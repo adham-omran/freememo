@@ -57,40 +57,47 @@
                   nil)))
             (dom/p (dom/text "No documents available. Please upload a PDF first."))))
 
-        ;; PDF Viewer (shows when document is selected)
+        ;; PDF Viewer and OCR extraction (shows when document is selected)
         (when selected-doc
+          ;; Render PDF viewer and capture the current page number it returns
           (dom/div
             (dom/h2 (dom/text "PDF Preview"))
             (dom/p
               (dom/props {:style {:color "#666" :margin-bottom "10px"}})
-              (dom/text "Use the viewer below to navigate through pages before extracting text."))
-            (PdfViewerComponent {:document-id selected-doc})))
+              (dom/text "Navigate through the PDF using the controls below. The current page will be used for text extraction.")))
 
-        ;; Step 2 & 3: Select page and extract (only show if document selected)
-        (when selected-doc
-          (dom/div
-            (dom/h2 (dom/text "2. Enter Page Number"))
-            (let [!page-num (atom 1)
-                  page-num (e/watch !page-num)]
-              (dom/div
-                (dom/input
-                  (dom/props {:type "number" :min "1" :value page-num :style {:margin-bottom "20px"}})
-                  (dom/On "input"
-                    (fn [e] (-> e .-target .-value js/parseInt))
-                    1))
-                (reset! !page-num
-                  (dom/On "input"
-                    (fn [e] (-> e .-target .-value js/parseInt))
-                    1)))
+          (let [current-pdf-page (PdfViewerComponent {:document-id selected-doc})]
 
-              ;; Step 3: Extract button
-              (dom/h2 (dom/text "3. Extract Text"))
+            (dom/div
+              ;; Show current page from PDF viewer
+              (dom/h2 (dom/text "2. Extract Text from Current Page"))
+              (dom/p
+                (dom/props {:style {:color "#666" :margin-bottom "10px"}})
+                (dom/text "Currently viewing page " current-pdf-page " in the PDF viewer above."))
+
+              ;; Extract button
               (dom/button
-                (dom/text "Extract Text from Page " page-num)
+                (dom/props {:style {:padding "10px 20px"
+                                    :background "#007bff"
+                                    :color "white"
+                                    :border "none"
+                                    :border-radius "4px"
+                                    :cursor "pointer"
+                                    :font-size "14px"
+                                    :margin-bottom "20px"}})
+                (dom/text "Extract Text from Page " current-pdf-page)
                 (let [click-event (dom/On "click" identity nil)
                       [?token ?error] (e/Token click-event)]
 
-                  (dom/props {:disabled (some? ?token)})
+                  (dom/props {:disabled (some? ?token)
+                              :style {:padding "10px 20px"
+                                      :background (if (some? ?token) "#ccc" "#007bff")
+                                      :color "white"
+                                      :border "none"
+                                      :border-radius "4px"
+                                      :cursor (if (some? ?token) "not-allowed" "pointer")
+                                      :font-size "14px"
+                                      :margin-bottom "20px"}})
 
                   (when ?error
                     (dom/div
@@ -98,19 +105,19 @@
                       (dom/text "Error: " ?error)))
 
                   (when-some [token ?token]
-                    (let [result (e/server (page/extract-page-text selected-doc page-num))]
+                    (let [result (e/server (page/extract-page-text selected-doc current-pdf-page))]
                       (if (:success result)
                         (do
                           (e/server (swap! !refresh inc))  ; Trigger refresh to update text display
                           (token))  ; Success - closes token
                         (token (:error result)))))))  ; Error
 
-              ;; Step 4 & 5: Show extracted text
-              ;; Electric reactivity: When page-num, selected-doc, or refresh change, this query
+              ;; Show extracted text
+              ;; Electric reactivity: When current-pdf-page, selected-doc, or refresh change, this query
               ;; automatically re-runs and updates the UI - no page refresh needed!
               (dom/h2 (dom/text "Extracted Text"))
               (let [refresh (e/server (e/watch !refresh))  ; Create reactive dependency on refresh atom
-                    text-result (e/server (get-page-text* refresh selected-doc page-num))]
+                    text-result (e/server (get-page-text* refresh selected-doc current-pdf-page))]
                 (if (:success text-result)
                   (dom/div
                     (dom/props {:style {:white-space "pre-wrap"

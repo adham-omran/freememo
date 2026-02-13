@@ -6,8 +6,9 @@
     [electric-starter-app.pdf-viewer :as viewer]))
 
 (e/defn PdfViewerComponent
-  "Renders a PDF viewer for the given document ID.
-   Props: {:document-id <int>}"
+  "Renders a PDF viewer for the given document ID and exposes current page number.
+   Props: {:document-id <int>}
+   Returns: The current page number (for OCR extraction)."
   [{:keys [document-id]}]
   (e/client
     (let [!page (atom 1)
@@ -23,7 +24,8 @@
                             :flex-direction "column"
                             :border "1px solid #ccc"
                             :border-radius "4px"
-                            :overflow "hidden"}})
+                            :overflow "hidden"
+                            :margin-bottom "20px"}})
 
         ;; Toolbar
         (dom/div
@@ -43,63 +45,50 @@
             ;; Previous button
             (dom/button
               (dom/props {:title "Previous Page"
-                          :disabled (= page 1)
+                          :disabled (or (= page 1) (= total 0))
                           :style {:padding "6px 12px"
-                                  :cursor (if (= page 1) "not-allowed" "pointer")
-                                  :background (if (= page 1) "#e0e0e0" "#fff")
+                                  :cursor (if (or (= page 1) (= total 0)) "not-allowed" "pointer")
+                                  :background (if (or (= page 1) (= total 0)) "#e0e0e0" "#fff")
                                   :border "1px solid #ccc"
                                   :border-radius "3px"}})
               (dom/text "◀")
               (e/for [_ (dom/On-all "click")]
-                (when (> page 1)
-                  (swap! !page dec)
-                  (viewer/go-to-page! @!page))))
+                (when (and (> page 1) (> total 0))
+                  (let [new-page (dec page)]
+                    (reset! !page new-page)
+                    (viewer/go-to-page! new-page)))))
 
-            ;; Page number input
-            (dom/input
-              (dom/props {:type "number"
-                          :value (str page)
-                          :min "1"
-                          :max (str total)
-                          :style {:width "60px"
-                                  :padding "4px"
-                                  :text-align "center"
-                                  :border "1px solid #ccc"
-                                  :border-radius "3px"}})
-              (e/for [e (dom/On-all "change")]
-                (when-let [target (.-target e)]
-                  (when-let [value-str (.-value target)]
-                    (let [val (js/parseInt value-str 10)]
-                      (when (and (js/Number.isFinite val) (>= val 1) (<= val total))
-                        (reset! !page val)
-                        (viewer/go-to-page! val)))))))
-
-            ;; Page count
+            ;; Page number display
             (dom/span
-              (dom/props {:style {:color "#666"}})
-              (dom/text "of " total))
+              (dom/props {:style {:color "#333"
+                                  :font-weight "bold"
+                                  :padding "0 8px"}})
+              (dom/text "Page " page " of " total))
 
             ;; Next button
             (dom/button
               (dom/props {:title "Next Page"
-                          :disabled (= page total)
+                          :disabled (or (>= page total) (= total 0))
                           :style {:padding "6px 12px"
-                                  :cursor (if (= page total) "not-allowed" "pointer")
-                                  :background (if (= page total) "#e0e0e0" "#fff")
+                                  :cursor (if (or (>= page total) (= total 0)) "not-allowed" "pointer")
+                                  :background (if (or (>= page total) (= total 0)) "#e0e0e0" "#fff")
                                   :border "1px solid #ccc"
                                   :border-radius "3px"}})
               (dom/text "▶")
               (e/for [_ (dom/On-all "click")]
-                (when (< page total)
-                  (swap! !page inc)
-                  (viewer/go-to-page! @!page)))))
+                (when (and (< page total) (> total 0))
+                  (let [new-page (inc page)]
+                    (reset! !page new-page)
+                    (viewer/go-to-page! new-page))))))
 
           ;; Zoom controls section
           (dom/div
             (dom/props {:style {:display "flex"
                                 :align-items "center"
                                 :gap "4px"
-                                :margin-left "20px"}})
+                                :margin-left "20px"
+                                :padding-left "20px"
+                                :border-left "1px solid #ddd"}})
 
             (dom/button
               (dom/props {:title "Zoom Out"
@@ -167,4 +156,7 @@
                         (when-let [{:keys [event-bus]} @viewer/!viewer-state]
                           (.on event-bus "pagechanging"
                                (fn [e] (reset! !page (.-pageNumber e)))))))))
-                100))))))))
+                100)))))
+
+      ;; Return current page number for OCR integration
+      page)))
