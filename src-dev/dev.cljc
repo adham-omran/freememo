@@ -5,33 +5,47 @@
    #?(:clj [shadow.cljs.devtools.api :as shadow-cljs-compiler])
    #?(:clj [shadow.cljs.devtools.server :as shadow-cljs-compiler-server])
    #?(:clj [clojure.tools.logging :as log])
+   #?(:clj [electric-starter-app.db :as db])
+   #?(:clj [electric-starter-app.api :as api])
 
    #?(:clj [ring.adapter.jetty :as ring])
    #?(:clj [ring.util.response :as ring-response])
    #?(:clj [ring.middleware.params :refer [wrap-params]])
+   #?(:clj [ring.middleware.multipart-params :refer [wrap-multipart-params]])
    #?(:clj [ring.middleware.resource :refer [wrap-resource]])
    #?(:clj [ring.middleware.content-type :refer [wrap-content-type]])
    #?(:clj [hyperfiddle.electric-ring-adapter3 :as electric-ring])))
 
 (comment (-main)) ; repl entrypoint
 
+#?(:clj
+   (defn wrap-api-routes [handler]
+     (fn [request]
+       (or (api/api-routes request)
+           (handler request)))))
+
 #?(:clj ; server entrypoint
    (defn -main [& args]
      (log/info "Starting Electric compiler and server...")
+
+     ;; Initialize database
+     (db/setup-schema)
 
      (shadow-cljs-compiler-server/start!)
      (shadow-cljs-compiler/watch :dev)
 
      (def server (ring/run-jetty
                    (-> ; ring middlewares – applied bottom up:
-                     (fn [ring-request] ; 5. index page fallback
+                     (fn [ring-request] ; 6. index page fallback
                          (-> (ring-response/resource-response "index.dev.html" {:root "public/electric_starter_app"})
                            (ring-response/content-type "text/html")))
-                     (wrap-resource "public") ; 4. serve assets from disk.
-                     (wrap-content-type) ; 3. boilerplate – to server assets with correct mime/type.
-                     (electric-ring/wrap-electric-websocket ; 2. install Electric server.
+                     (wrap-resource "public") ; 5. serve assets from disk.
+                     (wrap-content-type) ; 4. boilerplate – to server assets with correct mime/type.
+                     (electric-ring/wrap-electric-websocket ; 3. install Electric server.
                        (fn [ring-request] (electric-starter-app.main/electric-boot ring-request))) ; boot server-side Electric process
-                     (wrap-params)) ; 1. boilerplate – parse request URL parameters.
+                     (wrap-api-routes) ; 2. API routes
+                     (wrap-multipart-params) ; 1b. parse multipart form data (file uploads)
+                     (wrap-params)) ; 1a. boilerplate – parse request URL parameters.
                    {:host "0.0.0.0", :port 8080, :join? false
                     :ws-idle-timeout (* 60 1000)          ; 60 seconds in milliseconds
                     :ws-max-binary-size (* 100 1024 1024) ; 100MB - for demo
