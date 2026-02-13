@@ -6,6 +6,12 @@
     #?(:clj [electric-starter-app.page :as page])
     #?(:clj [electric-starter-app.pdf :as pdf])))
 
+#?(:clj (defonce !refresh (atom 0)))  ; Server-side refresh trigger
+
+;; Query wrapper: takes refresh arg to create Electric reactive dependency
+#?(:clj (defn get-page-text* [_refresh document-id page-number]
+          (page/get-page-text document-id page-number)))
+
 (e/defn OcrPage []
   (e/client
     (dom/div
@@ -84,14 +90,17 @@
                   (when-some [token ?token]
                     (let [result (e/server (page/extract-page-text selected-doc page-num))]
                       (if (:success result)
-                        (token)  ; Success - closes token, triggers reactive re-query below
+                        (do
+                          (e/server (swap! !refresh inc))  ; Trigger refresh to update text display
+                          (token))  ; Success - closes token
                         (token (:error result)))))))  ; Error
 
               ;; Step 4 & 5: Show extracted text
-              ;; Electric reactivity: When page-num or selected-doc change, this query
+              ;; Electric reactivity: When page-num, selected-doc, or refresh change, this query
               ;; automatically re-runs and updates the UI - no page refresh needed!
               (dom/h2 (dom/text "Extracted Text"))
-              (let [text-result (e/server (page/get-page-text selected-doc page-num))]
+              (let [refresh (e/server (e/watch !refresh))  ; Create reactive dependency on refresh atom
+                    text-result (e/server (get-page-text* refresh selected-doc page-num))]
                 (if (:success text-result)
                   (dom/div
                     (dom/props {:style {:white-space "pre-wrap"
