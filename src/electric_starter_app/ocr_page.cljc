@@ -3,6 +3,7 @@
   (:require
     [hyperfiddle.electric3 :as e]
     [hyperfiddle.electric-dom3 :as dom]
+    [electric-starter-app.pdf-viewer-component :refer [PdfViewerComponent]]
     #?(:clj [electric-starter-app.page :as page])
     #?(:clj [electric-starter-app.pdf :as pdf])))
 
@@ -55,6 +56,15 @@
                         nil)))
                   nil)))
             (dom/p (dom/text "No documents available. Please upload a PDF first."))))
+
+        ;; PDF Viewer (shows when document is selected)
+        (when selected-doc
+          (dom/div
+            (dom/h2 (dom/text "PDF Preview"))
+            (dom/p
+              (dom/props {:style {:color "#666" :margin-bottom "10px"}})
+              (dom/text "Use the viewer below to navigate through pages before extracting text."))
+            (PdfViewerComponent {:document-id selected-doc})))
 
         ;; Step 2 & 3: Select page and extract (only show if document selected)
         (when selected-doc

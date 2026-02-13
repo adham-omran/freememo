@@ -2,7 +2,9 @@
   "REST API handlers for file upload."
   (:require
     [electric-starter-app.pdf :as pdf]
-    [clojure.java.io :as io]))
+    [electric-starter-app.db :as db]
+    [clojure.java.io :as io]
+    [clojure.string]))
 
 (defn upload-pdf-handler [request]
   (try
@@ -31,11 +33,31 @@
        :headers {"Content-Type" "text/html"}
        :body (str "<html><body><h1>Upload Failed</h1><p>" (.getMessage e) "</p><a href='/'>Go back</a></body></html>")})))
 
+(defn get-pdf-handler [request]
+  "Serve PDF file by ID from database."
+  (try
+    (let [uri (:uri request)
+          doc-id (-> uri (clojure.string/split #"/") last parse-long)]
+      (if-let [doc (first (db/get-documents-by-id doc-id))]
+        {:status 200
+         :headers {"Content-Type" "application/pdf"
+                   "Content-Disposition" (str "inline; filename=\"" (:documents/filename doc) "\"")}
+         :body (io/input-stream (:documents/file_data doc))}
+        {:status 404
+         :body "PDF not found"}))
+    (catch Exception e
+      (println "ERROR [get-pdf-handler]:" (.getMessage e))
+      {:status 500
+       :body "Internal server error"})))
+
 (defn api-routes [request]
   (let [uri (:uri request)
         method (:request-method request)]
     (cond
       (and (= uri "/api/upload-pdf") (= method :post))
       (upload-pdf-handler request)
+
+      (and (re-matches #"/api/pdf/\d+" uri) (= method :get))
+      (get-pdf-handler request)
 
       :else nil)))  ; return nil to pass through to next middleware
