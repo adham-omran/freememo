@@ -14,7 +14,8 @@
 
    #?(:clj clojure.edn)
    #?(:clj clojure.java.io)
-   #?(:clj [clojure.tools.logging :as log])))
+   #?(:clj [clojure.tools.logging :as log])
+   #?(:clj [electric-starter-app.db :as db])))
 
 (defmacro comptime-resource [filename] (some-> filename clojure.java.io/resource slurp clojure.edn/read-string))
 
@@ -36,6 +37,10 @@
               :manifest-path "public/electric_starter_app/js/manifest.edn"})]
        (log/info (pr-str config))
        (assert (string? (:hyperfiddle/electric-user-version config)))
+
+       ;; Initialize database
+       (db/setup-schema)
+
        (ring/run-jetty
          (-> (fn [ring-request] (-> (ring-response/not-found "Page not found") (ring-response/content-type "text/plain")))
            (wrap-prod-index-page config) ; defined below
