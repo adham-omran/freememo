@@ -2,7 +2,8 @@
   (:require [hyperfiddle.electric3 :as e]
             [hyperfiddle.electric-dom3 :as dom]
             [electric-starter-app.settings-page :refer [SettingsPage]]
-            [electric-starter-app.pdf-page :refer [PdfPage]]))
+            [electric-starter-app.pdf-page :refer [PdfPage]]
+            [electric-starter-app.ocr-page :refer [OcrPage]]))
 
 (e/defn Main [ring-request]
   (e/client
@@ -18,7 +19,13 @@
 
         ;; PDF Documents section
         (dom/div
-          (PdfPage))))))
+          (PdfPage))
+
+        (dom/hr)  ; Visual separator
+
+        ;; OCR Text Extraction section
+        (dom/div
+          (OcrPage))))))
 
 (defn electric-boot [ring-request]
   #?(:clj  (e/boot-server {} Main (e/server ring-request))  ; inject server-only ring-request

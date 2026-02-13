@@ -48,6 +48,18 @@
       uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )"])
 
+  ;; Create pages table for OCR text storage
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS pages (
+      id SERIAL PRIMARY KEY,
+      document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+      page_number INTEGER NOT NULL,
+      text TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(document_id, page_number)
+    )"])
+
   (println "Database ready."))
 
 ;; Query functions
@@ -86,3 +98,42 @@
   (jdbc/execute! ds
     (sql/format {:delete-from :documents
                  :where [:= :id id]})))
+
+(defn get-documents-by-id
+  "Retrieve a document by its ID."
+  [id]
+  (jdbc/execute! ds
+    (sql/format {:select [:*]
+                 :from [:documents]
+                 :where [:= :id id]})))
+
+;; Page queries
+(defn save-page-text
+  "Save or update OCR text for a specific page of a document.
+   Uses UPSERT pattern (ON CONFLICT DO UPDATE)."
+  [document-id page-number text]
+  (jdbc/execute! ds
+    ["INSERT INTO pages (document_id, page_number, text, updated_at)
+      VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT (document_id, page_number)
+      DO UPDATE SET text = excluded.text, updated_at = CURRENT_TIMESTAMP"
+     document-id page-number text]))
+
+(defn get-page-text
+  "Retrieve OCR text for a specific page."
+  [document-id page-number]
+  (jdbc/execute-one! ds
+    (sql/format {:select [:*]
+                 :from [:pages]
+                 :where [:and
+                         [:= :document_id document-id]
+                         [:= :page_number page-number]]})))
+
+(defn list-pages
+  "List all pages with OCR text for a document."
+  [document-id]
+  (jdbc/execute! ds
+    (sql/format {:select [:*]
+                 :from [:pages]
+                 :where [:= :document_id document-id]
+                 :order-by [[:page_number :asc]]})))
