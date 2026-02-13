@@ -67,10 +67,12 @@
                                   :border "1px solid #ccc"
                                   :border-radius "3px"}})
               (e/for [e (dom/On-all "change")]
-                (let [val (js/parseInt (.. e -target -value))]
-                  (when (and (>= val 1) (<= val total))
-                    (reset! !page val)
-                    (viewer/go-to-page! val)))))
+                (when-let [target (.-target e)]
+                  (when-let [value-str (.-value target)]
+                    (let [val (js/parseInt value-str 10)]
+                      (when (and (js/Number.isFinite val) (>= val 1) (<= val total))
+                        (reset! !page val)
+                        (viewer/go-to-page! val)))))))
 
             ;; Page count
             (dom/span
