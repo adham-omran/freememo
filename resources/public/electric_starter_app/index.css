@@ -4,7 +4,33 @@
     box-sizing: border-box;
 }
 
-body {
+html, body {
+    height: 100%;
+    margin: 0;
     font-family: 'Open Sans', Arial, Verdana, sans-serif;
     background-color: rgb(248 250 252);
+}
+
+.split-divider-h {
+    width: 6px;
+    cursor: col-resize;
+    background: #e0e0e0;
+    flex-shrink: 0;
+    transition: background 0.15s;
+}
+.split-divider-h:hover,
+.split-divider-h:active {
+    background: #90caf9;
+}
+
+.split-divider-v {
+    height: 6px;
+    cursor: row-resize;
+    background: #e0e0e0;
+    flex-shrink: 0;
+    transition: background 0.15s;
+}
+.split-divider-v:hover,
+.split-divider-v:active {
+    background: #90caf9;
 }

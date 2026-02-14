@@ -19,13 +19,12 @@
           total (e/watch !total)]
 
       (dom/div
-        (dom/props {:style {:height "600px"
+        (dom/props {:style {:height "100%"
                             :display "flex"
                             :flex-direction "column"
                             :border "1px solid #ccc"
                             :border-radius "4px"
-                            :overflow "hidden"
-                            :margin-bottom "20px"}})
+                            :overflow "hidden"}})
 
         ;; Toolbar
         (dom/div

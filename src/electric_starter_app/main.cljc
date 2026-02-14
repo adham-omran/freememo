@@ -9,7 +9,8 @@
   (e/client
     (binding [dom/node js/document.body] ; DOM nodes will mount under this one
       (dom/div ; mandatory wrapper div to ensure node ordering - https://github.com/hyperfiddle/electric/issues/74
-        (dom/h1 (dom/text "Card Maker"))
+        (dom/props {:style {:height "100vh" :display "flex" :flex-direction "column" :overflow "hidden"}})
+        (dom/h1 (dom/props {:style {:margin "8px 16px" :flex-shrink "0"}}) (dom/text "Card Maker"))
 
         (let [!active-tab (atom :settings)
               active-tab (e/watch !active-tab)
@@ -22,7 +23,7 @@
 
           ;; Tab bar
           (dom/div
-            (dom/props {:style {:display "flex" :border-bottom "2px solid #e0e0e0" :margin-bottom "16px"}})
+            (dom/props {:style {:display "flex" :border-bottom "2px solid #e0e0e0" :flex-shrink "0"}})
 
             (dom/button
               (dom/props {:style (tab-style :settings)})
@@ -40,9 +41,11 @@
               (dom/On "click" (fn [_] (reset! !active-tab :ocr)) nil)))
 
           ;; Tab content
-          (when (= active-tab :settings) (SettingsPage))
-          (when (= active-tab :pdf) (PdfPage))
-          (when (= active-tab :ocr) (OcrPage)))))))
+          (dom/div
+            (dom/props {:style {:flex "1" :min-height "0" :overflow (if (= active-tab :ocr) "hidden" "auto")}})
+            (when (= active-tab :settings) (SettingsPage))
+            (when (= active-tab :pdf) (PdfPage))
+            (when (= active-tab :ocr) (OcrPage))))))))
 
 (defn electric-boot [ring-request]
   #?(:clj  (e/boot-server {} Main (e/server ring-request))  ; inject server-only ring-request
