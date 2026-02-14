@@ -16,13 +16,15 @@
       (dom/props {:class "quill-editor-wrapper"
                   :style {:border "1px solid #ccc"
                           :border-radius "4px"
-                          :background "#fff"}
+                          :background "#fff"
+                          :flex "1"
+                          :min-height "200px"}
                   :data-role "widget"})
 
       (let [node dom/node
             timer-id (js/setTimeout
                        (fn [] (editor/init-editor! node initial-html page-number doc-id))
-                       200)]
+                       0)]
         ;; Cleanup on unmount — cancel pending init and destroy editor
         (e/on-unmount
           (fn []

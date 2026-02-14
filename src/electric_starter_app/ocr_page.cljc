@@ -70,7 +70,8 @@
 
               ;; Right: extract button + editor + save status
               (dom/div
-                (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-width "0"}})
+                (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-width "0"
+                                    :height "600px" :overflow "hidden"}})
 
                 ;; Page header + extract button
                 (dom/div
@@ -117,7 +118,7 @@
                       text-result (e/server (get-page-text* refresh selected-doc current-pdf-page))]
                   (if (:success text-result)
                     (dom/div
-                      (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0"}})
+                      (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0" :overflow-y "auto"}})
                       (RichTextEditorComponent {:initial-html (:text text-result)
                                                 :page-number current-pdf-page
                                                 :doc-id selected-doc})
