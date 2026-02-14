@@ -11,21 +11,38 @@
       (dom/div ; mandatory wrapper div to ensure node ordering - https://github.com/hyperfiddle/electric/issues/74
         (dom/h1 (dom/text "Card Maker"))
 
-        ;; Settings section
-        (dom/div
-          (SettingsPage))
+        (let [!active-tab (atom :settings)
+              active-tab (e/watch !active-tab)
+              tab-style (fn [key]
+                          {:padding "10px 24px" :border "none" :background "none" :cursor "pointer"
+                           :font-size "16px" :font-weight (if (= active-tab key) "600" "400")
+                           :color (if (= active-tab key) "#2563eb" "#666")
+                           :border-bottom (if (= active-tab key) "2px solid #2563eb" "2px solid transparent")
+                           :margin-bottom "-2px"})]
 
-        (dom/hr)  ; Visual separator
+          ;; Tab bar
+          (dom/div
+            (dom/props {:style {:display "flex" :border-bottom "2px solid #e0e0e0" :margin-bottom "16px"}})
 
-        ;; PDF Documents section
-        (dom/div
-          (PdfPage))
+            (dom/button
+              (dom/props {:style (tab-style :settings)})
+              (dom/text "Settings")
+              (dom/On "click" (fn [_] (reset! !active-tab :settings)) nil))
 
-        (dom/hr)  ; Visual separator
+            (dom/button
+              (dom/props {:style (tab-style :pdf)})
+              (dom/text "PDF Documents")
+              (dom/On "click" (fn [_] (reset! !active-tab :pdf)) nil))
 
-        ;; OCR Text Extraction section
-        (dom/div
-          (OcrPage))))))
+            (dom/button
+              (dom/props {:style (tab-style :ocr)})
+              (dom/text "OCR Text Extraction")
+              (dom/On "click" (fn [_] (reset! !active-tab :ocr)) nil)))
+
+          ;; Tab content
+          (when (= active-tab :settings) (SettingsPage))
+          (when (= active-tab :pdf) (PdfPage))
+          (when (= active-tab :ocr) (OcrPage)))))))
 
 (defn electric-boot [ring-request]
   #?(:clj  (e/boot-server {} Main (e/server ring-request))  ; inject server-only ring-request
