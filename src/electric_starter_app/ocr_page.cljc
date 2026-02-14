@@ -1,13 +1,13 @@
 (ns electric-starter-app.ocr-page
   "OCR text extraction UI component."
   (:require
-    [hyperfiddle.electric3 :as e]
-    [hyperfiddle.electric-dom3 :as dom]
-    [electric-starter-app.pdf-viewer-component :refer [PdfViewerComponent]]
-    [electric-starter-app.rich-text-editor-component :refer [RichTextEditorComponent]]
-    [electric-starter-app.rich-text-editor :as editor]
-    #?(:clj [electric-starter-app.page :as page])
-    #?(:clj [electric-starter-app.pdf :as pdf])))
+   [hyperfiddle.electric3 :as e]
+   [hyperfiddle.electric-dom3 :as dom]
+   [electric-starter-app.pdf-viewer-component :refer [PdfViewerComponent]]
+   [electric-starter-app.rich-text-editor-component :refer [RichTextEditorComponent]]
+   [electric-starter-app.rich-text-editor :as editor]
+   #?(:clj [electric-starter-app.page :as page])
+   #?(:clj [electric-starter-app.pdf :as pdf])))
 
 #?(:clj (defonce !refresh (atom 0)))  ; Server-side refresh trigger
 
@@ -39,21 +39,14 @@
                         (dom/option
                           (dom/props {:value (str id)})
                           (dom/text filename))))))
-                (dom/On "change"
-                  (fn [e]
-                    (let [val (-> e .-target .-value)]
-                      (if (seq val)
-                        (js/parseInt val)
-                        nil)))
-                  nil))
-              (reset! !selected-doc
-                (dom/On "change"
-                  (fn [e]
-                    (let [val (-> e .-target .-value)]
-                      (if (seq val)
-                        (js/parseInt val)
-                        nil)))
-                  nil)))
+                (reset! !selected-doc
+                  (dom/On "change"
+                    (fn [e]
+                      (let [val (-> e .-target .-value)]
+                        (if (seq val)
+                          (js/parseInt val)
+                          nil)))
+                    nil)))
             (dom/p (dom/text "No documents available. Please upload a PDF first."))))
 
         ;; PDF Viewer and OCR extraction (shows when document is selected)
@@ -73,8 +66,18 @@
                 (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-width "0"
                                     :height "600px" :overflow "hidden"}})
 
-                ;; Page header + extract button
-                (dom/div
+                ;; Auto-save logic hoisted to editor panel scope
+                (let [dirty-data (e/watch editor/!dirty-html)
+                      save-result (when (some? dirty-data)
+                                    (e/server
+                                      (e/Offload
+                                        #(page/save-page-html-impl
+                                           (:doc-id dirty-data)
+                                           (:page dirty-data)
+                                           (:html dirty-data)))))]
+
+                  ;; Page header + extract button
+                  (dom/div
                   (dom/props {:style {:display "flex" :align-items "center" :gap "12px" :margin-bottom "12px"}})
                   (dom/span
                     (dom/props {:style {:font-weight "bold" :font-size "16px"}})
@@ -111,7 +114,28 @@
                             (do
                               (e/server (swap! !refresh inc))
                               (token))
-                            (token (:error result))))))))
+                            (token (:error result)))))))
+
+                  ;; Save status indicator with fade-out
+                  (when (some? dirty-data)
+                    (let [is-success (:success save-result)
+                          message (if is-success "Saved" (str "Save error: " (:error save-result)))
+                          !show (atom true)
+                          show (e/watch !show)]
+                      (dom/span
+                        (dom/props {:style {:margin-left "12px"
+                                            :font-size "12px"
+                                            :color (if is-success "#888" "red")
+                                            :opacity (if show "1" "0")
+                                            :transition "opacity 0.5s ease-out"}})
+                        (dom/text message)
+                        ;; Fade out after 2 seconds (only for successful saves)
+                        (when is-success
+                          (js/setTimeout
+                            (fn [] (reset! !show false))
+                            2000))))))
+
+                  )
 
                 ;; Editor + save status
                 (let [refresh (e/server (e/watch !refresh))
@@ -121,22 +145,7 @@
                       (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0" :overflow-y "auto"}})
                       (RichTextEditorComponent {:initial-html (:text text-result)
                                                 :page-number current-pdf-page
-                                                :doc-id selected-doc})
-
-                      ;; Auto-save: use stored page/doc from dirty-html map, not current reactive values
-                      (let [dirty-data (e/watch editor/!dirty-html)]
-                        (when (some? dirty-data)
-                          (let [result (e/server
-                                         (e/Offload
-                                           #(page/save-page-html-impl
-                                              (:doc-id dirty-data)
-                                              (:page dirty-data)
-                                              (:html dirty-data))))]
-                            (dom/div
-                              (dom/props {:style {:margin-top "6px"
-                                                 :font-size "12px"
-                                                 :color (if (:success result) "#888" "red")}})
-                              (dom/text (if (:success result) "Saved" (str "Save error: " (:error result)))))))))
+                                                :doc-id selected-doc}))
                     (dom/p
                       (dom/props {:style {:color "gray"}})
-                      (dom/text "No text extracted yet. Click 'Extract Text' to process this page."))))))))))))
+                      (dom/text "No text extracted yet. Click 'Extract Text' to process this page.")))))))))))))

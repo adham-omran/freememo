@@ -22,17 +22,17 @@
            :headers {"Location" "/"}
            :body ""}
           {:status 500
-           :headers {"Content-Type" "text/html"}
-           :body (str "<html><body><h1>Upload Failed</h1><p>" (:error result) "</p><a href='/'>Go back</a></body></html>")}))
+           :headers {"Content-Type" "text/plain"}
+           :body (str "error: " (:error result))}))
       {:status 400
-       :headers {"Content-Type" "text/html"}
-       :body "<html><body><h1>Upload Failed</h1><p>No file provided</p><a href='/'>Go back</a></body></html>"})
+       :headers {"Content-Type" "text/plain"}
+       :body "error: No file provided"})
     (catch Exception e
       (println "ERROR [upload-pdf-handler]:" (.getMessage e))
       (.printStackTrace e)
       {:status 500
-       :headers {"Content-Type" "text/html"}
-       :body (str "<html><body><h1>Upload Failed</h1><p>" (.getMessage e) "</p><a href='/'>Go back</a></body></html>")})))
+       :headers {"Content-Type" "text/plain"}
+       :body (str "error: " (.getMessage e))})))
 
 (defn get-pdf-handler [request]
   "Serve PDF file by ID from database."

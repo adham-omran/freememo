@@ -68,7 +68,7 @@
     (dom/div
       (dom/h1 (dom/text "PDF Documents"))
 
-      ;; Upload form using traditional POST
+      ;; Upload form
       (dom/p (dom/text "To upload a PDF, use the form below:"))
       (dom/form
         (dom/props {:action "/api/upload-pdf" :method "post" :enctype "multipart/form-data"})
@@ -77,9 +77,6 @@
         (dom/button
           (dom/props {:type "submit"})
           (dom/text "Upload")))
-      (dom/p
-        (dom/props {:style {:font-size "0.9em" :color "gray"}})
-        (dom/text "Note: Page will reload after upload."))
 
       ;; Document list
       (dom/h2 (dom/text "Uploaded Documents"))
