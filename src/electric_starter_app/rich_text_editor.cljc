@@ -89,3 +89,14 @@
      :cljs
      (when-let [{:keys [editor]} @!editor-state]
        (.-innerHTML (.-root editor)))))
+
+(defn get-selected-text!
+  "Get selected text from Quill editor. Returns nil if no selection.
+   Client-side only, never enters Electric reactive graph."
+  []
+  #?(:clj nil
+     :cljs
+     (when-let [{:keys [editor]} @!editor-state]
+       (let [selection (.getSelection editor)]
+         (when (and selection (not= (.-index selection) (.-length selection)))
+           (.getText editor (.-index selection) (.-length selection)))))))

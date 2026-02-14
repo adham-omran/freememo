@@ -60,6 +60,24 @@
       UNIQUE(document_id, page_number)
     )"])
 
+  ;; Create flashcards table
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS flashcards (
+      id SERIAL PRIMARY KEY,
+      document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+      page_number INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      question TEXT,
+      answer TEXT,
+      cloze TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(document_id, page_number, kind, question, cloze)
+    )"])
+
+  (jdbc/execute! ds ["
+    CREATE INDEX IF NOT EXISTS idx_flashcards_document_page
+      ON flashcards(document_id, page_number)"])
+
   (println "Database ready."))
 
 ;; Query functions
@@ -136,4 +154,45 @@
     (sql/format {:select [:*]
                  :from [:pages]
                  :where [:= :document_id document-id]
+                 :order-by [[:page_number :asc]]})))
+
+;; Flashcard queries
+(defn insert-flashcards
+  "Batch insert flashcards. Uses ON CONFLICT DO NOTHING to prevent duplicates."
+  [rows]
+  (when (seq rows)
+    (jdbc/execute! ds
+      (sql/format {:insert-into :flashcards
+                   :values rows
+                   :on-conflict []
+                   :do-nothing true}))))
+
+(defn get-flashcards
+  "Get all flashcards for a specific document page."
+  [document-id page-number]
+  (jdbc/execute! ds
+    (sql/format {:select [:*]
+                 :from [:flashcards]
+                 :where [:and
+                         [:= :document_id document-id]
+                         [:= :page_number page-number]]
+                 :order-by [[:created_at :asc]]})))
+
+(defn delete-flashcard
+  "Delete a single flashcard by ID."
+  [card-id]
+  (jdbc/execute! ds
+    (sql/format {:delete-from :flashcards
+                 :where [:= :id card-id]})))
+
+(defn get-context-pages
+  "Get text from previous N pages for context. Returns pages in ascending order."
+  [document-id start-page end-page]
+  (jdbc/execute! ds
+    (sql/format {:select [:page_number :text]
+                 :from [:pages]
+                 :where [:and
+                         [:= :document_id document-id]
+                         [:>= :page_number start-page]
+                         [:<= :page_number end-page]]
                  :order-by [[:page_number :asc]]})))
