@@ -98,5 +98,5 @@
      :cljs
      (when-let [{:keys [editor]} @!editor-state]
        (let [selection (.getSelection editor)]
-         (when (and selection (not= (.-index selection) (.-length selection)))
+         (when (and selection (> (.-length selection) 0))
            (.getText editor (.-index selection) (.-length selection)))))))

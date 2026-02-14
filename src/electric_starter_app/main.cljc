@@ -3,8 +3,7 @@
             [hyperfiddle.electric-dom3 :as dom]
             [electric-starter-app.settings-page :refer [SettingsPage]]
             [electric-starter-app.pdf-page :refer [PdfPage]]
-            [electric-starter-app.ocr-page :refer [OcrPage]]
-            [electric-starter-app.cards-page :refer [CardsPage]]))
+            [electric-starter-app.ocr-page :refer [OcrPage]]))
 
 (e/defn Main [ring-request]
   (e/client
@@ -26,13 +25,7 @@
 
         ;; OCR Text Extraction section
         (dom/div
-          (OcrPage))
-
-        (dom/hr)  ; Visual separator
-
-        ;; Flashcard Generation section
-        (dom/div
-          (CardsPage))))))
+          (OcrPage))))))
 
 (defn electric-boot [ring-request]
   #?(:clj  (e/boot-server {} Main (e/server ring-request))  ; inject server-only ring-request
