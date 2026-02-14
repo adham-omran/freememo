@@ -48,7 +48,8 @@
 - <strong> for bold/important text
 - <em> for italic/emphasized text
 - <br> for line breaks within paragraphs
-Preserve the reading order and document structure. Return only the HTML body content (no <html> or <body> tags)."
+Preserve the reading order and document structure. Return only the HTML body content (no <html> or <body> tags).
+IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return raw HTML only."
           response (api/create-chat-completion
                      {:model "gpt-4o"
                       :messages [{:role "user"
@@ -56,7 +57,13 @@ Preserve the reading order and document structure. Return only the HTML body con
                                             {:type "image_url"
                                              :image_url {:url base64-image}}]}]}
                      {:api-key api-key})
-          text (-> response :choices first :message :content)]
+          raw-text (-> response :choices first :message :content)
+          ;; Strip markdown code fences if GPT-4o adds them anyway
+          text (-> raw-text
+                   (clojure.string/replace #"^```html\s*\n?" "")
+                   (clojure.string/replace #"^```\s*\n?" "")
+                   (clojure.string/replace #"\n?```\s*$" "")
+                   clojure.string/trim)]
       {:success true :text text})
     (catch Exception e
       (println "ERROR [extract-text]:" (.getMessage e))

@@ -22,9 +22,14 @@
          (let [Quill (.-Quill js/window)
                editor (new Quill container
                           (clj->js {:theme "snow"
-                                    :modules {:toolbar [["bold" "italic"]
-                                                        [{"header" 1} {"header" 2}]
-                                                        [{"list" "ordered"} {"list" "bullet"}]]}
+                                    :modules {:toolbar [["bold" "italic" "underline" "strike"]
+                                                        [{"header" 1} {"header" 2} {"header" 3}]
+                                                        [{"size" ["small" false "large" "huge"]}]
+                                                        [{"color" []} {"background" []}]
+                                                        [{"list" "ordered"} {"list" "bullet"}]
+                                                        [{"align" []}]
+                                                        [{"direction" "rtl"}]
+                                                        ["clean"]]}
                                     :placeholder "Enter text..."}))
                delta (.clipboard.convert editor initial-html)]
            ;; Set initial content
