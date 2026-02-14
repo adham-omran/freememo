@@ -1,7 +1,8 @@
 (ns electric-starter-app.api
-  "REST API handlers for file upload."
+  "REST API handlers for file upload and page text save."
   (:require
     [electric-starter-app.pdf :as pdf]
+    [electric-starter-app.page :as page]
     [electric-starter-app.db :as db]
     [clojure.java.io :as io]
     [clojure.string]))
@@ -50,6 +51,26 @@
       {:status 500
        :body "Internal server error"})))
 
+(defn save-page-text-handler [request]
+  (try
+    (let [params (:params request)
+          document-id (some-> (get params "document_id") parse-long)
+          page-number (some-> (get params "page_number") parse-long)
+          html (get params "html")]
+      (if (and document-id page-number html)
+        (let [result (page/save-page-html-impl document-id page-number html)]
+          {:status (if (:success result) 200 500)
+           :headers {"Content-Type" "text/plain"}
+           :body (if (:success result) "ok" (str "error: " (:error result)))})
+        {:status 400
+         :headers {"Content-Type" "text/plain"}
+         :body "Missing required parameters: document_id, page_number, html"}))
+    (catch Exception e
+      (println "ERROR [save-page-text-handler]:" (.getMessage e))
+      {:status 500
+       :headers {"Content-Type" "text/plain"}
+       :body (str "error: " (.getMessage e))})))
+
 (defn api-routes [request]
   (let [uri (:uri request)
         method (:request-method request)]
@@ -59,5 +80,8 @@
 
       (and (re-matches #"/api/pdf/\d+" uri) (= method :get))
       (get-pdf-handler request)
+
+      (and (= uri "/api/save-page-text") (= method :post))
+      (save-page-text-handler request)
 
       :else nil)))  ; return nil to pass through to next middleware

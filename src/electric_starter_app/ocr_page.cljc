@@ -5,6 +5,7 @@
     [hyperfiddle.electric-dom3 :as dom]
     [electric-starter-app.pdf-viewer-component :refer [PdfViewerComponent]]
     [electric-starter-app.rich-text-editor-component :refer [RichTextEditorComponent]]
+    [electric-starter-app.rich-text-editor :as editor]
     #?(:clj [electric-starter-app.page :as page])
     #?(:clj [electric-starter-app.pdf :as pdf])))
 
@@ -114,24 +115,17 @@
                         (token (:error result)))))))  ; Error
 
               ;; Show extracted text
-              ;; Electric reactivity: When current-pdf-page, selected-doc, or refresh change, this query
-              ;; automatically re-runs and updates the UI - no page refresh needed!
               (dom/h2 (dom/text "Extracted Text"))
-              (let [refresh (e/server (e/watch !refresh))  ; Create reactive dependency on refresh atom
+              (let [refresh (e/server (e/watch !refresh))
                     text-result (e/server (get-page-text* refresh selected-doc current-pdf-page))]
                 (if (:success text-result)
-                  (let [!edited-html (atom (:text text-result))
-                        edited-html (e/watch !edited-html)
-                        !save-success (atom nil)
-                        save-success (e/watch !save-success)]
+                  (let [!save-status (atom nil)]
 
                     (dom/div
-                      ;; Rich text editor
-                      (reset! !edited-html
-                        (RichTextEditorComponent {:initial-html (:text text-result)
-                                                   :on-change (fn [html] (reset! !edited-html html))}))
+                      ;; Rich text editor — no callbacks, pure imperative widget
+                      (RichTextEditorComponent {:initial-html (:text text-result)})
 
-                      ;; Save button
+                      ;; Save button — reads HTML client-side, POSTs via fetch
                       (dom/button
                         (dom/props {:style {:margin-top "10px"
                                            :padding "10px 20px"
@@ -142,48 +136,37 @@
                                            :cursor "pointer"
                                            :font-size "14px"}})
                         (dom/text "Save Changes")
+                        (dom/On "click"
+                          (fn [_e]
+                            (let [html (editor/get-current-html!)]
+                              (when html
+                                (let [form-data (js/FormData.)]
+                                  (.append form-data "document_id" (str selected-doc))
+                                  (.append form-data "page_number" (str current-pdf-page))
+                                  (.append form-data "html" html)
+                                  (-> (js/fetch "/api/save-page-text"
+                                                (clj->js {:method "POST" :body form-data}))
+                                      (.then (fn [resp]
+                                               (if (.-ok resp)
+                                                 (reset! !save-status {:success true})
+                                                 (reset! !save-status {:success false :error "Server error"}))))
+                                      (.catch (fn [err]
+                                                (reset! !save-status {:success false :error (str err)}))))))))
+                          nil))
 
-                        (let [click-event (dom/On "click" identity nil)
-                              [?token ?error] (e/Token click-event)]
-
-                          (dom/props {:disabled (some? ?token)
-                                      :style {:margin-top "10px"
-                                             :padding "10px 20px"
-                                             :background (if (some? ?token) "#ccc" "#28a745")
-                                             :color "white"
-                                             :border "none"
-                                             :border-radius "4px"
-                                             :cursor (if (some? ?token) "not-allowed" "pointer")
-                                             :font-size "14px"}})
-
-                          (when ?error
-                            (dom/div
-                              (dom/props {:style {:color "red" :margin-top "10px"}})
-                              (dom/text "Error: " ?error)))
-
-                          (when-some [token ?token]
-                            (let [result (e/server (page/save-page-html-impl
-                                                    selected-doc
-                                                    current-pdf-page
-                                                    edited-html))]
-                              (if (:success result)
-                                (do
-                                  (e/server (swap! !refresh inc))
-                                  (reset! !save-success true)
-                                  #?(:cljs (js/setTimeout #(reset! !save-success false) 3000))
-                                  (token))
-                                (token (:error result)))))))
-
-                      ;; Success message
-                      (when save-success
-                        (dom/div
-                          (dom/props {:style {:color "green"
-                                             :margin-top "10px"
-                                             :padding "10px"
-                                             :background "#d4edda"
-                                             :border "1px solid #c3e6cb"
-                                             :border-radius "4px"}})
-                          (dom/text "✓ Changes saved successfully!")))))
+                      ;; Status message
+                      (let [save-status (e/watch !save-status)]
+                        (when save-status
+                          (dom/div
+                            (dom/props {:style {:margin-top "10px"
+                                               :padding "10px"
+                                               :border-radius "4px"
+                                               :color (if (:success save-status) "green" "red")
+                                               :background (if (:success save-status) "#d4edda" "#f8d7da")
+                                               :border (str "1px solid " (if (:success save-status) "#c3e6cb" "#f5c6cb"))}})
+                            (dom/text (if (:success save-status)
+                                        "Changes saved successfully!"
+                                        (str "Error: " (:error save-status)))))))))
                   (dom/p
                     (dom/props {:style {:color "gray"}})
                     (dom/text "No text extracted yet. Click 'Extract Text' to process this page.")))))))))))

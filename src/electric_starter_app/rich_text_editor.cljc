@@ -1,69 +1,73 @@
 (ns electric-starter-app.rich-text-editor
-  "Quill rich text editor integration utilities."
+  "Quill rich text editor integration — global singleton, no reactive callbacks."
   (:require
     [hyperfiddle.electric3 :as e]
     [hyperfiddle.electric-dom3 :as dom]))
 
-;; Global editor state (similar to pdf-viewer pattern)
+;; Global singleton — mirrors pdf_viewer.cljc pattern
 (defonce !editor-state (atom nil))
 
-(defn init-editor!
-  "Initialize Quill editor with given container and HTML content.
-   Calls on-change callback when content changes with HTML string."
-  [container initial-html on-change]
+(defn destroy-editor!
+  "Destroy the current global editor instance (if any)."
+  []
   #?(:clj nil
      :cljs
-     (do
-       (println "[Quill] Initializing with content:" initial-html)
-       (println "[Quill] Container:" container)
-       (println "[Quill] window.Quill available?" (some? (.-Quill js/window)))
+     (when-let [{:keys [editor container]} @!editor-state]
+       (.off editor "text-change")
+       (when container
+         (set! (.-innerHTML container) ""))
+       (reset! !editor-state nil))))
 
-       (when (and container (.-Quill js/window))
-         (let [Quill (.-Quill js/window)
-               editor (new Quill container
-                          (clj->js {:theme "snow"
-                                    :modules {:toolbar [["bold" "italic" "underline" "strike"]
-                                                        [{"header" 1} {"header" 2} {"header" 3}]
-                                                        [{"size" ["small" false "large" "huge"]}]
-                                                        [{"color" []} {"background" []}]
-                                                        [{"list" "ordered"} {"list" "bullet"}]
-                                                        [{"align" []}]
-                                                        [{"direction" "rtl"}]
-                                                        ["clean"]]}
-                                    :placeholder "Enter text..."}))
-               delta (.clipboard.convert editor initial-html)]
-           ;; Set initial content
-           (when initial-html
-             (.setContents editor delta))
-
-           ;; Listen for changes
-           (.on editor "text-change"
-                (fn [_delta _oldDelta _source]
-                  (let [html (.getSemanticHTML editor)]
-                    (when on-change (on-change html)))))
-
-           (println "[Quill] Editor initialized successfully")
-           (reset! !editor-state {:editor editor})
-           editor)))))
+(defn init-editor!
+  "Initialize Quill editor in the given container with initial HTML.
+   Destroys any existing editor first (singleton). No callbacks."
+  [container initial-html]
+  #?(:clj nil
+     :cljs
+     (when (and container (.-Quill js/window))
+       ;; Destroy previous editor if any
+       (destroy-editor!)
+       (let [Quill (.-Quill js/window)
+             cleaned-html (-> (or initial-html "")
+                              (clojure.string/replace #"^```html\s*\n?" "")
+                              (clojure.string/replace #"^```\s*\n?" "")
+                              (clojure.string/replace #"\n?```\s*$" "")
+                              clojure.string/trim)
+             editor (new Quill container
+                        (clj->js {:theme "snow"
+                                  :modules {:toolbar [["bold" "italic" "underline" "strike"]
+                                                      [{"header" 1} {"header" 2} {"header" 3}]
+                                                      [{"size" ["small" false "large" "huge"]}]
+                                                      [{"color" []} {"background" []}]
+                                                      [{"list" "ordered"} {"list" "bullet"}]
+                                                      [{"align" []}]
+                                                      [{"direction" "rtl"}]
+                                                      ["clean"]]}
+                                  :placeholder "Enter text..."}))
+             delta (.clipboard.convert editor cleaned-html)]
+         (when (seq cleaned-html)
+           (.setContents editor delta))
+         (reset! !editor-state {:editor editor :container container})
+         editor))))
 
 (defn set-content!
-  "Update editor content with new HTML."
+  "Replace the editor's content with new HTML, without creating a new Quill instance."
   [html]
   #?(:clj nil
-     :cljs (when-let [{:keys [editor]} @!editor-state]
-             (let [delta (.clipboard.convert editor html)]
-               (.setContents editor delta)))))
+     :cljs
+     (when-let [{:keys [editor]} @!editor-state]
+       (let [cleaned (-> (or html "")
+                         (clojure.string/replace #"^```html\s*\n?" "")
+                         (clojure.string/replace #"^```\s*\n?" "")
+                         (clojure.string/replace #"\n?```\s*$" "")
+                         clojure.string/trim)
+             delta (.clipboard.convert editor cleaned)]
+         (.setContents editor delta)))))
 
-(defn get-html!
-  "Get current editor content as HTML string."
+(defn get-current-html!
+  "Read innerHTML from the current editor. Client-side only, never enters Electric reactive graph."
   []
   #?(:clj nil
-     :cljs (when-let [{:keys [editor]} @!editor-state]
-             (.getSemanticHTML editor))))
-
-(defn destroy-editor!
-  "Destroy editor instance (cleanup)."
-  []
-  #?(:clj nil
-     :cljs (when-let [{:keys [editor]} @!editor-state]
-             (reset! !editor-state nil))))
+     :cljs
+     (when-let [{:keys [editor]} @!editor-state]
+       (.-innerHTML (.-root editor)))))

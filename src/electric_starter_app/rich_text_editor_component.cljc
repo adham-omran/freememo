@@ -1,45 +1,33 @@
 (ns electric-starter-app.rich-text-editor-component
-  "Rich text editor UI component using Quill."
+  "Rich text editor UI component — minimal wrapper, no reactive state."
   (:require
     [hyperfiddle.electric3 :as e]
     [hyperfiddle.electric-dom3 :as dom]
     [electric-starter-app.rich-text-editor :as editor]))
 
 (e/defn RichTextEditorComponent
-  "Renders a rich text editor with the given HTML content.
-   Props: {:initial-html <string>, :on-change <fn>}
-   Returns: The current HTML content."
-  [{:keys [initial-html on-change]}]
+  "Renders a rich text editor. Pure imperative widget — no callbacks, no reactive state.
+   Props: {:initial-html <string>}
+   The editor is created once. When initial-html changes reactively, content is
+   updated in-place via set-content! — no teardown/rebuild."
+  [{:keys [initial-html]}]
   (e/client
-    (println "[RichTextEditorComponent] Rendering with initial-html:" initial-html)
-    (let [!editor-html (atom (or initial-html ""))
-          editor-html (e/watch !editor-html)
-          !container (atom nil)]
+    (dom/div
+      (dom/props {:class "quill-editor-wrapper"
+                  :style {:border "1px solid #ccc"
+                          :border-radius "4px"
+                          :background "#fff"}
+                  :data-role "widget"})
 
-      ;; Editor container - Quill will create its own toolbar
-      (dom/div
-        (dom/props {:class "quill-editor-wrapper"
-                    :style {:border "1px solid #ccc"
-                            :border-radius "4px"
-                            :background "#fff"}
-                    :data-role "widget"})
-        (reset! !container dom/node)
-
-        ;; Initialize Quill editor after DOM element exists
+      (let [node dom/node]
+        ;; Initialize or update: if no editor exists yet, create one.
+        ;; If editor already exists (page changed), just update content.
         (js/setTimeout
           (fn []
-            (println "[Component] Attempting to initialize editor")
-            (println "[Component] Container:" @!container)
-            (println "[Component] Initial HTML:" initial-html)
-            (when @!container
-              (editor/init-editor!
-                @!container
-                initial-html
-                (fn [html]
-                  (println "[Component] Content changed, length:" (count html))
-                  (reset! !editor-html html)
-                  (when on-change (on-change html))))))
+            (if @editor/!editor-state
+              (editor/set-content! initial-html)
+              (editor/init-editor! node initial-html)))
           200))
 
-      ;; Return current HTML for parent component
-      editor-html)))
+      ;; Cleanup on unmount
+      (e/on-unmount editor/destroy-editor!))))
