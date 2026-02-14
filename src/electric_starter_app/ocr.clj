@@ -33,7 +33,7 @@
 
 (defn extract-text
   "Extract text from a PDF page using OpenAI Vision API.
-   Returns plain text (no HTML formatting for v1)."
+   Returns HTML with semantic formatting (h1-h6, p, ul, ol, strong, em)."
   [pdf-bytes page-number]
   (try
     (let [api-key (settings/get-openai-api-key)
@@ -41,7 +41,14 @@
               (throw (ex-info "OpenAI API key not configured" {})))
           image (pdf-page->image pdf-bytes page-number)
           base64-image (image->base64 image)
-          prompt "Extract all text from this image. Return only the text content, preserving the reading order and structure."
+          prompt "Extract all text from this image and return it as clean, semantic HTML. Use:
+- <h1>, <h2>, <h3> for headings
+- <p> for paragraphs
+- <ul><li> and <ol><li> for lists
+- <strong> for bold/important text
+- <em> for italic/emphasized text
+- <br> for line breaks within paragraphs
+Preserve the reading order and document structure. Return only the HTML body content (no <html> or <body> tags)."
           response (api/create-chat-completion
                      {:model "gpt-4o"
                       :messages [{:role "user"

@@ -4,6 +4,7 @@
     [hyperfiddle.electric3 :as e]
     [hyperfiddle.electric-dom3 :as dom]
     [electric-starter-app.pdf-viewer-component :refer [PdfViewerComponent]]
+    [electric-starter-app.rich-text-editor-component :refer [RichTextEditorComponent]]
     #?(:clj [electric-starter-app.page :as page])
     #?(:clj [electric-starter-app.pdf :as pdf])))
 
@@ -119,14 +120,70 @@
               (let [refresh (e/server (e/watch !refresh))  ; Create reactive dependency on refresh atom
                     text-result (e/server (get-page-text* refresh selected-doc current-pdf-page))]
                 (if (:success text-result)
-                  (dom/div
-                    (dom/props {:style {:white-space "pre-wrap"
-                                        :padding "10px"
-                                        :border "1px solid #ccc"
-                                        :background-color "#f9f9f9"
-                                        :max-height "400px"
-                                        :overflow-y "auto"}})
-                    (dom/text (:text text-result)))
+                  (let [!edited-html (atom (:text text-result))
+                        edited-html (e/watch !edited-html)
+                        !save-success (atom nil)
+                        save-success (e/watch !save-success)]
+
+                    (dom/div
+                      ;; Rich text editor
+                      (reset! !edited-html
+                        (RichTextEditorComponent {:initial-html (:text text-result)
+                                                   :on-change (fn [html] (reset! !edited-html html))}))
+
+                      ;; Save button
+                      (dom/button
+                        (dom/props {:style {:margin-top "10px"
+                                           :padding "10px 20px"
+                                           :background "#28a745"
+                                           :color "white"
+                                           :border "none"
+                                           :border-radius "4px"
+                                           :cursor "pointer"
+                                           :font-size "14px"}})
+                        (dom/text "Save Changes")
+
+                        (let [click-event (dom/On "click" identity nil)
+                              [?token ?error] (e/Token click-event)]
+
+                          (dom/props {:disabled (some? ?token)
+                                      :style {:margin-top "10px"
+                                             :padding "10px 20px"
+                                             :background (if (some? ?token) "#ccc" "#28a745")
+                                             :color "white"
+                                             :border "none"
+                                             :border-radius "4px"
+                                             :cursor (if (some? ?token) "not-allowed" "pointer")
+                                             :font-size "14px"}})
+
+                          (when ?error
+                            (dom/div
+                              (dom/props {:style {:color "red" :margin-top "10px"}})
+                              (dom/text "Error: " ?error)))
+
+                          (when-some [token ?token]
+                            (let [result (e/server (page/save-page-html-impl
+                                                    selected-doc
+                                                    current-pdf-page
+                                                    edited-html))]
+                              (if (:success result)
+                                (do
+                                  (e/server (swap! !refresh inc))
+                                  (reset! !save-success true)
+                                  #?(:cljs (js/setTimeout #(reset! !save-success false) 3000))
+                                  (token))
+                                (token (:error result)))))))
+
+                      ;; Success message
+                      (when save-success
+                        (dom/div
+                          (dom/props {:style {:color "green"
+                                             :margin-top "10px"
+                                             :padding "10px"
+                                             :background "#d4edda"
+                                             :border "1px solid #c3e6cb"
+                                             :border-radius "4px"}})
+                          (dom/text "✓ Changes saved successfully!")))))
                   (dom/p
                     (dom/props {:style {:color "gray"}})
                     (dom/text "No text extracted yet. Click 'Extract Text' to process this page.")))))))))))

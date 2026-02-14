@@ -45,3 +45,13 @@
       {:success true :pages pages})
     (catch Exception e
       {:success false :error (.getMessage e)})))
+
+(defn save-page-html-impl
+  "Save edited OCR text (as HTML) for a page. Returns {:success true} or {:success false :error msg}."
+  [document-id page-number html]
+  (try
+    (db/save-page-text document-id page-number html)  ; Reuse existing function, now stores HTML
+    {:success true}
+    (catch Exception e
+      (println "ERROR [save-page-html-impl]:" (.getMessage e))
+      {:success false :error "Failed to save text"})))
