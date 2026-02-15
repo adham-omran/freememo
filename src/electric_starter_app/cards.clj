@@ -215,3 +215,77 @@
     (catch Exception e
       (println "ERROR [delete-card]:" (.getMessage e))
       {:success false :error (.getMessage e)})))
+
+;; CSV Export
+(defn export-cards-csv
+  "Export flashcards as CSV for Anki import.
+   Options:
+   - document-id: ID of the document
+   - page-number: Page number to export (nil = all pages)
+   - kind: \"basic\", \"cloze\", or nil (all kinds)
+   - header-text: Optional text to prepend to each card's front
+   Returns {:success true :csv \"...\" :filename \"...\"}
+   or {:success false :error \"...\"}"
+  [{:keys [document-id page-number kind header-text]}]
+  (try
+    (let [;; Get document info for filename and tags
+          doc (first (db/get-documents-by-id document-id))
+          _ (when-not doc
+              (throw (ex-info "Document not found" {:document-id document-id})))
+          doc-filename (-> (:documents/filename doc)
+                           (str/replace #"\.pdf$" "")
+                           (str/replace #"[^a-zA-Z0-9_-]" "_"))
+          ;; Query cards
+          all-cards (if page-number
+                     (db/get-flashcards document-id page-number)
+                     (db/get-all-flashcards document-id))
+          _ (println "  Found" (count all-cards) "cards before filtering")
+          _ (when (seq all-cards)
+              (println "  Card kinds in DB:" (set (map :flashcards/kind all-cards))))
+          ;; Filter by kind if specified
+          cards (if kind
+                  (do
+                    (println "  Filtering for kind:" (pr-str kind))
+                    (filter #(= (:flashcards/kind %) kind) all-cards))
+                  all-cards)
+          _ (println "  Found" (count cards) "cards after kind filter")
+          _ (when-not (seq cards)
+              (throw (ex-info "No cards to export" {:count (count all-cards) :kind kind})))
+          ;; Format header text if provided
+          header-html (when (and header-text (not (str/blank? header-text)))
+                        (str "<p>" header-text "</p>"))
+          ;; Format as CSV (comma-separated, with quoted fields)
+          csv-lines (map (fn [card]
+                          (let [card-kind (:flashcards/kind card)
+                                page (:flashcards/page_number card)
+                                ;; Tag format: "filename - pageN" (matching original)
+                                tag (str doc-filename " - " page)
+                                ;; Build front field
+                                front (if (= card-kind "basic")
+                                       (str (when header-html header-html)
+                                            "<p>" (:flashcards/question card) "</p>")
+                                       ;; Cloze: just the cloze text
+                                       (str "<p>" (:flashcards/cloze card) "</p>"))
+                                ;; Build back field
+                                back (if (= card-kind "basic")
+                                      (str "<p>" (:flashcards/answer card) "</p>")
+                                      "")
+                                ;; Escape quotes and wrap in quotes
+                                escape-csv (fn [s]
+                                            (str "\"" (str/replace (or s "") "\"" "\"\"") "\""))]
+                            (str (escape-csv front) ","
+                                 (escape-csv back) ","
+                                 (escape-csv tag))))
+                        cards)
+          csv-string (str/join "\n" csv-lines)
+          ;; Generate filename
+          kind-suffix (if kind (str "_" kind) "")
+          page-suffix (if page-number (str "_page" page-number) "_all")
+          filename (str doc-filename page-suffix kind-suffix ".csv")]
+      (println "  SUCCESS: Generated" filename "with" (count cards) "cards")
+      {:success true :csv csv-string :filename filename})
+    (catch Exception e
+      (let [error-msg (or (ex-message e) (.getMessage e))]
+        (println "ERROR [export-cards-csv]:" error-msg)
+        (println "  Document ID:" document-id ", Page:" page-number ", Kind:" kind)
+        {:success false :error error-msg}))))

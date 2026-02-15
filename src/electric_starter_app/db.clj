@@ -178,6 +178,15 @@
                          [:= :page_number page-number]]
                  :order-by [[:created_at :asc]]})))
 
+(defn get-all-flashcards
+  "Get all flashcards for a document (all pages)."
+  [document-id]
+  (jdbc/execute! ds
+    (sql/format {:select [:*]
+                 :from [:flashcards]
+                 :where [:= :document_id document-id]
+                 :order-by [[:page_number :asc] [:created_at :asc]]})))
+
 (defn delete-flashcard
   "Delete a single flashcard by ID."
   [card-id]

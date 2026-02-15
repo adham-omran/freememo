@@ -8,6 +8,7 @@
    [electric-starter-app.pdf-viewer-component :refer [PdfViewerComponent]]
    [electric-starter-app.rich-text-editor-component :refer [RichTextEditorComponent]]
    [electric-starter-app.rich-text-editor :as editor]
+   [clojure.string :as str]
    #?(:clj [electric-starter-app.page :as page])
    #?(:clj [electric-starter-app.pdf :as pdf])
    #?(:clj [electric-starter-app.cards :as cards])))
@@ -17,6 +18,17 @@
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 #?(:clj (defn get-page-text* [_refresh document-id page-number]
           (page/get-page-text document-id page-number)))
+
+;; Browser download helper (ClojureScript only)
+#?(:cljs
+   (defn trigger-download! [filename content]
+     (let [blob (js/Blob. #js [content] #js {:type "text/csv"})
+           url (.createObjectURL js/URL blob)
+           a (.createElement js/document "a")]
+       (set! (.-href a) url)
+       (set! (.-download a) filename)
+       (.click a)
+       (.revokeObjectURL js/URL url))))
 
 ;; Query wrapper for cards
 #?(:clj (defn get-cards* [_refresh document-id page-number]
@@ -412,7 +424,138 @@
                                     (do
                                       (e/server (swap! !refresh inc))
                                       (token))
-                                    (token (:error save-result))))))))))))
+                                    (token (:error save-result))))))))))
+
+                      ;; Separator
+                      (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
+
+                      ;; Export button
+                      (let [!show-export (atom false)
+                            show-export (e/watch !show-export)]
+                        (dom/button
+                          (dom/props {:style {:padding "4px 12px" :background "#6c757d" :color "white" :border "none"
+                                              :border-radius "4px" :cursor "pointer" :font-size "13px" :font-weight "500"}})
+                          (dom/text "Export...")
+                          (dom/On "click" (fn [_] (reset! !show-export true)) nil))
+
+                        ;; Export modal
+                        (when show-export
+                          (let [!export-scope (atom "Current Page")
+                                export-scope (e/watch !export-scope)
+                                !export-kind (atom "Both")
+                                export-kind (e/watch !export-kind)
+                                !use-header (atom false)
+                                use-header (e/watch !use-header)
+                                !header-text (atom "")
+                                header-text (e/watch !header-text)]
+
+                            (dom/div
+                              (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
+                                                  :background "rgba(0,0,0,0.5)" :display "flex" :align-items "center"
+                                                  :justify-content "center" :z-index "1000"}})
+                              (dom/On "click" (fn [_] (reset! !show-export false)) nil)
+
+                              (dom/div
+                                (dom/props {:style {:background "white" :border-radius "8px" :padding "24px"
+                                                    :width "400px" :box-shadow "0 4px 6px rgba(0,0,0,0.1)"}})
+                                (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+
+                                (dom/h3 (dom/props {:style {:margin-top "0" :margin-bottom "20px"}})
+                                  (dom/text "Export Cards"))
+
+                                (dom/div
+                                  (dom/props {:style {:margin-bottom "16px"}})
+                                  (dom/label
+                                    (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :margin-bottom "8px"}})
+                                    (dom/input (dom/props {:type "checkbox" :checked use-header})
+                                      (reset! !use-header (dom/On "change" (fn [e] (-> e .-target .-checked)) false)))
+                                    (dom/text "Add custom header to each card"))
+                                  (when use-header
+                                    (dom/input
+                                      (dom/props {:type "text" :value header-text :placeholder "e.g., Chapter 5: Accounting"
+                                                  :style {:width "100%" :padding "8px" :border "1px solid #ccc"
+                                                          :border-radius "4px" :font-size "14px"}})
+                                      (reset! !header-text (dom/On "input" (fn [e] (-> e .-target .-value)) "")))))
+
+                                (dom/div
+                                  (dom/props {:style {:margin-bottom "16px"}})
+                                  (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500"}})
+                                    (dom/text "Scope:"))
+                                  (dom/select
+                                    (dom/props {:style {:width "100%" :padding "8px" :border "1px solid #ccc"
+                                                        :border-radius "4px" :font-size "14px"}})
+                                    (dom/option (dom/props {:value "Current Page"}) (dom/text "Current Page"))
+                                    (dom/option (dom/props {:value "Entire Doc"}) (dom/text "Entire Document"))
+                                    (reset! !export-scope (dom/On "change" (fn [e] (-> e .-target .-value)) "Current Page"))))
+
+                                (dom/div
+                                  (dom/props {:style {:margin-bottom "24px"}})
+                                  (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500"}})
+                                    (dom/text "Card Type:"))
+                                  (dom/select
+                                    (dom/props {:style {:width "100%" :padding "8px" :border "1px solid #ccc"
+                                                        :border-radius "4px" :font-size "14px"}})
+                                    (dom/option (dom/props {:value "Both"}) (dom/text "Both (Basic + Cloze)"))
+                                    (dom/option (dom/props {:value "Basic"}) (dom/text "Basic Only"))
+                                    (dom/option (dom/props {:value "Cloze"}) (dom/text "Cloze Only"))
+                                    (reset! !export-kind (dom/On "change" (fn [e] (-> e .-target .-value)) "Both"))))
+
+                                (dom/div
+                                  (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "12px"}})
+                                  (dom/button
+                                    (dom/props {:style {:padding "8px 16px" :background "#f8f9fa" :color "#333"
+                                                        :border "1px solid #ccc" :border-radius "4px" :cursor "pointer" :font-size "14px"}})
+                                    (dom/text "Cancel")
+                                    (dom/On "click" (fn [_] (reset! !show-export false)) nil))
+
+                                  (dom/button
+                                    (dom/props {:style {:padding "8px 16px" :background "#28a745" :color "white" :border "none"
+                                                        :border-radius "4px" :cursor "pointer" :font-size "14px" :font-weight "500"}})
+                                    (dom/text "Export")
+                                    (let [click-event (dom/On "click" identity nil)
+                                          [?token ?error] (e/Token click-event)]
+                                      (dom/props {:disabled (some? ?token)
+                                                  :style {:padding "8px 16px"
+                                                          :background (if (some? ?token) "#999" "#28a745")
+                                                          :color "white" :border "none" :border-radius "4px"
+                                                          :cursor (if (some? ?token) "not-allowed" "pointer")
+                                                          :font-size "14px" :font-weight "500"}})
+                                      (when ?error
+                                        (dom/div (dom/props {:style {:color "red" :font-size "12px" :margin-top "8px"}})
+                                          (dom/text "Error: " ?error)))
+                                      (when-some [token ?token]
+                                        (if (= export-kind "Both")
+                                          (let [basic-result (e/server
+                                                              (cards/export-cards-csv
+                                                                {:document-id selected-doc
+                                                                 :page-number (when (= export-scope "Current Page") current-pdf-page)
+                                                                 :kind "basic"
+                                                                 :header-text (when use-header header-text)}))
+                                                cloze-result (e/server
+                                                              (cards/export-cards-csv
+                                                                {:document-id selected-doc
+                                                                 :page-number (when (= export-scope "Current Page") current-pdf-page)
+                                                                 :kind "cloze"
+                                                                 :header-text (when use-header header-text)}))]
+                                            (if (and (:success basic-result) (:success cloze-result))
+                                              (do
+                                                (trigger-download! (:filename basic-result) (:csv basic-result))
+                                                (trigger-download! (:filename cloze-result) (:csv cloze-result))
+                                                (reset! !show-export false)
+                                                (token))
+                                              (token (str "Export failed: " (or (:error basic-result) (:error cloze-result))))))
+                                          (let [export-result (e/server
+                                                                (cards/export-cards-csv
+                                                                  {:document-id selected-doc
+                                                                   :page-number (when (= export-scope "Current Page") current-pdf-page)
+                                                                   :kind (str/lower-case export-kind)
+                                                                   :header-text (when use-header header-text)}))]
+                                            (if (:success export-result)
+                                              (do
+                                                (trigger-download! (:filename export-result) (:csv export-result))
+                                                (reset! !show-export false)
+                                                (token))
+                                              (token (:error export-result))))))))))))))))
 
                 ;; Cards table with virtual scroll
                 (let [cards-result (e/server (get-cards* refresh selected-doc current-pdf-page))]
