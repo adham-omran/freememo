@@ -126,11 +126,11 @@
                       (token))
                     (token (:error result))))))))))))
 
-(e/defn OcrPage []
+(e/defn OcrPage [user-id]
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-      (let [docs-result (e/server (pdf/list-pdfs))
+      (let [docs-result (e/server (pdf/list-pdfs user-id))
             !selected-doc (atom nil)
             selected-doc (e/watch !selected-doc)]
 
@@ -248,7 +248,7 @@
                             (dom/text "Error: " ?error)))
 
                         (when-some [token ?token]
-                          (let [result (e/server (page/extract-page-text selected-doc current-pdf-page))]
+                          (let [result (e/server (page/extract-page-text user-id selected-doc current-pdf-page))]
                             (if (:success result)
                               (do
                                 (e/server (swap! !refresh inc))
@@ -299,10 +299,10 @@
                 ;; Generation toolbar (compact single row)
                 (when page-text
                   (let [;; Load settings from server
-                        server-context-enabled (e/server (settings/get-context-enabled))
-                        server-context-pages (e/server (settings/get-context-pages))
-                        server-card-type (e/server (settings/get-card-type))
-                        server-card-count (e/server (settings/get-card-count))
+                        server-context-enabled (e/server (settings/get-context-enabled user-id))
+                        server-context-pages (e/server (settings/get-context-pages user-id))
+                        server-card-type (e/server (settings/get-card-type user-id))
+                        server-card-count (e/server (settings/get-card-count user-id))
 
                         ;; Initialize atoms with server values
                         !use-context (atom server-context-enabled)
@@ -329,7 +329,7 @@
                             (when (some? change-event)  ; Only reset when event actually fires
                               (reset! !use-context change-event))
                             (when-some [token ?token]
-                              (e/server (settings/save-context-enabled change-event))
+                              (e/server (settings/save-context-enabled user-id change-event))
                               (token))))
                         (dom/text "Context"))
                       (dom/input
@@ -345,7 +345,7 @@
                           (when (some? input-event)  ; Only reset when event actually fires
                             (reset! !context-window input-event))
                           (when-some [token ?token]
-                            (e/server (settings/save-context-pages input-event))
+                            (e/server (settings/save-context-pages user-id input-event))
                             (token))))
                       (dom/span (dom/props {:style {:font-size "13px" :color "#666"}}) (dom/text "pg"))
 
@@ -363,7 +363,7 @@
                             (when (some? change-event)  ; Only reset when event actually fires
                               (reset! !card-type change-event))
                             (when-some [token ?token]
-                              (e/server (settings/save-card-type "basic"))
+                              (e/server (settings/save-card-type user-id "basic"))
                               (token))))
                         (dom/text "Basic"))
                       (dom/label
@@ -376,7 +376,7 @@
                             (when (some? change-event)  ; Only reset when event actually fires
                               (reset! !card-type change-event))
                             (when-some [token ?token]
-                              (e/server (settings/save-card-type "cloze"))
+                              (e/server (settings/save-card-type user-id "cloze"))
                               (token))))
                         (dom/text "Cloze"))
 
@@ -398,7 +398,7 @@
                             (when (some? input-event)  ; Only reset when event actually fires
                               (reset! !card-count input-event))
                             (when-some [token ?token]
-                              (e/server (settings/save-card-count input-event))
+                              (e/server (settings/save-card-count user-id input-event))
                               (token)))))
 
                       ;; Generate button
@@ -445,11 +445,13 @@
                                                       (cards/generate-basic-cards
                                                         {:content content
                                                          :context context-text
-                                                         :card-count card-count-val})
+                                                         :card-count card-count-val
+                                                         :user-id user-id})
                                                       (cards/generate-cloze-cards
                                                         {:content content
                                                          :context context-text
-                                                         :card-count card-count-val})))]
+                                                         :card-count card-count-val
+                                                         :user-id user-id})))]
 
                               (if-not (:success generate-result)
                                 (token (:error generate-result))
@@ -565,13 +567,15 @@
                                                                 {:document-id selected-doc
                                                                  :page-number (when (= export-scope "Current Page") current-pdf-page)
                                                                  :kind "basic"
-                                                                 :header-text (when use-header header-text)}))
+                                                                 :header-text (when use-header header-text)
+                                                                 :user-id user-id}))
                                                 cloze-result (e/server
                                                               (cards/export-cards-csv
                                                                 {:document-id selected-doc
                                                                  :page-number (when (= export-scope "Current Page") current-pdf-page)
                                                                  :kind "cloze"
-                                                                 :header-text (when use-header header-text)}))]
+                                                                 :header-text (when use-header header-text)
+                                                                 :user-id user-id}))]
                                             (if (and (:success basic-result) (:success cloze-result))
                                               (do
                                                 (trigger-download! (:filename basic-result) (:csv basic-result))
@@ -584,7 +588,8 @@
                                                                   {:document-id selected-doc
                                                                    :page-number (when (= export-scope "Current Page") current-pdf-page)
                                                                    :kind (str/lower-case export-kind)
-                                                                   :header-text (when use-header header-text)}))]
+                                                                   :header-text (when use-header header-text)
+                                                                   :user-id user-id}))]
                                             (if (:success export-result)
                                               (do
                                                 (trigger-download! (:filename export-result) (:csv export-result))

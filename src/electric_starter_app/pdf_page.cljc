@@ -10,7 +10,7 @@
 #?(:clj (defonce !refresh (atom 0)))  ; Server-side refresh trigger
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
-#?(:clj (defn list-pdfs* [_refresh] (pdf/list-pdfs)))
+#?(:clj (defn list-pdfs* [_refresh user-id] (pdf/list-pdfs user-id)))
 
 ;; Helper: format bytes to human-readable
 #?(:clj
@@ -23,7 +23,7 @@
          :else (format "%.1f MB" (double (/ bytes 1024 1024)))))))
 
 ;; PDF list item component
-(e/defn PdfListItem [doc]
+(e/defn PdfListItem [user-id doc]
   (e/client
     (let [id (e/server (:documents/id doc))
           filename (e/server (:documents/filename doc))
@@ -61,7 +61,7 @@
 
             (when-some [token ?token]
               (reset! !deleting true)
-              (let [result (e/server (pdf/delete-pdf id))]
+              (let [result (e/server (pdf/delete-pdf user-id id))]
                 (if (:success result)
                   (do
                     (e/server (swap! !refresh inc))  ; Trigger server-side refresh
@@ -71,7 +71,7 @@
                     (token (:error result))))))))))))
 
 ;; Main PDF page component
-(e/defn PdfPage []
+(e/defn PdfPage [user-id]
   (e/client
     (dom/div
       (dom/h1 (dom/text "PDF Documents"))
@@ -90,7 +90,7 @@
       (dom/h2 (dom/text "Uploaded Documents"))
       (e/server
         (let [refresh (e/watch !refresh)
-              docs-result (list-pdfs* refresh)]
+              docs-result (list-pdfs* refresh user-id)]
           (e/client
             (if (:success docs-result)
               (if (seq (:documents docs-result))
@@ -112,7 +112,7 @@
                         (e/for [i (e/diff-by {} (range offset (+ offset limit)))]
                           (let [doc (e/server (nth docs-vec i nil))]
                             (when doc
-                              (PdfListItem doc)))))
+                              (PdfListItem user-id doc)))))
                       ;; Spacer for full scroll height
                       (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))
                 (dom/p (dom/text "No documents uploaded yet.")))

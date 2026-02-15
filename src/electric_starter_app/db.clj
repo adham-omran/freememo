@@ -19,26 +19,35 @@
 ;; Schema setup
 (defn setup-schema []
   (println "Setting up database schema...")
+
+  ;; Enable pgcrypto for password hashing
+  (jdbc/execute! ds ["CREATE EXTENSION IF NOT EXISTS pgcrypto"])
+
+  ;; Create users table (before settings, since settings references it)
   (jdbc/execute! ds ["
-    CREATE TABLE IF NOT EXISTS settings (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      username TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )"])
 
-  ;; Seed default values if table is empty
-  (let [count (-> (jdbc/execute-one! ds ["SELECT COUNT(*) FROM settings"])
-                  :count)]
-    (when (zero? count)
-      (println "Seeding default settings...")
-      (jdbc/execute! ds (sql/format
-        {:insert-into :settings
-         :values [{:key "openai_api_key" :value ""}
-                  {:key "model" :value "gpt-4o"}
-                  {:key "card_count" :value "5"}
-                  {:key "context_enabled" :value "false"}
-                  {:key "context_pages" :value "3"}
-                  {:key "card_type" :value "basic"}]}))))
+  ;; Migrate settings: drop old global table, recreate with user_id
+  ;; Check if settings table exists and lacks user_id column
+  (let [has-user-id (jdbc/execute-one! ds
+                      ["SELECT column_name FROM information_schema.columns
+                        WHERE table_name = 'settings' AND column_name = 'user_id'"])]
+    (when-not has-user-id
+      (println "Migrating settings table to per-user...")
+      (jdbc/execute! ds ["DROP TABLE IF EXISTS settings"])
+      (jdbc/execute! ds ["
+        CREATE TABLE IF NOT EXISTS settings (
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          key TEXT NOT NULL,
+          value TEXT NOT NULL,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (user_id, key)
+        )"])))
 
   ;; Create documents table
   (jdbc/execute! ds ["
@@ -50,6 +59,9 @@
       mime_type TEXT NOT NULL,
       uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )"])
+
+  ;; Add user_id column to documents (nullable — existing orphaned docs survive)
+  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE SET NULL"])
 
   ;; Create pages table for OCR text storage
   (jdbc/execute! ds ["
@@ -84,49 +96,57 @@
   (println "Database ready."))
 
 ;; Query functions
-(defn get-setting [key]
+(defn get-setting [user-id key]
   (-> (jdbc/execute-one! ds
         (sql/format {:select [:value]
                      :from [:settings]
-                     :where [:= :key key]}))
+                     :where [:and
+                             [:= :user_id user-id]
+                             [:= :key key]]}))
       :settings/value))
 
-(defn set-setting [key value]
+(defn set-setting [user-id key value]
   (jdbc/execute! ds
     (sql/format {:insert-into :settings
-                 :values [{:key key :value value}]
-                 :on-conflict [:key]
+                 :values [{:user_id user-id :key key :value value}]
+                 :on-conflict [:user_id :key]
                  :do-update-set {:value value
                                  :updated_at [:now]}})))
 
 ;; Document queries
-(defn save-document [filename file-bytes file-size mime-type]
+(defn save-document [user-id filename file-bytes file-size mime-type]
   (jdbc/execute! ds
     (sql/format {:insert-into :documents
-                 :values [{:filename filename
+                 :values [{:user_id user-id
+                           :filename filename
                            :file_data file-bytes
                            :file_size file-size
                            :mime_type mime-type}]
                  :returning [:id]})))
 
-(defn get-documents []
+(defn get-documents [user-id]
   (jdbc/execute! ds
     (sql/format {:select [:id :filename :file_size :uploaded_at]
                  :from [:documents]
+                 :where [:= :user_id user-id]
                  :order-by [[:uploaded_at :desc]]})))
 
-(defn delete-document [id]
+(defn delete-document [user-id id]
   (jdbc/execute! ds
     (sql/format {:delete-from :documents
-                 :where [:= :id id]})))
+                 :where [:and
+                         [:= :id id]
+                         [:= :user_id user-id]]})))
 
 (defn get-documents-by-id
-  "Retrieve a document by its ID."
-  [id]
+  "Retrieve a document by its ID, scoped to user."
+  [user-id id]
   (jdbc/execute! ds
     (sql/format {:select [:*]
                  :from [:documents]
-                 :where [:= :id id]})))
+                 :where [:and
+                         [:= :id id]
+                         [:= :user_id user-id]]})))
 
 ;; Page queries
 (defn save-page-text

@@ -90,17 +90,17 @@
    - :card-count - Number of cards to generate (default from settings)
    - :model - OpenAI model to use (default from settings)
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}"
-  [{:keys [content context card-count model]}]
+  [{:keys [content context card-count model user-id]}]
   (try
-    (let [api-key (settings/get-openai-api-key)
+    (let [api-key (settings/get-openai-api-key user-id)
           _ (when (empty? api-key)
               (throw (ex-info "OpenAI API key not configured" {})))
           _ (when (empty? content)
               (throw (ex-info "No content provided" {})))
-          card-count (or card-count (settings/get-card-count))
-          model (or model (settings/get-model))
-          reasoning (settings/get-reasoning)
-          verbosity (settings/get-verbosity)
+          card-count (or card-count (settings/get-card-count user-id))
+          model (or model (settings/get-model user-id))
+          reasoning (settings/get-reasoning user-id)
+          verbosity (settings/get-verbosity user-id)
           has-context? (not (empty? context))
           prompt (build-basic-prompt card-count has-context?)
           _ (when-not prompt
@@ -132,18 +132,19 @@
    - :context - Optional context text from previous pages
    - :card-count - Number of cards to generate (default from settings)
    - :model - OpenAI model to use (default from settings)
+   - :user-id - User ID for settings lookup
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}"
-  [{:keys [content context card-count model]}]
+  [{:keys [content context card-count model user-id]}]
   (try
-    (let [api-key (settings/get-openai-api-key)
+    (let [api-key (settings/get-openai-api-key user-id)
           _ (when (empty? api-key)
               (throw (ex-info "OpenAI API key not configured" {})))
           _ (when (empty? content)
               (throw (ex-info "No content provided" {})))
-          card-count (or card-count (settings/get-card-count))
-          model (or model (settings/get-model))
-          reasoning (settings/get-reasoning)
-          verbosity (settings/get-verbosity)
+          card-count (or card-count (settings/get-card-count user-id))
+          model (or model (settings/get-model user-id))
+          reasoning (settings/get-reasoning user-id)
+          verbosity (settings/get-verbosity user-id)
           has-context? (not (empty? context))
           prompt (build-cloze-prompt card-count has-context?)
           _ (when-not prompt
@@ -226,10 +227,10 @@
    - header-text: Optional text to prepend to each card's front
    Returns {:success true :csv \"...\" :filename \"...\"}
    or {:success false :error \"...\"}"
-  [{:keys [document-id page-number kind header-text]}]
+  [{:keys [document-id page-number kind header-text user-id]}]
   (try
     (let [;; Get document info for filename and tags
-          doc (first (db/get-documents-by-id document-id))
+          doc (first (db/get-documents-by-id user-id document-id))
           _ (when-not doc
               (throw (ex-info "Document not found" {:document-id document-id})))
           doc-filename (-> (:documents/filename doc)

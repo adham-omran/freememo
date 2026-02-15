@@ -7,19 +7,28 @@
    #?(:clj [ring.util.response :as ring-response])
    #?(:clj [ring.middleware.not-modified :refer [wrap-not-modified]])
    #?(:clj [ring.middleware.params :refer [wrap-params]])
+   #?(:clj [ring.middleware.multipart-params :refer [wrap-multipart-params]])
    #?(:clj [ring.middleware.resource :refer [wrap-resource]])
    #?(:clj [ring.middleware.content-type :refer [wrap-content-type]])
+   #?(:clj [ring.middleware.session :refer [wrap-session]])
    #?(:clj [hyperfiddle.electric-ring-adapter3 :as electric-ring])
    #?(:cljs [hyperfiddle.electric-client3 :as electric-client])
 
    #?(:clj clojure.edn)
    #?(:clj clojure.java.io)
    #?(:clj [clojure.tools.logging :as log])
-   #?(:clj [electric-starter-app.db :as db])))
+   #?(:clj [electric-starter-app.db :as db])
+   #?(:clj [electric-starter-app.api :as api])))
 
 (defmacro comptime-resource [filename] (some-> filename clojure.java.io/resource slurp clojure.edn/read-string))
 
 (declare wrap-prod-index-page wrap-ensure-cache-bust-on-server-deployment)
+
+#?(:clj
+   (defn wrap-api-routes [handler]
+     (fn [request]
+       (or (api/api-routes request)
+           (handler request)))))
 
 #?(:clj ; server entrypoint
    (defn -main [& {:strs [] :as args}] ; clojure.main entrypoint, args are strings
@@ -50,7 +59,10 @@
            (wrap-ensure-cache-bust-on-server-deployment)
            (electric-ring/wrap-electric-websocket (fn [ring-request] (electric-starter-app.main/electric-boot ring-request)))
            (electric-ring/wrap-reject-stale-client config) ; ensures electric client and servers stays in sync.
-           (wrap-params))
+           (wrap-api-routes)
+           (wrap-multipart-params)
+           (wrap-params)
+           (wrap-session))
          {:host (:host config), :port (:port config), :join? false
           :ws-idle-timeout (* 60 1000)          ; 60 seconds in milliseconds
           :ws-max-binary-size (* 100 1024 1024) ; 100MB - for demo
