@@ -99,6 +99,8 @@
               (throw (ex-info "No content provided" {})))
           card-count (or card-count (settings/get-card-count))
           model (or model (settings/get-model))
+          reasoning (settings/get-reasoning)
+          verbosity (settings/get-verbosity)
           has-context? (not (empty? context))
           prompt (build-basic-prompt card-count has-context?)
           _ (when-not prompt
@@ -110,8 +112,12 @@
           response (api/create-chat-completion
                      {:model model
                       :messages [{:role "system" :content prompt}
-                                 {:role "user" :content content-text}]}
-                     {:api-key api-key})
+                                 {:role "user" :content content-text}]
+                      :reasoning {:effort reasoning}
+                      :text {:verbosity verbosity}}
+                     {:api-key api-key
+                      :reasoning {:effort reasoning}
+                      :verbosity verbosity})
           raw-text (-> response :choices first :message :content)
           cards (parse-edn-response raw-text)]
       {:success true :cards cards})
@@ -136,6 +142,8 @@
               (throw (ex-info "No content provided" {})))
           card-count (or card-count (settings/get-card-count))
           model (or model (settings/get-model))
+          reasoning (settings/get-reasoning)
+          verbosity (settings/get-verbosity)
           has-context? (not (empty? context))
           prompt (build-cloze-prompt card-count has-context?)
           _ (when-not prompt
@@ -147,8 +155,12 @@
           response (api/create-chat-completion
                      {:model model
                       :messages [{:role "system" :content prompt}
-                                 {:role "user" :content content-text}]}
-                     {:api-key api-key})
+                                 {:role "user" :content content-text}]
+                      :reasoning {:effort reasoning}
+                      :text {:verbosity verbosity}}
+                     {:api-key api-key
+                      :reasoning {:effort reasoning}
+                      :verbosity verbosity})
           raw-text (-> response :choices first :message :content)
           cards (parse-edn-response raw-text)]
       {:success true :cards cards})
