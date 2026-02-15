@@ -3,6 +3,8 @@
   (:require
     [hyperfiddle.electric3 :as e]
     [hyperfiddle.electric-dom3 :as dom]
+    [hyperfiddle.electric-scroll0 :refer [Scroll-window]]
+    [contrib.data :refer [clamp-left]]
     #?(:clj [electric-starter-app.pdf :as pdf])))
 
 #?(:clj (defonce !refresh (atom 0)))  ; Server-side refresh trigger
@@ -31,7 +33,13 @@
           !deleting (atom false)
           deleting (e/watch !deleting)]
 
-      (dom/li
+      (dom/div
+        (dom/props {:style {:display "flex"
+                            :align-items "center"
+                            :justify-content "space-between"
+                            :padding "12px"
+                            :border-bottom "1px solid #e0e0e0"
+                            :background "white"}})
         (dom/div
           (dom/strong (dom/text filename))
           (dom/text " ")
@@ -78,7 +86,7 @@
           (dom/props {:type "submit"})
           (dom/text "Upload")))
 
-      ;; Document list
+      ;; Document list with virtual scroll
       (dom/h2 (dom/text "Uploaded Documents"))
       (e/server
         (let [refresh (e/watch !refresh)
@@ -86,10 +94,27 @@
           (e/client
             (if (:success docs-result)
               (if (seq (:documents docs-result))
-                (dom/ul
-                  (e/server
-                    (e/for-by :documents/id [doc (:documents docs-result)]
-                      (e/client (PdfListItem doc)))))
+                (let [docs-vec (e/server (vec (:documents docs-result)))
+                      doc-count (e/server (count docs-vec))
+                      row-height 49]
+                  ;; Scroll viewport
+                  (dom/div
+                    (dom/props {:style {:max-height "400px"
+                                        :overflow-y "auto"
+                                        :border "1px solid #e0e0e0"
+                                        :border-radius "4px"}})
+                    (let [[offset limit] (Scroll-window row-height doc-count dom/node {:overquery-factor 1})
+                          occluded-height (clamp-left (* row-height (- doc-count limit)) 0)]
+                      ;; Document list container
+                      (dom/div
+                        (dom/props {:style {:position "relative"
+                                            :top (str (* offset row-height) "px")}})
+                        (e/for [i (e/diff-by {} (range offset (+ offset limit)))]
+                          (let [doc (e/server (nth docs-vec i nil))]
+                            (when doc
+                              (PdfListItem doc)))))
+                      ;; Spacer for full scroll height
+                      (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))
                 (dom/p (dom/text "No documents uploaded yet.")))
               (dom/div
                 (dom/props {:style {:color "red"}})
