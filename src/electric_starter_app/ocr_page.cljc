@@ -3,6 +3,8 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [hyperfiddle.electric-scroll0 :refer [Scroll-window]]
+   [contrib.data :refer [clamp-left]]
    [electric-starter-app.pdf-viewer-component :refer [PdfViewerComponent]]
    [electric-starter-app.rich-text-editor-component :refer [RichTextEditorComponent]]
    [electric-starter-app.rich-text-editor :as editor]
@@ -47,67 +49,66 @@
          (.addEventListener js/document "mousemove" on-move)
          (.addEventListener js/document "mouseup" @on-up)))))
 
-;; Card display component
-(e/defn CardItem [card]
+;; Card table row component
+(e/defn CardRow [card]
   (e/client
     (let [id (e/server (:flashcards/id card))
           kind (e/server (:flashcards/kind card))
           question (e/server (:flashcards/question card))
           answer (e/server (:flashcards/answer card))
           cloze (e/server (:flashcards/cloze card))]
-      (dom/div
-        (dom/props {:style {:border "1px solid #ddd"
-                            :border-radius "8px"
-                            :padding "12px"
-                            :margin-bottom "12px"
-                            :background "#f9f9f9"}})
-        ;; Card content
-        (if (= kind "basic")
-          (dom/div
-            (dom/div
-              (dom/props {:style {:font-weight "bold" :margin-bottom "8px"}})
-              (dom/text "Q: " question))
-            (dom/div
-              (dom/props {:style {:margin-bottom "8px"}})
-              (dom/text "A: " answer)))
-          (dom/div
-            (dom/props {:style {:font-family "monospace" :margin-bottom "8px"}})
-            (dom/text cloze)))
-
-        ;; Delete button
-        (dom/button
-          (dom/props {:style {:padding "4px 8px"
-                              :background "#dc3545"
-                              :color "white"
-                              :border "none"
-                              :border-radius "4px"
-                              :cursor "pointer"
-                              :font-size "12px"}})
-          (dom/text "Delete")
-          (let [click-event (dom/On "click" identity nil)
-                [?token ?error] (e/Token click-event)]
-
-            (dom/props {:disabled (some? ?token)
-                        :style {:padding "4px 8px"
-                                :background (if (some? ?token) "#999" "#dc3545")
+      (dom/tr
+        (dom/props {:style {:border-bottom "1px solid #e0e0e0"}})
+        ;; Front column
+        (dom/td
+          (dom/props {:style {:padding "6px 8px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap" :max-width "0"}})
+          (dom/text (if (= kind "basic") question cloze)))
+        ;; Back column
+        (dom/td
+          (dom/props {:style {:padding "6px 8px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap" :max-width "0"}})
+          (dom/text (if (= kind "basic") (or answer "") "")))
+        ;; Kind column
+        (dom/td
+          (dom/props {:style {:padding "6px 8px" :width "60px" :color "#666" :font-size "12px"}})
+          (dom/text kind))
+        ;; Delete column
+        (dom/td
+          (dom/props {:style {:padding "6px 4px" :width "40px" :text-align "center"}})
+          (dom/button
+            (dom/props {:style {:padding "2px 6px"
+                                :background "#dc3545"
                                 :color "white"
                                 :border "none"
-                                :border-radius "4px"
-                                :cursor (if (some? ?token) "not-allowed" "pointer")
-                                :font-size "12px"}})
+                                :border-radius "3px"
+                                :cursor "pointer"
+                                :font-size "12px"
+                                :line-height "1"}})
+            (dom/text "\u00D7")
+            (let [click-event (dom/On "click" identity nil)
+                  [?token ?error] (e/Token click-event)]
 
-            (when ?error
-              (dom/div
-                (dom/props {:style {:color "red" :margin-top "4px" :font-size "12px"}})
-                (dom/text "Error: " ?error)))
+              (dom/props {:disabled (some? ?token)
+                          :style {:padding "2px 6px"
+                                  :background (if (some? ?token) "#999" "#dc3545")
+                                  :color "white"
+                                  :border "none"
+                                  :border-radius "3px"
+                                  :cursor (if (some? ?token) "not-allowed" "pointer")
+                                  :font-size "12px"
+                                  :line-height "1"}})
 
-            (when-some [token ?token]
-              (let [result (e/server (cards/delete-card id))]
-                (if (:success result)
-                  (do
-                    (e/server (swap! !refresh inc))
-                    (token))
-                  (token (:error result)))))))))))
+              (when ?error
+                (dom/div
+                  (dom/props {:style {:color "red" :font-size "11px"}})
+                  (dom/text ?error)))
+
+              (when-some [token ?token]
+                (let [result (e/server (cards/delete-card id))]
+                  (if (:success result)
+                    (do
+                      (e/server (swap! !refresh inc))
+                      (token))
+                    (token (:error result))))))))))))
 
 (e/defn OcrPage []
   (e/client
@@ -154,275 +155,308 @@
             (dom/props {:style {:color "red"}})
             (dom/text "Error loading documents: " (or (:error docs-result) "Unknown error"))))
 
-        ;; PDF Viewer and OCR extraction (shows when document is selected)
+        ;; Main content (shows when document is selected)
         (when selected-doc
-          ;; State atoms for split pane percentages
-          (let [!left-pct (atom 50)
-                left-pct (e/watch !left-pct)
-                !top-pct (atom 50)
+          (let [!top-pct (atom 60)
                 top-pct (e/watch !top-pct)
-                !mid-pct (atom 25)
-                mid-pct (e/watch !mid-pct)]
+                !left-pct (atom 50)
+                left-pct (e/watch !left-pct)
+                ;; Bridge current-pdf-page via atom so it's available at outer scope
+                !current-page (atom 1)
+                current-pdf-page (e/watch !current-page)
+                ;; Shared server data — hoisted so both editor and bottom panel can use them
+                dirty-data (e/watch editor/!dirty-html)
+                save-result (when (some? dirty-data)
+                              (e/server
+                                (e/Offload
+                                  #(page/save-page-html-impl
+                                     (:doc-id dirty-data)
+                                     (:page dirty-data)
+                                     (:html dirty-data)))))
+                refresh (e/server (e/watch !refresh))
+                text-result (e/server (get-page-text* refresh selected-doc current-pdf-page))
+                page-text (e/server (when (:success text-result) (:text text-result)))]
 
-            ;; Horizontal split container
+            ;; Outer: vertical flex (top row / bottom panel)
             (dom/div
-              (dom/props {:style {:flex "1" :display "flex" :min-height "0" :overflow "hidden"}})
+              (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0" :overflow "hidden"}})
 
-              ;; LEFT: PDF viewer
-              (let [current-pdf-page
-                    (dom/div
-                      (dom/props {:style {:width (str left-pct "%") :min-width "0" :overflow "hidden"}})
-                      (PdfViewerComponent {:document-id selected-doc}))]
+              ;; TOP ROW: PDF | Editor (horizontal flex)
+              (dom/div
+                (dom/props {:style {:height (str top-pct "%") :display "flex" :min-height "0" :overflow "hidden"}})
+
+                ;; LEFT: PDF viewer
+                (dom/div
+                  (dom/props {:style {:width (str left-pct "%") :min-width "0" :overflow "hidden"}})
+                  (reset! !current-page (PdfViewerComponent {:document-id selected-doc})))
 
                 ;; Horizontal drag handle
                 (dom/div
                   (dom/props {:class "split-divider-h"})
                   (dom/On "mousedown" (fn [e] (start-drag! e :x !left-pct)) nil))
 
-                ;; RIGHT: 3-panel stack
+                ;; RIGHT: Editor
                 (dom/div
                   (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-width "0" :min-height "0" :overflow "hidden"}})
 
-                  ;; Hoist all shared bindings so panels are siblings
-                  (let [dirty-data (e/watch editor/!dirty-html)
-                        save-result (when (some? dirty-data)
-                                      (e/server
-                                        (e/Offload
-                                          #(page/save-page-html-impl
-                                             (:doc-id dirty-data)
-                                             (:page dirty-data)
-                                             (:html dirty-data)))))
-                        refresh (e/server (e/watch !refresh))
-                        text-result (e/server (get-page-text* refresh selected-doc current-pdf-page))
-                        page-text (e/server (when (:success text-result) (:text text-result)))]
+                  ;; Page header + extract button
+                  (dom/div
+                    (dom/props {:style {:display "flex" :align-items "center" :gap "12px" :padding "8px" :flex-shrink "0"}})
+                    (dom/span
+                      (dom/props {:style {:font-weight "bold" :font-size "16px"}})
+                      (dom/text "Page " current-pdf-page))
+                    (dom/button
+                      (dom/props {:style {:padding "8px 16px"
+                                          :background "#007bff"
+                                          :color "white"
+                                          :border "none"
+                                          :border-radius "4px"
+                                          :cursor "pointer"
+                                          :font-size "14px"}})
+                      (dom/text "Extract Text")
+                      (let [click-event (dom/On "click" identity nil)
+                            [?token ?error] (e/Token click-event)]
 
-                    ;; RIGHT-TOP: header + editor
-                    (dom/div
-                      (dom/props {:style {:height (str top-pct "%") :display "flex" :flex-direction "column" :min-height "0" :overflow "hidden"}})
+                        (dom/props {:disabled (some? ?token)
+                                    :style {:padding "8px 16px"
+                                            :background (if (some? ?token) "#ccc" "#007bff")
+                                            :color "white"
+                                            :border "none"
+                                            :border-radius "4px"
+                                            :cursor (if (some? ?token) "not-allowed" "pointer")
+                                            :font-size "14px"}})
 
-                      ;; Page header + extract button
-                      (dom/div
-                        (dom/props {:style {:display "flex" :align-items "center" :gap "12px" :padding "8px" :flex-shrink "0"}})
+                        (when ?error
+                          (dom/div
+                            (dom/props {:style {:color "red" :margin-top "10px"}})
+                            (dom/text "Error: " ?error)))
+
+                        (when-some [token ?token]
+                          (let [result (e/server (page/extract-page-text selected-doc current-pdf-page))]
+                            (if (:success result)
+                              (do
+                                (e/server (swap! !refresh inc))
+                                (token))
+                              (token (:error result)))))))
+
+                    ;; Save status indicator with fade-out
+                    (when (some? dirty-data)
+                      (let [is-success (:success save-result)
+                            message (if is-success "Saved" (str "Save error: " (:error save-result)))
+                            !show (atom true)
+                            show (e/watch !show)]
                         (dom/span
-                          (dom/props {:style {:font-weight "bold" :font-size "16px"}})
-                          (dom/text "Page " current-pdf-page))
-                        (dom/button
-                          (dom/props {:style {:padding "8px 16px"
-                                              :background "#007bff"
+                          (dom/props {:style {:margin-left "12px"
+                                              :font-size "12px"
+                                              :color (if is-success "#888" "red")
+                                              :opacity (if show "1" "0")
+                                              :transition "opacity 0.5s ease-out"}})
+                          (dom/text message)
+                          ;; Fade out after 2 seconds (only for successful saves)
+                          (when is-success
+                            (js/setTimeout
+                              (fn [] (reset! !show false))
+                              2000))))))
+
+                  ;; Editor area
+                  (dom/div
+                    (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
+                    (if (:success text-result)
+                      (dom/div
+                        (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
+                        (RichTextEditorComponent {:initial-html (:text text-result)
+                                                  :page-number current-pdf-page
+                                                  :doc-id selected-doc}))
+                      (dom/p
+                        (dom/props {:style {:color "gray"}})
+                        (dom/text "No text extracted yet. Click 'Extract Text' to process this page."))))))
+
+              ;; Vertical drag handle (full width)
+              (dom/div
+                (dom/props {:class "split-divider-v"})
+                (dom/On "mousedown" (fn [e] (start-drag! e :y !top-pct)) nil))
+
+              ;; BOTTOM PANEL: Options toolbar + Cards table (full width)
+              (dom/div
+                (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0" :overflow "hidden"}})
+
+                ;; Generation toolbar (compact single row)
+                (when page-text
+                  (let [!use-context (atom false)
+                        use-context (e/watch !use-context)
+                        !card-type (atom "basic")
+                        card-type (e/watch !card-type)
+                        !context-window (atom 3)
+                        context-window (e/watch !context-window)
+                        !card-count (atom 20)
+                        card-count-val (e/watch !card-count)]
+
+                    (dom/div
+                      (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
+                                          :padding "8px 12px" :flex-shrink "0"
+                                          :border-bottom "1px solid #e0e0e0" :background "#fafafa"}})
+
+                      ;; Context checkbox + pages
+                      (dom/label
+                        (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}})
+                        (dom/input
+                          (dom/props {:type "checkbox" :checked use-context})
+                          (reset! !use-context
+                            (dom/On "change" (fn [e] (-> e .-target .-checked)) false)))
+                        (dom/text "Context"))
+                      (dom/input
+                        (dom/props {:type "number" :min "1" :max "10" :value (str context-window)
+                                    :disabled (not use-context)
+                                    :style {:padding "2px 4px" :font-size "13px" :width "40px"
+                                            :opacity (if use-context "1" "0.5")}})
+                        (reset! !context-window
+                          (dom/On "input"
+                            (fn [e] (let [v (-> e .-target .-value)]
+                                      (if (seq v) (js/parseInt v) 3)))
+                            3)))
+                      (dom/span (dom/props {:style {:font-size "13px" :color "#666"}}) (dom/text "pg"))
+
+                      ;; Separator
+                      (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
+
+                      ;; Card type radios
+                      (dom/label
+                        (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}})
+                        (dom/input
+                          (dom/props {:type "radio" :name "card-type" :value "basic"
+                                      :checked (= card-type "basic")})
+                          (dom/On "change" (fn [_] (reset! !card-type "basic")) nil))
+                        (dom/text "Basic"))
+                      (dom/label
+                        (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}})
+                        (dom/input
+                          (dom/props {:type "radio" :name "card-type" :value "cloze"
+                                      :checked (= card-type "cloze")})
+                          (dom/On "change" (fn [_] (reset! !card-type "cloze")) nil))
+                        (dom/text "Cloze"))
+
+                      ;; Separator
+                      (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
+
+                      ;; Card count
+                      (dom/span
+                        (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}})
+                        (dom/text "#")
+                        (dom/input
+                          (dom/props {:type "number" :min "1" :max "50" :value (str card-count-val)
+                                      :style {:padding "2px 4px" :font-size "13px" :width "50px"}})
+                          (reset! !card-count
+                            (dom/On "input"
+                              (fn [e] (let [v (-> e .-target .-value)]
+                                        (if (seq v) (js/parseInt v) 20)))
+                              20))))
+
+                      ;; Generate button
+                      (dom/button
+                        (dom/props {:style {:padding "4px 12px"
+                                            :background "#28a745"
+                                            :color "white"
+                                            :border "none"
+                                            :border-radius "4px"
+                                            :cursor "pointer"
+                                            :font-size "13px"
+                                            :font-weight "bold"
+                                            :margin-left "auto"}})
+                        (dom/text "Generate")
+                        (let [click-event (dom/On "click" identity nil)
+                              [?token ?error] (e/Token click-event)]
+
+                          (dom/props {:disabled (some? ?token)
+                                      :style {:padding "4px 12px"
+                                              :background (if (some? ?token) "#999" "#28a745")
                                               :color "white"
                                               :border "none"
                                               :border-radius "4px"
-                                              :cursor "pointer"
-                                              :font-size "14px"}})
-                          (dom/text "Extract Text")
-                          (let [click-event (dom/On "click" identity nil)
-                                [?token ?error] (e/Token click-event)]
+                                              :cursor (if (some? ?token) "not-allowed" "pointer")
+                                              :font-size "13px"
+                                              :font-weight "bold"
+                                              :margin-left "auto"}})
 
-                            (dom/props {:disabled (some? ?token)
-                                        :style {:padding "8px 16px"
-                                                :background (if (some? ?token) "#ccc" "#007bff")
-                                                :color "white"
-                                                :border "none"
-                                                :border-radius "4px"
-                                                :cursor (if (some? ?token) "not-allowed" "pointer")
-                                                :font-size "14px"}})
+                          (when ?token
+                            (dom/text " ..."))
 
-                            (when ?error
-                              (dom/div
-                                (dom/props {:style {:color "red" :margin-top "10px"}})
-                                (dom/text "Error: " ?error)))
+                          (when ?error
+                            (dom/div
+                              (dom/props {:style {:color "red" :font-size "12px"}})
+                              (dom/text "Error: " ?error)))
 
-                            (when-some [token ?token]
-                              (let [result (e/server (page/extract-page-text selected-doc current-pdf-page))]
-                                (if (:success result)
-                                  (do
-                                    (e/server (swap! !refresh inc))
-                                    (token))
-                                  (token (:error result)))))))
+                          (when-some [token ?token]
+                            (let [selected-text (editor/get-selected-text!)
+                                  content (or selected-text page-text)
+                                  context-text (when use-context
+                                                 (e/server (cards/get-context-pages selected-doc current-pdf-page context-window)))
+                                  generate-result (e/server
+                                                    (if (= card-type "basic")
+                                                      (cards/generate-basic-cards
+                                                        {:content content
+                                                         :context context-text
+                                                         :card-count card-count-val})
+                                                      (cards/generate-cloze-cards
+                                                        {:content content
+                                                         :context context-text
+                                                         :card-count card-count-val})))]
 
-                        ;; Save status indicator with fade-out
-                        (when (some? dirty-data)
-                          (let [is-success (:success save-result)
-                                message (if is-success "Saved" (str "Save error: " (:error save-result)))
-                                !show (atom true)
-                                show (e/watch !show)]
-                            (dom/span
-                              (dom/props {:style {:margin-left "12px"
-                                                  :font-size "12px"
-                                                  :color (if is-success "#888" "red")
-                                                  :opacity (if show "1" "0")
-                                                  :transition "opacity 0.5s ease-out"}})
-                              (dom/text message)
-                              ;; Fade out after 2 seconds (only for successful saves)
-                              (when is-success
-                                (js/setTimeout
-                                  (fn [] (reset! !show false))
-                                  2000))))))
+                              (if-not (:success generate-result)
+                                (token (:error generate-result))
+                                (let [generated-cards (e/server (:cards generate-result))
+                                      save-result (e/server (cards/save-cards selected-doc current-pdf-page card-type generated-cards))]
+                                  (if (:success save-result)
+                                    (do
+                                      (e/server (swap! !refresh inc))
+                                      (token))
+                                    (token (:error save-result))))))))))))
 
-                      ;; Editor area
-                      (dom/div
-                        (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                        (if (:success text-result)
-                          (dom/div
-                            (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-                            (RichTextEditorComponent {:initial-html (:text text-result)
-                                                      :page-number current-pdf-page
-                                                      :doc-id selected-doc}))
-                          (dom/p
-                            (dom/props {:style {:color "gray"}})
-                            (dom/text "No text extracted yet. Click 'Extract Text' to process this page."))))) ;; end RIGHT-TOP
-
-                    ;; Vertical drag handle 1
+                ;; Cards table with virtual scroll
+                (let [cards-result (e/server (get-cards* refresh selected-doc current-pdf-page))]
+                  (if (:success cards-result)
+                    (if (seq (:cards cards-result))
+                      (let [cards-vec (e/server (vec (:cards cards-result)))
+                            card-count (e/server (count cards-vec))
+                            row-height 36]
+                        ;; Scroll viewport
+                        (dom/div
+                          (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
+                          (let [[offset limit] (Scroll-window row-height card-count dom/node {:overquery-factor 1})
+                                occluded-height (clamp-left (* row-height (- card-count limit)) 0)]
+                            ;; Cards table
+                            (dom/table
+                              (dom/props {:style {:width "100%"
+                                                  :border-collapse "collapse"
+                                                  :table-layout "fixed"
+                                                  :font-size "13px"}})
+                              ;; Table header
+                              (dom/thead
+                                (dom/props {:style {:position "sticky" :top "0" :background "#f5f5f5" :z-index "1"}})
+                                (dom/tr
+                                  (dom/th (dom/props {:style {:text-align "left" :padding "6px 8px" :font-weight "600"
+                                                              :border-bottom "2px solid #ccc" :font-size "12px" :color "#555"}})
+                                    (dom/text "Front"))
+                                  (dom/th (dom/props {:style {:text-align "left" :padding "6px 8px" :font-weight "600"
+                                                              :border-bottom "2px solid #ccc" :font-size "12px" :color "#555"}})
+                                    (dom/text "Back"))
+                                  (dom/th (dom/props {:style {:text-align "left" :padding "6px 8px" :font-weight "600" :width "60px"
+                                                              :border-bottom "2px solid #ccc" :font-size "12px" :color "#555"}})
+                                    (dom/text "Kind"))
+                                  (dom/th (dom/props {:style {:width "40px" :border-bottom "2px solid #ccc"}})
+                                    (dom/text ""))))
+                              ;; Virtual-scrolled body
+                              (dom/tbody
+                                (dom/props {:style {:position "relative"
+                                                    :top (str (* offset row-height) "px")}})
+                                (e/for [i (e/diff-by {} (range offset (+ offset limit)))]
+                                  (let [card (e/server (nth cards-vec i nil))]
+                                    (when card
+                                      (CardRow card))))))
+                            ;; Spacer for full scroll height
+                            (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))
+                      (dom/p
+                        (dom/props {:style {:color "gray" :font-size "13px" :padding "8px 12px"}})
+                        (dom/text "No cards generated yet.")))
                     (dom/div
-                      (dom/props {:class "split-divider-v"})
-                      (dom/On "mousedown" (fn [e] (start-drag! e :y !top-pct)) nil))
-
-                    ;; RIGHT-MID: card options
-                    (when (:success text-result)
-                      (let [!use-context (atom false)
-                            use-context (e/watch !use-context)
-                            !card-type (atom "basic")
-                            card-type (e/watch !card-type)
-                            !context-window (atom 3)
-                            context-window (e/watch !context-window)
-                            !card-count (atom 20)
-                            card-count (e/watch !card-count)]
-
-                        (dom/div
-                          (dom/props {:style {:height (str mid-pct "%") :overflow-y "auto" :padding "12px" :min-height "0"}})
-                          (dom/h3 (dom/props {:style {:margin-top "0"}}) (dom/text "Generate Flashcards"))
-
-                          ;; Context option — single line: checkbox + label + number input
-                          (dom/div
-                            (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :margin-bottom "12px"}})
-                            (dom/label
-                              (dom/props {:style {:display "flex" :align-items "center" :gap "4px"}})
-                              (dom/input
-                                (dom/props {:type "checkbox" :checked use-context})
-                                (reset! !use-context
-                                  (dom/On "change" (fn [e] (-> e .-target .-checked)) false)))
-                              (dom/text "Include context from previous"))
-                            (dom/input
-                              (dom/props {:type "number" :min "1" :max "10" :value (str context-window)
-                                          :disabled (not use-context)
-                                          :style {:padding "4px" :font-size "14px" :width "50px"
-                                                  :opacity (if use-context "1" "0.5")}})
-                              (reset! !context-window
-                                (dom/On "input"
-                                  (fn [e] (let [v (-> e .-target .-value)]
-                                            (if (seq v) (js/parseInt v) 3)))
-                                  3)))
-                            (dom/text "pages"))
-
-                          ;; Card type + count — single line
-                          (dom/div
-                            (dom/props {:style {:display "flex" :align-items "center" :gap "12px" :margin-bottom "12px" :flex-wrap "wrap"}})
-                            (dom/label
-                              (dom/props {:style {:display "flex" :align-items "center" :gap "4px"}})
-                              (dom/input
-                                (dom/props {:type "radio" :name "card-type" :value "basic"
-                                            :checked (= card-type "basic")})
-                                (dom/On "change" (fn [_] (reset! !card-type "basic")) nil))
-                              (dom/text "Basic (Q&A)"))
-                            (dom/label
-                              (dom/props {:style {:display "flex" :align-items "center" :gap "4px"}})
-                              (dom/input
-                                (dom/props {:type "radio" :name "card-type" :value "cloze"
-                                            :checked (= card-type "cloze")})
-                                (dom/On "change" (fn [_] (reset! !card-type "cloze")) nil))
-                              (dom/text "Cloze"))
-                            (dom/span
-                              (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :margin-left "auto"}})
-                              (dom/text "Cards:")
-                              (dom/input
-                                (dom/props {:type "number" :min "1" :max "50" :value (str card-count)
-                                            :style {:padding "4px" :font-size "14px" :width "60px"}})
-                                (reset! !card-count
-                                  (dom/On "input"
-                                    (fn [e] (let [v (-> e .-target .-value)]
-                                              (if (seq v) (js/parseInt v) 20)))
-                                    20)))))
-
-                          ;; Generate button
-                          (dom/button
-                            (dom/props {:style {:padding "10px 20px"
-                                                :background "#28a745"
-                                                :color "white"
-                                                :border "none"
-                                                :border-radius "4px"
-                                                :cursor "pointer"
-                                                :font-size "14px"
-                                                :font-weight "bold"}})
-                            (dom/text "Generate Cards")
-                            (let [click-event (dom/On "click" identity nil)
-                                  [?token ?error] (e/Token click-event)]
-
-                              (dom/props {:disabled (some? ?token)
-                                          :style {:padding "10px 20px"
-                                                  :background (if (some? ?token) "#999" "#28a745")
-                                                  :color "white"
-                                                  :border "none"
-                                                  :border-radius "4px"
-                                                  :cursor (if (some? ?token) "not-allowed" "pointer")
-                                                  :font-size "14px"
-                                                  :font-weight "bold"}})
-
-                              (when ?token
-                                (dom/text " Generating..."))
-
-                              (when ?error
-                                (dom/div
-                                  (dom/props {:style {:color "red" :margin-top "10px" :font-size "14px"}})
-                                  (dom/text "Error: " ?error)))
-
-                              (when-some [token ?token]
-                                ;; AUTO-DETECT: use selection if present, else full page
-                                (let [selected-text (editor/get-selected-text!)
-                                      content (or selected-text page-text)
-                                      ;; SERVER: Fetch context if checkbox is on
-                                      context-text (when use-context
-                                                     (e/server (cards/get-context-pages selected-doc current-pdf-page context-window)))
-                                      ;; SERVER: Generate cards
-                                      generate-result (e/server
-                                                        (if (= card-type "basic")
-                                                          (cards/generate-basic-cards
-                                                            {:content content
-                                                             :context context-text
-                                                             :card-count card-count})
-                                                          (cards/generate-cloze-cards
-                                                            {:content content
-                                                             :context context-text
-                                                             :card-count card-count})))]
-
-                                  (if-not (:success generate-result)
-                                    (token (:error generate-result))
-                                    (let [generated-cards (e/server (:cards generate-result))
-                                          save-result (e/server (cards/save-cards selected-doc current-pdf-page card-type generated-cards))]
-                                      (if (:success save-result)
-                                        (do
-                                          (e/server (swap! !refresh inc))
-                                          (token))
-                                        (token (:error save-result))))))))))
-
-                        ;; Vertical drag handle 2
-                        (dom/div
-                          (dom/props {:class "split-divider-v"})
-                          (dom/On "mousedown" (fn [e] (start-drag! e :y !mid-pct)) nil))
-
-                        ;; RIGHT-BOTTOM: cards list
-                        (dom/div
-                          (dom/props {:style {:flex "1" :overflow-y "auto" :padding "12px" :min-height "0"}})
-                          (dom/h4 (dom/props {:style {:margin-top "0"}}) (dom/text "Generated Cards"))
-                          (let [cards-result (e/server (get-cards* refresh selected-doc current-pdf-page))]
-                            (if (:success cards-result)
-                              (if (seq (:cards cards-result))
-                                (dom/div
-                                  (e/server
-                                    (e/for-by :flashcards/id [card (:cards cards-result)]
-                                      (e/client (CardItem card)))))
-                                (dom/p
-                                  (dom/props {:style {:color "gray" :font-size "14px"}})
-                                  (dom/text "No cards generated yet.")))
-                              (dom/div
-                                (dom/props {:style {:color "red" :font-size "14px"}})
-                                (dom/text "Error loading cards: " (:error cards-result))))))))))))))))))
+                      (dom/props {:style {:color "red" :font-size "13px" :padding "8px 12px"}})
+                      (dom/text "Error loading cards: " (:error cards-result)))))))))))))
