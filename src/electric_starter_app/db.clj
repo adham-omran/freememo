@@ -35,7 +35,10 @@
         {:insert-into :settings
          :values [{:key "openai_api_key" :value ""}
                   {:key "model" :value "gpt-4o"}
-                  {:key "card_count" :value "20"}]}))))
+                  {:key "card_count" :value "5"}
+                  {:key "context_enabled" :value "false"}
+                  {:key "context_pages" :value "3"}
+                  {:key "card_type" :value "basic"}]}))))
 
   ;; Create documents table
   (jdbc/execute! ds ["

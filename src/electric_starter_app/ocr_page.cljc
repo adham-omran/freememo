@@ -11,7 +11,8 @@
    [clojure.string :as str]
    #?(:clj [electric-starter-app.page :as page])
    #?(:clj [electric-starter-app.pdf :as pdf])
-   #?(:clj [electric-starter-app.cards :as cards])))
+   #?(:clj [electric-starter-app.cards :as cards])
+   #?(:clj [electric-starter-app.settings :as settings])))
 
 #?(:clj (defonce !refresh (atom 0)))  ; Server-side refresh trigger
 
@@ -297,13 +298,20 @@
 
                 ;; Generation toolbar (compact single row)
                 (when page-text
-                  (let [!use-context (atom false)
+                  (let [;; Load settings from server
+                        server-context-enabled (e/server (settings/get-context-enabled))
+                        server-context-pages (e/server (settings/get-context-pages))
+                        server-card-type (e/server (settings/get-card-type))
+                        server-card-count (e/server (settings/get-card-count))
+
+                        ;; Initialize atoms with server values
+                        !use-context (atom server-context-enabled)
                         use-context (e/watch !use-context)
-                        !card-type (atom "basic")
-                        card-type (e/watch !card-type)
-                        !context-window (atom 3)
+                        !context-window (atom server-context-pages)
                         context-window (e/watch !context-window)
-                        !card-count (atom 5)
+                        !card-type (atom server-card-type)
+                        card-type (e/watch !card-type)
+                        !card-count (atom server-card-count)
                         card-count-val (e/watch !card-count)]
 
                     (dom/div
@@ -316,19 +324,29 @@
                         (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}})
                         (dom/input
                           (dom/props {:type "checkbox" :checked use-context})
-                          (reset! !use-context
-                            (dom/On "change" (fn [e] (-> e .-target .-checked)) false)))
+                          (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
+                                [?token ?error] (e/Token change-event)]
+                            (when (some? change-event)  ; Only reset when event actually fires
+                              (reset! !use-context change-event))
+                            (when-some [token ?token]
+                              (e/server (settings/save-context-enabled change-event))
+                              (token))))
                         (dom/text "Context"))
                       (dom/input
                         (dom/props {:type "number" :min "1" :max "10" :value (str context-window)
                                     :disabled (not use-context)
                                     :style {:padding "2px 4px" :font-size "13px" :width "40px"
                                             :opacity (if use-context "1" "0.5")}})
-                        (reset! !context-window
-                          (dom/On "input"
-                            (fn [e] (let [v (-> e .-target .-value)]
-                                      (if (seq v) (js/parseInt v) 3)))
-                            3)))
+                        (let [input-event (dom/On "change"  ; Use "change" instead of "input" - fires on blur/enter
+                                            (fn [e] (let [v (-> e .-target .-value)]
+                                                      (if (seq v) (js/parseInt v) nil)))
+                                            nil)
+                              [?token ?error] (e/Token input-event)]
+                          (when (some? input-event)  ; Only reset when event actually fires
+                            (reset! !context-window input-event))
+                          (when-some [token ?token]
+                            (e/server (settings/save-context-pages input-event))
+                            (token))))
                       (dom/span (dom/props {:style {:font-size "13px" :color "#666"}}) (dom/text "pg"))
 
                       ;; Separator
@@ -340,14 +358,26 @@
                         (dom/input
                           (dom/props {:type "radio" :name "card-type" :value "basic"
                                       :checked (= card-type "basic")})
-                          (dom/On "change" (fn [_] (reset! !card-type "basic")) nil))
+                          (let [change-event (dom/On "change" (fn [_] "basic") nil)
+                                [?token ?error] (e/Token change-event)]
+                            (when (some? change-event)  ; Only reset when event actually fires
+                              (reset! !card-type change-event))
+                            (when-some [token ?token]
+                              (e/server (settings/save-card-type "basic"))
+                              (token))))
                         (dom/text "Basic"))
                       (dom/label
                         (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}})
                         (dom/input
                           (dom/props {:type "radio" :name "card-type" :value "cloze"
                                       :checked (= card-type "cloze")})
-                          (dom/On "change" (fn [_] (reset! !card-type "cloze")) nil))
+                          (let [change-event (dom/On "change" (fn [_] "cloze") nil)
+                                [?token ?error] (e/Token change-event)]
+                            (when (some? change-event)  ; Only reset when event actually fires
+                              (reset! !card-type change-event))
+                            (when-some [token ?token]
+                              (e/server (settings/save-card-type "cloze"))
+                              (token))))
                         (dom/text "Cloze"))
 
                       ;; Separator
@@ -360,11 +390,16 @@
                         (dom/input
                           (dom/props {:type "number" :min "1" :max "50" :value (str card-count-val)
                                       :style {:padding "2px 4px" :font-size "13px" :width "50px"}})
-                          (reset! !card-count
-                            (dom/On "input"
-                              (fn [e] (let [v (-> e .-target .-value)]
-                                        (if (seq v) (js/parseInt v) 5)))
-                              5))))
+                          (let [input-event (dom/On "change"  ; Use "change" instead of "input" - fires on blur/enter
+                                              (fn [e] (let [v (-> e .-target .-value)]
+                                                        (if (seq v) (js/parseInt v) nil)))
+                                              nil)
+                                [?token ?error] (e/Token input-event)]
+                            (when (some? input-event)  ; Only reset when event actually fires
+                              (reset! !card-count input-event))
+                            (when-some [token ?token]
+                              (e/server (settings/save-card-count input-event))
+                              (token)))))
 
                       ;; Generate button
                       (dom/button

@@ -5,24 +5,6 @@
     [hyperfiddle.electric-dom3 :as dom]
     #?(:clj [electric-starter-app.settings :as settings])))
 
-(e/defn Input [v]
-  (dom/input
-    (dom/props {:type "password" :value v})
-    (dom/On "input" #(-> % .-target .-value) v)))
-
-(e/defn SaveButton []
-  (dom/button
-    (dom/props {:type "button"})
-    (dom/text "Save")
-    (let [click-event (dom/On "click" identity nil)
-          [?token ?error] (e/Token click-event)]
-      (when ?error
-        (dom/text " ")
-        (dom/span
-          (dom/props {:style {:color "red"}})
-          (dom/text ?error)))
-      (dom/props {:disabled (some? ?token)})
-      ?token)))
 
 (e/defn SettingsPage []
   (e/client
@@ -35,9 +17,7 @@
           reasoning (e/watch !reasoning)
           server-verbosity (e/server (settings/get-verbosity))
           !verbosity (atom server-verbosity)
-          verbosity (e/watch !verbosity)
-          !save-success (atom nil)
-          save-success (e/watch !save-success)]
+          verbosity (e/watch !verbosity)]
 
       (dom/div
         (dom/h2 (dom/text "Settings"))
@@ -45,7 +25,15 @@
         (dom/div
           (dom/label (dom/text "OpenAI API Key:"))
           (dom/br)
-          (reset! !api-key (Input api-key)))
+          (dom/input
+            (dom/props {:type "password" :value api-key})
+            (let [input-event (dom/On "change" #(-> % .-target .-value) nil)
+                  [?token ?error] (e/Token input-event)]
+              (when (some? input-event)
+                (reset! !api-key input-event))
+              (when-some [token ?token]
+                (e/server (settings/save-openai-api-key input-event))
+                (token)))))
 
         ;; Reasoning selector
         (dom/div
@@ -59,7 +47,13 @@
             (dom/option (dom/props {:value "low"}) (dom/text "Low"))
             (dom/option (dom/props {:value "medium"}) (dom/text "Medium"))
             (dom/option (dom/props {:value "high"}) (dom/text "High"))
-            (reset! !reasoning (dom/On "change" #(-> % .-target .-value) reasoning))))
+            (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                  [?token ?error] (e/Token change-event)]
+              (when (some? change-event)
+                (reset! !reasoning change-event))
+              (when-some [token ?token]
+                (e/server (settings/save-reasoning change-event))
+                (token)))))
 
         ;; Verbosity selector
         (dom/div
@@ -71,28 +65,12 @@
             (dom/option (dom/props {:value "low"}) (dom/text "Low"))
             (dom/option (dom/props {:value "medium"}) (dom/text "Medium"))
             (dom/option (dom/props {:value "high"}) (dom/text "High"))
-            (reset! !verbosity (dom/On "change" #(-> % .-target .-value) verbosity))))
+            (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                  [?token ?error] (e/Token change-event)]
+              (when (some? change-event)
+                (reset! !verbosity change-event))
+              (when-some [token ?token]
+                (e/server (settings/save-verbosity change-event))
+                (token)))))
 
-        (dom/div
-          (dom/props {:style {:margin-top "20px"}})
-          (when-some [token (SaveButton)]
-            (let [result-api-key (e/server (settings/save-openai-api-key api-key))
-                  result-reasoning (e/server (settings/save-reasoning reasoning))
-                  result-verbosity (e/server (settings/save-verbosity verbosity))
-                  all-success (and (:success result-api-key)
-                                   (:success result-reasoning)
-                                   (:success result-verbosity))
-                  error (or (:error result-api-key)
-                            (:error result-reasoning)
-                            (:error result-verbosity))]
-              (if all-success
-                (do
-                  (reset! !save-success true)
-                  #?(:cljs (js/setTimeout #(reset! !save-success nil) 3000))
-                  (token))
-                (token error)))))
-
-        (when save-success
-          (dom/div
-            (dom/props {:style {:margin-top "10px" :color "green"}})
-            (dom/text "✓ Saved successfully")))))))
+))))
