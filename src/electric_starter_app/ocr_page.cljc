@@ -117,32 +117,42 @@
             !selected-doc (atom nil)
             selected-doc (e/watch !selected-doc)]
 
-        (when (:success docs-result)
-          (if (seq (:documents docs-result))
-            (dom/div
-              (dom/props {:style {:flex-shrink "0" :padding "8px 0"}})
-              (dom/select
-                (dom/props {:style {:margin-bottom "0"}})
-                (dom/option
-                  (dom/props {:value ""})
-                  (dom/text "-- Choose a document --"))
-                (e/server
-                  (e/for-by :documents/id [doc (:documents docs-result)]
-                    (e/client
-                      (let [id (e/server (:documents/id doc))
-                            filename (e/server (:documents/filename doc))]
-                        (dom/option
-                          (dom/props {:value (str id)})
-                          (dom/text filename))))))
-                (reset! !selected-doc
-                  (dom/On "change"
-                    (fn [e]
-                      (let [val (-> e .-target .-value)]
-                        (if (seq val)
-                          (js/parseInt val)
-                          nil)))
-                    nil)))
-            (dom/p (dom/text "No documents available. Please upload a PDF first."))))
+        (cond
+          ;; Success with documents
+          (and (:success docs-result) (seq (:documents docs-result)))
+          (dom/div
+            (dom/props {:style {:flex-shrink "0" :padding "8px 0"}})
+            (dom/select
+              (dom/props {:style {:margin-bottom "0"}})
+              (dom/option
+                (dom/props {:value ""})
+                (dom/text "-- Choose a document --"))
+              (e/server
+                (e/for-by :documents/id [doc (:documents docs-result)]
+                  (e/client
+                    (let [id (e/server (:documents/id doc))
+                          filename (e/server (:documents/filename doc))]
+                      (dom/option
+                        (dom/props {:value (str id)})
+                        (dom/text filename))))))
+              (reset! !selected-doc
+                (dom/On "change"
+                  (fn [e]
+                    (let [val (-> e .-target .-value)]
+                      (if (seq val)
+                        (js/parseInt val)
+                        nil)))
+                  nil))))
+
+          ;; Success but no documents
+          (:success docs-result)
+          (dom/p (dom/text "No documents available. Please upload a PDF first."))
+
+          ;; Error case
+          :else
+          (dom/p
+            (dom/props {:style {:color "red"}})
+            (dom/text "Error loading documents: " (or (:error docs-result) "Unknown error"))))
 
         ;; PDF Viewer and OCR extraction (shows when document is selected)
         (when selected-doc
@@ -415,4 +425,4 @@
                                   (dom/text "No cards generated yet.")))
                               (dom/div
                                 (dom/props {:style {:color "red" :font-size "14px"}})
-                                (dom/text "Error loading cards: " (:error cards-result)))))))))))))))))))
+                                (dom/text "Error loading cards: " (:error cards-result))))))))))))))))))
