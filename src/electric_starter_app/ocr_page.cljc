@@ -291,7 +291,7 @@
                         card-type (e/watch !card-type)
                         !context-window (atom 3)
                         context-window (e/watch !context-window)
-                        !card-count (atom 20)
+                        !card-count (atom 5)
                         card-count-val (e/watch !card-count)]
 
                     (dom/div
@@ -351,8 +351,8 @@
                           (reset! !card-count
                             (dom/On "input"
                               (fn [e] (let [v (-> e .-target .-value)]
-                                        (if (seq v) (js/parseInt v) 20)))
-                              20))))
+                                        (if (seq v) (js/parseInt v) 5)))
+                              5))))
 
                       ;; Generate button
                       (dom/button
