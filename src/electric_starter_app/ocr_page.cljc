@@ -21,33 +21,31 @@
           (cards/get-cards document-id page-number)))
 
 ;; Drag helper for split-pane dividers
-#?(:cljs
-   (defn make-draggable!
-     "Attach mousedown listener to divider-el. On drag, compute delta as % of
-      parent container size along axis (:x or :y) and reset! !pct, clamped to [15,85]."
-     [divider-el axis !pct]
-     (let [horizontal? (= axis :x)]
-       (.addEventListener divider-el "mousedown"
-         (fn [e]
-           (.preventDefault e)
-           (let [start-pos    (if horizontal? (.-clientX e) (.-clientY e))
-                 start-pct    @!pct
-                 parent       (.-parentElement divider-el)
-                 parent-size  (if horizontal?
-                                (.-offsetWidth parent)
-                                (.-offsetHeight parent))
-                 on-move      (fn [me]
-                                (let [delta     (- (if horizontal? (.-clientX me) (.-clientY me)) start-pos)
-                                      delta-pct (* (/ delta parent-size) 100)
-                                      new-pct   (-> (+ start-pct delta-pct) (max 15) (min 85))]
-                                  (reset! !pct new-pct)))
-                 on-up        (atom nil)]
-             (reset! on-up
-               (fn [_]
-                 (.removeEventListener js/document "mousemove" on-move)
-                 (.removeEventListener js/document "mouseup" @on-up)))
-             (.addEventListener js/document "mousemove" on-move)
-             (.addEventListener js/document "mouseup" @on-up)))))))
+(defn start-drag!
+  "Begin a split-pane drag. Call from a mousedown handler.
+   axis: :x for horizontal, :y for vertical."
+  [e axis !pct]
+  #?(:clj nil
+     :cljs
+     (do
+       (.preventDefault e)
+       (let [horizontal? (= axis :x)
+             start-pos   (if horizontal? (.-clientX e) (.-clientY e))
+             start-pct   @!pct
+             parent      (-> e .-target .-parentElement)
+             parent-size (if horizontal? (.-offsetWidth parent) (.-offsetHeight parent))
+             on-move     (fn [me]
+                           (let [delta     (- (if horizontal? (.-clientX me) (.-clientY me)) start-pos)
+                                 delta-pct (* (/ delta parent-size) 100)
+                                 new-pct   (-> (+ start-pct delta-pct) (max 15) (min 85))]
+                             (reset! !pct new-pct)))
+             on-up       (atom nil)]
+         (reset! on-up
+           (fn [_]
+             (.removeEventListener js/document "mousemove" on-move)
+             (.removeEventListener js/document "mouseup" @on-up)))
+         (.addEventListener js/document "mousemove" on-move)
+         (.addEventListener js/document "mouseup" @on-up)))))
 
 ;; Card display component
 (e/defn CardItem [card]
@@ -169,8 +167,7 @@
                 ;; Horizontal drag handle
                 (dom/div
                   (dom/props {:class "split-divider-h"})
-                  (let [divider-el dom/node]
-                    (js/setTimeout #(make-draggable! divider-el :x !left-pct) 50)))
+                  (dom/On "mousedown" (fn [e] (start-drag! e :x !left-pct)) nil))
 
                 ;; RIGHT: 3-panel stack
                 (dom/div
@@ -268,8 +265,7 @@
                     ;; Vertical drag handle 1
                     (dom/div
                       (dom/props {:class "split-divider-v"})
-                      (let [divider-el dom/node]
-                        (js/setTimeout #(make-draggable! divider-el :y !top-pct) 50)))
+                      (dom/On "mousedown" (fn [e] (start-drag! e :y !top-pct)) nil))
 
                     ;; RIGHT-MID: card options
                     (when (:success text-result)
@@ -459,8 +455,7 @@
                         ;; Vertical drag handle 2
                         (dom/div
                           (dom/props {:class "split-divider-v"})
-                          (let [divider-el dom/node]
-                            (js/setTimeout #(make-draggable! divider-el :y !mid-pct) 50)))
+                          (dom/On "mousedown" (fn [e] (start-drag! e :y !mid-pct)) nil))
 
                         ;; RIGHT-BOTTOM: cards list
                         (dom/div
