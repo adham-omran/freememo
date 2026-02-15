@@ -269,8 +269,8 @@
 
                     ;; RIGHT-MID: card options
                     (when (:success text-result)
-                      (let [!input-mode (atom "full")
-                            input-mode (e/watch !input-mode)
+                      (let [!use-context (atom false)
+                            use-context (e/watch !use-context)
                             !card-type (atom "basic")
                             card-type (e/watch !card-type)
                             !context-window (atom 3)
@@ -282,103 +282,56 @@
                           (dom/props {:style {:height (str mid-pct "%") :overflow-y "auto" :padding "12px" :min-height "0"}})
                           (dom/h3 (dom/props {:style {:margin-top "0"}}) (dom/text "Generate Flashcards"))
 
-                          ;; Input mode selection
+                          ;; Context option — single line: checkbox + label + number input
                           (dom/div
-                            (dom/props {:style {:margin-bottom "12px"}})
+                            (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :margin-bottom "12px"}})
                             (dom/label
-                              (dom/props {:style {:display "block" :margin-bottom "8px" :font-weight "bold"}})
-                              (dom/text "Input Mode:"))
-                            (dom/div
-                              (dom/label
-                                (dom/props {:style {:display "block" :margin-bottom "4px"}})
-                                (dom/input
-                                  (dom/props {:type "radio" :name "input-mode" :value "full"
-                                              :checked (= input-mode "full")})
-                                  (dom/On "change"
-                                    (fn [_] (reset! !input-mode "full"))
-                                    nil))
-                                (dom/text " Full page text"))
-                              (dom/label
-                                (dom/props {:style {:display "block" :margin-bottom "4px"}})
-                                (dom/input
-                                  (dom/props {:type "radio" :name "input-mode" :value "selected"
-                                              :checked (= input-mode "selected")})
-                                  (dom/On "change"
-                                    (fn [_] (reset! !input-mode "selected"))
-                                    nil))
-                                (dom/text " Selected text only"))
-                              (dom/label
-                                (dom/props {:style {:display "block" :margin-bottom "4px"}})
-                                (dom/input
-                                  (dom/props {:type "radio" :name "input-mode" :value "context"
-                                              :checked (= input-mode "context")})
-                                  (dom/On "change"
-                                    (fn [_] (reset! !input-mode "context"))
-                                    nil))
-                                (dom/text " With context from previous pages"))))
-
-                          ;; Context window (conditional)
-                          (when (= input-mode "context")
-                            (dom/div
-                              (dom/props {:style {:margin-bottom "12px" :margin-left "20px"}})
-                              (dom/label
-                                (dom/props {:style {:display "block" :margin-bottom "8px"}})
-                                (dom/text "Context window (number of previous pages):"))
+                              (dom/props {:style {:display "flex" :align-items "center" :gap "4px"}})
                               (dom/input
-                                (dom/props {:type "number" :min "1" :max "10" :value (str context-window)
-                                            :style {:padding "8px" :font-size "14px" :width "80px"}})
-                                (reset! !context-window
-                                  (dom/On "input"
-                                    (fn [e]
-                                      (let [val (-> e .-target .-value)]
-                                        (if (seq val)
-                                          (js/parseInt val)
-                                          3)))
-                                    3)))))
-
-                          ;; Card type selection
-                          (dom/div
-                            (dom/props {:style {:margin-bottom "12px"}})
-                            (dom/label
-                              (dom/props {:style {:display "block" :margin-bottom "8px" :font-weight "bold"}})
-                              (dom/text "Card Type:"))
-                            (dom/div
-                              (dom/label
-                                (dom/props {:style {:display "block" :margin-bottom "4px"}})
-                                (dom/input
-                                  (dom/props {:type "radio" :name "card-type" :value "basic"
-                                              :checked (= card-type "basic")})
-                                  (dom/On "change"
-                                    (fn [_] (reset! !card-type "basic"))
-                                    nil))
-                                (dom/text " Basic (Q&A)"))
-                              (dom/label
-                                (dom/props {:style {:display "block"}})
-                                (dom/input
-                                  (dom/props {:type "radio" :name "card-type" :value "cloze"
-                                              :checked (= card-type "cloze")})
-                                  (dom/On "change"
-                                    (fn [_] (reset! !card-type "cloze"))
-                                    nil))
-                                (dom/text " Cloze Deletion"))))
-
-                          ;; Card count input
-                          (dom/div
-                            (dom/props {:style {:margin-bottom "12px"}})
-                            (dom/label
-                              (dom/props {:style {:display "block" :margin-bottom "8px" :font-weight "bold"}})
-                              (dom/text "Number of Cards:"))
+                                (dom/props {:type "checkbox" :checked use-context})
+                                (reset! !use-context
+                                  (dom/On "change" (fn [e] (-> e .-target .-checked)) false)))
+                              (dom/text "Include context from previous"))
                             (dom/input
-                              (dom/props {:type "number" :min "1" :max "50" :value (str card-count)
-                                          :style {:padding "8px" :font-size "14px" :width "100px"}})
-                              (reset! !card-count
+                              (dom/props {:type "number" :min "1" :max "10" :value (str context-window)
+                                          :disabled (not use-context)
+                                          :style {:padding "4px" :font-size "14px" :width "50px"
+                                                  :opacity (if use-context "1" "0.5")}})
+                              (reset! !context-window
                                 (dom/On "input"
-                                  (fn [e]
-                                    (let [val (-> e .-target .-value)]
-                                      (if (seq val)
-                                        (js/parseInt val)
-                                        20)))
-                                  20))))
+                                  (fn [e] (let [v (-> e .-target .-value)]
+                                            (if (seq v) (js/parseInt v) 3)))
+                                  3)))
+                            (dom/text "pages"))
+
+                          ;; Card type + count — single line
+                          (dom/div
+                            (dom/props {:style {:display "flex" :align-items "center" :gap "12px" :margin-bottom "12px" :flex-wrap "wrap"}})
+                            (dom/label
+                              (dom/props {:style {:display "flex" :align-items "center" :gap "4px"}})
+                              (dom/input
+                                (dom/props {:type "radio" :name "card-type" :value "basic"
+                                            :checked (= card-type "basic")})
+                                (dom/On "change" (fn [_] (reset! !card-type "basic")) nil))
+                              (dom/text "Basic (Q&A)"))
+                            (dom/label
+                              (dom/props {:style {:display "flex" :align-items "center" :gap "4px"}})
+                              (dom/input
+                                (dom/props {:type "radio" :name "card-type" :value "cloze"
+                                            :checked (= card-type "cloze")})
+                                (dom/On "change" (fn [_] (reset! !card-type "cloze")) nil))
+                              (dom/text "Cloze"))
+                            (dom/span
+                              (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :margin-left "auto"}})
+                              (dom/text "Cards:")
+                              (dom/input
+                                (dom/props {:type "number" :min "1" :max "50" :value (str card-count)
+                                            :style {:padding "4px" :font-size "14px" :width "60px"}})
+                                (reset! !card-count
+                                  (dom/On "input"
+                                    (fn [e] (let [v (-> e .-target .-value)]
+                                              (if (seq v) (js/parseInt v) 20)))
+                                    20)))))
 
                           ;; Generate button
                           (dom/button
@@ -413,44 +366,33 @@
                                   (dom/text "Error: " ?error)))
 
                               (when-some [token ?token]
-                                ;; CLIENT: Get selected text if needed
-                                (let [selected-text (when (= input-mode "selected")
-                                                      (editor/get-selected-text!))]
-                                  ;; Validate selection
-                                  (when (and (= input-mode "selected")
-                                             (nil? selected-text))
-                                    (token "No text selected. Please select text in the editor first."))
+                                ;; AUTO-DETECT: use selection if present, else full page
+                                (let [selected-text (editor/get-selected-text!)
+                                      content (or selected-text page-text)
+                                      ;; SERVER: Fetch context if checkbox is on
+                                      context-text (when use-context
+                                                     (e/server (cards/get-context-pages selected-doc current-pdf-page context-window)))
+                                      ;; SERVER: Generate cards
+                                      generate-result (e/server
+                                                        (if (= card-type "basic")
+                                                          (cards/generate-basic-cards
+                                                            {:content content
+                                                             :context context-text
+                                                             :card-count card-count})
+                                                          (cards/generate-cloze-cards
+                                                            {:content content
+                                                             :context context-text
+                                                             :card-count card-count})))]
 
-                                  ;; Determine content (page-text from outer scope)
-                                  (let [content (case input-mode
-                                                  "full" page-text
-                                                  "selected" selected-text
-                                                  "context" page-text
-                                                  page-text)
-                                        ;; SERVER: Get context if needed
-                                        context-text (when (= input-mode "context")
-                                                       (e/server (cards/get-context-pages selected-doc current-pdf-page context-window)))
-                                        ;; SERVER: Generate cards
-                                        generate-result (e/server
-                                                          (if (= card-type "basic")
-                                                            (cards/generate-basic-cards
-                                                              {:content content
-                                                               :context context-text
-                                                               :card-count card-count})
-                                                            (cards/generate-cloze-cards
-                                                              {:content content
-                                                               :context context-text
-                                                               :card-count card-count})))]
-
-                                    (if-not (:success generate-result)
-                                      (token (:error generate-result))
-                                      (let [generated-cards (e/server (:cards generate-result))
-                                            save-result (e/server (cards/save-cards selected-doc current-pdf-page card-type generated-cards))]
-                                        (if (:success save-result)
-                                          (do
-                                            (e/server (swap! !refresh inc))
-                                            (token))
-                                          (token (:error save-result)))))))))))
+                                  (if-not (:success generate-result)
+                                    (token (:error generate-result))
+                                    (let [generated-cards (e/server (:cards generate-result))
+                                          save-result (e/server (cards/save-cards selected-doc current-pdf-page card-type generated-cards))]
+                                      (if (:success save-result)
+                                        (do
+                                          (e/server (swap! !refresh inc))
+                                          (token))
+                                        (token (:error save-result))))))))))
 
                         ;; Vertical drag handle 2
                         (dom/div
