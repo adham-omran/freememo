@@ -58,22 +58,25 @@
           answer (e/server (:flashcards/answer card))
           cloze (e/server (:flashcards/cloze card))]
       (dom/tr
-        (dom/props {:style {:border-bottom "1px solid #e0e0e0"}})
         ;; Front column
         (dom/td
-          (dom/props {:style {:padding "6px 8px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap" :max-width "0"}})
+          (dom/props {:style {:padding "6px 8px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap" :max-width "0"
+                              :border-bottom "1px solid #e0e0e0"}})
           (dom/text (if (= kind "basic") question cloze)))
         ;; Back column
         (dom/td
-          (dom/props {:style {:padding "6px 8px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap" :max-width "0"}})
+          (dom/props {:style {:padding "6px 8px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap" :max-width "0"
+                              :border-bottom "1px solid #e0e0e0"}})
           (dom/text (if (= kind "basic") (or answer "") "")))
         ;; Kind column
         (dom/td
-          (dom/props {:style {:padding "6px 8px" :width "60px" :color "#666" :font-size "12px"}})
+          (dom/props {:style {:padding "6px 8px" :width "60px" :color "#666" :font-size "12px"
+                              :border-bottom "1px solid #e0e0e0"}})
           (dom/text kind))
         ;; Delete column
         (dom/td
-          (dom/props {:style {:padding "6px 4px" :width "40px" :text-align "center"}})
+          (dom/props {:style {:padding "6px 4px" :width "40px" :text-align "center"
+                              :border-bottom "1px solid #e0e0e0"}})
           (dom/button
             (dom/props {:style {:padding "2px 6px"
                                 :background "#dc3545"
@@ -426,24 +429,10 @@
                             ;; Cards table
                             (dom/table
                               (dom/props {:style {:width "100%"
-                                                  :border-collapse "collapse"
+                                                  :border-collapse "separate"
+                                                  :border-spacing "0"
                                                   :table-layout "fixed"
                                                   :font-size "13px"}})
-                              ;; Table header
-                              (dom/thead
-                                (dom/props {:style {:position "sticky" :top "0" :background "#f5f5f5" :z-index "1"}})
-                                (dom/tr
-                                  (dom/th (dom/props {:style {:text-align "left" :padding "6px 8px" :font-weight "600"
-                                                              :border-bottom "2px solid #ccc" :font-size "12px" :color "#555"}})
-                                    (dom/text "Front"))
-                                  (dom/th (dom/props {:style {:text-align "left" :padding "6px 8px" :font-weight "600"
-                                                              :border-bottom "2px solid #ccc" :font-size "12px" :color "#555"}})
-                                    (dom/text "Back"))
-                                  (dom/th (dom/props {:style {:text-align "left" :padding "6px 8px" :font-weight "600" :width "60px"
-                                                              :border-bottom "2px solid #ccc" :font-size "12px" :color "#555"}})
-                                    (dom/text "Kind"))
-                                  (dom/th (dom/props {:style {:width "40px" :border-bottom "2px solid #ccc"}})
-                                    (dom/text ""))))
                               ;; Virtual-scrolled body
                               (dom/tbody
                                 (dom/props {:style {:position "relative"
