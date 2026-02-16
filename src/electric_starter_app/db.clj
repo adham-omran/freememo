@@ -217,6 +217,14 @@
     (sql/format {:delete-from :flashcards
                  :where [:= :id card-id]})))
 
+(defn update-flashcard
+  "Update flashcard content fields. Returns update count."
+  [card-id fields]
+  (jdbc/execute-one! ds
+    (sql/format {:update :flashcards
+                 :set fields
+                 :where [:= :id card-id]})))
+
 (defn get-context-pages
   "Get text from previous N pages for context. Returns pages in ascending order."
   [document-id start-page end-page]

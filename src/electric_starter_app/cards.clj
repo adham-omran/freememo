@@ -217,6 +217,29 @@
       (println "ERROR [delete-card]:" (.getMessage e))
       {:success false :error (.getMessage e)})))
 
+(defn update-card
+  "Update a flashcard with validation. Returns {:success bool :error string}"
+  [card-id updated-fields]
+  (try
+    ;; Validate non-empty fields
+    (when (and (contains? updated-fields :question)
+               (str/blank? (:question updated-fields)))
+      (throw (ex-info "Question cannot be empty" {})))
+    (when (and (contains? updated-fields :answer)
+               (str/blank? (:answer updated-fields)))
+      (throw (ex-info "Answer cannot be empty" {})))
+    (when (and (contains? updated-fields :cloze)
+               (str/blank? (:cloze updated-fields)))
+      (throw (ex-info "Cloze text cannot be empty" {})))
+
+    ;; Execute update
+    (db/update-flashcard card-id updated-fields)
+    {:success true}
+
+    (catch Exception e
+      (println "ERROR [update-card]:" (.getMessage e))
+      {:success false :error (.getMessage e)})))
+
 ;; CSV Export
 (defn export-cards-csv
   "Export flashcards as CSV for Anki import.

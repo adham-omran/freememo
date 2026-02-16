@@ -63,7 +63,7 @@
          (.addEventListener js/document "mouseup" @on-up)))))
 
 ;; Card table row component
-(e/defn CardRow [card]
+(e/defn CardRow [card on-edit]
   (e/client
     (let [id (e/server (:flashcards/id card))
           kind (e/server (:flashcards/kind card))
@@ -86,6 +86,19 @@
           (dom/props {:style {:padding "6px 8px" :width "60px" :color "#666" :font-size "12px"
                               :border-bottom "1px solid #e0e0e0"}})
           (dom/text kind))
+        ;; Edit column
+        (dom/td
+          (dom/props {:style {:padding "6px 4px" :width "40px" :text-align "center"
+                              :border-bottom "1px solid #e0e0e0"}})
+          (dom/button
+            (dom/props {:style {:padding "2px 6px" :background "#007bff" :color "white"
+                                :border "none" :border-radius "3px" :cursor "pointer"
+                                :font-size "12px"}})
+            (dom/text "\u270E")
+            (dom/On "click" (fn [_]
+                              (let [data {:id id :kind kind :question question :answer answer :cloze cloze}]
+                                (println "EDIT CLICK data:" (pr-str data))
+                                (on-edit data))) nil)))
         ;; Delete column
         (dom/td
           (dom/props {:style {:padding "6px 4px" :width "40px" :text-align "center"
@@ -598,7 +611,85 @@
                                               (token (:error export-result))))))))))))))))
 
                 ;; Cards table with virtual scroll
-                (let [cards-result (e/server (get-cards* refresh selected-doc current-pdf-page))]
+                (let [cards-result (e/server (get-cards* refresh selected-doc current-pdf-page))
+                      !editing-card (atom nil)
+                      editing-card (e/watch !editing-card)]
+
+                  ;; Edit modal (inline, following export modal pattern)
+                  (when editing-card
+                    (let [_ (println "MODAL editing-card:" (pr-str editing-card))
+                          card-id (:id editing-card)
+                          kind (:kind editing-card)
+                          init-q (or (:question editing-card) "")
+                          init-a (or (:answer editing-card) "")
+                          init-c (or (:cloze editing-card) "")
+                          _ (println "MODAL init values q:" (pr-str init-q) "a:" (pr-str init-a) "c:" (pr-str init-c))
+                          !question (atom init-q)
+                          !answer (atom init-a)
+                          !cloze (atom init-c)
+                          question (e/watch !question)
+                          answer (e/watch !answer)
+                          cloze (e/watch !cloze)
+                          _ (println "MODAL watched values q:" (pr-str question) "a:" (pr-str answer) "c:" (pr-str cloze))]
+                      (dom/div
+                        (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
+                                            :background "rgba(0,0,0,0.5)" :display "flex" :align-items "center"
+                                            :justify-content "center" :z-index "1000"}})
+                        (dom/On "click" (fn [_] (reset! !editing-card nil)) nil)
+                        (dom/div
+                          (dom/props {:style {:background "white" :border-radius "8px" :padding "24px"
+                                              :width "500px" :box-shadow "0 4px 6px rgba(0,0,0,0.1)"}})
+                          (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+                          (dom/h3 (dom/props {:style {:margin-top "0"}})
+                            (dom/text "Edit " (if (= kind "basic") "Basic" "Cloze") " Card"))
+
+                          ;; Fields based on kind
+                          (if (= kind "basic")
+                            (dom/div
+                              (dom/label (dom/text "Question:"))
+                              (dom/textarea
+                                (dom/props {:value question :rows 3
+                                            :style {:width "100%" :padding "8px" :margin-bottom "12px"}})
+                                (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
+                                  (when (some? ev) (reset! !question ev))))
+                              (dom/label (dom/text "Answer:"))
+                              (dom/textarea
+                                (dom/props {:value answer :rows 3
+                                            :style {:width "100%" :padding "8px"}})
+                                (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
+                                  (when (some? ev) (reset! !answer ev)))))
+                            (dom/div
+                              (dom/label (dom/text "Cloze:"))
+                              (dom/textarea
+                                (dom/props {:value cloze :rows 4
+                                            :style {:width "100%" :padding "8px"}})
+                                (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
+                                  (when (some? ev) (reset! !cloze ev))))))
+
+                          ;; Buttons
+                          (dom/div
+                            (dom/props {:style {:display "flex" :gap "8px" :margin-top "16px"}})
+                            (dom/button
+                              (dom/props {:style {:padding "8px 16px"}})
+                              (dom/text "Cancel")
+                              (dom/On "click" (fn [_] (reset! !editing-card nil)) nil))
+                            (dom/button
+                              (dom/props {:style {:padding "8px 16px" :background "#007bff" :color "white" :border "none"}})
+                              (dom/text "Save")
+                              (let [click-event (dom/On "click" identity nil)
+                                    [?token ?error] (e/Token click-event)]
+                                (when-some [token ?token]
+                                  (let [fields (if (= kind "basic")
+                                                {:question question :answer answer}
+                                                {:cloze cloze})
+                                        result (e/server (cards/update-card card-id fields))]
+                                    (if (:success result)
+                                      (do
+                                        (e/server (swap! !refresh inc))
+                                        (reset! !editing-card nil)
+                                        (token))
+                                      (token (:error result))))))))))))
+
                   (if (:success cards-result)
                     (if (seq (:cards cards-result))
                       (let [cards-vec (e/server (vec (:cards cards-result)))
@@ -623,7 +714,7 @@
                                 (e/for [i (e/diff-by {} (range offset (+ offset limit)))]
                                   (let [card (e/server (nth cards-vec i nil))]
                                     (when card
-                                      (CardRow card))))))
+                                      (CardRow card (fn [c] (reset! !editing-card c))))))))
                             ;; Spacer for full scroll height
                             (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))
                       (dom/p
