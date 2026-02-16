@@ -198,6 +198,13 @@
                 ;; Bridge current-pdf-page via atom so it's available at outer scope
                 !current-page (atom 1)
                 current-pdf-page (e/watch !current-page)
+                ;; Pre-prompt state (session-persistent)
+                !pre-prompt (atom "")
+                pre-prompt-value (e/watch !pre-prompt)
+                !show-prompt-dialog (atom false)
+                show-prompt-dialog (e/watch !show-prompt-dialog)
+                !prompt-dialog-kind (atom nil)
+                prompt-dialog-kind (e/watch !prompt-dialog-kind)
                 ;; Shared server data — hoisted so both editor and bottom panel can use them
                 dirty-data (e/watch editor/!dirty-html)
                 save-result (when (some? dirty-data)
@@ -497,6 +504,23 @@
                                       (token))
                                     (token (:error save-result))))))))))
 
+                      ;; Generate with Prompt button
+                      (dom/button
+                        (dom/props {:style {:padding "4px 12px"
+                                            :background "#17a2b8"
+                                            :color "white"
+                                            :border "none"
+                                            :border-radius "4px"
+                                            :cursor "pointer"
+                                            :font-size "13px"
+                                            :font-weight "500"
+                                            :margin-left "8px"}})
+                        (dom/text "Generate with Prompt...")
+                        (dom/On "click" (fn [_]
+                                          (reset! !prompt-dialog-kind card-type)
+                                          (reset! !show-prompt-dialog true))
+                                nil))
+
                       ;; Separator
                       (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
 
@@ -629,7 +653,107 @@
                                                 (trigger-download! (:filename export-result) (:csv export-result))
                                                 (reset! !show-export false)
                                                 (token))
-                                              (token (:error export-result))))))))))))))))
+                                              (token (:error export-result)))))))))))))
+
+                    ;; Pre-prompt modal dialog
+                    (when show-prompt-dialog
+                      (let [!local-prompt (atom pre-prompt-value)
+                            local-prompt (e/watch !local-prompt)]
+                        (dom/div
+                          (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
+                                              :background "rgba(0,0,0,0.5)" :display "flex" :align-items "center"
+                                              :justify-content "center" :z-index "1000"}})
+                          (dom/On "click" (fn [_] (reset! !show-prompt-dialog false)) nil)
+
+                          (dom/div
+                            (dom/props {:style {:background "white" :border-radius "8px" :padding "24px"
+                                                :width "500px" :max-width "90%" :box-shadow "0 4px 6px rgba(0,0,0,0.1)"}})
+                            (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+
+                            (dom/h3
+                              (dom/props {:style {:margin-top "0" :margin-bottom "16px" :font-size "18px"}})
+                              (dom/text "Generate " (if (= prompt-dialog-kind "basic") "Basic" "Cloze") " Cards with Custom Prompt"))
+
+                            (dom/p
+                              (dom/props {:style {:font-size "13px" :color "#666" :margin-bottom "16px" :line-height "1.4"}})
+                              (dom/text "Add custom formatting instructions that will be inserted into the system prompt. "
+                                        "For example: \"Focus on accounting terminology\" or \"Use simple language for beginners\"."))
+
+                            (dom/div
+                              (dom/props {:style {:margin-bottom "20px"}})
+                              (dom/label
+                                (dom/props {:style {:display "block" :margin-bottom "6px" :font-weight "500" :font-size "14px"}})
+                                (dom/text "Custom Instructions:"))
+                              (dom/textarea
+                                (dom/props {:value local-prompt
+                                            :placeholder "e.g., Focus on accounting terminology, use examples from finance..."
+                                            :rows 5
+                                            :style {:width "100%" :padding "8px" :border "1px solid #ccc"
+                                                    :border-radius "4px" :font-size "14px" :font-family "inherit"
+                                                    :resize "vertical" :box-sizing "border-box"}})
+                                (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
+                                  (when (some? ev) (reset! !local-prompt ev)))))
+
+                            (dom/div
+                              (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "12px"}})
+
+                              (dom/button
+                                (dom/props {:style {:padding "8px 16px" :background "#f8f9fa" :color "#333"
+                                                    :border "1px solid #ccc" :border-radius "4px" :cursor "pointer"
+                                                    :font-size "14px"}})
+                                (dom/text "Cancel")
+                                (dom/On "click" (fn [_] (reset! !show-prompt-dialog false)) nil))
+
+                              (dom/button
+                                (let [click-event (dom/On "click" identity nil)
+                                      [?token ?error] (e/Token click-event)]
+
+                                  (dom/props {:disabled (some? ?token)
+                                              :style {:padding "8px 16px"
+                                                      :background (if (some? ?token) "#999" "#28a745")
+                                                      :color "white" :border "none" :border-radius "4px"
+                                                      :cursor (if (some? ?token) "not-allowed" "pointer")
+                                                      :font-size "14px" :font-weight "500"}})
+
+                                  (dom/text "Generate" (when ?token " ..."))
+
+                                  (when ?error
+                                    (dom/div
+                                      (dom/props {:style {:color "red" :font-size "12px" :margin-top "8px"}})
+                                      (dom/text "Error: " ?error)))
+
+                                  (when-some [token ?token]
+                                    (reset! !pre-prompt local-prompt)
+
+                                    (let [selected-text (editor/get-selected-text!)
+                                          content (or selected-text page-text)
+                                          context-text (when use-context
+                                                         (e/server (cards/get-context-pages selected-doc current-pdf-page context-window)))
+                                          generate-result (e/server
+                                                            (if (= prompt-dialog-kind "basic")
+                                                              (cards/generate-basic-cards
+                                                                {:content content
+                                                                 :context context-text
+                                                                 :card-count card-count-val
+                                                                 :user-id user-id
+                                                                 :pre-prompt local-prompt})
+                                                              (cards/generate-cloze-cards
+                                                                {:content content
+                                                                 :context context-text
+                                                                 :card-count card-count-val
+                                                                 :user-id user-id
+                                                                 :pre-prompt local-prompt})))]
+
+                                      (if-not (:success generate-result)
+                                        (token (:error generate-result))
+                                        (let [generated-cards (e/server (:cards generate-result))
+                                              save-result (e/server (cards/save-cards selected-doc current-pdf-page prompt-dialog-kind generated-cards))]
+                                          (if (:success save-result)
+                                            (do
+                                              (e/server (swap! !refresh inc))
+                                              (reset! !show-prompt-dialog false)
+                                              (token))
+                                            (token (:error save-result)))))))))))))))))
 
                 ;; Cards table with virtual scroll
                 (let [cards-result (e/server (get-cards* refresh selected-doc current-pdf-page))

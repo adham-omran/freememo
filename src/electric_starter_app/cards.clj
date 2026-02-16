@@ -24,26 +24,40 @@
 ;; Prompt building
 (defn build-basic-prompt
   "Build prompt for basic Q&A cards.
-   Concatenates system.md + basic.md + optional context.md."
-  [card-count has-context?]
+   Concatenates system.md + optional pre-prompt + basic.md + optional context.md."
+  [card-count has-context? pre-prompt]
   (let [system (load-prompt-template "system.md")
         basic (load-prompt-template "basic.md")
         context (when has-context? (load-prompt-template "context.md"))]
     (when (and system basic)
-      (str system "\n\n" basic
+      (str system
+           ;; Insert pre-prompt between system and basic
+           (when (and pre-prompt (not (str/blank? pre-prompt)))
+             (str "\n\n## Custom Question Format\n\n"
+                  "Use the following pattern for your questions:\n\n"
+                  pre-prompt
+                  "\n\n"))
+           basic
            (when context (str "\n\n" context))
            "\n\n# Instructions\n\n"
            "Generate " card-count " flashcards from the provided text."))))
 
 (defn build-cloze-prompt
   "Build prompt for cloze deletion cards.
-   Concatenates system.md + cloze.md + optional context-cloze.md."
-  [card-count has-context?]
+   Concatenates system.md + optional pre-prompt + cloze.md + optional context-cloze.md."
+  [card-count has-context? pre-prompt]
   (let [system (load-prompt-template "system.md")
         cloze (load-prompt-template "cloze.md")
         context (when has-context? (load-prompt-template "context-cloze.md"))]
     (when (and system cloze)
-      (str system "\n\n" cloze
+      (str system
+           ;; Insert pre-prompt between system and cloze
+           (when (and pre-prompt (not (str/blank? pre-prompt)))
+             (str "\n\n## Custom Question Format\n\n"
+                  "Use the following pattern for your questions:\n\n"
+                  pre-prompt
+                  "\n\n"))
+           cloze
            (when context (str "\n\n" context))
            "\n\n# Instructions\n\n"
            "Generate " card-count " flashcards from the provided text."))))
@@ -89,8 +103,9 @@
    - :context - Optional context text from previous pages
    - :card-count - Number of cards to generate (default from settings)
    - :model - OpenAI model to use (default from settings)
+   - :pre-prompt - Optional custom formatting instructions
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}"
-  [{:keys [content context card-count model user-id]}]
+  [{:keys [content context card-count model user-id pre-prompt]}]
   (try
     (let [api-key (settings/get-openai-api-key user-id)
           _ (when (empty? api-key)
@@ -102,7 +117,7 @@
           reasoning (settings/get-reasoning user-id)
           verbosity (settings/get-verbosity user-id)
           has-context? (not (empty? context))
-          prompt (build-basic-prompt card-count has-context?)
+          prompt (build-basic-prompt card-count has-context? pre-prompt)
           _ (when-not prompt
               (throw (ex-info "Failed to load prompt templates" {})))
           ;; Build content message
@@ -133,8 +148,9 @@
    - :card-count - Number of cards to generate (default from settings)
    - :model - OpenAI model to use (default from settings)
    - :user-id - User ID for settings lookup
+   - :pre-prompt - Optional custom formatting instructions
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}"
-  [{:keys [content context card-count model user-id]}]
+  [{:keys [content context card-count model user-id pre-prompt]}]
   (try
     (let [api-key (settings/get-openai-api-key user-id)
           _ (when (empty? api-key)
@@ -146,7 +162,7 @@
           reasoning (settings/get-reasoning user-id)
           verbosity (settings/get-verbosity user-id)
           has-context? (not (empty? context))
-          prompt (build-cloze-prompt card-count has-context?)
+          prompt (build-cloze-prompt card-count has-context? pre-prompt)
           _ (when-not prompt
               (throw (ex-info "Failed to load prompt templates" {})))
           ;; Build content message
