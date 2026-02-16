@@ -12,13 +12,18 @@
    #?(:clj [electric-starter-app.page :as page])
    #?(:clj [electric-starter-app.pdf :as pdf])
    #?(:clj [electric-starter-app.cards :as cards])
-   #?(:clj [electric-starter-app.settings :as settings])))
+   #?(:clj [electric-starter-app.settings :as settings])
+   #?(:clj [electric-starter-app.db :as db])))
 
 #?(:clj (defonce !refresh (atom 0)))  ; Server-side refresh trigger
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 #?(:clj (defn get-page-text* [_refresh document-id page-number]
           (page/get-page-text document-id page-number)))
+
+;; Query wrapper for page done status
+#?(:clj (defn get-page-done-status* [_refresh document-id page-number]
+          (db/get-page-done-status document-id page-number)))
 
 ;; Browser download helper (ClojureScript only)
 #?(:cljs
@@ -204,7 +209,8 @@
                                      (:html dirty-data)))))
                 refresh (e/server (e/watch !refresh))
                 text-result (e/server (get-page-text* refresh selected-doc current-pdf-page))
-                page-text (e/server (when (:success text-result) (:text text-result)))]
+                page-text (e/server (when (:success text-result) (:text text-result)))
+                is-done (e/server (get-page-done-status* refresh selected-doc current-pdf-page))]
 
             ;; Outer: vertical flex (top row / bottom panel)
             (dom/div
@@ -234,6 +240,21 @@
                     (dom/span
                       (dom/props {:style {:font-weight "bold" :font-size "16px"}})
                       (dom/text "Page " current-pdf-page))
+
+                    ;; Mark as done checkbox
+                    (dom/label
+                      (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "14px" :cursor "pointer"}})
+                      (dom/input
+                        (dom/props {:type "checkbox" :checked is-done})
+                        (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
+                              [?token ?error] (e/Token change-event)]
+                          (when (some? change-event)  ; Guard: only when event fires
+                            (when-some [token ?token]
+                              (e/server (db/toggle-page-done selected-doc current-pdf-page))
+                              (e/server (swap! !refresh inc))
+                              (token)))))
+                      (dom/text "Done"))
+
                     (dom/button
                       (dom/props {:style {:padding "8px 16px"
                                           :background "#007bff"

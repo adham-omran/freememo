@@ -75,6 +75,9 @@
       UNIQUE(document_id, page_number)
     )"])
 
+  ;; Add is_done column to pages table (migration)
+  (jdbc/execute! ds ["ALTER TABLE pages ADD COLUMN IF NOT EXISTS is_done BOOLEAN DEFAULT NULL"])
+
   ;; Create flashcards table
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS flashcards (
@@ -178,6 +181,29 @@
                  :from [:pages]
                  :where [:= :document_id document-id]
                  :order-by [[:page_number :asc]]})))
+
+(defn get-page-done-status
+  "Get the is_done status for a specific page. Returns boolean."
+  [document-id page-number]
+  (let [result (jdbc/execute-one! ds
+                 (sql/format {:select [:is_done]
+                              :from [:pages]
+                              :where [:and
+                                      [:= :document_id document-id]
+                                      [:= :page_number page-number]]}))]
+    (if result
+      (or (:pages/is_done result) false)  ; NULL or false -> false, true -> true
+      false)))  ; Page doesn't exist yet -> false
+
+(defn toggle-page-done
+  "Toggle the is_done status for a specific page. Returns update count.
+   Uses atomic SQL CASE toggle: true -> false, anything else -> true"
+  [document-id page-number]
+  (jdbc/execute-one! ds
+    ["UPDATE pages
+      SET is_done = CASE WHEN is_done = true THEN false ELSE true END
+      WHERE document_id = ? AND page_number = ?"
+     document-id page-number]))
 
 ;; Flashcard queries
 (defn insert-flashcards
