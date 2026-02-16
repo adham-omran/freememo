@@ -205,6 +205,8 @@
                 show-prompt-dialog (e/watch !show-prompt-dialog)
                 !prompt-dialog-kind (atom nil)
                 prompt-dialog-kind (e/watch !prompt-dialog-kind)
+                !captured-selection (atom nil)
+                captured-selection (e/watch !captured-selection)
                 ;; Shared server data — hoisted so both editor and bottom panel can use them
                 dirty-data (e/watch editor/!dirty-html)
                 save-result (when (some? dirty-data)
@@ -517,6 +519,7 @@
                                             :margin-left "8px"}})
                         (dom/text "Generate with Prompt...")
                         (dom/On "click" (fn [_]
+                                          (reset! !captured-selection (editor/get-selected-text!))
                                           (reset! !prompt-dialog-kind card-type)
                                           (reset! !show-prompt-dialog true))
                                 nil))
@@ -671,28 +674,23 @@
                             (dom/On "click" (fn [e] (.stopPropagation e)) nil)
 
                             (dom/h3
-                              (dom/props {:style {:margin-top "0" :margin-bottom "16px" :font-size "18px"}})
-                              (dom/text "Generate " (if (= prompt-dialog-kind "basic") "Basic" "Cloze") " Cards with Custom Prompt"))
-
-                            (dom/p
-                              (dom/props {:style {:font-size "13px" :color "#666" :margin-bottom "16px" :line-height "1.4"}})
-                              (dom/text "Add custom formatting instructions that will be inserted into the system prompt. "
-                                        "For example: \"Focus on accounting terminology\" or \"Use simple language for beginners\"."))
+                              (dom/props {:style {:margin-top "0" :margin-bottom "20px" :font-size "18px"}})
+                              (dom/text "Generate " (if (= prompt-dialog-kind "basic") "Basic" "Cloze") " Cards"))
 
                             (dom/div
                               (dom/props {:style {:margin-bottom "20px"}})
                               (dom/label
-                                (dom/props {:style {:display "block" :margin-bottom "6px" :font-weight "500" :font-size "14px"}})
-                                (dom/text "Custom Instructions:"))
-                              (dom/textarea
-                                (dom/props {:value local-prompt
-                                            :placeholder "e.g., Focus on accounting terminology, use examples from finance..."
-                                            :rows 5
+                                (dom/props {:style {:display "block" :margin-bottom "8px" :font-size "13px"}})
+                                (dom/text "Pre-prompt (will be added to the system prompt):"))
+                              (dom/input
+                                (dom/props {:type "text"
+                                            :value local-prompt
+                                            :placeholder "e.g., Focus on accounting terminology..."
                                             :style {:width "100%" :padding "8px" :border "1px solid #ccc"
-                                                    :border-radius "4px" :font-size "14px" :font-family "inherit"
-                                                    :resize "vertical" :box-sizing "border-box"}})
+                                                    :border-radius "4px" :font-size "14px" :box-sizing "border-box"}})
                                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-                                  (when (some? ev) (reset! !local-prompt ev)))))
+                                  (when (some? ev) (reset! !local-prompt ev)))
+                                (e/client (js/setTimeout #(.focus dom/node) 50))))
 
                             (dom/div
                               (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "12px"}})
@@ -725,8 +723,7 @@
                                   (when-some [token ?token]
                                     (reset! !pre-prompt local-prompt)
 
-                                    (let [selected-text (editor/get-selected-text!)
-                                          content (or selected-text page-text)
+                                    (let [content (or captured-selection page-text)
                                           context-text (when use-context
                                                          (e/server (cards/get-context-pages selected-doc current-pdf-page context-window)))
                                           generate-result (e/server
