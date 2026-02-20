@@ -34,9 +34,9 @@
 (defn extract-text
   "Extract text from a PDF page using OpenAI Vision API.
    Returns HTML with semantic formatting (h1-h6, p, ul, ol, strong, em)."
-  [user-id pdf-bytes page-number]
+  [user-id pdf-bytes page-number enc-key]
   (try
-    (let [api-key (settings/get-openai-api-key user-id)
+    (let [api-key (settings/get-openai-api-key user-id enc-key)
           _ (when (empty? api-key)
               (throw (ex-info "OpenAI API key not configured" {})))
           image (pdf-page->image pdf-bytes page-number)

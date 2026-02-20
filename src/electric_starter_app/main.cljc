@@ -11,6 +11,7 @@
     (binding [dom/node js/document.body] ; DOM nodes will mount under this one
       (let [user-id (e/server (get-in ring-request [:session :user-id]))
             username (e/server (get-in ring-request [:session :username]))
+            enc-key  (e/server (get-in ring-request [:session :enc-key]))
             auth-error (e/server (get-in ring-request [:session :auth-error]))]
         (if (e/server (some? user-id))
           ;; Authenticated: render app
@@ -49,9 +50,9 @@
               ;; Tab content
               (dom/div
                 (dom/props {:style {:flex "1" :min-height "0" :overflow (if (= active-tab :ocr) "hidden" "auto")}})
-                (when (= active-tab :settings) (SettingsPage user-id username))
+                (when (= active-tab :settings) (SettingsPage user-id username enc-key))
                 (when (= active-tab :pdf) (PdfPage user-id))
-                (when (= active-tab :ocr) (OcrPage user-id)))))
+                (when (= active-tab :ocr) (OcrPage user-id enc-key)))))
 
           ;; Not authenticated: render login page
           (LoginPage auth-error))))))

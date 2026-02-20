@@ -2,6 +2,7 @@
   "Business logic for application settings."
   (:require
     [electric-starter-app.db :as db]
+    [electric-starter-app.crypto :as crypto]
     [clojure.string :as str]))
 
 ;; Setting keys (constants)
@@ -15,8 +16,8 @@
 (def CARD_TYPE "card_type")
 
 ;; Get functions
-(defn get-openai-api-key [user-id]
-  (or (db/get-setting user-id OPENAI_API_KEY) ""))
+(defn get-openai-api-key [user-id enc-key]
+  (crypto/decrypt (or (db/get-setting user-id OPENAI_API_KEY) "") enc-key))
 
 (defn get-model [user-id]
   (or (db/get-setting user-id MODEL) "gpt-5.1"))
@@ -56,10 +57,10 @@
       "basic")))
 
 ;; Save functions with validation
-(defn save-openai-api-key [user-id api-key]
+(defn save-openai-api-key [user-id api-key enc-key]
   (try
     (let [trimmed (str/trim (or api-key ""))]
-      (db/set-setting user-id OPENAI_API_KEY trimmed)
+      (db/set-setting user-id OPENAI_API_KEY (crypto/encrypt trimmed enc-key))
       {:success true})
     (catch Exception e
       (println "ERROR [save-openai-api-key]:" (.getMessage e))

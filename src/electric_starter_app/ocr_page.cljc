@@ -144,7 +144,7 @@
                       (token))
                     (token (:error result))))))))))))
 
-(e/defn OcrPage [user-id]
+(e/defn OcrPage [user-id enc-key]
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
@@ -292,7 +292,7 @@
                             (dom/text "Error: " ?error)))
 
                         (when-some [token ?token]
-                          (let [result (e/server (page/extract-page-text user-id selected-doc current-pdf-page))]
+                          (let [result (e/server (page/extract-page-text user-id selected-doc current-pdf-page enc-key))]
                             (if (:success result)
                               (do
                                 (e/server (swap! !refresh inc))
@@ -511,12 +511,14 @@
                                                         {:content content
                                                          :context context-text
                                                          :card-count card-count-val
-                                                         :user-id user-id})
+                                                         :user-id user-id
+                                                         :enc-key enc-key})
                                                       (cards/generate-cloze-cards
                                                         {:content content
                                                          :context context-text
                                                          :card-count card-count-val
-                                                         :user-id user-id})))]
+                                                         :user-id user-id
+                                                         :enc-key enc-key})))]
 
                               (if-not (:success generate-result)
                                 (token (:error generate-result))
@@ -770,12 +772,14 @@
                                                                  :context context-text
                                                                  :card-count card-count-val
                                                                  :user-id user-id
+                                                                 :enc-key enc-key
                                                                  :pre-prompt local-prompt})
                                                               (cards/generate-cloze-cards
                                                                 {:content content
                                                                  :context context-text
                                                                  :card-count card-count-val
                                                                  :user-id user-id
+                                                                 :enc-key enc-key
                                                                  :pre-prompt local-prompt})))]
 
                                       (if-not (:success generate-result)

@@ -6,7 +6,7 @@
     #?(:clj [electric-starter-app.settings :as settings])))
 
 
-(e/defn SettingsPage [user-id username]
+(e/defn SettingsPage [user-id username enc-key]
   (e/client
     ;; Logout section
     (dom/div
@@ -26,7 +26,7 @@
           (dom/text "Logout"))))
 
     ;; Load initial value from server
-    (let [server-key (e/server (settings/get-openai-api-key user-id))
+    (let [server-key (e/server (settings/get-openai-api-key user-id enc-key))
           !api-key (atom server-key)
           api-key (e/watch !api-key)
           server-reasoning (e/server (settings/get-reasoning user-id))
@@ -49,7 +49,7 @@
               (when (some? input-event)
                 (reset! !api-key input-event))
               (when-some [token ?token]
-                (e/server (settings/save-openai-api-key user-id input-event))
+                (e/server (settings/save-openai-api-key user-id input-event enc-key))
                 (token)))))
 
         ;; Reasoning selector
