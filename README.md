@@ -1,3 +1,9 @@
+This app requires a PSQL server, run that with docker-compose.yml that's included.
+
+Run with `clj -M:dev -m dev`.
+
+Below is the default README for the starter app, ignore it I guess.
+
 # Electric v3 Starter App
 
 ## Links
@@ -7,7 +13,7 @@
 
 ## Getting started - dev setup
 
-* Shell: `clj -A:dev -X dev/-main`. 
+* Shell: `clj -A:dev -X dev/-main`.
 * Login instructions will be printed
 * REPL: `:dev` deps alias, `(dev/-main)` at the REPL to start dev build
 * App will start on http://localhost:8080
