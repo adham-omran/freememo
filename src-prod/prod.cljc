@@ -40,7 +40,7 @@
            ;; The client's version is injected in the compiled .js file.
            (merge
              (comptime-resource "electric-manifest.edn")
-             {:host "0.0.0.0", :port 8080,
+             {:host "0.0.0.0", :port (Integer/parseInt (or (System/getenv "PORT") "8080")),
               :resources-path "public"
               ;; shadow-cljs build manifest path, to get the fingerprinted main.sha1.js file to ensure cache invalidation
               :manifest-path "public/electric_starter_app/js/manifest.edn"})]
