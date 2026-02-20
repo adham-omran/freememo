@@ -24,12 +24,14 @@
          (js/clearTimeout timer)
          (reset! !debounce-timer nil))
        (when-let [{:keys [editor container]} @!editor-state]
-         (.off editor "text-change")
-         (when container
-           ;; Remove Quill's toolbar (sibling before container, created by snow theme)
-           (when-let [toolbar (.querySelector (.-parentNode container) ".ql-toolbar")]
-             (.remove toolbar))
-           (set! (.-innerHTML container) ""))
+         (let [^js ed editor
+               ^js ct container]
+           (.off ed "text-change")
+           (when ct
+             ;; Remove Quill's toolbar (sibling before container, created by snow theme)
+             (when-let [toolbar (.querySelector (.-parentNode ct) ".ql-toolbar")]
+               (.remove toolbar))
+             (set! (.-innerHTML ct) "")))
          (reset! !editor-state nil)))))
 
 (defn init-editor!
@@ -51,18 +53,19 @@
                               (clojure.string/replace #"^```\s*\n?" "")
                               (clojure.string/replace #"\n?```\s*$" "")
                               clojure.string/trim)
-             editor (new Quill container
-                        (clj->js {:theme "snow"
-                                  :modules {:toolbar [["bold" "italic" "underline" "strike"]
-                                                      [{"header" 1} {"header" 2} {"header" 3}]
-                                                      [{"size" ["small" false "large" "huge"]}]
-                                                      [{"color" []} {"background" []}]
-                                                      [{"list" "ordered"} {"list" "bullet"}]
-                                                      [{"align" []}]
-                                                      [{"direction" "rtl"}]
-                                                      ["clean"]]}
-                                  :placeholder "Enter text..."}))
-             delta (.clipboard.convert editor cleaned-html)]
+             ^js editor (new Quill container
+                             (clj->js {:theme "snow"
+                                       :modules {:toolbar [["bold" "italic" "underline" "strike"]
+                                                           [{"header" 1} {"header" 2} {"header" 3}]
+                                                           [{"size" ["small" false "large" "huge"]}]
+                                                           [{"color" []} {"background" []}]
+                                                           [{"list" "ordered"} {"list" "bullet"}]
+                                                           [{"align" []}]
+                                                           [{"direction" "rtl"}]
+                                                           ["clean"]]}
+                                       :placeholder "Enter text..."}))
+             ^js clipboard (.-clipboard editor)
+             delta (.convert clipboard cleaned-html)]
          (when (seq cleaned-html)
            (.setContents editor delta))
          ;; Debounced text-change: only on user edits, sets !dirty-html after 500ms
@@ -75,9 +78,10 @@
                   (reset! !debounce-timer
                     (js/setTimeout
                       (fn []
-                        (reset! !dirty-html {:html (.-innerHTML (.-root editor))
-                                             :page page-number
-                                             :doc-id doc-id}))
+                        (let [^js root (.-root editor)]
+                          (reset! !dirty-html {:html (.-innerHTML root)
+                                               :page page-number
+                                               :doc-id doc-id})))
                       500)))))
          (reset! !editor-state {:editor editor :container container})
          editor))))
@@ -88,7 +92,9 @@
   #?(:clj nil
      :cljs
      (when-let [{:keys [editor]} @!editor-state]
-       (.-innerHTML (.-root editor)))))
+       (let [^js ed editor
+             ^js root (.-root ed)]
+         (.-innerHTML root)))))
 
 (defn get-selected-text!
   "Get selected text from Quill editor. Returns nil if no selection.
@@ -97,6 +103,7 @@
   #?(:clj nil
      :cljs
      (when-let [{:keys [editor]} @!editor-state]
-       (let [selection (.getSelection editor)]
+       (let [^js ed editor
+             ^js selection (.getSelection ed)]
          (when (and selection (> (.-length selection) 0))
-           (.getText editor (.-index selection) (.-length selection)))))))
+           (.getText ed (.-index selection) (.-length selection)))))))
