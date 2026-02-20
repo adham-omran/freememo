@@ -104,10 +104,11 @@
    - :card-count - Number of cards to generate (default from settings)
    - :model - OpenAI model to use (default from settings)
    - :pre-prompt - Optional custom formatting instructions
+   - :enc-key - Base64 key from session for API key decryption
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}"
-  [{:keys [content context card-count model user-id pre-prompt]}]
+  [{:keys [content context card-count model user-id pre-prompt enc-key]}]
   (try
-    (let [api-key (settings/get-openai-api-key user-id)
+    (let [api-key (settings/get-openai-api-key user-id enc-key)
           _ (when (empty? api-key)
               (throw (ex-info "OpenAI API key not configured" {})))
           _ (when (empty? content)
@@ -149,10 +150,11 @@
    - :model - OpenAI model to use (default from settings)
    - :user-id - User ID for settings lookup
    - :pre-prompt - Optional custom formatting instructions
+   - :enc-key - Base64 key from session for API key decryption
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}"
-  [{:keys [content context card-count model user-id pre-prompt]}]
+  [{:keys [content context card-count model user-id pre-prompt enc-key]}]
   (try
-    (let [api-key (settings/get-openai-api-key user-id)
+    (let [api-key (settings/get-openai-api-key user-id enc-key)
           _ (when (empty? api-key)
               (throw (ex-info "OpenAI API key not configured" {})))
           _ (when (empty? content)

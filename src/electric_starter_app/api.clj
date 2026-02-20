@@ -5,6 +5,7 @@
     [electric-starter-app.page :as page]
     [electric-starter-app.db :as db]
     [electric-starter-app.auth :as auth]
+    [electric-starter-app.crypto :as crypto]
     [clojure.java.io :as io]
     [clojure.string]))
 
@@ -20,9 +21,11 @@
        :session {:auth-error "Username and password are required"}}
       (let [result (auth/create-user username password)]
         (if (:success result)
-          {:status 302
-           :headers {"Location" "/"}
-           :session {:user-id (:user-id result) :username username}}
+          (let [user-id (:user-id result)
+                enc-key (crypto/derive-key password user-id)]
+            {:status 302
+             :headers {"Location" "/"}
+             :session {:user-id user-id :username username :enc-key enc-key}})
           {:status 302
            :headers {"Location" "/"}
            :session {:auth-error (:error result)}})))))
@@ -36,9 +39,11 @@
        :session {:auth-error "Username and password are required"}}
       (let [result (auth/authenticate username password)]
         (if (:success result)
-          {:status 302
-           :headers {"Location" "/"}
-           :session {:user-id (:user-id result) :username (:username result)}}
+          (let [user-id (:user-id result)
+                enc-key (crypto/derive-key password user-id)]
+            {:status 302
+             :headers {"Location" "/"}
+             :session {:user-id user-id :username (:username result) :enc-key enc-key}})
           {:status 302
            :headers {"Location" "/"}
            :session {:auth-error (:error result)}})))))

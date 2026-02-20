@@ -7,7 +7,7 @@
 (defn extract-page-text
   "Extract text from a specific page of a document and save to database.
    Returns {:success true :text ...} or {:success false :error ...}"
-  [user-id document-id page-number]
+  [user-id document-id page-number enc-key]
   (try
     ;; Get the PDF bytes from database
     (let [docs (db/get-documents-by-id user-id document-id)
@@ -16,7 +16,7 @@
         {:success false :error "Document not found"}
         (let [pdf-bytes (:documents/file_data doc)
               ;; Extract text using OCR
-              result (ocr/extract-text user-id pdf-bytes (dec page-number))]  ; Convert to 0-indexed
+              result (ocr/extract-text user-id pdf-bytes (dec page-number) enc-key)]  ; Convert to 0-indexed
           (if (:success result)
             (do
               ;; Save to database
