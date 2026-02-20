@@ -6,12 +6,12 @@
 
 ;; Connection configuration
 (def db-config
-  {:dbtype "postgresql"
-   :host "localhost"
-   :port 5432
-   :dbname "cardmaker"
-   :user "cardmaker"
-   :password "dev"})
+  {:dbtype   "postgresql"
+   :host     (or (System/getenv "DB_HOST") "localhost")
+   :port     (Integer/parseInt (or (System/getenv "DB_PORT") "5432"))
+   :dbname   (or (System/getenv "DB_NAME") "cardmaker")
+   :user     (or (System/getenv "DB_USER") "cardmaker")
+   :password (or (System/getenv "DB_PASSWORD") "dev")})
 
 ;; HikariCP datasource (connection pool)
 (defonce ds (jdbc/get-datasource db-config))
