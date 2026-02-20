@@ -34,3 +34,46 @@ html, body {
 .split-divider-v:active {
     background: #90caf9;
 }
+
+/* Focus indicators for accessibility */
+*:focus-visible {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+}
+
+/* Help icon styling */
+.help-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border: 1px solid #ccc;
+    border-radius: 50%;
+    font-size: 11px;
+    color: #666;
+    background: transparent;
+    cursor: help;
+    margin-left: 4px;
+    transition: all 0.2s;
+}
+
+.help-icon:hover {
+    background: #f0f0f0;
+    border-color: #999;
+    color: #333;
+}
+
+/* Input hover states */
+input[type="text"]:hover,
+input[type="password"]:hover,
+input[type="number"]:hover,
+select:hover,
+textarea:hover {
+    border-color: #999;
+}
+
+/* Button hover states */
+button:not(:disabled):hover {
+    filter: brightness(0.95);
+}
