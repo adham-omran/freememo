@@ -236,7 +236,8 @@
 
                 ;; Horizontal drag handle
                 (dom/div
-                  (dom/props {:class "split-divider-h"})
+                  (dom/props {:class "split-divider-h"
+                              :title "Drag to resize panels"})
                   (dom/On "mousedown" (fn [e] (start-drag! e :x !left-pct)) nil))
 
                 ;; RIGHT: Editor
@@ -252,16 +253,16 @@
 
                     ;; Mark as done checkbox
                     (dom/label
-                      (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "14px" :cursor "pointer"}})
+                      (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "14px" :cursor "pointer"}
+                                  :title "Mark this page as completed to track your extraction progress"})
                       (dom/input
                         (dom/props {:type "checkbox" :checked is-done})
                         (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
                               [?token ?error] (e/Token change-event)]
-                          (when (some? change-event)  ; Guard: only when event fires
-                            (when-some [token ?token]
-                              (e/server (db/toggle-page-done selected-doc current-pdf-page))
-                              (e/server (swap! !refresh inc))
-                              (token)))))
+                          (when-some [token ?token]
+                            (e/server (db/toggle-page-done selected-doc current-pdf-page))
+                            (e/server (swap! !refresh inc))
+                            (token))))
                       (dom/text "Done"))
 
                     (dom/button
@@ -332,7 +333,8 @@
 
               ;; Vertical drag handle (full width)
               (dom/div
-                (dom/props {:class "split-divider-v"})
+                (dom/props {:class "split-divider-v"
+                            :title "Drag to resize panels"})
                 (dom/On "mousedown" (fn [e] (start-drag! e :y !top-pct)) nil))
 
               ;; BOTTOM PANEL: Options toolbar + Cards table (full width)
@@ -364,7 +366,8 @@
 
                       ;; Context checkbox + pages
                       (dom/label
-                        (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}})
+                        (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}
+                                    :title "Include text from previous pages for better context"})
                         (dom/input
                           (dom/props {:type "checkbox" :checked use-context})
                           (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
@@ -378,6 +381,7 @@
                       (dom/input
                         (dom/props {:type "number" :min "1" :max "10" :value (str context-window)
                                     :disabled (not use-context)
+                                    :title "Number of previous pages to include (1-10)"
                                     :style {:padding "2px 4px" :font-size "13px" :width "40px"
                                             :opacity (if use-context "1" "0.5")}})
                         (let [input-event (dom/On "change"  ; Use "change" instead of "input" - fires on blur/enter
@@ -390,7 +394,7 @@
                           (when-some [token ?token]
                             (e/server (settings/save-context-pages user-id input-event))
                             (token))))
-                      (dom/span (dom/props {:style {:font-size "13px" :color "#666"}}) (dom/text "pg"))
+                      (dom/span (dom/props {:style {:font-size "11px" :color "#999"}}) (dom/text "pages"))
 
                       ;; Separator
                       (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
@@ -422,6 +426,19 @@
                               (e/server (settings/save-card-type user-id "cloze"))
                               (token))))
                         (dom/text "Cloze"))
+                      ;; Help icon for card types
+                      (dom/button
+                        (dom/props {:class "help-icon"
+                                    :style {:padding "2px 6px" :margin-left "4px" :background "transparent"
+                                            :border "1px solid #ccc" :border-radius "50%" :cursor "help"
+                                            :font-size "11px" :color "#666"}
+                                    :title "Basic: Traditional question-answer flashcards. Cloze: Fill-in-the-blank deletion cards."})
+                        (dom/text "?")
+                        (dom/On "click"
+                          (fn [e]
+                            #?(:cljs (.preventDefault e))
+                            #?(:cljs (js/alert "Basic: Traditional question-answer flashcards.\n\nCloze: Fill-in-the-blank deletion cards (e.g., 'Paris is the capital of [...]').")))
+                          nil))
 
                       ;; Separator
                       (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
@@ -432,6 +449,7 @@
                         (dom/text "#")
                         (dom/input
                           (dom/props {:type "number" :min "1" :max "50" :value (str card-count-val)
+                                      :title "Number of flashcards to generate (1-50)"
                                       :style {:padding "2px 4px" :font-size "13px" :width "50px"}})
                           (let [input-event (dom/On "change"  ; Use "change" instead of "input" - fires on blur/enter
                                               (fn [e] (let [v (-> e .-target .-value)]
@@ -442,7 +460,10 @@
                               (reset! !card-count input-event))
                             (when-some [token ?token]
                               (e/server (settings/save-card-count user-id input-event))
-                              (token)))))
+                              (token))))
+                        (dom/span
+                          (dom/props {:style {:font-size "11px" :color "#999"}})
+                          (dom/text "(1-50)")))
 
                       ;; Generate button
                       (dom/button
@@ -454,7 +475,8 @@
                                             :cursor "pointer"
                                             :font-size "13px"
                                             :font-weight "bold"
-                                            :margin-left "auto"}})
+                                            :margin-left "auto"}
+                                    :title "Generate flashcards from editor text or selected text"})
                         (dom/text "Generate")
                         (let [click-event (dom/On "click" identity nil)
                               [?token ?error] (e/Token click-event)]
@@ -516,7 +538,8 @@
                                             :cursor "pointer"
                                             :font-size "13px"
                                             :font-weight "500"
-                                            :margin-left "8px"}})
+                                            :margin-left "8px"}
+                                    :title "Add custom instructions to guide card generation"})
                         (dom/text "Generate with Prompt...")
                         (dom/On "click" (fn [_]
                                           (reset! !captured-selection (editor/get-selected-text!))
@@ -550,8 +573,15 @@
                             (dom/div
                               (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
                                                   :background "rgba(0,0,0,0.5)" :display "flex" :align-items "center"
-                                                  :justify-content "center" :z-index "1000"}})
+                                                  :justify-content "center" :z-index "1000"}
+                                          :tabindex "-1"})
                               (dom/On "click" (fn [_] (reset! !show-export false)) nil)
+                              (dom/On "keydown"
+                                (fn [e]
+                                  #?(:cljs
+                                     (when (= (.-key e) "Escape")
+                                       (reset! !show-export false))))
+                                nil)
 
                               (dom/div
                                 (dom/props {:style {:background "white" :border-radius "8px" :padding "24px"
@@ -665,8 +695,15 @@
                         (dom/div
                           (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
                                               :background "rgba(0,0,0,0.5)" :display "flex" :align-items "center"
-                                              :justify-content "center" :z-index "1000"}})
+                                              :justify-content "center" :z-index "1000"}
+                                      :tabindex "-1"})
                           (dom/On "click" (fn [_] (reset! !show-prompt-dialog false)) nil)
+                          (dom/On "keydown"
+                            (fn [e]
+                              #?(:cljs
+                                 (when (= (.-key e) "Escape")
+                                   (reset! !show-prompt-dialog false))))
+                            nil)
 
                           (dom/div
                             (dom/props {:style {:background "white" :border-radius "8px" :padding "24px"
@@ -776,8 +813,15 @@
                       (dom/div
                         (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
                                             :background "rgba(0,0,0,0.5)" :display "flex" :align-items "center"
-                                            :justify-content "center" :z-index "1000"}})
+                                            :justify-content "center" :z-index "1000"}
+                                    :tabindex "-1"})
                         (dom/On "click" (fn [_] (reset! !editing-card nil)) nil)
+                        (dom/On "keydown"
+                          (fn [e]
+                            #?(:cljs
+                               (when (= (.-key e) "Escape")
+                                 (reset! !editing-card nil))))
+                          nil)
                         (dom/div
                           (dom/props {:style {:background "white" :border-radius "8px" :padding "24px"
                                               :width "500px" :box-shadow "0 4px 6px rgba(0,0,0,0.1)"}})
