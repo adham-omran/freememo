@@ -58,6 +58,10 @@ IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return
                                              :image_url {:url base64-image}}]}]}
                      {:api-key api-key})
           raw-text (-> response :choices first :message :content)
+          _ (when-not raw-text
+              (throw (ex-info "Empty response from OpenAI"
+                              {:status (get response :status)
+                               :error  (get-in response [:error :message])})))
           ;; Strip markdown code fences if GPT-4o adds them anyway
           text (-> raw-text
                    (clojure.string/replace #"^```html\s*\n?" "")
