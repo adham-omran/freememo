@@ -669,13 +669,14 @@
                                                                  :kind "cloze"
                                                                  :header-text (when use-header header-text)
                                                                  :user-id user-id}))]
-                                            (if (and (:success basic-result) (:success cloze-result))
-                                              (do
-                                                (trigger-download! (:filename basic-result) (:csv basic-result))
-                                                (trigger-download! (:filename cloze-result) (:csv cloze-result))
-                                                (reset! !show-export false)
-                                                (token))
-                                              (token (str "Export failed: " (or (:error basic-result) (:error cloze-result))))))
+                                            (let [any-success? (or (:success basic-result) (:success cloze-result))]
+                                              (when (:success basic-result)
+                                                (trigger-download! (:filename basic-result) (:csv basic-result)))
+                                              (when (:success cloze-result)
+                                                (trigger-download! (:filename cloze-result) (:csv cloze-result)))
+                                              (if any-success?
+                                                (do (reset! !show-export false) (token))
+                                                (token (str "Export failed: " (or (:error basic-result) (:error cloze-result)))))))
                                           (let [export-result (e/server
                                                                 (cards/export-cards-csv
                                                                   {:document-id selected-doc
