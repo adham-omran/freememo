@@ -67,8 +67,35 @@
          (.addEventListener js/document "mousemove" on-move)
          (.addEventListener js/document "mouseup" @on-up)))))
 
-;; Card table row component
-(e/defn CardRow [card on-edit]
+;; Delete button extracted into its own component to reduce macro-expansion depth in CardRow
+(e/defn DeleteCardButton [id]
+  (e/client
+    (dom/button
+      (dom/props {:style {:padding "2px 6px" :background "#dc3545" :color "white"
+                          :border "none" :border-radius "3px" :cursor "pointer"
+                          :font-size "12px" :line-height "1"}})
+      (dom/text "\u00D7")
+      (let [click-event (dom/On "click" identity nil)
+            [?token ?error] (e/Token click-event)]
+        (dom/props {:disabled (some? ?token)
+                    :style {:padding "2px 6px"
+                            :background (if (some? ?token) "#999" "#dc3545")
+                            :color "white" :border "none" :border-radius "3px"
+                            :cursor (if (some? ?token) "not-allowed" "pointer")
+                            :font-size "12px" :line-height "1"}})
+        (when ?error
+          (dom/div
+            (dom/props {:style {:color "red" :font-size "11px"}})
+            (dom/text ?error)))
+        (when-some [token ?token]
+          (let [result (e/server (cards/delete-card id))]
+            (if (:success result)
+              (do (e/server (swap! !refresh inc)) (token))
+              (token (:error result)))))))))
+
+;; Card table row component. Accepts !editing-card atom directly to avoid
+;; passing a plain fn as an e/defn parameter (which can confuse the macro expander).
+(e/defn CardRow [card !editing-card]
   (e/client
     (let [id (e/server (:flashcards/id card))
           kind (e/server (:flashcards/kind card))
@@ -103,46 +130,12 @@
             (dom/On "click" (fn [_]
                               (let [data {:id id :kind kind :question question :answer answer :cloze cloze}]
                                 (println "EDIT CLICK data:" (pr-str data))
-                                (on-edit data))) nil)))
+                                (reset! !editing-card data))) nil)))
         ;; Delete column
         (dom/td
           (dom/props {:style {:padding "6px 4px" :width "40px" :text-align "center"
                               :border-bottom "1px solid #e0e0e0"}})
-          (dom/button
-            (dom/props {:style {:padding "2px 6px"
-                                :background "#dc3545"
-                                :color "white"
-                                :border "none"
-                                :border-radius "3px"
-                                :cursor "pointer"
-                                :font-size "12px"
-                                :line-height "1"}})
-            (dom/text "\u00D7")
-            (let [click-event (dom/On "click" identity nil)
-                  [?token ?error] (e/Token click-event)]
-
-              (dom/props {:disabled (some? ?token)
-                          :style {:padding "2px 6px"
-                                  :background (if (some? ?token) "#999" "#dc3545")
-                                  :color "white"
-                                  :border "none"
-                                  :border-radius "3px"
-                                  :cursor (if (some? ?token) "not-allowed" "pointer")
-                                  :font-size "12px"
-                                  :line-height "1"}})
-
-              (when ?error
-                (dom/div
-                  (dom/props {:style {:color "red" :font-size "11px"}})
-                  (dom/text ?error)))
-
-              (when-some [token ?token]
-                (let [result (e/server (cards/delete-card id))]
-                  (if (:success result)
-                    (do
-                      (e/server (swap! !refresh inc))
-                      (token))
-                    (token (:error result))))))))))))
+          (DeleteCardButton id))))))
 
 (e/defn OcrPage [user-id enc-key]
   (e/client
@@ -905,7 +898,7 @@
                                 (e/for [i (e/diff-by {} (range offset (+ offset limit)))]
                                   (let [card (e/server (nth cards-vec i nil))]
                                     (when card
-                                      (CardRow card (fn [c] (reset! !editing-card c))))))))
+                                      (CardRow card !editing-card))))))
                             ;; Spacer for full scroll height
                             (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))
                       (dom/p
