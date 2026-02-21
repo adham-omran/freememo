@@ -96,16 +96,15 @@
               (if (seq (:documents docs-result))
                 (let [docs-vec (e/server (vec (:documents docs-result)))
                       doc-count (e/server (count docs-vec))
-                      row-height 49]
-                  ;; Scroll viewport
+                      row-height 49
+                      container-height (min (* doc-count row-height) 400)]
                   (dom/div
-                    (dom/props {:style {:max-height "400px"
+                    (dom/props {:style {:height (str container-height "px")
                                         :overflow-y "auto"
                                         :border "1px solid #e0e0e0"
                                         :border-radius "4px"}})
                     (let [[offset limit] (Scroll-window row-height doc-count dom/node {:overquery-factor 1})
                           occluded-height (clamp-left (* row-height (- doc-count limit)) 0)]
-                      ;; Document list container
                       (dom/div
                         (dom/props {:style {:position "relative"
                                             :top (str (* offset row-height) "px")}})
@@ -113,7 +112,6 @@
                           (let [doc (e/server (nth docs-vec i nil))]
                             (when doc
                               (PdfListItem user-id doc)))))
-                      ;; Spacer for full scroll height
                       (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))
                 (dom/p (dom/text "No documents uploaded yet.")))
               (dom/div
