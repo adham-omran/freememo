@@ -5,6 +5,16 @@
     [electric-starter-app.crypto :as crypto]
     [clojure.string :as str]))
 
+;; Toggle: set to false from REPL to disable shared key fallback
+(defonce !use-shared-key (atom true))
+
+;; Load the shared key once from resources/openai.txt (nil if file absent)
+(defonce shared-api-key
+  (delay
+    (when-let [r (clojure.java.io/resource "openai.txt")]
+      (let [k (clojure.string/trim (slurp r))]
+        (when (seq k) k)))))
+
 ;; Setting keys (constants)
 (def OPENAI_API_KEY "openai_api_key")
 (def MODEL "model")
@@ -17,7 +27,10 @@
 
 ;; Get functions
 (defn get-openai-api-key [user-id enc-key]
-  (crypto/decrypt (or (db/get-setting user-id OPENAI_API_KEY) "") enc-key))
+  (let [user-key (crypto/decrypt (or (db/get-setting user-id OPENAI_API_KEY) "") enc-key)]
+    (if (seq user-key)
+      user-key
+      (when @!use-shared-key @shared-api-key))))
 
 (defn get-model [user-id]
   (or (db/get-setting user-id MODEL) "gpt-5.1"))
