@@ -47,7 +47,7 @@
                      (wrap-api-routes) ; 2. API routes
                      (wrap-multipart-params) ; 1b. parse multipart form data (file uploads)
                      (wrap-params) ; 1a. boilerplate – parse request URL parameters.
-                     (wrap-session {:cookie-attrs {:same-site :lax}})) ; 0. session middleware (outermost – runs first)
+                     (wrap-session {:cookie-attrs {:same-site :lax :http-only true}})) ; 0. session middleware (outermost – runs first)
                    {:host "0.0.0.0", :port 8080, :join? false
                     :ws-idle-timeout (* 60 1000)          ; 60 seconds in milliseconds
                     :ws-max-binary-size (* 100 1024 1024) ; 100MB - for demo
