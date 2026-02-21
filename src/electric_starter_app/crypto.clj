@@ -26,6 +26,15 @@
           key-bytes (-> (.generateSecret factory spec) .getEncoded)]
       (.encodeToString (Base64/getEncoder) key-bytes))))
 
+(defn derive-key-for-oauth-user
+  "Derive enc-key for a Google (OAuth) user using server secret + google-sub.
+   Uses PBKDF2 with ENC_KEY_SECRET as the 'password' and google-sub as salt input.
+   Same google-sub + same ENC_KEY_SECRET always produces the same key (deterministic).
+   Security depends on ENC_KEY_SECRET being kept private."
+  [^String google-sub]
+  (let [server-secret (or (System/getenv "ENC_KEY_SECRET") "dev-enc-key-secret-change-in-prod")]
+    (derive-key server-secret (str "google-" google-sub))))
+
 (defn- str->secret-key
   "Parse a base64-encoded key string into an AES SecretKeySpec."
   [enc-key-str]

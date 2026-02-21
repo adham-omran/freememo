@@ -69,4 +69,18 @@
               (dom/On "click" (fn [e]
                                 (.preventDefault e)
                                 (reset! !mode (if (= mode :login) :signup :login)))
-                nil))))))))
+                nil)))
+
+          ;; Divider
+          (dom/div
+            (dom/props {:style {:text-align "center" :margin "20px 0 16px" :color "#999" :font-size "13px"}})
+            (dom/text "— or —"))
+
+          ;; Google sign-in
+          (dom/a
+            (dom/props {:href "/auth/google"
+                        :style {:display "block" :text-align "center" :padding "10px 16px"
+                                :border "1px solid #ddd" :border-radius "4px"
+                                :text-decoration "none" :color "#444" :font-size "14px"
+                                :font-weight "500" :background "white"}})
+            (dom/text "Sign in with Google")))))))

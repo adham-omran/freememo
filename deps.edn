@@ -8,13 +8,16 @@
            org.postgresql/postgresql {:mvn/version "42.7.3"}
            com.zaxxer/HikariCP {:mvn/version "5.1.0"}
            org.apache.pdfbox/pdfbox {:mvn/version "3.0.3"}
-           net.clojars.wkok/openai-clojure {:mvn/version "0.23.0"}}
+           net.clojars.wkok/openai-clojure {:mvn/version "0.23.0"}
+           clj-http/clj-http {:mvn/version "3.12.3"}
+           cheshire/cheshire {:mvn/version "5.12.0"}}
  :paths   ["src" "resources"]
  :aliases {:dev {:extra-paths ["src-dev"] :extra-deps  {thheller/shadow-cljs {:mvn/version "2.26.2"}}}
            :prod {:extra-paths ["src-prod"]}
            :build ; use `clj -X:prod:build build-client`, NOT -T!
            {:extra-paths ["src-build"]
             :ns-default  build
+            :jvm-opts    ["-Xss4m"]
             :extra-deps  {thheller/shadow-cljs          {:mvn/version "2.26.2"}
                           io.github.clojure/tools.build {:mvn/version "0.10.8"}}}
            :jetty9 {:override-deps {ring/ring {:mvn/version "1.9.6"}}

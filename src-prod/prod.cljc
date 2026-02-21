@@ -62,7 +62,7 @@
            (wrap-api-routes)
            (wrap-multipart-params)
            (wrap-params)
-           (wrap-session))
+           (wrap-session {:cookie-attrs {:same-site :lax}}))
          {:host (:host config), :port (:port config), :join? false
           :ws-idle-timeout (* 60 1000)          ; 60 seconds in milliseconds
           :ws-max-binary-size (* 100 1024 1024) ; 100MB - for demo
