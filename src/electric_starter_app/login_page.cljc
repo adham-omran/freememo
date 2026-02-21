@@ -14,7 +14,7 @@
                             :box-shadow "0 2px 10px rgba(0,0,0,0.1)" :width "360px"}})
         (dom/h1
           (dom/props {:style {:text-align "center" :margin-bottom "24px" :color "#333"}})
-          (dom/text "Card Maker"))
+          (dom/text "FreeMemo"))
 
         ;; Error message
         (when auth-error
@@ -35,9 +35,9 @@
         ;; Divider
         (dom/div
           (dom/props {:style {:text-align "center" :margin "20px 0 16px" :color "#999" :font-size "13px"}})
-          (dom/text "— or sign in with email —"))
+          (dom/text "— or sign in with username —"))
 
-        ;; Collapsible email/password section
+        ;; Collapsible username/password section
         (let [!expanded (atom false)
               expanded (e/watch !expanded)]
 
