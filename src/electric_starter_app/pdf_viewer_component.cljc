@@ -148,13 +148,13 @@
                       @!container
                       @!viewer-div
                       pdf-url
-                      (fn [pdf _]
+                      (fn [^js pdf _]
                         ;; On PDF loaded
                         (reset! !total (.-numPages pdf))
                         ;; Listen for page changes from PDF.js
                         (when-let [{:keys [event-bus]} @viewer/!viewer-state]
                           (.on event-bus "pagechanging"
-                               (fn [e] (reset! !page (.-pageNumber e)))))))))
+                               (fn [^js e] (reset! !page (.-pageNumber e)))))))))
                 100)))))
 
       ;; Return current page number for OCR integration
