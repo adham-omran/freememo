@@ -15,3 +15,4 @@ node_modules
 .DS_Store
 /.dir-locals.el
 .clj-kondo
+/resources/google_client.json

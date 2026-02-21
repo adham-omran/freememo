@@ -6,6 +6,7 @@
     [electric-starter-app.db :as db]
     [electric-starter-app.auth :as auth]
     [electric-starter-app.crypto :as crypto]
+    [electric-starter-app.google-oauth :as google-oauth]
     [clojure.java.io :as io]
     [clojure.string]))
 
@@ -105,6 +106,47 @@
      :headers {"Location" "/"}
      :body ""}))
 
+(defn google-auth-handler [_request]
+  (if-not (google-oauth/configured?)
+    {:status 503
+     :headers {"Content-Type" "text/plain"}
+     :body "Google sign-in is not configured (missing credentials)"}
+    (let [state (str (random-uuid))]
+      {:status 302
+       :headers {"Location" (google-oauth/auth-url state)}
+       :session {:oauth-state state}})))
+
+(defn google-callback-handler [request]
+  (let [code (get-in request [:params "code"])
+        state (get-in request [:params "state"])
+        expected-state (get-in request [:session :oauth-state])]
+    (cond
+      (not= state expected-state)
+      {:status 302
+       :headers {"Location" "/"}
+       :session {:auth-error "OAuth state mismatch — please try again"}}
+
+      (clojure.string/blank? code)
+      {:status 302
+       :headers {"Location" "/"}
+       :session {:auth-error "Google sign-in was cancelled"}}
+
+      :else
+      (try
+        (let [claims (google-oauth/exchange-code code)
+              google-sub (str (:sub claims))
+              email (str (:email claims))
+              display-name (str (:name claims))
+              {:keys [user-id username enc-key]} (google-oauth/find-or-create-user google-sub email display-name)]
+          {:status 302
+           :headers {"Location" "/"}
+           :session {:user-id user-id :username username :enc-key enc-key}})
+        (catch Exception e
+          (println "ERROR [google-callback-handler]:" (.getMessage e))
+          {:status 302
+           :headers {"Location" "/"}
+           :session {:auth-error "Google sign-in failed — please try again"}})))))
+
 (defn save-page-text-handler [request]
   (try
     (let [params (:params request)
@@ -146,5 +188,11 @@
 
       (and (= uri "/api/save-page-text") (= method :post))
       (save-page-text-handler request)
+
+      (and (= uri "/auth/google") (= method :get))
+      (google-auth-handler request)
+
+      (and (= uri "/auth/google/callback") (= method :get))
+      (google-callback-handler request)
 
       :else nil)))  ; return nil to pass through to next middleware

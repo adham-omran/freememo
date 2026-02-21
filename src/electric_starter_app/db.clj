@@ -32,6 +32,11 @@
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )"])
 
+  ;; Google OAuth migrations: add google_id and email columns, allow NULL password_hash
+  (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT UNIQUE"])
+  (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT"])
+  (jdbc/execute! ds ["ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL"])
+
   ;; Migrate settings: drop old global table, recreate with user_id
   ;; Check if settings table exists and lacks user_id column
   (let [has-user-id (jdbc/execute-one! ds
@@ -262,3 +267,18 @@
                          [:>= :page_number start-page]
                          [:<= :page_number end-page]]
                  :order-by [[:page_number :asc]]})))
+
+;; Google OAuth user queries
+(defn get-user-by-google-id [google-id]
+  (jdbc/execute-one! ds
+    (sql/format {:select [:id :username :email]
+                 :from [:users]
+                 :where [:= :google_id google-id]})))
+
+(defn upsert-google-user [google-id email username]
+  (jdbc/execute-one! ds
+    (sql/format {:insert-into :users
+                 :values [{:google_id google-id :email email :username username}]
+                 :on-conflict [:google_id]
+                 :do-update-set {:email email}
+                 :returning [:id :username]})))
