@@ -24,6 +24,7 @@
 (def CONTEXT_ENABLED "context_enabled")
 (def CONTEXT_PAGES "context_pages")
 (def CARD_TYPE "card_type")
+(def ACTIVE_TAB "active_tab")
 
 ;; Get functions
 (defn get-openai-api-key [user-id enc-key]
@@ -61,6 +62,17 @@
     (catch Exception e
       (println "ERROR [get-context-pages]:" (.getMessage e))
       3)))
+
+(defn get-active-tab [user-id]
+  (try
+    (let [raw (db/get-setting user-id ACTIVE_TAB)
+          valid #{"home" "settings" "pdf" "workspace"}]
+      (if (valid raw)
+        (keyword raw)
+        :home))
+    (catch Exception e
+      (println "ERROR [get-active-tab]:" (.getMessage e))
+      :home)))
 
 (defn get-card-type [user-id]
   (try
@@ -130,6 +142,14 @@
     (catch Exception e
       (println "ERROR [save-card-type]:" (.getMessage e))
       {:success false :error "Failed to save card type"})))
+
+(defn save-active-tab [user-id tab]
+  (try
+    (db/set-setting user-id ACTIVE_TAB (name tab))
+    {:success true}
+    (catch Exception e
+      (println "ERROR [save-active-tab]:" (.getMessage e))
+      {:success false :error "Failed to save active tab"})))
 
 (defn save-card-count [user-id value]
   (try
