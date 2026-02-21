@@ -85,8 +85,7 @@
   "Look up or create a user row for the given Google identity.
    Returns {:user-id ... :username ... :enc-key ...}."
   [google-sub email display-name]
-  (let [username (or (when (seq display-name) display-name)
-                     (first (clojure.string/split (or email "") #"@"))
+  (let [username (or (first (clojure.string/split (or email "") #"@"))
                      (str "user-" (subs google-sub 0 8)))
         existing (db/get-user-by-google-id google-sub)
         row      (if existing
