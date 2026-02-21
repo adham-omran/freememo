@@ -16,3 +16,4 @@ node_modules
 /.dir-locals.el
 .clj-kondo
 /resources/google_client.json
+/resources/openai.txt
