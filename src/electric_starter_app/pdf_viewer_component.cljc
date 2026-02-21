@@ -51,11 +51,14 @@
                                   :border "1px solid #ccc"
                                   :border-radius "3px"}})
               (dom/text "◀")
-              (e/for [_ (dom/On-all "click")]
-                (when (and (> page 1) (> total 0))
-                  (let [new-page (dec page)]
-                    (reset! !page new-page)
-                    (viewer/go-to-page! new-page)))))
+              (dom/On "click"
+                (fn [_]
+                  (let [p @!page t @!total]
+                    (when (and (> p 1) (> t 0))
+                      (let [new-page (dec p)]
+                        (reset! !page new-page)
+                        (viewer/go-to-page! new-page)))))
+                nil))
 
             ;; Page number display
             (dom/span
@@ -74,11 +77,14 @@
                                   :border "1px solid #ccc"
                                   :border-radius "3px"}})
               (dom/text "▶")
-              (e/for [_ (dom/On-all "click")]
-                (when (and (< page total) (> total 0))
-                  (let [new-page (inc page)]
-                    (reset! !page new-page)
-                    (viewer/go-to-page! new-page))))))
+              (dom/On "click"
+                (fn [_]
+                  (let [p @!page t @!total]
+                    (when (and (< p t) (> t 0))
+                      (let [new-page (inc p)]
+                        (reset! !page new-page)
+                        (viewer/go-to-page! new-page)))))
+                nil)))
 
           ;; Zoom controls section
           (dom/div
