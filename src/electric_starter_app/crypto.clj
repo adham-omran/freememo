@@ -54,19 +54,29 @@
 (defn decrypt
   "Decrypt base64-encoded AES-256-GCM ciphertext using the derived key.
    enc-key-str: base64-encoded key from derive-key / session.
-   Returns plaintext, or ciphertext unchanged if enc-key-str is nil or decryption fails
-   (graceful fallback for plain-text values stored before encryption was added)."
+   Returns plaintext, or ciphertext unchanged if enc-key-str is nil.
+   Handles two legacy cases:
+   - Not valid base64 (stored as plaintext before encryption was added): return as-is
+   - Valid base64 but GCM fails (encrypted with old ENCRYPTION_KEY scheme): return \"\"
+     so callers treat it as missing and prompt the user to re-enter the key."
   [^String ciphertext enc-key-str]
   (if (and enc-key-str (seq ciphertext))
     (try
-      (let [secret-key (str->secret-key enc-key-str)
-            combined  (.decode (Base64/getDecoder) ciphertext)
-            nonce     (Arrays/copyOfRange combined 0 12)
-            enc       (Arrays/copyOfRange combined 12 (alength combined))
-            cipher    (Cipher/getInstance "AES/GCM/NoPadding")
-            _         (.init cipher Cipher/DECRYPT_MODE secret-key (GCMParameterSpec. 128 nonce))]
-        (String. (.doFinal cipher enc) "UTF-8"))
-      (catch Exception _
-        ;; Value is likely stored as plain text (pre-encryption legacy data)
+      ;; Attempt base64 decode first
+      (let [combined (.decode (Base64/getDecoder) ciphertext)]
+        ;; Value IS base64 — attempt GCM decryption
+        (try
+          (let [secret-key (str->secret-key enc-key-str)
+                nonce      (Arrays/copyOfRange combined 0 12)
+                enc        (Arrays/copyOfRange combined 12 (alength combined))
+                cipher     (Cipher/getInstance "AES/GCM/NoPadding")
+                _          (.init cipher Cipher/DECRYPT_MODE secret-key (GCMParameterSpec. 128 nonce))]
+            (String. (.doFinal cipher enc) "UTF-8"))
+          (catch Exception _
+            ;; GCM failed: value was encrypted with a different key (old ENCRYPTION_KEY scheme)
+            ;; Return "" so caller treats it as missing — user will see "API key not configured"
+            "")))
+      (catch IllegalArgumentException _
+        ;; Not valid base64: value is plaintext (stored before encryption was added)
         ciphertext))
     ciphertext))
