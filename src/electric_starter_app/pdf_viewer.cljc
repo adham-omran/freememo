@@ -62,3 +62,12 @@
      :cljs (when-let [{:keys [viewer]} @!viewer-state]
              (let [^js v viewer]
                (set! (.-currentScale v) scale)))))
+
+(defn on-page-change!
+  "Register a callback for PDF.js page change events."
+  [callback]
+  #?(:clj nil
+     :cljs (when-let [{:keys [event-bus]} @!viewer-state]
+             (let [^js eb event-bus]
+               (.on eb "pagechanging"
+                    (fn [^js e] (callback (.-pageNumber e))))))))
