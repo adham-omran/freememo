@@ -203,6 +203,9 @@
                 ;; Generation queue — {:queue [...] :active nil-or-request}
                 !gen-state (atom {:queue [] :active nil})
                 gen-state (e/watch !gen-state)
+                ;; Prompt generation queue (same shape)
+                !prompt-gen-state (atom {:queue [] :active nil})
+                prompt-gen-state (e/watch !prompt-gen-state)
                 ;; Shared server data — hoisted so both editor and bottom panel can use them
                 dirty-data (e/watch editor/!dirty-html)
                 save-result (when (some? dirty-data)
@@ -494,6 +497,9 @@
                                             :font-weight "500"}
                                     :title "Add custom instructions to guide card generation"})
                         (dom/text "Generate with Prompt...")
+                        (let [pending (+ (count (:queue prompt-gen-state)) (if (:active prompt-gen-state) 1 0))]
+                          (when (pos? pending)
+                            (dom/text (str " (" pending ")"))))
                         (dom/On "click" (fn [_]
                                           (reset! !captured-selection (editor/get-selected-text!))
                                           (reset! !prompt-dialog-kind card-type)
@@ -531,6 +537,42 @@
                                         (swap! !gen-state assoc :active nil))
                                     (do (token (:error save-result))
                                         (swap! !gen-state assoc :active nil)))))))))
+
+                      ;; Auto-advance for prompt queue
+                      (when (and (nil? (:active prompt-gen-state)) (seq (:queue prompt-gen-state)))
+                        (swap! !prompt-gen-state (fn [{:keys [queue]}]
+                          {:active (first queue) :queue (vec (rest queue))})))
+
+                      ;; Prompt queue processor — processes one prompt-generation request at a time
+                      (when-some [current (:active prompt-gen-state)]
+                        (let [[?token _?error] (e/Token (:id current))]
+                          (when-some [token ?token]
+                            (let [content (or (:selection current) page-text)
+                                  prompt-text (:pre-prompt current)
+                                  kind (:kind current)
+                                  context-text (when use-context
+                                                 (e/server (cards/get-context-pages selected-doc current-pdf-page context-window)))
+                                  generate-result (e/server
+                                                    (if (= kind "basic")
+                                                      (cards/generate-basic-cards
+                                                        {:content content :context context-text
+                                                         :card-count card-count-val :user-id user-id
+                                                         :enc-key enc-key :pre-prompt prompt-text})
+                                                      (cards/generate-cloze-cards
+                                                        {:content content :context context-text
+                                                         :card-count card-count-val :user-id user-id
+                                                         :enc-key enc-key :pre-prompt prompt-text})))]
+                              (if-not (:success generate-result)
+                                (do (token (:error generate-result))
+                                    (swap! !prompt-gen-state assoc :active nil))
+                                (let [generated-cards (e/server (:cards generate-result))
+                                      save-result (e/server (cards/save-cards selected-doc current-pdf-page kind generated-cards))]
+                                  (if (:success save-result)
+                                    (do (e/server (swap! !refresh inc))
+                                        (token)
+                                        (swap! !prompt-gen-state assoc :active nil))
+                                    (do (token (:error save-result))
+                                        (swap! !prompt-gen-state assoc :active nil)))))))))
 
                       ;; Separator
                       (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
@@ -726,56 +768,20 @@
                                 (dom/On "click" (fn [_] (reset! !show-prompt-dialog false)) nil))
 
                               (dom/button
-                                (let [click-event (dom/On "click" identity nil)
-                                      [?token ?error] (e/Token click-event)]
-
-                                  (dom/props {:disabled (some? ?token)
-                                              :style {:padding "8px 16px"
-                                                      :background (if (some? ?token) "#999" "#28a745")
-                                                      :color "white" :border "none" :border-radius "4px"
-                                                      :cursor (if (some? ?token) "not-allowed" "pointer")
-                                                      :font-size "14px" :font-weight "500"}})
-
-                                  (dom/text "Generate" (when ?token " ..."))
-
-                                  (when ?error
-                                    (dom/div
-                                      (dom/props {:style {:color "red" :font-size "12px" :margin-top "8px"}})
-                                      (dom/text "Error: " ?error)))
-
-                                  (when-some [token ?token]
+                                (dom/props {:style {:padding "8px 16px" :background "#28a745"
+                                                    :color "white" :border "none" :border-radius "4px"
+                                                    :cursor "pointer" :font-size "14px" :font-weight "500"}})
+                                (dom/text "Generate")
+                                (dom/On "click"
+                                  (fn [_]
                                     (reset! !pre-prompt local-prompt)
-
-                                    (let [content (or captured-selection page-text)
-                                          context-text (when use-context
-                                                         (e/server (cards/get-context-pages selected-doc current-pdf-page context-window)))
-                                          generate-result (e/server
-                                                            (if (= prompt-dialog-kind "basic")
-                                                              (cards/generate-basic-cards
-                                                                {:content content
-                                                                 :context context-text
-                                                                 :card-count card-count-val
-                                                                 :user-id user-id
-                                                                 :enc-key enc-key
-                                                                 :pre-prompt local-prompt})
-                                                              (cards/generate-cloze-cards
-                                                                {:content content
-                                                                 :context context-text
-                                                                 :card-count card-count-val
-                                                                 :user-id user-id
-                                                                 :enc-key enc-key
-                                                                 :pre-prompt local-prompt})))]
-
-                                      (if-not (:success generate-result)
-                                        (token (:error generate-result))
-                                        (let [generated-cards (e/server (:cards generate-result))
-                                              save-result (e/server (cards/save-cards selected-doc current-pdf-page prompt-dialog-kind generated-cards))]
-                                          (if (:success save-result)
-                                            (do
-                                              (e/server (swap! !refresh inc))
-                                              (reset! !show-prompt-dialog false)
-                                              (token))
-                                            (token (:error save-result)))))))))))))))))
+                                    (swap! !prompt-gen-state update :queue conj
+                                      {:id        (str (random-uuid))
+                                       :selection captured-selection
+                                       :pre-prompt local-prompt
+                                       :kind      prompt-dialog-kind})
+                                    (reset! !show-prompt-dialog false))
+                                  nil))))))))))
 
                 ;; Cards table with virtual scroll
                 (let [cards-result (e/server (get-cards* refresh selected-doc current-pdf-page))
