@@ -200,9 +200,9 @@
                 prompt-dialog-kind (e/watch !prompt-dialog-kind)
                 !captured-selection (atom nil)
                 captured-selection (e/watch !captured-selection)
-                ;; Generation queue — each click enqueues a request, processed sequentially
-                !gen-queue (atom [])
-                gen-queue (e/watch !gen-queue)
+                ;; Generation queue — {:queue [...] :active nil-or-request}
+                !gen-state (atom {:queue [] :active nil})
+                gen-state (e/watch !gen-state)
                 ;; Shared server data — hoisted so both editor and bottom panel can use them
                 dirty-data (e/watch editor/!dirty-html)
                 save-result (when (some? dirty-data)
@@ -472,11 +472,12 @@
                                             :font-size "13px" :font-weight "bold"}
                                     :title "Generate flashcards from editor text or selected text"})
                         (dom/text "Generate")
-                        (when (seq gen-queue)
-                          (dom/text (str " (" (count gen-queue) ")")))
+                        (let [pending (+ (count (:queue gen-state)) (if (:active gen-state) 1 0))]
+                          (when (pos? pending)
+                            (dom/text (str " (" pending ")"))))
                         (dom/On "click"
                           (fn [_]
-                            (swap! !gen-queue conj
+                            (swap! !gen-state update :queue conj
                               {:id    (str (random-uuid))
                                :selection (editor/get-selected-text!)}))
                           nil)))
@@ -499,10 +500,14 @@
                                           (reset! !show-prompt-dialog true))
                                 nil))) ;; end Generate buttons group
 
+                      ;; Auto-advance: when not processing and queue has items, start next
+                      (when (and (nil? (:active gen-state)) (seq (:queue gen-state)))
+                        (swap! !gen-state (fn [{:keys [queue]}]
+                          {:active (first queue) :queue (vec (rest queue))})))
+
                       ;; Queue processor — processes one generation request at a time
-                      (when-some [current (first gen-queue)]
-                        (let [req-id (:id current)
-                              [?token _?error] (e/Token req-id)]
+                      (when-some [current (:active gen-state)]
+                        (let [[?token _?error] (e/Token (:id current))]
                           (when-some [token ?token]
                             (let [content (or (:selection current) page-text)
                                   context-text (when use-context
@@ -516,15 +521,16 @@
                                                         {:content content :context context-text
                                                          :card-count card-count-val :user-id user-id :enc-key enc-key})))]
                               (if-not (:success generate-result)
-                                (do (swap! !gen-queue #(vec (rest %)))
-                                    (token (:error generate-result)))
+                                (do (token (:error generate-result))
+                                    (swap! !gen-state assoc :active nil))
                                 (let [generated-cards (e/server (:cards generate-result))
                                       save-result (e/server (cards/save-cards selected-doc current-pdf-page card-type generated-cards))]
-                                  (swap! !gen-queue #(vec (rest %)))
                                   (if (:success save-result)
                                     (do (e/server (swap! !refresh inc))
-                                        (token))
-                                    (token (:error save-result)))))))))
+                                        (token)
+                                        (swap! !gen-state assoc :active nil))
+                                    (do (token (:error save-result))
+                                        (swap! !gen-state assoc :active nil)))))))))
 
                       ;; Separator
                       (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
