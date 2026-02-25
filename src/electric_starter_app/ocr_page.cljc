@@ -200,6 +200,9 @@
                 prompt-dialog-kind (e/watch !prompt-dialog-kind)
                 !captured-selection (atom nil)
                 captured-selection (e/watch !captured-selection)
+                ;; Generation queue — each click enqueues a request, processed sequentially
+                !gen-queue (atom [])
+                gen-queue (e/watch !gen-queue)
                 ;; Shared server data — hoisted so both editor and bottom panel can use them
                 dirty-data (e/watch editor/!dirty-html)
                 save-result (when (some? dirty-data)
@@ -462,68 +465,21 @@
                       (dom/div
                         (dom/props {:style {:display "flex" :gap "8px" :margin-left "auto"}})
 
-                      ;; Generate button
+                      ;; Generate button — always enabled, enqueues requests
                       (dom/button
-                        (dom/props {:style {:padding "4px 12px"
-                                            :background "#28a745"
-                                            :color "white"
-                                            :border "none"
-                                            :border-radius "4px"
-                                            :cursor "pointer"
-                                            :font-size "13px"
-                                            :font-weight "bold"}
+                        (dom/props {:style {:padding "4px 12px" :background "#28a745" :color "white"
+                                            :border "none" :border-radius "4px" :cursor "pointer"
+                                            :font-size "13px" :font-weight "bold"}
                                     :title "Generate flashcards from editor text or selected text"})
                         (dom/text "Generate")
-                        (let [click-event (dom/On "click" identity nil)
-                              [?token ?error] (e/Token click-event)]
-
-                          (dom/props {:disabled (some? ?token)
-                                      :style {:padding "4px 12px"
-                                              :background (if (some? ?token) "#999" "#28a745")
-                                              :color "white"
-                                              :border "none"
-                                              :border-radius "4px"
-                                              :cursor (if (some? ?token) "not-allowed" "pointer")
-                                              :font-size "13px"
-                                              :font-weight "bold"}})
-
-                          (when ?token
-                            (dom/text " ..."))
-
-                          (when ?error
-                            (dom/div
-                              (dom/props {:style {:color "red" :font-size "12px"}})
-                              (dom/text "Error: " ?error)))
-
-                          (when-some [token ?token]
-                            (let [selected-text (editor/get-selected-text!)
-                                  content (or selected-text page-text)
-                                  context-text (when use-context
-                                                 (e/server (cards/get-context-pages selected-doc current-pdf-page context-window)))
-                                  generate-result (e/server
-                                                    (if (= card-type "basic")
-                                                      (cards/generate-basic-cards
-                                                        {:content content
-                                                         :context context-text
-                                                         :card-count card-count-val
-                                                         :user-id user-id
-                                                         :enc-key enc-key})
-                                                      (cards/generate-cloze-cards
-                                                        {:content content
-                                                         :context context-text
-                                                         :card-count card-count-val
-                                                         :user-id user-id
-                                                         :enc-key enc-key})))]
-
-                              (if-not (:success generate-result)
-                                (token (:error generate-result))
-                                (let [generated-cards (e/server (:cards generate-result))
-                                      save-result (e/server (cards/save-cards selected-doc current-pdf-page card-type generated-cards))]
-                                  (if (:success save-result)
-                                    (do
-                                      (e/server (swap! !refresh inc))
-                                      (token))
-                                    (token (:error save-result))))))))))
+                        (when (seq gen-queue)
+                          (dom/text (str " (" (count gen-queue) ")")))
+                        (dom/On "click"
+                          (fn [_]
+                            (swap! !gen-queue conj
+                              {:id    (str (random-uuid))
+                               :selection (editor/get-selected-text!)}))
+                          nil)))
 
                       ;; Generate with Prompt button
                       (dom/button
@@ -542,6 +498,33 @@
                                           (reset! !prompt-dialog-kind card-type)
                                           (reset! !show-prompt-dialog true))
                                 nil))) ;; end Generate buttons group
+
+                      ;; Queue processor — processes one generation request at a time
+                      (when-some [current (first gen-queue)]
+                        (let [req-id (:id current)
+                              [?token _?error] (e/Token req-id)]
+                          (when-some [token ?token]
+                            (let [content (or (:selection current) page-text)
+                                  context-text (when use-context
+                                                 (e/server (cards/get-context-pages selected-doc current-pdf-page context-window)))
+                                  generate-result (e/server
+                                                    (if (= card-type "basic")
+                                                      (cards/generate-basic-cards
+                                                        {:content content :context context-text
+                                                         :card-count card-count-val :user-id user-id :enc-key enc-key})
+                                                      (cards/generate-cloze-cards
+                                                        {:content content :context context-text
+                                                         :card-count card-count-val :user-id user-id :enc-key enc-key})))]
+                              (if-not (:success generate-result)
+                                (do (swap! !gen-queue #(vec (rest %)))
+                                    (token (:error generate-result)))
+                                (let [generated-cards (e/server (:cards generate-result))
+                                      save-result (e/server (cards/save-cards selected-doc current-pdf-page card-type generated-cards))]
+                                  (swap! !gen-queue #(vec (rest %)))
+                                  (if (:success save-result)
+                                    (do (e/server (swap! !refresh inc))
+                                        (token))
+                                    (token (:error save-result)))))))))
 
                       ;; Separator
                       (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
