@@ -458,6 +458,10 @@
                           (dom/props {:style {:font-size "11px" :color "#999"}})
                           (dom/text "(1-50)")))
 
+                      ;; Generate buttons group
+                      (dom/div
+                        (dom/props {:style {:display "flex" :gap "8px" :margin-left "auto"}})
+
                       ;; Generate button
                       (dom/button
                         (dom/props {:style {:padding "4px 12px"
@@ -467,8 +471,7 @@
                                             :border-radius "4px"
                                             :cursor "pointer"
                                             :font-size "13px"
-                                            :font-weight "bold"
-                                            :margin-left "auto"}
+                                            :font-weight "bold"}
                                     :title "Generate flashcards from editor text or selected text"})
                         (dom/text "Generate")
                         (let [click-event (dom/On "click" identity nil)
@@ -482,8 +485,7 @@
                                               :border-radius "4px"
                                               :cursor (if (some? ?token) "not-allowed" "pointer")
                                               :font-size "13px"
-                                              :font-weight "bold"
-                                              :margin-left "auto"}})
+                                              :font-weight "bold"}})
 
                           (when ?token
                             (dom/text " ..."))
@@ -532,15 +534,14 @@
                                             :border-radius "4px"
                                             :cursor "pointer"
                                             :font-size "13px"
-                                            :font-weight "500"
-                                            :margin-left "8px"}
+                                            :font-weight "500"}
                                     :title "Add custom instructions to guide card generation"})
                         (dom/text "Generate with Prompt...")
                         (dom/On "click" (fn [_]
                                           (reset! !captured-selection (editor/get-selected-text!))
                                           (reset! !prompt-dialog-kind card-type)
                                           (reset! !show-prompt-dialog true))
-                                nil))
+                                nil))) ;; end Generate buttons group
 
                       ;; Separator
                       (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
