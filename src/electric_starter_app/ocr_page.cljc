@@ -871,13 +871,13 @@
                                       (token (:error result))))))))))))
 
                   (if (:success cards-result)
-                    (if (seq (:cards cards-result))
-                      (let [cards-vec (e/server (vec (:cards cards-result)))
-                            card-count (e/server (count cards-vec))
-                            row-height 36]
-                        ;; Scroll viewport
-                        (dom/div
-                          (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
+                    (let [cards-vec (e/server (vec (:cards cards-result)))
+                          card-count (e/server (count cards-vec))
+                          row-height 36]
+                      ;; Scroll viewport — always mounted to avoid DOM remount on 0→N transition
+                      (dom/div
+                        (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
+                        (if (pos? card-count)
                           (let [[offset limit] (Scroll-window row-height card-count dom/node {:overquery-factor 1})
                                 occluded-height (clamp-left (* row-height (- card-count limit)) 0)]
                             ;; Cards table
@@ -896,10 +896,10 @@
                                     (when card
                                       (CardRow card !editing-card))))))
                             ;; Spacer for full scroll height
-                            (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))
-                      (dom/p
-                        (dom/props {:style {:color "gray" :font-size "13px" :padding "8px 12px"}})
-                        (dom/text "No cards generated yet.")))
+                            (dom/div (dom/props {:style {:height (str occluded-height "px")}})))
+                          (dom/p
+                            (dom/props {:style {:color "gray" :font-size "13px" :padding "8px 12px"}})
+                            (dom/text "No cards generated yet.")))))
                     (dom/div
                       (dom/props {:style {:color "red" :font-size "13px" :padding "8px 12px"}})
                       (dom/text "Error loading cards: " (:error cards-result)))))))))))))
