@@ -290,13 +290,15 @@
                                     ek enc-key]
                                 (when-not (contains? @!extracting-pages [doc page])
                                   (swap! !extracting-pages conj [doc page])
-                                  (future
-                                    (try
-                                      (let [result (page/extract-page-text uid doc page ek)]
-                                        (when (:success result)
-                                          (swap! !refresh inc)))
-                                      (finally
-                                        (swap! !extracting-pages disj [doc page])))))))
+                                  (do
+                                    (future
+                                      (try
+                                        (let [result (page/extract-page-text uid doc page ek)]
+                                          (when (:success result)
+                                            (swap! !refresh inc)))
+                                        (finally
+                                          (swap! !extracting-pages disj [doc page]))))
+                                    :started))))
                             (token)))))
 
                     ;; Save status indicator with fade-out
