@@ -9,6 +9,7 @@
    [electric-starter-app.rich-text-editor-component :refer [RichTextEditorComponent]]
    [electric-starter-app.rich-text-editor :as editor]
    [clojure.string :as str]
+   [electric-starter-app.anki-sync :refer [AnkiSyncButton]]
    #?(:clj [electric-starter-app.page :as page])
    #?(:clj [electric-starter-app.pdf :as pdf])
    #?(:clj [electric-starter-app.cards :as cards])
@@ -718,6 +719,12 @@
                                                 (reset! !show-export false)
                                                 (token))
                                               (token (:error export-result)))))))))))))
+
+                      ;; Separator
+                      (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
+
+                      ;; Anki Sync button
+                      (AnkiSyncButton user-id selected-doc current-pdf-page card-type !refresh)
 
                     ;; Pre-prompt modal dialog
                     (when show-prompt-dialog

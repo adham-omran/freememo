@@ -101,6 +101,11 @@
     CREATE INDEX IF NOT EXISTS idx_flashcards_document_page
       ON flashcards(document_id, page_number)"])
 
+  ;; Anki sync columns on flashcards
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_note_id BIGINT DEFAULT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_synced_at TIMESTAMP DEFAULT NULL"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_anki_note_id ON flashcards(anki_note_id) WHERE anki_note_id IS NOT NULL"])
+
   (println "Database ready."))
 
 ;; Query functions
@@ -282,3 +287,24 @@
                  :on-conflict [:google_id]
                  :do-update-set {:email email}
                  :returning [:id :username]})))
+
+;; Anki sync functions
+(defn set-anki-note-id
+  "Set anki_note_id and anki_synced_at for a flashcard."
+  [card-id anki-note-id]
+  (jdbc/execute-one! ds
+    ["UPDATE flashcards SET anki_note_id = ?, anki_synced_at = CURRENT_TIMESTAMP WHERE id = ?"
+     anki-note-id card-id]))
+
+(defn set-anki-note-ids
+  "Bulk set anki_note_id + anki_synced_at. Takes [[card-id note-id] ...]."
+  [pairs]
+  (doseq [[card-id note-id] pairs]
+    (set-anki-note-id card-id note-id)))
+
+(defn mark-anki-synced
+  "Update anki_synced_at to now for a flashcard."
+  [card-id]
+  (jdbc/execute-one! ds
+    ["UPDATE flashcards SET anki_synced_at = CURRENT_TIMESTAMP WHERE id = ?"
+     card-id]))
