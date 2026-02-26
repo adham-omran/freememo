@@ -16,6 +16,7 @@
    #?(:clj [electric-starter-app.db :as db])))
 
 #?(:clj (defonce !refresh (atom 0)))  ; Server-side refresh trigger
+#?(:clj (defonce !extracting-pages (atom #{})))  ; #{[doc-id page-num]} currently extracting
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 #?(:clj (defn get-page-text* [_refresh document-id page-number]
@@ -206,6 +207,8 @@
                 ;; Prompt generation queue (same shape)
                 !prompt-gen-state (atom {:queue [] :active nil})
                 prompt-gen-state (e/watch !prompt-gen-state)
+                ;; Extraction tracking — server-side for true parallelism
+                extracting-pages (e/server (e/watch !extracting-pages))
                 ;; Shared server data — hoisted so both editor and bottom panel can use them
                 dirty-data (e/watch editor/!dirty-html)
                 save-result (when (some? dirty-data)
@@ -264,39 +267,37 @@
                             (token))))
                       (dom/text "Done"))
 
-                    (dom/button
-                      (dom/props {:style {:padding "8px 16px"
-                                          :background "#007bff"
-                                          :color "white"
-                                          :border "none"
-                                          :border-radius "4px"
-                                          :cursor "pointer"
-                                          :font-size "14px"}})
-                      (dom/text "Extract Text")
-                      (let [click-event (dom/On "click" identity nil)
-                            [?token ?error] (e/Token click-event)]
-
-                        (dom/props {:disabled (some? ?token)
-                                    :style {:padding "8px 16px"
-                                            :background (if (some? ?token) "#ccc" "#007bff")
+                    (let [extracting? (contains? extracting-pages [selected-doc current-pdf-page])]
+                      (dom/button
+                        (dom/props {:style {:padding "8px 16px"
+                                            :background (if extracting? "#ccc" "#007bff")
                                             :color "white"
                                             :border "none"
                                             :border-radius "4px"
-                                            :cursor (if (some? ?token) "not-allowed" "pointer")
-                                            :font-size "14px"}})
-
-                        (when ?error
-                          (dom/div
-                            (dom/props {:style {:color "red" :margin-top "10px"}})
-                            (dom/text "Error: " ?error)))
-
-                        (when-some [token ?token]
-                          (let [result (e/server (page/extract-page-text user-id selected-doc current-pdf-page enc-key))]
-                            (if (:success result)
-                              (do
-                                (e/server (swap! !refresh inc))
-                                (token))
-                              (token (:error result)))))))
+                                            :cursor (if extracting? "not-allowed" "pointer")
+                                            :font-size "14px"}
+                                    :disabled extracting?})
+                        (dom/text (if extracting? "Extracting..." "Extract Text"))
+                        (let [click-event (dom/On "click"
+                                            (fn [_] {:id (str (random-uuid)) :page current-pdf-page})
+                                            nil)
+                              [?token ?error] (e/Token click-event)]
+                          (when-some [token ?token]
+                            (e/server
+                              (let [page (:page click-event)
+                                    doc selected-doc
+                                    uid user-id
+                                    ek enc-key]
+                                (when-not (contains? @!extracting-pages [doc page])
+                                  (swap! !extracting-pages conj [doc page])
+                                  (future
+                                    (try
+                                      (let [result (page/extract-page-text uid doc page ek)]
+                                        (when (:success result)
+                                          (swap! !refresh inc)))
+                                      (finally
+                                        (swap! !extracting-pages disj [doc page])))))))
+                            (token)))))
 
                     ;; Save status indicator with fade-out
                     (when (some? dirty-data)
