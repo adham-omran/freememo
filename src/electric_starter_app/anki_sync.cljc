@@ -9,13 +9,19 @@
    [electric-starter-app.anki-sync-panels :as panels]))
 
 (e/defn AnkiSyncModalBody
-  "Form/sync atoms, field-fetch tokens, executor, and modal overlay DOM."
+  "Form/sync state, field-fetch tokens, executor, and modal overlay DOM.
+   Receives connection atoms (unwatched) and watches them locally."
   [user-id selected-doc current-pdf-page !refresh !show-modal
-   !conn-status conn-status !conn-error conn-error
-   !decks decks !models models
-   !selected-deck selected-deck !basic-model basic-model !cloze-model cloze-model]
+   !conn-status !conn-error !decks !models !selected-deck !basic-model !cloze-model]
   (e/client
-    (let [!basic-fields (atom [])
+    (let [conn-status (e/watch !conn-status)
+          conn-error (e/watch !conn-error)
+          decks (e/watch !decks)
+          models (e/watch !models)
+          selected-deck (e/watch !selected-deck)
+          basic-model (e/watch !basic-model)
+          cloze-model (e/watch !cloze-model)
+          !basic-fields (atom [])
           basic-fields (e/watch !basic-fields)
           !cloze-fields (atom [])
           cloze-fields (e/watch !cloze-fields)
@@ -96,19 +102,12 @@
   [user-id selected-doc current-pdf-page card-type !refresh !show-modal]
   (e/client
     (let [!conn-status (atom :connecting)
-          conn-status (e/watch !conn-status)
           !conn-error (atom nil)
-          conn-error (e/watch !conn-error)
           !decks (atom [])
-          decks (e/watch !decks)
           !models (atom [])
-          models (e/watch !models)
           !selected-deck (atom nil)
-          selected-deck (e/watch !selected-deck)
           !basic-model (atom nil)
-          basic-model (e/watch !basic-model)
-          !cloze-model (atom nil)
-          cloze-model (e/watch !cloze-model)]
+          !cloze-model (atom nil)]
 
       ;; On mount: fetch decks and models
       (let [[?token _] (e/Token :anki-sync-fetch-config)]
@@ -118,9 +117,7 @@
           (token)))
 
       (AnkiSyncModalBody user-id selected-doc current-pdf-page !refresh !show-modal
-        !conn-status conn-status !conn-error conn-error
-        !decks decks !models models
-        !selected-deck selected-deck !basic-model basic-model !cloze-model cloze-model))))
+        !conn-status !conn-error !decks !models !selected-deck !basic-model !cloze-model))))
 
 (e/defn AnkiSyncButton [user-id selected-doc current-pdf-page card-type !refresh]
   (e/client
