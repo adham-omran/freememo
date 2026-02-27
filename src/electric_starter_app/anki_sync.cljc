@@ -256,15 +256,71 @@
 ;; Sub-components (split to keep frame slot count small)
 ;; ---------------------------------------------------------------------------
 
+(e/defn AnkiSyncModelSelect
+  "Reusable model dropdown with field mapping hint."
+  [label !model models field-hint]
+  (e/client
+    (let [model (e/watch !model)]
+      (dom/div
+        (dom/props {:style {:margin-bottom "12px"}})
+        (dom/label (dom/props {:style {:font-weight "600" :font-size "13px" :display "block" :margin-bottom "4px"}})
+          (dom/text label))
+        (dom/select
+          (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
+                              :font-size "14px" :width "100%"}
+                      :value (or model "")})
+          (e/for [m (e/diff-by {} models)]
+            (dom/option (dom/props {:value m}) (dom/text m)))
+          (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
+            (when (some? v) (reset! !model v))))
+        (when (seq field-hint)
+          (dom/div
+            (dom/props {:style {:font-size "12px" :color "#666" :margin-top "4px"}})
+            (dom/text field-hint)))))))
+
+(e/defn AnkiSyncOptions
+  "Custom header checkbox/input + allow-duplicates checkbox."
+  [!allow-dupes !use-header !header-text]
+  (e/client
+    ;; Custom header
+    (dom/div
+      (dom/props {:style {:margin-bottom "12px"}})
+      (dom/label
+        (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "13px" :margin-bottom "8px"}})
+        (dom/input
+          (dom/props {:type "checkbox" :checked (e/watch !use-header)})
+          (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
+            (when (some? v)
+              (reset! !use-header v)
+              (when-not v (reset! !header-text "")))))
+        (dom/text "Add custom header to each card"))
+      (when (e/watch !use-header)
+        (dom/input
+          (dom/props {:type "text"
+                      :value (e/watch !header-text)
+                      :placeholder "e.g., Chapter 5: Accounting"
+                      :style {:width "100%" :padding "8px" :border "1px solid #ccc"
+                              :border-radius "4px" :font-size "14px"}})
+          (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
+            (when (some? v) (reset! !header-text v))))))
+    ;; Allow duplicates
+    (dom/div
+      (dom/props {:style {:margin-bottom "16px"}})
+      (dom/label
+        (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "13px"}})
+        (dom/input
+          (dom/props {:type "checkbox" :checked (e/watch !allow-dupes)})
+          (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
+            (when (some? v) (reset! !allow-dupes v))))
+        (dom/text "Allow duplicates")))))
+
 (e/defn AnkiSyncForm
   "The connected-state form: scope, deck, model selection, field mapping, custom header."
   [!scope decks !selected-deck models
    !basic-model basic-fields !cloze-model cloze-fields !allow-dupes !use-header !header-text]
   (e/client
     (let [scope (e/watch !scope)
-          selected-deck (e/watch !selected-deck)
-          basic-model (e/watch !basic-model)
-          cloze-model (e/watch !cloze-model)]
+          selected-deck (e/watch !selected-deck)]
 
       ;; Scope
       (dom/div
@@ -293,75 +349,16 @@
           (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
             (when (some? v) (reset! !selected-deck v)))))
 
-      ;; Basic Note Type
-      (dom/div
-        (dom/props {:style {:margin-bottom "12px"}})
-        (dom/label (dom/props {:style {:font-weight "600" :font-size "13px" :display "block" :margin-bottom "4px"}})
-          (dom/text "Note Type (Basic)"))
-        (dom/select
-          (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
-                              :font-size "14px" :width "100%"}
-                      :value (or basic-model "")})
-          (e/for [m (e/diff-by {} models)]
-            (dom/option (dom/props {:value m}) (dom/text m)))
-          (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
-            (when (some? v) (reset! !basic-model v))))
+      ;; Note Type selectors
+      (AnkiSyncModelSelect "Note Type (Basic)" !basic-model models
         (when (seq basic-fields)
-          (dom/div
-            (dom/props {:style {:font-size "12px" :color "#666" :margin-top "4px"}})
-            (dom/text (str "question \u2192 " (first basic-fields)
-                           ", answer \u2192 " (second basic-fields))))))
-
-      ;; Cloze Note Type
-      (dom/div
-        (dom/props {:style {:margin-bottom "12px"}})
-        (dom/label (dom/props {:style {:font-weight "600" :font-size "13px" :display "block" :margin-bottom "4px"}})
-          (dom/text "Note Type (Cloze)"))
-        (dom/select
-          (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
-                              :font-size "14px" :width "100%"}
-                      :value (or cloze-model "")})
-          (e/for [m (e/diff-by {} models)]
-            (dom/option (dom/props {:value m}) (dom/text m)))
-          (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
-            (when (some? v) (reset! !cloze-model v))))
+          (str "question \u2192 " (first basic-fields) ", answer \u2192 " (second basic-fields))))
+      (AnkiSyncModelSelect "Note Type (Cloze)" !cloze-model models
         (when (seq cloze-fields)
-          (dom/div
-            (dom/props {:style {:font-size "12px" :color "#666" :margin-top "4px"}})
-            (dom/text (str "cloze \u2192 " (first cloze-fields))))))
+          (str "cloze \u2192 " (first cloze-fields))))
 
-      ;; Custom header
-      (dom/div
-        (dom/props {:style {:margin-bottom "12px"}})
-        (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "13px" :margin-bottom "8px"}})
-          (dom/input
-            (dom/props {:type "checkbox" :checked (e/watch !use-header)})
-            (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
-              (when (some? v)
-                (reset! !use-header v)
-                (when-not v (reset! !header-text "")))))
-          (dom/text "Add custom header to each card"))
-        (when (e/watch !use-header)
-          (dom/input
-            (dom/props {:type "text"
-                        :value (e/watch !header-text)
-                        :placeholder "e.g., Chapter 5: Accounting"
-                        :style {:width "100%" :padding "8px" :border "1px solid #ccc"
-                                :border-radius "4px" :font-size "14px"}})
-            (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-              (when (some? v) (reset! !header-text v))))))
-
-      ;; Allow duplicates
-      (dom/div
-        (dom/props {:style {:margin-bottom "16px"}})
-        (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "13px"}})
-          (dom/input
-            (dom/props {:type "checkbox" :checked (e/watch !allow-dupes)})
-            (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
-              (when (some? v) (reset! !allow-dupes v))))
-          (dom/text "Allow duplicates"))))))
+      ;; Options
+      (AnkiSyncOptions !allow-dupes !use-header !header-text))))
 
 (e/defn AnkiSyncStatus
   "Sync status display and action buttons."
@@ -515,6 +512,80 @@
               !sync-result !push-pairs !sync-error !sync-phase))))))
   )
 
+(e/defn AnkiSyncErrorPanel
+  "Error state with retry and cancel buttons."
+  [conn-error !conn-status !conn-error !show-modal !decks !models
+   !selected-deck !basic-model !cloze-model]
+  (e/client
+    (dom/div
+      (dom/props {:style {:text-align "center" :padding "20px"}})
+      (dom/div
+        (dom/props {:style {:color "#dc3545" :margin-bottom "12px"}})
+        (dom/text (or conn-error "Connection failed")))
+      (dom/div
+        (dom/props {:style {:font-size "13px" :color "#666" :margin-bottom "16px"}})
+        (dom/text "Make sure Anki is running with the AnkiConnect plugin installed."))
+      (dom/button
+        (dom/props {:style {:padding "8px 16px" :background "#007bff" :color "white" :border "none"
+                            :border-radius "4px" :cursor "pointer"}})
+        (dom/text "Retry")
+        (dom/On "click"
+          (fn [_]
+            (reset! !conn-status :connecting)
+            (reset! !conn-error nil)
+            (run-fetch-config! !decks !models !selected-deck !basic-model !cloze-model
+              !conn-status !conn-error))
+          nil))
+      (dom/button
+        (dom/props {:style {:padding "8px 16px" :background "#f8f9fa" :color "#333"
+                            :border "1px solid #ccc" :border-radius "4px" :cursor "pointer"
+                            :margin-left "8px"}})
+        (dom/text "Cancel")
+        (dom/On "click" (fn [_] (reset! !show-modal false)) nil)))))
+
+(e/defn AnkiSyncConnectedPanel
+  "Connected state: last-settings button, form, and status."
+  [user-id decks models !scope !selected-deck !basic-model !cloze-model
+   basic-fields cloze-fields !allow-dupes !use-header !header-text
+   sync-phase sync-result sync-error !show-modal !sync-phase !sync-result !sync-error
+   !push-pairs !pull-updates]
+  (e/client
+    (dom/div
+      ;; "Use Last Settings" button
+      (dom/button
+        (dom/props {:style {:padding "6px 14px" :background "#f0f0f0" :color "#333"
+                            :border "1px solid #ccc" :border-radius "4px" :cursor "pointer"
+                            :font-size "13px" :margin-bottom "16px"}})
+        (dom/text "Use Last Settings")
+        (let [click (dom/On "click" identity nil)
+              [?token _] (e/Token click)]
+          (when-some [token ?token]
+            (let [result (e/server (sync/load-anki-preferences user-id))]
+              (if (:success result)
+                (let [prefs (:prefs result)]
+                  (when (:scope prefs) (reset! !scope (:scope prefs)))
+                  (when (:deck prefs)
+                    (when (some #{(:deck prefs)} decks)
+                      (reset! !selected-deck (:deck prefs))))
+                  (when (:basic-model prefs)
+                    (when (some #{(:basic-model prefs)} models)
+                      (reset! !basic-model (:basic-model prefs))))
+                  (when (:cloze-model prefs)
+                    (when (some #{(:cloze-model prefs)} models)
+                      (reset! !cloze-model (:cloze-model prefs))))
+                  (when (some? (:allow-dupes prefs))
+                    (reset! !allow-dupes (:allow-dupes prefs)))
+                  (when (some? (:use-header prefs))
+                    (reset! !use-header (:use-header prefs)))
+                  (when (:header-text prefs)
+                    (reset! !header-text (:header-text prefs)))
+                  (token))
+                (token))))))
+      (AnkiSyncForm !scope decks !selected-deck models
+        !basic-model basic-fields !cloze-model cloze-fields !allow-dupes !use-header !header-text)
+      (AnkiSyncStatus sync-phase sync-result sync-error
+        !show-modal !sync-phase !sync-result !sync-error !push-pairs !pull-updates))))
+
 ;; ---------------------------------------------------------------------------
 ;; Top-level button + modal
 ;; ---------------------------------------------------------------------------
@@ -621,65 +692,11 @@
                   (dom/text "Connecting to Anki..."))
 
                 (= conn-status :error)
-                (dom/div
-                  (dom/props {:style {:text-align "center" :padding "20px"}})
-                  (dom/div
-                    (dom/props {:style {:color "#dc3545" :margin-bottom "12px"}})
-                    (dom/text (or conn-error "Connection failed")))
-                  (dom/div
-                    (dom/props {:style {:font-size "13px" :color "#666" :margin-bottom "16px"}})
-                    (dom/text "Make sure Anki is running with the AnkiConnect plugin installed."))
-                  (dom/button
-                    (dom/props {:style {:padding "8px 16px" :background "#007bff" :color "white" :border "none"
-                                        :border-radius "4px" :cursor "pointer"}})
-                    (dom/text "Retry")
-                    (dom/On "click"
-                      (fn [_]
-                        (reset! !conn-status :connecting)
-                        (reset! !conn-error nil)
-                        (run-fetch-config! !decks !models !selected-deck !basic-model !cloze-model
-                          !conn-status !conn-error))
-                      nil))
-                  (dom/button
-                    (dom/props {:style {:padding "8px 16px" :background "#f8f9fa" :color "#333"
-                                        :border "1px solid #ccc" :border-radius "4px" :cursor "pointer"
-                                        :margin-left "8px"}})
-                    (dom/text "Cancel")
-                    (dom/On "click" (fn [_] (reset! !show-modal false)) nil)))
+                (AnkiSyncErrorPanel conn-error !conn-status !conn-error !show-modal !decks !models
+                  !selected-deck !basic-model !cloze-model)
 
                 (= conn-status :connected)
-                (dom/div
-                  ;; "Use Last Settings" button
-                  (dom/button
-                    (dom/props {:style {:padding "6px 14px" :background "#f0f0f0" :color "#333"
-                                        :border "1px solid #ccc" :border-radius "4px" :cursor "pointer"
-                                        :font-size "13px" :margin-bottom "16px"}})
-                    (dom/text "Use Last Settings")
-                    (let [click (dom/On "click" identity nil)
-                          [?token _] (e/Token click)]
-                      (when-some [token ?token]
-                        (let [result (e/server (sync/load-anki-preferences user-id))]
-                          (if (:success result)
-                            (let [prefs (:prefs result)]
-                              (when (:scope prefs) (reset! !scope (:scope prefs)))
-                              (when (:deck prefs)
-                                (when (some #{(:deck prefs)} decks)
-                                  (reset! !selected-deck (:deck prefs))))
-                              (when (:basic-model prefs)
-                                (when (some #{(:basic-model prefs)} models)
-                                  (reset! !basic-model (:basic-model prefs))))
-                              (when (:cloze-model prefs)
-                                (when (some #{(:cloze-model prefs)} models)
-                                  (reset! !cloze-model (:cloze-model prefs))))
-                              (when (some? (:allow-dupes prefs))
-                                (reset! !allow-dupes (:allow-dupes prefs)))
-                              (when (some? (:use-header prefs))
-                                (reset! !use-header (:use-header prefs)))
-                              (when (:header-text prefs)
-                                (reset! !header-text (:header-text prefs)))
-                              (token))
-                            (token))))))
-                  (AnkiSyncForm !scope decks !selected-deck models
-                    !basic-model basic-fields !cloze-model cloze-fields !allow-dupes !use-header !header-text)
-                  (AnkiSyncStatus sync-phase sync-result sync-error
-                    !show-modal !sync-phase !sync-result !sync-error !push-pairs !pull-updates))))))))))
+                (AnkiSyncConnectedPanel user-id decks models !scope !selected-deck !basic-model !cloze-model
+                  basic-fields cloze-fields !allow-dupes !use-header !header-text
+                  sync-phase sync-result sync-error !show-modal !sync-phase !sync-result !sync-error
+                  !push-pairs !pull-updates)))))))))
