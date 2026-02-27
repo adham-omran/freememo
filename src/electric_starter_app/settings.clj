@@ -25,6 +25,13 @@
 (def CONTEXT_PAGES "context_pages")
 (def CARD_TYPE "card_type")
 (def ACTIVE_TAB "active_tab")
+(def ANKI_SCOPE "anki_scope")
+(def ANKI_DECK "anki_deck")
+(def ANKI_BASIC_MODEL "anki_basic_model")
+(def ANKI_CLOZE_MODEL "anki_cloze_model")
+(def ANKI_ALLOW_DUPES "anki_allow_dupes")
+(def ANKI_USE_HEADER "anki_use_header")
+(def ANKI_HEADER_TEXT "anki_header_text")
 
 ;; Get functions
 (defn get-openai-api-key [user-id enc-key]
@@ -80,6 +87,27 @@
     (catch Exception e
       (println "ERROR [get-card-type]:" (.getMessage e))
       "basic")))
+
+(defn get-anki-scope [user-id]
+  (or (db/get-setting user-id ANKI_SCOPE) "Current Page"))
+
+(defn get-anki-deck [user-id]
+  (db/get-setting user-id ANKI_DECK))
+
+(defn get-anki-basic-model [user-id]
+  (db/get-setting user-id ANKI_BASIC_MODEL))
+
+(defn get-anki-cloze-model [user-id]
+  (db/get-setting user-id ANKI_CLOZE_MODEL))
+
+(defn get-anki-allow-dupes [user-id]
+  (= "true" (or (db/get-setting user-id ANKI_ALLOW_DUPES) "false")))
+
+(defn get-anki-use-header [user-id]
+  (= "true" (or (db/get-setting user-id ANKI_USE_HEADER) "false")))
+
+(defn get-anki-header-text [user-id]
+  (or (db/get-setting user-id ANKI_HEADER_TEXT) ""))
 
 ;; Save functions with validation
 (defn save-openai-api-key [user-id api-key enc-key]
@@ -160,3 +188,17 @@
     (catch Exception e
       (println "ERROR [save-card-count]:" (.getMessage e))
       {:success false :error "Failed to save card count"})))
+
+(defn save-anki-sync-settings [user-id {:keys [scope deck basic-model cloze-model allow-dupes use-header header-text]}]
+  (try
+    (when scope (db/set-setting user-id ANKI_SCOPE scope))
+    (when deck (db/set-setting user-id ANKI_DECK deck))
+    (when basic-model (db/set-setting user-id ANKI_BASIC_MODEL basic-model))
+    (when cloze-model (db/set-setting user-id ANKI_CLOZE_MODEL cloze-model))
+    (db/set-setting user-id ANKI_ALLOW_DUPES (str (boolean allow-dupes)))
+    (db/set-setting user-id ANKI_USE_HEADER (str (boolean use-header)))
+    (when (some? header-text) (db/set-setting user-id ANKI_HEADER_TEXT header-text))
+    {:success true}
+    (catch Exception e
+      (println "ERROR [save-anki-sync-settings]:" (.getMessage e))
+      {:success false :error "Failed to save Anki sync settings"})))

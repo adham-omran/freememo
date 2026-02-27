@@ -1,13 +1,23 @@
 (ns electric-starter-app.anki-sync
   "Full-stack Anki sync component — client-side AnkiConnect calls + modal UI."
   (:require
+   [clojure.string :as str]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   #?(:clj [electric-starter-app.anki-sync-server :as sync])))
+   #?(:clj [electric-starter-app.anki-sync-server :as sync])
+   #?(:clj [electric-starter-app.settings :as settings])))
 
 ;; ---------------------------------------------------------------------------
 ;; Client-side AnkiConnect wrapper
 ;; ---------------------------------------------------------------------------
+
+(defn prepend-header
+  "Prepend optional HTML header to note front text."
+  [front use-header header-text]
+  (let [base (or front "")]
+    (if (and use-header (not (str/blank? header-text)))
+      (str "<p>" header-text "</p>" base)
+      base)))
 
 #?(:cljs
    (defn anki-call!
@@ -43,15 +53,16 @@
 #?(:cljs
    (defn build-note
      "Build an AnkiConnect note map for addNote."
-     [card deck-name basic-model cloze-model basic-fields cloze-fields doc-id allow-dupes]
+     [card deck-name basic-model cloze-model basic-fields cloze-fields doc-id allow-dupes
+      use-header header-text]
      (let [kind (:flashcards/kind card)
            basic? (= kind "basic")
            model (if basic? basic-model cloze-model)
            fields (if basic? basic-fields cloze-fields)
            field-map (if basic?
-                       {(first fields) (or (:flashcards/question card) "")
+                       {(first fields) (prepend-header (or (:flashcards/question card) "") use-header header-text)
                         (second fields) (or (:flashcards/answer card) "")}
-                       {(first fields) (or (:flashcards/cloze card) "")})]
+                       {(first fields) (prepend-header (or (:flashcards/cloze card) "") use-header header-text)})]
        (cond-> {:deckName deck-name
                 :modelName model
                 :fields field-map
@@ -63,7 +74,8 @@
 #?(:cljs
    (defn do-anki-push!
      "Push cards to Anki. Returns Promise resolving to result map."
-     [cards deck-name basic-model cloze-model basic-fields cloze-fields doc-id allow-dupes]
+     [cards deck-name basic-model cloze-model basic-fields cloze-fields doc-id allow-dupes
+      use-header header-text]
      (let [new-cards (filter #(nil? (:flashcards/anki_note_id %)) cards)
            existing-cards (filter #(some? (:flashcards/anki_note_id %)) cards)]
        (->
@@ -75,7 +87,8 @@
                  (.then promise-chain
                    (fn [result]
                      (let [note (build-note card deck-name basic-model cloze-model
-                                  basic-fields cloze-fields doc-id allow-dupes)]
+                                  basic-fields cloze-fields doc-id allow-dupes
+                                  use-header header-text)]
                        (-> (anki-call! "addNote" {:note note})
                            (.then (fn [note-id]
                                     (if note-id
@@ -101,9 +114,9 @@
                            basic? (= kind "basic")
                            fields (if basic? basic-fields cloze-fields)
                            field-map (if basic?
-                                       {(first fields) (or (:flashcards/question card) "")
+                                       {(first fields) (prepend-header (or (:flashcards/question card) "") use-header header-text)
                                         (second fields) (or (:flashcards/answer card) "")}
-                                       {(first fields) (or (:flashcards/cloze card) "")})]
+                                       {(first fields) (prepend-header (or (:flashcards/cloze card) "") use-header header-text)})]
                        (-> (anki-call! "updateNoteFields"
                              {:note {:id (:flashcards/anki_note_id card)
                                      :fields field-map}})
@@ -200,10 +213,10 @@
 (defn run-push!
   "Execute push to Anki and update state atoms with results."
   [cards deck basic-model cloze-model basic-fields cloze-fields
-   doc-id allow-dupes !sync-result !push-pairs !sync-error !sync-phase]
+   doc-id allow-dupes use-header header-text !sync-result !push-pairs !sync-error !sync-phase]
   #?(:cljs
      (-> (do-anki-push! cards deck basic-model cloze-model
-           basic-fields cloze-fields doc-id allow-dupes)
+           basic-fields cloze-fields doc-id allow-dupes use-header header-text)
          (.then (fn [result]
                   (reset! !sync-result result)
                   (if (seq (:pairs result))
@@ -244,79 +257,111 @@
 ;; ---------------------------------------------------------------------------
 
 (e/defn AnkiSyncForm
-  "The connected-state form: scope, deck, model selection, field mapping."
+  "The connected-state form: scope, deck, model selection, field mapping, custom header."
   [!scope decks !selected-deck models
-   !basic-model basic-fields !cloze-model cloze-fields !allow-dupes]
+   !basic-model basic-fields !cloze-model cloze-fields !allow-dupes !use-header !header-text]
   (e/client
-    ;; Scope
-    (dom/div
-      (dom/props {:style {:margin-bottom "12px"}})
-      (dom/label (dom/props {:style {:font-weight "600" :font-size "13px" :display "block" :margin-bottom "4px"}})
-        (dom/text "Scope"))
-      (dom/select
-        (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px" :font-size "14px"}})
-        (dom/option (dom/props {:value "Current Page"}) (dom/text "Current Page"))
-        (dom/option (dom/props {:value "Entire Doc"}) (dom/text "Entire Document"))
-        (reset! !scope (dom/On "change" (fn [e] (-> e .-target .-value)) "Current Page"))))
+    (let [scope (e/watch !scope)
+          selected-deck (e/watch !selected-deck)
+          basic-model (e/watch !basic-model)
+          cloze-model (e/watch !cloze-model)]
 
-    ;; Deck
-    (dom/div
-      (dom/props {:style {:margin-bottom "12px"}})
-      (dom/label (dom/props {:style {:font-weight "600" :font-size "13px" :display "block" :margin-bottom "4px"}})
-        (dom/text "Deck"))
-      (dom/select
-        (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
-                            :font-size "14px" :width "100%"}})
-        (e/for [d (e/diff-by {} decks)]
-          (dom/option (dom/props {:value d}) (dom/text d)))
-        (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
-          (when (some? v) (reset! !selected-deck v)))))
+      ;; Scope
+      (dom/div
+        (dom/props {:style {:margin-bottom "12px"}})
+        (dom/label (dom/props {:style {:font-weight "600" :font-size "13px" :display "block" :margin-bottom "4px"}})
+          (dom/text "Scope"))
+        (dom/select
+          (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px" :font-size "14px"}
+                      :value scope})
+          (dom/option (dom/props {:value "Current Page"}) (dom/text "Current Page"))
+          (dom/option (dom/props {:value "Entire Doc"}) (dom/text "Entire Document"))
+          (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
+            (when (some? v) (reset! !scope v)))))
 
-    ;; Basic Note Type
-    (dom/div
-      (dom/props {:style {:margin-bottom "12px"}})
-      (dom/label (dom/props {:style {:font-weight "600" :font-size "13px" :display "block" :margin-bottom "4px"}})
-        (dom/text "Note Type (Basic)"))
-      (dom/select
-        (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
-                            :font-size "14px" :width "100%"}})
-        (e/for [m (e/diff-by {} models)]
-          (dom/option (dom/props {:value m}) (dom/text m)))
-        (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
-          (when (some? v) (reset! !basic-model v))))
-      (when (seq basic-fields)
-        (dom/div
-          (dom/props {:style {:font-size "12px" :color "#666" :margin-top "4px"}})
-          (dom/text (str "question \u2192 " (first basic-fields)
-                         ", answer \u2192 " (second basic-fields))))))
+      ;; Deck
+      (dom/div
+        (dom/props {:style {:margin-bottom "12px"}})
+        (dom/label (dom/props {:style {:font-weight "600" :font-size "13px" :display "block" :margin-bottom "4px"}})
+          (dom/text "Deck"))
+        (dom/select
+          (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
+                              :font-size "14px" :width "100%"}
+                      :value (or selected-deck "")})
+          (e/for [d (e/diff-by {} decks)]
+            (dom/option (dom/props {:value d}) (dom/text d)))
+          (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
+            (when (some? v) (reset! !selected-deck v)))))
 
-    ;; Cloze Note Type
-    (dom/div
-      (dom/props {:style {:margin-bottom "12px"}})
-      (dom/label (dom/props {:style {:font-weight "600" :font-size "13px" :display "block" :margin-bottom "4px"}})
-        (dom/text "Note Type (Cloze)"))
-      (dom/select
-        (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
-                            :font-size "14px" :width "100%"}})
-        (e/for [m (e/diff-by {} models)]
-          (dom/option (dom/props {:value m}) (dom/text m)))
-        (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
-          (when (some? v) (reset! !cloze-model v))))
-      (when (seq cloze-fields)
-        (dom/div
-          (dom/props {:style {:font-size "12px" :color "#666" :margin-top "4px"}})
-          (dom/text (str "cloze \u2192 " (first cloze-fields))))))
+      ;; Basic Note Type
+      (dom/div
+        (dom/props {:style {:margin-bottom "12px"}})
+        (dom/label (dom/props {:style {:font-weight "600" :font-size "13px" :display "block" :margin-bottom "4px"}})
+          (dom/text "Note Type (Basic)"))
+        (dom/select
+          (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
+                              :font-size "14px" :width "100%"}
+                      :value (or basic-model "")})
+          (e/for [m (e/diff-by {} models)]
+            (dom/option (dom/props {:value m}) (dom/text m)))
+          (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
+            (when (some? v) (reset! !basic-model v))))
+        (when (seq basic-fields)
+          (dom/div
+            (dom/props {:style {:font-size "12px" :color "#666" :margin-top "4px"}})
+            (dom/text (str "question \u2192 " (first basic-fields)
+                           ", answer \u2192 " (second basic-fields))))))
 
-    ;; Allow duplicates
-    (dom/div
-      (dom/props {:style {:margin-bottom "16px"}})
-      (dom/label
-        (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "13px"}})
-        (dom/input
-          (dom/props {:type "checkbox" :checked (e/watch !allow-dupes)})
-          (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
-            (when (some? v) (reset! !allow-dupes v))))
-        (dom/text "Allow duplicates")))))
+      ;; Cloze Note Type
+      (dom/div
+        (dom/props {:style {:margin-bottom "12px"}})
+        (dom/label (dom/props {:style {:font-weight "600" :font-size "13px" :display "block" :margin-bottom "4px"}})
+          (dom/text "Note Type (Cloze)"))
+        (dom/select
+          (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
+                              :font-size "14px" :width "100%"}
+                      :value (or cloze-model "")})
+          (e/for [m (e/diff-by {} models)]
+            (dom/option (dom/props {:value m}) (dom/text m)))
+          (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
+            (when (some? v) (reset! !cloze-model v))))
+        (when (seq cloze-fields)
+          (dom/div
+            (dom/props {:style {:font-size "12px" :color "#666" :margin-top "4px"}})
+            (dom/text (str "cloze \u2192 " (first cloze-fields))))))
+
+      ;; Custom header
+      (dom/div
+        (dom/props {:style {:margin-bottom "12px"}})
+        (dom/label
+          (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "13px" :margin-bottom "8px"}})
+          (dom/input
+            (dom/props {:type "checkbox" :checked (e/watch !use-header)})
+            (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
+              (when (some? v)
+                (reset! !use-header v)
+                (when-not v (reset! !header-text "")))))
+          (dom/text "Add custom header to each card"))
+        (when (e/watch !use-header)
+          (dom/input
+            (dom/props {:type "text"
+                        :value (e/watch !header-text)
+                        :placeholder "e.g., Chapter 5: Accounting"
+                        :style {:width "100%" :padding "8px" :border "1px solid #ccc"
+                                :border-radius "4px" :font-size "14px"}})
+            (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
+              (when (some? v) (reset! !header-text v))))))
+
+      ;; Allow duplicates
+      (dom/div
+        (dom/props {:style {:margin-bottom "16px"}})
+        (dom/label
+          (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "13px"}})
+          (dom/input
+            (dom/props {:type "checkbox" :checked (e/watch !allow-dupes)})
+            (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
+              (when (some? v) (reset! !allow-dupes v))))
+          (dom/text "Allow duplicates"))))))
 
 (e/defn AnkiSyncStatus
   "Sync status display and action buttons."
@@ -399,8 +444,8 @@
 
 (e/defn AnkiSyncExecutor
   "Handles push/pull execution and server recording."
-  [sync-phase scope selected-doc current-pdf-page selected-deck
-   basic-model cloze-model basic-fields cloze-fields allow-dupes
+  [user-id sync-phase scope selected-doc current-pdf-page selected-deck
+   basic-model cloze-model basic-fields cloze-fields allow-dupes use-header header-text
    !sync-phase !sync-result !sync-error !push-pairs !pull-updates !refresh]
   ;; Record push pairs on server
   (when (and (= sync-phase :recording) (some? (e/watch !push-pairs)))
@@ -410,6 +455,11 @@
         (let [result (e/server (sync/record-pushed-notes pairs))]
           (if (:success result)
             (do (e/server (swap! !refresh inc))
+                (e/server (settings/save-anki-sync-settings user-id
+                  {:scope scope :deck selected-deck
+                   :basic-model basic-model :cloze-model cloze-model
+                   :allow-dupes allow-dupes
+                   :use-header use-header :header-text header-text}))
                 (reset! !sync-phase :done)
                 (token))
             (do (reset! !sync-error (:error result))
@@ -424,6 +474,11 @@
         (let [result (e/server (sync/apply-pull-updates updates))]
           (if (:success result)
             (do (e/server (swap! !refresh inc))
+                (e/server (settings/save-anki-sync-settings user-id
+                  {:scope scope :deck selected-deck
+                   :basic-model basic-model :cloze-model cloze-model
+                   :allow-dupes allow-dupes
+                   :use-header use-header :header-text header-text}))
                 (reset! !sync-phase :done)
                 (token))
             (do (reset! !sync-error (:error result))
@@ -456,7 +511,7 @@
               (reset! !sync-phase :error))
           (let [cards (:cards cards-result)]
             (run-push! cards selected-deck basic-model cloze-model
-              basic-fields cloze-fields selected-doc allow-dupes
+              basic-fields cloze-fields selected-doc allow-dupes use-header header-text
               !sync-result !push-pairs !sync-error !sync-phase))))))
   )
 
@@ -500,6 +555,10 @@
               cloze-fields (e/watch !cloze-fields)
               !allow-dupes (atom false)
               allow-dupes (e/watch !allow-dupes)
+              !use-header (atom false)
+              use-header (e/watch !use-header)
+              !header-text (atom "")
+              header-text (e/watch !header-text)
               !sync-phase (atom nil)
               sync-phase (e/watch !sync-phase)
               !sync-result (atom nil)
@@ -529,8 +588,8 @@
                 (token))))
 
           ;; Executor (server recording + push/pull logic)
-          (AnkiSyncExecutor sync-phase scope selected-doc current-pdf-page selected-deck
-            basic-model cloze-model basic-fields cloze-fields allow-dupes
+          (AnkiSyncExecutor user-id sync-phase scope selected-doc current-pdf-page selected-deck
+            basic-model cloze-model basic-fields cloze-fields allow-dupes use-header header-text
             !sync-phase !sync-result !sync-error !push-pairs !pull-updates !refresh)
 
           ;; Modal overlay
@@ -590,7 +649,37 @@
 
                 (= conn-status :connected)
                 (dom/div
+                  ;; "Use Last Settings" button
+                  (dom/button
+                    (dom/props {:style {:padding "6px 14px" :background "#f0f0f0" :color "#333"
+                                        :border "1px solid #ccc" :border-radius "4px" :cursor "pointer"
+                                        :font-size "13px" :margin-bottom "16px"}})
+                    (dom/text "Use Last Settings")
+                    (let [click (dom/On "click" identity nil)
+                          [?token _] (e/Token click)]
+                      (when-some [token ?token]
+                        (let [result (e/server (sync/load-anki-preferences user-id))]
+                          (if (:success result)
+                            (let [prefs (:prefs result)]
+                              (when (:scope prefs) (reset! !scope (:scope prefs)))
+                              (when (:deck prefs)
+                                (when (some #{(:deck prefs)} decks)
+                                  (reset! !selected-deck (:deck prefs))))
+                              (when (:basic-model prefs)
+                                (when (some #{(:basic-model prefs)} models)
+                                  (reset! !basic-model (:basic-model prefs))))
+                              (when (:cloze-model prefs)
+                                (when (some #{(:cloze-model prefs)} models)
+                                  (reset! !cloze-model (:cloze-model prefs))))
+                              (when (some? (:allow-dupes prefs))
+                                (reset! !allow-dupes (:allow-dupes prefs)))
+                              (when (some? (:use-header prefs))
+                                (reset! !use-header (:use-header prefs)))
+                              (when (:header-text prefs)
+                                (reset! !header-text (:header-text prefs)))
+                              (token))
+                            (token))))))
                   (AnkiSyncForm !scope decks !selected-deck models
-                    !basic-model basic-fields !cloze-model cloze-fields !allow-dupes)
+                    !basic-model basic-fields !cloze-model cloze-fields !allow-dupes !use-header !header-text)
                   (AnkiSyncStatus sync-phase sync-result sync-error
                     !show-modal !sync-phase !sync-result !sync-error !push-pairs !pull-updates))))))))))
