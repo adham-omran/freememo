@@ -14,7 +14,7 @@
            cheshire/cheshire {:mvn/version "5.12.0"}}
  :paths   ["src" "resources"]
  :aliases {:dev {:extra-paths ["src-dev"] :extra-deps  {thheller/shadow-cljs {:mvn/version "2.26.2"}}}
-           :prod {:extra-paths ["src-prod"]}
+           :prod {:extra-paths ["src-prod"] :jvm-opts ["-Xss4m"]}
            :build ; use `clj -X:prod:build build-client`, NOT -T!
            {:extra-paths ["src-build"]
             :ns-default  build
