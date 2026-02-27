@@ -2,7 +2,24 @@
   "Server-side Anki sync operations — fetching cards for sync,
    recording pushed note IDs, and applying pull updates."
   (:require
-    [electric-starter-app.db :as db]))
+    [electric-starter-app.db :as db]
+    [electric-starter-app.settings :as settings]))
+
+(defn load-anki-preferences
+  "Load saved Anki sync preferences for a user."
+  [user-id]
+  (try
+    {:success true
+     :prefs {:scope       (settings/get-anki-scope user-id)
+             :deck        (settings/get-anki-deck user-id)
+             :basic-model (settings/get-anki-basic-model user-id)
+             :cloze-model (settings/get-anki-cloze-model user-id)
+             :allow-dupes (settings/get-anki-allow-dupes user-id)
+             :use-header  (settings/get-anki-use-header user-id)
+             :header-text (settings/get-anki-header-text user-id)}}
+    (catch Exception e
+      (println "ERROR [load-anki-preferences]:" (.getMessage e))
+      {:success false :prefs {}})))
 
 (defn get-cards-for-sync
   "Get flashcards for Anki sync.
