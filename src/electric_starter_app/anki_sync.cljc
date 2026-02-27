@@ -12,7 +12,7 @@
   "Form/sync state, field-fetch tokens, executor, and modal overlay DOM.
    Receives connection atoms (unwatched) and watches them locally."
   [user-id selected-doc current-pdf-page !refresh !show-modal
-   !conn-status !conn-error !decks !models !selected-deck !basic-model !cloze-model]
+   !conn-status !conn-error !decks !models !selected-deck !basic-model !cloze-model !all-tags]
   (e/client
     (let [conn-status (e/watch !conn-status)
           conn-error (e/watch !conn-error)
@@ -33,6 +33,11 @@
           use-header (e/watch !use-header)
           !header-text (atom "")
           header-text (e/watch !header-text)
+          all-tags (e/watch !all-tags)
+          !use-tags (atom false)
+          use-tags (e/watch !use-tags)
+          !tags (atom [])
+          tags (e/watch !tags)
           !sync-phase (atom nil)
           sync-phase (e/watch !sync-phase)
           !sync-result (atom nil)
@@ -57,6 +62,7 @@
       ;; Executor (server recording + push/pull logic)
       (panels/AnkiSyncExecutor user-id sync-phase scope selected-doc current-pdf-page selected-deck
         basic-model cloze-model basic-fields cloze-fields allow-dupes use-header header-text
+        use-tags tags
         !sync-phase !sync-result !sync-error !push-pairs !pull-updates !refresh)
 
       ;; Modal overlay
@@ -89,11 +95,12 @@
 
             (= conn-status :error)
             (panels/AnkiSyncErrorPanel conn-error !conn-status !conn-error !show-modal !decks !models
-              !selected-deck !basic-model !cloze-model)
+              !selected-deck !basic-model !cloze-model !all-tags)
 
             (= conn-status :connected)
             (panels/AnkiSyncConnectedPanel user-id decks models !scope !selected-deck !basic-model !cloze-model
               basic-fields cloze-fields !allow-dupes !use-header !header-text
+              all-tags !use-tags !tags
               sync-phase sync-result sync-error !show-modal !sync-phase !sync-result !sync-error
               !push-pairs !pull-updates)))))))
 
@@ -107,17 +114,18 @@
           !models (atom [])
           !selected-deck (atom nil)
           !basic-model (atom nil)
-          !cloze-model (atom nil)]
+          !cloze-model (atom nil)
+          !all-tags (atom [])]
 
-      ;; On mount: fetch decks and models
+      ;; On mount: fetch decks, models, and tags
       (let [[?token _] (e/Token :anki-sync-fetch-config)]
         (when-some [token ?token]
           (helpers/run-fetch-config! !decks !models !selected-deck !basic-model !cloze-model
-            !conn-status !conn-error)
+            !all-tags !conn-status !conn-error)
           (token)))
 
       (AnkiSyncModalBody user-id selected-doc current-pdf-page !refresh !show-modal
-        !conn-status !conn-error !decks !models !selected-deck !basic-model !cloze-model))))
+        !conn-status !conn-error !decks !models !selected-deck !basic-model !cloze-model !all-tags))))
 
 (e/defn AnkiSyncButton [user-id selected-doc current-pdf-page card-type !refresh]
   (e/client

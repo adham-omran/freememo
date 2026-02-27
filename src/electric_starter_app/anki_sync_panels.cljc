@@ -13,6 +13,7 @@
   "Handles push/pull execution and server recording."
   [user-id sync-phase scope selected-doc current-pdf-page selected-deck
    basic-model cloze-model basic-fields cloze-fields allow-dupes use-header header-text
+   use-tags tags
    !sync-phase !sync-result !sync-error !push-pairs !pull-updates !refresh]
   ;; Record push pairs on server
   (when (and (= sync-phase :recording) (some? (e/watch !push-pairs)))
@@ -26,7 +27,8 @@
                   {:scope scope :deck selected-deck
                    :basic-model basic-model :cloze-model cloze-model
                    :allow-dupes allow-dupes
-                   :use-header use-header :header-text header-text}))
+                   :use-header use-header :header-text header-text
+                   :use-tags use-tags :tags tags}))
                 (reset! !sync-phase :done)
                 (token))
             (do (reset! !sync-error (:error result))
@@ -45,7 +47,8 @@
                   {:scope scope :deck selected-deck
                    :basic-model basic-model :cloze-model cloze-model
                    :allow-dupes allow-dupes
-                   :use-header use-header :header-text header-text}))
+                   :use-header use-header :header-text header-text
+                   :use-tags use-tags :tags tags}))
                 (reset! !sync-phase :done)
                 (token))
             (do (reset! !sync-error (:error result))
@@ -72,19 +75,20 @@
       (let [page-num (when (= scope "Current Page") current-pdf-page)
             cards-result (e/server (sync/get-cards-for-sync
                                      {:document-id selected-doc
-                                      :page-number page-num}))]
+                                      :page-number page-num}))
+            effective-tags (if use-tags tags [])]
         (if-not (:success cards-result)
           (do (reset! !sync-error (:error cards-result))
               (reset! !sync-phase :error))
           (let [cards (:cards cards-result)]
             (helpers/run-push! cards selected-deck basic-model cloze-model
-              basic-fields cloze-fields selected-doc allow-dupes use-header header-text
+              basic-fields cloze-fields allow-dupes use-header header-text effective-tags
               !sync-result !push-pairs !sync-error !sync-phase)))))))
 
 (e/defn AnkiSyncErrorPanel
   "Error state with retry and cancel buttons."
   [conn-error !conn-status !conn-error !show-modal !decks !models
-   !selected-deck !basic-model !cloze-model]
+   !selected-deck !basic-model !cloze-model !all-tags]
   (e/client
     (dom/div
       (dom/props {:style {:text-align "center" :padding "20px"}})
@@ -103,7 +107,7 @@
             (reset! !conn-status :connecting)
             (reset! !conn-error nil)
             (helpers/run-fetch-config! !decks !models !selected-deck !basic-model !cloze-model
-              !conn-status !conn-error))
+              !all-tags !conn-status !conn-error))
           nil))
       (dom/button
         (dom/props {:style {:padding "8px 16px" :background "#f8f9fa" :color "#333"
@@ -116,6 +120,7 @@
   "Connected state: last-settings button, form, and status."
   [user-id decks models !scope !selected-deck !basic-model !cloze-model
    basic-fields cloze-fields !allow-dupes !use-header !header-text
+   all-tags !use-tags !tags
    sync-phase sync-result sync-error !show-modal !sync-phase !sync-result !sync-error
    !push-pairs !pull-updates]
   (e/client
@@ -148,9 +153,14 @@
                     (reset! !use-header (:use-header prefs)))
                   (when (:header-text prefs)
                     (reset! !header-text (:header-text prefs)))
+                  (when (some? (:use-tags prefs))
+                    (reset! !use-tags (:use-tags prefs)))
+                  (when (:tags prefs)
+                    (reset! !tags (:tags prefs)))
                   (token))
                 (token))))))
       (form/AnkiSyncForm !scope decks !selected-deck models
-        !basic-model basic-fields !cloze-model cloze-fields !allow-dupes !use-header !header-text)
+        !basic-model basic-fields !cloze-model cloze-fields !allow-dupes !use-header !header-text
+        all-tags !use-tags !tags)
       (form/AnkiSyncStatus sync-phase sync-result sync-error
         !show-modal !sync-phase !sync-result !sync-error !push-pairs !pull-updates))))

@@ -2,6 +2,7 @@
   "Extracted form UI components for Anki sync — kept in a separate namespace
    to stay below the JVM 64KB method limit imposed by Electric v3's e/defn macro."
   (:require
+   [clojure.string :as string]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]))
 
@@ -27,9 +28,99 @@
             (dom/props {:style {:font-size "12px" :color "#666" :margin-top "4px"}})
             (dom/text field-hint)))))))
 
+(e/defn TagInput
+  "Multi-tag input with chip display and autocomplete from all-tags."
+  [!tags all-tags]
+  (e/client
+    (let [tags (e/watch !tags)
+          !search (atom "")
+          search (e/watch !search)
+          !focused (atom false)
+          focused (e/watch !focused)
+          filtered (when (and focused (seq search))
+                     (->> all-tags
+                       (filter (fn [t]
+                                 (and (string/includes?
+                                        (string/lower-case t)
+                                        (string/lower-case search))
+                                      (not (some #{t} tags)))))
+                       (take 10)
+                       vec))]
+      (dom/div
+        (dom/props {:style {:position "relative"}})
+        ;; Input row with chips
+        (dom/div
+          (dom/props {:style {:display "flex" :flex-wrap "wrap" :align-items "center"
+                              :gap "4px" :padding "4px 6px"
+                              :border "1px solid #ccc" :border-radius "4px"
+                              :font-size "13px" :min-height "30px" :background "white"}})
+          ;; Chips
+          (e/for [t (e/diff-by {} tags)]
+            (dom/span
+              (dom/props {:style {:display "inline-flex" :align-items "center" :gap "3px"
+                                  :background "#e0e0e0" :border-radius "3px"
+                                  :padding "1px 5px" :font-size "12px"}})
+              (dom/text t)
+              (dom/button
+                (dom/props {:type "button"
+                            :style {:background "none" :border "none" :cursor "pointer"
+                                    :padding "0" :font-size "12px" :line-height "1"
+                                    :color "#555"}})
+                (dom/text "\u00d7")
+                (dom/On "click" (fn [_] (swap! !tags (fn [ts] (vec (remove #{t} ts))))) nil))))
+          ;; Text input
+          (dom/input
+            (dom/props {:type "text"
+                        :value search
+                        :placeholder (if (seq tags) "" "Add tags...")
+                        :style {:border "none" :outline "none" :font-size "13px"
+                                :flex "1" :min-width "80px" :padding "2px"}})
+            (dom/On "focus" (fn [_] (reset! !focused true)) nil)
+            (dom/On "blur" (fn [_] (reset! !focused false)) nil)
+            (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
+              (when (some? v) (reset! !search v)))
+            (dom/On "keydown"
+              (fn [e]
+                (let [key (.-key e)
+                      val (string/trim search)]
+                  (cond
+                    (and (= key " ") (seq val))
+                    (do (.preventDefault e)
+                        (when-not (some #{val} tags)
+                          (swap! !tags conj val))
+                        (reset! !search ""))
+                    (and (= key "Enter") (seq val))
+                    (do (.preventDefault e)
+                        (when-not (some #{val} tags)
+                          (swap! !tags conj val))
+                        (reset! !search ""))
+                    (and (= key "Backspace") (empty? search) (seq tags))
+                    (swap! !tags (fn [ts] (vec (butlast ts)))))))
+              nil)))
+        ;; Dropdown
+        (when (seq filtered)
+          (dom/div
+            (dom/props {:style {:position "absolute" :top "100%" :left "0" :right "0"
+                                :background "white" :border "1px solid #ccc"
+                                :border-radius "4px" :z-index "100"
+                                :box-shadow "0 2px 4px rgba(0,0,0,0.15)"}})
+            (e/for [t (e/diff-by {} filtered)]
+              (dom/div
+                (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "13px"}
+                            :onmouseover "this.style.background='#f0f0f0'"
+                            :onmouseout "this.style.background=''"})
+                (dom/text t)
+                (dom/On "mousedown"
+                  (fn [e]
+                    (.preventDefault e)
+                    (when-not (some #{t} tags)
+                      (swap! !tags conj t))
+                    (reset! !search ""))
+                  nil)))))))))
+
 (e/defn AnkiSyncOptions
-  "Custom header checkbox/input + allow-duplicates checkbox."
-  [!allow-dupes !use-header !header-text]
+  "Custom header checkbox/input + allow-duplicates checkbox + tags."
+  [!allow-dupes !use-header !header-text all-tags !use-tags !tags]
   (e/client
     ;; Custom header
     (dom/div
@@ -54,19 +145,32 @@
             (when (some? v) (reset! !header-text v))))))
     ;; Allow duplicates
     (dom/div
-      (dom/props {:style {:margin-bottom "16px"}})
+      (dom/props {:style {:margin-bottom "12px"}})
       (dom/label
         (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "13px"}})
         (dom/input
           (dom/props {:type "checkbox" :checked (e/watch !allow-dupes)})
           (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
             (when (some? v) (reset! !allow-dupes v))))
-        (dom/text "Allow duplicates")))))
+        (dom/text "Allow duplicates")))
+    ;; Tags
+    (dom/div
+      (dom/props {:style {:margin-bottom "16px"}})
+      (dom/label
+        (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "13px" :margin-bottom "6px"}})
+        (dom/input
+          (dom/props {:type "checkbox" :checked (e/watch !use-tags)})
+          (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
+            (when (some? v) (reset! !use-tags v))))
+        (dom/text "Tags"))
+      (when (e/watch !use-tags)
+        (TagInput !tags all-tags)))))
 
 (e/defn AnkiSyncForm
-  "The connected-state form: scope, deck, model selection, field mapping, custom header."
+  "The connected-state form: scope, deck, model selection, field mapping, custom header, tags."
   [!scope decks !selected-deck models
-   !basic-model basic-fields !cloze-model cloze-fields !allow-dupes !use-header !header-text]
+   !basic-model basic-fields !cloze-model cloze-fields !allow-dupes !use-header !header-text
+   all-tags !use-tags !tags]
   (e/client
     (let [scope (e/watch !scope)
           selected-deck (e/watch !selected-deck)]
@@ -107,7 +211,7 @@
           (str "cloze \u2192 " (first cloze-fields))))
 
       ;; Options
-      (AnkiSyncOptions !allow-dupes !use-header !header-text))))
+      (AnkiSyncOptions !allow-dupes !use-header !header-text all-tags !use-tags !tags))))
 
 (e/defn AnkiSyncStatus
   "Sync status display and action buttons."

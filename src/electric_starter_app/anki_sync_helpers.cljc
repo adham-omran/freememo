@@ -36,20 +36,22 @@
 
 #?(:cljs
    (defn fetch-anki-config!
-     "Fetch decks + models from Anki. Returns Promise of {:decks [...] :models [...]}."
+     "Fetch decks + models + tags from Anki. Returns Promise of {:decks [...] :models [...] :tags [...]}."
      []
      (-> (js/Promise.all
            #js [(anki-call! "deckNames" nil)
-                (anki-call! "modelNames" nil)])
+                (anki-call! "modelNames" nil)
+                (anki-call! "getTags" nil)])
          (.then (fn [results]
-                  {:decks (vec (js->clj (aget results 0)))
-                   :models (vec (js->clj (aget results 1)))})))))
+                  {:decks  (vec (js->clj (aget results 0)))
+                   :models (vec (js->clj (aget results 1)))
+                   :tags   (vec (js->clj (aget results 2)))})))))
 
 #?(:cljs
    (defn build-note
      "Build an AnkiConnect note map for addNote."
-     [card deck-name basic-model cloze-model basic-fields cloze-fields doc-id allow-dupes
-      use-header header-text]
+     [card deck-name basic-model cloze-model basic-fields cloze-fields allow-dupes
+      use-header header-text tags]
      (let [kind (:flashcards/kind card)
            basic? (= kind "basic")
            model (if basic? basic-model cloze-model)
@@ -61,7 +63,7 @@
        (cond-> {:deckName deck-name
                 :modelName model
                 :fields field-map
-                :tags ["card-maker" (str "doc-" doc-id)]}
+                :tags tags}
          (not allow-dupes) (assoc :options {:allowDuplicate false
                                             :duplicateScope "deck"})
          allow-dupes       (assoc :options {:allowDuplicate true})))))
@@ -69,8 +71,8 @@
 #?(:cljs
    (defn do-anki-push!
      "Push cards to Anki. Returns Promise resolving to result map."
-     [cards deck-name basic-model cloze-model basic-fields cloze-fields doc-id allow-dupes
-      use-header header-text]
+     [cards deck-name basic-model cloze-model basic-fields cloze-fields allow-dupes
+      use-header header-text tags]
      (let [new-cards (filter #(nil? (:flashcards/anki_note_id %)) cards)
            existing-cards (filter #(some? (:flashcards/anki_note_id %)) cards)]
        (->
@@ -82,8 +84,8 @@
                  (.then promise-chain
                    (fn [result]
                      (let [note (build-note card deck-name basic-model cloze-model
-                                  basic-fields cloze-fields doc-id allow-dupes
-                                  use-header header-text)]
+                                  basic-fields cloze-fields allow-dupes
+                                  use-header header-text tags)]
                        (-> (anki-call! "addNote" {:note note})
                            (.then (fn [note-id]
                                     (if note-id
@@ -178,13 +180,14 @@
 ;; ---------------------------------------------------------------------------
 
 (defn run-fetch-config!
-  "Fetch Anki config (decks + models) and populate atoms."
-  [!decks !models !selected-deck !basic-model !cloze-model !conn-status !conn-error]
+  "Fetch Anki config (decks + models + tags) and populate atoms."
+  [!decks !models !selected-deck !basic-model !cloze-model !all-tags !conn-status !conn-error]
   #?(:cljs
      (-> (fetch-anki-config!)
-         (.then (fn [{:keys [decks models]}]
+         (.then (fn [{:keys [decks models tags]}]
                   (reset! !decks decks)
                   (reset! !models models)
+                  (reset! !all-tags tags)
                   (when (seq decks) (reset! !selected-deck (first decks)))
                   (when (seq models)
                     (reset! !basic-model (first models))
@@ -208,10 +211,10 @@
 (defn run-push!
   "Execute push to Anki and update state atoms with results."
   [cards deck basic-model cloze-model basic-fields cloze-fields
-   doc-id allow-dupes use-header header-text !sync-result !push-pairs !sync-error !sync-phase]
+   allow-dupes use-header header-text tags !sync-result !push-pairs !sync-error !sync-phase]
   #?(:cljs
      (-> (do-anki-push! cards deck basic-model cloze-model
-           basic-fields cloze-fields doc-id allow-dupes use-header header-text)
+           basic-fields cloze-fields allow-dupes use-header header-text tags)
          (.then (fn [result]
                   (reset! !sync-result result)
                   (if (seq (:pairs result))
