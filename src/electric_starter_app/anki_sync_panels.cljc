@@ -96,11 +96,11 @@
         (dom/props {:style {:color "#dc3545" :margin-bottom "12px"}})
         (dom/text (or conn-error "Connection failed")))
       (dom/div
-        (dom/props {:style {:font-size "13px" :color "#666" :margin-bottom "16px"}})
+        (dom/props {:style {:font-size "14px" :color "#666" :margin-bottom "16px"}})
         (dom/text "Make sure Anki is running with the AnkiConnect plugin installed."))
       (dom/button
         (dom/props {:style {:padding "8px 16px" :background "#007bff" :color "white" :border "none"
-                            :border-radius "4px" :cursor "pointer"}})
+                            :border-radius "4px" :cursor "pointer" :font-size "14px"}})
         (dom/text "Retry")
         (dom/On "click"
           (fn [_]
@@ -112,7 +112,7 @@
       (dom/button
         (dom/props {:style {:padding "8px 16px" :background "#f8f9fa" :color "#333"
                             :border "1px solid #ccc" :border-radius "4px" :cursor "pointer"
-                            :margin-left "8px"}})
+                            :font-size "14px" :margin-left "8px"}})
         (dom/text "Cancel")
         (dom/On "click" (fn [_] (reset! !show-modal false)) nil)))))
 
@@ -129,7 +129,7 @@
       (dom/button
         (dom/props {:style {:padding "6px 14px" :background "#f0f0f0" :color "#333"
                             :border "1px solid #ccc" :border-radius "4px" :cursor "pointer"
-                            :font-size "13px" :margin-bottom "16px"}})
+                            :font-size "14px" :margin-bottom "16px"}})
         (dom/text "Use Last Settings")
         (let [click (dom/On "click" identity nil)
               [?token _] (e/Token click)]

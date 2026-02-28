@@ -80,7 +80,7 @@
 
         (dom/div
           (dom/props {:style {:background "white" :border-radius "8px" :padding "24px"
-                              :width "520px" :max-width "90%" :box-shadow "0 4px 6px rgba(0,0,0,0.1)"
+                              :width "620px" :max-width "90%" :box-shadow "0 4px 6px rgba(0,0,0,0.1)"
                               :max-height "80vh" :overflow-y "auto"}})
           (dom/On "click" (fn [e] (.stopPropagation e)) nil)
 
