@@ -119,61 +119,67 @@
                   nil)))))))))
 
 (e/defn AnkiSyncOptions
-  "Custom header checkbox/input + allow-duplicates checkbox + tags."
-  [!allow-dupes !use-header !header-text all-tags !use-tags !tags]
+  "Custom header checkbox/input + allow-duplicates checkbox + tags.
+   conn = {:!all-tags ...}  form = {:!allow-dupes :!use-header :!header-text :!use-tags :!tags ...}"
+  [conn form]
   (e/client
-    ;; Custom header
-    (dom/div
-      (dom/props {:style {:margin-bottom "12px"}})
-      (dom/label
-        (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "14px" :margin-bottom "8px"}})
-        (dom/input
-          (dom/props {:type "checkbox" :checked (e/watch !use-header)})
-          (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
-            (when (some? v)
-              (reset! !use-header v)
-              (when-not v (reset! !header-text "")))))
-        (dom/text "Add custom header to each card"))
-      (when (e/watch !use-header)
-        (dom/input
-          (dom/props {:type "text"
-                      :value (e/watch !header-text)
-                      :placeholder "e.g., Chapter 5: Accounting"
-                      :style {:width "100%" :padding "8px" :border "1px solid #ccc"
-                              :border-radius "4px" :font-size "15px"}})
-          (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-            (when (some? v) (reset! !header-text v))))))
-    ;; Allow duplicates
-    (dom/div
-      (dom/props {:style {:margin-bottom "12px"}})
-      (dom/label
-        (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "14px"}})
-        (dom/input
-          (dom/props {:type "checkbox" :checked (e/watch !allow-dupes)})
-          (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
-            (when (some? v) (reset! !allow-dupes v))))
-        (dom/text "Allow duplicates")))
-    ;; Tags
-    (dom/div
-      (dom/props {:style {:margin-bottom "16px"}})
-      (dom/label
-        (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "14px" :margin-bottom "6px"}})
-        (dom/input
-          (dom/props {:type "checkbox" :checked (e/watch !use-tags)})
-          (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
-            (when (some? v) (reset! !use-tags v))))
-        (dom/text "Tags"))
-      (when (e/watch !use-tags)
-        (TagInput !tags all-tags)))))
+    (let [all-tags (e/watch (:!all-tags conn))]
+      ;; Custom header
+      (dom/div
+        (dom/props {:style {:margin-bottom "12px"}})
+        (dom/label
+          (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "14px" :margin-bottom "8px"}})
+          (dom/input
+            (dom/props {:type "checkbox" :checked (e/watch (:!use-header form))})
+            (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
+              (when (some? v)
+                (reset! (:!use-header form) v)
+                (when-not v (reset! (:!header-text form) "")))))
+          (dom/text "Add custom header to each card"))
+        (when (e/watch (:!use-header form))
+          (dom/input
+            (dom/props {:type "text"
+                        :value (e/watch (:!header-text form))
+                        :placeholder "e.g., Chapter 5: Accounting"
+                        :style {:width "100%" :padding "8px" :border "1px solid #ccc"
+                                :border-radius "4px" :font-size "15px"}})
+            (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
+              (when (some? v) (reset! (:!header-text form) v))))))
+      ;; Allow duplicates
+      (dom/div
+        (dom/props {:style {:margin-bottom "12px"}})
+        (dom/label
+          (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "14px"}})
+          (dom/input
+            (dom/props {:type "checkbox" :checked (e/watch (:!allow-dupes form))})
+            (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
+              (when (some? v) (reset! (:!allow-dupes form) v))))
+          (dom/text "Allow duplicates")))
+      ;; Tags
+      (dom/div
+        (dom/props {:style {:margin-bottom "16px"}})
+        (dom/label
+          (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "14px" :margin-bottom "6px"}})
+          (dom/input
+            (dom/props {:type "checkbox" :checked (e/watch (:!use-tags form))})
+            (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
+              (when (some? v) (reset! (:!use-tags form) v))))
+          (dom/text "Tags"))
+        (when (e/watch (:!use-tags form))
+          (TagInput (:!tags form) all-tags))))))
 
 (e/defn AnkiSyncForm
-  "The connected-state form: scope, deck, model selection, field mapping, custom header, tags."
-  [!scope decks !selected-deck models
-   !basic-model basic-fields !cloze-model cloze-fields !allow-dupes !use-header !header-text
-   all-tags !use-tags !tags]
+  "The connected-state form: scope, deck, model selection, field mapping, custom header, tags.
+   conn = {:!decks :!models :!selected-deck :!basic-model :!cloze-model :!all-tags ...}
+   form = {:!scope :!basic-fields :!cloze-fields ...}"
+  [conn form]
   (e/client
-    (let [scope (e/watch !scope)
-          selected-deck (e/watch !selected-deck)]
+    (let [scope (e/watch (:!scope form))
+          selected-deck (e/watch (:!selected-deck conn))
+          decks (e/watch (:!decks conn))
+          models (e/watch (:!models conn))
+          basic-fields (e/watch (:!basic-fields form))
+          cloze-fields (e/watch (:!cloze-fields form))]
 
       ;; Scope
       (dom/div
@@ -186,7 +192,7 @@
           (dom/option (dom/props {:value "Current Page"}) (dom/text "Current Page"))
           (dom/option (dom/props {:value "Entire Doc"}) (dom/text "Entire Document"))
           (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
-            (when (some? v) (reset! !scope v)))))
+            (when (some? v) (reset! (:!scope form) v)))))
 
       ;; Deck
       (dom/div
@@ -200,94 +206,99 @@
           (e/for [d (e/diff-by {} decks)]
             (dom/option (dom/props {:value d}) (dom/text d)))
           (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
-            (when (some? v) (reset! !selected-deck v)))))
+            (when (some? v) (reset! (:!selected-deck conn) v)))))
 
       ;; Note Type selectors
-      (AnkiSyncModelSelect "Note Type (Basic)" !basic-model models
+      (AnkiSyncModelSelect "Note Type (Basic)" (:!basic-model conn) models
         (when (seq basic-fields)
           (str "question \u2192 " (first basic-fields) ", answer \u2192 " (second basic-fields))))
-      (AnkiSyncModelSelect "Note Type (Cloze)" !cloze-model models
+      (AnkiSyncModelSelect "Note Type (Cloze)" (:!cloze-model conn) models
         (when (seq cloze-fields)
           (str "cloze \u2192 " (first cloze-fields))))
 
       ;; Options
-      (AnkiSyncOptions !allow-dupes !use-header !header-text all-tags !use-tags !tags))))
+      (AnkiSyncOptions conn form))))
 
 (e/defn AnkiSyncStatus
-  "Sync status display and action buttons."
-  [sync-phase sync-result sync-error !show-modal !sync-phase !sync-result !sync-error !push-pairs !pull-updates]
+  "Sync status display and action buttons.
+   sync = {:!phase :!result :!error :!push-pairs :!pull-updates}"
+  [sync !show-modal]
   (e/client
-    ;; Status display
-    (when sync-phase
-      (dom/div
-        (dom/props {:style {:margin-bottom "16px" :padding "12px" :background "#f8f9fa"
-                            :border-radius "4px" :font-size "14px"}})
-        (cond
-          (= sync-phase :pushing)   (dom/text "Pushing cards to Anki...")
-          (= sync-phase :pulling)   (dom/text "Pulling edits from Anki...")
-          (= sync-phase :recording) (dom/text "Saving to database...")
-          (= sync-phase :error)
-          (dom/div
-            (dom/props {:style {:color "#dc3545"}})
-            (dom/text (str "Error: " (or sync-error "Unknown error"))))
-          (= sync-phase :done)
-          (let [r sync-result
-                pairs (or (:pairs r) [])
-                updated-count (or (:updated r) 0)
-                added-count (max 0 (- (count pairs) updated-count))
-                skipped (or (:skipped r) [])
-                pull-upds (or (:updates r) [])]
+    (let [sync-phase (e/watch (:!phase sync))
+          sync-result (e/watch (:!result sync))
+          sync-error (e/watch (:!error sync))
+          {:keys [!phase !result !error !push-pairs !pull-updates]} sync]
+      ;; Status display
+      (when sync-phase
+        (dom/div
+          (dom/props {:style {:margin-bottom "16px" :padding "12px" :background "#f8f9fa"
+                              :border-radius "4px" :font-size "14px"}})
+          (cond
+            (= sync-phase :pushing)   (dom/text "Pushing cards to Anki...")
+            (= sync-phase :pulling)   (dom/text "Pulling edits from Anki...")
+            (= sync-phase :recording) (dom/text "Saving to database...")
+            (= sync-phase :error)
             (dom/div
-              (dom/props {:style {:color "#28a745"}})
-              (dom/text
-                (str "Done! "
-                  (cond
-                    (seq pull-upds) (str (count pull-upds) " cards updated from Anki")
-                    (or (pos? added-count) (pos? updated-count))
-                    (str (when (pos? added-count) (str added-count " added"))
-                         (when (and (pos? added-count) (pos? updated-count)) ", ")
-                         (when (pos? updated-count) (str updated-count " updated"))
-                         (when (seq skipped) (str ", " (count skipped) " skipped")))
-                    :else "No changes"))))))))
+              (dom/props {:style {:color "#dc3545"}})
+              (dom/text (str "Error: " (or sync-error "Unknown error"))))
+            (= sync-phase :done)
+            (let [r sync-result
+                  pairs (or (:pairs r) [])
+                  updated-count (or (:updated r) 0)
+                  added-count (max 0 (- (count pairs) updated-count))
+                  skipped (or (:skipped r) [])
+                  pull-upds (or (:updates r) [])]
+              (dom/div
+                (dom/props {:style {:color "#28a745"}})
+                (dom/text
+                  (str "Done! "
+                    (cond
+                      (seq pull-upds) (str (count pull-upds) " cards updated from Anki")
+                      (or (pos? added-count) (pos? updated-count))
+                      (str (when (pos? added-count) (str added-count " added"))
+                           (when (and (pos? added-count) (pos? updated-count)) ", ")
+                           (when (pos? updated-count) (str updated-count " updated"))
+                           (when (seq skipped) (str ", " (count skipped) " skipped")))
+                      :else "No changes"))))))))
 
-    ;; Action buttons
-    (dom/div
-      (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "8px" :margin-top "8px"}})
-      (dom/button
-        (dom/props {:style {:padding "8px 16px" :background "#f8f9fa" :color "#333"
-                            :border "1px solid #ccc" :border-radius "4px" :cursor "pointer" :font-size "15px"}})
-        (dom/text (if (= sync-phase :done) "Close" "Cancel"))
-        (dom/On "click" (fn [_]
-                          (reset! !show-modal false)
-                          (reset! !sync-phase nil)
-                          (reset! !sync-result nil)
-                          (reset! !sync-error nil)
-                          (reset! !push-pairs nil)
-                          (reset! !pull-updates nil))
-          nil))
-      (when-not (#{:pushing :pulling :recording} sync-phase)
+      ;; Action buttons
+      (dom/div
+        (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "8px" :margin-top "8px"}})
         (dom/button
-          (dom/props {:style {:padding "8px 16px" :background "#17a2b8" :color "white" :border "none"
-                              :border-radius "4px" :cursor "pointer" :font-size "15px"}})
-          (dom/text "Pull from Anki")
-          (dom/On "click"
-            (fn [_]
-              (reset! !sync-phase :pulling)
-              (reset! !sync-result nil)
-              (reset! !sync-error nil)
-              (reset! !pull-updates nil)
-              (reset! !push-pairs nil))
-            nil)))
-      (when-not (#{:pushing :pulling :recording} sync-phase)
-        (dom/button
-          (dom/props {:style {:padding "8px 16px" :background "#28a745" :color "white" :border "none"
-                              :border-radius "4px" :cursor "pointer" :font-size "15px" :font-weight "500"}})
-          (dom/text "Push to Anki")
-          (dom/On "click"
-            (fn [_]
-              (reset! !sync-phase :pushing)
-              (reset! !sync-result nil)
-              (reset! !sync-error nil)
-              (reset! !push-pairs nil)
-              (reset! !pull-updates nil))
-            nil))))))
+          (dom/props {:style {:padding "8px 16px" :background "#f8f9fa" :color "#333"
+                              :border "1px solid #ccc" :border-radius "4px" :cursor "pointer" :font-size "15px"}})
+          (dom/text (if (= sync-phase :done) "Close" "Cancel"))
+          (dom/On "click" (fn [_]
+                            (reset! !show-modal false)
+                            (reset! !phase nil)
+                            (reset! !result nil)
+                            (reset! !error nil)
+                            (reset! !push-pairs nil)
+                            (reset! !pull-updates nil))
+            nil))
+        (when-not (#{:pushing :pulling :recording} sync-phase)
+          (dom/button
+            (dom/props {:style {:padding "8px 16px" :background "#17a2b8" :color "white" :border "none"
+                                :border-radius "4px" :cursor "pointer" :font-size "15px"}})
+            (dom/text "Pull from Anki")
+            (dom/On "click"
+              (fn [_]
+                (reset! !phase :pulling)
+                (reset! !result nil)
+                (reset! !error nil)
+                (reset! !pull-updates nil)
+                (reset! !push-pairs nil))
+              nil)))
+        (when-not (#{:pushing :pulling :recording} sync-phase)
+          (dom/button
+            (dom/props {:style {:padding "8px 16px" :background "#28a745" :color "white" :border "none"
+                                :border-radius "4px" :cursor "pointer" :font-size "15px" :font-weight "500"}})
+            (dom/text "Push to Anki")
+            (dom/On "click"
+              (fn [_]
+                (reset! !phase :pushing)
+                (reset! !result nil)
+                (reset! !error nil)
+                (reset! !push-pairs nil)
+                (reset! !pull-updates nil))
+              nil)))))))
