@@ -143,9 +143,13 @@
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-      (let [docs-result (e/server (pdf/list-pdfs user-id))
-            !selected-doc (atom nil)
-            selected-doc (e/watch !selected-doc)]
+      (let [docs-result    (e/server (pdf/list-pdfs user-id))
+            last-doc-id    (e/server (settings/get-last-document user-id))
+            valid-last-doc (when (some #(= (:documents/id %) last-doc-id)
+                                       (:documents docs-result))
+                             last-doc-id)
+            !selected-doc  (atom valid-last-doc)
+            selected-doc   (e/watch !selected-doc)]
 
         (cond
           ;; Success with documents
@@ -155,7 +159,7 @@
             (dom/select
               (dom/props {:style {:margin-bottom "0"}})
               (dom/option
-                (dom/props {:value ""})
+                (dom/props {:value "" :selected (nil? selected-doc)})
                 (dom/text "-- Choose a document --"))
               (e/server
                 (e/for-by :documents/id [doc (:documents docs-result)]
@@ -163,16 +167,20 @@
                     (let [id (e/server (:documents/id doc))
                           filename (e/server (:documents/filename doc))]
                       (dom/option
-                        (dom/props {:value (str id)})
+                        (dom/props {:value (str id) :selected (= id selected-doc)})
                         (dom/text filename))))))
-              (reset! !selected-doc
-                (dom/On "change"
-                  (fn [e]
-                    (let [val (-> e .-target .-value)]
-                      (if (seq val)
-                        (js/parseInt val)
-                        nil)))
-                  nil))))
+              (let [doc-change (dom/On "change"
+                                 (fn [e]
+                                   (let [val (-> e .-target .-value)]
+                                     (if (seq val) (js/parseInt val) nil)))
+                                 nil)
+                    [?save-token _] (e/Token doc-change)]
+                (when (some? doc-change)
+                  (reset! !selected-doc doc-change))
+                (when-some [token ?save-token]
+                  (when doc-change
+                    (e/server (settings/save-last-document user-id doc-change)))
+                  (token)))))
 
           ;; Success but no documents
           (:success docs-result)
@@ -186,7 +194,11 @@
 
         ;; Main content (shows when document is selected)
         (when selected-doc
-          (let [!top-pct (atom 60)
+          (let [initial-page    (e/server (settings/get-last-page user-id selected-doc))
+                !page-to-save   (atom nil)
+                page-to-save    (e/watch !page-to-save)
+                [?page-token _] (e/Token page-to-save)
+                !top-pct (atom 60)
                 top-pct (e/watch !top-pct)
                 !left-pct (atom 50)
                 left-pct (e/watch !left-pct)
@@ -224,6 +236,11 @@
                 page-text (e/server (when (:success text-result) (:text text-result)))
                 is-done (e/server (get-page-done-status* refresh selected-doc current-pdf-page))]
 
+            ;; Save last page when user navigates
+            (when-some [token ?page-token]
+              (e/server (settings/save-last-page user-id selected-doc page-to-save))
+              (token))
+
             ;; Outer: vertical flex (top row / bottom panel)
             (dom/div
               (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0" :overflow "hidden"}})
@@ -235,7 +252,10 @@
                 ;; LEFT: PDF viewer
                 (dom/div
                   (dom/props {:style {:width (str left-pct "%") :min-width "0" :overflow "hidden"}})
-                  (reset! !current-page (PdfViewerComponent {:document-id selected-doc})))
+                  (reset! !current-page
+                    (PdfViewerComponent {:document-id selected-doc
+                                         :initial-page initial-page
+                                         :on-navigate! (fn [p] (reset! !page-to-save p))})))
 
                 ;; Horizontal drag handle
                 (dom/div
@@ -745,7 +765,7 @@
 
                           (dom/div
                             (dom/props {:style {:background "white" :border-radius "8px" :padding "24px"
-                                                :width "500px" :max-width "90%" :box-shadow "0 4px 6px rgba(0,0,0,0.1)"}})
+                                                :width "600px" :max-width "90%" :box-shadow "0 4px 6px rgba(0,0,0,0.1)"}})
                             (dom/On "click" (fn [e] (.stopPropagation e)) nil)
 
                             (dom/h3
@@ -755,14 +775,14 @@
                             (dom/div
                               (dom/props {:style {:margin-bottom "20px"}})
                               (dom/label
-                                (dom/props {:style {:display "block" :margin-bottom "8px" :font-size "13px"}})
+                                (dom/props {:style {:display "block" :margin-bottom "8px" :font-size "14px"}})
                                 (dom/text "Pre-prompt (will be added to the system prompt):"))
                               (dom/input
                                 (dom/props {:type "text"
                                             :value local-prompt
                                             :placeholder "e.g., Focus on accounting terminology..."
                                             :style {:width "100%" :padding "8px" :border "1px solid #ccc"
-                                                    :border-radius "4px" :font-size "14px" :box-sizing "border-box"}})
+                                                    :border-radius "4px" :font-size "15px" :box-sizing "border-box"}})
                                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                                   (when (some? ev) (reset! !local-prompt ev)))
                                 (e/client (js/setTimeout #(.focus dom/node) 50))))
@@ -773,14 +793,14 @@
                               (dom/button
                                 (dom/props {:style {:padding "8px 16px" :background "#f8f9fa" :color "#333"
                                                     :border "1px solid #ccc" :border-radius "4px" :cursor "pointer"
-                                                    :font-size "14px"}})
+                                                    :font-size "15px"}})
                                 (dom/text "Cancel")
                                 (dom/On "click" (fn [_] (reset! !show-prompt-dialog false)) nil))
 
                               (dom/button
                                 (dom/props {:style {:padding "8px 16px" :background "#28a745"
                                                     :color "white" :border "none" :border-radius "4px"
-                                                    :cursor "pointer" :font-size "14px" :font-weight "500"}})
+                                                    :cursor "pointer" :font-size "15px" :font-weight "500"}})
                                 (dom/text "Generate")
                                 (dom/On "click"
                                   (fn [_]

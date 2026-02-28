@@ -32,6 +32,8 @@
 (def ANKI_ALLOW_DUPES "anki_allow_dupes")
 (def ANKI_USE_HEADER "anki_use_header")
 (def ANKI_HEADER_TEXT "anki_header_text")
+(def LAST_DOCUMENT "last_document")
+; Per-document page keys are dynamic: (str "last_page_" doc-id)
 
 ;; Get functions
 (defn get-openai-api-key [user-id enc-key]
@@ -188,6 +190,35 @@
     (catch Exception e
       (println "ERROR [save-card-count]:" (.getMessage e))
       {:success false :error "Failed to save card count"})))
+
+(defn get-last-document [user-id]
+  (try
+    (when-let [v (db/get-setting user-id LAST_DOCUMENT)]
+      (let [n (Integer/parseInt v)]
+        (when (pos? n) n)))
+    (catch Exception _ nil)))
+
+(defn save-last-document [user-id doc-id]
+  (try
+    (db/set-setting user-id LAST_DOCUMENT (str doc-id))
+    {:success true}
+    (catch Exception e
+      (println "ERROR [save-last-document]:" (.getMessage e))
+      {:success false})))
+
+(defn get-last-page [user-id doc-id]
+  (try
+    (let [v (db/get-setting user-id (str "last_page_" doc-id))]
+      (if v (max 1 (Integer/parseInt v)) 1))
+    (catch Exception _ 1)))
+
+(defn save-last-page [user-id doc-id page]
+  (try
+    (db/set-setting user-id (str "last_page_" doc-id) (str page))
+    {:success true}
+    (catch Exception e
+      (println "ERROR [save-last-page]:" (.getMessage e))
+      {:success false})))
 
 (defn save-anki-sync-settings [user-id {:keys [scope deck basic-model cloze-model allow-dupes use-header header-text]}]
   (try

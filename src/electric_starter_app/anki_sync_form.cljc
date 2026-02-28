@@ -13,11 +13,11 @@
     (let [model (e/watch !model)]
       (dom/div
         (dom/props {:style {:margin-bottom "12px"}})
-        (dom/label (dom/props {:style {:font-weight "600" :font-size "13px" :display "block" :margin-bottom "4px"}})
+        (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
           (dom/text label))
         (dom/select
           (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
-                              :font-size "14px" :width "100%"}
+                              :font-size "15px" :width "100%"}
                       :value (or model "")})
           (e/for [m (e/diff-by {} models)]
             (dom/option (dom/props {:value m}) (dom/text m)))
@@ -25,7 +25,7 @@
             (when (some? v) (reset! !model v))))
         (when (seq field-hint)
           (dom/div
-            (dom/props {:style {:font-size "12px" :color "#666" :margin-top "4px"}})
+            (dom/props {:style {:font-size "13px" :color "#666" :margin-top "4px"}})
             (dom/text field-hint)))))))
 
 (e/defn TagInput
@@ -53,18 +53,18 @@
           (dom/props {:style {:display "flex" :flex-wrap "wrap" :align-items "center"
                               :gap "4px" :padding "4px 6px"
                               :border "1px solid #ccc" :border-radius "4px"
-                              :font-size "13px" :min-height "30px" :background "white"}})
+                              :font-size "14px" :min-height "30px" :background "white"}})
           ;; Chips
           (e/for [t (e/diff-by {} tags)]
             (dom/span
               (dom/props {:style {:display "inline-flex" :align-items "center" :gap "3px"
                                   :background "#e0e0e0" :border-radius "3px"
-                                  :padding "1px 5px" :font-size "12px"}})
+                                  :padding "1px 5px" :font-size "13px"}})
               (dom/text t)
               (dom/button
                 (dom/props {:type "button"
                             :style {:background "none" :border "none" :cursor "pointer"
-                                    :padding "0" :font-size "12px" :line-height "1"
+                                    :padding "0" :font-size "13px" :line-height "1"
                                     :color "#555"}})
                 (dom/text "\u00d7")
                 (dom/On "click" (fn [_] (swap! !tags (fn [ts] (vec (remove #{t} ts))))) nil))))
@@ -73,7 +73,7 @@
             (dom/props {:type "text"
                         :value search
                         :placeholder (if (seq tags) "" "Add tags...")
-                        :style {:border "none" :outline "none" :font-size "13px"
+                        :style {:border "none" :outline "none" :font-size "14px"
                                 :flex "1" :min-width "80px" :padding "2px"}})
             (dom/On "focus" (fn [_] (reset! !focused true)) nil)
             (dom/On "blur" (fn [_] (reset! !focused false)) nil)
@@ -106,7 +106,7 @@
                                 :box-shadow "0 2px 4px rgba(0,0,0,0.15)"}})
             (e/for [t (e/diff-by {} filtered)]
               (dom/div
-                (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "13px"}
+                (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "14px"}
                             :onmouseover "this.style.background='#f0f0f0'"
                             :onmouseout "this.style.background=''"})
                 (dom/text t)
@@ -126,7 +126,7 @@
     (dom/div
       (dom/props {:style {:margin-bottom "12px"}})
       (dom/label
-        (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "13px" :margin-bottom "8px"}})
+        (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "14px" :margin-bottom "8px"}})
         (dom/input
           (dom/props {:type "checkbox" :checked (e/watch !use-header)})
           (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
@@ -140,14 +140,14 @@
                       :value (e/watch !header-text)
                       :placeholder "e.g., Chapter 5: Accounting"
                       :style {:width "100%" :padding "8px" :border "1px solid #ccc"
-                              :border-radius "4px" :font-size "14px"}})
+                              :border-radius "4px" :font-size "15px"}})
           (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
             (when (some? v) (reset! !header-text v))))))
     ;; Allow duplicates
     (dom/div
       (dom/props {:style {:margin-bottom "12px"}})
       (dom/label
-        (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "13px"}})
+        (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "14px"}})
         (dom/input
           (dom/props {:type "checkbox" :checked (e/watch !allow-dupes)})
           (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
@@ -157,7 +157,7 @@
     (dom/div
       (dom/props {:style {:margin-bottom "16px"}})
       (dom/label
-        (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "13px" :margin-bottom "6px"}})
+        (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "14px" :margin-bottom "6px"}})
         (dom/input
           (dom/props {:type "checkbox" :checked (e/watch !use-tags)})
           (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
@@ -178,10 +178,10 @@
       ;; Scope
       (dom/div
         (dom/props {:style {:margin-bottom "12px"}})
-        (dom/label (dom/props {:style {:font-weight "600" :font-size "13px" :display "block" :margin-bottom "4px"}})
+        (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
           (dom/text "Scope"))
         (dom/select
-          (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px" :font-size "14px"}
+          (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px" :font-size "15px"}
                       :value scope})
           (dom/option (dom/props {:value "Current Page"}) (dom/text "Current Page"))
           (dom/option (dom/props {:value "Entire Doc"}) (dom/text "Entire Document"))
@@ -191,11 +191,11 @@
       ;; Deck
       (dom/div
         (dom/props {:style {:margin-bottom "12px"}})
-        (dom/label (dom/props {:style {:font-weight "600" :font-size "13px" :display "block" :margin-bottom "4px"}})
+        (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
           (dom/text "Deck"))
         (dom/select
           (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
-                              :font-size "14px" :width "100%"}
+                              :font-size "15px" :width "100%"}
                       :value (or selected-deck "")})
           (e/for [d (e/diff-by {} decks)]
             (dom/option (dom/props {:value d}) (dom/text d)))
@@ -221,7 +221,7 @@
     (when sync-phase
       (dom/div
         (dom/props {:style {:margin-bottom "16px" :padding "12px" :background "#f8f9fa"
-                            :border-radius "4px" :font-size "13px"}})
+                            :border-radius "4px" :font-size "14px"}})
         (cond
           (= sync-phase :pushing)   (dom/text "Pushing cards to Anki...")
           (= sync-phase :pulling)   (dom/text "Pulling edits from Anki...")
@@ -255,7 +255,7 @@
       (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "8px" :margin-top "8px"}})
       (dom/button
         (dom/props {:style {:padding "8px 16px" :background "#f8f9fa" :color "#333"
-                            :border "1px solid #ccc" :border-radius "4px" :cursor "pointer" :font-size "14px"}})
+                            :border "1px solid #ccc" :border-radius "4px" :cursor "pointer" :font-size "15px"}})
         (dom/text (if (= sync-phase :done) "Close" "Cancel"))
         (dom/On "click" (fn [_]
                           (reset! !show-modal false)
@@ -268,7 +268,7 @@
       (when-not (#{:pushing :pulling :recording} sync-phase)
         (dom/button
           (dom/props {:style {:padding "8px 16px" :background "#17a2b8" :color "white" :border "none"
-                              :border-radius "4px" :cursor "pointer" :font-size "14px"}})
+                              :border-radius "4px" :cursor "pointer" :font-size "15px"}})
           (dom/text "Pull from Anki")
           (dom/On "click"
             (fn [_]
@@ -281,7 +281,7 @@
       (when-not (#{:pushing :pulling :recording} sync-phase)
         (dom/button
           (dom/props {:style {:padding "8px 16px" :background "#28a745" :color "white" :border "none"
-                              :border-radius "4px" :cursor "pointer" :font-size "14px" :font-weight "500"}})
+                              :border-radius "4px" :cursor "pointer" :font-size "15px" :font-weight "500"}})
           (dom/text "Push to Anki")
           (dom/On "click"
             (fn [_]

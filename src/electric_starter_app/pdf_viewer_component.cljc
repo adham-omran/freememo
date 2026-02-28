@@ -7,16 +7,24 @@
 
 (e/defn PdfViewerComponent
   "Renders a PDF viewer for the given document ID and exposes current page number.
-   Props: {:document-id <int>}
-   Returns: The current page number (for OCR extraction)."
-  [{:keys [document-id]}]
+   Props: {:document-id <int>, :initial-page <int>, :on-navigate! <fn>}
+   Returns: The current page number (for OCR integration)."
+  [{:keys [document-id initial-page on-navigate!]}]
   (e/client
-    (let [!page (atom 1)
-          !total (atom 0)
-          !container (atom nil)
-          !viewer-div (atom nil)
-          page (e/watch !page)
-          total (e/watch !total)]
+    (let [!page        (atom (or initial-page 1))
+          !total       (atom 0)
+          !container   (atom nil)
+          !viewer-div  (atom nil)
+          !input-val   (atom (str (or initial-page 1)))
+          !inp-focused (atom false)
+          page         (e/watch !page)
+          total        (e/watch !total)
+          input-val    (e/watch !input-val)
+          inp-focused  (e/watch !inp-focused)]
+
+      ;; Sync page → input-val when not typing
+      (when (and (not inp-focused) (not= input-val (str page)))
+        (reset! !input-val (str page)))
 
       (dom/div
         (dom/props {:style {:height "100%"
@@ -57,15 +65,41 @@
                     (when (and (> p 1) (> t 0))
                       (let [new-page (dec p)]
                         (reset! !page new-page)
-                        (viewer/go-to-page! new-page)))))
+                        (viewer/go-to-page! new-page)
+                        (when on-navigate! (on-navigate! new-page))))))
                 nil))
 
-            ;; Page number display
+            ;; Typed page input
+            (dom/input
+              (dom/props {:type "text"
+                          :value input-val
+                          :style {:width "40px" :text-align "center" :padding "4px"
+                                  :border "1px solid #ccc" :border-radius "3px"
+                                  :font-size "14px"}})
+              (dom/On "focus" (fn [_] (reset! !inp-focused true)) nil)
+              (dom/On "blur"
+                (fn [e]
+                  ;; Capture value before any state changes that might trigger re-render
+                  (let [raw (-> e .-target .-value)]
+                    (reset! !inp-focused false)
+                    (let [n (js/parseInt raw)]
+                      (when (and (not (js/isNaN n)) (>= n 1) (<= n @!total))
+                        (let [clamped (max 1 (min @!total n))]
+                          (reset! !page clamped)
+                          (viewer/go-to-page! clamped)
+                          (when on-navigate! (on-navigate! clamped)))))))
+                nil)
+              (dom/On "keydown"
+                (fn [e]
+                  (when (= "Enter" (.-key e))
+                    (.blur (.-target e))))
+                nil)
+              (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
+                (when (some? v) (reset! !input-val v))))
+
             (dom/span
-              (dom/props {:style {:color "#333"
-                                  :font-weight "bold"
-                                  :padding "0 8px"}})
-              (dom/text "Page " page " of " total))
+              (dom/props {:style {:color "#333" :padding "0 4px"}})
+              (dom/text "of " total))
 
             ;; Next button
             (dom/button
@@ -83,7 +117,8 @@
                     (when (and (< p t) (> t 0))
                       (let [new-page (inc p)]
                         (reset! !page new-page)
-                        (viewer/go-to-page! new-page)))))
+                        (viewer/go-to-page! new-page)
+                        (when on-navigate! (on-navigate! new-page))))))
                 nil)))
 
           ;; Zoom controls section
@@ -158,7 +193,10 @@
                         ;; On PDF loaded
                         (reset! !total (.-numPages pdf))
                         ;; Listen for page changes from PDF.js
-                        (viewer/on-page-change! (fn [page-num] (reset! !page page-num)))))))
+                        (viewer/on-page-change! (fn [page-num] (reset! !page page-num)))
+                        ;; Jump to initial page if provided
+                        (when (and initial-page (> initial-page 1))
+                          (viewer/go-to-page! initial-page))))))
                 100)))))
 
       ;; Return current page number for OCR integration
