@@ -164,3 +164,45 @@
         all-tags !use-tags !tags)
       (form/AnkiSyncStatus sync-phase sync-result sync-error
         !show-modal !sync-phase !sync-result !sync-error !push-pairs !pull-updates))))
+
+(e/defn AnkiSyncModalDom
+  "Modal overlay + inner dialog; delegates to error/connected/connecting panels."
+  [user-id sync-phase !show-modal conn-status conn-error
+   decks models !scope !selected-deck !basic-model !cloze-model
+   basic-fields cloze-fields !allow-dupes !use-header !header-text
+   all-tags !use-tags !tags sync-result sync-error
+   !sync-phase !sync-result !sync-error !push-pairs !pull-updates
+   !conn-status !conn-error !decks !models !all-tags]
+  (e/client
+    (dom/div
+      (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
+                          :background "rgba(0,0,0,0.5)" :display "flex" :align-items "center"
+                          :justify-content "center" :z-index "1000"}
+                  :tabindex "-1"})
+      (dom/On "click" (fn [_] (when-not sync-phase (reset! !show-modal false))) nil)
+      (dom/On "keydown"
+        (fn [e]
+          (when (and (helpers/escape-key? e) (not sync-phase))
+            (reset! !show-modal false)))
+        nil)
+      (dom/div
+        (dom/props {:style {:background "white" :border-radius "8px" :padding "24px"
+                            :width "620px" :max-width "90%" :box-shadow "0 4px 6px rgba(0,0,0,0.1)"
+                            :max-height "80vh" :overflow-y "auto"}})
+        (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+        (dom/h3 (dom/props {:style {:margin-top "0" :margin-bottom "20px"}})
+          (dom/text "Anki Sync"))
+        (cond
+          (= conn-status :connecting)
+          (dom/div
+            (dom/props {:style {:text-align "center" :padding "20px" :color "#666"}})
+            (dom/text "Connecting to Anki..."))
+          (= conn-status :error)
+          (AnkiSyncErrorPanel conn-error !conn-status !conn-error !show-modal !decks !models
+            !selected-deck !basic-model !cloze-model !all-tags)
+          (= conn-status :connected)
+          (AnkiSyncConnectedPanel user-id decks models !scope !selected-deck !basic-model !cloze-model
+            basic-fields cloze-fields !allow-dupes !use-header !header-text
+            all-tags !use-tags !tags
+            sync-phase sync-result sync-error !show-modal !sync-phase !sync-result !sync-error
+            !push-pairs !pull-updates))))))
