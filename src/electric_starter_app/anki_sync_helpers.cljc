@@ -49,10 +49,13 @@
 
 #?(:cljs
    (defn build-note
-     "Build an AnkiConnect note map for addNote."
-     [card deck-name basic-model cloze-model basic-fields cloze-fields allow-dupes
-      use-header header-text tags]
-     (let [kind (:flashcards/kind card)
+     "Build an AnkiConnect note map for addNote.
+      settings = {:deck :basic-model :cloze-model :basic-fields :cloze-fields
+                  :allow-dupes :use-header :header-text :tags}"
+     [card settings]
+     (let [{:keys [deck basic-model cloze-model basic-fields cloze-fields
+                   allow-dupes use-header header-text tags]} settings
+           kind (:flashcards/kind card)
            basic? (= kind "basic")
            model (if basic? basic-model cloze-model)
            fields (if basic? basic-fields cloze-fields)
@@ -60,7 +63,7 @@
                        {(first fields) (prepend-header (or (:flashcards/question card) "") use-header header-text)
                         (second fields) (or (:flashcards/answer card) "")}
                        {(first fields) (prepend-header (or (:flashcards/cloze card) "") use-header header-text)})]
-       (cond-> {:deckName deck-name
+       (cond-> {:deckName deck
                 :modelName model
                 :fields field-map
                 :tags tags}
@@ -70,10 +73,12 @@
 
 #?(:cljs
    (defn do-anki-push!
-     "Push cards to Anki. Returns Promise resolving to result map."
-     [cards deck-name basic-model cloze-model basic-fields cloze-fields allow-dupes
-      use-header header-text tags]
-     (let [new-cards (filter #(nil? (:flashcards/anki_note_id %)) cards)
+     "Push cards to Anki. Returns Promise resolving to result map.
+      settings = {:deck :basic-model :cloze-model :basic-fields :cloze-fields
+                  :allow-dupes :use-header :header-text :tags}"
+     [cards settings]
+     (let [{:keys [basic-fields cloze-fields use-header header-text]} settings
+           new-cards (filter #(nil? (:flashcards/anki_note_id %)) cards)
            existing-cards (filter #(some? (:flashcards/anki_note_id %)) cards)]
        (->
          (.resolve js/Promise {:pairs [] :updated 0 :skipped [] :errors []})
@@ -83,9 +88,7 @@
                (fn [promise-chain card]
                  (.then promise-chain
                    (fn [result]
-                     (let [note (build-note card deck-name basic-model cloze-model
-                                  basic-fields cloze-fields allow-dupes
-                                  use-header header-text tags)]
+                     (let [note (build-note card settings)]
                        (-> (anki-call! "addNote" {:note note})
                            (.then (fn [note-id]
                                     (if note-id
@@ -180,23 +183,25 @@
 ;; ---------------------------------------------------------------------------
 
 (defn run-fetch-config!
-  "Fetch Anki config (decks + models + tags) and populate atoms."
-  [!decks !models !selected-deck !basic-model !cloze-model !all-tags !conn-status !conn-error]
-  #?(:cljs
-     (-> (fetch-anki-config!)
-         (.then (fn [{:keys [decks models tags]}]
-                  (reset! !decks decks)
-                  (reset! !models models)
-                  (reset! !all-tags tags)
-                  (when (seq decks) (reset! !selected-deck (first decks)))
-                  (when (seq models)
-                    (reset! !basic-model (first models))
-                    (reset! !cloze-model (first models)))
-                  (reset! !conn-status :connected)))
-         (.catch (fn [err]
-                   (reset! !conn-error (str "Cannot connect to Anki: " (.-message err)))
-                   (reset! !conn-status :error))))
-     :clj nil))
+  "Fetch Anki config (decks + models + tags) and populate atoms.
+   conn = {:!status :!error :!decks :!models :!selected-deck :!basic-model :!cloze-model :!all-tags}"
+  [conn]
+  (let [{:keys [!status !error !decks !models !selected-deck !basic-model !cloze-model !all-tags]} conn]
+    #?(:cljs
+       (-> (fetch-anki-config!)
+           (.then (fn [{:keys [decks models tags]}]
+                    (reset! !decks decks)
+                    (reset! !models models)
+                    (reset! !all-tags tags)
+                    (when (seq decks) (reset! !selected-deck (first decks)))
+                    (when (seq models)
+                      (reset! !basic-model (first models))
+                      (reset! !cloze-model (first models)))
+                    (reset! !status :connected)))
+           (.catch (fn [err]
+                     (reset! !error (str "Cannot connect to Anki: " (.-message err)))
+                     (reset! !status :error))))
+       :clj nil)))
 
 (defn run-fetch-fields!
   "Fetch model field names from Anki and store in atom."
@@ -209,40 +214,45 @@
      :clj nil))
 
 (defn run-push!
-  "Execute push to Anki and update state atoms with results."
-  [cards deck basic-model cloze-model basic-fields cloze-fields
-   allow-dupes use-header header-text tags !sync-result !push-pairs !sync-error !sync-phase]
-  #?(:cljs
-     (-> (do-anki-push! cards deck basic-model cloze-model
-           basic-fields cloze-fields allow-dupes use-header header-text tags)
-         (.then (fn [result]
-                  (reset! !sync-result result)
-                  (if (seq (:pairs result))
-                    (do (reset! !push-pairs (:pairs result))
-                        (reset! !sync-phase :recording))
-                    (reset! !sync-phase :done))))
-         (.catch (fn [err]
-                   (reset! !sync-error (.-message err))
-                   (reset! !sync-phase :error))))
-     :clj nil))
+  "Execute push to Anki and update state atoms with results.
+   settings = {:deck :basic-model :cloze-model :basic-fields :cloze-fields
+               :allow-dupes :use-header :header-text :tags}
+   sync     = {:!phase :!result :!error :!push-pairs :!pull-updates}"
+  [cards settings sync]
+  (let [{:keys [!phase !result !error !push-pairs]} sync]
+    #?(:cljs
+       (-> (do-anki-push! cards settings)
+           (.then (fn [result]
+                    (reset! !result result)
+                    (if (seq (:pairs result))
+                      (do (reset! !push-pairs (:pairs result))
+                          (reset! !phase :recording))
+                      (reset! !phase :done))))
+           (.catch (fn [err]
+                     (reset! !error (.-message err))
+                     (reset! !phase :error))))
+       :clj nil)))
 
 (defn run-pull!
-  "Execute pull from Anki and update state atoms with results."
-  [cards basic-fields cloze-fields
-   !sync-result !pull-updates !sync-error !sync-phase]
-  #?(:cljs
-     (-> (do-anki-pull! cards basic-fields cloze-fields)
-         (.then (fn [result]
-                  (if (empty? (:updates result))
-                    (do (reset! !sync-result result)
-                        (reset! !sync-phase :done))
-                    (do (reset! !sync-result result)
-                        (reset! !pull-updates (:updates result))
-                        (reset! !sync-phase :recording)))))
-         (.catch (fn [err]
-                   (reset! !sync-error (.-message err))
-                   (reset! !sync-phase :error))))
-     :clj nil))
+  "Execute pull from Anki and update state atoms with results.
+   settings = {:basic-fields :cloze-fields ...}
+   sync     = {:!phase :!result :!error :!push-pairs :!pull-updates}"
+  [cards settings sync]
+  (let [{:keys [basic-fields cloze-fields]} settings
+        {:keys [!phase !result !error !pull-updates]} sync]
+    #?(:cljs
+       (-> (do-anki-pull! cards basic-fields cloze-fields)
+           (.then (fn [result]
+                    (if (empty? (:updates result))
+                      (do (reset! !result result)
+                          (reset! !phase :done))
+                      (do (reset! !result result)
+                          (reset! !pull-updates (:updates result))
+                          (reset! !phase :recording)))))
+           (.catch (fn [err]
+                     (reset! !error (.-message err))
+                     (reset! !phase :error))))
+       :clj nil)))
 
 (defn escape-key?
   "Cross-platform Escape key check for DOM key events."

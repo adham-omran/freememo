@@ -9,75 +9,47 @@
    [electric-starter-app.anki-sync-panels :as panels]))
 
 (e/defn AnkiSyncInnerBody
-  "Form-config state (scope, fields, options, tags) + delegate to AnkiSyncSyncBody."
-  [user-id selected-doc current-pdf-page !refresh !show-modal
-   conn-status conn-error decks models selected-deck basic-model cloze-model all-tags
-   !conn-status !conn-error !decks !models !selected-deck !basic-model !cloze-model !all-tags]
+  "Form-config state (scope, fields, options, tags) + delegate to AnkiSyncSyncBody.
+   conn = {:!status :!error :!decks :!models :!selected-deck :!basic-model :!cloze-model :!all-tags}"
+  [user-id selected-doc current-pdf-page !refresh !show-modal conn]
   (e/client
-    (let [!basic-fields (atom [])
-          basic-fields  (e/watch !basic-fields)
-          !cloze-fields (atom [])
-          cloze-fields  (e/watch !cloze-fields)
-          !scope        (atom "Current Page")
-          scope         (e/watch !scope)
-          !allow-dupes  (atom false)
-          allow-dupes   (e/watch !allow-dupes)
-          !use-header   (atom false)
-          use-header    (e/watch !use-header)
-          !header-text  (atom "")
-          header-text   (e/watch !header-text)
-          !use-tags     (atom false)
-          use-tags      (e/watch !use-tags)
-          !tags         (atom [])
-          tags          (e/watch !tags)]
+    (let [form {:!scope        (atom "Current Page")
+                :!allow-dupes  (atom false)
+                :!use-header   (atom false)
+                :!header-text  (atom "")
+                :!use-tags     (atom false)
+                :!tags         (atom [])
+                :!basic-fields (atom [])
+                :!cloze-fields (atom [])}]
       (panels/AnkiSyncSyncBody
-        user-id selected-doc current-pdf-page !refresh !show-modal
-        conn-status conn-error decks models selected-deck basic-model cloze-model all-tags
-        !conn-status !conn-error !decks !models !selected-deck !basic-model !cloze-model !all-tags
-        basic-fields cloze-fields !basic-fields !cloze-fields
-        scope allow-dupes use-header header-text use-tags tags
-        !scope !allow-dupes !use-header !header-text !use-tags !tags))))
+        user-id selected-doc current-pdf-page !refresh !show-modal conn form))))
 
 (e/defn AnkiSyncModalBody
-  "Watches outer connection atoms and delegates to AnkiSyncInnerBody."
-  [user-id selected-doc current-pdf-page !refresh !show-modal
-   !conn-status !conn-error !decks !models !selected-deck !basic-model !cloze-model !all-tags]
-  (e/client
-    (let [conn-status   (e/watch !conn-status)
-          conn-error    (e/watch !conn-error)
-          decks         (e/watch !decks)
-          models        (e/watch !models)
-          selected-deck (e/watch !selected-deck)
-          basic-model   (e/watch !basic-model)
-          cloze-model   (e/watch !cloze-model)
-          all-tags      (e/watch !all-tags)]
-      (AnkiSyncInnerBody
-        user-id selected-doc current-pdf-page !refresh !show-modal
-        conn-status conn-error decks models selected-deck basic-model cloze-model all-tags
-        !conn-status !conn-error !decks !models !selected-deck !basic-model !cloze-model !all-tags))))
+  "Delegates to AnkiSyncInnerBody — split point to stay below JVM 64KB method limit.
+   conn = {:!status :!error :!decks :!models :!selected-deck :!basic-model :!cloze-model :!all-tags}"
+  [user-id selected-doc current-pdf-page !refresh !show-modal conn]
+  (AnkiSyncInnerBody user-id selected-doc current-pdf-page !refresh !show-modal conn))
 
 (e/defn AnkiSyncModal
   "Connection/selection atoms + config-fetch token; delegates to AnkiSyncModalBody."
   [user-id selected-doc current-pdf-page card-type !refresh !show-modal]
   (e/client
-    (let [!conn-status (atom :connecting)
-          !conn-error (atom nil)
-          !decks (atom [])
-          !models (atom [])
-          !selected-deck (atom nil)
-          !basic-model (atom nil)
-          !cloze-model (atom nil)
-          !all-tags (atom [])]
+    (let [conn {:!status        (atom :connecting)
+                :!error         (atom nil)
+                :!decks         (atom [])
+                :!models        (atom [])
+                :!selected-deck (atom nil)
+                :!basic-model   (atom nil)
+                :!cloze-model   (atom nil)
+                :!all-tags      (atom [])}]
 
       ;; On mount: fetch decks, models, and tags
       (let [[?token _] (e/Token :anki-sync-fetch-config)]
         (when-some [token ?token]
-          (helpers/run-fetch-config! !decks !models !selected-deck !basic-model !cloze-model
-            !all-tags !conn-status !conn-error)
+          (helpers/run-fetch-config! conn)
           (token)))
 
-      (AnkiSyncModalBody user-id selected-doc current-pdf-page !refresh !show-modal
-        !conn-status !conn-error !decks !models !selected-deck !basic-model !cloze-model !all-tags))))
+      (AnkiSyncModalBody user-id selected-doc current-pdf-page !refresh !show-modal conn))))
 
 (e/defn AnkiSyncButton [user-id selected-doc current-pdf-page card-type !refresh]
   (e/client
