@@ -193,7 +193,9 @@
                         ;; On PDF loaded
                         (reset! !total (.-numPages pdf))
                         ;; Listen for page changes from PDF.js
-                        (viewer/on-page-change! (fn [page-num] (reset! !page page-num)))
+                        (viewer/on-page-change! (fn [page-num]
+                                                  (reset! !page page-num)
+                                                  (when on-navigate! (on-navigate! page-num))))
                         ;; Jump to initial page after pages are rendered
                         (when (and initial-page (> initial-page 1))
                           (viewer/go-to-page-after-load! initial-page))))))
