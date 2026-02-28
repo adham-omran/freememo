@@ -206,3 +206,41 @@
             all-tags !use-tags !tags
             sync-phase sync-result sync-error !show-modal !sync-phase !sync-result !sync-error
             !push-pairs !pull-updates))))))
+
+(e/defn AnkiSyncSyncBody
+  "Sync state, field-fetch tokens, executor, and modal DOM."
+  [user-id selected-doc current-pdf-page !refresh !show-modal
+   conn-status conn-error decks models selected-deck basic-model cloze-model all-tags
+   !conn-status !conn-error !decks !models !selected-deck !basic-model !cloze-model !all-tags
+   basic-fields cloze-fields !basic-fields !cloze-fields
+   scope allow-dupes use-header header-text use-tags tags
+   !scope !allow-dupes !use-header !header-text !use-tags !tags]
+  (e/client
+    (let [!sync-phase   (atom nil)
+          sync-phase    (e/watch !sync-phase)
+          !sync-result  (atom nil)
+          sync-result   (e/watch !sync-result)
+          !sync-error   (atom nil)
+          sync-error    (e/watch !sync-error)
+          !push-pairs   (atom nil)
+          !pull-updates (atom nil)]
+      (let [[?token _] (e/Token [:anki-sync-basic-fields conn-status basic-model])]
+        (when (and basic-model (= conn-status :connected))
+          (when-some [token ?token]
+            (helpers/run-fetch-fields! basic-model !basic-fields)
+            (token))))
+      (let [[?token _] (e/Token [:anki-sync-cloze-fields conn-status cloze-model])]
+        (when (and cloze-model (= conn-status :connected))
+          (when-some [token ?token]
+            (helpers/run-fetch-fields! cloze-model !cloze-fields)
+            (token))))
+      (AnkiSyncExecutor user-id sync-phase scope selected-doc current-pdf-page selected-deck
+        basic-model cloze-model basic-fields cloze-fields allow-dupes use-header header-text
+        use-tags tags
+        !sync-phase !sync-result !sync-error !push-pairs !pull-updates !refresh)
+      (AnkiSyncModalDom user-id sync-phase !show-modal conn-status conn-error
+        decks models !scope !selected-deck !basic-model !cloze-model
+        basic-fields cloze-fields !allow-dupes !use-header !header-text
+        all-tags !use-tags !tags sync-result sync-error
+        !sync-phase !sync-result !sync-error !push-pairs !pull-updates
+        !conn-status !conn-error !decks !models !all-tags))))
