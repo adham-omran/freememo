@@ -194,9 +194,9 @@
                         (reset! !total (.-numPages pdf))
                         ;; Listen for page changes from PDF.js
                         (viewer/on-page-change! (fn [page-num] (reset! !page page-num)))
-                        ;; Jump to initial page if provided
+                        ;; Jump to initial page after pages are rendered
                         (when (and initial-page (> initial-page 1))
-                          (viewer/go-to-page! initial-page))))))
+                          (viewer/go-to-page-after-load! initial-page))))))
                 100)))))
 
       ;; Return current page number for OCR integration
