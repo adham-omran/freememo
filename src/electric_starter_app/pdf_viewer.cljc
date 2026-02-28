@@ -63,6 +63,16 @@
              (let [^js v viewer]
                (set! (.-currentScale v) scale)))))
 
+(defn go-to-page-after-load!
+  "Navigate to page once PDF.js fires pagesloaded (pages not ready at setDocument time)."
+  [page-num]
+  #?(:clj nil
+     :cljs (when-let [{:keys [event-bus]} @!viewer-state]
+             (let [^js eb event-bus]
+               (.on eb "pagesloaded"
+                    (fn [] (go-to-page! page-num))
+                    (clj->js {:once true}))))))
+
 (defn on-page-change!
   "Register a callback for PDF.js page change events."
   [callback]
