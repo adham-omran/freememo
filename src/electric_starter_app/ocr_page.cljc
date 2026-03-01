@@ -10,6 +10,7 @@
    [electric-starter-app.rich-text-editor :as editor]
    [clojure.string :as str]
    [electric-starter-app.anki-sync :refer [AnkiSyncButton]]
+   [electric-starter-app.components :refer [Typeahead]]
    #?(:clj [electric-starter-app.page :as page])
    #?(:clj [electric-starter-app.pdf :as pdf])
    #?(:clj [electric-starter-app.cards :as cards])
@@ -792,22 +793,7 @@
                                 (dom/props {:style {:display "block" :margin-bottom "8px" :font-size "14px"}})
                                 (dom/text "Pre-prompt (will be added to the system prompt):"))
                               (let [prompt-history (e/watch !prompt-history)]
-                                (dom/input
-                                  (dom/props {:type "text"
-                                              :list "prompt-history-list"
-                                              :value local-prompt
-                                              :placeholder "e.g., Focus on accounting terminology..."
-                                              :style {:width "100%" :padding "8px" :border "1px solid #ccc"
-                                                      :border-radius "4px" :font-size "15px" :box-sizing "border-box"}})
-                                  (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-                                    (when (some? ev) (reset! !local-prompt ev)))
-                                  (e/client (js/setTimeout #(.focus dom/node) 50)))
-                                (dom/datalist
-                                  (dom/props {:id "prompt-history-list"})
-                                  (e/client
-                                    (set! (.-innerHTML dom/node)
-                                      (str/join "" (map #(str "<option value=\"" % "\"></option>")
-                                                     (take 20 prompt-history))))))))
+                                (Typeahead !local-prompt (take 20 prompt-history) "e.g., Focus on accounting terminology...")))
 
                             (dom/div
                               (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "12px"}})
