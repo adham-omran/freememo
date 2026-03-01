@@ -77,7 +77,7 @@
       settings = {:deck :basic-model :cloze-model :basic-fields :cloze-fields
                   :allow-dupes :use-header :header-text :tags}"
      [cards settings]
-     (let [{:keys [basic-fields cloze-fields use-header header-text]} settings
+     (let [{:keys [basic-fields cloze-fields use-header header-text tags]} settings
            new-cards (filter #(nil? (:flashcards/anki_note_id %)) cards)
            existing-cards (filter #(some? (:flashcards/anki_note_id %)) cards)]
        (->
@@ -117,9 +117,10 @@
                                        {(first fields) (prepend-header (or (:flashcards/question card) "") use-header header-text)
                                         (second fields) (or (:flashcards/answer card) "")}
                                        {(first fields) (prepend-header (or (:flashcards/cloze card) "") use-header header-text)})]
-                       (-> (anki-call! "updateNoteFields"
+                       (-> (anki-call! "updateNote"
                              {:note {:id (:flashcards/anki_note_id card)
-                                     :fields field-map}})
+                                     :fields field-map
+                                     :tags tags}})
                            (.then (fn [_]
                                     (-> result
                                         (update :updated inc)

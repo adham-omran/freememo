@@ -76,7 +76,15 @@
                         :style {:border "none" :outline "none" :font-size "14px"
                                 :flex "1" :min-width "80px" :padding "2px"}})
             (dom/On "focus" (fn [_] (reset! !focused true)) nil)
-            (dom/On "blur" (fn [_] (reset! !focused false)) nil)
+            (dom/On "blur"
+              (fn [_]
+                (reset! !focused false)
+                (let [val (string/trim @!search)]
+                  (when (seq val)
+                    (when-not (some #{val} @!tags)
+                      (swap! !tags conj val))
+                    (reset! !search ""))))
+              nil)
             (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
               (when (some? v) (reset! !search v)))
             (dom/On "keydown"
