@@ -40,7 +40,9 @@
            basic
            (when context (str "\n\n" context))
            "\n\n# Instructions\n\n"
-           "Generate " card-count " flashcards from the provided text."))))
+           "Generate EXACTLY " card-count " flashcards from the provided text. "
+           "Return EXACTLY " card-count " items in the EDN vector — no more, no fewer. "
+           "Do not exceed this count even if the content seems to warrant more cards."))))
 
 (defn build-cloze-prompt
   "Build prompt for cloze deletion cards.
@@ -60,7 +62,9 @@
            cloze
            (when context (str "\n\n" context))
            "\n\n# Instructions\n\n"
-           "Generate " card-count " flashcards from the provided text."))))
+           "Generate EXACTLY " card-count " flashcards from the provided text. "
+           "Return EXACTLY " card-count " items in the EDN vector — no more, no fewer. "
+           "Do not exceed this count even if the content seems to warrant more cards."))))
 
 ;; Context retrieval
 (defn get-context-pages

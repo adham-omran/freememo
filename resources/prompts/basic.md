@@ -11,4 +11,4 @@
 - Return your output as a sequence of Clojure/EDN maps `[{:q " ", :a " "}]`
 - Output only basic cards
 - For basic cards the map is `{:q "" :a ""}` where `q` is the question text and `a` is the answer text
-- Answers MUST be SHORT per rule 1, they should be under 10 words, if an answer is found to be more than 10 words, break it into multiple questions
+- Answers MUST be SHORT per rule 1, they should be under 10 words; if a candidate answer exceeds 10 words, shorten it rather than splitting into extra cards
