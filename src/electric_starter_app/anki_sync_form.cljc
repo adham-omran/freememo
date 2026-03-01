@@ -4,25 +4,55 @@
   (:require
    [clojure.string :as string]
    [hyperfiddle.electric3 :as e]
-   [hyperfiddle.electric-dom3 :as dom]))
+   [hyperfiddle.electric-dom3 :as dom]
+   [hyperfiddle.electric-scroll0 :refer [Repaint]]))
 
 (e/defn AnkiSyncModelSelect
-  "Reusable model dropdown with field mapping hint."
+  "Reusable model typeahead with field mapping hint."
   [label !model models field-hint]
   (e/client
-    (let [model (e/watch !model)]
+    (let [model    (e/watch !model)
+          !search  (atom nil)
+          search   (e/watch !search)
+          filtered (when (some? search)
+                     (vec (filter #(string/includes? (string/lower-case %)
+                                                     (string/lower-case search))
+                                  models)))]
       (dom/div
-        (dom/props {:style {:margin-bottom "12px"}})
+        (dom/props {:style {:margin-bottom "12px" :position "relative"}})
         (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
           (dom/text label))
-        (dom/select
-          (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
-                              :font-size "15px" :width "100%"}
-                      :value (or model "")})
-          (e/for [m (e/diff-by {} models)]
-            (dom/option (dom/props {:value m}) (dom/text m)))
-          (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
-            (when (some? v) (reset! !model v))))
+        (dom/input
+          (dom/props {:type "text"
+                      :value (if (some? search) search (or model ""))
+                      :placeholder "Start typing..."
+                      :style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
+                              :font-size "15px" :width "100%" :box-sizing "border-box"}})
+          (dom/On "focus" (fn [_] (reset! !search (or model ""))) nil)
+          (dom/On "blur"  (fn [_] (reset! !search nil)) nil)
+          (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
+            (when (some? v)
+              (reset! !search v)
+              (reset! !model v))))
+        (when (seq filtered)
+          (dom/div
+            (dom/props {:style {:position "absolute" :top "100%" :left "0" :right "0"
+                                :background "white" :border "1px solid #ccc"
+                                :border-radius "4px" :z-index "100"
+                                :box-shadow "0 2px 4px rgba(0,0,0,0.15)"
+                                :max-height "200px" :overflow-y "auto"}})
+            (e/for [m (e/diff-by {} filtered)]
+              (dom/div
+                (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "15px"}
+                            :onmouseover "this.style.background='#f0f0f0'"
+                            :onmouseout "this.style.background=''"})
+                (dom/text m)
+                (dom/On "mousedown"
+                  (fn [e]
+                    (.preventDefault e)
+                    (reset! !model m)
+                    (reset! !search nil))
+                  nil)))))
         (when (seq field-hint)
           (dom/div
             (dom/props {:style {:font-size "13px" :color "#666" :margin-top "4px"}})
@@ -204,17 +234,46 @@
 
       ;; Deck
       (dom/div
-        (dom/props {:style {:margin-bottom "12px"}})
+        (dom/props {:style {:margin-bottom "12px" :position "relative"}})
         (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
           (dom/text "Deck"))
-        (dom/select
-          (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
-                              :font-size "15px" :width "100%"}
-                      :value (or selected-deck "")})
-          (e/for [d (e/diff-by {} decks)]
-            (dom/option (dom/props {:value d}) (dom/text d)))
-          (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
-            (when (some? v) (reset! (:!selected-deck conn) v)))))
+        (let [!deck-search   (atom nil)
+              deck-search    (e/watch !deck-search)
+              filtered-decks (when (some? deck-search)
+                               (vec (filter #(string/includes? (string/lower-case %)
+                                                               (string/lower-case deck-search))
+                                            decks)))]
+          (dom/input
+            (dom/props {:type "text"
+                        :value (if (some? deck-search) deck-search (or selected-deck ""))
+                        :placeholder "Start typing deck name..."
+                        :style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
+                                :font-size "15px" :width "100%" :box-sizing "border-box"}})
+            (dom/On "focus" (fn [_] (reset! !deck-search (or selected-deck ""))) nil)
+            (dom/On "blur"  (fn [_] (reset! !deck-search nil)) nil)
+            (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
+              (when (some? v)
+                (reset! !deck-search v)
+                (reset! (:!selected-deck conn) v))))
+          (when (seq filtered-decks)
+            (dom/div
+              (dom/props {:style {:position "absolute" :top "100%" :left "0" :right "0"
+                                  :background "white" :border "1px solid #ccc"
+                                  :border-radius "4px" :z-index "100"
+                                  :box-shadow "0 2px 4px rgba(0,0,0,0.15)"
+                                  :max-height "200px" :overflow-y "auto"}})
+              (e/for [d (e/diff-by {} filtered-decks)]
+                (dom/div
+                  (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "15px"}
+                              :onmouseover "this.style.background='#f0f0f0'"
+                              :onmouseout "this.style.background=''"})
+                  (dom/text d)
+                  (dom/On "mousedown"
+                    (fn [e]
+                      (.preventDefault e)
+                      (reset! (:!selected-deck conn) d)
+                      (reset! !deck-search nil))
+                    nil)))))))
 
       ;; Note Type selectors
       (AnkiSyncModelSelect "Note Type (Basic)" (:!basic-model conn) models
