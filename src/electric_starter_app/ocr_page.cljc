@@ -853,8 +853,35 @@
                           (dom/props {:style {:background "white" :border-radius "8px" :padding "24px"
                                               :width "460px" :box-shadow "0 4px 20px rgba(0,0,0,0.25)"
                                               :pointer-events "auto"}})
-                          ;; Repurpose stopPropagation handler: starts drag when pointerdown on h3
-                          (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+                          ;; Repurposed: pointerdown on h3 starts drag; other targets ignored
+                          (dom/On "pointerdown"
+                            (fn [e]
+                              #?(:cljs
+                                 (let [inner  (.-currentTarget e)
+                                       h3     (.querySelector inner "h3")]
+                                   (when (and h3 (or (= (.-target e) h3)
+                                                     (.contains h3 (.-target e))))
+                                     (.preventDefault e)
+                                     (let [rect    (.getBoundingClientRect inner)
+                                           sx      (.-clientX e)
+                                           sy      (.-clientY e)
+                                           px      (.-left rect)
+                                           py      (.-top rect)
+                                           move-fn (fn [me]
+                                                     (set! (.-position (.-style inner)) "fixed")
+                                                     (set! (.-left (.-style inner))
+                                                           (str (+ px (- (.-clientX me) sx)) "px"))
+                                                     (set! (.-top (.-style inner))
+                                                           (str (+ py (- (.-clientY me) sy)) "px"))
+                                                     (set! (.-margin (.-style inner)) "0"))
+                                           up-fn   (fn self [ue]
+                                                     (.releasePointerCapture inner (.-pointerId ue))
+                                                     (.removeEventListener inner "pointermove" move-fn)
+                                                     (.removeEventListener inner "pointerup" self))]
+                                       (.setPointerCapture inner (.-pointerId e))
+                                       (.addEventListener inner "pointermove" move-fn)
+                                       (.addEventListener inner "pointerup" up-fn))))))
+                            nil)
                           (dom/h3 (dom/props {:style {:margin-top "0" :cursor "move" :user-select "none"
                                                       :padding-bottom "8px" :margin-bottom "12px"
                                                       :border-bottom "1px solid #ddd"}})
