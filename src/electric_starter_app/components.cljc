@@ -11,13 +11,15 @@
    placeholder — input placeholder text"
   [!atom options placeholder]
   (e/client
-    (let [value    (e/watch !atom)
-          !search  (atom nil)
-          search   (e/watch !search)
-          filtered (when (some? search)
-                     (vec (filter #(string/includes? (string/lower-case %)
-                                                     (string/lower-case search))
-                                  options)))]
+    (let [value       (e/watch !atom)
+          !search     (atom nil)
+          search      (e/watch !search)
+          !active-idx (atom -1)
+          active-idx  (e/watch !active-idx)
+          filtered    (when (some? search)
+                        (vec (take 5 (filter #(string/includes? (string/lower-case %)
+                                                                (string/lower-case search))
+                                             options))))]
       (dom/div
         (dom/props {:style {:position "relative"}})
         (dom/input
@@ -26,28 +28,54 @@
                       :placeholder placeholder
                       :style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
                               :font-size "15px" :width "100%" :box-sizing "border-box"}})
-          (dom/On "focus" (fn [_] (reset! !search (or value ""))) nil)
-          (dom/On "blur"  (fn [_] (reset! !search nil)) nil)
+          (dom/On "focus" (fn [_] (reset! !search (or value ""))
+                                  (reset! !active-idx -1)) nil)
+          (dom/On "blur"  (fn [_] (reset! !search nil)
+                                  (reset! !active-idx -1)) nil)
           (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
             (when (some? v)
               (reset! !search v)
-              (reset! !atom v))))
+              (reset! !atom v)
+              (reset! !active-idx -1)))
+          (dom/On "keydown"
+            (fn [e]
+              (let [key (.-key e)
+                    n   (count filtered)]
+                (cond
+                  (= key "ArrowDown")
+                  (do (.preventDefault e)
+                      (reset! !active-idx (mod (inc active-idx) n)))
+                  (= key "ArrowUp")
+                  (do (.preventDefault e)
+                      (reset! !active-idx (mod (dec active-idx) n)))
+                  (and (= key "Enter") (>= active-idx 0))
+                  (do (.preventDefault e)
+                      (reset! !atom (nth filtered active-idx))
+                      (reset! !search nil)
+                      (reset! !active-idx -1))
+                  (= key "Escape")
+                  (do (reset! !search nil)
+                      (reset! !active-idx -1)))))
+            nil))
         (when (seq filtered)
           (dom/div
             (dom/props {:style {:position "absolute" :top "100%" :left "0" :right "0"
                                 :background "white" :border "1px solid #ccc"
                                 :border-radius "4px" :z-index "100"
-                                :box-shadow "0 2px 4px rgba(0,0,0,0.15)"
-                                :max-height "200px" :overflow-y "auto"}})
-            (e/for [item (e/diff-by {} filtered)]
+                                :box-shadow "0 2px 4px rgba(0,0,0,0.15)"}})
+            (e/for [[i item] (e/diff-by {} (map-indexed vector filtered))]
               (dom/div
-                (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "15px"}
-                            :onmouseover "this.style.background='#f0f0f0'"
-                            :onmouseout "this.style.background=''"})
+                (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "15px"
+                                    :background (cond
+                                                  (= i active-idx) "#d0e8ff"
+                                                  (odd? i)         "#f9f9f9"
+                                                  :else            "white")}})
                 (dom/text item)
+                (dom/On "mousemove" (fn [_] (reset! !active-idx i)) nil)
                 (dom/On "mousedown"
                   (fn [e]
                     (.preventDefault e)
                     (reset! !atom item)
-                    (reset! !search nil))
+                    (reset! !search nil)
+                    (reset! !active-idx -1))
                   nil)))))))))
