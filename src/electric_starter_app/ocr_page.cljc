@@ -818,7 +818,7 @@
                       !editing-card (atom nil)
                       editing-card (e/watch !editing-card)]
 
-                  ;; Edit modal (inline, following export modal pattern)
+                  ;; Edit modal — floating panel (no backdrop, draggable via h3 title)
                   (when editing-card
                     (let [_ (println "MODAL editing-card:" (pr-str editing-card))
                           card-id (:id editing-card)
@@ -834,23 +834,30 @@
                           answer (e/watch !answer)
                           cloze (e/watch !cloze)
                           _ (println "MODAL watched values q:" (pr-str question) "a:" (pr-str answer) "c:" (pr-str cloze))]
+                      ;; Invisible overlay — pointer-events:none so content below stays interactive
                       (dom/div
                         (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
-                                            :background "rgba(0,0,0,0.5)" :display "flex" :align-items "center"
-                                            :justify-content "center" :z-index "1000"}
+                                            :background "transparent" :display "flex" :align-items "flex-start"
+                                            :justify-content "flex-end" :z-index "1000"
+                                            :pointer-events "none" :padding "80px 20px"}
                                     :tabindex "-1"})
-                        (dom/On "click" (fn [_] (reset! !editing-card nil)) nil)
+                        (dom/On "click" (fn [_] nil) nil)
                         (dom/On "keydown"
                           (fn [e]
                             #?(:cljs
                                (when (= (.-key e) "Escape")
                                  (reset! !editing-card nil))))
                           nil)
+                        ;; Floating panel — pointer-events:auto for interaction
                         (dom/div
                           (dom/props {:style {:background "white" :border-radius "8px" :padding "24px"
-                                              :width "500px" :box-shadow "0 4px 6px rgba(0,0,0,0.1)"}})
+                                              :width "460px" :box-shadow "0 4px 20px rgba(0,0,0,0.25)"
+                                              :pointer-events "auto"}})
+                          ;; Repurpose stopPropagation handler: starts drag when pointerdown on h3
                           (dom/On "click" (fn [e] (.stopPropagation e)) nil)
-                          (dom/h3 (dom/props {:style {:margin-top "0"}})
+                          (dom/h3 (dom/props {:style {:margin-top "0" :cursor "move" :user-select "none"
+                                                      :padding-bottom "8px" :margin-bottom "12px"
+                                                      :border-bottom "1px solid #ddd"}})
                             (dom/text "Edit " (if (= kind "basic") "Basic" "Cloze") " Card"))
 
                           ;; Fields based on kind
