@@ -33,6 +33,7 @@
 (def ANKI_USE_HEADER "anki_use_header")
 (def ANKI_HEADER_TEXT "anki_header_text")
 (def LAST_DOCUMENT "last_document")
+(def PRE_PROMPT_HISTORY "pre_prompt_history")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
 
 ;; Get functions
@@ -219,6 +220,30 @@
     (catch Exception e
       (println "ERROR [save-last-page]:" (.getMessage e))
       {:success false})))
+
+(defn add-to-history [history new-prompt]
+  (->> (cons new-prompt history)
+       (distinct)
+       (take 50)
+       (vec)))
+
+(defn get-pre-prompt-history [user-id]
+  (try
+    (let [raw (db/get-setting user-id PRE_PROMPT_HISTORY)]
+      (if (seq raw)
+        (vec (remove str/blank? (str/split-lines raw)))
+        []))
+    (catch Exception e
+      (println "ERROR [get-pre-prompt-history]:" (.getMessage e))
+      [])))
+
+(defn save-pre-prompt-history [user-id history-vec]
+  (try
+    (db/set-setting user-id PRE_PROMPT_HISTORY (str/join "\n" history-vec))
+    {:success true}
+    (catch Exception e
+      (println "ERROR [save-pre-prompt-history]:" (.getMessage e))
+      {:success false :error "Failed to save prompt history"})))
 
 (defn save-anki-sync-settings [user-id {:keys [scope deck basic-model cloze-model allow-dupes use-header header-text]}]
   (try

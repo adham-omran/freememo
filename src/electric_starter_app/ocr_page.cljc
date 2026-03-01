@@ -376,6 +376,7 @@
                         server-context-pages (e/server (settings/get-context-pages user-id))
                         server-card-type (e/server (settings/get-card-type user-id))
                         server-card-count (e/server (settings/get-card-count user-id))
+                        server-prompt-history (e/server (settings/get-pre-prompt-history user-id))
 
                         ;; Initialize atoms with server values
                         !use-context (atom server-context-enabled)
@@ -385,7 +386,15 @@
                         !card-type (atom server-card-type)
                         card-type (e/watch !card-type)
                         !card-count (atom server-card-count)
-                        card-count-val (e/watch !card-count)]
+                        card-count-val (e/watch !card-count)
+                        !prompt-history (atom server-prompt-history)
+                        ;; Trigger for persisting history to server (set to new history vec on generate)
+                        !history-save-trigger (atom nil)
+                        history-save-trigger (e/watch !history-save-trigger)]
+
+                    ;; Persist prompt history to server when Generate is clicked
+                    (when (some? history-save-trigger)
+                      (e/server (settings/save-pre-prompt-history user-id history-save-trigger)))
 
                     (dom/div
                       (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
@@ -782,15 +791,23 @@
                               (dom/label
                                 (dom/props {:style {:display "block" :margin-bottom "8px" :font-size "14px"}})
                                 (dom/text "Pre-prompt (will be added to the system prompt):"))
-                              (dom/input
-                                (dom/props {:type "text"
-                                            :value local-prompt
-                                            :placeholder "e.g., Focus on accounting terminology..."
-                                            :style {:width "100%" :padding "8px" :border "1px solid #ccc"
-                                                    :border-radius "4px" :font-size "15px" :box-sizing "border-box"}})
-                                (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-                                  (when (some? ev) (reset! !local-prompt ev)))
-                                (e/client (js/setTimeout #(.focus dom/node) 50))))
+                              (let [prompt-history (e/watch !prompt-history)]
+                                (dom/input
+                                  (dom/props {:type "text"
+                                              :list "prompt-history-list"
+                                              :value local-prompt
+                                              :placeholder "e.g., Focus on accounting terminology..."
+                                              :style {:width "100%" :padding "8px" :border "1px solid #ccc"
+                                                      :border-radius "4px" :font-size "15px" :box-sizing "border-box"}})
+                                  (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
+                                    (when (some? ev) (reset! !local-prompt ev)))
+                                  (e/client (js/setTimeout #(.focus dom/node) 50)))
+                                (dom/datalist
+                                  (dom/props {:id "prompt-history-list"})
+                                  (e/client
+                                    (set! (.-innerHTML dom/node)
+                                      (str/join "" (map #(str "<option value=\"" % "\"></option>")
+                                                     (take 20 prompt-history))))))))
 
                             (dom/div
                               (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "12px"}})
@@ -810,6 +827,13 @@
                                 (dom/On "click"
                                   (fn [_]
                                     (reset! !pre-prompt local-prompt)
+                                    (when (seq local-prompt)
+                                      (let [new-history (->> (cons local-prompt @!prompt-history)
+                                                             (distinct)
+                                                             (take 50)
+                                                             (vec))]
+                                        (reset! !prompt-history new-history)
+                                        (reset! !history-save-trigger new-history)))
                                     (swap! !prompt-gen-state update :queue conj
                                       {:id        (str (random-uuid))
                                        :selection captured-selection
