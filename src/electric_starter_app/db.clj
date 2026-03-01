@@ -206,13 +206,16 @@
       false)))  ; Page doesn't exist yet -> false
 
 (defn toggle-page-done
-  "Toggle the is_done status for a specific page. Returns update count.
-   Uses atomic SQL CASE toggle: true -> false, anything else -> true"
+  "Toggle the is_done status for a specific page.
+   Upserts the row so it works even if text has never been extracted."
   [document-id page-number]
   (jdbc/execute-one! ds
-    ["UPDATE pages
-      SET is_done = CASE WHEN is_done = true THEN false ELSE true END
-      WHERE document_id = ? AND page_number = ?"
+    ["INSERT INTO pages (document_id, page_number, is_done, updated_at)
+      VALUES (?, ?, true, CURRENT_TIMESTAMP)
+      ON CONFLICT (document_id, page_number)
+      DO UPDATE SET
+        is_done = CASE WHEN pages.is_done = true THEN false ELSE true END,
+        updated_at = CURRENT_TIMESTAMP"
      document-id page-number]))
 
 ;; Flashcard queries
