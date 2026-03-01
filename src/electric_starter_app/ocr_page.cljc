@@ -278,14 +278,19 @@
                     (dom/label
                       (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "14px" :cursor "pointer"}
                                   :title "Mark this page as completed to track your extraction progress"})
-                      (dom/input
-                        (dom/props {:type "checkbox" :checked is-done})
-                        (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
-                              [?token ?error] (e/Token change-event)]
-                          (when-some [token ?token]
-                            (e/server (db/toggle-page-done selected-doc current-pdf-page))
-                            (e/server (swap! !refresh inc))
-                            (token))))
+                      (e/for-by identity [_page [current-pdf-page]]
+                        (dom/input
+                          (dom/props {:type "checkbox"})
+                          (set! (.-checked dom/node) is-done)
+                          (let [change-event (dom/On "change"
+                                               (fn [e] {:checked (-> e .-target .-checked)
+                                                        :page current-pdf-page})
+                                               nil)
+                                [?token ?error] (e/Token change-event)]
+                            (when-some [token ?token]
+                              (e/server (db/toggle-page-done selected-doc (:page change-event)))
+                              (e/server (swap! !refresh inc))
+                              (token)))))
                       (dom/text "Done"))
 
                     (let [extracting? (contains? extracting-pages [selected-doc current-pdf-page])]
