@@ -25,20 +25,27 @@
   "Multi-tag input with chip display and autocomplete from all-tags."
   [!tags all-tags]
   (e/client
-    (let [tags (e/watch !tags)
-          !search (atom "")
-          search (e/watch !search)
-          !focused (atom false)
-          focused (e/watch !focused)
-          filtered (when (and focused (seq search))
-                     (->> all-tags
-                       (filter (fn [t]
-                                 (and (string/includes?
-                                        (string/lower-case t)
-                                        (string/lower-case search))
-                                      (not (some #{t} tags)))))
-                       (take 10)
-                       vec))]
+    (let [tags        (e/watch !tags)
+          !search     (atom "")
+          search      (e/watch !search)
+          !focused    (atom false)
+          focused     (e/watch !focused)
+          !active-idx (atom -1)
+          active-idx  (e/watch !active-idx)
+          filtered    (when (and focused (seq search))
+                        (->> all-tags
+                          (filter (fn [t]
+                                    (and (string/includes?
+                                           (string/lower-case t)
+                                           (string/lower-case search))
+                                         (not (some #{t} tags)))))
+                          (take 5)
+                          vec))
+          add-tag!    (fn [t]
+                        (when-not (some #{t} @!tags)
+                          (swap! !tags conj t))
+                        (reset! !search "")
+                        (reset! !active-idx -1))]
       (dom/div
         (dom/props {:style {:position "relative"}})
         ;; Input row with chips
@@ -68,10 +75,12 @@
                         :placeholder (if (seq tags) "" "Add tags...")
                         :style {:border "none" :outline "none" :font-size "14px"
                                 :flex "1" :min-width "80px" :padding "2px"}})
-            (dom/On "focus" (fn [_] (reset! !focused true)) nil)
+            (dom/On "focus" (fn [_] (reset! !focused true)
+                                    (reset! !active-idx -1)) nil)
             (dom/On "blur"
               (fn [_]
                 (reset! !focused false)
+                (reset! !active-idx -1)
                 (let [val (string/trim @!search)]
                   (when (seq val)
                     (when-not (some #{val} @!tags)
@@ -79,22 +88,34 @@
                     (reset! !search ""))))
               nil)
             (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-              (when (some? v) (reset! !search v)))
+              (when (some? v)
+                (reset! !search v)
+                (reset! !active-idx -1)))
             (dom/On "keydown"
               (fn [e]
                 (let [key (.-key e)
-                      val (string/trim search)]
+                      val (string/trim search)
+                      n   (count filtered)]
                   (cond
+                    (= key "ArrowDown")
+                    (do (.preventDefault e)
+                        (reset! !active-idx (mod (inc active-idx) n)))
+                    (= key "ArrowUp")
+                    (do (.preventDefault e)
+                        (reset! !active-idx (mod (dec active-idx) n)))
+                    (and (= key "Enter") (>= active-idx 0))
+                    (do (.preventDefault e)
+                        (add-tag! (nth filtered active-idx)))
                     (and (= key " ") (seq val))
                     (do (.preventDefault e)
-                        (when-not (some #{val} tags)
-                          (swap! !tags conj val))
-                        (reset! !search ""))
+                        (add-tag! val))
                     (and (= key "Enter") (seq val))
                     (do (.preventDefault e)
-                        (when-not (some #{val} tags)
-                          (swap! !tags conj val))
-                        (reset! !search ""))
+                        (add-tag! val))
+                    (and (= key "Escape") (seq filtered))
+                    (do (.preventDefault e)
+                        (reset! !active-idx -1)
+                        (reset! !focused false))
                     (and (= key "Backspace") (empty? search) (seq tags))
                     (swap! !tags (fn [ts] (vec (butlast ts)))))))
               nil)))
@@ -105,18 +126,19 @@
                                 :background "white" :border "1px solid #ccc"
                                 :border-radius "4px" :z-index "100"
                                 :box-shadow "0 2px 4px rgba(0,0,0,0.15)"}})
-            (e/for [t (e/diff-by {} filtered)]
+            (e/for [[i t] (e/diff-by {} (map-indexed vector filtered))]
               (dom/div
-                (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "14px"}
-                            :onmouseover "this.style.background='#f0f0f0'"
-                            :onmouseout "this.style.background=''"})
+                (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "14px"
+                                    :background (cond
+                                                  (= i active-idx) "#d0e8ff"
+                                                  (odd? i)         "#f9f9f9"
+                                                  :else            "white")}})
                 (dom/text t)
+                (dom/On "mousemove" (fn [_] (reset! !active-idx i)) nil)
                 (dom/On "mousedown"
                   (fn [e]
                     (.preventDefault e)
-                    (when-not (some #{t} tags)
-                      (swap! !tags conj t))
-                    (reset! !search ""))
+                    (add-tag! t))
                   nil)))))))))
 
 (e/defn AnkiSyncOptions
