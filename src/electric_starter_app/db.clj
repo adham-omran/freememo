@@ -173,6 +173,18 @@
       DO UPDATE SET text = excluded.text, updated_at = CURRENT_TIMESTAMP"
      document-id page-number text]))
 
+(defn create-page-stubs
+  "Batch-insert empty page rows for a newly uploaded document.
+   Uses ON CONFLICT DO NOTHING so existing rows (from OCR) are never overwritten."
+  [document-id page-count]
+  (when (pos? page-count)
+    (jdbc/execute! ds
+      (sql/format {:insert-into :pages
+                   :columns [:document_id :page_number]
+                   :values (mapv (fn [n] [document-id n]) (range 1 (inc page-count)))
+                   :on-conflict [:document_id :page_number]
+                   :do-nothing true}))))
+
 (defn get-page-text
   "Retrieve OCR text for a specific page."
   [document-id page-number]
