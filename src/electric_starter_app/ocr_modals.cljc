@@ -174,7 +174,7 @@
               (dom/props {:style {:display "block" :margin-bottom "8px" :font-size "14px"}})
               (dom/text "Pre-prompt (will be added to the system prompt):"))
             (let [prompt-history (e/watch !prompt-history)]
-              (Typeahead !local-prompt (take 20 prompt-history) "e.g., Focus on accounting terminology...")))
+              (Typeahead !local-prompt (take 20 prompt-history) "e.g., Focus on accounting terminology..." nil)))
           (dom/div
             (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "12px"}})
             (dom/button

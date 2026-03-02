@@ -21,6 +21,13 @@
     (.close doc)
     image))
 
+(defn get-page-count
+  "Return the number of pages in a PDF byte array using PDFBox."
+  [pdf-bytes]
+  (let [doc (Loader/loadPDF pdf-bytes)]
+    (try (.getNumberOfPages doc)
+         (finally (.close doc)))))
+
 (defn image->base64
   "Convert BufferedImage to base64 data URL for OpenAI API."
   [^BufferedImage image]

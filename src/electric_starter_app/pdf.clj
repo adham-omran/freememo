@@ -1,7 +1,8 @@
 (ns electric-starter-app.pdf
   "Business logic for PDF document management."
   (:require
-    [electric-starter-app.db :as db]))
+    [electric-starter-app.db :as db]
+    [electric-starter-app.ocr :as ocr]))
 
 (defn save-pdf [user-id filename file-bytes]
   (try
@@ -11,9 +12,12 @@
       (when (> file-size (* 100 1024 1024))
         (throw (ex-info "File too large" {:size file-size})))
 
-      ;; Save to database
-      (let [result (db/save-document user-id filename file-bytes file-size mime-type)]
-        {:success true :id (:documents/id (first result))}))
+      ;; Save to database and create page stubs
+      (let [result     (db/save-document user-id filename file-bytes file-size mime-type)
+            doc-id     (:documents/id (first result))
+            page-count (ocr/get-page-count file-bytes)]
+        (db/create-page-stubs doc-id page-count)
+        {:success true :id doc-id}))
     (catch Exception e
       (println "ERROR [save-pdf]:" (.getMessage e))
       {:success false :error (str "Failed to save PDF: " (.getMessage e))})))

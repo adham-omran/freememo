@@ -7,9 +7,11 @@
 
 (e/defn Typeahead
   "Text input with filtered dropdown. Writes selected/typed value to !atom.
-   options     — seq of strings to filter
-   placeholder — input placeholder text"
-  [!atom options placeholder]
+   options      — seq of strings to filter
+   placeholder  — input placeholder text
+   ?!committed  — optional atom; reset to selected item only on definitive selection
+                  (mousedown or Enter), not on every keystroke. Pass nil to disable."
+  [!atom options placeholder ?!committed]
   (e/client
     (let [value       (e/watch !atom)
           !search     (atom nil)
@@ -50,7 +52,9 @@
                       (reset! !active-idx (mod (dec active-idx) n)))
                   (and (= key "Enter") (>= active-idx 0))
                   (do (.preventDefault e)
-                      (reset! !atom (nth filtered active-idx))
+                      (let [selected (nth filtered active-idx)]
+                        (reset! !atom selected)
+                        (when ?!committed (reset! ?!committed selected)))
                       (reset! !search nil)
                       (reset! !active-idx -1))
                   (= key "Escape")
@@ -76,6 +80,7 @@
                   (fn [e]
                     (.preventDefault e)
                     (reset! !atom item)
+                    (when ?!committed (reset! ?!committed item))
                     (reset! !search nil)
                     (reset! !active-idx -1))
                   nil)))))))))

@@ -8,6 +8,7 @@
    [electric-starter-app.pdf-viewer-component :refer [PdfViewerComponent]]
    [electric-starter-app.rich-text-editor-component :refer [RichTextEditorComponent]]
    [electric-starter-app.rich-text-editor :as editor]
+   [electric-starter-app.components :refer [Typeahead]]
    [electric-starter-app.anki-sync :refer [AnkiSyncButton]]
    [electric-starter-app.ocr-modals :refer [ExportModal PromptDialog EditCardModal]]
    #?(:clj [electric-starter-app.page :as page])
@@ -30,6 +31,12 @@
 ;; Query wrapper for cards
 #?(:clj (defn get-cards* [_refresh document-id page-number]
           (cards/get-cards document-id page-number)))
+
+;; Page completion stats for a document
+#?(:clj (defn get-page-stats* [document-id]
+          (let [pages (db/list-pages document-id)]
+            {:done  (count (filter :pages/is_done pages))
+             :total (count pages)})))
 
 ;; Drag helper for split-pane dividers
 (defn start-drag!
@@ -134,46 +141,50 @@
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
       (let [docs-result    (e/server (pdf/list-pdfs user-id))
             last-doc-id    (e/server (settings/get-last-document user-id))
-            valid-last-doc (when (some #(= (:documents/id %) last-doc-id)
-                                       (:documents docs-result))
+            refresh        (e/server (e/watch !refresh))
+            documents      (:documents docs-result)
+            valid-last-doc (when (some #(= (:documents/id %) last-doc-id) documents)
                              last-doc-id)
-            !selected-doc  (atom valid-last-doc)
-            selected-doc   (e/watch !selected-doc)]
+            doc-by-name    (into {} (map (fn [d] [(:documents/filename d) (:documents/id d)]) documents))
+            filenames      (mapv :documents/filename documents)
+            last-doc-name  (some #(when (= (:documents/id %) valid-last-doc) (:documents/filename %)) documents)
+            !selected-name (atom last-doc-name)
+            selected-name  (e/watch !selected-name)
+            selected-doc   (get doc-by-name selected-name)
+            !doc-commit    (atom nil)
+            doc-commit     (e/watch !doc-commit)
+            [?commit-token _] (e/Token doc-commit)
+            page-stats     (e/server
+                             (when selected-doc
+                               (let [_ refresh]
+                                 (get-page-stats* selected-doc))))]
+
+        ;; Save last document on definitive selection
+        (when-some [token ?commit-token]
+          (when-some [doc-id (get doc-by-name doc-commit)]
+            (e/server (settings/save-last-document user-id doc-id)))
+          (reset! !doc-commit nil)
+          (token))
 
         (cond
           ;; Success with documents
-          (and (:success docs-result) (seq (:documents docs-result)))
+          (and (:success docs-result) (seq documents))
           (dom/div
-            (dom/props {:style {:flex-shrink "0" :padding "8px 0"}})
-            (dom/select
-              (dom/props {:style {:margin-bottom "0"}})
-              (dom/option
-                (dom/props {:value "" :selected (nil? selected-doc)})
-                (dom/text "-- Choose a document --"))
-              (e/server
-                (e/for-by :documents/id [doc (:documents docs-result)]
-                  (e/client
-                    (let [id (e/server (:documents/id doc))
-                          filename (e/server (:documents/filename doc))]
-                      (dom/option
-                        (dom/props {:value (str id) :selected (= id selected-doc)})
-                        (dom/text filename))))))
-              (let [doc-change (dom/On "change"
-                                 (fn [e]
-                                   (let [val (-> e .-target .-value)]
-                                     (if (seq val) (js/parseInt val) nil)))
-                                 nil)
-                    [?save-token _] (e/Token doc-change)]
-                (when (some? doc-change)
-                  (reset! !selected-doc doc-change))
-                (when-some [token ?save-token]
-                  (when doc-change
-                    (e/server (settings/save-last-document user-id doc-change)))
-                  (token)))))
+            (dom/props {:style {:flex-shrink "0" :padding "8px 0"
+                                :display "flex" :align-items "center" :gap "12px"}})
+            (dom/div
+              (dom/props {:style {:flex "1" :position "relative"}})
+              (Typeahead !selected-name filenames "Search documents..." !doc-commit))
+            (when (and selected-doc page-stats)
+              (dom/span
+                (dom/props {:style {:font-size "13px" :color "#666" :white-space "nowrap"}})
+                (dom/text (:done page-stats) " / " (:total page-stats) " pages done"))))
 
           ;; Success but no documents
           (:success docs-result)
-          (dom/p (dom/text "No documents available. Please upload a PDF first."))
+          (dom/div
+            (dom/props {:style {:padding "8px 0"}})
+            (dom/p (dom/text "No documents yet. Upload a PDF on the PDF tab to get started.")))
 
           ;; Error case
           :else
@@ -219,7 +230,6 @@
                                      (:doc-id dirty-data)
                                      (:page dirty-data)
                                      (:html dirty-data)))))
-                refresh (e/server (e/watch !refresh))
                 text-result (e/server (get-page-text* refresh selected-doc current-pdf-page))
                 page-text (e/server (when (:success text-result) (:text text-result)))
                 is-done (e/server (get-page-done-status* refresh selected-doc current-pdf-page))]
