@@ -1,13 +1,11 @@
 (ns electric-starter-app.pdf-page
   "PDF upload and management UI."
   (:require
-    [hyperfiddle.electric3 :as e]
-    [hyperfiddle.electric-dom3 :as dom]
-    [hyperfiddle.electric-scroll0 :refer [Scroll-window]]
-    [contrib.data :refer [clamp-left]]
-    #?(:clj [electric-starter-app.pdf :as pdf])))
+   [hyperfiddle.electric3 :as e]
+   [hyperfiddle.electric-dom3 :as dom]
+   #?(:clj [electric-starter-app.pdf :as pdf])))
 
-#?(:clj (defonce !refresh (atom 0)))  ; Server-side refresh trigger
+#?(:clj (defonce !refresh (atom 0))) ; Server-side refresh trigger
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 #?(:clj (defn list-pdfs* [_refresh user-id] (pdf/list-pdfs user-id)))
@@ -50,7 +48,7 @@
         (dom/button
           (dom/props {:disabled deleting})
           (dom/text (if deleting "Deleting..." "Delete"))
-          (let [click-event (dom/On "click" identity nil)
+          (let [click-event (dom/On "click" (fn [_] id) nil)
                 [?token ?error] (e/Token click-event)]
 
             (when ?error
@@ -61,11 +59,11 @@
 
             (when-some [token ?token]
               (reset! !deleting true)
-              (let [result (e/server (pdf/delete-pdf user-id id))]
+              (let [result (e/server (pdf/delete-pdf user-id click-event))]
                 (if (:success result)
                   (do
-                    (e/server (swap! !refresh inc))  ; Trigger server-side refresh
-                    (token))  ; Close token to reset button state
+                    (e/server (swap! !refresh inc)) ; Trigger server-side refresh
+                    (token)) ; Close token to reset button state
                   (do
                     (reset! !deleting false)
                     (token (:error result))))))))))))
@@ -86,7 +84,7 @@
           (dom/props {:type "submit"})
           (dom/text "Upload")))
 
-      ;; Document list with virtual scroll
+      ;; Document list
       (dom/h2 (dom/text "Uploaded Documents"))
       (e/server
         (let [refresh (e/watch !refresh)
@@ -94,26 +92,16 @@
           (e/client
             (if (:success docs-result)
               (if (seq (:documents docs-result))
-                (let [docs-vec (e/server (vec (:documents docs-result)))
-                      doc-count (e/server (count docs-vec))
-                      row-height 49
-                      container-height (min (* doc-count row-height) 400)]
-                  (dom/div
-                    (dom/props {:style {:height (str container-height "px")
-                                        :overflow-y "auto"
-                                        :border "1px solid #e0e0e0"
-                                        :border-radius "4px"}})
-                    (let [[offset limit] (Scroll-window row-height doc-count dom/node {:overquery-factor 1})
-                          occluded-height (clamp-left (* row-height (- doc-count limit)) 0)]
-                      (dom/div
-                        (dom/props {:style {:position "relative"
-                                            :top (str (* offset row-height) "px")}})
-                        (e/for [i (e/diff-by {} (range offset (+ offset limit)))]
-                          (let [doc (e/server (nth docs-vec i nil))]
-                            (when doc
-                              (PdfListItem user-id doc)))))
-                      (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))
+                (dom/div
+                  (dom/props {:style {:max-height "400px"
+                                      :overflow-y "auto"
+                                      :border "1px solid #e0e0e0"
+                                      :border-radius "4px"}})
+                  (e/server
+                    (e/for-by :documents/id [doc (vec (:documents docs-result))]
+                      (PdfListItem user-id doc))))
                 (dom/p (dom/text "No documents uploaded yet.")))
               (dom/div
                 (dom/props {:style {:color "red"}})
                 (dom/text "Error loading documents: " (:error docs-result))))))))))
+
