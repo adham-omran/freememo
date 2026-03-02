@@ -19,6 +19,7 @@
 
 #?(:clj (defonce !refresh (atom 0)))  ; Server-side refresh trigger
 #?(:clj (defonce !extracting-pages (atom #{})))  ; #{[doc-id page-num]} currently extracting
+#?(:cljs (defonce !extracting-client? (atom false)))  ; Client-side flag: set true immediately on click to prevent rapid re-clicks before server state round-trips
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 #?(:clj (defn get-page-text* [_refresh document-id page-number]
@@ -33,7 +34,7 @@
           (cards/get-cards document-id page-number)))
 
 ;; Page completion stats for a document
-#?(:clj (defn get-page-stats* [document-id]
+#?(:clj (defn get-page-stats* [_refresh document-id]
           (let [pages (db/list-pages document-id)]
             {:done  (count (filter :pages/is_done pages))
              :total (count pages)})))
@@ -156,8 +157,7 @@
             [?commit-token _] (e/Token doc-commit)
             page-stats     (e/server
                              (when selected-doc
-                               (let [_ refresh]
-                                 (get-page-stats* selected-doc))))]
+                               (get-page-stats* refresh selected-doc)))]
 
         ;; Save last document on definitive selection
         (when-some [token ?commit-token]
@@ -177,7 +177,7 @@
               (Typeahead !selected-name filenames "Search documents..." !doc-commit))
             (when (and selected-doc page-stats)
               (dom/span
-                (dom/props {:style {:font-size "13px" :color "#666" :white-space "nowrap"}})
+                (dom/props {:style {:font-size "13px" :color "#666" :white-space "nowrap" :margin-right "8px"}})
                 (dom/text (:done page-stats) " / " (:total page-stats) " pages done"))))
 
           ;; Success but no documents
@@ -291,19 +291,24 @@
                               (token)))))
                       (dom/text "Done"))
 
-                    (let [extracting? (contains? extracting-pages [selected-doc current-pdf-page])]
+                    (let [extracting? (contains? extracting-pages [selected-doc current-pdf-page])
+                          client-extracting? (e/client (e/watch !extracting-client?))
+                          disabled? (or extracting? client-extracting?)]
                       (dom/button
                         (dom/props {:style {:padding "8px 16px"
-                                            :background (if extracting? "#ccc" "#007bff")
+                                            :background (if disabled? "#ccc" "#007bff")
                                             :color "white"
                                             :border "none"
                                             :border-radius "4px"
-                                            :cursor (if extracting? "not-allowed" "pointer")
+                                            :cursor (if disabled? "not-allowed" "pointer")
                                             :font-size "14px"}
-                                    :disabled extracting?})
-                        (dom/text (if extracting? "Extracting..." "Extract Text"))
+                                    :disabled disabled?})
+                        (dom/text (if disabled? "Extracting..." "Extract Text"))
                         (let [click-event (dom/On "click"
-                                            (fn [_] {:id (str (random-uuid)) :page current-pdf-page})
+                                            (fn [_]
+                                              (when-not @!extracting-client?
+                                                (reset! !extracting-client? true)
+                                                {:id (str (random-uuid)) :page current-pdf-page}))
                                             nil)
                               [?token ?error] (e/Token click-event)]
                           (when-some [token ?token]
@@ -323,7 +328,11 @@
                                         (finally
                                           (swap! !extracting-pages disj [doc page]))))
                                     :started))))
-                            (token)))))
+                            (token))
+                          ;; Reset client flag once server confirms extraction is running (or completes)
+                          (e/client
+                            (when (not extracting?)
+                              (reset! !extracting-client? false))))))
 
                     ;; Save status indicator with fade-out
                     (when (some? dirty-data)

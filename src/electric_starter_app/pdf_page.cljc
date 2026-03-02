@@ -75,14 +75,18 @@
       (dom/h1 (dom/text "PDF Documents"))
 
       ;; Upload form
-      (dom/p (dom/text "To upload a PDF, use the form below:"))
-      (dom/form
-        (dom/props {:action "/api/upload-pdf" :method "post" :enctype "multipart/form-data"})
-        (dom/input
-          (dom/props {:type "file" :name "file" :accept "application/pdf" :required true}))
-        (dom/button
-          (dom/props {:type "submit"})
-          (dom/text "Upload")))
+      (let [!file-input (atom nil)]
+        (dom/form
+          (dom/props {:action "/api/upload-pdf" :method "post" :enctype "multipart/form-data"})
+          (dom/input
+            (dom/props {:type "file" :name "file" :accept "application/pdf"
+                        :style {:display "none"}})
+            (reset! !file-input dom/node)
+            (dom/On "change" (fn [e] (.. e -target -form submit)) nil))
+          (dom/button
+            (dom/props {:type "button"})
+            (dom/text "Upload PDF")
+            (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil))))
 
       ;; Document list
       (dom/h2 (dom/text "Uploaded Documents"))
