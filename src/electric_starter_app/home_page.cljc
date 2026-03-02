@@ -22,7 +22,7 @@
                             :padding "16px" :margin-bottom "32px"}})
         (dom/p
           (dom/props {:style {:margin "0" :color "#795548"}})
-          (dom/text "Early iteration — the vision is to become a full SuperMemo replacement with spaced repetition scheduling.")))
+          (dom/text "Early iteration — the vision is to become an Incremental Reading companion to Anki, similar in features to SuperMemo.")))
 
       ;; Workflow steps
       (dom/h2
