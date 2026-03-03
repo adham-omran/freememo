@@ -213,11 +213,11 @@
                 prompt-dialog-kind (e/watch !prompt-dialog-kind)
                 !captured-selection (atom nil)
                 captured-selection (e/watch !captured-selection)
-                ;; Generation queue — {:queue [...] :active nil-or-request}
-                !gen-state (atom {:queue [] :active nil})
+                ;; Generation queue — {:queue [...] :active nil-or-request :error nil}
+                !gen-state (atom {:queue [] :active nil :error nil})
                 gen-state (e/watch !gen-state)
                 ;; Prompt generation queue (same shape)
-                !prompt-gen-state (atom {:queue [] :active nil})
+                !prompt-gen-state (atom {:queue [] :active nil :error nil})
                 prompt-gen-state (e/watch !prompt-gen-state)
                 ;; Extraction tracking — server-side for true parallelism
                 extracting-pages (e/server (e/watch !extracting-pages))
@@ -518,15 +518,17 @@
                                               :border "none" :border-radius "4px" :cursor "pointer"
                                               :font-size "13px" :font-weight "bold"}
                                       :title "Generate flashcards from editor text or selected text"})
-                          (dom/text "Generate")
+                          (dom/text (or (:error gen-state) "Generate"))
                           (let [pending (+ (count (:queue gen-state)) (if (:active gen-state) 1 0))]
-                            (when (pos? pending)
+                            (when (and (pos? pending) (nil? (:error gen-state)))
                               (dom/text (str " (" pending ")"))))
                           (dom/On "click"
                             (fn [_]
-                              (swap! !gen-state update :queue conj
-                                {:id    (str (random-uuid))
-                                 :selection (editor/get-selected-text!)}))
+                              (swap! !gen-state (fn [s]
+                                (-> s
+                                    (update :queue conj {:id (str (random-uuid))
+                                                         :selection (editor/get-selected-text!)})
+                                    (assoc :error nil)))))
                             nil))
 
                         ;; Generate with Prompt button
@@ -540,9 +542,9 @@
                                               :font-size "13px"
                                               :font-weight "500"}
                                       :title "Add custom instructions to guide card generation"})
-                          (dom/text "Generate with Prompt...")
+                          (dom/text (or (:error prompt-gen-state) "Generate with Prompt..."))
                           (let [pending (+ (count (:queue prompt-gen-state)) (if (:active prompt-gen-state) 1 0))]
-                            (when (pos? pending)
+                            (when (and (pos? pending) (nil? (:error prompt-gen-state)))
                               (dom/text (str " (" pending ")"))))
                           (dom/On "click" (fn [_]
                                             (reset! !captured-selection (editor/get-selected-text!))
@@ -572,7 +574,7 @@
                                                          :card-count card-count-val :user-id user-id :enc-key enc-key})))]
                               (if-not (:success generate-result)
                                 (do (token (:error generate-result))
-                                    (swap! !gen-state assoc :active nil))
+                                    (swap! !gen-state assoc :active nil :error (:error generate-result)))
                                 (let [generated-cards (e/server (:cards generate-result))
                                       save-result (e/server (cards/save-cards selected-doc current-pdf-page card-type generated-cards))]
                                   (if (:success save-result)
@@ -608,7 +610,7 @@
                                                          :enc-key enc-key :pre-prompt prompt-text})))]
                               (if-not (:success generate-result)
                                 (do (token (:error generate-result))
-                                    (swap! !prompt-gen-state assoc :active nil))
+                                    (swap! !prompt-gen-state assoc :active nil :error (:error generate-result)))
                                 (let [generated-cards (e/server (:cards generate-result))
                                       save-result (e/server (cards/save-cards selected-doc current-pdf-page kind generated-cards))]
                                   (if (:success save-result)
