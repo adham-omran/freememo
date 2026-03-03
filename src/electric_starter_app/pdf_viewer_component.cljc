@@ -149,16 +149,24 @@
                                   :border-radius "3px"}})
               (dom/text "+")
               (e/for [_ (dom/On-all "click")] (viewer/zoom! 1.1)))
-
             (dom/button
-              (dom/props {:title "Reset Zoom"
+              (dom/props {:title ""
                           :style {:padding "6px 12px"
                                   :cursor "pointer"
                                   :background "#fff"
                                   :border "1px solid #ccc"
                                   :border-radius "3px"}})
-              (dom/text "100%")
-              (e/for [_ (dom/On-all "click")] (viewer/set-zoom! 1.0)))))
+              (dom/text "Page Width")
+              (e/for [_ (dom/On-all "click")] (viewer/set-zoom-fit!)))
+            (dom/button
+              (dom/props {:title ""
+                          :style {:padding "6px 12px"
+                                  :cursor "pointer"
+                                  :background "#fff"
+                                  :border "1px solid #ccc"
+                                  :border-radius "3px"}})
+              (dom/text "Page Fit")
+              (e/for [_ (dom/On-all "click")] (viewer/set-zoom-page-fit!)))))
 
         ;; Viewer wrapper (relative positioning for absolute container inside)
         (dom/div
