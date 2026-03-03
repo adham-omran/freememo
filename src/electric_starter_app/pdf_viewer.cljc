@@ -63,6 +63,20 @@
              (let [^js v viewer]
                (set! (.-currentScale v) scale)))))
 
+(defn set-zoom-fit!
+  []
+  #?(:clj nil
+     :cljs (when-let [{:keys [viewer]} @!viewer-state]
+             (let [^js v viewer]
+               (set! (.-currentScaleValue v) "page-width")))))
+
+(defn set-zoom-page-fit!
+  []
+  #?(:clj nil
+     :cljs (when-let [{:keys [viewer]} @!viewer-state]
+             (let [^js v viewer]
+               (set! (.-currentScaleValue v) "page-fit")))))
+
 (defn go-to-page-after-load!
   "Navigate to page once PDF.js fires pagesloaded (pages not ready at setDocument time)."
   [page-num]
