@@ -74,7 +74,7 @@
                           :border "none" :border-radius "3px" :cursor "pointer"
                           :font-size "12px" :line-height "1"}})
       (dom/text "\u00D7")
-      (let [click-event (dom/On "click" identity nil)
+      (let [click-event (dom/On "click" (fn [_] id) nil)
             [?token ?error] (e/Token click-event)]
         (dom/props {:disabled (some? ?token)
                     :style {:padding "2px 6px"
@@ -87,7 +87,7 @@
             (dom/props {:style {:color "red" :font-size "11px"}})
             (dom/text ?error)))
         (when-some [token ?token]
-          (let [result (e/server (cards/delete-card id))]
+          (let [result (e/server (cards/delete-card click-event))]
             (if (:success result)
               (do (e/server (swap! !refresh inc)) (token))
               (token (:error result)))))))))
