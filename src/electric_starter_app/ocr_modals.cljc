@@ -226,11 +226,10 @@
           _ (println "MODAL watched values q:" (pr-str question) "a:" (pr-str answer) "c:" (pr-str cloze))]
       (dom/div
         (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
-                            :background "transparent" :display "flex" :align-items "flex-start"
-                            :justify-content "flex-end" :z-index "1000"
-                            :pointer-events "none" :padding "80px 20px"}
+                            :background "transparent" :display "flex" :align-items "center"
+                            :justify-content "center" :z-index "1000"
+                            :pointer-events "none"}
                     :tabindex "-1"})
-        (dom/On "click" (fn [_] nil) nil)
         (dom/On "keydown"
           (fn [e]
             #?(:cljs
