@@ -377,8 +377,7 @@
                 (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0" :overflow "hidden"}})
 
                 ;; Generation toolbar (compact single row)
-                (when page-text
-                  (let [;; Load settings from server
+                (let [;; Load settings from server
                         server-context-enabled (e/server (settings/get-context-enabled user-id))
                         server-context-pages (e/server (settings/get-context-pages user-id))
                         server-card-type (e/server (settings/get-card-type user-id))
@@ -647,7 +646,7 @@
                                      :!prompt-history    !prompt-history
                                      :!history-save-trigger !history-save-trigger
                                      :captured-selection captured-selection
-                                     :prompt-dialog-kind prompt-dialog-kind}))))
+                                     :prompt-dialog-kind prompt-dialog-kind})))
 
                 ;; Cards table with virtual scroll
                 (let [cards-result (e/server (get-cards* refresh selected-doc current-pdf-page))

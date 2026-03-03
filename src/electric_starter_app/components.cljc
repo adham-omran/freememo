@@ -30,7 +30,8 @@
                       :placeholder placeholder
                       :style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
                               :font-size "15px" :width "100%" :box-sizing "border-box"}})
-          (dom/On "focus" (fn [_] (reset! !search (or value ""))
+          (dom/On "focus" (fn [_] (reset! !atom nil)
+                                  (reset! !search "")
                                   (reset! !active-idx -1)) nil)
           (dom/On "blur"  (fn [_] (reset! !search nil)
                                   (reset! !active-idx -1)) nil)
