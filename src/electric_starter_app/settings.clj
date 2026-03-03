@@ -36,12 +36,27 @@
 (def PRE_PROMPT_HISTORY "pre_prompt_history")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
 
+;; OpenAI key helpers
+(defn- get-user-openai-api-key [user-id enc-key]
+  (crypto/decrypt (or (db/get-setting user-id OPENAI_API_KEY) "") enc-key))
+
+(defn- get-shared-openai-api-key []
+  (when @!use-shared-key @shared-api-key))
+
 ;; Get functions
 (defn get-openai-api-key [user-id enc-key]
-  (let [user-key (crypto/decrypt (or (db/get-setting user-id OPENAI_API_KEY) "") enc-key)]
+  (let [user-key (get-user-openai-api-key user-id enc-key)]
     (if (seq user-key)
       user-key
-      (when @!use-shared-key @shared-api-key))))
+      (get-shared-openai-api-key))))
+
+(defn get-openai-api-key-status [user-id enc-key]
+  (let [user-key (get-user-openai-api-key user-id enc-key)
+        shared-key (get-shared-openai-api-key)]
+    (cond
+      (seq user-key) {:source :user :configured? true}
+      (seq shared-key) {:source :shared :configured? true}
+      :else {:source :none :configured? false})))
 
 (defn get-model [user-id]
   (or (db/get-setting user-id MODEL) "gpt-5.1"))
