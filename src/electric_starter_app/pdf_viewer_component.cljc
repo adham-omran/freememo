@@ -149,24 +149,21 @@
                                   :border-radius "3px"}})
               (dom/text "+")
               (e/for [_ (dom/On-all "click")] (viewer/zoom! 1.1)))
-            (dom/button
-              (dom/props {:title ""
-                          :style {:padding "6px 12px"
+            (dom/select
+              (dom/props {:style {:padding "6px 8px"
                                   :cursor "pointer"
                                   :background "#fff"
                                   :border "1px solid #ccc"
                                   :border-radius "3px"}})
-              (dom/text "Page Width")
-              (e/for [_ (dom/On-all "click")] (viewer/set-zoom-fit!)))
-            (dom/button
-              (dom/props {:title ""
-                          :style {:padding "6px 12px"
-                                  :cursor "pointer"
-                                  :background "#fff"
-                                  :border "1px solid #ccc"
-                                  :border-radius "3px"}})
-              (dom/text "Page Fit")
-              (e/for [_ (dom/On-all "click")] (viewer/set-zoom-page-fit!)))))
+              (dom/option (dom/props {:value "page-width"}) (dom/text "Page Width"))
+              (dom/option (dom/props {:value "page-fit"})   (dom/text "Page Fit"))
+              (e/for [[t e] (dom/On-all "change")]
+                (when e
+                  (case (-> e .-target .-value)
+                    "page-width" (viewer/set-zoom-fit!)
+                    "page-fit"   (viewer/set-zoom-page-fit!)
+                    nil))
+                (t)))))
 
         ;; Viewer wrapper (relative positioning for absolute container inside)
         (dom/div
