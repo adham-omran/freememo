@@ -100,6 +100,50 @@
         (throw (ex-info "Failed to parse EDN response from OpenAI"
                         {:raw raw-text :cleaned cleaned}))))))
 
+(defn- generate-cards*
+  "Shared implementation for card generation with up to 3 retry attempts.
+   Validates that the returned card count matches the requested count."
+  [{:keys [content context card-count model user-id pre-prompt enc-key]} prompt-builder-fn]
+  (let [api-key      (settings/get-openai-api-key user-id enc-key)
+        _            (when (empty? api-key) (throw (ex-info "OpenAI API key not configured" {})))
+        _            (when (empty? content) (throw (ex-info "No content provided" {})))
+        card-count   (or card-count (settings/get-card-count user-id))
+        model        (or model (settings/get-model user-id))
+        reasoning    (settings/get-reasoning user-id)
+        verbosity    (settings/get-verbosity user-id)
+        has-context? (not (empty? context))
+        prompt       (prompt-builder-fn card-count has-context? pre-prompt)
+        _            (when-not prompt (throw (ex-info "Failed to load prompt templates" {})))
+        content-text (if has-context? (pr-str {:content content :context context}) content)]
+    (loop [attempt 1]
+      (let [response     (api/create-chat-completion
+                           {:model    model
+                            :messages [{:role "system" :content prompt}
+                                       {:role "user"   :content content-text}]
+                            :reasoning {:effort reasoning}
+                            :text      {:verbosity verbosity}}
+                           {:api-key   api-key
+                            :reasoning {:effort reasoning}
+                            :verbosity verbosity})
+            raw-text     (-> response :choices first :message :content)
+            cards        (parse-edn-response raw-text)
+            actual-count (count cards)]
+        (cond
+          (= actual-count card-count)
+          {:success true :cards cards}
+
+          (>= attempt 3)
+          (do (println "ERROR [generate-cards*]: Count mismatch after 3 attempts."
+                       "Expected:" card-count "Got:" actual-count)
+              {:success false
+               :error (str "LLM returned " actual-count " cards instead of "
+                           card-count " after 3 attempts")})
+
+          :else
+          (do (println "WARN [generate-cards*]: Attempt" attempt "returned" actual-count
+                       "cards, expected" card-count "— retrying")
+              (recur (inc attempt))))))))
+
 (defn generate-basic-cards
   "Generate basic Q&A flashcards using OpenAI API.
    Options:
@@ -110,37 +154,9 @@
    - :pre-prompt - Optional custom formatting instructions
    - :enc-key - Base64 key from session for API key decryption
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}"
-  [{:keys [content context card-count model user-id pre-prompt enc-key]}]
+  [opts]
   (try
-    (let [api-key (settings/get-openai-api-key user-id enc-key)
-          _ (when (empty? api-key)
-              (throw (ex-info "OpenAI API key not configured" {})))
-          _ (when (empty? content)
-              (throw (ex-info "No content provided" {})))
-          card-count (or card-count (settings/get-card-count user-id))
-          model (or model (settings/get-model user-id))
-          reasoning (settings/get-reasoning user-id)
-          verbosity (settings/get-verbosity user-id)
-          has-context? (not (empty? context))
-          prompt (build-basic-prompt card-count has-context? pre-prompt)
-          _ (when-not prompt
-              (throw (ex-info "Failed to load prompt templates" {})))
-          ;; Build content message
-          content-text (if has-context?
-                         (pr-str {:content content :context context})
-                         content)
-          response (api/create-chat-completion
-                     {:model model
-                      :messages [{:role "system" :content prompt}
-                                 {:role "user" :content content-text}]
-                      :reasoning {:effort reasoning}
-                      :text {:verbosity verbosity}}
-                     {:api-key api-key
-                      :reasoning {:effort reasoning}
-                      :verbosity verbosity})
-          raw-text (-> response :choices first :message :content)
-          cards (parse-edn-response raw-text)]
-      {:success true :cards cards})
+    (generate-cards* opts build-basic-prompt)
     (catch Exception e
       (println "ERROR [generate-basic-cards]:" (.getMessage e))
       {:success false :error (.getMessage e)})))
@@ -156,37 +172,9 @@
    - :pre-prompt - Optional custom formatting instructions
    - :enc-key - Base64 key from session for API key decryption
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}"
-  [{:keys [content context card-count model user-id pre-prompt enc-key]}]
+  [opts]
   (try
-    (let [api-key (settings/get-openai-api-key user-id enc-key)
-          _ (when (empty? api-key)
-              (throw (ex-info "OpenAI API key not configured" {})))
-          _ (when (empty? content)
-              (throw (ex-info "No content provided" {})))
-          card-count (or card-count (settings/get-card-count user-id))
-          model (or model (settings/get-model user-id))
-          reasoning (settings/get-reasoning user-id)
-          verbosity (settings/get-verbosity user-id)
-          has-context? (not (empty? context))
-          prompt (build-cloze-prompt card-count has-context? pre-prompt)
-          _ (when-not prompt
-              (throw (ex-info "Failed to load prompt templates" {})))
-          ;; Build content message
-          content-text (if has-context?
-                         (pr-str {:content content :context context})
-                         content)
-          response (api/create-chat-completion
-                     {:model model
-                      :messages [{:role "system" :content prompt}
-                                 {:role "user" :content content-text}]
-                      :reasoning {:effort reasoning}
-                      :text {:verbosity verbosity}}
-                     {:api-key api-key
-                      :reasoning {:effort reasoning}
-                      :verbosity verbosity})
-          raw-text (-> response :choices first :message :content)
-          cards (parse-edn-response raw-text)]
-      {:success true :cards cards})
+    (generate-cards* opts build-cloze-prompt)
     (catch Exception e
       (println "ERROR [generate-cloze-cards]:" (.getMessage e))
       {:success false :error (.getMessage e)})))
