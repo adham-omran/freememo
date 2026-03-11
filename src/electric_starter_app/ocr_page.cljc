@@ -114,7 +114,7 @@
           (dom/text (if (= kind "basic") (or answer "") "")))
         ;; Kind column
         (dom/td
-          (dom/props {:style {:padding "6px 8px" :width "60px" :color "#666" :font-size "12px"
+          (dom/props {:style {:padding "6px 8px" :width "60px" :font-size "12px"
                               :border-bottom "1px solid #e0e0e0"}})
           (dom/text kind))
         ;; Edit column
@@ -136,7 +136,7 @@
                               :border-bottom "1px solid #e0e0e0"}})
           (DeleteCardButton id))))))
 
-(e/defn OcrPage [user-id enc-key]
+(e/defn OcrPage [user-id enc-key !nav-target]
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
@@ -147,6 +147,7 @@
             valid-last-doc (when (some #(= (:documents/id %) last-doc-id) documents)
                              last-doc-id)
             doc-by-name    (into {} (map (fn [d] [(:documents/filename d) (:documents/id d)]) documents))
+            id-to-name     (into {} (map (fn [d] [(:documents/id d) (:documents/filename d)]) documents))
             filenames      (mapv :documents/filename documents)
             last-doc-name  (some #(when (= (:documents/id %) valid-last-doc) (:documents/filename %)) documents)
             !selected-name (atom last-doc-name)
@@ -155,9 +156,21 @@
             !doc-commit    (atom nil)
             doc-commit     (e/watch !doc-commit)
             [?commit-token _] (e/Token doc-commit)
+            ;; Nav target override (from Queue tab)
+            nav-target     (e/watch !nav-target)
+            ;; Holds page override for when we jump from Queue; set once, used as initial-page
+            !nav-page      (atom nil)
             page-stats     (e/server
                              (when selected-doc
                                (get-page-stats* refresh selected-doc)))]
+
+        ;; Handle navigation from Queue tab
+        (when-some [{:keys [doc-id page]} nav-target]
+          (when-some [doc-name (get id-to-name doc-id)]
+            (reset! !selected-name doc-name)
+            (reset! !doc-commit doc-name))
+          (reset! !nav-page page)
+          (reset! !nav-target nil))
 
         ;; Save last document on definitive selection
         (when-some [token ?commit-token]
@@ -194,7 +207,7 @@
 
         ;; Main content (shows when document is selected)
         (when selected-doc
-          (let [initial-page    (e/server (settings/get-last-page user-id selected-doc))
+          (let [initial-page    (or (e/watch !nav-page) (e/server (settings/get-last-page user-id selected-doc)))
                 !page-to-save   (atom nil)
                 page-to-save    (e/watch !page-to-save)
                 [?page-token _] (e/Token page-to-save)
@@ -290,6 +303,23 @@
                               (e/server (swap! !refresh inc))
                               (token)))))
                       (dom/text "Done"))
+
+                    ;; Priority input
+                    (let [page-priority (e/server (db/get-page-priority selected-doc current-pdf-page))]
+                      (dom/label
+                        (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "14px"}
+                                    :title "Page priority (0=highest, 100=lowest). Used to sort the reading queue."})
+                        (dom/text "P:")
+                        (e/for-by identity [_k [current-pdf-page]]
+                          (dom/input
+                            (dom/props {:type "number" :min "0" :max "100" :style {:width "52px" :font-size "13px" :padding "2px 4px"}})
+                            (set! (.-value dom/node) (str (or page-priority 50)))
+                            (let [change-event (dom/On "change" #(-> % .-target .-value js/parseInt) nil)
+                                  [?token _] (e/Token change-event)]
+                              (when-some [token ?token]
+                                (e/server (db/set-page-priority selected-doc current-pdf-page change-event))
+                                (e/server (swap! !refresh inc))
+                                (token)))))))
 
                     (let [extracting? (contains? extracting-pages [selected-doc current-pdf-page])
                           client-extracting? (e/client (e/watch !extracting-client?))
@@ -551,6 +581,36 @@
                                             (reset! !prompt-dialog-kind card-type)
                                             (reset! !show-prompt-dialog true))
                                   nil)))  ;; end Generate buttons group
+
+                      ;; Extract button — highlights selection + saves as content item
+                      (let [!extract-state (atom {:pending nil :error nil})
+                            extract-state  (e/watch !extract-state)
+                            pending        (:pending extract-state)]
+                        (dom/button
+                          (dom/props {:style {:padding "4px 12px" :background "#6610f2" :color "white"
+                                              :border "none" :border-radius "4px" :cursor "pointer"
+                                              :font-size "13px" :font-weight "500"}
+                                      :title "Extract selected text as a content item"})
+                          (dom/text "Extract")
+                          (dom/On "click"
+                            (fn [_]
+                              (when-let [{:keys [text index length]} (editor/get-selection!)]
+                                (when (seq text)
+                                  (editor/highlight-range! index length)
+                                  (swap! !extract-state assoc :pending text :error nil))))
+                            nil))
+                        (when (:error extract-state)
+                          (dom/span
+                            (dom/props {:style {:color "red" :font-size "12px"}})
+                            (dom/text (:error extract-state))))
+                        (let [[?token _] (e/Token pending)]
+                          (when-some [token ?token]
+                            (let [result (e/server (db/save-content-item selected-doc current-pdf-page "html" pending))]
+                              (if result
+                                (do (reset! !extract-state {:pending nil :error nil})
+                                    (token))
+                                (do (reset! !extract-state {:pending nil :error "Failed to save extract"})
+                                    (token "Failed to save extract")))))))
 
                       ;; Auto-advance: when not processing and queue has items, start next
                       (when (and (nil? (:active gen-state)) (seq (:queue gen-state)))
