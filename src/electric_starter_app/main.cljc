@@ -5,6 +5,8 @@
             [electric-starter-app.settings-page :refer [SettingsPage]]
             [electric-starter-app.pdf-page :refer [PdfPage]]
             [electric-starter-app.ocr-page :refer [OcrPage]]
+            [electric-starter-app.queue-page :refer [QueuePage]]
+            [electric-starter-app.extract-page :refer [ExtractPage]]
             [electric-starter-app.login-page :refer [LoginPage]]
             #?(:clj [electric-starter-app.settings :as settings])))
 
@@ -33,6 +35,7 @@
                                :color (if (= active-tab key) "#2563eb" "#666")
                                :border-bottom (if (= active-tab key) "2px solid #2563eb" "2px solid transparent")
                                :margin-bottom "-2px"})
+                  !nav-target (atom nil)
                   navigate! (fn [tab]
                               (reset! !active-tab tab)
                               (reset! !tab-to-save tab))]
@@ -64,15 +67,22 @@
                 (dom/button
                   (dom/props {:style (tab-style :workspace)})
                   (dom/text "Workspace")
-                  (dom/On "click" (fn [_] (navigate! :workspace)) nil)))
+                  (dom/On "click" (fn [_] (navigate! :workspace)) nil))
+
+                (dom/button
+                  (dom/props {:style (tab-style :queue)})
+                  (dom/text "Queue")
+                  (dom/On "click" (fn [_] (navigate! :queue)) nil)))
 
               ;; Tab content
               (dom/div
-                (dom/props {:style {:flex "1" :min-height "0" :overflow (if (= active-tab :workspace) "hidden" "auto")}})
+                (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:workspace :extract} active-tab) "hidden" "auto")}})
                 (when (= active-tab :home) (HomePage navigate!))
                 (when (= active-tab :settings) (SettingsPage user-id username enc-key))
                 (when (= active-tab :pdf) (PdfPage user-id))
-                (when (= active-tab :workspace) (OcrPage user-id enc-key)))))
+                (when (= active-tab :workspace) (OcrPage user-id enc-key !nav-target))
+                (when (= active-tab :queue) (QueuePage user-id !nav-target #(navigate! :extract)))
+                (when (= active-tab :extract) (ExtractPage user-id (:content-item-id (e/watch !nav-target)) navigate!)))))
 
           ;; Not authenticated: render login page
           (LoginPage auth-error))))))

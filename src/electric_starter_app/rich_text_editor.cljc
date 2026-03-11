@@ -83,7 +83,8 @@
                                                :page page-number
                                                :doc-id doc-id})))
                       500)))))
-         (reset! !editor-state {:editor editor :container container})
+         (reset! !editor-state {:editor editor :container container
+                               :page-number page-number :doc-id doc-id})
          editor))))
 
 (defn get-current-html!
@@ -107,3 +108,32 @@
              ^js selection (.getSelection ed)]
          (when (and selection (> (.-length selection) 0))
            (.getText ed (.-index selection) (.-length selection)))))))
+
+(defn get-selection!
+  "Get selected text and its range from Quill. Returns nil if no selection."
+  []
+  #?(:clj nil
+     :cljs
+     (when-let [{:keys [editor]} @!editor-state]
+       (let [^js ed editor
+             ^js sel (.getSelection ed)]
+         (when (and sel (> (.-length sel) 0))
+           {:text   (.getText ed (.-index sel) (.-length sel))
+            :index  (.-index sel)
+            :length (.-length sel)})))))
+
+(defn highlight-range!
+  "Apply yellow highlight formatting to a range in the Quill editor.
+   Also pushes the updated HTML to !dirty-html so the highlight is persisted."
+  [index length]
+  #?(:clj nil
+     :cljs
+     (when-let [{:keys [editor page-number doc-id]} @!editor-state]
+       (.formatText ^js editor index length
+                    (clj->js {:background "#ffff80"})
+                    "api")
+       ;; Push updated HTML so the auto-save pipeline persists the highlight
+       (let [^js root (.-root editor)]
+         (reset! !dirty-html {:html (.-innerHTML root)
+                              :page page-number
+                              :doc-id doc-id})))))

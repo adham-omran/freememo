@@ -83,6 +83,9 @@
   ;; Add is_done column to pages table (migration)
   (jdbc/execute! ds ["ALTER TABLE pages ADD COLUMN IF NOT EXISTS is_done BOOLEAN DEFAULT NULL"])
 
+  ;; Add priority column to pages table (migration)
+  (jdbc/execute! ds ["ALTER TABLE pages ADD COLUMN IF NOT EXISTS priority INTEGER DEFAULT 50"])
+
   ;; Create flashcards table
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS flashcards (
@@ -105,6 +108,19 @@
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_note_id BIGINT DEFAULT NULL"])
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_synced_at TIMESTAMP DEFAULT NULL"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_anki_note_id ON flashcards(anki_note_id) WHERE anki_note_id IS NOT NULL"])
+
+  ;; Create content_items table
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS content_items (
+      id SERIAL PRIMARY KEY,
+      document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+      page_number INTEGER NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'html',
+      content TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_content_items_document_page
+                      ON content_items(document_id, page_number)"])
 
   (println "Database ready."))
 
@@ -217,6 +233,39 @@
       (or (:pages/is_done result) false)  ; NULL or false -> false, true -> true
       false)))  ; Page doesn't exist yet -> false
 
+(defn get-page-priority
+  "Get the priority for a specific page. Returns integer (default 50)."
+  [document-id page-number]
+  (let [result (jdbc/execute-one! ds
+                 (sql/format {:select [:priority]
+                              :from [:pages]
+                              :where [:and
+                                      [:= :document_id document-id]
+                                      [:= :page_number page-number]]}))]
+    (or (:pages/priority result) 50)))
+
+(defn set-page-priority
+  "Set the priority for a specific page (0=highest, 100=lowest).
+   Upserts the row so it works even without extracted text."
+  [document-id page-number priority]
+  (jdbc/execute! ds
+    ["INSERT INTO pages (document_id, page_number, priority, updated_at)
+      VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT (document_id, page_number)
+      DO UPDATE SET priority = excluded.priority, updated_at = CURRENT_TIMESTAMP"
+     document-id page-number priority]))
+
+(defn get-reading-queue
+  "Returns all non-done pages for a user's documents, sorted by priority."
+  [user-id]
+  (jdbc/execute! ds
+    (sql/format {:select [:p/document_id :p/page_number :p/priority :d/filename]
+                 :from [[:pages :p]]
+                 :join [[:documents :d] [:= :p/document_id :d/id]]
+                 :where [:and [:= :d/user_id user-id]
+                               [:or [:= :p/is_done false] [:= :p/is_done nil]]]
+                 :order-by [[:p/priority :asc] [:d/id :asc] [:p/page_number :asc]]})))
+
 (defn toggle-page-done
   "Toggle the is_done status for a specific page.
    Upserts the row so it works even if text has never been extracted."
@@ -302,6 +351,44 @@
                  :on-conflict [:google_id]
                  :do-update-set {:email email}
                  :returning [:id :username]})))
+
+;; Content item queries
+(defn save-content-item [document-id page-number kind content]
+  (jdbc/execute-one! ds
+    (sql/format {:insert-into :content_items
+                 :values [{:document_id document-id
+                           :page_number page-number
+                           :kind kind
+                           :content content}]
+                 :returning [:id]})))
+
+(defn get-content-items [document-id page-number]
+  (jdbc/execute! ds
+    (sql/format {:select [:*]
+                 :from [:content_items]
+                 :where [:and [:= :document_id document-id]
+                               [:= :page_number page-number]]
+                 :order-by [[:created_at :asc]]})))
+
+(defn get-content-item-by-id [id]
+  (jdbc/execute-one! ds
+    (sql/format {:select [:*] :from [:content_items] :where [:= :id id]})))
+
+(defn update-content-item-content [id content]
+  (jdbc/execute-one! ds
+    (sql/format {:update :content_items
+                 :set {:content content}
+                 :where [:= :id id]})))
+
+(defn get-all-content-items
+  "Get all content items for a user across all documents, newest first."
+  [user-id]
+  (jdbc/execute! ds
+    (sql/format {:select [:ci/id :ci/document_id :ci/page_number :ci/content :ci/created_at :d/filename]
+                 :from [[:content_items :ci]]
+                 :join [[:documents :d] [:= :ci/document_id :d/id]]
+                 :where [:= :d/user_id user-id]
+                 :order-by [[:ci/created_at :desc]]})))
 
 ;; Anki sync functions
 (defn set-anki-note-id
