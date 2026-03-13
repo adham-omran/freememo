@@ -207,6 +207,18 @@
       (println "ERROR [save-cards]:" (.getMessage e))
       {:success false :error (.getMessage e)})))
 
+(defn add-card
+  "Manually add a single flashcard."
+  [document-id page-number kind fields]
+  (try
+    (let [cards (if (= kind "basic")
+                  [{:q (:question fields) :a (:answer fields)}]
+                  [{:c (:cloze fields)}])]
+      (save-cards document-id page-number kind cards))
+    (catch Exception e
+      (println "ERROR [add-card]:" (.getMessage e))
+      {:success false :error (.getMessage e)})))
+
 (defn get-cards
   "Get all flashcards for a specific document page."
   [document-id page-number]

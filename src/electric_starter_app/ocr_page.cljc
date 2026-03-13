@@ -10,7 +10,7 @@
    [electric-starter-app.rich-text-editor :as editor]
    [electric-starter-app.components :refer [Typeahead]]
    [electric-starter-app.anki-sync :refer [AnkiSyncButton]]
-   [electric-starter-app.ocr-modals :refer [ExportModal PromptDialog EditCardModal]]
+   [electric-starter-app.ocr-modals :refer [ExportModal PromptDialog EditCardModal AddCardModal]]
    [electric-starter-app.card-components :refer [CardRow get-cards*]]
    #?(:clj [electric-starter-app.page :as page])
    #?(:clj [electric-starter-app.pdf :as pdf])
@@ -607,6 +607,17 @@
                                         (swap! !prompt-gen-state assoc :active nil))
                                     (do (token (:error save-result))
                                         (swap! !prompt-gen-state assoc :active nil)))))))))
+
+                      ;; Add new card button
+                      (let [!show-add (atom false)
+                            show-add (e/watch !show-add)]
+                        (dom/button
+                          (dom/props {:style {:padding "4px 12px" :background "#28a745" :color "white" :border "none"
+                                              :border-radius "4px" :cursor "pointer" :font-size "13px" :font-weight "500"}})
+                          (dom/text "Add new")
+                          (dom/On "click" (fn [_] (reset! !show-add true)) nil))
+                        (when show-add
+                          (AddCardModal !show-add card-type selected-doc current-pdf-page !refresh)))
 
                       ;; Separator
                       (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
