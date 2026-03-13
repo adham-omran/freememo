@@ -82,7 +82,7 @@
                 (when (= active-tab :pdf) (PdfPage user-id))
                 (when (= active-tab :workspace) (OcrPage user-id enc-key !nav-target))
                 (when (= active-tab :queue) (QueuePage user-id !nav-target #(navigate! :extract)))
-                (when (= active-tab :extract) (ExtractPage user-id (:content-item-id (e/watch !nav-target)) navigate!)))))
+                (when (= active-tab :extract) (ExtractPage user-id enc-key (:content-item-id (e/watch !nav-target)) navigate!)))))
 
           ;; Not authenticated: render login page
           (LoginPage auth-error))))))
