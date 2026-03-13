@@ -277,20 +277,23 @@
               (dom/label (dom/text "Question:"))
               (dom/textarea
                 (dom/props {:value question :rows 3
-                            :style {:width "100%" :padding "8px" :margin-bottom "12px"}})
+                            :style {:width "100%" :padding "8px" :margin-bottom "12px"
+                                    :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !question ev))))
               (dom/label (dom/text "Answer:"))
               (dom/textarea
                 (dom/props {:value answer :rows 3
-                            :style {:width "100%" :padding "8px"}})
+                            :style {:width "100%" :padding "8px"
+                                    :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !answer ev)))))
             (dom/div
               (dom/label (dom/text "Cloze:"))
               (dom/textarea
                 (dom/props {:value cloze :rows 4
-                            :style {:width "100%" :padding "8px"}})
+                            :style {:width "100%" :padding "8px"
+                                    :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !cloze ev))))))
           (dom/div
@@ -319,7 +322,8 @@
 ;; Add card modal
 (e/defn AddCardModal [!show-add card-type doc-id page-number !refresh]
   (e/client
-    (let [kind card-type
+    (let [!kind (atom card-type)
+          kind (e/watch !kind)
           !question (atom "")
           !answer (atom "")
           !cloze (atom "")
@@ -373,26 +377,45 @@
           (dom/h3 (dom/props {:style {:margin-top "0" :cursor "move" :user-select "none"
                                       :padding-bottom "8px" :margin-bottom "12px"
                                       :border-bottom "1px solid #ddd"}})
-            (dom/text "Add " (if (= kind "basic") "Basic" "Cloze") " Card"))
+            (dom/text "Add Card"))
+          (dom/div
+            (dom/props {:style {:display "flex" :align-items "center" :gap "12px" :margin-bottom "16px"}})
+            (dom/label
+              (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "14px" :cursor "pointer"}})
+              (dom/input
+                (dom/props {:type "radio" :name "add-card-kind" :value "basic"
+                            :checked (= kind "basic")})
+                (dom/On "change" (fn [_] (reset! !kind "basic")) nil))
+              (dom/text "Basic"))
+            (dom/label
+              (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "14px" :cursor "pointer"}})
+              (dom/input
+                (dom/props {:type "radio" :name "add-card-kind" :value "cloze"
+                            :checked (= kind "cloze")})
+                (dom/On "change" (fn [_] (reset! !kind "cloze")) nil))
+              (dom/text "Cloze")))
           (if (= kind "basic")
             (dom/div
               (dom/label (dom/text "Question:"))
               (dom/textarea
                 (dom/props {:value question :rows 3
-                            :style {:width "100%" :padding "8px" :margin-bottom "12px"}})
+                            :style {:width "100%" :padding "8px" :margin-bottom "12px"
+                                    :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !question ev))))
               (dom/label (dom/text "Answer:"))
               (dom/textarea
                 (dom/props {:value answer :rows 3
-                            :style {:width "100%" :padding "8px"}})
+                            :style {:width "100%" :padding "8px"
+                                    :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !answer ev)))))
             (dom/div
               (dom/label (dom/text "Cloze:"))
               (dom/textarea
                 (dom/props {:value cloze :rows 4
-                            :style {:width "100%" :padding "8px"}})
+                            :style {:width "100%" :padding "8px"
+                                    :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !cloze ev))))))
           (dom/div
