@@ -315,3 +315,109 @@
                         (reset! !editing-card nil)
                         (token))
                       (token (:error result)))))))))))))
+
+;; Add card modal
+(e/defn AddCardModal [!show-add card-type doc-id page-number !refresh]
+  (e/client
+    (let [kind card-type
+          !question (atom "")
+          !answer (atom "")
+          !cloze (atom "")
+          question (e/watch !question)
+          answer (e/watch !answer)
+          cloze (e/watch !cloze)]
+      (dom/div
+        (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
+                            :background "transparent" :display "flex" :align-items "center"
+                            :justify-content "center" :z-index "1000"
+                            :pointer-events "none"}
+                    :tabindex "-1"})
+        (dom/On "keydown"
+          (fn [e]
+            #?(:cljs
+               (when (= (.-key e) "Escape")
+                 (reset! !show-add false))))
+          nil)
+        (dom/div
+          (dom/props {:style {:background "white" :border-radius "8px" :padding "24px"
+                              :width "460px" :box-shadow "0 4px 20px rgba(0,0,0,0.25)"
+                              :pointer-events "auto"}})
+          (dom/On "pointerdown"
+            (fn [e]
+              #?(:cljs
+                 (let [inner  (.-currentTarget e)
+                       h3     (.querySelector inner "h3")]
+                   (when (and h3 (or (= (.-target e) h3)
+                                     (.contains h3 (.-target e))))
+                     (.preventDefault e)
+                     (let [rect    (.getBoundingClientRect inner)
+                           sx      (.-clientX e)
+                           sy      (.-clientY e)
+                           px      (.-left rect)
+                           py      (.-top rect)
+                           move-fn (fn [me]
+                                     (set! (.-position (.-style inner)) "fixed")
+                                     (set! (.-left (.-style inner))
+                                           (str (+ px (- (.-clientX me) sx)) "px"))
+                                     (set! (.-top (.-style inner))
+                                           (str (+ py (- (.-clientY me) sy)) "px"))
+                                     (set! (.-margin (.-style inner)) "0"))
+                           up-fn   (fn self [ue]
+                                     (.releasePointerCapture inner (.-pointerId ue))
+                                     (.removeEventListener inner "pointermove" move-fn)
+                                     (.removeEventListener inner "pointerup" self))]
+                       (.setPointerCapture inner (.-pointerId e))
+                       (.addEventListener inner "pointermove" move-fn)
+                       (.addEventListener inner "pointerup" up-fn))))))
+            nil)
+          (dom/h3 (dom/props {:style {:margin-top "0" :cursor "move" :user-select "none"
+                                      :padding-bottom "8px" :margin-bottom "12px"
+                                      :border-bottom "1px solid #ddd"}})
+            (dom/text "Add " (if (= kind "basic") "Basic" "Cloze") " Card"))
+          (if (= kind "basic")
+            (dom/div
+              (dom/label (dom/text "Question:"))
+              (dom/textarea
+                (dom/props {:value question :rows 3
+                            :style {:width "100%" :padding "8px" :margin-bottom "12px"}})
+                (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
+                  (when (some? ev) (reset! !question ev))))
+              (dom/label (dom/text "Answer:"))
+              (dom/textarea
+                (dom/props {:value answer :rows 3
+                            :style {:width "100%" :padding "8px"}})
+                (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
+                  (when (some? ev) (reset! !answer ev)))))
+            (dom/div
+              (dom/label (dom/text "Cloze:"))
+              (dom/textarea
+                (dom/props {:value cloze :rows 4
+                            :style {:width "100%" :padding "8px"}})
+                (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
+                  (when (some? ev) (reset! !cloze ev))))))
+          (dom/div
+            (dom/props {:style {:display "flex" :gap "8px" :margin-top "16px"}})
+            (dom/button
+              (dom/props {:style {:padding "8px 16px"}})
+              (dom/text "Cancel")
+              (dom/On "click" (fn [_] (reset! !show-add false)) nil))
+            (dom/button
+              (dom/props {:style {:padding "8px 16px" :background "#28a745" :color "white" :border "none"
+                                  :border-radius "4px"}})
+              (dom/text "Save")
+              (let [click-event (dom/On "click" identity nil)
+                    [?token ?error] (e/Token click-event)]
+                (when ?error
+                  (dom/div (dom/props {:style {:color "red" :font-size "12px" :margin-top "8px"}})
+                    (dom/text "Error: " ?error)))
+                (when-some [token ?token]
+                  (let [fields (if (= kind "basic")
+                                {:question question :answer answer}
+                                {:cloze cloze})
+                        result (e/server (cards/add-card doc-id page-number kind fields))]
+                    (if (:success result)
+                      (do
+                        (e/server (swap! !refresh inc))
+                        (reset! !show-add false)
+                        (token))
+                      (token (:error result)))))))))))))
