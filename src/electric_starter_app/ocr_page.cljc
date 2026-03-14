@@ -554,8 +554,14 @@
                       (let [[?token _?error] (e/Token (:id current))]
                         (when-some [token ?token]
                           (let [content (or (:selection current) page-text)
-                                context-text (when use-context
+                                prev-context (when use-context
                                                (e/server (cards/get-context-pages selected-doc current-pdf-page context-window)))
+                                context-text (when use-context
+                                               (if (:selection current)
+                                                 (if prev-context
+                                                   (str prev-context "\n\n---\n\n" page-text)
+                                                   page-text)
+                                                 prev-context))
                                 generate-result (e/server
                                                   (if (= card-type "basic")
                                                     (cards/generate-basic-cards
@@ -588,8 +594,14 @@
                           (let [content (or (:selection current) page-text)
                                 prompt-text (:pre-prompt current)
                                 kind (:kind current)
-                                context-text (when use-context
+                                prev-context (when use-context
                                                (e/server (cards/get-context-pages selected-doc current-pdf-page context-window)))
+                                context-text (when use-context
+                                               (if (:selection current)
+                                                 (if prev-context
+                                                   (str prev-context "\n\n---\n\n" page-text)
+                                                   page-text)
+                                                 prev-context))
                                 generate-result (e/server
                                                   (if (= kind "basic")
                                                     (cards/generate-basic-cards
