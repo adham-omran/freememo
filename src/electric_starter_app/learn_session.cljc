@@ -103,8 +103,8 @@
                 [?token _error] (e/Token event)]
             (when-some [token ?token]
               (e/server (advance-topic* topic-type topic-id))
-              (swap! !queue-idx inc)
-              (token))))))))
+              (token)
+              (swap! !queue-idx inc))))))))
 
 ;; Session header bar
 (e/defn SessionHeader [item !queue-idx !mode idx total view-source!]
