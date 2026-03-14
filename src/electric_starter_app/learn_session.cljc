@@ -35,8 +35,8 @@
             [?token _error] (e/Token event)]
         (when-some [token ?token]
           (e/server (dismiss-topic* topic-type topic-id))
-          (swap! !queue-idx inc)
-          (token))))))
+          (token)
+          (swap! !queue-idx inc))))))
 
 ;; Shared bottom bar with Postpone + Next
 (e/defn BottomBar [topic-type topic-id !queue-idx]
@@ -77,8 +77,8 @@
                   (when (and (some? event) (pos? event))
                     (e/server (postpone-topic* topic-type topic-id event)))
                   (reset! !show-postpone false)
-                  (swap! !queue-idx inc)
-                  (token))))
+                  (token)
+                  (swap! !queue-idx inc))))
             (dom/button
               (dom/props {:style {:padding "6px 12px" :background "#f0f0f0" :border "1px solid #ccc"
                                   :border-radius "4px" :cursor "pointer" :font-size "13px"}})
