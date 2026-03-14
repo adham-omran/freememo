@@ -8,14 +8,15 @@
    [electric-starter-app.ocr-modals :refer [ExportModal PromptDialog AddCardModal]]
    [electric-starter-app.extract-cards :as extract-cards]
    #?(:clj [electric-starter-app.cards :as cards])
-   #?(:clj [electric-starter-app.settings :as settings])))
+   #?(:clj [electric-starter-app.settings :as settings])
+   #?(:clj [electric-starter-app.db :as db])))
 
 ;; State map keys:
-;; {:user-id :enc-key :doc-id :page-number :content-text}
+;; {:user-id :enc-key :doc-id :page-number :content-text :content-item-id}
 
 (e/defn ExtractToolbar [state]
   (e/client
-    (let [{:keys [user-id enc-key doc-id page-number content-text]} state
+    (let [{:keys [user-id enc-key doc-id page-number content-text content-item-id]} state
           ;; Load settings from server
           server-context-enabled (e/server (settings/get-context-enabled user-id))
           server-context-pages (e/server (settings/get-context-pages user-id))
@@ -181,10 +182,10 @@
             (dom/On "click"
               (fn [_]
                 (swap! !gen-state (fn [s]
-                  (-> s
-                      (update :queue conj {:id (str (random-uuid))
-                                           :selection (editor/get-selected-text!)})
-                      (assoc :error nil)))))
+                                    (-> s
+                                      (update :queue conj {:id (str (random-uuid))
+                                                           :selection (editor/get-selected-text!)})
+                                      (assoc :error nil)))))
               nil))
 
           ;; Generate with Prompt button
@@ -206,12 +207,43 @@
                               (reset! !captured-selection (editor/get-selected-text!))
                               (reset! !prompt-dialog-kind card-type)
                               (reset! !show-prompt-dialog true))
-                    nil)))
+              nil)))
+
+        ;; Extract button — create child extract from selected text
+        (let [!extract-state (atom {:pending nil :error nil})
+              extract-state (e/watch !extract-state)
+              pending (:pending extract-state)]
+          (dom/button
+            (dom/props {:style {:padding "4px 12px" :background "#6610f2" :color "white"
+                                :border "none" :border-radius "4px" :cursor "pointer"
+                                :font-size "13px" :font-weight "500"}
+                        :title "Extract selected text as a child content item"})
+            (dom/text "Extract")
+            (dom/On "click"
+              (fn [_]
+                (when-let [{:keys [text index length]} (editor/get-selection!)]
+                  (when (seq text)
+                    (editor/highlight-range! index length)
+                    (swap! !extract-state assoc :pending text :error nil))))
+              nil))
+          (when (:error extract-state)
+            (dom/span
+              (dom/props {:style {:color "red" :font-size "12px"}})
+              (dom/text (:error extract-state))))
+          (let [[?token _] (e/Token pending)]
+            (when-some [token ?token]
+              (let [result (e/server (db/save-content-item doc-id page-number "html" pending content-item-id))]
+                (if result
+                  (do (e/server (swap! extract-cards/!refresh inc))
+                    (reset! !extract-state {:pending nil :error nil})
+                    (token))
+                  (do (reset! !extract-state {:pending nil :error "Failed to save extract"})
+                    (token "Failed to save extract")))))))
 
         ;; Auto-advance: when not processing and queue has items, start next
         (when (and (nil? (:active gen-state)) (seq (:queue gen-state)))
           (swap! !gen-state (fn [{:keys [queue]}]
-            {:active (first queue) :queue (vec (rest queue))})))
+                              {:active (first queue) :queue (vec (rest queue))})))
 
         ;; Queue processor — processes one generation request at a time
         (when-some [current (:active gen-state)]
@@ -219,7 +251,9 @@
             (when-some [token ?token]
               (let [content (or (:selection current) content-text)
                     context-text (when use-context
-                                   (e/server (cards/get-context-pages doc-id page-number context-window)))
+                                   (if (:selection current)
+                                     content-text
+                                     (e/server (cards/get-extract-page-context doc-id page-number))))
                     generate-result (e/server
                                       (if (= card-type "basic")
                                         (cards/generate-basic-cards
@@ -230,20 +264,20 @@
                                            :card-count card-count-val :user-id user-id :enc-key enc-key})))]
                 (if-not (:success generate-result)
                   (do (token (:error generate-result))
-                      (swap! !gen-state assoc :active nil :error (:error generate-result)))
+                    (swap! !gen-state assoc :active nil :error (:error generate-result)))
                   (let [generated-cards (e/server (:cards generate-result))
-                        save-result (e/server (cards/save-cards doc-id page-number card-type generated-cards))]
+                        save-result (e/server (cards/save-cards doc-id page-number card-type generated-cards content-item-id))]
                     (if (:success save-result)
                       (do (e/server (swap! extract-cards/!refresh inc))
-                          (token)
-                          (swap! !gen-state assoc :active nil))
+                        (token)
+                        (swap! !gen-state assoc :active nil))
                       (do (token (:error save-result))
-                          (swap! !gen-state assoc :active nil)))))))))
+                        (swap! !gen-state assoc :active nil)))))))))
 
         ;; Auto-advance for prompt queue
         (when (and (nil? (:active prompt-gen-state)) (seq (:queue prompt-gen-state)))
           (swap! !prompt-gen-state (fn [{:keys [queue]}]
-            {:active (first queue) :queue (vec (rest queue))})))
+                                     {:active (first queue) :queue (vec (rest queue))})))
 
         ;; Prompt queue processor
         (when-some [current (:active prompt-gen-state)]
@@ -253,7 +287,9 @@
                     prompt-text (:pre-prompt current)
                     kind (:kind current)
                     context-text (when use-context
-                                   (e/server (cards/get-context-pages doc-id page-number context-window)))
+                                   (if (:selection current)
+                                     content-text
+                                     (e/server (cards/get-extract-page-context doc-id page-number))))
                     generate-result (e/server
                                       (if (= kind "basic")
                                         (cards/generate-basic-cards
@@ -266,15 +302,15 @@
                                            :enc-key enc-key :pre-prompt prompt-text})))]
                 (if-not (:success generate-result)
                   (do (token (:error generate-result))
-                      (swap! !prompt-gen-state assoc :active nil :error (:error generate-result)))
+                    (swap! !prompt-gen-state assoc :active nil :error (:error generate-result)))
                   (let [generated-cards (e/server (:cards generate-result))
-                        save-result (e/server (cards/save-cards doc-id page-number kind generated-cards))]
+                        save-result (e/server (cards/save-cards doc-id page-number kind generated-cards content-item-id))]
                     (if (:success save-result)
                       (do (e/server (swap! extract-cards/!refresh inc))
-                          (token)
-                          (swap! !prompt-gen-state assoc :active nil))
+                        (token)
+                        (swap! !prompt-gen-state assoc :active nil))
                       (do (token (:error save-result))
-                          (swap! !prompt-gen-state assoc :active nil)))))))))
+                        (swap! !prompt-gen-state assoc :active nil)))))))))
 
         ;; Add new card button
         (let [!show-add (atom false)
@@ -309,10 +345,10 @@
 
       ;; Pre-prompt modal dialog
       (when show-prompt-dialog
-        (PromptDialog {:!show              !show-prompt-dialog
-                       :!prompt-gen-state  !prompt-gen-state
-                       :!pre-prompt        !pre-prompt
-                       :!prompt-history    !prompt-history
+        (PromptDialog {:!show !show-prompt-dialog
+                       :!prompt-gen-state !prompt-gen-state
+                       :!pre-prompt !pre-prompt
+                       :!prompt-history !prompt-history
                        :!history-save-trigger !history-save-trigger
                        :captured-selection captured-selection
                        :prompt-dialog-kind prompt-dialog-kind})))))

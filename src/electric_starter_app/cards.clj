@@ -80,6 +80,12 @@
                (map :pages/text)
                (str/join "\n\n---\n\n")))))))
 
+(defn get-extract-page-context
+  "Get the original PDF page text for use as context when generating cards from an extract."
+  [document-id page-number]
+  (when-let [page-text (:pages/text (first (db/get-context-pages document-id page-number page-number)))]
+    page-text))
+
 ;; OpenAI API calls
 (defn parse-edn-response
   "Parse OpenAI response as EDN. Handles markdown code fences.
@@ -183,29 +189,34 @@
 (defn save-cards
   "Save generated cards to the database.
    For basic cards: expects [{:q \"...\" :a \"...\"}]
-   For cloze cards: expects [{:c \"...\"}]"
-  [document-id page-number kind cards]
-  (try
-    (let [rows (map (fn [card]
-                      (if (= kind "basic")
-                        {:document_id document-id
-                         :page_number page-number
-                         :kind kind
-                         :question (:q card)
-                         :answer (:a card)
-                         :cloze nil}
-                        {:document_id document-id
-                         :page_number page-number
-                         :kind kind
-                         :question nil
-                         :answer nil
-                         :cloze (:c card)}))
-                    cards)]
-      (db/insert-flashcards rows)
-      {:success true})
-    (catch Exception e
-      (println "ERROR [save-cards]:" (.getMessage e))
-      {:success false :error (.getMessage e)})))
+   For cloze cards: expects [{:c \"...\"}]
+   Optional content-item-id links cards to a specific extract."
+  ([document-id page-number kind cards]
+   (save-cards document-id page-number kind cards nil))
+  ([document-id page-number kind cards content-item-id]
+   (try
+     (let [rows (map (fn [card]
+                       (cond-> (if (= kind "basic")
+                                 {:document_id document-id
+                                  :page_number page-number
+                                  :kind kind
+                                  :question (:q card)
+                                  :answer (:a card)
+                                  :cloze nil}
+                                 {:document_id document-id
+                                  :page_number page-number
+                                  :kind kind
+                                  :question nil
+                                  :answer nil
+                                  :cloze (:c card)})
+                         content-item-id
+                         (assoc :content_item_id content-item-id)))
+                     cards)]
+       (db/insert-flashcards rows)
+       {:success true})
+     (catch Exception e
+       (println "ERROR [save-cards]:" (.getMessage e))
+       {:success false :error (.getMessage e)}))))
 
 (defn add-card
   "Manually add a single flashcard."
@@ -229,6 +240,16 @@
       (println "ERROR [get-cards]:" (.getMessage e))
       {:success false :error (.getMessage e)})))
 
+
+(defn get-cards-by-content-item
+  "Get all flashcards for a specific content item (extract)."
+  [content-item-id]
+  (try
+    (let [cards (db/get-flashcards-by-content-item content-item-id)]
+      {:success true :cards cards})
+    (catch Exception e
+      (println "ERROR [get-cards-by-content-item]:" (.getMessage e))
+      {:success false :error (.getMessage e)})))
 
 (defn delete-card
   "Delete a single flashcard by ID."

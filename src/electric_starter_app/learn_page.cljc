@@ -102,17 +102,17 @@
                         (let [item (e/server (nth items-vec i nil))]
                           (when item
                             (let [topic-type (:topic_type item)
-                                  filename   (or (:filename item) "-")
-                                  page-num   (:page_number item)
-                                  priority   (or (:priority item) 50)
-                                  interval   (or (:interval_days item) 1.0)
-                                  content    (or (:content item) "")
-                                  is-doc     (= topic-type "document")
-                                  truncated  (if is-doc
-                                               filename
-                                               (if (> (count content) 60)
-                                                 (str (subs content 0 60) "...")
-                                                 content))
+                                  filename (or (:filename item) "-")
+                                  page-num (:page_number item)
+                                  priority (or (:priority item) 50)
+                                  interval (or (:interval_days item) 1.0)
+                                  content (or (:content item) "")
+                                  is-doc (= topic-type "document")
+                                  truncated (if is-doc
+                                              filename
+                                              (if (> (count content) 60)
+                                                (str (subs content 0 60) "...")
+                                                content))
                                   type-label (if is-doc "Doc" "Extract")
                                   type-color (if is-doc "#dcfce7" "#fef3c7")
                                   interval-str (if (< interval 1.0)
@@ -150,17 +150,18 @@
 
 (e/defn LearnPage [user-id enc-key !nav-target navigate-to-extract!]
   (e/client
-    (let [;; Check for nav-target from PDF Documents "Open" button
-          nav-val (e/watch !nav-target)
-          initial-doc-id (when (and (map? nav-val) (:doc-id nav-val)) (:doc-id nav-val))
-          !mode (atom (if initial-doc-id :browse :overview))
+    (let [!mode (atom :overview)
           mode (e/watch !mode)
-          !browse-doc-id (atom initial-doc-id)
+          !browse-doc-id (atom nil)
           browse-doc-id (e/watch !browse-doc-id)
-          !queue-idx (atom 0)]
+          !queue-idx (atom 0)
+          ;; Reactive watch — fires when "Open" from PDF Documents sets nav-target
+          nav-val (e/watch !nav-target)]
 
-      ;; Clear nav-target after consuming it
-      (when initial-doc-id
+      ;; Consume nav-target reactively: switch to browse mode when set
+      (when (and (map? nav-val) (:doc-id nav-val))
+        (reset! !browse-doc-id (:doc-id nav-val))
+        (reset! !mode :browse)
         (reset! !nav-target nil))
 
       (case mode

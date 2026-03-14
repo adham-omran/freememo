@@ -104,6 +104,11 @@
     CREATE INDEX IF NOT EXISTS idx_flashcards_document_page
       ON flashcards(document_id, page_number)"])
 
+  ;; Link flashcards to their parent extract (NULL = page-level card from OcrPage)
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS content_item_id INTEGER
+                      REFERENCES content_items(id) ON DELETE CASCADE"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_content_item ON flashcards(content_item_id)"])
+
   ;; Anki sync columns on flashcards
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_note_id BIGINT DEFAULT NULL"])
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_synced_at TIMESTAMP DEFAULT NULL"])
@@ -136,6 +141,11 @@
   (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS next_review_at TIMESTAMP DEFAULT NULL"])
   (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS last_review_at TIMESTAMP DEFAULT NULL"])
   (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS review_count INTEGER DEFAULT 0"])
+
+  ;; Parent-child hierarchy for extract-from-extract (SuperMemo-style)
+  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS parent_content_item_id INTEGER
+                      REFERENCES content_items(id) ON DELETE CASCADE"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_content_items_parent ON content_items(parent_content_item_id)"])
 
   ;; Indexes for review queue queries
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_pages_next_review ON pages(next_review_at)"])
@@ -329,6 +339,15 @@
                          [:= :page_number page-number]]
                  :order-by [[:created_at :asc]]})))
 
+(defn get-flashcards-by-content-item
+  "Get all flashcards for a specific content item (extract)."
+  [content-item-id]
+  (jdbc/execute! ds
+    (sql/format {:select [:*]
+                 :from [:flashcards]
+                 :where [:= :content_item_id content-item-id]
+                 :order-by [[:created_at :asc]]})))
+
 (defn get-all-flashcards
   "Get all flashcards for a document (all pages)."
   [document-id]
@@ -381,14 +400,19 @@
                  :returning [:id :username]})))
 
 ;; Content item queries
-(defn save-content-item [document-id page-number kind content]
-  (jdbc/execute-one! ds
-    (sql/format {:insert-into :content_items
-                 :values [{:document_id document-id
-                           :page_number page-number
-                           :kind kind
-                           :content content}]
-                 :returning [:id]})))
+(defn save-content-item
+  ([document-id page-number kind content]
+   (save-content-item document-id page-number kind content nil))
+  ([document-id page-number kind content parent-content-item-id]
+   (jdbc/execute-one! ds
+     (sql/format {:insert-into :content_items
+                  :values [(cond-> {:document_id document-id
+                                    :page_number page-number
+                                    :kind kind
+                                    :content content}
+                             parent-content-item-id
+                             (assoc :parent_content_item_id parent-content-item-id))]
+                  :returning [:id]}))))
 
 (defn get-content-items [document-id page-number]
   (jdbc/execute! ds

@@ -11,6 +11,11 @@
   #?(:clj (cards/get-cards document-id page-number)
      :cljs nil))
 
+;; Query wrapper for extract-level cards
+(defn get-cards-by-extract* [_refresh content-item-id]
+  #?(:clj (cards/get-cards-by-content-item content-item-id)
+     :cljs nil))
+
 ;; Delete button — parameterized with !refresh atom
 (e/defn DeleteCardButton [id !refresh]
   (e/client
