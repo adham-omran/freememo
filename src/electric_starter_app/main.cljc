@@ -60,7 +60,7 @@
 
                 (dom/button
                   (dom/props {:style (tab-style :pdf)})
-                  (dom/text "PDF Documents")
+                  (dom/text "Documents")
                   (dom/On "click" (fn [_] (navigate! :pdf)) nil))
 
                 (dom/button

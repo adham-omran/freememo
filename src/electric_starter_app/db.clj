@@ -68,6 +68,14 @@
   ;; Add user_id column to documents (nullable — existing orphaned docs survive)
   (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE SET NULL"])
 
+  ;; Web import: extend documents for non-PDF content
+  (jdbc/execute! ds ["ALTER TABLE documents ALTER COLUMN file_data DROP NOT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE documents ALTER COLUMN file_size DROP NOT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE documents ALTER COLUMN mime_type DROP NOT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_type TEXT DEFAULT 'pdf'"])
+  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_url TEXT"])
+  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS html_content TEXT"])
+
   ;; Create pages table for OCR text storage
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS pages (
@@ -195,9 +203,32 @@
                            :mime_type mime-type}]
                  :returning [:id]})))
 
+(defn save-web-document
+  "Save a web article as a document with a single page containing the HTML."
+  [user-id title html-content source-type source-url]
+  (let [doc (first (jdbc/execute! ds
+                     (sql/format {:insert-into :documents
+                                  :values [{:user_id user-id
+                                            :filename title
+                                            :source_type source-type
+                                            :source_url source-url
+                                            :html_content html-content}]
+                                  :returning [:id]})))
+        doc-id (:documents/id doc)]
+    (when doc-id
+      ;; Create single page with the HTML content
+      (jdbc/execute! ds
+        (sql/format {:insert-into :pages
+                     :values [{:document_id doc-id
+                               :page_number 1
+                               :text html-content}]
+                     :on-conflict [:document_id :page_number]
+                     :do-nothing true})))
+    doc-id))
+
 (defn get-documents [user-id]
   (jdbc/execute! ds
-    (sql/format {:select [:id :filename :file_size :uploaded_at]
+    (sql/format {:select [:id :filename :file_size :uploaded_at :source_type]
                  :from [:documents]
                  :where [:= :user_id user-id]
                  :order-by [[:uploaded_at :desc]]})))
