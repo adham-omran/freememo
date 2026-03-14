@@ -51,6 +51,24 @@
                                     :border-radius "4px" :cursor "pointer" :font-size "13px"}})
                 (dom/text "Back to Learn")
                 (dom/On "click" (fn [_] (navigate! :learn)) nil))
+              (dom/button
+                (dom/props {:style {:padding "4px 10px" :background "#dc3545" :color "white"
+                                    :border "none" :border-radius "4px" :cursor "pointer"
+                                    :font-size "12px"}
+                            :title "Delete this extract and its cards"})
+                (dom/text "Delete")
+                (let [event (dom/On "click"
+                              (fn [_]
+                                #?(:cljs
+                                   (when (js/confirm "Delete this extract and all its cards?")
+                                     :delete)
+                                   :clj nil))
+                              nil)
+                      [?token _error] (e/Token event)]
+                  (when-some [token ?token]
+                    (e/server (db/delete-content-item content-item-id))
+                    (token)
+                    (navigate! :learn))))
               (if view-source!
                 (dom/span
                   (dom/props {:style {:color "#2563eb" :font-size "13px" :cursor "pointer"

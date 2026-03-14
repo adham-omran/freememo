@@ -227,11 +227,19 @@
     doc-id))
 
 (defn get-documents [user-id]
-  (jdbc/execute! ds
-    (sql/format {:select [:id :filename :file_size :uploaded_at :source_type]
-                 :from [:documents]
-                 :where [:= :user_id user-id]
-                 :order-by [[:uploaded_at :desc]]})))
+  (let [docs (jdbc/execute! ds
+               (sql/format {:select [:id :filename :file_size :uploaded_at :source_type :html_content]
+                            :from [:documents]
+                            :where [:= :user_id user-id]
+                            :order-by [[:uploaded_at :desc]]}))]
+    (mapv (fn [d]
+            (let [size (or (:documents/file_size d)
+                           (when-let [html (:documents/html_content d)]
+                             (count (.getBytes html "UTF-8"))))]
+              (-> d
+                  (assoc :documents/file_size size)
+                  (dissoc :documents/html_content))))
+          docs)))
 
 (defn delete-document [user-id id]
   (jdbc/execute! ds
@@ -585,4 +593,35 @@
                 "extract" "content_items")]
     (jdbc/execute-one! ds
       [(str "UPDATE " table " SET dismissed = true WHERE id = ?")
+       id])))
+
+(defn delete-content-item
+  "Delete a content item (extract) and cascade to children + flashcards."
+  [id]
+  (jdbc/execute! ds
+    (sql/format {:delete-from :content_items
+                 :where [:= :id id]})))
+
+(defn get-dismissed-topics
+  "Get all dismissed documents and extracts for a user."
+  [user-id]
+  (jdbc/execute! ds
+    ["SELECT 'document' AS topic_type, d.id, d.filename AS title, d.uploaded_at
+      FROM documents d
+      WHERE d.user_id = ? AND d.dismissed = true
+      UNION ALL
+      SELECT 'extract', ci.id, SUBSTRING(ci.content FROM 1 FOR 100) AS title, ci.created_at AS uploaded_at
+      FROM content_items ci JOIN documents d ON ci.document_id = d.id
+      WHERE d.user_id = ? AND ci.dismissed = true
+      ORDER BY uploaded_at DESC"
+     user-id user-id]))
+
+(defn restore-topic
+  "Restore a dismissed topic back to the review queue."
+  [topic-type id]
+  (let [table (case topic-type
+                "document" "documents"
+                "extract" "content_items")]
+    (jdbc/execute-one! ds
+      [(str "UPDATE " table " SET dismissed = false, next_review_at = NULL WHERE id = ?")
        id])))

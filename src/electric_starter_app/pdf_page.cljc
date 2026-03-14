@@ -373,7 +373,13 @@
                                                                   :cursor (if deleting "not-allowed" "pointer")
                                                                   :font-size "12px"}})
                                               (dom/text (if deleting "..." "Delete"))
-                                              (let [click-event (dom/On "click" (fn [_] id) nil)
+                                              (let [click-event (dom/On "click"
+                                                (fn [_]
+                                                  #?(:cljs
+                                                     (when (js/confirm "Delete this document? All pages, extracts, and cards will be permanently removed.")
+                                                       id)
+                                                     :clj nil))
+                                                nil)
                                                     [?token ?error] (e/Token click-event)]
                                                 (when ?error
                                                   (dom/span
@@ -383,8 +389,9 @@
                                                   (reset! !deleting true)
                                                   (let [result (e/server (pdf/delete-pdf user-id click-event))]
                                                     (if (:success result)
-                                                      (do (e/server (swap! !refresh inc))
-                                                        (token))
+                                                      (do (reset! !deleting false)
+                                                          (e/server (swap! !refresh inc))
+                                                          (token))
                                                       (do (reset! !deleting false)
                                                         (token (:error result)))))))))))))))))
                           (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))

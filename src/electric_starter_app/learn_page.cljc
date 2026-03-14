@@ -19,6 +19,18 @@
   #?(:clj (db/get-learning-queue-count user-id)
      :cljs 0))
 
+(defn get-dismissed-topics* [_refresh user-id]
+  #?(:clj (vec (db/get-dismissed-topics user-id))
+     :cljs nil))
+
+(defn restore-topic* [topic-type id]
+  #?(:clj (db/restore-topic topic-type id)
+     :cljs nil))
+
+(defn delete-content-item* [id]
+  #?(:clj (db/delete-content-item id)
+     :cljs nil))
+
 (e/defn LearnBrowse [user-id enc-key nav !mode]
   (e/client
     (let [doc-id (:doc-id nav)
@@ -152,7 +164,74 @@
           ;; Empty state
           (dom/p
             (dom/props {:style {:color "#888" :font-size "14px" :margin-top "24px"}})
-            (dom/text "All caught up! No topics due for review.")))))))
+            (dom/text "All caught up! No topics due for review.")))
+
+        ;; Dismissed items section
+        (let [!show-dismissed (atom false)
+              show-dismissed (e/watch !show-dismissed)
+              dismissed (when show-dismissed
+                          (e/server (get-dismissed-topics* refresh user-id)))]
+          (dom/div
+            (dom/props {:style {:margin-top "24px" :border-top "1px solid #e0e0e0" :padding-top "12px"}})
+            (dom/button
+              (dom/props {:style {:padding "4px 12px" :background "#f0f0f0" :border "1px solid #ccc"
+                                  :border-radius "4px" :cursor "pointer" :font-size "13px" :color "#666"}})
+              (dom/text (if show-dismissed "Hide dismissed" "Show dismissed"))
+              (dom/On "click" (fn [_] (swap! !show-dismissed not)) nil))
+
+            (when (and show-dismissed (seq dismissed))
+              (dom/div
+                (dom/props {:style {:margin-top "8px"}})
+                (e/for-by :id [item dismissed]
+                  (let [topic-type (:topic_type item)
+                        item-id (:id item)
+                        title (or (:title item) "-")
+                        type-label (if (= topic-type "document") "Doc" "Extract")]
+                    (dom/div
+                      (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
+                                          :padding "8px 10px" :border-bottom "1px solid #f0f0f0"}})
+                      (dom/span
+                        (dom/props {:style {:padding "2px 8px" :border-radius "4px" :font-size "11px"
+                                            :font-weight "600"
+                                            :background (if (= topic-type "document") "#dcfce7" "#fef3c7")}})
+                        (dom/text type-label))
+                      (dom/span
+                        (dom/props {:style {:flex "1" :font-size "13px" :overflow "hidden"
+                                            :text-overflow "ellipsis" :white-space "nowrap"}})
+                        (dom/text title))
+                      ;; Restore button
+                      (dom/button
+                        (dom/props {:style {:padding "3px 10px" :background "#2563eb" :color "white"
+                                            :border "none" :border-radius "3px" :cursor "pointer"
+                                            :font-size "12px"}})
+                        (dom/text "Restore")
+                        (let [event (dom/On "click" (fn [_] :restore) nil)
+                              [?token _] (e/Token event)]
+                          (when-some [token ?token]
+                            (e/server (restore-topic* topic-type item-id))
+                            (e/server (swap! !refresh inc))
+                            (token))))
+                      ;; Delete button
+                      (dom/button
+                        (dom/props {:style {:padding "3px 10px" :background "#dc3545" :color "white"
+                                            :border "none" :border-radius "3px" :cursor "pointer"
+                                            :font-size "12px"}})
+                        (dom/text "Delete")
+                        (let [event (dom/On "click"
+                                      (fn [_]
+                                        #?(:cljs
+                                           (when (js/confirm "Permanently delete this item?")
+                                             :delete)
+                                           :clj nil))
+                                      nil)
+                              [?token _] (e/Token event)]
+                          (when-some [token ?token]
+                            (e/server
+                              (if (= topic-type "document")
+                                (db/delete-document user-id item-id)
+                                (db/delete-content-item item-id)))
+                            (e/server (swap! !refresh inc))
+                            (token)))))))))))))))
 
 (e/defn LearnPage [user-id enc-key !nav-target navigate-to-extract!]
   (e/client
