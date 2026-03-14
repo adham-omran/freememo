@@ -147,6 +147,10 @@
                       REFERENCES content_items(id) ON DELETE CASCADE"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_content_items_parent ON content_items(parent_content_item_id)"])
 
+  ;; Dismissed flag for removing topics from queue without deleting
+  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS dismissed BOOLEAN DEFAULT false"])
+  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS dismissed BOOLEAN DEFAULT false"])
+
   ;; Indexes for review queue queries
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_pages_next_review ON pages(next_review_at)"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_content_items_next_review ON content_items(next_review_at)"])
@@ -474,6 +478,7 @@
       FROM documents d
       WHERE d.user_id = ?
         AND (d.next_review_at <= NOW() OR d.next_review_at IS NULL)
+        AND (d.dismissed = false OR d.dismissed IS NULL)
       UNION ALL
       SELECT 'extract', ci.id, ci.document_id, ci.page_number, ci.priority,
              ci.next_review_at, ci.interval_days, ci.a_factor, ci.review_count,
@@ -481,6 +486,7 @@
       FROM content_items ci JOIN documents d ON ci.document_id = d.id
       WHERE d.user_id = ?
         AND (ci.next_review_at <= NOW() OR ci.next_review_at IS NULL)
+        AND (ci.dismissed = false OR ci.dismissed IS NULL)
       ORDER BY priority ASC, next_review_at ASC NULLS FIRST"
      user-id user-id]))
 
@@ -491,10 +497,12 @@
                  ["SELECT
                      (SELECT COUNT(*) FROM documents d
                       WHERE d.user_id = ?
-                        AND (d.next_review_at <= NOW() OR d.next_review_at IS NULL))
+                        AND (d.next_review_at <= NOW() OR d.next_review_at IS NULL)
+                        AND (d.dismissed = false OR d.dismissed IS NULL))
                    + (SELECT COUNT(*) FROM content_items ci JOIN documents d ON ci.document_id = d.id
                       WHERE d.user_id = ?
-                        AND (ci.next_review_at <= NOW() OR ci.next_review_at IS NULL))
+                        AND (ci.next_review_at <= NOW() OR ci.next_review_at IS NULL)
+                        AND (ci.dismissed = false OR ci.dismissed IS NULL))
                    AS total"
                   user-id user-id])]
     (or (:total result) 0)))
@@ -513,4 +521,37 @@
                  last_review_at = NOW(),
                  review_count = COALESCE(review_count, 0) + 1
              WHERE id = ?")
+       id])))
+
+(defn update-topic-priority
+  "Update a topic's priority (0=highest, 100=lowest)."
+  [topic-type id priority]
+  (let [table (case topic-type
+                "document" "documents"
+                "extract" "content_items")]
+    (jdbc/execute-one! ds
+      [(str "UPDATE " table " SET priority = ? WHERE id = ?")
+       priority id])))
+
+(defn postpone-topic
+  "Postpone a topic by N days without changing its interval/a-factor."
+  [topic-type id days]
+  (let [table (case topic-type
+                "document" "documents"
+                "extract" "content_items")]
+    (jdbc/execute-one! ds
+      [(str "UPDATE " table "
+             SET next_review_at = NOW() + ? * INTERVAL '1 day',
+                 last_review_at = NOW()
+             WHERE id = ?")
+       (double days) id])))
+
+(defn dismiss-topic
+  "Remove a topic from the review queue without deleting it."
+  [topic-type id]
+  (let [table (case topic-type
+                "document" "documents"
+                "extract" "content_items")]
+    (jdbc/execute-one! ds
+      [(str "UPDATE " table " SET dismissed = true WHERE id = ?")
        id])))
