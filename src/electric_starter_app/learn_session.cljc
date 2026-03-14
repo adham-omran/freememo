@@ -63,7 +63,7 @@
               (dom/props {:style {:font-size "13px" :color "#666"}})
               (dom/text "days"))
             (dom/button
-              (dom/props {:style {:padding "6px 16px" :background "#f59e0b" :color "white"
+              (dom/props {:style {:padding "6px 16px" :background "#2563eb" :color "white"
                                   :border "none" :border-radius "6px" :cursor "pointer"
                                   :font-size "14px" :font-weight "600"}})
               (dom/text "Go")
@@ -87,8 +87,8 @@
 
           ;; Collapsed postpone button
           (dom/button
-            (dom/props {:style {:padding "8px 20px" :background "#f59e0b" :color "white"
-                                :border "none" :border-radius "6px" :cursor "pointer"
+            (dom/props {:style {:padding "8px 20px" :background "#f0f0f0" :color "#333"
+                                :border "1px solid #ccc" :border-radius "6px" :cursor "pointer"
                                 :font-size "14px"}})
             (dom/text "Postpone")
             (dom/On "click" (fn [_] (reset! !show-postpone true)) nil)))

@@ -58,7 +58,7 @@
 
       ;; Toolbar button
       (dom/button
-        (dom/props {:style {:padding "4px 12px" :background "#7952b3" :color "white" :border "none"
+        (dom/props {:style {:padding "4px 12px" :background "#f0f0f0" :color "#333" :border "1px solid #ccc"
                             :border-radius "4px" :cursor "pointer" :font-size "13px" :font-weight "500"}})
         (dom/text "Anki Sync...")
         (dom/On "click" (fn [_] (reset! !show-modal true)) nil))

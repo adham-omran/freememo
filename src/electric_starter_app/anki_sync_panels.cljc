@@ -119,7 +119,7 @@
           (dom/props {:style {:font-size "14px" :color "#666" :margin-bottom "16px"}})
           (dom/text "Make sure Anki is running with the AnkiConnect plugin installed."))
         (dom/button
-          (dom/props {:style {:padding "8px 16px" :background "#007bff" :color "white" :border "none"
+          (dom/props {:style {:padding "8px 16px" :background "#2563eb" :color "white" :border "none"
                               :border-radius "4px" :cursor "pointer" :font-size "14px"}})
           (dom/text "Retry")
           (dom/On "click"

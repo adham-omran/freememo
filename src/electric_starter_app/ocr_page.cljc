@@ -464,7 +464,7 @@
 
                         ;; Generate button — always enabled, enqueues requests
                       (dom/button
-                        (dom/props {:style {:padding "4px 12px" :background "#28a745" :color "white"
+                        (dom/props {:style {:padding "4px 12px" :background "#2563eb" :color "white"
                                             :border "none" :border-radius "4px" :cursor "pointer"
                                             :font-size "13px" :font-weight "bold"}
                                     :title "Generate flashcards from editor text or selected text"})
@@ -484,9 +484,9 @@
                         ;; Generate with Prompt button
                       (dom/button
                         (dom/props {:style {:padding "4px 12px"
-                                            :background "#17a2b8"
-                                            :color "white"
-                                            :border "none"
+                                            :background "#f0f0f0"
+                                            :color "#333"
+                                            :border "1px solid #ccc"
                                             :border-radius "4px"
                                             :cursor "pointer"
                                             :font-size "13px"
@@ -507,7 +507,7 @@
                           extract-state (e/watch !extract-state)
                           pending (:pending extract-state)]
                       (dom/button
-                        (dom/props {:style {:padding "4px 12px" :background "#6610f2" :color "white"
+                        (dom/props {:style {:padding "4px 12px" :background "#2563eb" :color "white"
                                             :border "none" :border-radius "4px" :cursor "pointer"
                                             :font-size "13px" :font-weight "500"}
                                     :title "Extract selected text as a content item"})
@@ -617,7 +617,7 @@
                     (let [!show-add (atom false)
                           show-add (e/watch !show-add)]
                       (dom/button
-                        (dom/props {:style {:padding "4px 12px" :background "#28a745" :color "white" :border "none"
+                        (dom/props {:style {:padding "4px 12px" :background "#f0f0f0" :color "#333" :border "1px solid #ccc"
                                             :border-radius "4px" :cursor "pointer" :font-size "13px" :font-weight "500"}})
                         (dom/text "Add new")
                         (dom/On "click" (fn [_] (reset! !show-add true)) nil))
@@ -631,7 +631,7 @@
                     (let [!show-export (atom false)
                           show-export (e/watch !show-export)]
                       (dom/button
-                        (dom/props {:style {:padding "4px 12px" :background "#6c757d" :color "white" :border "none"
+                        (dom/props {:style {:padding "4px 12px" :background "#f0f0f0" :color "#333" :border "1px solid #ccc"
                                             :border-radius "4px" :cursor "pointer" :font-size "13px" :font-weight "500"}})
                         (dom/text "Export...")
                         (dom/On "click" (fn [_] (reset! !show-export true)) nil))
