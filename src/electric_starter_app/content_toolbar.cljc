@@ -239,9 +239,8 @@
             (when-some [token ?token]
               (let [result (e/server (db/save-content-item doc-id page-number "html" pending content-item-id))]
                 (if result
-                  (do (e/server (swap! !refresh inc))
-                    (reset! !extract-state {:pending nil :error nil})
-                    (token))
+                  (do (reset! !extract-state {:pending nil :error nil})
+                      (token))
                   (do (reset! !extract-state {:pending nil :error "Failed to save extract"})
                     (token "Failed to save extract")))))))
 
