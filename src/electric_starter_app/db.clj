@@ -141,6 +141,15 @@
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_pages_next_review ON pages(next_review_at)"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_content_items_next_review ON content_items(next_review_at)"])
 
+  ;; Scheduling columns for documents (incremental reading at document level)
+  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS priority INTEGER DEFAULT 50"])
+  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS interval_days REAL DEFAULT 1.0"])
+  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS a_factor REAL DEFAULT 2.0"])
+  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS next_review_at TIMESTAMP DEFAULT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS last_review_at TIMESTAMP DEFAULT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS review_count INTEGER DEFAULT 0"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_documents_next_review ON documents(next_review_at)"])
+
   (println "Database ready."))
 
 ;; Query functions
@@ -432,17 +441,15 @@
 
 ;; Learning queue functions
 (defn get-learning-queue
-  "Unified queue of due pages and extracts for incremental reading."
+  "Unified queue of due documents and extracts for incremental reading."
   [user-id]
   (jdbc/execute! ds
-    ["SELECT 'page' AS topic_type, p.id, p.document_id, p.page_number, p.priority,
-             p.next_review_at, p.interval_days, p.a_factor, p.review_count,
-             p.text AS content, d.filename
-      FROM pages p JOIN documents d ON p.document_id = d.id
+    ["SELECT 'document' AS topic_type, d.id, d.id AS document_id, 0 AS page_number,
+             d.priority, d.next_review_at, d.interval_days, d.a_factor, d.review_count,
+             NULL AS content, d.filename
+      FROM documents d
       WHERE d.user_id = ?
-        AND p.text IS NOT NULL
-        AND (p.is_done IS NOT TRUE)
-        AND (p.next_review_at <= NOW() OR p.next_review_at IS NULL)
+        AND (d.next_review_at <= NOW() OR d.next_review_at IS NULL)
       UNION ALL
       SELECT 'extract', ci.id, ci.document_id, ci.page_number, ci.priority,
              ci.next_review_at, ci.interval_days, ci.a_factor, ci.review_count,
@@ -458,9 +465,9 @@
   [user-id]
   (let [result (jdbc/execute-one! ds
                  ["SELECT
-                     (SELECT COUNT(*) FROM pages p JOIN documents d ON p.document_id = d.id
-                      WHERE d.user_id = ? AND p.text IS NOT NULL AND (p.is_done IS NOT TRUE)
-                        AND (p.next_review_at <= NOW() OR p.next_review_at IS NULL))
+                     (SELECT COUNT(*) FROM documents d
+                      WHERE d.user_id = ?
+                        AND (d.next_review_at <= NOW() OR d.next_review_at IS NULL))
                    + (SELECT COUNT(*) FROM content_items ci JOIN documents d ON ci.document_id = d.id
                       WHERE d.user_id = ?
                         AND (ci.next_review_at <= NOW() OR ci.next_review_at IS NULL))
@@ -472,6 +479,7 @@
   "Advance a topic's review schedule using A-Factor algorithm."
   [topic-type id]
   (let [table (case topic-type
+                "document" "documents"
                 "page" "pages"
                 "extract" "content_items")]
     (jdbc/execute-one! ds
