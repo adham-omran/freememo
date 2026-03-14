@@ -485,6 +485,17 @@
                  :where [:= :d/user_id user-id]
                  :order-by [[:ci/created_at :desc]]})))
 
+(defn get-knowledge-tree
+  "Fetch all content_items with parent references for building the knowledge tree."
+  [user-id]
+  (jdbc/execute! ds
+    (sql/format {:select [:ci/id :ci/document_id :ci/page_number :ci/content
+                          :ci/parent_content_item_id :ci/dismissed :ci/created_at]
+                 :from [[:content_items :ci]]
+                 :join [[:documents :d] [:= :ci/document_id :d/id]]
+                 :where [:= :d/user_id user-id]
+                 :order-by [[:ci/document_id :asc] [:ci/page_number :asc] [:ci/created_at :asc]]})))
+
 ;; Anki sync functions
 (defn set-anki-note-id
   "Set anki_note_id and anki_synced_at for a flashcard."

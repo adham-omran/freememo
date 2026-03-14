@@ -6,6 +6,7 @@
             [electric-starter-app.pdf-page :refer [PdfPage]]
             [electric-starter-app.learn-page :refer [LearnPage]]
             [electric-starter-app.extract-page :refer [ExtractPage]]
+            [electric-starter-app.contents-page :refer [ContentsPage]]
             [electric-starter-app.login-page :refer [LoginPage]]
             #?(:clj [electric-starter-app.settings :as settings])))
 
@@ -54,6 +55,11 @@
                   (dom/On "click" (fn [_] (navigate! :home)) nil))
 
                 (dom/button
+                  (dom/props {:style (tab-style :contents)})
+                  (dom/text "Contents")
+                  (dom/On "click" (fn [_] (navigate! :contents)) nil))
+
+                (dom/button
                   (dom/props {:style (tab-style :settings)})
                   (dom/text "Settings")
                   (dom/On "click" (fn [_] (navigate! :settings)) nil))
@@ -70,8 +76,9 @@
 
               ;; Tab content
               (dom/div
-                (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:extract :learn} active-tab) "hidden" "auto")}})
+                (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:extract :learn :contents} active-tab) "hidden" "auto")}})
                 (when (= active-tab :home) (HomePage navigate!))
+                (when (= active-tab :contents) (ContentsPage user-id !nav-target navigate!))
                 (when (= active-tab :settings) (SettingsPage user-id username enc-key))
                 (when (= active-tab :pdf) (PdfPage user-id !nav-target navigate!))
                 (when (= active-tab :learn) (LearnPage user-id enc-key !nav-target #(navigate! :extract)))
