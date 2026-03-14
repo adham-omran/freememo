@@ -117,6 +117,23 @@
                       REFERENCES content_items(id) ON DELETE CASCADE"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_content_item ON flashcards(content_item_id)"])
 
+  ;; Source reference columns
+  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_reference TEXT"])
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS source_reference TEXT"])
+
+  ;; Backfill source_reference on documents from filename + URL
+  (jdbc/execute! ds ["UPDATE documents
+                      SET source_reference = filename || CASE WHEN source_url IS NOT NULL THEN ' — ' || source_url ELSE '' END
+                      WHERE source_reference IS NULL OR source_reference = ''"])
+  ;; Backfill source_reference on existing cards from their parent document
+  (jdbc/execute! ds ["UPDATE flashcards f
+                      SET source_reference = d.source_reference
+                      FROM documents d
+                      WHERE f.document_id = d.id
+                        AND (f.source_reference IS NULL OR f.source_reference = '')
+                        AND d.source_reference IS NOT NULL
+                        AND d.source_reference != ''"])
+
   ;; Anki sync columns on flashcards
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_note_id BIGINT DEFAULT NULL"])
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_synced_at TIMESTAMP DEFAULT NULL"])
@@ -200,19 +217,22 @@
                            :filename filename
                            :file_data file-bytes
                            :file_size file-size
-                           :mime_type mime-type}]
+                           :mime_type mime-type
+                           :source_reference filename}]
                  :returning [:id]})))
 
 (defn save-web-document
   "Save a web article as a document with a single page containing the HTML."
   [user-id title html-content source-type source-url]
-  (let [doc (first (jdbc/execute! ds
+  (let [source-ref (str title (when source-url (str " — " source-url)))
+        doc (first (jdbc/execute! ds
                      (sql/format {:insert-into :documents
                                   :values [{:user_id user-id
                                             :filename title
                                             :source_type source-type
                                             :source_url source-url
-                                            :html_content html-content}]
+                                            :html_content html-content
+                                            :source_reference source-ref}]
                                   :returning [:id]})))
         doc-id (:documents/id doc)]
     (when doc-id
@@ -257,6 +277,19 @@
                  :where [:and
                          [:= :id id]
                          [:= :user_id user-id]]})))
+
+(defn update-document-source [document-id source-reference]
+  (jdbc/execute-one! ds
+    (sql/format {:update :documents
+                 :set {:source_reference source-reference}
+                 :where [:= :id document-id]})))
+
+(defn get-document-source [document-id]
+  (:documents/source_reference
+    (jdbc/execute-one! ds
+      (sql/format {:select [:source_reference]
+                   :from [:documents]
+                   :where [:= :id document-id]}))))
 
 ;; Page queries
 (defn save-page-text

@@ -231,6 +231,24 @@
         (when (seq cloze-fields)
           (str "cloze \u2192 " (first cloze-fields))))
 
+      ;; Source field name (for "separate field" mode)
+      (dom/div
+        (dom/props {:style {:margin-bottom "12px"}})
+        (dom/label
+          (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
+          (dom/text "Source Field"))
+        (dom/input
+          (dom/props {:type "text"
+                      :value (e/watch (:!source-field form))
+                      :placeholder "Source"
+                      :title "Name of the Anki field for source info. Used when 'Separate field' mode is selected in Settings."
+                      :style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
+                              :font-size "14px" :width "200px"}})
+          (dom/On "change" (fn [e] (reset! (:!source-field form) (-> e .-target .-value))) nil))
+        (dom/span
+          (dom/props {:style {:font-size "11px" :color "#999" :margin-left "8px"}})
+          (dom/text "Anki field name for source reference")))
+
       ;; Options
       (AnkiSyncOptions conn form))))
 

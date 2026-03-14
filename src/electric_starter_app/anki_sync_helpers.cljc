@@ -14,6 +14,21 @@
       (str "<p>" header-text "</p>" base)
       base)))
 
+(defn wrap-p
+  "Wrap text in <p> tags if not already wrapped in HTML block tags."
+  [text]
+  (if (or (str/blank? text)
+          (str/starts-with? (str/trim text) "<"))
+    text
+    (str "<p>" text "</p>")))
+
+(defn append-source
+  "Append source reference HTML to card content when source-display-mode is 'append'."
+  [content source-ref]
+  (if (and (not (str/blank? source-ref)))
+    (str content "\n<hr><small style='color:#999'>Source: " source-ref "</small>")
+    content))
+
 #?(:cljs
    (defn anki-call!
      "Call AnkiConnect API. Returns a Promise resolving to the result value."
@@ -24,15 +39,15 @@
                      :body (js/JSON.stringify
                              (clj->js (cond-> {:action action :version 6}
                                         params (assoc :params params))))}))
-         (.then (fn [resp]
-                  (when-not (.-ok resp)
-                    (throw (js/Error. (str "HTTP " (.-status resp)))))
-                  (.json resp)))
-         (.then (fn [json]
-                  (let [result (js->clj json :keywordize-keys true)]
-                    (when (:error result)
-                      (throw (js/Error. (str (:error result)))))
-                    (:result result)))))))
+       (.then (fn [resp]
+                (when-not (.-ok resp)
+                  (throw (js/Error. (str "HTTP " (.-status resp)))))
+                (.json resp)))
+       (.then (fn [json]
+                (let [result (js->clj json :keywordize-keys true)]
+                  (when (:error result)
+                    (throw (js/Error. (str (:error result)))))
+                  (:result result)))))))
 
 #?(:cljs
    (defn fetch-anki-config!
@@ -42,34 +57,43 @@
            #js [(anki-call! "deckNames" nil)
                 (anki-call! "modelNames" nil)
                 (anki-call! "getTags" nil)])
-         (.then (fn [results]
-                  {:decks  (vec (js->clj (aget results 0)))
-                   :models (vec (js->clj (aget results 1)))
-                   :tags   (vec (js->clj (aget results 2)))})))))
+       (.then (fn [results]
+                {:decks (vec (js->clj (aget results 0)))
+                 :models (vec (js->clj (aget results 1)))
+                 :tags (vec (js->clj (aget results 2)))})))))
 
 #?(:cljs
    (defn build-note
      "Build an AnkiConnect note map for addNote.
       settings = {:deck :basic-model :cloze-model :basic-fields :cloze-fields
-                  :allow-dupes :use-header :header-text :tags}"
+                  :allow-dupes :use-header :header-text :tags :source-display-mode}"
      [card settings]
      (let [{:keys [deck basic-model cloze-model basic-fields cloze-fields
-                   allow-dupes use-header header-text tags]} settings
+                   allow-dupes use-header header-text tags source-display-mode]} settings
            kind (:flashcards/kind card)
            basic? (= kind "basic")
            model (if basic? basic-model cloze-model)
            fields (if basic? basic-fields cloze-fields)
+           source-ref (:flashcards/source_reference card)
+           append-source? (and (= source-display-mode "append") (not (str/blank? source-ref)))
+           field-source? (and (= source-display-mode "field") (not (str/blank? source-ref)))
            field-map (if basic?
-                       {(first fields) (prepend-header (or (:flashcards/question card) "") use-header header-text)
-                        (second fields) (or (:flashcards/answer card) "")}
-                       {(first fields) (prepend-header (or (:flashcards/cloze card) "") use-header header-text)})]
+                       (cond-> {(first fields) (prepend-header (wrap-p (or (:flashcards/question card) "")) use-header header-text)
+                                (second fields) (if append-source?
+                                                  (append-source (wrap-p (or (:flashcards/answer card) "")) source-ref)
+                                                  (wrap-p (or (:flashcards/answer card) "")))}
+                         field-source? (assoc (or (:source-field settings) "Source") (wrap-p source-ref)))
+                       (cond-> {(first fields) (if append-source?
+                                                 (append-source (prepend-header (or (:flashcards/cloze card) "") use-header header-text) source-ref)
+                                                 (prepend-header (or (:flashcards/cloze card) "") use-header header-text))}
+                         field-source? (assoc (or (:source-field settings) "Source") source-ref)))]
        (cond-> {:deckName deck
                 :modelName model
                 :fields field-map
                 :tags tags}
          (not allow-dupes) (assoc :options {:allowDuplicate false
                                             :duplicateScope "deck"})
-         allow-dupes       (assoc :options {:allowDuplicate true})))))
+         allow-dupes (assoc :options {:allowDuplicate true})))))
 
 #?(:cljs
    (defn do-anki-push!
@@ -77,7 +101,7 @@
       settings = {:deck :basic-model :cloze-model :basic-fields :cloze-fields
                   :allow-dupes :use-header :header-text :tags}"
      [cards settings]
-     (let [{:keys [basic-fields cloze-fields use-header header-text tags]} settings
+     (let [{:keys [basic-fields cloze-fields use-header header-text tags source-display-mode]} settings
            new-cards (filter #(nil? (:flashcards/anki_note_id %)) cards)
            existing-cards (filter #(some? (:flashcards/anki_note_id %)) cards)]
        (->
@@ -90,18 +114,18 @@
                    (fn [result]
                      (let [note (build-note card settings)]
                        (-> (anki-call! "addNote" {:note note})
-                           (.then (fn [note-id]
-                                    (if note-id
-                                      (update result :pairs conj
-                                        {:card-id (:flashcards/id card)
-                                         :anki-note-id note-id})
-                                      (update result :skipped conj
-                                        {:card-id (:flashcards/id card)
-                                         :reason "No note ID returned"}))))
-                           (.catch (fn [err]
-                                     (update result :errors conj
-                                       {:card-id (:flashcards/id card)
-                                        :error (.-message err)}))))))))
+                         (.then (fn [note-id]
+                                  (if note-id
+                                    (update result :pairs conj
+                                      {:card-id (:flashcards/id card)
+                                       :anki-note-id note-id})
+                                    (update result :skipped conj
+                                      {:card-id (:flashcards/id card)
+                                       :reason "No note ID returned"}))))
+                         (.catch (fn [err]
+                                   (update result :errors conj
+                                     {:card-id (:flashcards/id card)
+                                      :error (.-message err)}))))))))
                (.resolve js/Promise acc)
                new-cards)))
          (.then
@@ -113,24 +137,33 @@
                      (let [kind (:flashcards/kind card)
                            basic? (= kind "basic")
                            fields (if basic? basic-fields cloze-fields)
+                           source-ref (:flashcards/source_reference card)
+                           append-src? (and (= source-display-mode "append") (not (str/blank? source-ref)))
+                           field-src? (and (= source-display-mode "field") (not (str/blank? source-ref)))
                            field-map (if basic?
-                                       {(first fields) (prepend-header (or (:flashcards/question card) "") use-header header-text)
-                                        (second fields) (or (:flashcards/answer card) "")}
-                                       {(first fields) (prepend-header (or (:flashcards/cloze card) "") use-header header-text)})]
+                                       (cond-> {(first fields) (prepend-header (wrap-p (or (:flashcards/question card) "")) use-header header-text)
+                                                (second fields) (if append-src?
+                                                                  (append-source (wrap-p (or (:flashcards/answer card) "")) source-ref)
+                                                                  (wrap-p (or (:flashcards/answer card) "")))}
+                                         field-src? (assoc (or (:source-field settings) "Source") (wrap-p source-ref)))
+                                       (cond-> {(first fields) (if append-src?
+                                                                 (append-source (prepend-header (or (:flashcards/cloze card) "") use-header header-text) source-ref)
+                                                                 (prepend-header (or (:flashcards/cloze card) "") use-header header-text))}
+                                         field-src? (assoc (or (:source-field settings) "Source") source-ref)))]
                        (-> (anki-call! "updateNote"
                              {:note {:id (:flashcards/anki_note_id card)
                                      :fields field-map
                                      :tags tags}})
-                           (.then (fn [_]
-                                    (-> result
-                                        (update :updated inc)
-                                        (update :pairs conj
-                                          {:card-id (:flashcards/id card)
-                                           :anki-note-id (:flashcards/anki_note_id card)}))))
-                           (.catch (fn [err]
-                                     (update result :errors conj
-                                       {:card-id (:flashcards/id card)
-                                        :error (.-message err)}))))))))
+                         (.then (fn [_]
+                                  (-> result
+                                    (update :updated inc)
+                                    (update :pairs conj
+                                      {:card-id (:flashcards/id card)
+                                       :anki-note-id (:flashcards/anki_note_id card)}))))
+                         (.catch (fn [err]
+                                   (update result :errors conj
+                                     {:card-id (:flashcards/id card)
+                                      :error (.-message err)}))))))))
                (.resolve js/Promise acc)
                existing-cards)))))))
 
@@ -144,39 +177,39 @@
        (if (empty? note-ids)
          (.resolve js/Promise {:updates []})
          (-> (anki-call! "notesInfo" {:notes note-ids})
-             (.then
-               (fn [notes]
-                 (let [updates
-                       (reduce
-                         (fn [acc anki-note]
-                           (let [anki-note (js->clj anki-note :keywordize-keys true)
-                                 note-id (:noteId anki-note)
-                                 card (get id->card note-id)]
-                             (if-not card
-                               acc
-                               (let [kind (:flashcards/kind card)
-                                     basic? (= kind "basic")
-                                     fields-map (:fields anki-note)
-                                     get-field (fn [fname]
-                                                 (:value (get fields-map (keyword fname))))
-                                     update-map
-                                     (if basic?
-                                       (let [q (get-field (first basic-fields))
-                                             a (get-field (second basic-fields))
-                                             local-q (or (:flashcards/question card) "")
-                                             local-a (or (:flashcards/answer card) "")]
-                                         (when (or (not= q local-q) (not= a local-a))
-                                           {:card-id (:flashcards/id card)
-                                            :question q :answer a}))
-                                       (let [c (get-field (first cloze-fields))
-                                             local-c (or (:flashcards/cloze card) "")]
-                                         (when (not= c local-c)
-                                           {:card-id (:flashcards/id card)
-                                            :cloze c})))]
-                                 (if update-map (conj acc update-map) acc)))))
-                         []
-                         (js->clj notes))]
-                   {:updates updates}))))))))
+           (.then
+             (fn [notes]
+               (let [updates
+                     (reduce
+                       (fn [acc anki-note]
+                         (let [anki-note (js->clj anki-note :keywordize-keys true)
+                               note-id (:noteId anki-note)
+                               card (get id->card note-id)]
+                           (if-not card
+                             acc
+                             (let [kind (:flashcards/kind card)
+                                   basic? (= kind "basic")
+                                   fields-map (:fields anki-note)
+                                   get-field (fn [fname]
+                                               (:value (get fields-map (keyword fname))))
+                                   update-map
+                                   (if basic?
+                                     (let [q (get-field (first basic-fields))
+                                           a (get-field (second basic-fields))
+                                           local-q (or (:flashcards/question card) "")
+                                           local-a (or (:flashcards/answer card) "")]
+                                       (when (or (not= q local-q) (not= a local-a))
+                                         {:card-id (:flashcards/id card)
+                                          :question q :answer a}))
+                                     (let [c (get-field (first cloze-fields))
+                                           local-c (or (:flashcards/cloze card) "")]
+                                       (when (not= c local-c)
+                                         {:card-id (:flashcards/id card)
+                                          :cloze c})))]
+                               (if update-map (conj acc update-map) acc)))))
+                       []
+                       (js->clj notes))]
+                 {:updates updates}))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Cross-platform wrappers — avoid #?(:cljs) inside e/defn bodies.
@@ -190,18 +223,18 @@
   (let [{:keys [!status !error !decks !models !selected-deck !basic-model !cloze-model !all-tags]} conn]
     #?(:cljs
        (-> (fetch-anki-config!)
-           (.then (fn [{:keys [decks models tags]}]
-                    (reset! !decks decks)
-                    (reset! !models models)
-                    (reset! !all-tags tags)
-                    (when (seq decks) (reset! !selected-deck (first decks)))
-                    (when (seq models)
-                      (reset! !basic-model (first models))
-                      (reset! !cloze-model (first models)))
-                    (reset! !status :connected)))
-           (.catch (fn [err]
-                     (reset! !error (str "Cannot connect to Anki: " (.-message err)))
-                     (reset! !status :error))))
+         (.then (fn [{:keys [decks models tags]}]
+                  (reset! !decks decks)
+                  (reset! !models models)
+                  (reset! !all-tags tags)
+                  (when (seq decks) (reset! !selected-deck (first decks)))
+                  (when (seq models)
+                    (reset! !basic-model (first models))
+                    (reset! !cloze-model (first models)))
+                  (reset! !status :connected)))
+         (.catch (fn [err]
+                   (reset! !error (str "Cannot connect to Anki: " (.-message err)))
+                   (reset! !status :error))))
        :clj nil)))
 
 (defn run-fetch-fields!
@@ -210,8 +243,8 @@
   #?(:cljs
      (when model-name
        (-> (anki-call! "modelFieldNames" {:modelName model-name})
-           (.then (fn [fields] (reset! !fields-atom (vec (js->clj fields)))))
-           (.catch (fn [_] (reset! !fields-atom [])))))
+         (.then (fn [fields] (reset! !fields-atom (vec (js->clj fields)))))
+         (.catch (fn [_] (reset! !fields-atom [])))))
      :clj nil))
 
 (defn run-push!
@@ -223,15 +256,15 @@
   (let [{:keys [!phase !result !error !push-pairs]} sync]
     #?(:cljs
        (-> (do-anki-push! cards settings)
-           (.then (fn [result]
-                    (reset! !result result)
-                    (if (seq (:pairs result))
-                      (do (reset! !push-pairs (:pairs result))
-                          (reset! !phase :recording))
-                      (reset! !phase :done))))
-           (.catch (fn [err]
-                     (reset! !error (.-message err))
-                     (reset! !phase :error))))
+         (.then (fn [result]
+                  (reset! !result result)
+                  (if (seq (:pairs result))
+                    (do (reset! !push-pairs (:pairs result))
+                      (reset! !phase :recording))
+                    (reset! !phase :done))))
+         (.catch (fn [err]
+                   (reset! !error (.-message err))
+                   (reset! !phase :error))))
        :clj nil)))
 
 (defn run-pull!
@@ -243,16 +276,16 @@
         {:keys [!phase !result !error !pull-updates]} sync]
     #?(:cljs
        (-> (do-anki-pull! cards basic-fields cloze-fields)
-           (.then (fn [result]
-                    (if (empty? (:updates result))
-                      (do (reset! !result result)
-                          (reset! !phase :done))
-                      (do (reset! !result result)
-                          (reset! !pull-updates (:updates result))
-                          (reset! !phase :recording)))))
-           (.catch (fn [err]
-                     (reset! !error (.-message err))
-                     (reset! !phase :error))))
+         (.then (fn [result]
+                  (if (empty? (:updates result))
+                    (do (reset! !result result)
+                      (reset! !phase :done))
+                    (do (reset! !result result)
+                      (reset! !pull-updates (:updates result))
+                      (reset! !phase :recording)))))
+         (.catch (fn [err]
+                   (reset! !error (.-message err))
+                   (reset! !phase :error))))
        :clj nil)))
 
 (defn escape-key?

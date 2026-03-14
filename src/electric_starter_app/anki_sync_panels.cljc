@@ -16,27 +16,31 @@
    sync = {:!phase :!result :!error :!push-pairs :!pull-updates}"
   [user-id selected-doc current-pdf-page !refresh conn form sync]
   (let [{:keys [!phase !error !push-pairs !pull-updates]} sync
-        sync-phase    (e/watch (:!phase sync))
-        scope         (e/watch (:!scope form))
+        sync-phase (e/watch (:!phase sync))
+        scope (e/watch (:!scope form))
         selected-deck (e/watch (:!selected-deck conn))
-        basic-model   (e/watch (:!basic-model conn))
-        cloze-model   (e/watch (:!cloze-model conn))
-        basic-fields  (e/watch (:!basic-fields form))
-        cloze-fields  (e/watch (:!cloze-fields form))
-        allow-dupes   (e/watch (:!allow-dupes form))
-        use-header    (e/watch (:!use-header form))
-        header-text   (e/watch (:!header-text form))
-        use-tags      (e/watch (:!use-tags form))
-        tags          (e/watch (:!tags form))
-        settings      {:deck selected-deck
-                       :basic-model basic-model
-                       :cloze-model cloze-model
-                       :basic-fields basic-fields
-                       :cloze-fields cloze-fields
-                       :allow-dupes allow-dupes
-                       :use-header use-header
-                       :header-text header-text
-                       :tags tags}]
+        basic-model (e/watch (:!basic-model conn))
+        cloze-model (e/watch (:!cloze-model conn))
+        basic-fields (e/watch (:!basic-fields form))
+        cloze-fields (e/watch (:!cloze-fields form))
+        allow-dupes (e/watch (:!allow-dupes form))
+        use-header (e/watch (:!use-header form))
+        header-text (e/watch (:!header-text form))
+        use-tags (e/watch (:!use-tags form))
+        tags (e/watch (:!tags form))
+        source-display-mode (e/server (settings/get-source-display-mode user-id))
+        source-field (e/watch (:!source-field form))
+        settings {:deck selected-deck
+                  :basic-model basic-model
+                  :cloze-model cloze-model
+                  :basic-fields basic-fields
+                  :cloze-fields cloze-fields
+                  :allow-dupes allow-dupes
+                  :use-header use-header
+                  :header-text header-text
+                  :tags tags
+                  :source-display-mode source-display-mode
+                  :source-field source-field}]
 
     ;; Record push pairs on server
     (when (and (= sync-phase :recording) (some? (e/watch !push-pairs)))
@@ -46,17 +50,17 @@
           (let [result (e/server (sync/record-pushed-notes pairs))]
             (if (:success result)
               (do (e/server (swap! !refresh inc))
-                  (e/server (settings/save-anki-sync-settings user-id
-                    {:scope scope :deck selected-deck
-                     :basic-model basic-model :cloze-model cloze-model
-                     :allow-dupes allow-dupes
-                     :use-header use-header :header-text header-text
-                     :use-tags use-tags :tags tags}))
-                  (reset! !phase :done)
-                  (token))
+                (e/server (settings/save-anki-sync-settings user-id
+                            {:scope scope :deck selected-deck
+                             :basic-model basic-model :cloze-model cloze-model
+                             :allow-dupes allow-dupes
+                             :use-header use-header :header-text header-text
+                             :use-tags use-tags :tags tags}))
+                (reset! !phase :done)
+                (token))
               (do (reset! !error (:error result))
-                  (reset! !phase :error)
-                  (token)))))))
+                (reset! !phase :error)
+                (token)))))))
 
     ;; Record pull updates on server
     (when (and (= sync-phase :recording) (some? (e/watch !pull-updates)))
@@ -66,17 +70,17 @@
           (let [result (e/server (sync/apply-pull-updates updates))]
             (if (:success result)
               (do (e/server (swap! !refresh inc))
-                  (e/server (settings/save-anki-sync-settings user-id
-                    {:scope scope :deck selected-deck
-                     :basic-model basic-model :cloze-model cloze-model
-                     :allow-dupes allow-dupes
-                     :use-header use-header :header-text header-text
-                     :use-tags use-tags :tags tags}))
-                  (reset! !phase :done)
-                  (token))
+                (e/server (settings/save-anki-sync-settings user-id
+                            {:scope scope :deck selected-deck
+                             :basic-model basic-model :cloze-model cloze-model
+                             :allow-dupes allow-dupes
+                             :use-header use-header :header-text header-text
+                             :use-tags use-tags :tags tags}))
+                (reset! !phase :done)
+                (token))
               (do (reset! !error (:error result))
-                  (reset! !phase :error)
-                  (token)))))))
+                (reset! !phase :error)
+                (token)))))))
 
     ;; Pull execution
     (e/client
@@ -87,7 +91,7 @@
                                         :page-number page-num}))]
           (if-not (:success cards-result)
             (do (reset! !error (:error cards-result))
-                (reset! !phase :error))
+              (reset! !phase :error))
             (let [cards (:cards cards-result)]
               (helpers/run-pull! cards settings sync))))))
 
@@ -100,7 +104,7 @@
                                         :page-number page-num}))]
           (if-not (:success cards-result)
             (do (reset! !error (:error cards-result))
-                (reset! !phase :error))
+              (reset! !phase :error))
             (let [cards (:cards cards-result)]
               (helpers/run-push! cards (assoc settings :tags (if use-tags tags [])) sync))))))))
 
@@ -188,7 +192,7 @@
   [user-id !show-modal conn form sync]
   (e/client
     (let [conn-status (e/watch (:!status conn))
-          sync-phase  (e/watch (:!phase sync))]
+          sync-phase (e/watch (:!phase sync))]
       (dom/div
         (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
                             :background "rgba(0,0,0,0.5)" :display "flex" :align-items "center"
@@ -223,19 +227,19 @@
    form = {:!basic-fields :!cloze-fields ...}"
   [user-id selected-doc current-pdf-page !refresh !show-modal conn form]
   (e/client
-    (let [!sync-phase   (atom nil)
-          !sync-result  (atom nil)
-          !sync-error   (atom nil)
-          !push-pairs   (atom nil)
+    (let [!sync-phase (atom nil)
+          !sync-result (atom nil)
+          !sync-error (atom nil)
+          !push-pairs (atom nil)
           !pull-updates (atom nil)
-          sync          {:!phase       !sync-phase
-                         :!result      !sync-result
-                         :!error       !sync-error
-                         :!push-pairs  !push-pairs
-                         :!pull-updates !pull-updates}
-          conn-status   (e/watch (:!status conn))
-          basic-model   (e/watch (:!basic-model conn))
-          cloze-model   (e/watch (:!cloze-model conn))]
+          sync {:!phase !sync-phase
+                :!result !sync-result
+                :!error !sync-error
+                :!push-pairs !push-pairs
+                :!pull-updates !pull-updates}
+          conn-status (e/watch (:!status conn))
+          basic-model (e/watch (:!basic-model conn))
+          cloze-model (e/watch (:!cloze-model conn))]
       (let [[?token _] (e/Token [:anki-sync-basic-fields conn-status basic-model])]
         (when (and basic-model (= conn-status :connected))
           (when-some [token ?token]

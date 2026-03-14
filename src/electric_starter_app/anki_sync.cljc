@@ -20,7 +20,8 @@
                 :!use-tags     (atom false)
                 :!tags         (atom [])
                 :!basic-fields (atom [])
-                :!cloze-fields (atom [])}]
+                :!cloze-fields (atom [])
+                :!source-field (atom "Source")}]
       (panels/AnkiSyncSyncBody
         user-id selected-doc current-pdf-page !refresh !show-modal conn form))))
 

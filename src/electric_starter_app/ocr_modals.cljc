@@ -320,7 +320,7 @@
                       (token (:error result)))))))))))))
 
 ;; Add card modal
-(e/defn AddCardModal [!show-add card-type doc-id page-number !refresh content-item-id]
+(e/defn AddCardModal [!show-add card-type doc-id page-number !refresh content-item-id source-reference]
   (e/client
     (let [!kind (atom card-type)
           kind (e/watch !kind)
@@ -437,7 +437,7 @@
                   (let [fields (if (= kind "basic")
                                 {:question question :answer answer}
                                 {:cloze cloze})
-                        result (e/server (cards/add-card doc-id page-number kind fields content-item-id))]
+                        result (e/server (cards/add-card doc-id page-number kind fields content-item-id source-reference))]
                     (if (:success result)
                       (do
                         (e/server (swap! !refresh inc))
