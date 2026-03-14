@@ -23,60 +23,6 @@
   #?(:clj (db/dismiss-topic topic-type id)
      :cljs nil))
 
-;; Priority modal — own e/defn for frame isolation
-;; !local-priority is the caller's atom — updated on save for immediate UI feedback
-(e/defn PriorityModal [!show !local-priority topic-type topic-id]
-  (e/client
-    (let [!val (atom (str @!local-priority))]
-      (dom/div
-        (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
-                            :background "rgba(0,0,0,0.3)" :display "flex" :align-items "center"
-                            :justify-content "center" :z-index "1000"}})
-        (dom/On "click" (fn [e]
-                          (when (= (.-target e) (.-currentTarget e))
-                            (reset! !show false)))
-          nil)
-        (dom/div
-          (dom/props {:style {:background "white" :border-radius "8px" :padding "24px"
-                              :width "280px" :box-shadow "0 4px 20px rgba(0,0,0,0.25)"}})
-          (dom/h3
-            (dom/props {:style {:margin "0 0 16px 0" :font-size "16px"}})
-            (dom/text "Set Priority"))
-          (dom/p
-            (dom/props {:style {:margin "0 0 12px 0" :font-size "13px" :color "#666"}})
-            (dom/text "0 = highest, 100 = lowest"))
-          (dom/input
-            (dom/props {:type "number" :min "0" :max "100"
-                        :value (e/watch !val)
-                        :style {:width "100%" :padding "8px 12px" :font-size "16px"
-                                :border "1px solid #ccc" :border-radius "4px"
-                                :text-align "center" :box-sizing "border-box"}})
-            (dom/On "input" (fn [e] (reset! !val (-> e .-target .-value))) nil))
-          (dom/div
-            (dom/props {:style {:display "flex" :gap "8px" :margin-top "16px"}})
-            (dom/button
-              (dom/props {:style {:flex "1" :padding "8px" :background "#f0f0f0" :border "1px solid #ccc"
-                                  :border-radius "4px" :cursor "pointer" :font-size "14px"}})
-              (dom/text "Cancel")
-              (dom/On "click" (fn [_] (reset! !show false)) nil))
-            (dom/button
-              (dom/props {:style {:flex "1" :padding "8px" :background "#2563eb" :color "white"
-                                  :border "none" :border-radius "4px" :cursor "pointer"
-                                  :font-size "14px" :font-weight "600"}})
-              (dom/text "Save")
-              (let [event (dom/On "click"
-                            (fn [_]
-                              (let [v @!val]
-                                #?(:cljs (js/parseInt v) :clj nil)))
-                            nil)
-                    [?token _error] (e/Token event)]
-                (when-some [token ?token]
-                  (when (and (some? event) (>= event 0) (<= event 100))
-                    (e/server (update-topic-priority* topic-type topic-id event))
-                    (reset! !local-priority event))
-                  (reset! !show false)
-                  (token))))))))))
-
 ;; Dismiss button — isolated e/defn
 (e/defn DismissButton [topic-type topic-id !queue-idx]
   (e/client
@@ -168,17 +114,10 @@
           document-id (:document_id item)
           filename (or (:filename item) "-")
           page-num (:page_number item)
-          !local-priority (atom (or (:priority item) 50))
-          local-priority (e/watch !local-priority)
+          priority (or (:priority item) 50)
           is-doc (= topic-type "document")
           type-label (cond is-doc "Doc" (= topic-type "extract") "Extract" :else "Page")
-          type-color (cond is-doc "#dcfce7" (= topic-type "extract") "#fef3c7" :else "#e0f2fe")
-          !show-priority (atom false)
-          show-priority (e/watch !show-priority)]
-
-      ;; Priority modal (rendered outside header flow)
-      (when show-priority
-        (PriorityModal !show-priority !local-priority topic-type topic-id))
+          type-color (cond is-doc "#dcfce7" (= topic-type "extract") "#fef3c7" :else "#e0f2fe")]
 
       (dom/div
         (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
@@ -214,13 +153,22 @@
                               :font-weight "600" :background type-color}})
           (dom/text type-label))
 
-        ;; Priority button — opens modal
-        (dom/button
-          (dom/props {:style {:padding "2px 10px" :background "#f8f8f8" :border "1px solid #ddd"
-                              :border-radius "4px" :cursor "pointer" :font-size "12px" :color "#555"}
-                      :title "Click to change priority"})
-          (dom/text (str "Priority " local-priority))
-          (dom/On "click" (fn [_] (reset! !show-priority true)) nil))
+        ;; Priority — inline input (e/for-by isolates the frame)
+        (dom/label
+          (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "12px" :color "#888"}
+                      :title "Priority (0=highest, 100=lowest)"})
+          (dom/text "Priority")
+          (e/for-by identity [_k [topic-id]]
+            (dom/input
+              (dom/props {:type "number" :min "0" :max "100"
+                          :style {:width "48px" :font-size "12px" :padding "2px 4px"
+                                  :border "1px solid #ddd" :border-radius "3px" :text-align "center"}})
+              (set! (.-value dom/node) (str priority))
+              (let [change-event (dom/On "change" #(-> % .-target .-value js/parseInt) nil)
+                    [?token _] (e/Token change-event)]
+                (when-some [token ?token]
+                  (e/server (update-topic-priority* topic-type topic-id change-event))
+                  (token))))))
 
         ;; Counter
         (dom/span
