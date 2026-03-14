@@ -19,7 +19,7 @@
   #?(:clj (db/get-learning-queue-count user-id)
      :cljs 0))
 
-(e/defn LearnBrowse [user-id enc-key doc-id !mode]
+(e/defn LearnBrowse [user-id enc-key nav !mode]
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
@@ -41,7 +41,7 @@
       ;; OcrPage workspace
       (dom/div
         (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-        (let [!nav (atom {:doc-id doc-id})]
+        (let [!nav (atom nav)]
           (OcrPage user-id enc-key !nav))))))
 
 (e/defn LearnOverview [user-id !mode]
@@ -152,15 +152,15 @@
   (e/client
     (let [!mode (atom :overview)
           mode (e/watch !mode)
-          !browse-doc-id (atom nil)
-          browse-doc-id (e/watch !browse-doc-id)
+          !browse-nav (atom nil)
+          browse-nav (e/watch !browse-nav)
           !queue-idx (atom 0)
-          ;; Reactive watch — fires when "Open" from PDF Documents sets nav-target
+          ;; Reactive watch — fires when "Open" or "View Source" sets nav-target
           nav-val (e/watch !nav-target)]
 
       ;; Consume nav-target reactively: switch to browse mode when set
       (when (and (map? nav-val) (:doc-id nav-val))
-        (reset! !browse-doc-id (:doc-id nav-val))
+        (reset! !browse-nav nav-val)
         (reset! !mode :browse)
         (reset! !nav-target nil))
 
@@ -169,10 +169,13 @@
         (LearnOverview user-id !mode)
 
         :browse
-        (when browse-doc-id
-          (LearnBrowse user-id enc-key browse-doc-id !mode))
+        (when browse-nav
+          (LearnBrowse user-id enc-key browse-nav !mode))
 
         :session
         (let [refresh (e/server (e/watch !refresh))
               queue-vec (e/server (get-learning-queue* refresh user-id))]
-          (LearnSession user-id enc-key queue-vec !queue-idx !mode !refresh !nav-target navigate-to-extract!))))))
+          (LearnSession user-id enc-key queue-vec !queue-idx !mode !refresh !nav-target navigate-to-extract!
+            (fn [doc-id page]
+              (reset! !browse-nav {:doc-id doc-id :page page})
+              (reset! !mode :browse))))))))

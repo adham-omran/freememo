@@ -6,9 +6,13 @@
    [hyperfiddle.electric-scroll0 :refer [Scroll-window]]
    [contrib.data :refer [clamp-left]]
    [electric-starter-app.card-components :refer [CardRow get-cards-by-extract*]]
-   [electric-starter-app.ocr-modals :refer [EditCardModal]]))
+   [electric-starter-app.ocr-modals :refer [EditCardModal AddCardModal]]))
 
 #?(:clj (defonce !refresh (atom 0)))
+
+;; Wrapper that bridges !refresh from this namespace (same-namespace bridging works in Electric)
+(e/defn ExtractAddCardModal [!show-add card-type doc-id page-number content-item-id]
+  (AddCardModal !show-add card-type doc-id page-number !refresh content-item-id))
 
 (e/defn ExtractCardTable [content-item-id]
   (e/client

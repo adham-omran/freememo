@@ -10,7 +10,7 @@
    [electric-starter-app.ocr-page :refer [start-drag!]]
    #?(:clj [electric-starter-app.db :as db])))
 
-(e/defn ExtractPage [user-id enc-key content-item-id navigate!]
+(e/defn ExtractPage [user-id enc-key content-item-id navigate! view-source!]
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
@@ -49,9 +49,16 @@
                                     :border-radius "4px" :cursor "pointer" :font-size "13px"}})
                 (dom/text "Back to Learn")
                 (dom/On "click" (fn [_] (navigate! :learn)) nil))
-              (dom/span
-                (dom/props {:style {:color "#888" :font-size "13px"}})
-                (dom/text (str (or filename "Unknown") " — p. " page-num)))))
+              (if view-source!
+                (dom/span
+                  (dom/props {:style {:color "#2563eb" :font-size "13px" :cursor "pointer"
+                                      :text-decoration "underline"}
+                              :title "View source PDF page"})
+                  (dom/text (str (or filename "Unknown") " — p. " page-num))
+                  (dom/On "click" (fn [_] (view-source! doc-id page-num)) nil))
+                (dom/span
+                  (dom/props {:style {:color "#888" :font-size "13px"}})
+                  (dom/text (str (or filename "Unknown") " — p. " page-num))))))
 
           ;; Split pane: editor top / toolbar+cards bottom
           (let [!top-pct (atom 60)

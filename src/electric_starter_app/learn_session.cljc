@@ -11,7 +11,7 @@
   #?(:clj (db/advance-topic topic-type id)
      :cljs nil))
 
-(e/defn LearnSession [user-id enc-key queue-vec !queue-idx !mode !refresh !nav-target navigate-to-extract!]
+(e/defn LearnSession [user-id enc-key queue-vec !queue-idx !mode !refresh !nav-target navigate-to-extract! view-source!]
   (e/client
     (let [idx (e/watch !queue-idx)
           total (count queue-vec)]
@@ -46,6 +46,7 @@
           (let [item (nth queue-vec idx nil)
                 topic-type (:topic_type item)
                 topic-id (:id item)
+                document-id (:document_id item)
                 filename (or (:filename item) "-")
                 page-num (:page_number item)
                 priority (or (:priority item) 50)
@@ -64,9 +65,18 @@
                                       :border-radius "4px" :cursor "pointer" :font-size "13px"}})
                   (dom/text "\u2190 Back to Learn")
                   (dom/On "click" (fn [_] (reset! !queue-idx 0) (reset! !mode :overview)) nil))
-                (dom/span
-                  (dom/props {:style {:color "#555" :font-size "13px"}})
-                  (dom/text (if is-doc filename (str filename "  p." page-num))))
+                (if is-doc
+                  (dom/span
+                    (dom/props {:style {:color "#555" :font-size "13px"}})
+                    (dom/text filename))
+                  (dom/span
+                    (dom/props {:style {:color "#2563eb" :font-size "13px" :cursor "pointer"
+                                        :text-decoration "underline"}
+                                :title "View source PDF page"})
+                    (dom/text (str filename "  p." page-num))
+                    (dom/On "click"
+                      (fn [_] (view-source! document-id page-num))
+                      nil)))
                 (dom/span
                   (dom/props {:style {:padding "2px 8px" :border-radius "4px" :font-size "11px"
                                       :font-weight "600" :background type-color}})
@@ -109,7 +119,7 @@
                   (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
                   (dom/div
                     (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                    (ExtractPage user-id enc-key topic-id nil))
+                    (ExtractPage user-id enc-key topic-id nil nil))
 
                   ;; Next button at bottom
                   (dom/div
