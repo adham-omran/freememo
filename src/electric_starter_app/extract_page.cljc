@@ -45,8 +45,8 @@
             (dom/button
               (dom/props {:style {:padding "4px 12px" :background "#f0f0f0" :border "1px solid #ccc"
                                   :border-radius "4px" :cursor "pointer" :font-size "13px"}})
-              (dom/text "Back to Queue")
-              (dom/On "click" (fn [_] (navigate! :queue)) nil))
+              (dom/text "Back to Learn")
+              (dom/On "click" (fn [_] (navigate! :learn)) nil))
             (dom/span
               (dom/props {:style {:color "#888" :font-size "13px"}})
               (dom/text (str (or filename "Unknown") " — p. " page-num))))
@@ -82,5 +82,5 @@
             (dom/button
               (dom/props {:style {:padding "6px 16px" :background "#f0f0f0" :border "1px solid #ccc"
                                   :border-radius "4px" :cursor "pointer"}})
-              (dom/text "Go to Queue")
-              (dom/On "click" (fn [_] (navigate! :queue)) nil))))))))
+              (dom/text "Go to Learn")
+              (dom/On "click" (fn [_] (navigate! :learn)) nil))))))))

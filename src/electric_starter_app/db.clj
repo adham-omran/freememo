@@ -122,6 +122,25 @@
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_content_items_document_page
                       ON content_items(document_id, page_number)"])
 
+  ;; Scheduling columns for incremental reading (pages)
+  (jdbc/execute! ds ["ALTER TABLE pages ADD COLUMN IF NOT EXISTS interval_days REAL DEFAULT 1.0"])
+  (jdbc/execute! ds ["ALTER TABLE pages ADD COLUMN IF NOT EXISTS a_factor REAL DEFAULT 2.0"])
+  (jdbc/execute! ds ["ALTER TABLE pages ADD COLUMN IF NOT EXISTS next_review_at TIMESTAMP DEFAULT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE pages ADD COLUMN IF NOT EXISTS last_review_at TIMESTAMP DEFAULT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE pages ADD COLUMN IF NOT EXISTS review_count INTEGER DEFAULT 0"])
+
+  ;; Scheduling columns for incremental reading (content_items)
+  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS priority INTEGER DEFAULT 50"])
+  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS interval_days REAL DEFAULT 1.0"])
+  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS a_factor REAL DEFAULT 2.0"])
+  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS next_review_at TIMESTAMP DEFAULT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS last_review_at TIMESTAMP DEFAULT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS review_count INTEGER DEFAULT 0"])
+
+  ;; Indexes for review queue queries
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_pages_next_review ON pages(next_review_at)"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_content_items_next_review ON content_items(next_review_at)"])
+
   (println "Database ready."))
 
 ;; Query functions
@@ -410,3 +429,56 @@
   (jdbc/execute-one! ds
     ["UPDATE flashcards SET anki_synced_at = CURRENT_TIMESTAMP WHERE id = ?"
      card-id]))
+
+;; Learning queue functions
+(defn get-learning-queue
+  "Unified queue of due pages and extracts for incremental reading."
+  [user-id]
+  (jdbc/execute! ds
+    ["SELECT 'page' AS topic_type, p.id, p.document_id, p.page_number, p.priority,
+             p.next_review_at, p.interval_days, p.a_factor, p.review_count,
+             p.text AS content, d.filename
+      FROM pages p JOIN documents d ON p.document_id = d.id
+      WHERE d.user_id = ?
+        AND p.text IS NOT NULL
+        AND (p.is_done IS NOT TRUE)
+        AND (p.next_review_at <= NOW() OR p.next_review_at IS NULL)
+      UNION ALL
+      SELECT 'extract', ci.id, ci.document_id, ci.page_number, ci.priority,
+             ci.next_review_at, ci.interval_days, ci.a_factor, ci.review_count,
+             ci.content, d.filename
+      FROM content_items ci JOIN documents d ON ci.document_id = d.id
+      WHERE d.user_id = ?
+        AND (ci.next_review_at <= NOW() OR ci.next_review_at IS NULL)
+      ORDER BY priority ASC, next_review_at ASC NULLS FIRST"
+     user-id user-id]))
+
+(defn get-learning-queue-count
+  "Count of due topics without fetching content."
+  [user-id]
+  (let [result (jdbc/execute-one! ds
+                 ["SELECT
+                     (SELECT COUNT(*) FROM pages p JOIN documents d ON p.document_id = d.id
+                      WHERE d.user_id = ? AND p.text IS NOT NULL AND (p.is_done IS NOT TRUE)
+                        AND (p.next_review_at <= NOW() OR p.next_review_at IS NULL))
+                   + (SELECT COUNT(*) FROM content_items ci JOIN documents d ON ci.document_id = d.id
+                      WHERE d.user_id = ?
+                        AND (ci.next_review_at <= NOW() OR ci.next_review_at IS NULL))
+                   AS total"
+                  user-id user-id])]
+    (or (:total result) 0)))
+
+(defn advance-topic
+  "Advance a topic's review schedule using A-Factor algorithm."
+  [topic-type id]
+  (let [table (case topic-type
+                "page" "pages"
+                "extract" "content_items")]
+    (jdbc/execute-one! ds
+      [(str "UPDATE " table "
+             SET interval_days = COALESCE(interval_days, 1.0) * COALESCE(a_factor, 2.0),
+                 next_review_at = NOW() + (COALESCE(interval_days, 1.0) * COALESCE(a_factor, 2.0)) * INTERVAL '1 day',
+                 last_review_at = NOW(),
+                 review_count = COALESCE(review_count, 0) + 1
+             WHERE id = ?")
+       id])))
