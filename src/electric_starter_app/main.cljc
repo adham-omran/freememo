@@ -5,7 +5,7 @@
             [electric-starter-app.settings-page :refer [SettingsPage]]
             [electric-starter-app.pdf-page :refer [PdfPage]]
             [electric-starter-app.ocr-page :refer [OcrPage]]
-            [electric-starter-app.queue-page :refer [QueuePage]]
+            [electric-starter-app.learn-page :refer [LearnPage]]
             [electric-starter-app.extract-page :refer [ExtractPage]]
             [electric-starter-app.login-page :refer [LoginPage]]
             #?(:clj [electric-starter-app.settings :as settings])))
@@ -70,18 +70,18 @@
                   (dom/On "click" (fn [_] (navigate! :workspace)) nil))
 
                 (dom/button
-                  (dom/props {:style (tab-style :queue)})
-                  (dom/text "Queue")
-                  (dom/On "click" (fn [_] (navigate! :queue)) nil)))
+                  (dom/props {:style (tab-style :learn)})
+                  (dom/text "Learn")
+                  (dom/On "click" (fn [_] (navigate! :learn)) nil)))
 
               ;; Tab content
               (dom/div
-                (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:workspace :extract} active-tab) "hidden" "auto")}})
+                (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:workspace :extract :learn} active-tab) "hidden" "auto")}})
                 (when (= active-tab :home) (HomePage navigate!))
                 (when (= active-tab :settings) (SettingsPage user-id username enc-key))
                 (when (= active-tab :pdf) (PdfPage user-id))
                 (when (= active-tab :workspace) (OcrPage user-id enc-key !nav-target))
-                (when (= active-tab :queue) (QueuePage user-id !nav-target #(navigate! :extract)))
+                (when (= active-tab :learn) (LearnPage user-id !nav-target #(navigate! :extract)))
                 (when (= active-tab :extract) (ExtractPage user-id enc-key (:content-item-id (e/watch !nav-target)) navigate!)))))
 
           ;; Not authenticated: render login page
