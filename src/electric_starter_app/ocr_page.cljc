@@ -371,7 +371,7 @@
                       ;; Context checkbox + pages
                     (dom/label
                       (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}
-                                  :title "Include text from previous pages for better context"})
+                                  :title "Include context for better cards. With a selection: current page + N previous pages. Without: N previous pages."})
                       (dom/input
                         (dom/props {:type "checkbox" :checked use-context})
                         (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
@@ -385,7 +385,7 @@
                     (dom/input
                       (dom/props {:type "number" :min "1" :max "10" :value (str context-window)
                                   :disabled (not use-context)
-                                  :title "Number of previous pages to include (1-10)"
+                                  :title "Number of previous pages to include as context (1-10). Current page is always included when text is selected."
                                   :style {:padding "2px 4px" :font-size "13px" :width "40px"
                                           :opacity (if use-context "1" "0.5")}})
                       (let [input-event (dom/On "change"
