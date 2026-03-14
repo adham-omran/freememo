@@ -67,7 +67,7 @@
         ;; Context checkbox + pages
         (dom/label
           (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}
-                      :title "Include text from previous pages for better context"})
+                      :title "Include context for better cards. With a selection: extract text. Without: original page text."})
           (dom/input
             (dom/props {:type "checkbox" :checked use-context})
             (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
