@@ -66,7 +66,7 @@
           (dom/button
             (dom/props {:type "button"
                         :style {:padding "8px 14px"
-                                :background "#0d6efd"
+                                :background "#2563eb"
                                 :color "white"
                                 :border "none"
                                 :border-radius "4px"
@@ -136,7 +136,7 @@
                     (dom/props {:type "button"
                                 :disabled (some? ?token)
                                 :style {:padding "8px 16px"
-                                        :background (if (some? ?token) "#999" "#28a745")
+                                        :background (if (some? ?token) "#999" "#2563eb")
                                         :color "white"
                                         :border "none"
                                         :border-radius "4px"

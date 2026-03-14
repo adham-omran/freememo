@@ -293,7 +293,7 @@
             nil))
         (when-not (#{:pushing :pulling :recording} sync-phase)
           (dom/button
-            (dom/props {:style {:padding "8px 16px" :background "#17a2b8" :color "white" :border "none"
+            (dom/props {:style {:padding "8px 16px" :background "#f0f0f0" :color "#333" :border "1px solid #ccc"
                                 :border-radius "4px" :cursor "pointer" :font-size "15px"}})
             (dom/text "Pull from Anki")
             (dom/On "click"
@@ -306,7 +306,7 @@
               nil)))
         (when-not (#{:pushing :pulling :recording} sync-phase)
           (dom/button
-            (dom/props {:style {:padding "8px 16px" :background "#28a745" :color "white" :border "none"
+            (dom/props {:style {:padding "8px 16px" :background "#2563eb" :color "white" :border "none"
                                 :border-radius "4px" :cursor "pointer" :font-size "15px" :font-weight "500"}})
             (dom/text "Push to Anki")
             (dom/On "click"

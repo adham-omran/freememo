@@ -98,14 +98,14 @@
               (dom/text "Cancel")
               (dom/On "click" (fn [_] (reset! !show-export false)) nil))
             (dom/button
-              (dom/props {:style {:padding "8px 16px" :background "#28a745" :color "white" :border "none"
+              (dom/props {:style {:padding "8px 16px" :background "#2563eb" :color "white" :border "none"
                                   :border-radius "4px" :cursor "pointer" :font-size "14px" :font-weight "500"}})
               (dom/text "Export")
               (let [click-event (dom/On "click" identity nil)
                     [?token ?error] (e/Token click-event)]
                 (dom/props {:disabled (some? ?token)
                             :style {:padding "8px 16px"
-                                    :background (if (some? ?token) "#999" "#28a745")
+                                    :background (if (some? ?token) "#999" "#2563eb")
                                     :color "white" :border "none" :border-radius "4px"
                                     :cursor (if (some? ?token) "not-allowed" "pointer")
                                     :font-size "14px" :font-weight "500"}})
@@ -184,7 +184,7 @@
               (dom/text "Cancel")
               (dom/On "click" (fn [_] (reset! !show false)) nil))
             (dom/button
-              (dom/props {:style {:padding "8px 16px" :background "#28a745"
+              (dom/props {:style {:padding "8px 16px" :background "#2563eb"
                                   :color "white" :border "none" :border-radius "4px"
                                   :cursor "pointer" :font-size "15px" :font-weight "500"}})
               (dom/text "Generate")
@@ -303,7 +303,7 @@
               (dom/text "Cancel")
               (dom/On "click" (fn [_] (reset! !editing-card nil)) nil))
             (dom/button
-              (dom/props {:style {:padding "8px 16px" :background "#007bff" :color "white" :border "none"}})
+              (dom/props {:style {:padding "8px 16px" :background "#2563eb" :color "white" :border "none"}})
               (dom/text "Save")
               (let [click-event (dom/On "click" identity nil)
                     [?token ?error] (e/Token click-event)]
@@ -425,7 +425,7 @@
               (dom/text "Cancel")
               (dom/On "click" (fn [_] (reset! !show-add false)) nil))
             (dom/button
-              (dom/props {:style {:padding "8px 16px" :background "#28a745" :color "white" :border "none"
+              (dom/props {:style {:padding "8px 16px" :background "#2563eb" :color "white" :border "none"
                                   :border-radius "4px"}})
               (dom/text "Save")
               (let [click-event (dom/On "click" identity nil)

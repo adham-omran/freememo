@@ -53,12 +53,12 @@
       (dom/tr
         ;; Front column
         (dom/td
-          (dom/props {:style {:padding "6px 8px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap" :max-width "0"
+          (dom/props {:style {:padding "6px 8px"
                               :border-bottom "1px solid #e0e0e0"}})
           (dom/text (if (= kind "basic") question cloze)))
         ;; Back column
         (dom/td
-          (dom/props {:style {:padding "6px 8px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap" :max-width "0"
+          (dom/props {:style {:padding "6px 8px"
                               :border-bottom "1px solid #e0e0e0"}})
           (dom/text (if (= kind "basic") (or answer "") "")))
         ;; Kind column
@@ -71,7 +71,7 @@
           (dom/props {:style {:padding "6px 4px" :width "40px" :text-align "center"
                               :border-bottom "1px solid #e0e0e0"}})
           (dom/button
-            (dom/props {:style {:padding "2px 6px" :background "#007bff" :color "white"
+            (dom/props {:style {:padding "2px 6px" :background "#2563eb" :color "white"
                                 :border "none" :border-radius "3px" :cursor "pointer"
                                 :font-size "12px"}})
             (dom/text "\u270E")
