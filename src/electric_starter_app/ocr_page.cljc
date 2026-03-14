@@ -76,11 +76,13 @@
                              last-doc-id)
             doc-by-name (into {} (map (fn [d] [(:documents/filename d) (:documents/id d)]) documents))
             id-to-name (into {} (map (fn [d] [(:documents/id d) (:documents/filename d)]) documents))
+            source-by-id (into {} (map (fn [d] [(:documents/id d) (or (:documents/source_type d) "pdf")]) documents))
             filenames (mapv :documents/filename documents)
             last-doc-name (some #(when (= (:documents/id %) valid-last-doc) (:documents/filename %)) documents)
             !selected-name (atom last-doc-name)
             selected-name (e/watch !selected-name)
             selected-doc (get doc-by-name selected-name)
+            is-pdf (= (get source-by-id selected-doc) "pdf")
             !doc-commit (atom nil)
             doc-commit (e/watch !doc-commit)
             [?commit-token _] (e/Token doc-commit)
@@ -191,21 +193,22 @@
               (dom/div
                 (dom/props {:style {:height (str top-pct "%") :display "flex" :min-height "0" :overflow "hidden"}})
 
-                ;; LEFT: PDF viewer
-                (dom/div
-                  (dom/props {:style {:width (str left-pct "%") :min-width "0" :overflow "hidden"}})
-                  (reset! !current-page
-                    (PdfViewerComponent {:document-id selected-doc
-                                         :initial-page initial-page
-                                         :on-navigate! (fn [p] (reset! !page-to-save p))})))
+                ;; LEFT: PDF viewer + divider (hidden for web articles)
+                (when is-pdf
+                  (dom/div
+                    (dom/props {:style {:width (str left-pct "%") :min-width "0" :overflow "hidden"}})
+                    (reset! !current-page
+                      (PdfViewerComponent {:document-id selected-doc
+                                           :initial-page initial-page
+                                           :on-navigate! (fn [p] (reset! !page-to-save p))})))
 
-                ;; Horizontal drag handle
-                (dom/div
-                  (dom/props {:class "split-divider-h"
-                              :title "Drag to resize panels"})
-                  (dom/On "mousedown" (fn [e] (start-drag! e :x !left-pct)) nil))
+                  ;; Horizontal drag handle
+                  (dom/div
+                    (dom/props {:class "split-divider-h"
+                                :title "Drag to resize panels"})
+                    (dom/On "mousedown" (fn [e] (start-drag! e :x !left-pct)) nil)))
 
-                ;; RIGHT: Editor
+                ;; RIGHT: Editor (full width for web articles)
                 (dom/div
                   (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-width "0" :min-height "0" :overflow "hidden"}})
 
