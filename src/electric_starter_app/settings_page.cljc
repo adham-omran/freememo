@@ -1,9 +1,9 @@
 (ns electric-starter-app.settings-page
   "Settings page UI component."
   (:require
-    [hyperfiddle.electric3 :as e]
-    [hyperfiddle.electric-dom3 :as dom]
-    #?(:clj [electric-starter-app.settings :as settings])))
+   [hyperfiddle.electric3 :as e]
+   [hyperfiddle.electric-dom3 :as dom]
+   #?(:clj [electric-starter-app.settings :as settings])))
 
 
 (e/defn SettingsPage [user-id username enc-key]
@@ -30,7 +30,7 @@
           key-status-refresh (e/watch !key-status-refresh)
           api-key-status (e/server
                            (do key-status-refresh
-                               (settings/get-openai-api-key-status user-id enc-key)))
+                             (settings/get-openai-api-key-status user-id enc-key)))
           api-key-source (:source api-key-status)
           api-key-status-text (case api-key-source
                                 :user "Configured"
@@ -50,7 +50,10 @@
           reasoning (e/watch !reasoning)
           server-verbosity (e/server (settings/get-verbosity user-id))
           !verbosity (atom server-verbosity)
-          verbosity (e/watch !verbosity)]
+          verbosity (e/watch !verbosity)
+          server-source-mode (e/server (settings/get-source-display-mode user-id))
+          !source-mode (atom server-source-mode)
+          source-mode (e/watch !source-mode)]
 
       (dom/div
         (dom/h2 (dom/text "Settings"))
@@ -193,4 +196,44 @@
                 (reset! !verbosity change-event))
               (when-some [token ?token]
                 (e/server (settings/save-verbosity user-id change-event))
-                (token)))))))))
+                (token)))))
+
+        ;; Source Display Mode
+        (dom/div
+          (dom/props {:style {:margin-top "20px"}})
+          (dom/label (dom/text "Source Display (Anki Sync):"))
+          (dom/br)
+          (dom/div
+            (dom/props {:style {:margin-top "8px" :display "flex" :flex-direction "column" :gap "8px"}})
+            (dom/label
+              (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "14px" :cursor "pointer"}})
+              (dom/input
+                (dom/props {:type "radio" :name "source-display-mode" :value "append"
+                            :checked (= source-mode "append")})
+                (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                      [?token ?error] (e/Token change-event)]
+                  (when (some? change-event)
+                    (reset! !source-mode change-event))
+                  (when-some [token ?token]
+                    (e/server (settings/save-source-display-mode user-id change-event))
+                    (token))))
+              (dom/text "Append to card "))
+            (dom/span
+              (dom/props {:style {:font-size "12px" :color "#888" :margin-left "22px" :margin-top "-4px"}})
+              (dom/text "Source text appended to card content during Anki sync"))
+            (dom/label
+              (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "14px" :cursor "pointer"}})
+              (dom/input
+                (dom/props {:type "radio" :name "source-display-mode" :value "field"
+                            :checked (= source-mode "field")})
+                (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                      [?token ?error] (e/Token change-event)]
+                  (when (some? change-event)
+                    (reset! !source-mode change-event))
+                  (when-some [token ?token]
+                    (e/server (settings/save-source-display-mode user-id change-event))
+                    (token))))
+              (dom/text "Separate field "))
+            (dom/span
+              (dom/props {:style {:font-size "12px" :color "#888" :margin-left "22px" :margin-top "-4px"}})
+              (dom/text "Source sent as a separate \"Source\" Anki field"))))))))

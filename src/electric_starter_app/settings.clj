@@ -1,9 +1,9 @@
 (ns electric-starter-app.settings
   "Business logic for application settings."
   (:require
-    [electric-starter-app.db :as db]
-    [electric-starter-app.crypto :as crypto]
-    [clojure.string :as str]))
+   [electric-starter-app.db :as db]
+   [electric-starter-app.crypto :as crypto]
+   [clojure.string :as str]))
 
 ;; Toggle: set to false from REPL to disable shared key fallback
 (defonce !use-shared-key (atom true))
@@ -32,6 +32,7 @@
 (def ANKI_ALLOW_DUPES "anki_allow_dupes")
 (def ANKI_USE_HEADER "anki_use_header")
 (def ANKI_HEADER_TEXT "anki_header_text")
+(def SOURCE_DISPLAY_MODE "source_display_mode")
 (def LAST_DOCUMENT "last_document")
 (def PRE_PROMPT_HISTORY "pre_prompt_history")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
@@ -106,6 +107,19 @@
       (println "ERROR [get-card-type]:" (.getMessage e))
       "basic")))
 
+(defn get-source-display-mode [user-id]
+  (or (db/get-setting user-id SOURCE_DISPLAY_MODE) "append"))
+
+(defn save-source-display-mode [user-id mode]
+  (try
+    (when-not (#{"append" "field"} mode)
+      (throw (Exception. "Invalid source display mode")))
+    (db/set-setting user-id SOURCE_DISPLAY_MODE mode)
+    {:success true}
+    (catch Exception e
+      (println "ERROR [save-source-display-mode]:" (.getMessage e))
+      {:success false :error "Failed to save source display mode"})))
+
 (defn get-anki-scope [user-id]
   (or (db/get-setting user-id ANKI_SCOPE) "Current Page"))
 
@@ -172,7 +186,7 @@
 (defn save-context-pages [user-id value]
   (try
     (let [parsed (Integer/parseInt (str value))
-          clamped (max 1 (min 10 parsed))]  ; Enforce 1-10 range
+          clamped (max 1 (min 10 parsed))] ; Enforce 1-10 range
       (db/set-setting user-id CONTEXT_PAGES (str clamped))
       {:success true})
     (catch Exception e
@@ -200,7 +214,7 @@
 (defn save-card-count [user-id value]
   (try
     (let [parsed (Integer/parseInt (str value))
-          clamped (max 1 (min 50 parsed))]  ; Enforce 1-50 range
+          clamped (max 1 (min 50 parsed))] ; Enforce 1-50 range
       (db/set-setting user-id CARD_COUNT (str clamped))
       {:success true})
     (catch Exception e
@@ -238,9 +252,9 @@
 
 (defn add-to-history [history new-prompt]
   (->> (cons new-prompt history)
-       (distinct)
-       (take 50)
-       (vec)))
+    (distinct)
+    (take 50)
+    (vec)))
 
 (defn get-pre-prompt-history [user-id]
   (try

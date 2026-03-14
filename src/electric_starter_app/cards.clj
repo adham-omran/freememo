@@ -190,10 +190,13 @@
   "Save generated cards to the database.
    For basic cards: expects [{:q \"...\" :a \"...\"}]
    For cloze cards: expects [{:c \"...\"}]
-   Optional content-item-id links cards to a specific extract."
+   Optional content-item-id links cards to a specific extract.
+   Optional source-reference propagates document source info to each card."
   ([document-id page-number kind cards]
    (save-cards document-id page-number kind cards nil))
   ([document-id page-number kind cards content-item-id]
+   (save-cards document-id page-number kind cards content-item-id nil))
+  ([document-id page-number kind cards content-item-id source-reference]
    (try
      (let [rows (map (fn [card]
                        (cond-> (if (= kind "basic")
@@ -210,7 +213,9 @@
                                   :answer nil
                                   :cloze (:c card)})
                          content-item-id
-                         (assoc :content_item_id content-item-id)))
+                         (assoc :content_item_id content-item-id)
+                         source-reference
+                         (assoc :source_reference source-reference)))
                      cards)]
        (db/insert-flashcards rows)
        {:success true})
@@ -219,15 +224,18 @@
        {:success false :error (.getMessage e)}))))
 
 (defn add-card
-  "Manually add a single flashcard. Optional content-item-id links to an extract."
+  "Manually add a single flashcard. Optional content-item-id links to an extract.
+   Optional source-reference propagates document source info to the card."
   ([document-id page-number kind fields]
    (add-card document-id page-number kind fields nil))
   ([document-id page-number kind fields content-item-id]
+   (add-card document-id page-number kind fields content-item-id nil))
+  ([document-id page-number kind fields content-item-id source-reference]
    (try
      (let [cards (if (= kind "basic")
                    [{:q (:question fields) :a (:answer fields)}]
                    [{:c (:cloze fields)}])]
-       (save-cards document-id page-number kind cards content-item-id))
+       (save-cards document-id page-number kind cards content-item-id source-reference))
      (catch Exception e
        (println "ERROR [add-card]:" (.getMessage e))
        {:success false :error (.getMessage e)}))))

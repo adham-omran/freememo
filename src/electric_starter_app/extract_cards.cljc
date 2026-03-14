@@ -11,8 +11,8 @@
 #?(:clj (defonce !refresh (atom 0)))
 
 ;; Wrapper that bridges !refresh from this namespace (same-namespace bridging works in Electric)
-(e/defn ExtractAddCardModal [!show-add card-type doc-id page-number content-item-id]
-  (AddCardModal !show-add card-type doc-id page-number !refresh content-item-id))
+(e/defn ExtractAddCardModal [!show-add card-type doc-id page-number content-item-id source-reference]
+  (AddCardModal !show-add card-type doc-id page-number !refresh content-item-id source-reference))
 
 (e/defn ExtractCardTable [content-item-id]
   (e/client

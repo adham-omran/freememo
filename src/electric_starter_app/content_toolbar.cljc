@@ -27,6 +27,8 @@
   (e/client
     (let [{:keys [user-id enc-key doc-id page-number content-text
                   content-item-id context-mode context-tooltip]} state
+          ;; Fetch document source reference for card propagation
+          source-ref (e/server (db/get-document-source doc-id))
           ;; Load settings from server
           server-context-enabled (e/server (settings/get-context-enabled user-id))
           server-context-pages (e/server (settings/get-context-pages user-id))
@@ -284,7 +286,7 @@
                   (do (token (:error generate-result))
                     (swap! !gen-state assoc :active nil :error (:error generate-result)))
                   (let [generated-cards (e/server (:cards generate-result))
-                        save-result (e/server (cards/save-cards doc-id page-number card-type generated-cards content-item-id))]
+                        save-result (e/server (cards/save-cards doc-id page-number card-type generated-cards content-item-id source-ref))]
                     (if (:success save-result)
                       (do (e/server (swap! !refresh inc))
                         (token)
@@ -334,7 +336,7 @@
                   (do (token (:error generate-result))
                     (swap! !prompt-gen-state assoc :active nil :error (:error generate-result)))
                   (let [generated-cards (e/server (:cards generate-result))
-                        save-result (e/server (cards/save-cards doc-id page-number kind generated-cards content-item-id))]
+                        save-result (e/server (cards/save-cards doc-id page-number kind generated-cards content-item-id source-ref))]
                     (if (:success save-result)
                       (do (e/server (swap! !refresh inc))
                         (token)
@@ -351,7 +353,7 @@
             (dom/text "Add new")
             (dom/On "click" (fn [_] (reset! !show-add true)) nil))
           (when show-add
-            (AddCardModal !show-add card-type doc-id page-number !refresh content-item-id)))
+            (AddCardModal !show-add card-type doc-id page-number !refresh content-item-id source-ref)))
 
         ;; Separator
         (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))

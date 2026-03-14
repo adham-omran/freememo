@@ -85,6 +85,7 @@
             selected-name (e/watch !selected-name)
             selected-doc (get doc-by-name selected-name)
             is-pdf (= (get source-by-id selected-doc) "pdf")
+            ocr-source-ref (e/server (when selected-doc (db/get-document-source selected-doc)))
             !doc-commit (atom nil)
             doc-commit (e/watch !doc-commit)
             [?commit-token _] (e/Token doc-commit)
@@ -318,6 +319,30 @@
                             (js/setTimeout
                               (fn [] (reset! !show false))
                               2000))))))
+
+                  ;; Source reference — editable inline
+                  (let [current-source (e/server (db/get-document-source selected-doc))]
+                    (dom/div
+                      (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
+                                          :padding "4px 8px" :flex-shrink "0"
+                                          :background "#f9f9f9" :border-bottom "1px solid #eee"}})
+                      (dom/span
+                        (dom/props {:style {:font-size "11px" :color "#999" :flex-shrink "0"}})
+                        (dom/text "Source:"))
+                      (e/for-by identity [_k [selected-doc]]
+                        (dom/input
+                          (dom/props {:type "text"
+                                      :placeholder "Source reference (auto-populated)"
+                                      :title "Source reference — propagated to generated cards"
+                                      :style {:flex "1" :padding "2px 6px" :font-size "12px" :color "#555"
+                                              :border "1px solid #e0e0e0" :border-radius "3px"
+                                              :background "white"}})
+                          (set! (.-value dom/node) (or current-source ""))
+                          (let [event (dom/On "change" #(-> % .-target .-value) nil)
+                                [?token _] (e/Token event)]
+                            (when-some [token ?token]
+                              (e/server (db/update-document-source selected-doc event))
+                              (token)))))))
 
                   ;; Editor area
                   (dom/div
@@ -583,7 +608,7 @@
               (do (token (:error generate-result))
                 (swap! !gen-state assoc :active nil :error (:error generate-result)))
               (let [generated-cards (e/server (:cards generate-result))
-                    save-result (e/server (cards/save-cards selected-doc current-pdf-page card-type generated-cards))]
+                    save-result (e/server (cards/save-cards selected-doc current-pdf-page card-type generated-cards nil ocr-source-ref))]
                 (if (:success save-result)
                   (do (e/server (swap! !refresh inc))
                     (token)
@@ -625,7 +650,7 @@
               (do (token (:error generate-result))
                 (swap! !prompt-gen-state assoc :active nil :error (:error generate-result)))
               (let [generated-cards (e/server (:cards generate-result))
-                    save-result (e/server (cards/save-cards selected-doc current-pdf-page kind generated-cards))]
+                    save-result (e/server (cards/save-cards selected-doc current-pdf-page kind generated-cards nil ocr-source-ref))]
                 (if (:success save-result)
                   (do (e/server (swap! !refresh inc))
                     (token)
@@ -642,7 +667,7 @@
         (dom/text "Add new")
         (dom/On "click" (fn [_] (reset! !show-add true)) nil))
       (when show-add
-        (AddCardModal !show-add card-type selected-doc current-pdf-page !refresh nil)))
+        (AddCardModal !show-add card-type selected-doc current-pdf-page !refresh nil ocr-source-ref)))
 
                       ;; Separator
     (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
