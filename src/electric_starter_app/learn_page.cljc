@@ -21,28 +21,34 @@
 
 (e/defn LearnBrowse [user-id enc-key nav !mode]
   (e/client
-    (dom/div
-      (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-
-      ;; Header bar
+    (let [doc-id (:doc-id nav)
+          filename (e/server
+                     (when doc-id
+                       (-> (db/get-documents-by-id user-id doc-id)
+                         first
+                         :documents/filename)))]
       (dom/div
-        (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
-                            :padding "8px 16px" :flex-shrink "0"
-                            :border-bottom "1px solid #e0e0e0"}})
-        (dom/button
-          (dom/props {:style {:padding "4px 12px" :background "#f0f0f0" :border "1px solid #ccc"
-                              :border-radius "4px" :cursor "pointer" :font-size "13px"}})
-          (dom/text "Back to Overview")
-          (dom/On "click" (fn [_] (reset! !mode :overview)) nil))
-        (dom/span
-          (dom/props {:style {:color "#555" :font-size "14px"}})
-          (dom/text "Browsing document")))
+        (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
 
-      ;; OcrPage workspace
-      (dom/div
-        (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-        (let [!nav (atom nav)]
-          (OcrPage user-id enc-key !nav))))))
+        ;; Header bar
+        (dom/div
+          (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
+                              :padding "8px 16px" :flex-shrink "0"
+                              :border-bottom "1px solid #e0e0e0"}})
+          (dom/button
+            (dom/props {:style {:padding "4px 12px" :background "#f0f0f0" :border "1px solid #ccc"
+                                :border-radius "4px" :cursor "pointer" :font-size "13px"}})
+            (dom/text "Back to Overview")
+            (dom/On "click" (fn [_] (reset! !mode :overview)) nil))
+          (dom/span
+            (dom/props {:style {:color "#555" :font-size "14px"}})
+            (dom/text (str "Browsing: " (or filename "document")))))
+
+        ;; OcrPage workspace
+        (dom/div
+          (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
+          (let [!nav (atom nav)]
+            (OcrPage user-id enc-key !nav)))))))
 
 (e/defn LearnOverview [user-id !mode]
   (e/client
