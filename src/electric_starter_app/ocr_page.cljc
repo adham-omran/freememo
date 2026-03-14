@@ -405,7 +405,8 @@
 
                       ;; Card type radios
                     (dom/label
-                      (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}})
+                      (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}
+                                  :title "Traditional question-answer flashcards"})
                       (dom/input
                         (dom/props {:type "radio" :name "card-type" :value "basic"
                                     :checked (= card-type "basic")})
@@ -418,7 +419,8 @@
                             (token))))
                       (dom/text "Basic"))
                     (dom/label
-                      (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}})
+                      (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}
+                                  :title "Fill-in-the-blank deletion cards (e.g., 'Paris is the capital of [...]')"})
                       (dom/input
                         (dom/props {:type "radio" :name "card-type" :value "cloze"
                                     :checked (= card-type "cloze")})
@@ -430,19 +432,6 @@
                             (e/server (settings/save-card-type user-id "cloze"))
                             (token))))
                       (dom/text "Cloze"))
-                      ;; Help icon for card types
-                    (dom/button
-                      (dom/props {:class "help-icon"
-                                  :style {:padding "2px 6px" :margin-left "4px" :background "transparent"
-                                          :border "1px solid #ccc" :border-radius "50%" :cursor "help"
-                                          :font-size "11px" :color "#666"}
-                                  :title "Basic: Traditional question-answer flashcards. Cloze: Fill-in-the-blank deletion cards."})
-                      (dom/text "?")
-                      (dom/On "click"
-                        (fn [e]
-                          #?(:cljs (.preventDefault e))
-                          #?(:cljs (js/alert "Basic: Traditional question-answer flashcards.\n\nCloze: Fill-in-the-blank deletion cards (e.g., 'Paris is the capital of [...]').")))
-                        nil))
 
                       ;; Separator
                     (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
@@ -633,7 +622,7 @@
                         (dom/text "Add new")
                         (dom/On "click" (fn [_] (reset! !show-add true)) nil))
                       (when show-add
-                        (AddCardModal !show-add card-type selected-doc current-pdf-page !refresh)))
+                        (AddCardModal !show-add card-type selected-doc current-pdf-page !refresh nil)))
 
                       ;; Separator
                     (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))

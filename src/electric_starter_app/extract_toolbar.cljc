@@ -5,7 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [electric-starter-app.rich-text-editor :as editor]
    [electric-starter-app.anki-sync :refer [AnkiSyncButton]]
-   [electric-starter-app.ocr-modals :refer [ExportModal PromptDialog AddCardModal]]
+   [electric-starter-app.ocr-modals :refer [ExportModal PromptDialog]]
    [electric-starter-app.extract-cards :as extract-cards]
    #?(:clj [electric-starter-app.cards :as cards])
    #?(:clj [electric-starter-app.settings :as settings])
@@ -101,7 +101,8 @@
 
         ;; Card type radios
         (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}})
+          (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}
+                      :title "Traditional question-answer flashcards"})
           (dom/input
             (dom/props {:type "radio" :name "extract-card-type" :value "basic"
                         :checked (= card-type "basic")})
@@ -114,7 +115,8 @@
                 (token))))
           (dom/text "Basic"))
         (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}})
+          (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}
+                      :title "Fill-in-the-blank deletion cards (e.g., 'Paris is the capital of [...]')"})
           (dom/input
             (dom/props {:type "radio" :name "extract-card-type" :value "cloze"
                         :checked (= card-type "cloze")})
@@ -126,19 +128,6 @@
                 (e/server (settings/save-card-type user-id "cloze"))
                 (token))))
           (dom/text "Cloze"))
-        ;; Help icon
-        (dom/button
-          (dom/props {:class "help-icon"
-                      :style {:padding "2px 6px" :margin-left "4px" :background "transparent"
-                              :border "1px solid #ccc" :border-radius "50%" :cursor "help"
-                              :font-size "11px" :color "#666"}
-                      :title "Basic: Traditional question-answer flashcards. Cloze: Fill-in-the-blank deletion cards."})
-          (dom/text "?")
-          (dom/On "click"
-            (fn [e]
-              #?(:cljs (.preventDefault e))
-              #?(:cljs (js/alert "Basic: Traditional question-answer flashcards.\n\nCloze: Fill-in-the-blank deletion cards (e.g., 'Paris is the capital of [...]').")))
-            nil))
 
         ;; Separator
         (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
@@ -321,7 +310,7 @@
             (dom/text "Add new")
             (dom/On "click" (fn [_] (reset! !show-add true)) nil))
           (when show-add
-            (AddCardModal !show-add card-type doc-id page-number extract-cards/!refresh)))
+            (extract-cards/ExtractAddCardModal !show-add card-type doc-id page-number content-item-id)))
 
         ;; Separator
         (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))

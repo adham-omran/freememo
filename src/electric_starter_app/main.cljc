@@ -14,7 +14,7 @@
     (binding [dom/node js/document.body]
       (let [user-id (e/server (get-in ring-request [:session :user-id]))
             username (e/server (get-in ring-request [:session :username]))
-            enc-key  (e/server (get-in ring-request [:session :enc-key]))
+            enc-key (e/server (get-in ring-request [:session :enc-key]))
             auth-error (e/server (get-in ring-request [:session :auth-error]))]
         (if (e/server (some? user-id))
           ;; Authenticated: render app
@@ -75,11 +75,15 @@
                 (when (= active-tab :settings) (SettingsPage user-id username enc-key))
                 (when (= active-tab :pdf) (PdfPage user-id !nav-target navigate!))
                 (when (= active-tab :learn) (LearnPage user-id enc-key !nav-target #(navigate! :extract)))
-                (when (= active-tab :extract) (ExtractPage user-id enc-key (:content-item-id (e/watch !nav-target)) navigate!)))))
+                (when (= active-tab :extract)
+                  (ExtractPage user-id enc-key (:content-item-id (e/watch !nav-target)) navigate!
+                    (fn [doc-id page]
+                      (reset! !nav-target {:doc-id doc-id :page page})
+                      (navigate! :learn)))))))
 
           ;; Not authenticated: render login page
           (LoginPage auth-error))))))
 
 (defn electric-boot [ring-request]
-  #?(:clj  (e/boot-server {} Main (e/server ring-request))
+  #?(:clj (e/boot-server {} Main (e/server ring-request))
      :cljs (e/boot-client {} Main (e/server (e/amb)))))
