@@ -5,17 +5,15 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window]]
    [contrib.data :refer [clamp-left]]
-   [electric-starter-app.card-components :refer [CardRow get-cards*]]
+   [electric-starter-app.card-components :refer [CardRow get-cards-by-extract*]]
    [electric-starter-app.ocr-modals :refer [EditCardModal]]))
 
-(defonce !refresh
-  #?(:clj (atom 0)
-     :cljs nil))
+#?(:clj (defonce !refresh (atom 0)))
 
-(e/defn ExtractCardTable [doc-id page-number]
+(e/defn ExtractCardTable [content-item-id]
   (e/client
     (let [refresh (e/server (e/watch !refresh))
-          cards-result (e/server (get-cards* refresh doc-id page-number))
+          cards-result (e/server (get-cards-by-extract* refresh content-item-id))
           !editing-card (atom nil)
           editing-card (e/watch !editing-card)]
 

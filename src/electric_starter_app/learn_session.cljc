@@ -4,6 +4,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [electric-starter-app.ocr-page :refer [OcrPage]]
+   [electric-starter-app.extract-page :refer [ExtractPage]]
    #?(:clj [electric-starter-app.db :as db])))
 
 (defn advance-topic* [topic-type id]
@@ -42,104 +43,87 @@
                   (token)))))
 
           ;; Active topic
-          (let [item (nth queue-vec idx)
+          (let [item (nth queue-vec idx nil)
                 topic-type (:topic_type item)
-                topic-id   (:id item)
-                filename   (or (:filename item) "-")
-                page-num   (:page_number item)
-                priority   (or (:priority item) 50)
-                is-doc     (= topic-type "document")
+                topic-id (:id item)
+                filename (or (:filename item) "-")
+                page-num (:page_number item)
+                priority (or (:priority item) 50)
+                is-doc (= topic-type "document")
                 type-label (cond is-doc "Doc" (= topic-type "extract") "Extract" :else "Page")
                 type-color (cond is-doc "#dcfce7" (= topic-type "extract") "#fef3c7" :else "#e0f2fe")]
 
-            ;; Header bar
-            (dom/div
-              (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
-                                  :padding "8px 16px" :flex-shrink "0"
-                                  :border-bottom "1px solid #e0e0e0"}})
-              (dom/button
-                (dom/props {:style {:padding "4px 12px" :background "#f0f0f0" :border "1px solid #ccc"
-                                    :border-radius "4px" :cursor "pointer" :font-size "13px"}})
-                (dom/text "Overview")
-                (dom/On "click" (fn [_] (reset! !queue-idx 0) (reset! !mode :overview)) nil))
-              (dom/span
-                (dom/props {:style {:color "#555" :font-size "13px"}})
-                (dom/text (if is-doc filename (str filename "  p." page-num))))
-              (dom/span
-                (dom/props {:style {:padding "2px 8px" :border-radius "4px" :font-size "11px"
-                                    :font-weight "600" :background type-color}})
-                (dom/text type-label))
-              (dom/span
-                (dom/props {:style {:color "#888" :font-size "12px"}})
-                (dom/text (str "P:" priority)))
-              (dom/span
-                (dom/props {:style {:margin-left "auto" :color "#888" :font-size "13px"}})
-                (dom/text (str (inc idx) " / " total))))
-
-            (if is-doc
-              ;; Document topic — embed full OcrPage workspace
+            (when item
+              ;; Header bar
               (dom/div
-                (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
-                (dom/div
-                  (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                  (let [!nav (atom {:doc-id (:document_id item)})]
-                    (OcrPage user-id enc-key !nav)))
+                (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
+                                    :padding "8px 16px" :flex-shrink "0"
+                                    :border-bottom "1px solid #e0e0e0"}})
+                (dom/button
+                  (dom/props {:style {:padding "4px 12px" :background "#f0f0f0" :border "1px solid #ccc"
+                                      :border-radius "4px" :cursor "pointer" :font-size "13px"}})
+                  (dom/text "\u2190 Back to Learn")
+                  (dom/On "click" (fn [_] (reset! !queue-idx 0) (reset! !mode :overview)) nil))
+                (dom/span
+                  (dom/props {:style {:color "#555" :font-size "13px"}})
+                  (dom/text (if is-doc filename (str filename "  p." page-num))))
+                (dom/span
+                  (dom/props {:style {:padding "2px 8px" :border-radius "4px" :font-size "11px"
+                                      :font-weight "600" :background type-color}})
+                  (dom/text type-label))
+                (dom/span
+                  (dom/props {:style {:color "#888" :font-size "12px"}})
+                  (dom/text (str "P:" priority)))
+                (dom/span
+                  (dom/props {:style {:margin-left "auto" :color "#888" :font-size "13px"}})
+                  (dom/text (str (inc idx) " / " total))))
 
-                ;; Next button at bottom
+              (if is-doc
+                ;; Document topic — embed full OcrPage workspace
                 (dom/div
-                  (dom/props {:style {:display "flex" :align-items "center" :justify-content "center"
-                                      :padding "12px 16px" :flex-shrink "0"
-                                      :border-top "1px solid #e0e0e0"}})
-                  (dom/button
-                    (dom/props {:style {:padding "8px 28px" :background "#2563eb" :color "white"
-                                        :border "none" :border-radius "6px" :cursor "pointer"
-                                        :font-size "15px" :font-weight "600"}})
-                    (dom/text "Next")
-                    (let [event (dom/On "click" (fn [_] :next) nil)
-                          [?token _error] (e/Token event)]
-                      (when-some [token ?token]
-                        (e/server (advance-topic* topic-type topic-id))
-                        (swap! !queue-idx inc)
-                        (token))))))
-
-              ;; Extract topic — show content read-only with Open Extract + Next
-              (let [content (or (:content item) "")]
-                (dom/div
-                  (dom/props {:style {:flex "1" :min-height "0" :overflow "auto"
-                                      :display "flex" :justify-content "center"
-                                      :padding "24px 16px"}})
+                  (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
                   (dom/div
-                    (dom/props {:style {:width "100%" :max-width "800px" :line-height "1.6"}})
-                    (dom/div
-                      (dom/props {:style {:font-size "15px"}})
-                      (set! (.-innerHTML dom/node) content))))
+                    (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
+                    (let [!nav (atom {:doc-id (:document_id item)})]
+                      (OcrPage user-id enc-key !nav)))
 
-                ;; Bottom bar with Open Extract + Next
-                (dom/div
-                  (dom/props {:style {:display "flex" :align-items "center" :justify-content "center"
-                                      :gap "12px" :padding "12px 16px" :flex-shrink "0"
-                                      :border-top "1px solid #e0e0e0"}})
-
-                  (when (= topic-type "extract")
+                  ;; Next button at bottom
+                  (dom/div
+                    (dom/props {:style {:display "flex" :align-items "center" :justify-content "center"
+                                        :padding "12px 16px" :flex-shrink "0"
+                                        :border-top "1px solid #e0e0e0"}})
                     (dom/button
-                      (dom/props {:style {:padding "8px 20px" :background "#f0f0f0" :color "#333"
-                                          :border "1px solid #ccc" :border-radius "6px" :cursor "pointer"
-                                          :font-size "14px"}})
-                      (dom/text "Open Extract")
-                      (dom/On "click"
-                        (fn [_]
-                          (reset! !nav-target {:content-item-id topic-id})
-                          (navigate-to-extract!))
-                        nil)))
+                      (dom/props {:style {:padding "8px 28px" :background "#2563eb" :color "white"
+                                          :border "none" :border-radius "6px" :cursor "pointer"
+                                          :font-size "15px" :font-weight "600"}})
+                      (dom/text "Next")
+                      (let [event (dom/On "click" (fn [_] :next) nil)
+                            [?token _error] (e/Token event)]
+                        (when-some [token ?token]
+                          (e/server (advance-topic* topic-type topic-id))
+                          (swap! !queue-idx inc)
+                          (token))))))
 
-                  (dom/button
-                    (dom/props {:style {:padding "8px 28px" :background "#2563eb" :color "white"
-                                        :border "none" :border-radius "6px" :cursor "pointer"
-                                        :font-size "15px" :font-weight "600"}})
-                    (dom/text "Next")
-                    (let [event (dom/On "click" (fn [_] :next) nil)
-                          [?token _error] (e/Token event)]
-                      (when-some [token ?token]
-                        (e/server (advance-topic* topic-type topic-id))
-                        (swap! !queue-idx inc)
-                        (token)))))))))))))
+                ;; Extract topic — embed ExtractPage directly for immediate editing
+                (dom/div
+                  (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
+                  (dom/div
+                    (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
+                    (ExtractPage user-id enc-key topic-id nil))
+
+                  ;; Next button at bottom
+                  (dom/div
+                    (dom/props {:style {:display "flex" :align-items "center" :justify-content "center"
+                                        :padding "12px 16px" :flex-shrink "0"
+                                        :border-top "1px solid #e0e0e0"}})
+                    (dom/button
+                      (dom/props {:style {:padding "8px 28px" :background "#2563eb" :color "white"
+                                          :border "none" :border-radius "6px" :cursor "pointer"
+                                          :font-size "15px" :font-weight "600"}})
+                      (dom/text "Next")
+                      (let [event (dom/On "click" (fn [_] :next) nil)
+                            [?token _error] (e/Token event)]
+                        (when-some [token ?token]
+                          (e/server (advance-topic* topic-type topic-id))
+                          (swap! !queue-idx inc)
+                          (token))))))))))))))
