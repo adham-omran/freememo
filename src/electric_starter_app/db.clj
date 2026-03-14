@@ -590,6 +590,43 @@
                   user-id user-id])]
     (or (:total result) 0)))
 
+(defn get-full-queue
+  "Get ALL topics (documents + extracts) ordered by priority. No date filter."
+  [user-id]
+  (jdbc/execute! ds
+    ["SELECT 'document' AS topic_type, d.id, d.filename AS title, d.priority,
+             d.next_review_at, d.interval_days, d.dismissed,
+             d.source_type, NULL AS content
+      FROM documents d WHERE d.user_id = ?
+      UNION ALL
+      SELECT 'extract', ci.id, d.filename AS title, ci.priority,
+             ci.next_review_at, ci.interval_days, ci.dismissed,
+             NULL AS source_type, SUBSTRING(ci.content FROM 1 FOR 100) AS content
+      FROM content_items ci JOIN documents d ON ci.document_id = d.id
+      WHERE d.user_id = ?
+      ORDER BY dismissed ASC NULLS FIRST, priority ASC, next_review_at ASC NULLS FIRST"
+     user-id user-id]))
+
+(defn get-review-calendar
+  "Get topic counts per day for the next N days."
+  [user-id days]
+  (jdbc/execute! ds
+    ["SELECT review_date, SUM(cnt) AS count FROM (
+        SELECT DATE(next_review_at) AS review_date, COUNT(*) AS cnt
+        FROM documents WHERE user_id = ?
+          AND next_review_at BETWEEN NOW() AND NOW() + ? * INTERVAL '1 day'
+          AND (dismissed = false OR dismissed IS NULL)
+        GROUP BY DATE(next_review_at)
+        UNION ALL
+        SELECT DATE(ci.next_review_at), COUNT(*)
+        FROM content_items ci JOIN documents d ON ci.document_id = d.id
+        WHERE d.user_id = ?
+          AND ci.next_review_at BETWEEN NOW() AND NOW() + ? * INTERVAL '1 day'
+          AND (ci.dismissed = false OR ci.dismissed IS NULL)
+        GROUP BY DATE(ci.next_review_at)
+      ) sub GROUP BY review_date ORDER BY review_date"
+     user-id days user-id days]))
+
 (defn advance-topic
   "Advance a topic's review schedule using A-Factor algorithm."
   [topic-type id]
