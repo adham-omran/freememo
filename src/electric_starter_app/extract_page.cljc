@@ -5,10 +5,12 @@
    [hyperfiddle.electric-dom3 :as dom]
    [electric-starter-app.rich-text-editor :as editor]
    [electric-starter-app.rich-text-editor-component :refer [RichTextEditorComponent]]
-   [electric-starter-app.extract-toolbar :refer [ExtractToolbar]]
-   [electric-starter-app.extract-cards :as extract-cards :refer [ExtractCardTable]]
+   [electric-starter-app.content-toolbar :refer [ContentToolbar]]
+   [electric-starter-app.content-card-table :refer [ContentCardTable]]
    [electric-starter-app.ocr-page :refer [start-drag!]]
    #?(:clj [electric-starter-app.db :as db])))
+
+#?(:clj (defonce !refresh (atom 0)))
 
 (e/defn ExtractPage [user-id enc-key content-item-id navigate! view-source!]
   (e/client
@@ -85,16 +87,21 @@
             (dom/div
               (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0" :overflow "hidden"}})
 
-              ;; Toolbar
-              (ExtractToolbar {:user-id user-id
+              ;; Shared toolbar
+              (ContentToolbar {:user-id user-id
                                :enc-key enc-key
                                :doc-id doc-id
                                :page-number page-num
                                :content-text content
-                               :content-item-id content-item-id})
+                               :content-item-id content-item-id
+                               :context-mode :extract
+                               :context-tooltip "Include context for better cards. With a selection: extract text. Without: original page text."}
+                !refresh)
 
-              ;; Card table
-              (ExtractCardTable content-item-id))))
+              ;; Shared card table
+              (ContentCardTable {:query-mode :extract
+                                 :content-item-id content-item-id}
+                !refresh))))
 
         ;; No content-item-id
         (dom/div
