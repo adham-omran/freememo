@@ -277,7 +277,7 @@
 
                     ;; Table header
                     (dom/table
-                      (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :table-layout "fixed" :flex-shrink "0"}})
+                      (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :flex-shrink "0"}})
                       (let [th-style {:padding "8px 10px" :border-bottom "2px solid var(--color-border)" :font-weight "600" :color "var(--color-text-label)"}]
                         (dom/thead
                           (dom/tr
@@ -296,8 +296,7 @@
                           (dom/props {:class "tape-scroll"
                                       :style {:--offset offset :--row-height (str row-height "px")}})
                           (dom/table
-                            (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :table-layout "fixed"
-                                                :grid-template-columns "1fr 60px 80px 140px 80px"}})
+                            (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px"}})
                             (e/for [i (Tape offset limit)]
                               (let [item (e/server (nth docs-vec i nil))]
                                 (when item

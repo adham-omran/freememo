@@ -99,12 +99,12 @@
 
               ;; Table header
               (dom/table
-                (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :table-layout "fixed" :flex-shrink "0"}})
+                (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :flex-shrink "0"}})
                 (dom/thead
                   (let [th-base {:padding "8px 10px" :border-bottom "2px solid var(--color-border)" :font-weight "600" :color "var(--color-text-primary)"}]
                     (dom/tr
                       (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "70px"})}) (dom/text "Type"))
-                      (dom/th (dom/props {:style (merge th-base {:text-align "left" :width "20%"})}) (dom/text "Document"))
+                      (dom/th (dom/props {:style (merge th-base {:text-align "left"})}) (dom/text "Document"))
                       (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "60px"})}) (dom/text "Page"))
                       (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "60px"})}) (dom/text "Pri"))
                       (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "80px"})}) (dom/text "Interval"))
@@ -118,7 +118,7 @@
                   (dom/props {:class "tape-scroll"
                               :style {:--offset offset :--row-height (str row-height "px")}})
                   (dom/table
-                    (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :table-layout "fixed"}})
+                    (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px"}})
                     (e/for [i (Tape offset limit)]
                       (let [item (e/server (nth items-vec i nil))]
                         (when item
@@ -148,7 +148,7 @@
                                   (dom/props {:class "type-badge" :style {:padding "2px 8px" :background type-color}})
                                   (dom/text type-label)))
                               (dom/td
-                                (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap" :width "25%"}})
+                                (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
                                 (dom/text filename))
                               (dom/td
                                 (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#555" :width "60px"}})
