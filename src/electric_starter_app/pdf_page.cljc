@@ -3,7 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window]]
+   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
    #?(:clj [electric-starter-app.pdf :as pdf])
    #?(:clj [electric-starter-app.db :as db])
@@ -312,88 +312,90 @@
                         (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
                         (let [[offset limit] (Scroll-window row-height doc-count dom/node {:overquery-factor 1})
                               occluded-height (clamp-left (* row-height (- doc-count limit)) 0)]
+                          (dom/props {:class "tape-scroll"
+                                      :style {:--offset offset :--row-height (str row-height "px")}})
                           (dom/table
-                            (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :table-layout "fixed"}})
-                            (dom/tbody
-                              (dom/props {:style {:position "relative" :top (str (* offset row-height) "px")}})
-                              (e/for [i (e/diff-by {} (range offset (+ offset limit)))]
-                                (let [item (e/server (nth docs-vec i nil))]
-                                  (when item
-                                    (let [id (e/server (:documents/id item))
-                                          filename (e/server (:documents/filename item))
-                                          file-size (e/server (format-bytes (:documents/file_size item)))
-                                          uploaded (e/server (format-timestamp (:documents/uploaded_at item)))
-                                          source-type (e/server (or (:documents/source_type item) "pdf"))
-                                          type-label (e/server (case source-type
-                                                                 "wikipedia" "Wiki"
-                                                                 "web" "Web"
-                                                                 "PDF"))
-                                          type-color (e/server (case source-type
-                                                                 "wikipedia" "#fef3c7"
-                                                                 "web" "#e0f2fe"
-                                                                 "#dcfce7"))]
-                                      (dom/tr
-                                        (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")}})
+                            (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :table-layout "fixed"
+                                                :grid-template-columns "1fr 60px 80px 140px 80px"}})
+                            (e/for [i (Tape offset limit)]
+                              (let [item (e/server (nth docs-vec i nil))]
+                                (when item
+                                  (let [id (e/server (:documents/id item))
+                                        filename (e/server (:documents/filename item))
+                                        file-size (e/server (format-bytes (:documents/file_size item)))
+                                        uploaded (e/server (format-timestamp (:documents/uploaded_at item)))
+                                        source-type (e/server (or (:documents/source_type item) "pdf"))
+                                        type-label (e/server (case source-type
+                                                               "wikipedia" "Wiki"
+                                                               "web" "Web"
+                                                               "PDF"))
+                                        type-color (e/server (case source-type
+                                                               "wikipedia" "#fef3c7"
+                                                               "web" "#e0f2fe"
+                                                               "#dcfce7"))]
+                                    (dom/tr
+                                      (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")
+                                                          :--order (inc i)}})
                                         ;; Name — clickable link
-                                        (dom/td
-                                          (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
-                                          (dom/span
-                                            (dom/props {:style {:color "#2563eb" :cursor "pointer" :text-decoration "underline"}
-                                                        :title "Open in Learn tab"})
-                                            (dom/text filename)
-                                            (dom/On "click"
-                                              (fn [_]
-                                                (reset! !nav-target {:doc-id id})
-                                                (navigate! :learn))
-                                              nil)))
+                                      (dom/td
+                                        (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
+                                        (dom/span
+                                          (dom/props {:style {:color "#2563eb" :cursor "pointer" :text-decoration "underline"}
+                                                      :title "Open in Learn tab"})
+                                          (dom/text filename)
+                                          (dom/On "click"
+                                            (fn [_]
+                                              (reset! !nav-target {:doc-id id})
+                                              (navigate! :learn))
+                                            nil)))
                                         ;; Type badge
-                                        (dom/td
-                                          (dom/props {:style {:padding "8px 10px" :text-align "center" :width "60px"}})
-                                          (dom/span
-                                            (dom/props {:style {:padding "2px 8px" :border-radius "4px" :font-size "11px"
-                                                                :font-weight "600" :background type-color}})
-                                            (dom/text type-label)))
+                                      (dom/td
+                                        (dom/props {:style {:padding "8px 10px" :text-align "center" :width "60px"}})
+                                        (dom/span
+                                          (dom/props {:style {:padding "2px 8px" :border-radius "4px" :font-size "11px"
+                                                              :font-weight "600" :background type-color}})
+                                          (dom/text type-label)))
                                         ;; Size
-                                        (dom/td
-                                          (dom/props {:style {:padding "8px 10px" :text-align "right" :color "#555" :width "80px"}})
-                                          (dom/text file-size))
+                                      (dom/td
+                                        (dom/props {:style {:padding "8px 10px" :text-align "right" :color "#555" :width "80px"}})
+                                        (dom/text file-size))
                                         ;; Uploaded
-                                        (dom/td
-                                          (dom/props {:style {:padding "8px 10px" :color "#555" :width "140px"}})
-                                          (dom/text (or uploaded "-")))
+                                      (dom/td
+                                        (dom/props {:style {:padding "8px 10px" :color "#555" :width "140px"}})
+                                        (dom/text (or uploaded "-")))
                                         ;; Delete
-                                        (dom/td
-                                          (dom/props {:style {:padding "8px 10px" :text-align "center" :width "80px"}})
-                                          (let [!deleting (atom false)
-                                                deleting (e/watch !deleting)]
-                                            (dom/button
-                                              (dom/props {:disabled deleting
-                                                          :style {:padding "3px 10px" :background (if deleting "#999" "#dc3545")
-                                                                  :color "white" :border "none" :border-radius "3px"
-                                                                  :cursor (if deleting "not-allowed" "pointer")
-                                                                  :font-size "12px"}})
-                                              (dom/text (if deleting "..." "Delete"))
-                                              (let [click-event (dom/On "click"
-                                                (fn [_]
-                                                  #?(:cljs
-                                                     (when (js/confirm "Delete this document? All pages, extracts, and cards will be permanently removed.")
-                                                       id)
-                                                     :clj nil))
-                                                nil)
-                                                    [?token ?error] (e/Token click-event)]
-                                                (when ?error
-                                                  (dom/span
-                                                    (dom/props {:style {:color "red" :font-size "11px" :margin-left "4px"}})
-                                                    (dom/text ?error)))
-                                                (when-some [token ?token]
-                                                  (reset! !deleting true)
-                                                  (let [result (e/server (pdf/delete-pdf user-id click-event))]
-                                                    (if (:success result)
-                                                      (do (reset! !deleting false)
-                                                          (e/server (swap! !refresh inc))
-                                                          (token))
-                                                      (do (reset! !deleting false)
-                                                        (token (:error result)))))))))))))))))
+                                      (dom/td
+                                        (dom/props {:style {:padding "8px 10px" :text-align "center" :width "80px"}})
+                                        (let [!deleting (atom false)
+                                              deleting (e/watch !deleting)]
+                                          (dom/button
+                                            (dom/props {:disabled deleting
+                                                        :style {:padding "3px 10px" :background (if deleting "#999" "#dc3545")
+                                                                :color "white" :border "none" :border-radius "3px"
+                                                                :cursor (if deleting "not-allowed" "pointer")
+                                                                :font-size "12px"}})
+                                            (dom/text (if deleting "..." "Delete"))
+                                            (let [click-event (dom/On "click"
+                                                                (fn [_]
+                                                                  #?(:cljs
+                                                                     (when (js/confirm "Delete this document? All pages, extracts, and cards will be permanently removed.")
+                                                                       id)
+                                                                     :clj nil))
+                                                                nil)
+                                                  [?token ?error] (e/Token click-event)]
+                                              (when ?error
+                                                (dom/span
+                                                  (dom/props {:style {:color "red" :font-size "11px" :margin-left "4px"}})
+                                                  (dom/text ?error)))
+                                              (when-some [token ?token]
+                                                (reset! !deleting true)
+                                                (let [result (e/server (pdf/delete-pdf user-id click-event))]
+                                                  (if (:success result)
+                                                    (do (reset! !deleting false)
+                                                      (e/server (swap! !refresh inc))
+                                                      (token))
+                                                    (do (reset! !deleting false)
+                                                      (token (:error result))))))))))))))))
                           (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))
 
                       ;; Empty state

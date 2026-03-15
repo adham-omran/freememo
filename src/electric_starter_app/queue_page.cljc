@@ -3,7 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window]]
+   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
    #?(:clj [electric-starter-app.db :as db])))
 
@@ -161,62 +161,64 @@
             (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
             (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 1})
                   occluded-height (clamp-left (* row-height (- item-count limit)) 0)]
+              (dom/props {:class "tape-scroll"
+                          :style {:--offset offset :--row-height (str row-height "px")}})
               (dom/table
-                (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :table-layout "fixed"}})
-                (dom/tbody
-                  (dom/props {:style {:position "relative" :top (str (* offset row-height) "px")}})
-                  (e/for [i (e/diff-by {} (range offset (+ offset limit)))]
-                    (let [item (e/server (nth items-vec i nil))]
-                      (when item
-                        (let [dismissed (:dismissed item)
-                              topic-type (:topic-type item)
-                              source-type (:source-type item)
-                              priority (:priority item)
-                              due-label (:due-label item)
-                              display-title (or (:display-title item) "")
-                              id (:id item)
-                              ;; Type badge
-                              [badge-text badge-color]
-                              (if (= topic-type "extract")
-                                ["Ext" "#44C2FF"]
-                                (case source-type
-                                  "wikipedia" ["Wiki" "#fef3c7"]
-                                  "web" ["Web" "#e0f2fe"]
-                                  ["PDF" "#dcfce7"]))]
-                          (dom/tr
-                            (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")
-                                                :opacity (if dismissed "0.4" "1")}})
-                            ;; Priority
-                            (dom/td
-                              (dom/props {:style {:padding "4px 6px" :text-align "center" :color "#555" :width "50px" :font-size "13px"}})
-                              (dom/text (if dismissed "\u2014" (str (or priority "")))))
+                (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :table-layout "fixed"
+                                    :grid-template-columns "50px 60px 80px 1fr"}})
+                (e/for [i (Tape offset limit)]
+                  (let [item (e/server (nth items-vec i nil))]
+                    (when item
+                      (let [dismissed (:dismissed item)
+                            topic-type (:topic-type item)
+                            source-type (:source-type item)
+                            priority (:priority item)
+                            due-label (:due-label item)
+                            display-title (or (:display-title item) "")
+                            id (:id item)
                             ;; Type badge
-                            (dom/td
-                              (dom/props {:style {:padding "4px 6px" :text-align "center" :width "60px"}})
-                              (dom/span
-                                (dom/props {:style {:padding "1px 6px" :border-radius "3px" :font-size "10px"
-                                                    :font-weight "600" :background badge-color}})
-                                (dom/text badge-text)))
-                            ;; Due
-                            (dom/td
-                              (dom/props {:style {:padding "4px 6px" :text-align "center" :color "#555" :width "80px" :font-size "12px"}})
-                              (dom/text due-label))
-                            ;; Title (clickable)
-                            (dom/td
-                              (dom/props {:style {:padding "4px 10px" :overflow "hidden" :text-overflow "ellipsis"
-                                                  :white-space "nowrap" :cursor "pointer"}
-                                          :title display-title})
-                              (dom/On "mouseenter" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "underline")) nil)
-                              (dom/On "mouseleave" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "none")) nil)
-                              (dom/text display-title)
-                              (dom/On "click"
-                                (fn [_]
-                                  (if (= topic-type "extract")
-                                    (do (reset! !nav-target {:content-item-id id})
-                                      (navigate! :extract))
-                                    (do (reset! !nav-target {:doc-id id})
-                                      (navigate! :learn))))
-                                nil)))))))))
+                            [badge-text badge-color]
+                            (if (= topic-type "extract")
+                              ["Ext" "#44C2FF"]
+                              (case source-type
+                                "wikipedia" ["Wiki" "#fef3c7"]
+                                "web" ["Web" "#e0f2fe"]
+                                ["PDF" "#dcfce7"]))]
+                        (dom/tr
+                          (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")
+                                              :opacity (if dismissed "0.4" "1")
+                                              :--order (inc i)}})
+                          ;; Priority
+                          (dom/td
+                            (dom/props {:style {:padding "4px 6px" :text-align "center" :color "#555" :width "50px" :font-size "13px"}})
+                            (dom/text (if dismissed "\u2014" (str (or priority "")))))
+                          ;; Type badge
+                          (dom/td
+                            (dom/props {:style {:padding "4px 6px" :text-align "center" :width "60px"}})
+                            (dom/span
+                              (dom/props {:style {:padding "1px 6px" :border-radius "3px" :font-size "10px"
+                                                  :font-weight "600" :background badge-color}})
+                              (dom/text badge-text)))
+                          ;; Due
+                          (dom/td
+                            (dom/props {:style {:padding "4px 6px" :text-align "center" :color "#555" :width "80px" :font-size "12px"}})
+                            (dom/text due-label))
+                          ;; Title (clickable)
+                          (dom/td
+                            (dom/props {:style {:padding "4px 10px" :overflow "hidden" :text-overflow "ellipsis"
+                                                :white-space "nowrap" :cursor "pointer"}
+                                        :title display-title})
+                            (dom/On "mouseenter" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "underline")) nil)
+                            (dom/On "mouseleave" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "none")) nil)
+                            (dom/text display-title)
+                            (dom/On "click"
+                              (fn [_]
+                                (if (= topic-type "extract")
+                                  (do (reset! !nav-target {:content-item-id id})
+                                    (navigate! :extract))
+                                  (do (reset! !nav-target {:doc-id id})
+                                    (navigate! :learn))))
+                              nil))))))))
               (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))
 
       (dom/p
