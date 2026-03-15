@@ -223,7 +223,7 @@
 
       (dom/p
         (dom/props {:style {:color "#888" :font-size "14px" :margin-top "24px"}})
-        (dom/text "No topics yet.")))))
+        (dom/text "No topics in your queue yet. Import a document from the Documents tab \u2014 it will appear here automatically.")))))
 
 (e/defn QueuePage [user-id !nav-target navigate!]
   (e/client

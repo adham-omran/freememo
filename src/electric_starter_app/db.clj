@@ -2,7 +2,8 @@
   "Database connection and schema management for PostgreSQL."
   (:require
     [next.jdbc :as jdbc]
-    [honey.sql :as sql]))
+    [honey.sql :as sql]
+    [clojure.string :as str]))
 
 ;; Connection configuration
 (def db-config
@@ -138,6 +139,9 @@
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_note_id BIGINT DEFAULT NULL"])
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_synced_at TIMESTAMP DEFAULT NULL"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_anki_note_id ON flashcards(anki_note_id) WHERE anki_note_id IS NOT NULL"])
+
+  ;; Track card edits for sync-after-edit detection
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NULL"])
 
   ;; Create content_items table
   (jdbc/execute! ds ["
@@ -405,7 +409,7 @@
                    :do-nothing true}))))
 
 (defn get-flashcards
-  "Get all flashcards for a specific document page."
+  "Get ALL flashcards for a page (used by sync, export). Includes extract cards."
   [document-id page-number]
   (jdbc/execute! ds
     (sql/format {:select [:*]
@@ -441,11 +445,11 @@
                  :where [:= :id card-id]})))
 
 (defn update-flashcard
-  "Update flashcard content fields. Returns update count."
+  "Update flashcard content fields. Sets updated_at for sync tracking."
   [card-id fields]
   (jdbc/execute-one! ds
     (sql/format {:update :flashcards
-                 :set fields
+                 :set (assoc fields :updated_at [:now])
                  :where [:= :id card-id]})))
 
 (defn get-context-pages
@@ -550,6 +554,39 @@
     ["UPDATE flashcards SET anki_synced_at = CURRENT_TIMESTAMP WHERE id = ?"
      card-id]))
 
+(defn mark-cards-exported
+  "Mark cards as exported (sets anki_synced_at). Used after CSV export."
+  [card-ids]
+  (when (seq card-ids)
+    (jdbc/execute! ds
+      (into [(str "UPDATE flashcards SET anki_synced_at = CURRENT_TIMESTAMP WHERE id IN ("
+                  (str/join "," (repeat (count card-ids) "?"))
+                  ")")]
+            card-ids))))
+
+(defn get-unsynced-card-count
+  "Count unsynced cards, scoped to extract, page, or document.
+   - content-item-id provided: count only that extract's cards
+   - page-number provided (no content-item-id): count all cards on the page
+   - neither: count all cards in document"
+  [document-id page-number content-item-id]
+  (let [base-where "document_id = ? AND (anki_synced_at IS NULL OR (updated_at IS NOT NULL AND updated_at > anki_synced_at))"
+        [sql & params]
+        (cond
+          content-item-id
+          [(str "SELECT COUNT(*) AS cnt FROM flashcards WHERE " base-where " AND content_item_id = ?")
+           document-id content-item-id]
+
+          page-number
+          [(str "SELECT COUNT(*) AS cnt FROM flashcards WHERE " base-where " AND page_number = ?")
+           document-id page-number]
+
+          :else
+          [(str "SELECT COUNT(*) AS cnt FROM flashcards WHERE " base-where)
+           document-id])
+        result (jdbc/execute-one! ds (into [sql] params))]
+    (or (:cnt result) 0)))
+
 ;; Learning queue functions
 (defn get-learning-queue
   "Unified queue of due documents and extracts for incremental reading."
@@ -585,6 +622,21 @@
                    + (SELECT COUNT(*) FROM content_items ci JOIN documents d ON ci.document_id = d.id
                       WHERE d.user_id = ?
                         AND (ci.next_review_at <= NOW() OR ci.next_review_at IS NULL)
+                        AND (ci.dismissed = false OR ci.dismissed IS NULL))
+                   AS total"
+                  user-id user-id])]
+    (or (:total result) 0)))
+
+(defn get-total-topic-count
+  "Count ALL topics (due and not due, excluding dismissed)."
+  [user-id]
+  (let [result (jdbc/execute-one! ds
+                 ["SELECT
+                     (SELECT COUNT(*) FROM documents d
+                      WHERE d.user_id = ?
+                        AND (d.dismissed = false OR d.dismissed IS NULL))
+                   + (SELECT COUNT(*) FROM content_items ci JOIN documents d ON ci.document_id = d.id
+                      WHERE d.user_id = ?
                         AND (ci.dismissed = false OR ci.dismissed IS NULL))
                    AS total"
                   user-id user-id])]

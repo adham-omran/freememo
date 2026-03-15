@@ -195,6 +195,9 @@
             (dom/div
               (dom/props {:style {:font-size "14px" :color "#888"}})
               (dom/text (str "Reviewed " total " topic" (when (not= total 1) "s") ".")))
+            (dom/div
+              (dom/props {:style {:font-size "13px" :color "#aaa" :margin-top "4px"}})
+              (dom/text "Return to Overview to browse your topics."))
             (dom/button
               (dom/props {:style {:padding "10px 28px" :background "#2563eb" :color "white"
                                   :border "none" :border-radius "6px" :cursor "pointer"

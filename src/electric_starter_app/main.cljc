@@ -95,7 +95,7 @@
               ;; Tab content
               (dom/div
                 (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:extract :learn :contents :queue} active-tab) "hidden" "auto")}})
-                (when (= active-tab :home) (HomePage navigate!))
+                (when (= active-tab :home) (HomePage navigate! user-id enc-key))
                 (when (= active-tab :contents) (ContentsPage user-id !nav-target navigate!))
                 (when (= active-tab :queue) (QueuePage user-id !nav-target navigate!))
                 (when (= active-tab :settings) (SettingsPage user-id username enc-key !settings-refresh))

@@ -78,4 +78,12 @@ IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return
       {:success true :text text})
     (catch Exception e
       (println "ERROR [extract-text]:" (.getMessage e))
-      {:success false :error (.getMessage e)})))
+      {:success false :error (let [msg (.getMessage e)]
+                               (cond
+                                 (re-find #"(?i)API key not configured" (str msg))
+                                 "No API key configured. Set one in Settings."
+                                 (re-find #"(?i)401|unauthorized" (str msg))
+                                 "Invalid API key. Check your key in Settings."
+                                 (re-find #"(?i)429|rate.?limit" (str msg))
+                                 "Rate limit reached. Wait a moment and try again."
+                                 :else (str msg)))})))
