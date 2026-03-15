@@ -127,7 +127,7 @@
                 (Typeahead !selected-name filenames "Search documents..." !doc-commit))
               (when (and selected-doc page-stats)
                 (dom/span
-                  (dom/props {:style {:font-size "13px" :color "#666" :white-space "nowrap" :margin-right "8px"}})
+                  (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)" :white-space "nowrap" :margin-right "var(--sp-2)"}})
                   (dom/text (:done page-stats) " / " (:total page-stats) " pages done")))))
 
           ;; Success but no documents
@@ -219,7 +219,7 @@
 
                   ;; Compact page header
                   (dom/div
-                    (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :padding "4px 8px" :flex-shrink "0"}})
+                    (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-2)" :padding "var(--sp-1) var(--sp-2)" :flex-shrink "0"}})
                     (dom/span
                       (dom/props {:style {:font-weight "600" :font-size "13px" :color "#444"}})
                       (dom/text "p." current-pdf-page))
@@ -265,13 +265,10 @@
                             client-extracting? (e/client (e/watch !extracting-client?))
                             disabled? (or extracting? client-extracting?)]
                       (dom/button
-                        (dom/props {:style {:padding "4px 12px"
-                                            :background (if disabled? "#ccc" "#007bff")
-                                            :color "white"
-                                            :border "none"
-                                            :border-radius "4px"
-                                            :cursor (if disabled? "not-allowed" "pointer")
-                                            :font-size "14px"}
+                        (dom/props {:class "btn btn-sm btn-primary"
+                                    :style {:padding "4px 12px" :font-size "14px"
+                                            :background (if disabled? "#ccc" "var(--color-primary)")
+                                            :cursor (if disabled? "not-allowed" "pointer")}
                                     :disabled disabled?})
                         (dom/text (if disabled? "Extracting..." "Extract Text"))
                         (let [click-event (dom/On "click"
@@ -312,8 +309,8 @@
                     (when-let [ocr-err (get ocr-errors [selected-doc current-pdf-page])]
                       (dom/div
                         (dom/props {:style {:padding "6px 10px" :background "#fef2f2" :border "1px solid #fecaca"
-                                            :border-radius "4px" :font-size "13px" :color "#991b1b"
-                                            :margin-top "4px"}})
+                                            :border-radius "var(--radius-sm)" :font-size "13px" :color "#991b1b"
+                                            :margin-top "var(--sp-1)"}})
                         (dom/text ocr-err)))
 
                     ;; Save status indicator with fade-out
@@ -325,7 +322,7 @@
                         (dom/span
                           (dom/props {:style {:margin-left "12px"
                                               :font-size "12px"
-                                              :color (if is-success "#888" "red")
+                                              :color (if is-success "var(--color-text-secondary)" "var(--color-danger)")
                                               :opacity (if show "1" "0")
                                               :transition "opacity 0.5s ease-out"}})
                           (dom/text message)
@@ -344,17 +341,17 @@
                       (dom/div
                         (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
                                             :padding "3px 8px" :flex-shrink "0"
-                                            :background "#f9f9f9" :border-bottom "1px solid #eee"}})
+                                            :background "var(--color-bg-subtle)" :border-bottom "1px solid var(--color-border)"}})
                         (dom/span
-                          (dom/props {:style {:font-size "11px" :color "#999" :flex-shrink "0"}})
+                          (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)" :flex-shrink "0"}})
                           (dom/text "Source:"))
                         (e/for-by identity [_k [selected-doc]]
                           (dom/input
                             (dom/props {:type "text"
                                         :placeholder "Source reference"
                                         :style {:flex "1" :padding "2px 6px" :font-size "12px" :color "#555"
-                                                :border "1px solid #e0e0e0" :border-radius "3px"
-                                                :background "white"}})
+                                                :border "1px solid var(--color-border)" :border-radius "3px"
+                                                :background "var(--color-bg-card)"}})
                             (set! (.-value dom/node) (or current-source ""))
                             (let [event (dom/On "change" #(-> % .-target .-value) nil)
                                   [?token _] (e/Token event)]
@@ -364,13 +361,13 @@
                                 (token)))))
                         (dom/button
                           (dom/props {:style {:padding "2px 8px" :font-size "11px" :background "#f0f0f0"
-                                              :border "1px solid #ccc" :border-radius "3px" :cursor "pointer"}})
+                                              :border "1px solid var(--color-border)" :border-radius "3px" :cursor "pointer"}})
                           (dom/text "Close")
                           (dom/On "click" (fn [_] (reset! !editing-source false)) nil)))
                       ;; Collapsed: just a small clickable source indicator
                       (when (seq current-source)
                         (dom/span
-                          (dom/props {:style {:font-size "11px" :color "#999" :cursor "pointer"
+                          (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)" :cursor "pointer"
                                               :padding "0 8px" :flex-shrink "0"
                                               :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
                                               :max-width "200px"}

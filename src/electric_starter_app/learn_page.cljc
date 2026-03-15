@@ -49,16 +49,13 @@
 
         ;; Header bar
         (dom/div
-          (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
-                              :padding "8px 16px" :flex-shrink "0"
-                              :border-bottom "1px solid #e0e0e0"}})
+          (dom/props {:class "header-bar" :style {:gap "12px"}})
           (dom/button
-            (dom/props {:style {:padding "4px 12px" :background "#f0f0f0" :border "1px solid #ccc"
-                                :border-radius "4px" :cursor "pointer" :font-size "13px"}})
+            (dom/props {:class "btn btn-sm btn-secondary"})
             (dom/text "Back to Overview")
             (dom/On "click" (fn [_] (reset! !mode :overview)) nil))
           (dom/span
-            (dom/props {:style {:color "#555" :font-size "14px"}})
+            (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
             (dom/text (str "Browsing: " (or filename "document")))))
 
         ;; OcrPage workspace
@@ -83,14 +80,12 @@
             (dom/props {:style {:margin "0" :font-size "20px"}})
             (dom/text "Learn"))
           (dom/span
-            (dom/props {:style {:color "#888" :font-size "14px"}
+            (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}
                         :title "Documents and extracts scheduled for review"})
             (dom/text (str due-count " topics due")))
           (when (pos? due-count)
             (dom/button
-              (dom/props {:style {:padding "8px 24px" :background "#2563eb" :color "white"
-                                  :border "none" :border-radius "6px" :cursor "pointer"
-                                  :font-size "15px" :font-weight "600"}})
+              (dom/props {:class "btn btn-primary" :style {:padding "8px 24px" :font-size "15px" :font-weight "600"}})
               (dom/text "Start Learning")
               (dom/On "click" (fn [_] (reset! !mode :session)) nil))))
 
@@ -106,13 +101,14 @@
               (dom/table
                 (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :table-layout "fixed" :flex-shrink "0"}})
                 (dom/thead
-                  (dom/tr
-                    (dom/th (dom/props {:style {:text-align "center" :padding "8px 10px" :border-bottom "2px solid #e0e0e0" :font-weight "600" :color "#444" :width "70px"}}) (dom/text "Type"))
-                    (dom/th (dom/props {:style {:text-align "left" :padding "8px 10px" :border-bottom "2px solid #e0e0e0" :font-weight "600" :color "#444" :width "20%"}}) (dom/text "Document"))
-                    (dom/th (dom/props {:style {:text-align "center" :padding "8px 10px" :border-bottom "2px solid #e0e0e0" :font-weight "600" :color "#444" :width "60px"}}) (dom/text "Page"))
-                    (dom/th (dom/props {:style {:text-align "center" :padding "8px 10px" :border-bottom "2px solid #e0e0e0" :font-weight "600" :color "#444" :width "60px"}}) (dom/text "Pri"))
-                    (dom/th (dom/props {:style {:text-align "center" :padding "8px 10px" :border-bottom "2px solid #e0e0e0" :font-weight "600" :color "#444" :width "80px"}}) (dom/text "Interval"))
-                    (dom/th (dom/props {:style {:text-align "left" :padding "8px 10px" :border-bottom "2px solid #e0e0e0" :font-weight "600" :color "#444"}}) (dom/text "Content")))))
+                  (let [th-base {:padding "8px 10px" :border-bottom "2px solid var(--color-border)" :font-weight "600" :color "var(--color-text-primary)"}]
+                    (dom/tr
+                      (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "70px"})}) (dom/text "Type"))
+                      (dom/th (dom/props {:style (merge th-base {:text-align "left" :width "20%"})}) (dom/text "Document"))
+                      (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "60px"})}) (dom/text "Page"))
+                      (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "60px"})}) (dom/text "Pri"))
+                      (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "80px"})}) (dom/text "Interval"))
+                      (dom/th (dom/props {:style (merge th-base {:text-align "left"})}) (dom/text "Content"))))))
 
               ;; Scrollable body
               (dom/div
@@ -150,8 +146,7 @@
                               (dom/td
                                 (dom/props {:style {:padding "8px 10px" :text-align "center" :width "70px"}})
                                 (dom/span
-                                  (dom/props {:style {:padding "2px 8px" :border-radius "4px" :font-size "11px"
-                                                      :font-weight "600" :background type-color}})
+                                  (dom/props {:class "type-badge" :style {:padding "2px 8px" :background type-color}})
                                   (dom/text type-label)))
                               (dom/td
                                 (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap" :width "20%"}})
@@ -163,7 +158,7 @@
                                 (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#555" :width "60px"}})
                                 (dom/text (str priority)))
                               (dom/td
-                                (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#888" :font-size "12px" :width "80px"}})
+                                (dom/props {:style {:padding "8px 10px" :text-align "center" :color "var(--color-text-secondary)" :font-size "12px" :width "80px"}})
                                 (dom/text interval-str))
                               (dom/td
                                 (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
@@ -172,7 +167,7 @@
 
           ;; Empty state
           (dom/p
-            (dom/props {:style {:color "#888" :font-size "14px" :margin-top "24px"}})
+            (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px" :margin-top "24px"}})
             (dom/text (if (zero? total-count)
                         "No topics yet. Import a document from the Documents tab to start learning."
                         "All caught up! No topics due for review."))))
@@ -183,10 +178,9 @@
               dismissed (when show-dismissed
                           (e/server (get-dismissed-topics* refresh user-id)))]
           (dom/div
-            (dom/props {:style {:margin-top "24px" :border-top "1px solid #e0e0e0" :padding-top "12px"}})
+            (dom/props {:style {:margin-top "24px" :border-top "1px solid var(--color-border)" :padding-top "12px"}})
             (dom/button
-              (dom/props {:style {:padding "4px 12px" :background "#f0f0f0" :border "1px solid #ccc"
-                                  :border-radius "4px" :cursor "pointer" :font-size "13px" :color "#666"}})
+              (dom/props {:class "btn btn-sm btn-secondary" :style {:color "var(--color-text-secondary)"}})
               (dom/text (if show-dismissed "Hide dismissed" "Show dismissed"))
               (dom/On "click" (fn [_] (swap! !show-dismissed not)) nil))
 
@@ -202,9 +196,8 @@
                       (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
                                           :padding "8px 10px" :border-bottom "1px solid #f0f0f0"}})
                       (dom/span
-                        (dom/props {:style {:padding "2px 8px" :border-radius "4px" :font-size "11px"
-                                            :font-weight "600"
-                                            :background (if (= topic-type "document") "#dcfce7" "#44C2FF")}})
+                        (dom/props {:class "type-badge" :style {:padding "2px 8px"
+                                                                :background (if (= topic-type "document") "#dcfce7" "#44C2FF")}})
                         (dom/text type-label))
                       (dom/span
                         (dom/props {:style {:flex "1" :font-size "13px" :overflow "hidden"
@@ -212,9 +205,8 @@
                         (dom/text title))
                       ;; Restore button
                       (dom/button
-                        (dom/props {:style {:padding "3px 10px" :background "#2563eb" :color "white"
-                                            :border "none" :border-radius "3px" :cursor "pointer"
-                                            :font-size "12px"}})
+                        (dom/props {:class "btn btn-sm btn-primary" :style {:padding "3px 10px" :font-size "12px"}})
+
                         (dom/text "Restore")
                         (let [event (dom/On "click" (fn [_] :restore) nil)
                               [?token _] (e/Token event)]
@@ -224,9 +216,8 @@
                             (token))))
                       ;; Delete button
                       (dom/button
-                        (dom/props {:style {:padding "3px 10px" :background "#dc3545" :color "white"
-                                            :border "none" :border-radius "3px" :cursor "pointer"
-                                            :font-size "12px"}})
+                        (dom/props {:class "btn btn-sm btn-danger-fill" :style {:padding "3px 10px" :font-size "12px"}})
+
                         (dom/text "Delete")
                         (let [event (dom/On "click"
                                       (fn [_]

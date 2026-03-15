@@ -44,18 +44,15 @@
           ;; Header: breadcrumb + back button (hidden when embedded in learn session)
           (when navigate!
             (dom/div
-              (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
-                                  :padding "8px 16px" :flex-shrink "0"
-                                  :border-bottom "1px solid #e0e0e0"}})
+              (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-3)"
+                                  :padding "var(--sp-2) var(--sp-4)" :flex-shrink "0"
+                                  :border-bottom "1px solid var(--color-border)"}})
               (dom/button
-                (dom/props {:style {:padding "4px 12px" :background "#f0f0f0" :border "1px solid #ccc"
-                                    :border-radius "4px" :cursor "pointer" :font-size "13px"}})
+                (dom/props {:class "btn btn-sm btn-secondary" :style {:background "#f0f0f0"}})
                 (dom/text "Back to Learn")
                 (dom/On "click" (fn [_] (navigate! :learn)) nil))
               (dom/button
-                (dom/props {:style {:padding "4px 10px" :background "#dc3545" :color "white"
-                                    :border "none" :border-radius "4px" :cursor "pointer"
-                                    :font-size "12px"}
+                (dom/props {:class "btn btn-sm btn-danger-fill" :style {:padding "4px 10px" :font-size "12px"}
                             :title "Delete this extract and its cards"})
                 (dom/text "Delete")
                 (let [event (dom/On "click"
@@ -74,13 +71,13 @@
                       (navigate! :learn)))))
               (if view-source!
                 (dom/span
-                  (dom/props {:style {:color "#2563eb" :font-size "13px" :cursor "pointer"
+                  (dom/props {:style {:color "var(--color-primary)" :font-size "13px" :cursor "pointer"
                                       :text-decoration "underline"}
                               :title "View source PDF page"})
                   (dom/text (str (or filename "Unknown") " — p. " page-num))
                   (dom/On "click" (fn [_] (view-source! doc-id page-num)) nil))
                 (dom/span
-                  (dom/props {:style {:color "#888" :font-size "13px"}})
+                  (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px"}})
                   (dom/text (str (or filename "Unknown") " — p. " page-num))))))
 
           ;; Split pane: editor top / toolbar+cards bottom
@@ -127,12 +124,11 @@
 
         ;; No content-item-id
         (dom/div
-          (dom/props {:style {:padding "32px" :text-align "center" :color "#888"}})
+          (dom/props {:style {:padding "32px" :text-align "center" :color "var(--color-text-secondary)"}})
           (dom/text "No extract selected.")
           (dom/div
             (dom/props {:style {:margin-top "12px"}})
             (dom/button
-              (dom/props {:style {:padding "6px 16px" :background "#f0f0f0" :border "1px solid #ccc"
-                                  :border-radius "4px" :cursor "pointer"}})
+              (dom/props {:class "btn btn-sm btn-secondary" :style {:padding "6px 16px" :background "#f0f0f0"}})
               (dom/text "Go to Learn")
               (dom/On "click" (fn [_] (navigate! :learn)) nil))))))))

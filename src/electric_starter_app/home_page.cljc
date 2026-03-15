@@ -20,20 +20,20 @@
           (dom/text "FreeMemo"))
 
         (dom/p
-          (dom/props {:style {:font-size "1.2rem" :color "#555" :margin-bottom "32px"}})
+          (dom/props {:style {:font-size "1.2rem" :color "var(--color-text-secondary)" :margin-bottom "var(--sp-8)"}})
           (dom/text "Turn documents into flashcards with AI"))
 
         ;; Early iteration notice
         (dom/div
-          (dom/props {:style {:background "#fff8e1" :border "1px solid #ffe082" :border-radius "8px"
-                              :padding "16px" :margin-bottom "32px"}})
+          (dom/props {:style {:background "#fff8e1" :border "1px solid #ffe082" :border-radius "var(--radius-lg)"
+                              :padding "var(--sp-4)" :margin-bottom "var(--sp-8)"}})
           (dom/p
             (dom/props {:style {:margin "0" :color "#795548"}})
             (dom/text "Early iteration — the vision is to become an Incremental Reading companion to Anki, similar in features to SuperMemo.")))
 
         ;; API key status
         (dom/div
-          (dom/props {:style {:padding "12px 16px" :border-radius "8px" :margin-bottom "24px"
+          (dom/props {:style {:padding "12px 16px" :border-radius "var(--radius-lg)" :margin-bottom "var(--sp-6)"
                               :background (if configured? "#f0fdf4" "#fefce8")
                               :border (str "1px solid " (if configured? "#bbf7d0" "#fde68a"))}})
           (dom/span
@@ -43,15 +43,13 @@
                         "Set up your OpenAI API key in Settings to enable AI features.")))
           (when-not configured?
             (dom/button
-              (dom/props {:style {:margin-left "12px" :padding "4px 12px" :background "#2563eb"
-                                  :color "white" :border "none" :border-radius "4px"
-                                  :cursor "pointer" :font-size "13px"}})
+              (dom/props {:class "btn btn-sm btn-primary" :style {:margin-left "var(--sp-3)"}})
               (dom/text "Go to Settings")
               (dom/On "click" (fn [_] (navigate! :settings)) nil))))
 
         ;; Workflow steps
         (dom/h2
-          (dom/props {:style {:margin-bottom "16px"}})
+          (dom/props {:style {:margin-bottom "var(--sp-4)"}})
           (dom/text "How it works"))
 
         (dom/ol
@@ -63,8 +61,8 @@
 
         ;; Get Started button
         (dom/button
-          (dom/props {:style {:margin-top "32px" :padding "12px 32px" :background "#2563eb"
-                              :color "white" :border "none" :border-radius "6px"
-                              :cursor "pointer" :font-size "16px" :font-weight "600"}})
+          (dom/props {:class "btn btn-primary" :style {:margin-top "var(--sp-8)" :padding "12px 32px"
+                              :border-radius "var(--radius-md)" :font-size "16px" :font-weight "600"}})
+
           (dom/text "Get Started →")
           (dom/On "click" (fn [_] (navigate! :pdf)) nil))))))

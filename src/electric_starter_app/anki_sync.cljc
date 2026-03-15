@@ -59,8 +59,7 @@
 
       ;; Toolbar button
       (dom/button
-        (dom/props {:style {:padding "4px 12px" :background "#f0f0f0" :color "#333" :border "1px solid #ccc"
-                            :border-radius "4px" :cursor "pointer" :font-size "13px" :font-weight "500"}})
+        (dom/props {:class "btn btn-sm btn-secondary" :style {:background "#f0f0f0" :color "#333" :font-weight "500"}})
         (dom/text (if (and unsynced-count (pos? unsynced-count))
                     (str "Anki Sync (" unsynced-count ")...")
                     "Anki Sync..."))

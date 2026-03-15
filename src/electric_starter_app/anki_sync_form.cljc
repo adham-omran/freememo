@@ -12,13 +12,13 @@
   [label !model models field-hint]
   (e/client
     (dom/div
-      (dom/props {:style {:margin-bottom "12px"}})
+      (dom/props {:style {:margin-bottom "var(--sp-3)"}})
       (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
         (dom/text label))
       (Typeahead !model models "Start typing..." nil)
       (when (seq field-hint)
         (dom/div
-          (dom/props {:style {:font-size "13px" :color "#666" :margin-top "4px"}})
+          (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)" :margin-top "var(--sp-1)"}})
           (dom/text field-hint))))))
 
 (e/defn TagInput
@@ -51,14 +51,14 @@
         ;; Input row with chips
         (dom/div
           (dom/props {:style {:display "flex" :flex-wrap "wrap" :align-items "center"
-                              :gap "4px" :padding "4px 6px"
-                              :border "1px solid #ccc" :border-radius "4px"
-                              :font-size "14px" :min-height "30px" :background "white"}})
+                              :gap "var(--sp-1)" :padding "var(--sp-1) 6px"
+                              :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"
+                              :font-size "14px" :min-height "30px" :background "var(--color-bg-card)"}})
           ;; Chips
           (e/for [t (e/diff-by {} tags)]
             (dom/span
               (dom/props {:style {:display "inline-flex" :align-items "center" :gap "3px"
-                                  :background "#e0e0e0" :border-radius "3px"
+                                  :background "var(--color-border)" :border-radius "3px"
                                   :padding "1px 5px" :font-size "13px"}})
               (dom/text t)
               (dom/button
@@ -123,8 +123,8 @@
         (when (seq filtered)
           (dom/div
             (dom/props {:style {:position "absolute" :top "100%" :left "0" :right "0"
-                                :background "white" :border "1px solid #ccc"
-                                :border-radius "4px" :z-index "100"
+                                :background "var(--color-bg-card)" :border "1px solid var(--color-border)"
+                                :border-radius "var(--radius-sm)" :z-index "100"
                                 :box-shadow "0 2px 4px rgba(0,0,0,0.15)"}})
             (e/for [[i t] (e/diff-by {} (map-indexed vector filtered))]
               (dom/div
@@ -149,9 +149,9 @@
     (let [all-tags (e/watch (:!all-tags conn))]
       ;; Custom header
       (dom/div
-        (dom/props {:style {:margin-bottom "12px"}})
+        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
         (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "14px" :margin-bottom "8px"}})
+          (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-2)" :font-size "14px" :margin-bottom "var(--sp-2)"}})
           (dom/input
             (dom/props {:type "checkbox" :checked (e/watch (:!use-header form))})
             (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
@@ -164,13 +164,12 @@
             (dom/props {:type "text"
                         :value (e/watch (:!header-text form))
                         :placeholder "e.g., Chapter 5: Accounting"
-                        :style {:width "100%" :padding "8px" :border "1px solid #ccc"
-                                :border-radius "4px" :font-size "15px"}})
+                        :class "input input-full" :style {:font-size "15px"}})
             (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
               (when (some? v) (reset! (:!header-text form) v))))))
       ;; Allow duplicates
       (dom/div
-        (dom/props {:style {:margin-bottom "12px"}})
+        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
         (dom/label
           (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "14px"}})
           (dom/input
@@ -180,7 +179,7 @@
           (dom/text "Allow duplicates")))
       ;; Tags
       (dom/div
-        (dom/props {:style {:margin-bottom "16px"}})
+        (dom/props {:style {:margin-bottom "var(--sp-4)"}})
         (dom/label
           (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "14px" :margin-bottom "6px"}})
           (dom/input
@@ -205,11 +204,11 @@
 
       ;; Scope
       (dom/div
-        (dom/props {:style {:margin-bottom "12px"}})
+        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
         (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
           (dom/text "Scope"))
         (dom/select
-          (dom/props {:style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px" :font-size "15px"}
+          (dom/props {:class "select" :style {:font-size "15px"}
                       :value scope})
           (dom/option (dom/props {:value "Current Page"}) (dom/text "Current Page"))
           (dom/option (dom/props {:value "Entire Doc"}) (dom/text "Entire Document"))
@@ -218,7 +217,7 @@
 
       ;; Deck
       (dom/div
-        (dom/props {:style {:margin-bottom "12px"}})
+        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
         (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
           (dom/text "Deck"))
         (Typeahead (:!selected-deck conn) decks "Start typing deck name..." nil))
@@ -233,7 +232,7 @@
 
       ;; Source field name (for "separate field" mode)
       (dom/div
-        (dom/props {:style {:margin-bottom "12px"}})
+        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
         (dom/label
           (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
           (dom/text "Source Field"))
@@ -242,11 +241,10 @@
                       :value (e/watch (:!source-field form))
                       :placeholder "Source"
                       :title "Name of the Anki field for source info. Used when 'Separate field' mode is selected in Settings."
-                      :style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
-                              :font-size "14px" :width "200px"}})
+                      :class "input" :style {:width "200px"}})
           (dom/On "change" (fn [e] (reset! (:!source-field form) (-> e .-target .-value))) nil))
         (dom/span
-          (dom/props {:style {:font-size "11px" :color "#999" :margin-left "8px"}})
+          (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)" :margin-left "var(--sp-2)"}})
           (dom/text "Anki field name for source reference")))
 
       ;; Options
@@ -264,15 +262,15 @@
       ;; Status display
       (when sync-phase
         (dom/div
-          (dom/props {:style {:margin-bottom "16px" :padding "12px" :background "#f8f9fa"
-                              :border-radius "4px" :font-size "14px"}})
+          (dom/props {:style {:margin-bottom "var(--sp-4)" :padding "var(--sp-3)" :background "var(--color-bg-subtle)"
+                              :border-radius "var(--radius-sm)" :font-size "14px"}})
           (cond
             (= sync-phase :pushing)   (dom/text "Pushing cards to Anki...")
             (= sync-phase :pulling)   (dom/text "Pulling edits from Anki...")
             (= sync-phase :recording) (dom/text "Saving to database...")
             (= sync-phase :error)
             (dom/div
-              (dom/props {:style {:color "#dc3545"}})
+              (dom/props {:style {:color "var(--color-danger)"}})
               (dom/text (str "Error: " (or sync-error "Unknown error"))))
             (= sync-phase :done)
             (let [r sync-result
@@ -282,7 +280,7 @@
                   skipped (or (:skipped r) [])
                   pull-upds (or (:updates r) [])]
               (dom/div
-                (dom/props {:style {:color "#28a745"}})
+                (dom/props {:style {:color "var(--color-success)"}})
                 (dom/text
                   (str "Done! "
                     (cond
@@ -296,10 +294,10 @@
 
       ;; Action buttons
       (dom/div
-        (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "8px" :margin-top "8px"}})
+        (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-2)" :margin-top "var(--sp-2)"}})
         (dom/button
-          (dom/props {:style {:padding "8px 16px" :background "#f8f9fa" :color "#333"
-                              :border "1px solid #ccc" :border-radius "4px" :cursor "pointer" :font-size "15px"}})
+          (dom/props {:class "btn btn-secondary" :style {:font-size "15px"}})
+
           (dom/text (if (= sync-phase :done) "Close" "Cancel"))
           (dom/On "click" (fn [_]
                             (reset! !show-modal false)
@@ -311,8 +309,7 @@
             nil))
         (when-not (#{:pushing :pulling :recording} sync-phase)
           (dom/button
-            (dom/props {:style {:padding "8px 16px" :background "#f0f0f0" :color "#333" :border "1px solid #ccc"
-                                :border-radius "4px" :cursor "pointer" :font-size "15px"}})
+            (dom/props {:class "btn btn-secondary" :style {:font-size "15px"}})
             (dom/text "Pull from Anki")
             (dom/On "click"
               (fn [_]
@@ -324,8 +321,7 @@
               nil)))
         (when-not (#{:pushing :pulling :recording} sync-phase)
           (dom/button
-            (dom/props {:style {:padding "8px 16px" :background "#2563eb" :color "white" :border "none"
-                                :border-radius "4px" :cursor "pointer" :font-size "15px" :font-weight "500"}})
+            (dom/props {:class "btn btn-primary" :style {:font-size "15px"}})
             (dom/text "Push to Anki")
             (dom/On "click"
               (fn [_]
