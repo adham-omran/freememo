@@ -178,7 +178,7 @@
                               ;; Type badge
                               [badge-text badge-color]
                               (if (= topic-type "extract")
-                                ["Ext" "#fef3c7"]
+                                ["Ext" "#44C2FF"]
                                 (case source-type
                                   "wikipedia" ["Wiki" "#fef3c7"]
                                   "web" ["Web" "#e0f2fe"]

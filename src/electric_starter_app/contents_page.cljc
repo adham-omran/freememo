@@ -56,7 +56,7 @@
           ;; Type badge
           (dom/span
             (dom/props {:style {:padding "1px 6px" :border-radius "3px" :font-size "10px"
-                                :font-weight "600" :background "#fef3c7" :flex-shrink "0"}})
+                                :font-weight "600" :background "#44C2FF" :flex-shrink "0"}})
             (dom/text "Ext"))
           ;; Content preview — double-click opens
           (dom/span

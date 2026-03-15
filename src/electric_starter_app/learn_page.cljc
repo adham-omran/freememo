@@ -132,7 +132,7 @@
                                                 (str (subs content 0 60) "...")
                                                 content))
                                   type-label (if is-doc "Doc" "Extract")
-                                  type-color (if is-doc "#dcfce7" "#fef3c7")
+                                  type-color (if is-doc "#dcfce7" "#44C2FF")
                                   interval-str (if (< interval 1.0)
                                                  (str (int (* interval 24)) "h")
                                                  (str (int interval) "d"))]
@@ -193,7 +193,7 @@
                       (dom/span
                         (dom/props {:style {:padding "2px 8px" :border-radius "4px" :font-size "11px"
                                             :font-weight "600"
-                                            :background (if (= topic-type "document") "#dcfce7" "#fef3c7")}})
+                                            :background (if (= topic-type "document") "#dcfce7" "#44C2FF")}})
                         (dom/text type-label))
                       (dom/span
                         (dom/props {:style {:flex "1" :font-size "13px" :overflow "hidden"

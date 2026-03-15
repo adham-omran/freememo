@@ -56,6 +56,16 @@
                   (dom/On "click" (fn [_] (navigate! :home)) nil))
 
                 (dom/button
+                  (dom/props {:style (tab-style :learn)})
+                  (dom/text "Learn")
+                  (dom/On "click" (fn [_] (navigate! :learn)) nil))
+
+                (dom/button
+                  (dom/props {:style (tab-style :pdf)})
+                  (dom/text "Documents")
+                  (dom/On "click" (fn [_] (navigate! :pdf)) nil))
+
+                (dom/button
                   (dom/props {:style (tab-style :contents)})
                   (dom/text "Contents")
                   (dom/On "click" (fn [_] (navigate! :contents)) nil))
@@ -68,17 +78,7 @@
                 (dom/button
                   (dom/props {:style (tab-style :settings)})
                   (dom/text "Settings")
-                  (dom/On "click" (fn [_] (navigate! :settings)) nil))
-
-                (dom/button
-                  (dom/props {:style (tab-style :pdf)})
-                  (dom/text "Documents")
-                  (dom/On "click" (fn [_] (navigate! :pdf)) nil))
-
-                (dom/button
-                  (dom/props {:style (tab-style :learn)})
-                  (dom/text "Learn")
-                  (dom/On "click" (fn [_] (navigate! :learn)) nil)))
+                  (dom/On "click" (fn [_] (navigate! :settings)) nil)))
 
               ;; Tab content
               (dom/div

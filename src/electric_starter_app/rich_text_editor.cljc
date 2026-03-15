@@ -123,14 +123,14 @@
             :length (.-length sel)})))))
 
 (defn highlight-range!
-  "Apply yellow highlight formatting to a range in the Quill editor.
+  "Apply highlight formatting to a range in the Quill editor (SuperMemo extract blue).
    Also pushes the updated HTML to !dirty-html so the highlight is persisted."
   [index length]
   #?(:clj nil
      :cljs
      (when-let [{:keys [editor page-number doc-id]} @!editor-state]
        (.formatText ^js editor index length
-                    (clj->js {:background "#ffff80"})
+                    (clj->js {:background "#44C2FF"})
                     "api")
        ;; Push updated HTML so the auto-save pipeline persists the highlight
        (let [^js root (.-root editor)]

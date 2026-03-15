@@ -117,7 +117,7 @@
           priority (or (:priority item) 50)
           is-doc (= topic-type "document")
           type-label (cond is-doc "Doc" (= topic-type "extract") "Extract" :else "Page")
-          type-color (cond is-doc "#dcfce7" (= topic-type "extract") "#fef3c7" :else "#e0f2fe")]
+          type-color (cond is-doc "#dcfce7" (= topic-type "extract") "#44C2FF" :else "#e0f2fe")]
 
       (dom/div
         (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
