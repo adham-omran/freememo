@@ -24,7 +24,8 @@
             (dom/props {:style {:height "100vh" :display "flex" :flex-direction "column" :overflow "hidden"}})
             (dom/h1 (dom/props {:style {:margin "8px 16px" :flex-shrink "0"}}) (dom/text "FreeMemo"))
 
-            (let [saved-tab (e/server (settings/get-active-tab user-id))
+            (let [llm-enabled? (e/server (settings/get-llm-enabled user-id))
+                  saved-tab (e/server (settings/get-active-tab user-id))
                   !active-tab (atom saved-tab)
                   active-tab (e/watch !active-tab)
                   !tab-to-save (atom nil)
@@ -88,12 +89,13 @@
                 (when (= active-tab :queue) (QueuePage user-id !nav-target navigate!))
                 (when (= active-tab :settings) (SettingsPage user-id username enc-key))
                 (when (= active-tab :pdf) (PdfPage user-id !nav-target navigate!))
-                (when (= active-tab :learn) (LearnPage user-id enc-key !nav-target #(navigate! :extract)))
+                (when (= active-tab :learn) (LearnPage user-id enc-key !nav-target #(navigate! :extract) llm-enabled?))
                 (when (= active-tab :extract)
                   (ExtractPage user-id enc-key (:content-item-id (e/watch !nav-target)) navigate!
                     (fn [doc-id page]
                       (reset! !nav-target {:doc-id doc-id :page page})
-                      (navigate! :learn)))))))
+                      (navigate! :learn))
+                    llm-enabled?)))))
 
           ;; Not authenticated: render login page
           (LoginPage auth-error))))))
