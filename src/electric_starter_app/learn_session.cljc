@@ -31,7 +31,7 @@
                           :border-radius "4px" :cursor "pointer" :font-size "12px" :color "#888"}
                   :title "Remove from review queue (keep content)"})
       (dom/text "Dismiss")
-      (let [event (dom/On "click" (fn [_] :dismiss) nil)
+      (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
             [?token _error] (e/Token event)]
         (when-some [token ?token]
           (e/server (dismiss-topic* topic-type topic-id))
@@ -70,12 +70,14 @@
               (let [event (dom/On "click"
                             (fn [_]
                               (let [v @!postpone-days]
-                                #?(:cljs (js/parseInt v) :clj nil)))
+                                {:id (str (random-uuid))
+                                 :days #?(:cljs (js/parseInt v) :clj nil)}))
                             nil)
                     [?token _error] (e/Token event)]
                 (when-some [token ?token]
-                  (when (and (some? event) (pos? event))
-                    (e/server (postpone-topic* topic-type topic-id event)))
+                  (when-some [days (:days event)]
+                    (when (pos? days)
+                      (e/server (postpone-topic* topic-type topic-id days))))
                   (reset! !show-postpone false)
                   (token)
                   (swap! !queue-idx inc))))
@@ -99,7 +101,7 @@
                               :border "none" :border-radius "6px" :cursor "pointer"
                               :font-size "15px" :font-weight "600"}})
           (dom/text "Next")
-          (let [event (dom/On "click" (fn [_] :next) nil)
+          (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
                 [?token _error] (e/Token event)]
             (when-some [token ?token]
               (e/server (advance-topic* topic-type topic-id))
