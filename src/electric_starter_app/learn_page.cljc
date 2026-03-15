@@ -19,6 +19,10 @@
   #?(:clj (db/get-learning-queue-count user-id)
      :cljs 0))
 
+(defn get-total-topic-count* [_refresh user-id]
+  #?(:clj (db/get-total-topic-count user-id)
+     :cljs 0))
+
 (defn get-dismissed-topics* [_refresh user-id]
   #?(:clj (vec (db/get-dismissed-topics user-id))
      :cljs nil))
@@ -68,7 +72,8 @@
       (dom/props {:style {:padding "16px" :max-width "900px" :height "100%" :display "flex" :flex-direction "column"}})
 
       (let [refresh (e/server (e/watch !refresh))
-            due-count (e/server (get-learning-queue-count* refresh user-id))]
+            due-count (e/server (get-learning-queue-count* refresh user-id))
+            total-count (e/server (get-total-topic-count* refresh user-id))]
 
         ;; Header with count and Learn button
         (dom/div
@@ -77,7 +82,8 @@
             (dom/props {:style {:margin "0" :font-size "20px"}})
             (dom/text "Learn"))
           (dom/span
-            (dom/props {:style {:color "#888" :font-size "14px"}})
+            (dom/props {:style {:color "#888" :font-size "14px"}
+                        :title "Documents and extracts scheduled for review"})
             (dom/text (str due-count " topics due")))
           (when (pos? due-count)
             (dom/button
@@ -166,7 +172,9 @@
           ;; Empty state
           (dom/p
             (dom/props {:style {:color "#888" :font-size "14px" :margin-top "24px"}})
-            (dom/text "All caught up! No topics due for review.")))
+            (dom/text (if (zero? total-count)
+                        "No topics yet. Import a document from the Documents tab to start learning."
+                        "All caught up! No topics due for review."))))
 
         ;; Dismissed items section
         (let [!show-dismissed (atom false)

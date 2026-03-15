@@ -43,15 +43,42 @@
               (token (:error result)))))))))
 
 ;; Card table row component
+(defn sync-state
+  "Derive sync state from card fields. Returns :unsynced, :synced, or :modified."
+  [synced-at updated-at]
+  (cond
+    (nil? synced-at) :unsynced
+    (and updated-at (pos? (compare (str updated-at) (str synced-at)))) :modified
+    :else :synced))
+
 (e/defn CardRow [card !editing-card !refresh order]
   (e/client
     (let [id (e/server (:flashcards/id card))
           kind (e/server (:flashcards/kind card))
           question (e/server (:flashcards/question card))
           answer (e/server (:flashcards/answer card))
-          cloze (e/server (:flashcards/cloze card))]
+          cloze (e/server (:flashcards/cloze card))
+          synced-at (e/server (:flashcards/anki_synced_at card))
+          updated-at (e/server (:flashcards/updated_at card))
+          sync-st (sync-state synced-at updated-at)]
       (dom/tr
         (dom/props {:style {:--order order}})
+        ;; Sync indicator
+        (dom/td
+          (dom/props {:style {:padding "6px 4px" :width "24px" :text-align "center"
+                              :border-bottom "1px solid #e0e0e0" :font-size "10px"}
+                      :title (case sync-st
+                               :unsynced "Not synced to Anki"
+                               :synced (str "Synced to Anki")
+                               :modified "Modified since last sync")})
+          (dom/text (case sync-st
+                      :unsynced "\u25CB"
+                      :synced "\u25CF"
+                      :modified "\u25CF"))
+          (dom/props {:style {:color (case sync-st
+                                       :unsynced "#f59e0b"
+                                       :synced "#22c55e"
+                                       :modified "#eab308")}}))
         ;; Front column
         (dom/td
           (dom/props {:style {:padding "6px 8px"

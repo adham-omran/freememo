@@ -8,6 +8,25 @@
     [clojure.edn :as edn]
     [clojure.string :as str]))
 
+(defn- humanize-error [msg]
+  (cond
+    (re-find #"(?i)API key not configured" (str msg))
+    "No API key configured. Set one in Settings."
+
+    (re-find #"(?i)401|unauthorized|invalid.*key" (str msg))
+    "Invalid API key. Check your key in Settings."
+
+    (re-find #"(?i)429|rate.?limit" (str msg))
+    "Rate limit reached. Wait a moment and try again."
+
+    (re-find #"(?i)No content provided" (str msg))
+    "No text on this page. Extract text first."
+
+    (re-find #"(?i)timeout|timed.?out" (str msg))
+    "Request timed out. Try again."
+
+    :else (str msg)))
+
 ;; Prompt template loading
 (defn load-prompt-template
   "Load a prompt template from resources/prompts/.
@@ -165,7 +184,7 @@
     (generate-cards* opts build-basic-prompt)
     (catch Exception e
       (println "ERROR [generate-basic-cards]:" (.getMessage e))
-      {:success false :error (.getMessage e)})))
+      {:success false :error (humanize-error (.getMessage e))})))
 
 (defn generate-cloze-cards
   "Generate cloze deletion flashcards using OpenAI API.
@@ -183,7 +202,7 @@
     (generate-cards* opts build-cloze-prompt)
     (catch Exception e
       (println "ERROR [generate-cloze-cards]:" (.getMessage e))
-      {:success false :error (.getMessage e)})))
+      {:success false :error (humanize-error (.getMessage e))})))
 
 ;; Card persistence
 (defn save-cards
@@ -361,6 +380,9 @@
           page-suffix (if page-number (str "_page" page-number) "_all")
           filename (str doc-filename page-suffix kind-suffix ".csv")]
       (println "  SUCCESS: Generated" filename "with" (count cards) "cards")
+      ;; Mark exported cards as synced
+      (let [card-ids (mapv :flashcards/id cards)]
+        (db/mark-cards-exported card-ids))
       {:success true :csv csv-string :filename filename})
     (catch Exception e
       (let [error-msg (or (ex-message e) (.getMessage e))]

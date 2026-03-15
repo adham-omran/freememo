@@ -161,23 +161,32 @@
           (dom/props {:style {:display "flex" :gap "8px" :margin-left "auto"}})
 
           ;; Generate button
-          (dom/button
-            (dom/props {:style {:padding "4px 12px" :background "#2563eb" :color "white"
-                                :border "none" :border-radius "4px" :cursor "pointer"
-                                :font-size "13px" :font-weight "bold"}
-                        :title "Generate flashcards from editor text or selected text"})
-            (dom/text (or (:error gen-state) "Generate"))
-            (let [pending (+ (count (:queue gen-state)) (if (:active gen-state) 1 0))]
-              (when (and (pos? pending) (nil? (:error gen-state)))
-                (dom/text (str " (" pending ")"))))
-            (dom/On "click"
-              (fn [_]
-                (swap! !gen-state (fn [s]
-                                    (-> s
-                                      (update :queue conj {:id (str (random-uuid))
-                                                           :selection (editor/get-selected-text!)})
-                                      (assoc :error nil)))))
-              nil))
+          (let [gen-pending (+ (count (:queue gen-state)) (if (:active gen-state) 1 0))
+                gen-active? (pos? gen-pending)
+                no-content? (empty? content-text)]
+            (dom/button
+              (dom/props {:style {:padding "4px 12px"
+                                  :background (cond no-content? "#94a3b8" gen-active? "#93c5fd" :else "#2563eb")
+                                  :color "white"
+                                  :border "none" :border-radius "4px"
+                                  :cursor (if no-content? "not-allowed" "pointer")
+                                  :font-size "13px" :font-weight "bold"}
+                          :disabled no-content?
+                          :title (if no-content? "Extract text first to generate flashcards"
+                                   "Generate flashcards from editor text or selected text")})
+              (dom/text (cond (:error gen-state) (:error gen-state)
+                              gen-active? "Generating..."
+                              :else "Generate"))
+              (when (and gen-active? (nil? (:error gen-state)))
+                (dom/text (str " (" gen-pending ")")))
+              (dom/On "click"
+                (fn [_]
+                  (swap! !gen-state (fn [s]
+                                      (-> s
+                                        (update :queue conj {:id (str (random-uuid))
+                                                             :selection (editor/get-selected-text!)})
+                                        (assoc :error nil)))))
+                nil)))
 
           ;; Generate with Prompt button
           (dom/button
@@ -332,7 +341,7 @@
         (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
 
         ;; Anki Sync button
-        (AnkiSyncButton user-id doc-id page-number card-type extract-cards/!refresh))
+        (AnkiSyncButton user-id doc-id page-number card-type extract-cards/!refresh 0))
 
       ;; Pre-prompt modal dialog
       (when show-prompt-dialog

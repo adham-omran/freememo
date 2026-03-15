@@ -194,12 +194,17 @@
               (dom/text "Cancel")
               (dom/On "click" (fn [_] (reset! !show false)) nil))
             (dom/button
-              (dom/props {:style {:padding "8px 16px" :background "#2563eb" :color "white"
-                                  :border "none" :border-radius "4px" :cursor "pointer"
-                                  :font-size "14px" :font-weight "600"}})
-              (dom/text "Import")
               (let [event (dom/On "click" (fn [_] @!url) nil)
-                    [?token ?error] (e/Token event)]
+                    [?token ?error] (e/Token event)
+                    importing? (some? ?token)]
+                (dom/props {:style {:padding "8px 16px"
+                                    :background (if importing? "#93c5fd" "#2563eb")
+                                    :color "white"
+                                    :border "none" :border-radius "4px"
+                                    :cursor (if importing? "not-allowed" "pointer")
+                                    :font-size "14px" :font-weight "600"}
+                            :disabled importing?})
+                (dom/text (if importing? "Importing..." "Import"))
                 (when ?error
                   (dom/div (dom/props {:style {:color "red" :font-size "12px" :margin-top "4px"}})
                     (dom/text ?error)))
@@ -289,7 +294,9 @@
                 docs-result (list-pdfs* refresh user-id)]
             (e/client
               (if (:success docs-result)
-                (let [docs-vec (e/server (vec (filter-docs (:documents docs-result) filter-text)))
+                (let [all-docs (e/server (:documents docs-result))
+                      total-doc-count (e/server (count all-docs))
+                      docs-vec (e/server (vec (filter-docs all-docs filter-text)))
                       doc-count (e/server (count docs-vec))
                       row-height 40]
                   (dom/div
@@ -401,7 +408,9 @@
                       ;; Empty state
                       (dom/p
                         (dom/props {:style {:color "#888" :font-size "14px" :padding "16px 0"}})
-                        (dom/text "No documents match.")))))
+                        (dom/text (if (zero? total-doc-count)
+                                    "No documents yet. Upload a PDF, paste an article, or import from URL above."
+                                    "No documents match your search."))))))
 
                 (dom/div
                   (dom/props {:style {:color "red"}})

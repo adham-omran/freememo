@@ -121,12 +121,10 @@
                       (let [basic-result (e/server (cards/export-cards-csv (assoc export-opts :kind "basic")))
                             cloze-result (e/server (cards/export-cards-csv (assoc export-opts :kind "cloze")))]
                         (let [any-success? (or (:success basic-result) (:success cloze-result))]
-                          #?(:cljs
-                             (do
-                               (when (:success basic-result)
-                                 (trigger-download! (:filename basic-result) (:csv basic-result)))
-                               (when (:success cloze-result)
-                                 (trigger-download! (:filename cloze-result) (:csv cloze-result)))))
+                          (when (:success basic-result)
+                            (trigger-download! (:filename basic-result) (:csv basic-result)))
+                          (when (:success cloze-result)
+                            (trigger-download! (:filename cloze-result) (:csv cloze-result)))
                           (if any-success?
                             (do (reset! !show-export false) (token))
                             (token (str "Export failed: " (or (:error basic-result) (:error cloze-result)))))))
@@ -134,7 +132,7 @@
                                                       (assoc export-opts :kind (str/lower-case export-kind))))]
                         (if (:success export-result)
                           (do
-                            #?(:cljs (trigger-download! (:filename export-result) (:csv export-result)))
+                            (trigger-download! (:filename export-result) (:csv export-result))
                             (reset! !show-export false)
                             (token))
                           (token (:error export-result)))))))))))))))

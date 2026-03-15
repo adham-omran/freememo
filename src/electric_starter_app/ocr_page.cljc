@@ -22,6 +22,7 @@
 
 #?(:clj (defonce !refresh (atom 0))) ; Server-side refresh trigger
 #?(:clj (defonce !extracting-pages (atom #{}))) ; #{[doc-id page-num]} currently extracting
+#?(:clj (defonce !ocr-errors (atom {}))) ; {[doc-id page-num] "error message"}
 #?(:cljs (defonce !extracting-client? (atom false))) ; Client-side flag: set true immediately on click to prevent rapid re-clicks before server state round-trips
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
@@ -133,7 +134,7 @@
           (:success docs-result)
           (dom/div
             (dom/props {:style {:padding "8px 0"}})
-            (dom/p (dom/text "No documents yet. Upload a PDF on the PDF tab to get started.")))
+            (dom/p (dom/text "No documents yet. Go to the Documents tab to upload a PDF, paste an article, or import a URL.")))
 
           ;; Error case
           :else
@@ -170,6 +171,7 @@
                 prompt-gen-state (e/watch !prompt-gen-state)
                 ;; Extraction tracking — server-side for true parallelism
                 extracting-pages (e/server (e/watch !extracting-pages))
+                ocr-errors (e/server (e/watch !ocr-errors))
                 ;; Shared server data — hoisted so both editor and bottom panel can use them
                 dirty-data (e/watch editor/!dirty-html)
                 save-result (when (some? dirty-data)
@@ -287,12 +289,16 @@
                                     ek enc-key]
                                 (when-not (contains? @!extracting-pages [doc page])
                                   (swap! !extracting-pages conj [doc page])
+                                  (swap! !ocr-errors dissoc [doc page])
                                   (do
                                     (future
                                       (try
                                         (let [result (page/extract-page-text uid doc page ek)]
-                                          (when (:success result)
-                                            (swap! !refresh inc)))
+                                          (if (:success result)
+                                            (swap! !refresh inc)
+                                            (swap! !ocr-errors assoc [doc page] (:error result))))
+                                        (catch Exception e
+                                          (swap! !ocr-errors assoc [doc page] (.getMessage e)))
                                         (finally
                                           (swap! !extracting-pages disj [doc page]))))
                                     :started))))
@@ -301,6 +307,14 @@
                           (e/client
                             (when (not extracting?)
                               (reset! !extracting-client? false))))))) ;; end when llm-enabled?
+
+                    ;; OCR error display
+                    (when-let [ocr-err (get ocr-errors [selected-doc current-pdf-page])]
+                      (dom/div
+                        (dom/props {:style {:padding "6px 10px" :background "#fef2f2" :border "1px solid #fecaca"
+                                            :border-radius "4px" :font-size "13px" :color "#991b1b"
+                                            :margin-top "4px"}})
+                        (dom/text ocr-err)))
 
                     ;; Save status indicator with fade-out
                     (when (some? dirty-data)

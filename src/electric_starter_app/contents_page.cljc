@@ -147,4 +147,4 @@
               (DocumentNode doc (get items-by-doc (:documents/id doc)) !nav-target navigate!)))
           (dom/p
             (dom/props {:style {:color "#888" :font-size "14px"}})
-            (dom/text "No documents yet. Import content from the Documents tab.")))))))
+            (dom/text "No content yet. Import a document from the Documents tab, then extract content items for study.")))))))
