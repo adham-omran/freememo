@@ -50,9 +50,10 @@
       {:success false :error (.getMessage e)})))
 
 (defn apply-pull-updates
-  "After pull, update card content from Anki edits.
-   updates: [{:card-id N :question Q :answer A :cloze C} ...]"
-  [updates]
+  "After pull, update card content from Anki edits and delete locally cards removed from Anki.
+   updates: [{:card-id N :question Q :answer A :cloze C} ...]
+   deleted-card-ids: [N ...] — cards whose Anki notes no longer exist"
+  [updates deleted-card-ids]
   (try
     (doseq [{:keys [card-id question answer cloze]} updates]
       (let [fields (cond-> {}
@@ -62,7 +63,10 @@
         (when (seq fields)
           (db/update-flashcard card-id fields)
           (db/mark-anki-synced card-id))))
-    {:success true :count (count updates)}
+    (when (seq deleted-card-ids)
+      (doseq [id deleted-card-ids]
+        (db/delete-flashcard id)))
+    {:success true :count (count updates) :deleted (count (or deleted-card-ids []))}
     (catch Exception e
       (println "ERROR [apply-pull-updates]:" (.getMessage e))
       {:success false :error (.getMessage e)})))

@@ -7,7 +7,8 @@
    [contrib.data :refer [clamp-left]]
    [electric-starter-app.learn-session :refer [LearnSession]]
    [electric-starter-app.ocr-page :refer [OcrPage]]
-   #?(:clj [electric-starter-app.db :as db])))
+   #?(:clj [electric-starter-app.db :as db])
+   [electric-starter-app.card-components :as card-components]))
 
 #?(:clj (defonce !refresh (atom 0)))
 
@@ -236,12 +237,17 @@
                                       nil)
                               [?token _] (e/Token event)]
                           (when-some [token ?token]
-                            (e/server
-                              (if (= topic-type "document")
-                                (db/delete-document user-id item-id)
-                                (db/delete-content-item item-id)))
-                            (e/server (swap! !refresh inc))
-                            (token)))))))))))))))
+                            (let [note-ids (e/server
+                                             (if (= topic-type "document")
+                                               (db/get-anki-note-ids-for-document item-id)
+                                               (db/get-anki-note-ids-for-content-item item-id)))]
+                              (e/server
+                                (if (= topic-type "document")
+                                  (db/delete-document user-id item-id)
+                                  (db/delete-content-item item-id)))
+                              (e/server (swap! !refresh inc))
+                              (e/client (card-components/try-delete-anki-notes! note-ids))
+                              (token))))))))))))))))
 
 (e/defn LearnPage [user-id enc-key !nav-target navigate-to-extract! llm-enabled?]
   (e/client

@@ -169,47 +169,67 @@
 
 #?(:cljs
    (defn do-anki-pull!
-     "Pull edits from Anki for previously-synced cards. Returns Promise of updates."
+     "Pull edits from Anki for previously-synced cards. Returns Promise of updates + deleted IDs."
      [cards basic-fields cloze-fields]
      (let [synced (filter #(some? (:flashcards/anki_note_id %)) cards)
-           note-ids (mapv :flashcards/anki_note_id synced)
-           id->card (into {} (map (fn [c] [(:flashcards/anki_note_id c) c]) synced))]
+           note-ids (mapv :flashcards/anki_note_id synced)]
        (if (empty? note-ids)
-         (.resolve js/Promise {:updates []})
+         (.resolve js/Promise {:updates [] :deleted []})
          (-> (anki-call! "notesInfo" {:notes note-ids})
            (.then
              (fn [notes]
-               (let [updates
-                     (reduce
-                       (fn [acc anki-note]
-                         (let [anki-note (js->clj anki-note :keywordize-keys true)
-                               note-id (:noteId anki-note)
-                               card (get id->card note-id)]
-                           (if-not card
-                             acc
-                             (let [kind (:flashcards/kind card)
-                                   basic? (= kind "basic")
-                                   fields-map (:fields anki-note)
-                                   get-field (fn [fname]
-                                               (:value (get fields-map (keyword fname))))
-                                   update-map
-                                   (if basic?
-                                     (let [q (get-field (first basic-fields))
-                                           a (get-field (second basic-fields))
-                                           local-q (or (:flashcards/question card) "")
-                                           local-a (or (:flashcards/answer card) "")]
-                                       (when (or (not= q local-q) (not= a local-a))
-                                         {:card-id (:flashcards/id card)
-                                          :question q :answer a}))
-                                     (let [c (get-field (first cloze-fields))
-                                           local-c (or (:flashcards/cloze card) "")]
-                                       (when (not= c local-c)
-                                         {:card-id (:flashcards/id card)
-                                          :cloze c})))]
-                               (if update-map (conj acc update-map) acc)))))
-                       []
-                       (js->clj notes))]
-                 {:updates updates}))))))))
+               (let [notes-js (js->clj notes)
+                     ;; Pair each synced card with its Anki response
+                     pairs (map vector synced notes-js)
+                     ;; Detect deleted: notesInfo returns {} or nil noteId for deleted notes
+                     deleted (reduce
+                               (fn [acc [card anki-note]]
+                                 (let [anki-note (if (map? anki-note) anki-note
+                                                   (js->clj anki-note :keywordize-keys true))]
+                                   (if (or (empty? anki-note) (nil? (:noteId anki-note)))
+                                     (conj acc (:flashcards/id card))
+                                     acc)))
+                               []
+                               pairs)
+                     ;; Build id->card for non-deleted cards
+                     id->card (into {} (keep (fn [[card anki-note]]
+                                               (let [anki-note (if (map? anki-note) anki-note
+                                                                 (js->clj anki-note :keywordize-keys true))]
+                                                 (when-let [nid (:noteId anki-note)]
+                                                   [nid card])))
+                                             pairs))
+                     ;; Detect updates for cards that still exist in Anki
+                     updates (reduce
+                               (fn [acc anki-note]
+                                 (let [anki-note (if (map? anki-note) anki-note
+                                                   (js->clj anki-note :keywordize-keys true))
+                                       note-id (:noteId anki-note)
+                                       card (get id->card note-id)]
+                                   (if-not card
+                                     acc
+                                     (let [kind (:flashcards/kind card)
+                                           basic? (= kind "basic")
+                                           fields-map (:fields anki-note)
+                                           get-field (fn [fname]
+                                                       (:value (get fields-map (keyword fname))))
+                                           update-map
+                                           (if basic?
+                                             (let [q (get-field (first basic-fields))
+                                                   a (get-field (second basic-fields))
+                                                   local-q (or (:flashcards/question card) "")
+                                                   local-a (or (:flashcards/answer card) "")]
+                                               (when (or (not= q local-q) (not= a local-a))
+                                                 {:card-id (:flashcards/id card)
+                                                  :question q :answer a}))
+                                             (let [c (get-field (first cloze-fields))
+                                                   local-c (or (:flashcards/cloze card) "")]
+                                               (when (not= c local-c)
+                                                 {:card-id (:flashcards/id card)
+                                                  :cloze c})))]
+                                       (if update-map (conj acc update-map) acc)))))
+                               []
+                               notes-js)]
+                 {:updates updates :deleted deleted}))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Cross-platform wrappers — avoid #?(:cljs) inside e/defn bodies.
@@ -277,11 +297,12 @@
     #?(:cljs
        (-> (do-anki-pull! cards basic-fields cloze-fields)
          (.then (fn [result]
-                  (if (empty? (:updates result))
+                  (if (and (empty? (:updates result)) (empty? (:deleted result)))
                     (do (reset! !result result)
                       (reset! !phase :done))
                     (do (reset! !result result)
-                      (reset! !pull-updates (:updates result))
+                      (reset! !pull-updates {:updates (:updates result)
+                                             :deleted (:deleted result)})
                       (reset! !phase :recording)))))
          (.catch (fn [err]
                    (reset! !error (.-message err))

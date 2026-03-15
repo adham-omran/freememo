@@ -62,12 +62,14 @@
                 (reset! !phase :error)
                 (token)))))))
 
-    ;; Record pull updates on server
+    ;; Record pull updates + deletions on server
     (when (and (= sync-phase :recording) (some? (e/watch !pull-updates)))
-      (let [updates (e/watch !pull-updates)
+      (let [pull-data (e/watch !pull-updates)
+            updates (:updates pull-data)
+            deleted (:deleted pull-data)
             [?token _] (e/Token :record-pull)]
         (when-some [token ?token]
-          (let [result (e/server (sync/apply-pull-updates updates))]
+          (let [result (e/server (sync/apply-pull-updates updates deleted))]
             (if (:success result)
               (do (e/server (swap! !refresh inc))
                 (e/server (settings/save-anki-sync-settings user-id

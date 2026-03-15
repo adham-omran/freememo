@@ -3,7 +3,8 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   #?(:clj [electric-starter-app.cards :as cards])))
+   #?(:clj [electric-starter-app.cards :as cards])
+   #?(:cljs [electric-starter-app.anki-sync-helpers :refer [anki-call!]])))
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 ;; Plain defn visible on both CLJ and CLJS — callers wrap in e/server
@@ -15,6 +16,15 @@
 (defn get-cards-by-extract* [_refresh content-item-id]
   #?(:clj (cards/get-cards-by-content-item content-item-id)
      :cljs nil))
+
+(defn try-delete-anki-notes!
+  "Fire-and-forget: attempt to delete notes from Anki. Silently ignores errors."
+  [note-ids]
+  #?(:cljs
+     (when (seq note-ids)
+       (-> (anki-call! "deleteNotes" {:notes (vec note-ids)})
+           (.catch (fn [_] nil))))
+     :clj nil))
 
 ;; Delete button — parameterized with !refresh atom
 (e/defn DeleteCardButton [id !refresh]
@@ -39,7 +49,10 @@
         (when-some [token ?token]
           (let [result (e/server (cards/delete-card click-event))]
             (if (:success result)
-              (do (e/server (swap! !refresh inc)) (token))
+              (do (e/server (swap! !refresh inc))
+                  (when-some [note-id (:anki-note-id result)]
+                    (e/client (try-delete-anki-notes! [note-id])))
+                  (token))
               (token (:error result)))))))))
 
 ;; Card table row component
