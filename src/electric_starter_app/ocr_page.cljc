@@ -66,7 +66,7 @@
          (.addEventListener js/document "mouseup" @on-up)))))
 
 
-(e/defn OcrPage [user-id enc-key !nav-target]
+(e/defn OcrPage [user-id enc-key !nav-target llm-enabled?]
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
@@ -258,9 +258,10 @@
                                 (e/server (swap! !refresh inc))
                                 (token)))))))
 
-                    (let [extracting? (contains? extracting-pages [selected-doc current-pdf-page])
-                          client-extracting? (e/client (e/watch !extracting-client?))
-                          disabled? (or extracting? client-extracting?)]
+                    (when llm-enabled?
+                      (let [extracting? (contains? extracting-pages [selected-doc current-pdf-page])
+                            client-extracting? (e/client (e/watch !extracting-client?))
+                            disabled? (or extracting? client-extracting?)]
                       (dom/button
                         (dom/props {:style {:padding "8px 16px"
                                             :background (if disabled? "#ccc" "#007bff")
@@ -299,7 +300,7 @@
                           ;; Reset client flag once server confirms extraction is running (or completes)
                           (e/client
                             (when (not extracting?)
-                              (reset! !extracting-client? false))))))
+                              (reset! !extracting-client? false))))))) ;; end when llm-enabled?
 
                     ;; Save status indicator with fade-out
                     (when (some? dirty-data)
@@ -374,7 +375,8 @@
                                  :content-text page-text
                                  :content-item-id nil
                                  :context-mode :page
-                                 :context-tooltip "Include context for better cards. With a selection: current page + N previous pages. Without: N previous pages."}
+                                 :context-tooltip "Include context for better cards. With a selection: current page + N previous pages. Without: N previous pages."
+                                 :llm-enabled? llm-enabled?}
                   !refresh)
 
                 (ContentCardTable {:query-mode :page

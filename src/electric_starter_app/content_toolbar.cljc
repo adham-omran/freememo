@@ -26,7 +26,7 @@
 (e/defn ContentToolbar [state !refresh]
   (e/client
     (let [{:keys [user-id enc-key doc-id page-number content-text
-                  content-item-id context-mode context-tooltip]} state
+                  content-item-id context-mode context-tooltip llm-enabled?]} state
           ;; Fetch document source reference for card propagation
           source-ref (e/server (db/get-document-source doc-id))
           ;; Load settings from server
@@ -76,6 +76,7 @@
                             :padding "8px 12px" :flex-shrink "0"
                             :border-bottom "1px solid #e0e0e0" :background "#fafafa"}})
 
+        (when llm-enabled?
         ;; Context checkbox + pages
         (dom/label
           (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}
@@ -208,7 +209,7 @@
                               (reset! !captured-selection (editor/get-selected-text!))
                               (reset! !prompt-dialog-kind card-type)
                               (reset! !show-prompt-dialog true))
-              nil)))
+              nil)))) ;; end when llm-enabled? (generation UI)
 
         ;; Extract button — create content item from selected text
         ;; For :page mode, content-item-id is nil so this creates a top-level extract.
@@ -244,6 +245,7 @@
                   (do (reset! !extract-state {:pending nil :error "Failed to save extract"})
                     (token "Failed to save extract")))))))
 
+        (when llm-enabled?
         ;; Auto-advance: when not processing and queue has items, start next
         (when (and (nil? (:active gen-state)) (seq (:queue gen-state)))
           (swap! !gen-state (fn [{:keys [queue]}]
@@ -341,7 +343,7 @@
                         (token)
                         (swap! !prompt-gen-state assoc :active nil))
                       (do (token (:error save-result))
-                        (swap! !prompt-gen-state assoc :active nil)))))))))
+                        (swap! !prompt-gen-state assoc :active nil)))))))))) ;; end when llm-enabled? (queue processors)
 
         ;; Add new card button — uses AddCardModal directly with caller-provided !refresh
         (let [!show-add (atom false)
@@ -374,8 +376,8 @@
         ;; Anki Sync button
         (AnkiSyncButton user-id doc-id page-number card-type !refresh))
 
-      ;; Pre-prompt modal dialog
-      (when show-prompt-dialog
+      ;; Pre-prompt modal dialog (LLM only)
+      (when (and llm-enabled? show-prompt-dialog)
         (PromptDialog {:!show !show-prompt-dialog
                        :!prompt-gen-state !prompt-gen-state
                        :!pre-prompt !pre-prompt

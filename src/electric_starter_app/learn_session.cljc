@@ -177,7 +177,7 @@
           (dom/props {:style {:margin-left "auto" :color "#888" :font-size "13px"}})
           (dom/text (str (inc idx) " / " total)))))))
 
-(e/defn LearnSession [user-id enc-key queue-vec !queue-idx !mode !refresh !nav-target navigate-to-extract! view-source!]
+(e/defn LearnSession [user-id enc-key queue-vec !queue-idx !mode !refresh !nav-target navigate-to-extract! view-source! llm-enabled?]
   (e/client
     (let [idx (e/watch !queue-idx)
           total (count queue-vec)]
@@ -225,12 +225,12 @@
                   (dom/div
                     (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
                     (let [!nav (atom {:doc-id (:document_id item)})]
-                      (OcrPage user-id enc-key !nav)))
+                      (OcrPage user-id enc-key !nav llm-enabled?)))
                   (BottomBar topic-type topic-id !queue-idx))
 
                 (dom/div
                   (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
                   (dom/div
                     (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                    (ExtractPage user-id enc-key topic-id nil nil))
+                    (ExtractPage user-id enc-key topic-id nil nil llm-enabled?))
                   (BottomBar topic-type topic-id !queue-idx))))))))))

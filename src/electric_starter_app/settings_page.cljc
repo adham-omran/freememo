@@ -26,7 +26,10 @@
           (dom/text "Logout"))))
 
     ;; Load initial values from server
-    (let [!key-status-refresh (atom 0)
+    (let [server-llm-enabled (e/server (settings/get-llm-enabled user-id))
+          !llm-enabled (atom server-llm-enabled)
+          llm-enabled (e/watch !llm-enabled)
+          !key-status-refresh (atom 0)
           key-status-refresh (e/watch !key-status-refresh)
           api-key-status (e/server
                            (do key-status-refresh
@@ -58,6 +61,28 @@
       (dom/div
         (dom/h2 (dom/text "Settings"))
 
+        ;; LLM Features toggle
+        (dom/div
+          (dom/props {:style {:margin-bottom "20px" :padding "12px 0" :border-bottom "1px solid #e0e0e0"}})
+          (dom/label
+            (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :cursor "pointer"}})
+            (dom/input
+              (dom/props {:type "checkbox" :checked llm-enabled})
+              (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
+                    [?token ?error] (e/Token change-event)]
+                (when (some? change-event)
+                  (reset! !llm-enabled change-event))
+                (when-some [token ?token]
+                  (e/server (settings/save-llm-enabled user-id change-event))
+                  (token))))
+            (dom/span
+              (dom/props {:style {:font-size "15px" :font-weight "500"}})
+              (dom/text "Enable LLM features"))
+            (dom/span
+              (dom/props {:style {:font-size "12px" :color "#888" :margin-left "4px"}})
+              (dom/text "(OCR, flashcard generation)"))))
+
+        (when llm-enabled
         (dom/div
           (dom/props {:style {:margin-bottom "20px"}})
           (dom/label (dom/text "OpenAI API Key:"))
@@ -196,7 +221,9 @@
                 (reset! !verbosity change-event))
               (when-some [token ?token]
                 (e/server (settings/save-verbosity user-id change-event))
-                (token)))))
+                (token))))) ;; end verbosity
+
+        ) ;; end (when llm-enabled ...)
 
         ;; Source Display Mode
         (dom/div

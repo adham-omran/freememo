@@ -12,7 +12,7 @@
 
 #?(:clj (defonce !refresh (atom 0)))
 
-(e/defn ExtractPage [user-id enc-key content-item-id navigate! view-source!]
+(e/defn ExtractPage [user-id enc-key content-item-id navigate! view-source! llm-enabled?]
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
@@ -113,7 +113,8 @@
                                :content-text content
                                :content-item-id content-item-id
                                :context-mode :extract
-                               :context-tooltip "Include context for better cards. With a selection: extract text. Without: original page text."}
+                               :context-tooltip "Include context for better cards. With a selection: extract text. Without: original page text."
+                               :llm-enabled? llm-enabled?}
                 !refresh)
 
               ;; Shared card table

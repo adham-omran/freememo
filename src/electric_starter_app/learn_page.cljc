@@ -31,7 +31,7 @@
   #?(:clj (db/delete-content-item id)
      :cljs nil))
 
-(e/defn LearnBrowse [user-id enc-key nav !mode]
+(e/defn LearnBrowse [user-id enc-key nav !mode llm-enabled?]
   (e/client
     (let [doc-id (:doc-id nav)
           filename (e/server
@@ -60,7 +60,7 @@
         (dom/div
           (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
           (let [!nav (atom nav)]
-            (OcrPage user-id enc-key !nav)))))))
+            (OcrPage user-id enc-key !nav llm-enabled?)))))))
 
 (e/defn LearnOverview [user-id !mode]
   (e/client
@@ -235,7 +235,7 @@
                             (e/server (swap! !refresh inc))
                             (token)))))))))))))))
 
-(e/defn LearnPage [user-id enc-key !nav-target navigate-to-extract!]
+(e/defn LearnPage [user-id enc-key !nav-target navigate-to-extract! llm-enabled?]
   (e/client
     (let [!mode (atom :overview)
           mode (e/watch !mode)
@@ -257,7 +257,7 @@
 
         :browse
         (when browse-nav
-          (LearnBrowse user-id enc-key browse-nav !mode))
+          (LearnBrowse user-id enc-key browse-nav !mode llm-enabled?))
 
         :session
         (let [refresh (e/server (e/watch !refresh))
@@ -265,4 +265,5 @@
           (LearnSession user-id enc-key queue-vec !queue-idx !mode !refresh !nav-target navigate-to-extract!
             (fn [doc-id page]
               (reset! !browse-nav {:doc-id doc-id :page page})
-              (reset! !mode :browse))))))))
+              (reset! !mode :browse))
+            llm-enabled?))))))

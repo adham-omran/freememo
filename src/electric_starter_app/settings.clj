@@ -33,6 +33,7 @@
 (def ANKI_USE_HEADER "anki_use_header")
 (def ANKI_HEADER_TEXT "anki_header_text")
 (def SOURCE_DISPLAY_MODE "source_display_mode")
+(def LLM_ENABLED "llm_enabled")
 (def LAST_DOCUMENT "last_document")
 (def PRE_PROMPT_HISTORY "pre_prompt_history")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
@@ -119,6 +120,18 @@
     (catch Exception e
       (println "ERROR [save-source-display-mode]:" (.getMessage e))
       {:success false :error "Failed to save source display mode"})))
+
+(defn get-llm-enabled [user-id]
+  (let [v (db/get-setting user-id LLM_ENABLED)]
+    (or (nil? v) (= "true" v))))
+
+(defn save-llm-enabled [user-id value]
+  (try
+    (db/set-setting user-id LLM_ENABLED (str (boolean value)))
+    {:success true}
+    (catch Exception e
+      (println "ERROR [save-llm-enabled]:" (.getMessage e))
+      {:success false :error "Failed to save LLM enabled"})))
 
 (defn get-anki-scope [user-id]
   (or (db/get-setting user-id ANKI_SCOPE) "Current Page"))
