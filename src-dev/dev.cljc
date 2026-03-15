@@ -8,6 +8,7 @@
    #?(:clj [electric-starter-app.db :as db])
    #?(:clj [electric-starter-app.api :as api])
 
+   #?(:clj [nrepl.server :as nrepl])
    #?(:clj [ring.adapter.jetty :as ring])
    #?(:clj [ring.util.response :as ring-response])
    #?(:clj [ring.middleware.params :refer [wrap-params]])
@@ -31,6 +32,9 @@
 
      ;; Initialize database
      (db/setup-schema)
+
+     (def nrepl-server (nrepl/start-server :port 7888))
+     (log/info "nREPL server started on port 7888")
 
      (shadow-cljs-compiler-server/start!)
      (shadow-cljs-compiler/watch :dev)
@@ -68,4 +72,5 @@
 (comment
   (shadow-cljs-compiler-server/stop!)
   (.stop server) ; stop jetty server
+  (.close nrepl-server) ; stop nrepl server
   )

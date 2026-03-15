@@ -1,6 +1,8 @@
 This app requires a PSQL server, run that with docker-compose.yml that's included.
 
-Run with `clj -M:dev -m dev`.
+Run with `clj -M:dev -m dev`. This starts the Electric dev server (port 8080) and an nREPL server (port 7888) in the same JVM.
+
+The nREPL server on port 7888 is auto-discovered by clojure-mcp, enabling Claude Code's Clojure MCP tools (eval, edit, etc.).
 
 Below is the default README for the starter app, ignore it I guess.
 
