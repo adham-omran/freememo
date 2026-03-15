@@ -32,7 +32,7 @@
                                                                 (pos? (compare (str (:flashcards/updated_at %))
                                                                                (str (:flashcards/anki_synced_at %))))))
                                                       (:cards cards-result))))
-              row-height 36]
+              row-height 54]
           (dom/div
             (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
             (when (pos? card-count)

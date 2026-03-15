@@ -39,7 +39,7 @@
           !expanded (atom false)
           expanded (e/watch !expanded)]
       (dom/div
-        (dom/props {:style {:padding-left (str (* depth 20) "px")
+        (dom/props {:style {:padding-left "20px"
                             :opacity (if dismissed "0.4" "1")}})
         ;; Row
         (dom/div

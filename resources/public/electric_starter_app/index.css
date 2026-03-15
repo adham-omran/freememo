@@ -259,6 +259,7 @@ html, body {
 .tape-scroll table td {
     grid-row: var(--order);
     height: var(--row-height);
+    overflow: hidden;
 }
 .tape-scroll table tr:hover td { background: #f5f7fa; }
 
