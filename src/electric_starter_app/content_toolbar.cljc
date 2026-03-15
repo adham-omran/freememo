@@ -79,8 +79,8 @@
         (e/server (settings/save-pre-prompt-history user-id history-save-trigger)))
 
       (dom/div
-        (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
-                            :padding "8px 12px" :flex-shrink "0"
+        (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
+                            :padding "4px 8px" :flex-shrink "0"
                             :border-bottom "1px solid #e0e0e0" :background "#fafafa"}})
 
         (when llm-enabled?
