@@ -5,8 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    #?(:clj [electric-starter-app.settings :as settings])))
 
-
-(e/defn SettingsPage [user-id username enc-key]
+(e/defn SettingsPage [user-id username enc-key !settings-refresh]
   (e/client
     ;; Logout section
     (dom/div
@@ -74,6 +73,7 @@
                   (reset! !llm-enabled change-event))
                 (when-some [token ?token]
                   (e/server (settings/save-llm-enabled user-id change-event))
+                  (e/server (swap! !settings-refresh inc))
                   (token))))
             (dom/span
               (dom/props {:style {:font-size "15px" :font-weight "500"}})
@@ -243,6 +243,7 @@
                     (reset! !source-mode change-event))
                   (when-some [token ?token]
                     (e/server (settings/save-source-display-mode user-id change-event))
+                    (e/server (swap! !settings-refresh inc))
                     (token))))
               (dom/text "Append to card "))
             (dom/span
@@ -259,6 +260,7 @@
                     (reset! !source-mode change-event))
                   (when-some [token ?token]
                     (e/server (settings/save-source-display-mode user-id change-event))
+                    (e/server (swap! !settings-refresh inc))
                     (token))))
               (dom/text "Separate field "))
             (dom/span

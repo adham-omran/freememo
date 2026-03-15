@@ -11,6 +11,16 @@
             [electric-starter-app.login-page :refer [LoginPage]]
             #?(:clj [electric-starter-app.settings :as settings])))
 
+#?(:clj (defonce !settings-refresh (atom 0)))
+
+(defn get-llm-enabled* [_refresh user-id]
+  #?(:clj (settings/get-llm-enabled user-id)
+     :cljs nil))
+
+(defn get-active-tab* [_refresh user-id]
+  #?(:clj (settings/get-active-tab user-id)
+     :cljs nil))
+
 (e/defn Main [ring-request]
   (e/client
     (binding [dom/node js/document.body]
@@ -24,8 +34,9 @@
             (dom/props {:style {:height "100vh" :display "flex" :flex-direction "column" :overflow "hidden"}})
             (dom/h1 (dom/props {:style {:margin "8px 16px" :flex-shrink "0"}}) (dom/text "FreeMemo"))
 
-            (let [llm-enabled? (e/server (settings/get-llm-enabled user-id))
-                  saved-tab (e/server (settings/get-active-tab user-id))
+            (let [settings-refresh (e/server (e/watch !settings-refresh))
+                  llm-enabled? (e/server (get-llm-enabled* settings-refresh user-id))
+                  saved-tab (e/server (get-active-tab* settings-refresh user-id))
                   !active-tab (atom saved-tab)
                   active-tab (e/watch !active-tab)
                   !tab-to-save (atom nil)
@@ -87,7 +98,7 @@
                 (when (= active-tab :home) (HomePage navigate!))
                 (when (= active-tab :contents) (ContentsPage user-id !nav-target navigate!))
                 (when (= active-tab :queue) (QueuePage user-id !nav-target navigate!))
-                (when (= active-tab :settings) (SettingsPage user-id username enc-key))
+                (when (= active-tab :settings) (SettingsPage user-id username enc-key !settings-refresh))
                 (when (= active-tab :pdf) (PdfPage user-id !nav-target navigate!))
                 (when (= active-tab :learn) (LearnPage user-id enc-key !nav-target #(navigate! :extract) llm-enabled?))
                 (when (= active-tab :extract)
