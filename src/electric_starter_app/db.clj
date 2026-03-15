@@ -113,6 +113,19 @@
     CREATE INDEX IF NOT EXISTS idx_flashcards_document_page
       ON flashcards(document_id, page_number)"])
 
+  ;; Create content_items table (must exist before flashcards FK reference)
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS content_items (
+      id SERIAL PRIMARY KEY,
+      document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+      page_number INTEGER NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'html',
+      content TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_content_items_document_page
+                      ON content_items(document_id, page_number)"])
+
   ;; Link flashcards to their parent extract (NULL = page-level card from OcrPage)
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS content_item_id INTEGER
                       REFERENCES content_items(id) ON DELETE CASCADE"])
@@ -142,19 +155,6 @@
 
   ;; Track card edits for sync-after-edit detection
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NULL"])
-
-  ;; Create content_items table
-  (jdbc/execute! ds ["
-    CREATE TABLE IF NOT EXISTS content_items (
-      id SERIAL PRIMARY KEY,
-      document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-      page_number INTEGER NOT NULL,
-      kind TEXT NOT NULL DEFAULT 'html',
-      content TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )"])
-  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_content_items_document_page
-                      ON content_items(document_id, page_number)"])
 
   ;; Scheduling columns for incremental reading (pages)
   (jdbc/execute! ds ["ALTER TABLE pages ADD COLUMN IF NOT EXISTS interval_days REAL DEFAULT 1.0"])
