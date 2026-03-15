@@ -118,8 +118,7 @@
                   (dom/props {:class "tape-scroll"
                               :style {:--offset offset :--row-height (str row-height "px")}})
                   (dom/table
-                    (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :table-layout "fixed"
-                                        :grid-template-columns "70px 20% 60px 60px 80px 1fr"}})
+                    (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :table-layout "fixed"}})
                     (e/for [i (Tape offset limit)]
                       (let [item (e/server (nth items-vec i nil))]
                         (when item
@@ -149,7 +148,7 @@
                                   (dom/props {:class "type-badge" :style {:padding "2px 8px" :background type-color}})
                                   (dom/text type-label)))
                               (dom/td
-                                (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap" :width "20%"}})
+                                (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap" :width "25%"}})
                                 (dom/text filename))
                               (dom/td
                                 (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#555" :width "60px"}})
