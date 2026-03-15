@@ -281,11 +281,12 @@
       {:success false :error (.getMessage e)})))
 
 (defn delete-card
-  "Delete a single flashcard by ID."
+  "Delete a single flashcard by ID. Returns {:success true :anki-note-id N} if the card was synced."
   [card-id]
   (try
-    (db/delete-flashcard card-id)
-    {:success true}
+    (let [deleted (db/delete-flashcard card-id)
+          note-id (:flashcards/anki_note_id deleted)]
+      {:success true :anki-note-id note-id})
     (catch Exception e
       (println "ERROR [delete-card]:" (.getMessage e))
       {:success false :error (.getMessage e)})))

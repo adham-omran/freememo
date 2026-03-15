@@ -438,11 +438,26 @@
                  :order-by [[:page_number :asc] [:created_at :asc]]})))
 
 (defn delete-flashcard
-  "Delete a single flashcard by ID."
+  "Delete a single flashcard by ID. Returns the deleted row (including anki_note_id)."
   [card-id]
-  (jdbc/execute! ds
-    (sql/format {:delete-from :flashcards
-                 :where [:= :id card-id]})))
+  (jdbc/execute-one! ds
+    ["DELETE FROM flashcards WHERE id = ? RETURNING id, anki_note_id" card-id]))
+
+(defn get-anki-note-ids-for-document
+  "Get all anki_note_ids for a document's flashcards (for bulk Anki cleanup before cascade delete)."
+  [document-id]
+  (->> (jdbc/execute! ds
+         ["SELECT anki_note_id FROM flashcards WHERE document_id = ? AND anki_note_id IS NOT NULL"
+          document-id])
+       (mapv :flashcards/anki_note_id)))
+
+(defn get-anki-note-ids-for-content-item
+  "Get all anki_note_ids for an extract's flashcards (for bulk Anki cleanup before cascade delete)."
+  [content-item-id]
+  (->> (jdbc/execute! ds
+         ["SELECT anki_note_id FROM flashcards WHERE content_item_id = ? AND anki_note_id IS NOT NULL"
+          content-item-id])
+       (mapv :flashcards/anki_note_id)))
 
 (defn update-flashcard
   "Update flashcard content fields. Sets updated_at for sync tracking."

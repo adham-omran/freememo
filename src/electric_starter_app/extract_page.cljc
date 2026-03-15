@@ -8,7 +8,8 @@
    [electric-starter-app.content-toolbar :refer [ContentToolbar]]
    [electric-starter-app.content-card-table :refer [ContentCardTable]]
    [electric-starter-app.ocr-page :refer [start-drag!]]
-   #?(:clj [electric-starter-app.db :as db])))
+   #?(:clj [electric-starter-app.db :as db])
+   [electric-starter-app.card-components :as card-components]))
 
 #?(:clj (defonce !refresh (atom 0)))
 
@@ -66,9 +67,11 @@
                               nil)
                       [?token _error] (e/Token event)]
                   (when-some [token ?token]
-                    (e/server (db/delete-content-item content-item-id))
-                    (token)
-                    (navigate! :learn))))
+                    (let [note-ids (e/server (db/get-anki-note-ids-for-content-item content-item-id))]
+                      (e/server (db/delete-content-item content-item-id))
+                      (e/client (card-components/try-delete-anki-notes! note-ids))
+                      (token)
+                      (navigate! :learn)))))
               (if view-source!
                 (dom/span
                   (dom/props {:style {:color "#2563eb" :font-size "13px" :cursor "pointer"

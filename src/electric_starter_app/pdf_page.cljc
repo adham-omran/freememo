@@ -9,7 +9,8 @@
    #?(:clj [electric-starter-app.db :as db])
    #?(:clj [electric-starter-app.wikipedia :as wiki])
    #?(:clj [electric-starter-app.html-cleaner :as cleaner])
-   #?(:clj [clojure.string :as str])))
+   #?(:clj [clojure.string :as str])
+   [electric-starter-app.card-components :as card-components]))
 
 #?(:clj (defonce !refresh (atom 0))) ; Server-side refresh trigger
 
@@ -396,10 +397,12 @@
                                                   (dom/text ?error)))
                                               (when-some [token ?token]
                                                 (reset! !deleting true)
-                                                (let [result (e/server (pdf/delete-pdf user-id click-event))]
+                                                (let [note-ids (e/server (db/get-anki-note-ids-for-document click-event))
+                                                      result (e/server (pdf/delete-pdf user-id click-event))]
                                                   (if (:success result)
                                                     (do (reset! !deleting false)
                                                       (e/server (swap! !refresh inc))
+                                                      (e/client (card-components/try-delete-anki-notes! note-ids))
                                                       (token))
                                                     (do (reset! !deleting false)
                                                       (token (:error result))))))))))))))))
