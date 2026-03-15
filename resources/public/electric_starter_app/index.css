@@ -41,6 +41,21 @@ html, body {
     outline-offset: 2px;
 }
 
+/* Tape virtual scroll — O(1) DOM updates via CSS grid ordering */
+/* Based on Electric monorepo's table_tape pattern */
+.tape-scroll table {
+    display: grid;
+    position: relative;
+    top: calc(var(--offset) * var(--row-height));
+}
+.tape-scroll table tr {
+    display: contents;
+}
+.tape-scroll table td {
+    grid-row: var(--order);
+    height: var(--row-height);
+}
+
 /* Help icon styling */
 .help-icon {
     display: inline-flex;

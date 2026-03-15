@@ -43,7 +43,7 @@
               (token (:error result)))))))))
 
 ;; Card table row component
-(e/defn CardRow [card !editing-card !refresh]
+(e/defn CardRow [card !editing-card !refresh order]
   (e/client
     (let [id (e/server (:flashcards/id card))
           kind (e/server (:flashcards/kind card))
@@ -51,6 +51,7 @@
           answer (e/server (:flashcards/answer card))
           cloze (e/server (:flashcards/cloze card))]
       (dom/tr
+        (dom/props {:style {:--order order}})
         ;; Front column
         (dom/td
           (dom/props {:style {:padding "6px 8px"

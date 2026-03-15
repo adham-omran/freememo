@@ -6,7 +6,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window]]
+   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
    [electric-starter-app.card-components :refer [CardRow get-cards* get-cards-by-extract*]]
    [electric-starter-app.ocr-modals :refer [EditCardModal]]))
@@ -33,19 +33,19 @@
             (if (pos? card-count)
               (let [[offset limit] (Scroll-window row-height card-count dom/node {:overquery-factor 1})
                     occluded-height (clamp-left (* row-height (- card-count limit)) 0)]
+                (dom/props {:class "tape-scroll"
+                            :style {:--offset offset :--row-height (str row-height "px")}})
                 (dom/table
                   (dom/props {:style {:width "100%"
                                       :border-collapse "separate"
                                       :border-spacing "0"
                                       :table-layout "fixed"
-                                      :font-size "13px"}})
-                  (dom/tbody
-                    (dom/props {:style {:position "relative"
-                                        :top (str (* offset row-height) "px")}})
-                    (e/for [i (e/diff-by {} (range offset (+ offset limit)))]
-                      (let [card (e/server (nth cards-vec i nil))]
-                        (when card
-                          (CardRow card !editing-card !refresh))))))
+                                      :font-size "13px"
+                                      :grid-template-columns "1fr 1fr 60px 40px 40px"}})
+                  (e/for [i (Tape offset limit)]
+                    (let [card (e/server (nth cards-vec i nil))]
+                      (when card
+                        (CardRow card !editing-card !refresh (inc i))))))
                 (dom/div (dom/props {:style {:height (str occluded-height "px")}})))
               (dom/p
                 (dom/props {:style {:color "gray" :font-size "13px" :padding "8px 12px"}})

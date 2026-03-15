@@ -3,7 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window]]
+   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
    [electric-starter-app.learn-session :refer [LearnSession]]
    [electric-starter-app.ocr-page :refer [OcrPage]]
@@ -112,53 +112,55 @@
                 (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
                 (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 1})
                       occluded-height (clamp-left (* row-height (- item-count limit)) 0)]
+                  (dom/props {:class "tape-scroll"
+                              :style {:--offset offset :--row-height (str row-height "px")}})
                   (dom/table
-                    (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :table-layout "fixed"}})
-                    (dom/tbody
-                      (dom/props {:style {:position "relative" :top (str (* offset row-height) "px")}})
-                      (e/for [i (e/diff-by {} (range offset (+ offset limit)))]
-                        (let [item (e/server (nth items-vec i nil))]
-                          (when item
-                            (let [topic-type (:topic_type item)
-                                  filename (or (:filename item) "-")
-                                  page-num (:page_number item)
-                                  priority (or (:priority item) 50)
-                                  interval (or (:interval_days item) 1.0)
-                                  content (or (:content item) "")
-                                  is-doc (= topic-type "document")
-                                  truncated (if is-doc
-                                              filename
-                                              (if (> (count content) 60)
-                                                (str (subs content 0 60) "...")
-                                                content))
-                                  type-label (if is-doc "Doc" "Extract")
-                                  type-color (if is-doc "#dcfce7" "#44C2FF")
-                                  interval-str (if (< interval 1.0)
-                                                 (str (int (* interval 24)) "h")
-                                                 (str (int interval) "d"))]
-                              (dom/tr
-                                (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")}})
-                                (dom/td
-                                  (dom/props {:style {:padding "8px 10px" :text-align "center" :width "70px"}})
-                                  (dom/span
-                                    (dom/props {:style {:padding "2px 8px" :border-radius "4px" :font-size "11px"
-                                                        :font-weight "600" :background type-color}})
-                                    (dom/text type-label)))
-                                (dom/td
-                                  (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap" :width "20%"}})
-                                  (dom/text filename))
-                                (dom/td
-                                  (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#555" :width "60px"}})
-                                  (dom/text (if is-doc "-" (str page-num))))
-                                (dom/td
-                                  (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#555" :width "60px"}})
-                                  (dom/text (str priority)))
-                                (dom/td
-                                  (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#888" :font-size "12px" :width "80px"}})
-                                  (dom/text interval-str))
-                                (dom/td
-                                  (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
-                                  (dom/text truncated)))))))))
+                    (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :table-layout "fixed"
+                                        :grid-template-columns "70px 20% 60px 60px 80px 1fr"}})
+                    (e/for [i (Tape offset limit)]
+                      (let [item (e/server (nth items-vec i nil))]
+                        (when item
+                          (let [topic-type (:topic_type item)
+                                filename (or (:filename item) "-")
+                                page-num (:page_number item)
+                                priority (or (:priority item) 50)
+                                interval (or (:interval_days item) 1.0)
+                                content (or (:content item) "")
+                                is-doc (= topic-type "document")
+                                truncated (if is-doc
+                                            filename
+                                            (if (> (count content) 60)
+                                              (str (subs content 0 60) "...")
+                                              content))
+                                type-label (if is-doc "Doc" "Extract")
+                                type-color (if is-doc "#dcfce7" "#44C2FF")
+                                interval-str (if (< interval 1.0)
+                                               (str (int (* interval 24)) "h")
+                                               (str (int interval) "d"))]
+                            (dom/tr
+                              (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")
+                                                  :--order (inc i)}})
+                              (dom/td
+                                (dom/props {:style {:padding "8px 10px" :text-align "center" :width "70px"}})
+                                (dom/span
+                                  (dom/props {:style {:padding "2px 8px" :border-radius "4px" :font-size "11px"
+                                                      :font-weight "600" :background type-color}})
+                                  (dom/text type-label)))
+                              (dom/td
+                                (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap" :width "20%"}})
+                                (dom/text filename))
+                              (dom/td
+                                (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#555" :width "60px"}})
+                                (dom/text (if is-doc "-" (str page-num))))
+                              (dom/td
+                                (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#555" :width "60px"}})
+                                (dom/text (str priority)))
+                              (dom/td
+                                (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#888" :font-size "12px" :width "80px"}})
+                                (dom/text interval-str))
+                              (dom/td
+                                (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
+                                (dom/text truncated))))))))
                   (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))
 
           ;; Empty state
