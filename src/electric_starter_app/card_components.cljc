@@ -89,15 +89,17 @@
                                        :synced "var(--color-success)"
                                        :modified "#eab308")}}))
         ;; Front column
-        (dom/td
-          (dom/props {:style {:padding "6px 8px"
-                              :border-bottom "1px solid var(--color-border)"}})
-          (dom/text (if (= kind "basic") question cloze)))
+        (let [front-text (if (= kind "basic") question cloze)]
+          (dom/td
+            (dom/props {:style {:padding "6px 8px"
+                                :border-bottom "1px solid var(--color-border)"}})
+            (dom/text front-text)))
         ;; Back column
-        (dom/td
-          (dom/props {:style {:padding "6px 8px"
-                              :border-bottom "1px solid var(--color-border)"}})
-          (dom/text (if (= kind "basic") (or answer "") "")))
+        (let [back-text (if (= kind "basic") (or answer "") "")]
+          (dom/td
+            (dom/props {:style {:padding "6px 8px"
+                                :border-bottom "1px solid var(--color-border)"}})
+            (dom/text back-text)))
         ;; Kind column
         (dom/td
           (dom/props {:style {:padding "6px 8px" :width "60px" :font-size "12px"
