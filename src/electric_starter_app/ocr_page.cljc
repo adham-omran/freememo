@@ -148,7 +148,7 @@
                 !page-to-save (atom nil)
                 page-to-save (e/watch !page-to-save)
                 [?page-token _] (e/Token page-to-save)
-                !top-pct (atom 60)
+                !top-pct (atom 75)
                 top-pct (e/watch !top-pct)
                 !left-pct (atom 50)
                 left-pct (e/watch !left-pct)
@@ -217,16 +217,16 @@
                 (dom/div
                   (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-width "0" :min-height "0" :overflow "hidden"}})
 
-                  ;; Page header + extract button
+                  ;; Compact page header
                   (dom/div
-                    (dom/props {:style {:display "flex" :align-items "center" :gap "12px" :padding "8px" :flex-shrink "0"}})
+                    (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :padding "4px 8px" :flex-shrink "0"}})
                     (dom/span
-                      (dom/props {:style {:font-weight "bold" :font-size "16px"}})
-                      (dom/text "Page " current-pdf-page))
+                      (dom/props {:style {:font-weight "600" :font-size "13px" :color "#444"}})
+                      (dom/text "p." current-pdf-page))
 
                     ;; Mark as done checkbox
                     (dom/label
-                      (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "14px" :cursor "pointer"}
+                      (dom/props {:style {:display "flex" :align-items "center" :gap "3px" :font-size "12px" :cursor "pointer"}
                                   :title "Mark this page as completed to track your extraction progress"})
                       (e/for-by identity [_page [current-pdf-page]]
                         (dom/input
@@ -246,7 +246,7 @@
                     ;; Priority input
                     (let [page-priority (e/server (db/get-page-priority selected-doc current-pdf-page))]
                       (dom/label
-                        (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "14px"}
+                        (dom/props {:style {:display "flex" :align-items "center" :gap "3px" :font-size "12px"}
                                     :title "Page priority (0=highest, 100=lowest). Used to sort the reading queue."})
                         (dom/text "P:")
                         (e/for-by identity [_k [current-pdf-page]]
@@ -265,7 +265,7 @@
                             client-extracting? (e/client (e/watch !extracting-client?))
                             disabled? (or extracting? client-extracting?)]
                       (dom/button
-                        (dom/props {:style {:padding "8px 16px"
+                        (dom/props {:style {:padding "4px 12px"
                                             :background (if disabled? "#ccc" "#007bff")
                                             :color "white"
                                             :border "none"
@@ -335,29 +335,48 @@
                               (fn [] (reset! !show false))
                               2000))))))
 
-                  ;; Source reference — editable inline
-                  (let [current-source (e/server (db/get-document-source selected-doc))]
-                    (dom/div
-                      (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
-                                          :padding "4px 8px" :flex-shrink "0"
-                                          :background "#f9f9f9" :border-bottom "1px solid #eee"}})
-                      (dom/span
-                        (dom/props {:style {:font-size "11px" :color "#999" :flex-shrink "0"}})
-                        (dom/text "Source:"))
-                      (e/for-by identity [_k [selected-doc]]
-                        (dom/input
-                          (dom/props {:type "text"
-                                      :placeholder "Source reference (auto-populated)"
-                                      :title "Source reference — propagated to generated cards"
-                                      :style {:flex "1" :padding "2px 6px" :font-size "12px" :color "#555"
-                                              :border "1px solid #e0e0e0" :border-radius "3px"
-                                              :background "white"}})
-                          (set! (.-value dom/node) (or current-source ""))
-                          (let [event (dom/On "change" #(-> % .-target .-value) nil)
-                                [?token _] (e/Token event)]
-                            (when-some [token ?token]
-                              (e/server (db/update-document-source selected-doc event))
-                              (token)))))))
+                  ;; Source reference — collapsed to compact editable field in page header
+                  (let [current-source (e/server (db/get-document-source selected-doc))
+                        !editing-source (atom false)
+                        editing-source (e/watch !editing-source)]
+                    (if editing-source
+                      ;; Expanded source editor (shown on click)
+                      (dom/div
+                        (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
+                                            :padding "3px 8px" :flex-shrink "0"
+                                            :background "#f9f9f9" :border-bottom "1px solid #eee"}})
+                        (dom/span
+                          (dom/props {:style {:font-size "11px" :color "#999" :flex-shrink "0"}})
+                          (dom/text "Source:"))
+                        (e/for-by identity [_k [selected-doc]]
+                          (dom/input
+                            (dom/props {:type "text"
+                                        :placeholder "Source reference"
+                                        :style {:flex "1" :padding "2px 6px" :font-size "12px" :color "#555"
+                                                :border "1px solid #e0e0e0" :border-radius "3px"
+                                                :background "white"}})
+                            (set! (.-value dom/node) (or current-source ""))
+                            (let [event (dom/On "change" #(-> % .-target .-value) nil)
+                                  [?token _] (e/Token event)]
+                              (when-some [token ?token]
+                                (e/server (db/update-document-source selected-doc event))
+                                (reset! !editing-source false)
+                                (token)))))
+                        (dom/button
+                          (dom/props {:style {:padding "2px 8px" :font-size "11px" :background "#f0f0f0"
+                                              :border "1px solid #ccc" :border-radius "3px" :cursor "pointer"}})
+                          (dom/text "Close")
+                          (dom/On "click" (fn [_] (reset! !editing-source false)) nil)))
+                      ;; Collapsed: just a small clickable source indicator
+                      (when (seq current-source)
+                        (dom/span
+                          (dom/props {:style {:font-size "11px" :color "#999" :cursor "pointer"
+                                              :padding "0 8px" :flex-shrink "0"
+                                              :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
+                                              :max-width "200px"}
+                                      :title (str "Source: " current-source " (click to edit)")})
+                          (dom/text current-source)
+                          (dom/On "click" (fn [_] (reset! !editing-source true)) nil)))))
 
                   ;; Editor area
                   (dom/div

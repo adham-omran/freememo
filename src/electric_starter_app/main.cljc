@@ -32,7 +32,6 @@
           ;; Authenticated: render app
           (dom/div
             (dom/props {:style {:height "100vh" :display "flex" :flex-direction "column" :overflow "hidden"}})
-            (dom/h1 (dom/props {:style {:margin "8px 16px" :flex-shrink "0"}}) (dom/text "FreeMemo"))
 
             (let [settings-refresh (e/server (e/watch !settings-refresh))
                   llm-enabled? (e/server (get-llm-enabled* settings-refresh user-id))
@@ -43,8 +42,8 @@
                   tab-to-save (e/watch !tab-to-save)
                   [?token _error] (e/Token tab-to-save)
                   tab-style (fn [key]
-                              {:padding "10px 24px" :border "none" :background "none" :cursor "pointer"
-                               :font-size "16px" :font-weight (if (= active-tab key) "600" "400")
+                              {:padding "6px 16px" :border "none" :background "none" :cursor "pointer"
+                               :font-size "14px" :font-weight (if (= active-tab key) "600" "400")
                                :color (if (= active-tab key) "#2563eb" "#666")
                                :border-bottom (if (= active-tab key) "2px solid #2563eb" "2px solid transparent")
                                :margin-bottom "-2px"})
@@ -58,9 +57,16 @@
                 (e/server (settings/save-active-tab user-id tab-to-save))
                 (token))
 
-              ;; Tab bar
+              ;; Combined title + tab bar (single row)
               (dom/div
-                (dom/props {:style {:display "flex" :border-bottom "2px solid #e0e0e0" :flex-shrink "0"}})
+                (dom/props {:style {:display "flex" :align-items "center" :border-bottom "2px solid #e0e0e0" :flex-shrink "0"}})
+
+                ;; Inline title
+                (dom/span
+                  (dom/props {:style {:font-size "16px" :font-weight "700" :padding "6px 16px"
+                                      :color "#111" :cursor "pointer" :white-space "nowrap"}})
+                  (dom/text "FreeMemo")
+                  (dom/On "click" (fn [_] (navigate! :home)) nil))
 
                 (dom/button
                   (dom/props {:style (tab-style :home)})

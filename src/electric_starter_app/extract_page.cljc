@@ -84,7 +84,7 @@
                   (dom/text (str (or filename "Unknown") " — p. " page-num))))))
 
           ;; Split pane: editor top / toolbar+cards bottom
-          (let [!top-pct (atom 60)
+          (let [!top-pct (atom 75)
                 top-pct (e/watch !top-pct)]
 
             ;; Editor area

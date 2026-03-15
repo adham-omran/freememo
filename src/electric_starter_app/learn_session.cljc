@@ -46,7 +46,7 @@
           !postpone-days (atom "7")]
       (dom/div
         (dom/props {:style {:display "flex" :align-items "center" :justify-content "center"
-                            :gap "12px" :padding "12px 16px" :flex-shrink "0"
+                            :gap "12px" :padding "6px 16px" :flex-shrink "0"
                             :border-top "1px solid #e0e0e0"}})
 
         ;; Postpone toggle + input
@@ -122,8 +122,8 @@
           type-color (cond is-doc "#dcfce7" (= topic-type "extract") "#44C2FF" :else "#e0f2fe")]
 
       (dom/div
-        (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
-                            :padding "8px 16px" :flex-shrink "0"
+        (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
+                            :padding "4px 12px" :flex-shrink "0"
                             :border-bottom "1px solid #e0e0e0"}})
         ;; Back to Learn
         (dom/button
