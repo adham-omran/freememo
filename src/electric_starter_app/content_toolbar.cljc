@@ -79,9 +79,7 @@
         (e/server (settings/save-pre-prompt-history user-id history-save-trigger)))
 
       (dom/div
-        (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
-                            :padding "4px 8px" :flex-shrink "0"
-                            :border-bottom "1px solid #e0e0e0" :background "#fafafa"}})
+        (dom/props {:class "toolbar"})
 
         (when llm-enabled?
         ;; Context checkbox + pages
@@ -183,12 +181,10 @@
                 gen-active? (pos? gen-pending)
                 no-content? (empty? content-text)]
             (dom/button
-              (dom/props {:style {:padding "4px 12px"
-                                  :background (cond no-content? "#94a3b8" gen-active? "#93c5fd" :else "#2563eb")
-                                  :color "white"
-                                  :border "none" :border-radius "4px"
+              (dom/props {:class "btn btn-sm btn-primary"
+                          :style {:background (cond no-content? "#94a3b8" gen-active? "var(--color-primary-light)" :else "var(--color-primary)")
                                   :cursor (if no-content? "not-allowed" "pointer")
-                                  :font-size "13px" :font-weight "bold"}
+                                  :font-weight "bold"}
                           :disabled no-content?
                           :title (if no-content? "Extract text first to generate flashcards"
                                    "Generate flashcards from editor text or selected text")})
@@ -208,14 +204,8 @@
 
           ;; Generate with Prompt button
           (dom/button
-            (dom/props {:style {:padding "4px 12px"
-                                :background "#f0f0f0"
-                                :color "#333"
-                                :border "1px solid #ccc"
-                                :border-radius "4px"
-                                :cursor "pointer"
-                                :font-size "13px"
-                                :font-weight "500"}
+            (dom/props {:class "btn btn-sm btn-secondary"
+                        :style {:font-weight "500"}
                         :title "Add custom instructions to guide card generation"})
             (dom/text (or (:error prompt-gen-state) "Generate with Prompt..."))
             (let [pending (+ (count (:queue prompt-gen-state)) (if (:active prompt-gen-state) 1 0))]
@@ -234,9 +224,8 @@
               extract-state (e/watch !extract-state)
               pending (:pending extract-state)]
           (dom/button
-            (dom/props {:style {:padding "4px 12px" :background "#2563eb" :color "white"
-                                :border "none" :border-radius "4px" :cursor "pointer"
-                                :font-size "13px" :font-weight "500"}
+            (dom/props {:class "btn btn-sm btn-primary"
+                        :style {:font-weight "500"}
                         :title (if (= context-mode :extract)
                                  "Extract selected text as a child content item"
                                  "Extract selected text as a content item")})
@@ -365,8 +354,7 @@
         (let [!show-add (atom false)
               show-add (e/watch !show-add)]
           (dom/button
-            (dom/props {:style {:padding "4px 12px" :background "#f0f0f0" :color "#333" :border "1px solid #ccc"
-                                :border-radius "4px" :cursor "pointer" :font-size "13px" :font-weight "500"}})
+            (dom/props {:class "btn btn-sm btn-secondary" :style {:font-weight "500"}})
             (dom/text "Add new")
             (dom/On "click" (fn [_] (reset! !show-add true)) nil))
           (when show-add
@@ -379,8 +367,7 @@
         (let [!show-export (atom false)
               show-export (e/watch !show-export)]
           (dom/button
-            (dom/props {:style {:padding "4px 12px" :background "#f0f0f0" :color "#333" :border "1px solid #ccc"
-                                :border-radius "4px" :cursor "pointer" :font-size "13px" :font-weight "500"}})
+            (dom/props {:class "btn btn-sm btn-secondary" :style {:font-weight "500"}})
             (dom/text (if (pos? unsynced-count)
                         (str "Export (" unsynced-count ")...")
                         "Export..."))

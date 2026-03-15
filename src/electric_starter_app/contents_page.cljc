@@ -55,8 +55,7 @@
             (dom/span (dom/props {:style {:width "16px" :flex-shrink "0"}})))
           ;; Type badge
           (dom/span
-            (dom/props {:style {:padding "1px 6px" :border-radius "3px" :font-size "10px"
-                                :font-weight "600" :background "#44C2FF" :flex-shrink "0"}})
+            (dom/props {:class "type-badge" :style {:background "#44C2FF"}})
             (dom/text "Ext"))
           ;; Content preview — double-click opens
           (dom/span
@@ -107,8 +106,7 @@
             (dom/span (dom/props {:style {:width "16px" :flex-shrink "0"}})))
           ;; Type badge
           (dom/span
-            (dom/props {:style {:padding "1px 6px" :border-radius "3px" :font-size "10px"
-                                :font-weight "600" :background type-color :flex-shrink "0"}})
+            (dom/props {:class "type-badge" :style {:background type-color}})
             (dom/text type-label))
           ;; Filename — double-click opens
           (dom/span
@@ -146,5 +144,5 @@
             (e/for-by :documents/id [doc documents]
               (DocumentNode doc (get items-by-doc (:documents/id doc)) !nav-target navigate!)))
           (dom/p
-            (dom/props {:style {:color "#888" :font-size "14px"}})
+            (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
             (dom/text "No content yet. Import a document from the Documents tab, then extract content items for study.")))))))

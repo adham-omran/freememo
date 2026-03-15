@@ -57,55 +57,47 @@
           !url (atom "")
           !html (atom nil)]
       (dom/div
-        (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
-                            :background "rgba(0,0,0,0.3)" :display "flex" :align-items "center"
-                            :justify-content "center" :z-index "1000"}})
+        (dom/props {:class "modal-backdrop"})
         (dom/On "click" (fn [e]
                           (when (= (.-target e) (.-currentTarget e))
                             (reset! !show false)))
           nil)
         (dom/div
-          (dom/props {:style {:background "white" :border-radius "8px" :padding "24px"
-                              :width "600px" :max-height "80vh" :display "flex" :flex-direction "column"
-                              :box-shadow "0 4px 20px rgba(0,0,0,0.25)"}})
+          (dom/props {:class "modal-content modal-lg" :style {:max-height "80vh" :display "flex" :flex-direction "column"}})
           (dom/h3
             (dom/props {:style {:margin "0 0 16px 0" :font-size "16px"}})
             (dom/text "Import Web Article"))
 
           ;; Title
           (dom/label
-            (dom/props {:style {:font-size "13px" :color "#555" :margin-bottom "4px"}})
+            (dom/props {:class "label" :style {:color "var(--color-text-secondary)"}})
             (dom/text "Title"))
           (dom/input
             (dom/props {:type "text" :placeholder "Article title"
                         :value (e/watch !title)
-                        :style {:width "100%" :padding "8px 12px" :margin-bottom "12px"
-                                :border "1px solid #ccc" :border-radius "4px" :font-size "14px"
-                                :box-sizing "border-box"}})
+                        :class "input input-full" :style {:margin-bottom "var(--sp-3)"}})
             (dom/On "input" (fn [e] (reset! !title (-> e .-target .-value))) nil))
 
           ;; Source URL (optional)
           (dom/label
-            (dom/props {:style {:font-size "13px" :color "#555" :margin-bottom "4px"}})
+            (dom/props {:class "label" :style {:color "var(--color-text-secondary)"}})
             (dom/text "Source URL (optional)"))
           (dom/input
             (dom/props {:type "text" :placeholder "https://..."
                         :value (e/watch !url)
-                        :style {:width "100%" :padding "8px 12px" :margin-bottom "12px"
-                                :border "1px solid #ccc" :border-radius "4px" :font-size "14px"
-                                :box-sizing "border-box"}})
+                        :class "input input-full" :style {:margin-bottom "var(--sp-3)"}})
             (dom/On "input" (fn [e] (reset! !url (-> e .-target .-value))) nil))
 
           ;; Paste area
           (dom/label
-            (dom/props {:style {:font-size "13px" :color "#555" :margin-bottom "4px"}})
+            (dom/props {:class "label" :style {:color "var(--color-text-secondary)"}})
             (dom/text "Content (paste from browser with Ctrl+V)"))
           (dom/div
             (dom/props {:contenteditable "true"
                         :style {:flex "1" :min-height "200px" :max-height "400px" :overflow-y "auto"
-                                :padding "12px" :border "1px solid #ccc" :border-radius "4px"
-                                :font-size "14px" :line-height "1.6" :margin-bottom "16px"
-                                :background "#fafafa"}})
+                                :padding "var(--sp-3)" :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"
+                                :font-size "14px" :line-height "1.6" :margin-bottom "var(--sp-4)"
+                                :background "var(--color-bg-subtle)"}})
             (dom/On "paste"
               (fn [e]
                 (let [cd (.-clipboardData e)
@@ -126,24 +118,20 @@
 
           ;; Buttons
           (dom/div
-            (dom/props {:style {:display "flex" :gap "8px" :justify-content "flex-end"}})
+            (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
             (dom/button
-              (dom/props {:style {:padding "8px 16px" :background "#f0f0f0" :color "#333"
-                                  :border "1px solid #ccc" :border-radius "4px" :cursor "pointer"
-                                  :font-size "14px"}})
+              (dom/props {:class "btn btn-secondary"})
               (dom/text "Cancel")
               (dom/On "click" (fn [_] (reset! !show false)) nil))
             (dom/button
-              (dom/props {:style {:padding "8px 16px" :background "#2563eb" :color "white"
-                                  :border "none" :border-radius "4px" :cursor "pointer"
-                                  :font-size "14px" :font-weight "600"}})
+              (dom/props {:class "btn btn-primary" :style {:font-weight "600"}})
               (dom/text "Import")
               (let [event (dom/On "click"
                             (fn [_] {:title @!title :html @!html :url @!url})
                             nil)
                     [?token ?error] (e/Token event)]
                 (when ?error
-                  (dom/div (dom/props {:style {:color "red" :font-size "12px" :margin-top "4px"}})
+                  (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-1)"}})
                     (dom/text ?error)))
                 (when-some [token ?token]
                   (let [title-val (:title event)
@@ -163,51 +151,42 @@
   (e/client
     (let [!url (atom "")]
       (dom/div
-        (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
-                            :background "rgba(0,0,0,0.3)" :display "flex" :align-items "center"
-                            :justify-content "center" :z-index "1000"}})
+        (dom/props {:class "modal-backdrop"})
         (dom/On "click" (fn [e]
                           (when (= (.-target e) (.-currentTarget e))
                             (reset! !show false)))
           nil)
         (dom/div
-          (dom/props {:style {:background "white" :border-radius "8px" :padding "24px"
-                              :width "500px" :box-shadow "0 4px 20px rgba(0,0,0,0.25)"}})
+          (dom/props {:class "modal-content" :style {:width "500px" :max-width "90%"}})
           (dom/h3
             (dom/props {:style {:margin "0 0 16px 0" :font-size "16px"}})
             (dom/text "Import from URL"))
           (dom/p
-            (dom/props {:style {:margin "0 0 12px 0" :font-size "13px" :color "#666"}})
+            (dom/props {:style {:margin "0 0 12px 0" :font-size "13px" :color "var(--color-text-secondary)"}})
             (dom/text "Paste a Wikipedia or any web page URL. Wikipedia articles are fetched via API for best quality."))
           (dom/input
             (dom/props {:type "text" :placeholder "https://en.wikipedia.org/wiki/..."
                         :value (e/watch !url)
-                        :style {:width "100%" :padding "10px 12px" :border "1px solid #ccc"
-                                :border-radius "4px" :font-size "14px" :box-sizing "border-box"
-                                :margin-bottom "16px"}})
+                        :class "input input-full" :style {:padding "10px 12px" :margin-bottom "var(--sp-4)"}})
             (dom/On "input" (fn [e] (reset! !url (-> e .-target .-value))) nil))
           (dom/div
-            (dom/props {:style {:display "flex" :gap "8px" :justify-content "flex-end"}})
+            (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
             (dom/button
-              (dom/props {:style {:padding "8px 16px" :background "#f0f0f0" :color "#333"
-                                  :border "1px solid #ccc" :border-radius "4px" :cursor "pointer"
-                                  :font-size "14px"}})
+              (dom/props {:class "btn btn-secondary"})
               (dom/text "Cancel")
               (dom/On "click" (fn [_] (reset! !show false)) nil))
             (dom/button
               (let [event (dom/On "click" (fn [_] @!url) nil)
                     [?token ?error] (e/Token event)
                     importing? (some? ?token)]
-                (dom/props {:style {:padding "8px 16px"
-                                    :background (if importing? "#93c5fd" "#2563eb")
-                                    :color "white"
-                                    :border "none" :border-radius "4px"
-                                    :cursor (if importing? "not-allowed" "pointer")
-                                    :font-size "14px" :font-weight "600"}
+                (dom/props {:class "btn btn-primary"
+                            :style {:font-weight "600"
+                                    :background (if importing? "var(--color-primary-light)" "var(--color-primary)")
+                                    :cursor (if importing? "not-allowed" "pointer")}
                             :disabled importing?})
                 (dom/text (if importing? "Importing..." "Import"))
                 (when ?error
-                  (dom/div (dom/props {:style {:color "red" :font-size "12px" :margin-top "4px"}})
+                  (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-1)"}})
                     (dom/text ?error)))
                 (when-some [token ?token]
                   (if (seq event)
@@ -229,14 +208,14 @@
 (e/defn PdfPage [user-id !nav-target navigate!]
   (e/client
     (dom/div
-      (dom/props {:style {:padding "16px" :max-width "900px" :height "100%" :display "flex" :flex-direction "column"}})
+      (dom/props {:style {:padding "var(--sp-4)" :max-width "900px" :height "100%" :display "flex" :flex-direction "column"}})
       (dom/h2
         (dom/props {:style {:margin "0 0 12px 0" :font-size "20px"}})
         (dom/text "Documents"))
 
       ;; Import buttons row
       (dom/div
-        (dom/props {:style {:display "flex" :gap "8px" :margin-bottom "12px" :flex-wrap "wrap"}})
+        (dom/props {:style {:display "flex" :gap "var(--sp-2)" :margin-bottom "var(--sp-3)" :flex-wrap "wrap"}})
 
         ;; Upload PDF
         (let [!file-input (atom nil)]
@@ -249,9 +228,7 @@
               (dom/On "change" (fn [e] (.. e -target -form submit)) nil))
             (dom/button
               (dom/props {:type "button"
-                          :style {:padding "8px 20px" :background "#2563eb" :color "white"
-                                  :border "none" :border-radius "6px" :cursor "pointer"
-                                  :font-size "14px" :font-weight "600"}})
+                          :class "btn btn-primary" :style {:padding "8px 20px" :border-radius "var(--radius-md)" :font-weight "600"}})
               (dom/text "Upload PDF")
               (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil))))
 
@@ -259,9 +236,7 @@
         (let [!show-paste (atom false)
               show-paste (e/watch !show-paste)]
           (dom/button
-            (dom/props {:style {:padding "8px 20px" :background "#2563eb" :color "white"
-                                :border "none" :border-radius "6px" :cursor "pointer"
-                                :font-size "14px" :font-weight "600"}})
+            (dom/props {:class "btn btn-primary" :style {:padding "8px 20px" :border-radius "var(--radius-md)" :font-weight "600"}})
             (dom/text "Paste Article")
             (dom/On "click" (fn [_] (reset! !show-paste true)) nil))
           (when show-paste
@@ -271,9 +246,7 @@
         (let [!show-url (atom false)
               show-url (e/watch !show-url)]
           (dom/button
-            (dom/props {:style {:padding "8px 20px" :background "#2563eb" :color "white"
-                                :border "none" :border-radius "6px" :cursor "pointer"
-                                :font-size "14px" :font-weight "600"}})
+            (dom/props {:class "btn btn-primary" :style {:padding "8px 20px" :border-radius "var(--radius-md)" :font-weight "600"}})
             (dom/text "Import URL")
             (dom/On "click" (fn [_] (reset! !show-url true)) nil))
           (when show-url
@@ -284,9 +257,8 @@
             filter-text (e/watch !filter-text)]
         (dom/input
           (dom/props {:type "text" :placeholder "Filter documents..."
-                      :style {:width "100%" :max-width "400px" :padding "8px 12px"
-                              :margin-bottom "12px" :border "1px solid #ccc" :border-radius "4px"
-                              :font-size "14px"}})
+                      :class "input" :style {:width "100%" :max-width "400px" :margin-bottom "var(--sp-3)"}})
+
           (dom/On "input" (fn [e] (reset! !filter-text (-> e .-target .-value))) nil))
 
         ;; Document table with virtual scroll
@@ -306,13 +278,14 @@
                     ;; Table header
                     (dom/table
                       (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :table-layout "fixed" :flex-shrink "0"}})
-                      (dom/thead
-                        (dom/tr
-                          (dom/th (dom/props {:style {:text-align "left" :padding "8px 10px" :border-bottom "2px solid #e0e0e0" :font-weight "600" :color "#444"}}) (dom/text "Name"))
-                          (dom/th (dom/props {:style {:text-align "center" :padding "8px 10px" :border-bottom "2px solid #e0e0e0" :font-weight "600" :color "#444" :width "60px"}}) (dom/text "Type"))
-                          (dom/th (dom/props {:style {:text-align "right" :padding "8px 10px" :border-bottom "2px solid #e0e0e0" :font-weight "600" :color "#444" :width "80px"}}) (dom/text "Size"))
-                          (dom/th (dom/props {:style {:text-align "left" :padding "8px 10px" :border-bottom "2px solid #e0e0e0" :font-weight "600" :color "#444" :width "140px"}}) (dom/text "Uploaded"))
-                          (dom/th (dom/props {:style {:text-align "center" :padding "8px 10px" :border-bottom "2px solid #e0e0e0" :font-weight "600" :color "#444" :width "80px"}}) (dom/text "Actions")))))
+                      (let [th-style {:padding "8px 10px" :border-bottom "2px solid var(--color-border)" :font-weight "600" :color "var(--color-text-label)"}]
+                        (dom/thead
+                          (dom/tr
+                            (dom/th (dom/props {:style (merge th-style {:text-align "left"})}) (dom/text "Name"))
+                            (dom/th (dom/props {:style (merge th-style {:text-align "center" :width "60px"})}) (dom/text "Type"))
+                            (dom/th (dom/props {:style (merge th-style {:text-align "right" :width "80px"})}) (dom/text "Size"))
+                            (dom/th (dom/props {:style (merge th-style {:text-align "left" :width "140px"})}) (dom/text "Uploaded"))
+                            (dom/th (dom/props {:style (merge th-style {:text-align "center" :width "80px"})}) (dom/text "Actions"))))))
 
                     (if (pos? doc-count)
                       ;; Scrollable body
@@ -348,7 +321,7 @@
                                       (dom/td
                                         (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
                                         (dom/span
-                                          (dom/props {:style {:color "#2563eb" :cursor "pointer" :text-decoration "underline"}
+                                          (dom/props {:style {:color "var(--color-primary)" :cursor "pointer" :text-decoration "underline"}
                                                       :title "Open in Learn tab"})
                                           (dom/text filename)
                                           (dom/On "click"
@@ -365,11 +338,11 @@
                                           (dom/text type-label)))
                                         ;; Size
                                       (dom/td
-                                        (dom/props {:style {:padding "8px 10px" :text-align "right" :color "#555" :width "80px"}})
+                                        (dom/props {:style {:padding "8px 10px" :text-align "right" :color "var(--color-text-secondary)" :width "80px"}})
                                         (dom/text file-size))
                                         ;; Uploaded
                                       (dom/td
-                                        (dom/props {:style {:padding "8px 10px" :color "#555" :width "140px"}})
+                                        (dom/props {:style {:padding "8px 10px" :color "var(--color-text-secondary)" :width "140px"}})
                                         (dom/text (or uploaded "-")))
                                         ;; Delete
                                       (dom/td
@@ -378,10 +351,11 @@
                                               deleting (e/watch !deleting)]
                                           (dom/button
                                             (dom/props {:disabled deleting
-                                                        :style {:padding "3px 10px" :background (if deleting "#999" "#dc3545")
-                                                                :color "white" :border "none" :border-radius "3px"
-                                                                :cursor (if deleting "not-allowed" "pointer")
-                                                                :font-size "12px"}})
+                                                        :class "btn btn-sm btn-danger-fill"
+                                                        :style {:padding "3px 10px"
+                                                                :background (if deleting "#999" "var(--color-danger)")
+                                                                :cursor (if deleting "not-allowed" "pointer")}})
+
                                             (dom/text (if deleting "..." "Delete"))
                                             (let [click-event (dom/On "click"
                                                                 (fn [_]
@@ -393,7 +367,7 @@
                                                   [?token ?error] (e/Token click-event)]
                                               (when ?error
                                                 (dom/span
-                                                  (dom/props {:style {:color "red" :font-size "11px" :margin-left "4px"}})
+                                                  (dom/props {:style {:color "var(--color-danger)" :font-size "11px" :margin-left "var(--sp-1)"}})
                                                   (dom/text ?error)))
                                               (when-some [token ?token]
                                                 (reset! !deleting true)
@@ -410,11 +384,11 @@
 
                       ;; Empty state
                       (dom/p
-                        (dom/props {:style {:color "#888" :font-size "14px" :padding "16px 0"}})
+                        (dom/props {:style {:color "var(--color-text-hint)" :font-size "14px" :padding "var(--sp-4) 0"}})
                         (dom/text (if (zero? total-doc-count)
                                     "No documents yet. Upload a PDF, paste an article, or import from URL above."
                                     "No documents match your search."))))))
 
                 (dom/div
-                  (dom/props {:style {:color "red"}})
+                  (dom/props {:style {:color "var(--color-danger)"}})
                   (dom/text "Error loading documents: " (:error docs-result)))))))))))

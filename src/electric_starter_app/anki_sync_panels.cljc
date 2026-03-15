@@ -119,14 +119,13 @@
       (dom/div
         (dom/props {:style {:text-align "center" :padding "20px"}})
         (dom/div
-          (dom/props {:style {:color "#dc3545" :margin-bottom "12px"}})
+          (dom/props {:style {:color "var(--color-danger)" :margin-bottom "var(--sp-3)"}})
           (dom/text (or conn-error "Connection failed")))
         (dom/div
-          (dom/props {:style {:font-size "14px" :color "#666" :margin-bottom "16px"}})
+          (dom/props {:style {:font-size "14px" :color "var(--color-text-secondary)" :margin-bottom "var(--sp-4)"}})
           (dom/text "Make sure Anki is running with the AnkiConnect plugin installed."))
         (dom/button
-          (dom/props {:style {:padding "8px 16px" :background "#2563eb" :color "white" :border "none"
-                              :border-radius "4px" :cursor "pointer" :font-size "14px"}})
+          (dom/props {:class "btn btn-primary" :style {:font-size "14px"}})
           (dom/text "Retry")
           (dom/On "click"
             (fn [_]
@@ -135,9 +134,7 @@
               (helpers/run-fetch-config! conn))
             nil))
         (dom/button
-          (dom/props {:style {:padding "8px 16px" :background "#f8f9fa" :color "#333"
-                              :border "1px solid #ccc" :border-radius "4px" :cursor "pointer"
-                              :font-size "14px" :margin-left "8px"}})
+          (dom/props {:class "btn btn-secondary" :style {:font-size "14px" :margin-left "var(--sp-2)"}})
           (dom/text "Cancel")
           (dom/On "click" (fn [_] (reset! !show-modal false)) nil))))))
 
@@ -153,9 +150,7 @@
       (dom/div
         ;; "Use Last Settings" button
         (dom/button
-          (dom/props {:style {:padding "6px 14px" :background "#f0f0f0" :color "#333"
-                              :border "1px solid #ccc" :border-radius "4px" :cursor "pointer"
-                              :font-size "14px" :margin-bottom "16px"}})
+          (dom/props {:class "btn btn-secondary" :style {:padding "6px 14px" :font-size "14px" :margin-bottom "var(--sp-4)"}})
           (dom/text "Use Last Settings")
           (let [click (dom/On "click" identity nil)
                 [?token _] (e/Token click)]
@@ -196,9 +191,7 @@
     (let [conn-status (e/watch (:!status conn))
           sync-phase (e/watch (:!phase sync))]
       (dom/div
-        (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
-                            :background "rgba(0,0,0,0.5)" :display "flex" :align-items "center"
-                            :justify-content "center" :z-index "1000"}
+        (dom/props {:class "modal-backdrop" :style {:background "rgba(0,0,0,0.5)"}
                     :tabindex "-1"})
         (dom/On "click" (fn [_] (when-not sync-phase (reset! !show-modal false))) nil)
         (dom/On "keydown"
@@ -207,16 +200,14 @@
               (reset! !show-modal false)))
           nil)
         (dom/div
-          (dom/props {:style {:background "white" :border-radius "8px" :padding "24px"
-                              :width "620px" :max-width "90%" :box-shadow "0 4px 6px rgba(0,0,0,0.1)"
-                              :max-height "80vh" :overflow-y "auto"}})
+          (dom/props {:class "modal-content modal-lg" :style {:width "620px" :max-height "80vh" :overflow-y "auto"}})
           (dom/On "click" (fn [e] (.stopPropagation e)) nil)
           (dom/h3 (dom/props {:style {:margin-top "0" :margin-bottom "20px"}})
             (dom/text "Anki Sync"))
           (cond
             (= conn-status :connecting)
             (dom/div
-              (dom/props {:style {:text-align "center" :padding "20px" :color "#666"}})
+              (dom/props {:style {:text-align "center" :padding "var(--sp-5)" :color "var(--color-text-secondary)"}})
               (dom/text "Connecting to Anki..."))
             (= conn-status :error)
             (AnkiSyncErrorPanel conn !show-modal)

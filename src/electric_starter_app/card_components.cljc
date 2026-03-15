@@ -30,18 +30,14 @@
 (e/defn DeleteCardButton [id !refresh]
   (e/client
     (dom/button
-      (dom/props {:style {:padding "2px 6px" :background "#dc3545" :color "white"
-                          :border "none" :border-radius "3px" :cursor "pointer"
-                          :font-size "12px" :line-height "1"}})
+      (dom/props {:class "btn-delete-x"})
       (dom/text "\u00D7")
       (let [click-event (dom/On "click" (fn [_] id) nil)
             [?token ?error] (e/Token click-event)]
         (dom/props {:disabled (some? ?token)
-                    :style {:padding "2px 6px"
-                            :background (if (some? ?token) "#999" "#dc3545")
-                            :color "white" :border "none" :border-radius "3px"
-                            :cursor (if (some? ?token) "not-allowed" "pointer")
-                            :font-size "12px" :line-height "1"}})
+                    :class "btn-delete-x"
+                    :style {:background (if (some? ?token) "#999" "var(--color-danger)")
+                            :cursor (if (some? ?token) "not-allowed" "pointer")}})
         (when ?error
           (dom/div
             (dom/props {:style {:color "red" :font-size "11px"}})
@@ -79,7 +75,7 @@
         ;; Sync indicator
         (dom/td
           (dom/props {:style {:padding "6px 4px" :width "24px" :text-align "center"
-                              :border-bottom "1px solid #e0e0e0" :font-size "10px"}
+                              :border-bottom "1px solid var(--color-border)" :font-size "10px"}
                       :title (case sync-st
                                :unsynced "Not synced to Anki"
                                :synced (str "Synced to Anki")
@@ -89,31 +85,31 @@
                       :synced "\u25CF"
                       :modified "\u25CF"))
           (dom/props {:style {:color (case sync-st
-                                       :unsynced "#f59e0b"
-                                       :synced "#22c55e"
+                                       :unsynced "var(--color-warning)"
+                                       :synced "var(--color-success)"
                                        :modified "#eab308")}}))
         ;; Front column
         (dom/td
           (dom/props {:style {:padding "6px 8px"
-                              :border-bottom "1px solid #e0e0e0"}})
+                              :border-bottom "1px solid var(--color-border)"}})
           (dom/text (if (= kind "basic") question cloze)))
         ;; Back column
         (dom/td
           (dom/props {:style {:padding "6px 8px"
-                              :border-bottom "1px solid #e0e0e0"}})
+                              :border-bottom "1px solid var(--color-border)"}})
           (dom/text (if (= kind "basic") (or answer "") "")))
         ;; Kind column
         (dom/td
           (dom/props {:style {:padding "6px 8px" :width "60px" :font-size "12px"
-                              :border-bottom "1px solid #e0e0e0"}})
+                              :border-bottom "1px solid var(--color-border)"}})
           (dom/text kind))
         ;; Edit column
         (dom/td
           (dom/props {:style {:padding "6px 4px" :width "40px" :text-align "center"
-                              :border-bottom "1px solid #e0e0e0"}})
+                              :border-bottom "1px solid var(--color-border)"}})
           (dom/button
-            (dom/props {:style {:padding "2px 6px" :background "#2563eb" :color "white"
-                                :border "none" :border-radius "3px" :cursor "pointer"
+            (dom/props {:style {:padding "2px 6px" :background "var(--color-primary)" :color "white"
+                                :border "none" :border-radius "var(--radius-sm)" :cursor "pointer"
                                 :font-size "12px"}})
             (dom/text "\u270E")
             (dom/On "click" (fn [_]
@@ -123,5 +119,5 @@
         ;; Delete column
         (dom/td
           (dom/props {:style {:padding "6px 4px" :width "40px" :text-align "center"
-                              :border-bottom "1px solid #e0e0e0"}})
+                              :border-bottom "1px solid var(--color-border)"}})
           (DeleteCardButton id !refresh))))))

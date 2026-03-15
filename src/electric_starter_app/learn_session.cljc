@@ -27,8 +27,7 @@
 (e/defn DismissButton [topic-type topic-id !queue-idx]
   (e/client
     (dom/button
-      (dom/props {:style {:padding "4px 10px" :background "transparent" :border "1px solid #ccc"
-                          :border-radius "4px" :cursor "pointer" :font-size "12px" :color "#888"}
+      (dom/props {:class "btn btn-sm btn-secondary" :style {:padding "4px 10px" :background "transparent" :color "var(--color-text-secondary)"}
                   :title "Remove from review queue (keep content)"})
       (dom/text "Dismiss")
       (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
@@ -47,7 +46,7 @@
       (dom/div
         (dom/props {:style {:display "flex" :align-items "center" :justify-content "center"
                             :gap "12px" :padding "6px 16px" :flex-shrink "0"
-                            :border-top "1px solid #e0e0e0"}})
+                            :border-top "1px solid var(--color-border)"}})
 
         ;; Postpone toggle + input
         (if show-postpone
@@ -57,15 +56,15 @@
               (dom/props {:type "number" :min "1" :max "365"
                           :value (e/watch !postpone-days)
                           :style {:width "60px" :padding "4px 8px" :font-size "14px"
-                                  :border "1px solid #ccc" :border-radius "4px"}})
+                                  :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"}})
+
               (dom/On "input" (fn [e] (reset! !postpone-days (-> e .-target .-value))) nil))
             (dom/span
-              (dom/props {:style {:font-size "13px" :color "#666"}})
+              (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
               (dom/text "days"))
             (dom/button
-              (dom/props {:style {:padding "6px 16px" :background "#2563eb" :color "white"
-                                  :border "none" :border-radius "6px" :cursor "pointer"
-                                  :font-size "14px" :font-weight "600"}})
+              (dom/props {:class "btn btn-primary" :style {:padding "6px 16px"}})
+
               (dom/text "Go")
               (let [event (dom/On "click"
                             (fn [_]
@@ -82,24 +81,22 @@
                   (token)
                   (swap! !queue-idx inc))))
             (dom/button
-              (dom/props {:style {:padding "6px 12px" :background "#f0f0f0" :border "1px solid #ccc"
-                                  :border-radius "4px" :cursor "pointer" :font-size "13px"}})
+              (dom/props {:class "btn btn-sm btn-secondary" :style {:padding "6px 12px"}})
+
               (dom/text "Cancel")
               (dom/On "click" (fn [_] (reset! !show-postpone false)) nil)))
 
           ;; Collapsed postpone button
           (dom/button
-            (dom/props {:style {:padding "8px 20px" :background "#f0f0f0" :color "#333"
-                                :border "1px solid #ccc" :border-radius "6px" :cursor "pointer"
-                                :font-size "14px"}})
+            (dom/props {:class "btn btn-secondary" :style {:padding "8px 20px"}})
+
             (dom/text "Postpone")
             (dom/On "click" (fn [_] (reset! !show-postpone true)) nil)))
 
         ;; Next button
         (dom/button
-          (dom/props {:style {:padding "8px 28px" :background "#2563eb" :color "white"
-                              :border "none" :border-radius "6px" :cursor "pointer"
-                              :font-size "15px" :font-weight "600"}})
+          (dom/props {:class "btn btn-primary" :style {:padding "8px 28px" :font-size "15px" :font-weight "600"}})
+
           (dom/text "Next")
           (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
                 [?token _error] (e/Token event)]
@@ -122,13 +119,11 @@
           type-color (cond is-doc "#dcfce7" (= topic-type "extract") "#44C2FF" :else "#e0f2fe")]
 
       (dom/div
-        (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
-                            :padding "4px 12px" :flex-shrink "0"
-                            :border-bottom "1px solid #e0e0e0"}})
+        (dom/props {:class "header-bar" :style {:gap "8px"}})
         ;; Back to Learn
         (dom/button
-          (dom/props {:style {:padding "4px 12px" :background "#f0f0f0" :border "1px solid #ccc"
-                              :border-radius "4px" :cursor "pointer" :font-size "13px"}})
+          (dom/props {:class "btn btn-sm btn-secondary"})
+
           (dom/text "\u2190 Back to Learn")
           (dom/On "click" (fn [_] (reset! !queue-idx 0) (reset! !mode :overview)) nil))
 
@@ -141,7 +136,7 @@
             (dom/props {:style {:color "#555" :font-size "13px"}})
             (dom/text filename))
           (dom/span
-            (dom/props {:style {:color "#2563eb" :font-size "13px" :cursor "pointer"
+            (dom/props {:style {:color "var(--color-primary)" :font-size "13px" :cursor "pointer"
                                 :text-decoration "underline"}
                         :title "View source PDF page"})
             (dom/text (str filename "  p." page-num))
@@ -151,20 +146,19 @@
 
         ;; Type badge
         (dom/span
-          (dom/props {:style {:padding "2px 8px" :border-radius "4px" :font-size "11px"
-                              :font-weight "600" :background type-color}})
+          (dom/props {:class "type-badge" :style {:padding "2px 8px" :background type-color}})
           (dom/text type-label))
 
         ;; Priority — inline input (e/for-by isolates the frame)
         (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "12px" :color "#888"}
+          (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "12px" :color "var(--color-text-secondary)"}
                       :title "Priority (0=highest, 100=lowest)"})
           (dom/text "Priority")
           (e/for-by identity [_k [topic-id]]
             (dom/input
               (dom/props {:type "number" :min "0" :max "100"
                           :style {:width "48px" :font-size "12px" :padding "2px 4px"
-                                  :border "1px solid #ddd" :border-radius "3px" :text-align "center"}})
+                                  :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)" :text-align "center"}})
               (set! (.-value dom/node) (str priority))
               (let [change-event (dom/On "change" #(-> % .-target .-value js/parseInt) nil)
                     [?token _] (e/Token change-event)]
@@ -174,7 +168,7 @@
 
         ;; Counter
         (dom/span
-          (dom/props {:style {:margin-left "auto" :color "#888" :font-size "13px"}})
+          (dom/props {:style {:margin-left "auto" :color "var(--color-text-secondary)" :font-size "13px"}})
           (dom/text (str (inc idx) " / " total)))))))
 
 (e/defn LearnSession [user-id enc-key queue-vec !queue-idx !mode !refresh !nav-target navigate-to-extract! view-source! llm-enabled?]
@@ -190,18 +184,17 @@
             (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
                                 :align-items "center" :justify-content "center" :gap "16px"}})
             (dom/div
-              (dom/props {:style {:font-size "24px" :color "#444"}})
+              (dom/props {:style {:font-size "24px" :color "var(--color-text-primary)"}})
               (dom/text "All caught up!"))
             (dom/div
-              (dom/props {:style {:font-size "14px" :color "#888"}})
+              (dom/props {:style {:font-size "14px" :color "var(--color-text-secondary)"}})
               (dom/text (str "Reviewed " total " topic" (when (not= total 1) "s") ".")))
             (dom/div
-              (dom/props {:style {:font-size "13px" :color "#aaa" :margin-top "4px"}})
+              (dom/props {:style {:font-size "13px" :color "var(--color-text-hint)" :margin-top "4px"}})
               (dom/text "Return to Overview to browse your topics."))
             (dom/button
-              (dom/props {:style {:padding "10px 28px" :background "#2563eb" :color "white"
-                                  :border "none" :border-radius "6px" :cursor "pointer"
-                                  :font-size "15px" :font-weight "600"}})
+              (dom/props {:class "btn btn-primary" :style {:padding "10px 28px" :font-size "15px" :font-weight "600"}})
+
               (dom/text "Back to Overview")
               (let [event (dom/On "click" (fn [_] :back) nil)
                     [?token _error] (e/Token event)]

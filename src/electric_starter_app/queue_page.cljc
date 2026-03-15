@@ -112,13 +112,13 @@
                              ["Total topics" (:total summary)]
                              ["Dismissed" (:dismissed summary)]]]
         (dom/div
-          (dom/props {:style {:flex "1" :padding "12px" :background "#f9fafb"
-                              :border-radius "6px" :text-align "center"}})
+          (dom/props {:style {:flex "1" :padding "12px" :background "var(--color-bg-subtle)"
+                              :border-radius "var(--radius-md)" :text-align "center"}})
           (dom/div
             (dom/props {:style {:font-size "24px" :font-weight "700" :color "#222"}})
             (dom/text (second item)))
           (dom/div
-            (dom/props {:style {:font-size "12px" :color "#888" :margin-top "4px"}})
+            (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)" :margin-top "4px"}})
             (dom/text (first item))))))))
 
 (e/defn ReviewCalendar [calendar-data]
@@ -133,9 +133,9 @@
                           (zero? cnt) "#f0f0f0"
                           (<= cnt 3) "#bfdbfe"
                           (<= cnt 7) "#60a5fa"
-                          :else "#2563eb")]
+                          :else "var(--color-primary)")]
               (dom/div
-                (dom/props {:style {:width "20px" :height "20px" :border-radius "3px"
+                (dom/props {:style {:width "20px" :height "20px" :border-radius "var(--radius-sm)"
                                     :background color}
                             :title (:label cell)})))))))))
 
@@ -149,11 +149,12 @@
         (dom/table
           (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :table-layout "fixed" :flex-shrink "0"}})
           (dom/thead
-            (dom/tr
-              (dom/th (dom/props {:style {:text-align "center" :padding "8px 6px" :border-bottom "2px solid #e0e0e0" :font-weight "600" :color "#444" :width "50px"}}) (dom/text "Pri"))
-              (dom/th (dom/props {:style {:text-align "center" :padding "8px 6px" :border-bottom "2px solid #e0e0e0" :font-weight "600" :color "#444" :width "60px"}}) (dom/text "Type"))
-              (dom/th (dom/props {:style {:text-align "center" :padding "8px 6px" :border-bottom "2px solid #e0e0e0" :font-weight "600" :color "#444" :width "80px"}}) (dom/text "Due"))
-              (dom/th (dom/props {:style {:text-align "left" :padding "8px 10px" :border-bottom "2px solid #e0e0e0" :font-weight "600" :color "#444"}}) (dom/text "Title")))))
+            (let [th-base {:padding "8px 6px" :border-bottom "2px solid var(--color-border)" :font-weight "600" :color "var(--color-text-primary)"}]
+              (dom/tr
+                (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "50px"})}) (dom/text "Pri"))
+                (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "60px"})}) (dom/text "Type"))
+                (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "80px"})}) (dom/text "Due"))
+                (dom/th (dom/props {:style (merge th-base {:text-align "left" :padding "8px 10px"})}) (dom/text "Title"))))))
 
         ;; Scrollable body with virtual scroll
         (let [row-height 36]
@@ -196,8 +197,7 @@
                           (dom/td
                             (dom/props {:style {:padding "4px 6px" :text-align "center" :width "60px"}})
                             (dom/span
-                              (dom/props {:style {:padding "1px 6px" :border-radius "3px" :font-size "10px"
-                                                  :font-weight "600" :background badge-color}})
+                              (dom/props {:class "type-badge" :style {:background badge-color}})
                               (dom/text badge-text)))
                           ;; Due
                           (dom/td
@@ -222,7 +222,7 @@
               (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))
 
       (dom/p
-        (dom/props {:style {:color "#888" :font-size "14px" :margin-top "24px"}})
+        (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px" :margin-top "24px"}})
         (dom/text "No topics in your queue yet. Import a document from the Documents tab \u2014 it will appear here automatically.")))))
 
 (e/defn QueuePage [user-id !nav-target navigate!]

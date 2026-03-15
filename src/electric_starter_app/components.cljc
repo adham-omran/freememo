@@ -3,7 +3,8 @@
   (:require
    [clojure.string :as string]
    [hyperfiddle.electric3 :as e]
-   [hyperfiddle.electric-dom3 :as dom]))
+   [hyperfiddle.electric-dom3 :as dom]
+   ))
 
 (e/defn Typeahead
   "Text input with filtered dropdown. Writes selected/typed value to !atom.
@@ -28,8 +29,8 @@
           (dom/props {:type "text"
                       :value (if (some? search) search (or value ""))
                       :placeholder placeholder
-                      :style {:padding "4px 8px" :border "1px solid #ccc" :border-radius "4px"
-                              :font-size "15px" :width "100%" :box-sizing "border-box"}})
+                      :class "input"
+                      :style {:font-size "15px" :width "100%"}})
           (dom/On "focus" (fn [_] (reset! !atom nil)
                                   (reset! !search "")
                                   (reset! !active-idx -1)) nil)
@@ -65,16 +66,16 @@
         (when (seq filtered)
           (dom/div
             (dom/props {:style {:position "absolute" :top "100%" :left "0" :right "0"
-                                :background "white" :border "1px solid #ccc"
-                                :border-radius "4px" :z-index "100"
+                                :background "var(--color-bg-card)" :border "1px solid var(--color-border)"
+                                :border-radius "var(--radius-sm)" :z-index "100"
                                 :box-shadow "0 2px 4px rgba(0,0,0,0.15)"}})
             (e/for [[i item] (e/diff-by {} (map-indexed vector filtered))]
               (dom/div
                 (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "15px"
                                     :background (cond
                                                   (= i active-idx) "#d0e8ff"
-                                                  (odd? i)         "#f9f9f9"
-                                                  :else            "white")}})
+                                                  (odd? i)         "var(--color-bg-subtle)"
+                                                  :else            "var(--color-bg-card)")}})
                 (dom/text item)
                 (dom/On "mousemove" (fn [_] (reset! !active-idx i)) nil)
                 (dom/On "mousedown"

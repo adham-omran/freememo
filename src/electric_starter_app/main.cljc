@@ -44,8 +44,8 @@
                   tab-style (fn [key]
                               {:padding "6px 16px" :border "none" :background "none" :cursor "pointer"
                                :font-size "14px" :font-weight (if (= active-tab key) "600" "400")
-                               :color (if (= active-tab key) "#2563eb" "#666")
-                               :border-bottom (if (= active-tab key) "2px solid #2563eb" "2px solid transparent")
+                               :color (if (= active-tab key) "var(--color-primary)" "var(--color-text-secondary)")
+                               :border-bottom (if (= active-tab key) "2px solid var(--color-primary)" "2px solid transparent")
                                :margin-bottom "-2px"})
                   !nav-target (atom nil)
                   navigate! (fn [tab]
@@ -59,12 +59,12 @@
 
               ;; Combined title + tab bar (single row)
               (dom/div
-                (dom/props {:style {:display "flex" :align-items "center" :border-bottom "2px solid #e0e0e0" :flex-shrink "0"}})
+                (dom/props {:style {:display "flex" :align-items "center" :border-bottom "2px solid var(--color-border)" :flex-shrink "0"}})
 
                 ;; Inline title
                 (dom/span
                   (dom/props {:style {:font-size "16px" :font-weight "700" :padding "6px 16px"
-                                      :color "#111" :cursor "pointer" :white-space "nowrap"}})
+                                      :color "var(--color-text-primary)" :cursor "pointer" :white-space "nowrap"}})
                   (dom/text "FreeMemo")
                   (dom/On "click" (fn [_] (navigate! :home)) nil))
 
