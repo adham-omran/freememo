@@ -29,9 +29,14 @@
                              first
                              :documents/filename)))]
 
+          ;; Clear stale dirty-html from other pages/components on mount
+          (e/client (reset! editor/!dirty-html nil))
+
           ;; Auto-save dirty edits to content_items table
+          ;; Guard: only save when the edit belongs to THIS extract (not stale page-level edits)
           (let [dirty-data (e/watch editor/!dirty-html)]
-            (when (some? dirty-data)
+            (when (and (some? dirty-data)
+                       (= (:content-item-id dirty-data) content-item-id))
               (e/server
                 (e/Offload
                   #(try
@@ -94,7 +99,8 @@
                                     :display "flex" :flex-direction "column"}})
                 (RichTextEditorComponent {:initial-html content
                                           :page-number page-num
-                                          :doc-id doc-id})))
+                                          :doc-id doc-id
+                                          :content-item-id content-item-id})))
 
             ;; Draggable divider
             (dom/div

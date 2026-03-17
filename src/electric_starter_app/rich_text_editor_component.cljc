@@ -7,10 +7,10 @@
 
 (e/defn RichTextEditorComponent
   "Renders a rich text editor. Pure imperative widget — no callbacks, no reactive state.
-   Props: {:initial-html <string> :page-number <int> :doc-id <int>}
+   Props: {:initial-html <string> :page-number <int> :doc-id <int> :content-item-id <int|nil>}
    Always (re)creates the editor on the current DOM node. init-editor! is idempotent
    (destroys previous instance first)."
-  [{:keys [initial-html page-number doc-id]}]
+  [{:keys [initial-html page-number doc-id content-item-id]}]
   (e/client
     (dom/div
       (dom/props {:class "quill-editor-wrapper"
@@ -23,7 +23,8 @@
 
       (let [node dom/node
             timer-id (js/setTimeout
-                       (fn [] (editor/init-editor! node initial-html page-number doc-id))
+                       (fn [] (editor/init-editor! node initial-html page-number doc-id
+                                :content-item-id content-item-id))
                        0)]
         ;; Cleanup on unmount — cancel pending init and destroy editor
         (e/on-unmount
