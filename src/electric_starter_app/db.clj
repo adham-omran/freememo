@@ -495,6 +495,13 @@
                  :returning [:id :username]})))
 
 ;; Content item queries
+
+(defn sanitize-utf8
+  "Re-encode string through UTF-8 to strip invalid byte sequences."
+  [s]
+  (when s
+    (String. (.getBytes (str s) "UTF-8") "UTF-8")))
+
 (defn save-content-item
   ([document-id page-number kind content]
    (save-content-item document-id page-number kind content nil))
@@ -504,7 +511,7 @@
                   :values [(cond-> {:document_id document-id
                                     :page_number page-number
                                     :kind kind
-                                    :content content}
+                                    :content (sanitize-utf8 content)}
                              parent-content-item-id
                              (assoc :parent_content_item_id parent-content-item-id))]
                   :returning [:id]}))))
@@ -524,7 +531,7 @@
 (defn update-content-item-content [id content]
   (jdbc/execute-one! ds
     (sql/format {:update :content_items
-                 :set {:content content}
+                 :set {:content (sanitize-utf8 content)}
                  :where [:= :id id]})))
 
 (defn get-all-content-items
@@ -606,24 +613,28 @@
 (defn get-learning-queue
   "Unified queue of due documents and extracts for incremental reading."
   [user-id]
-  (jdbc/execute! ds
-    ["SELECT 'document' AS topic_type, d.id, d.id AS document_id, 0 AS page_number,
-             d.priority, d.next_review_at, d.interval_days, d.a_factor, d.review_count,
-             NULL AS content, d.filename
-      FROM documents d
-      WHERE d.user_id = ?
-        AND (d.next_review_at <= NOW() OR d.next_review_at IS NULL)
-        AND (d.dismissed = false OR d.dismissed IS NULL)
-      UNION ALL
-      SELECT 'extract', ci.id, ci.document_id, ci.page_number, ci.priority,
-             ci.next_review_at, ci.interval_days, ci.a_factor, ci.review_count,
-             ci.content, d.filename
-      FROM content_items ci JOIN documents d ON ci.document_id = d.id
-      WHERE d.user_id = ?
-        AND (ci.next_review_at <= NOW() OR ci.next_review_at IS NULL)
-        AND (ci.dismissed = false OR ci.dismissed IS NULL)
-      ORDER BY priority ASC, next_review_at ASC NULLS FIRST"
-     user-id user-id]))
+  (try
+    (jdbc/execute! ds
+      ["SELECT 'document' AS topic_type, d.id, d.id AS document_id, 0 AS page_number,
+               d.priority, d.next_review_at, d.interval_days, d.a_factor, d.review_count,
+               NULL AS content, d.filename
+        FROM documents d
+        WHERE d.user_id = ?
+          AND (d.next_review_at <= NOW() OR d.next_review_at IS NULL)
+          AND (d.dismissed = false OR d.dismissed IS NULL)
+        UNION ALL
+        SELECT 'extract', ci.id, ci.document_id, ci.page_number, ci.priority,
+               ci.next_review_at, ci.interval_days, ci.a_factor, ci.review_count,
+               ci.content, d.filename
+        FROM content_items ci JOIN documents d ON ci.document_id = d.id
+        WHERE d.user_id = ?
+          AND (ci.next_review_at <= NOW() OR ci.next_review_at IS NULL)
+          AND (ci.dismissed = false OR ci.dismissed IS NULL)
+        ORDER BY priority ASC, next_review_at ASC NULLS FIRST"
+       user-id user-id])
+    (catch Exception e
+      (println "ERROR get-learning-queue:" (.getMessage e))
+      [])))
 
 (defn get-learning-queue-count
   "Count of due topics without fetching content."
@@ -660,19 +671,23 @@
 (defn get-full-queue
   "Get ALL topics (documents + extracts) ordered by priority. No date filter."
   [user-id]
-  (jdbc/execute! ds
-    ["SELECT 'document' AS topic_type, d.id, d.filename AS title, d.priority,
-             d.next_review_at, d.interval_days, d.dismissed,
-             d.source_type, NULL AS content
-      FROM documents d WHERE d.user_id = ?
-      UNION ALL
-      SELECT 'extract', ci.id, d.filename AS title, ci.priority,
-             ci.next_review_at, ci.interval_days, ci.dismissed,
-             NULL AS source_type, SUBSTRING(ci.content FROM 1 FOR 100) AS content
-      FROM content_items ci JOIN documents d ON ci.document_id = d.id
-      WHERE d.user_id = ?
-      ORDER BY dismissed ASC NULLS FIRST, priority ASC, next_review_at ASC NULLS FIRST"
-     user-id user-id]))
+  (try
+    (jdbc/execute! ds
+      ["SELECT 'document' AS topic_type, d.id, d.filename AS title, d.priority,
+               d.next_review_at, d.interval_days, d.dismissed,
+               d.source_type, NULL AS content
+        FROM documents d WHERE d.user_id = ?
+        UNION ALL
+        SELECT 'extract', ci.id, d.filename AS title, ci.priority,
+               ci.next_review_at, ci.interval_days, ci.dismissed,
+               NULL AS source_type, SUBSTRING(ci.content FROM 1 FOR 100) AS content
+        FROM content_items ci JOIN documents d ON ci.document_id = d.id
+        WHERE d.user_id = ?
+        ORDER BY dismissed ASC NULLS FIRST, priority ASC, next_review_at ASC NULLS FIRST"
+       user-id user-id])
+    (catch Exception e
+      (println "ERROR get-full-queue:" (.getMessage e))
+      [])))
 
 (defn get-review-calendar
   "Get topic counts per day for the next N days."
@@ -753,16 +768,20 @@
 (defn get-dismissed-topics
   "Get all dismissed documents and extracts for a user."
   [user-id]
-  (jdbc/execute! ds
-    ["SELECT 'document' AS topic_type, d.id, d.filename AS title, d.uploaded_at
-      FROM documents d
-      WHERE d.user_id = ? AND d.dismissed = true
-      UNION ALL
-      SELECT 'extract', ci.id, SUBSTRING(ci.content FROM 1 FOR 100) AS title, ci.created_at AS uploaded_at
-      FROM content_items ci JOIN documents d ON ci.document_id = d.id
-      WHERE d.user_id = ? AND ci.dismissed = true
-      ORDER BY uploaded_at DESC"
-     user-id user-id]))
+  (try
+    (jdbc/execute! ds
+      ["SELECT 'document' AS topic_type, d.id, d.filename AS title, d.uploaded_at
+        FROM documents d
+        WHERE d.user_id = ? AND d.dismissed = true
+        UNION ALL
+        SELECT 'extract', ci.id, SUBSTRING(ci.content FROM 1 FOR 100) AS title, ci.created_at AS uploaded_at
+        FROM content_items ci JOIN documents d ON ci.document_id = d.id
+        WHERE d.user_id = ? AND ci.dismissed = true
+        ORDER BY uploaded_at DESC"
+       user-id user-id])
+    (catch Exception e
+      (println "ERROR get-dismissed-topics:" (.getMessage e))
+      [])))
 
 (defn restore-topic
   "Restore a dismissed topic back to the review queue."
