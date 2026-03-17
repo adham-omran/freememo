@@ -38,8 +38,9 @@
   "Initialize Quill editor in the given container with initial HTML.
    Destroys any existing editor first (singleton).
    Wires a debounced text-change listener that sets !dirty-html on user edits.
-   page-number and doc-id are tagged onto dirty-html so auto-save targets the correct page."
-  [container initial-html page-number doc-id]
+   page-number and doc-id are tagged onto dirty-html so auto-save targets the correct page.
+   content-item-id (optional) tags edits as extract-level so page auto-save ignores them."
+  [container initial-html page-number doc-id & {:keys [content-item-id]}]
   #?(:clj nil
      :cljs
      (when (and container (.-Quill js/window))
@@ -69,7 +70,7 @@
          (when (seq cleaned-html)
            (.setContents editor delta))
          ;; Debounced text-change: only on user edits, sets !dirty-html after 500ms
-         ;; Stores a map with :html, :page, :doc-id so auto-save targets the correct page
+         ;; Stores a map with :html, :page, :doc-id, :content-item-id so auto-save targets the correct entity
          (.on editor "text-change"
               (fn [_delta _oldDelta source]
                 (when (= source "user")
@@ -81,10 +82,12 @@
                         (let [^js root (.-root editor)]
                           (reset! !dirty-html {:html (.-innerHTML root)
                                                :page page-number
-                                               :doc-id doc-id})))
+                                               :doc-id doc-id
+                                               :content-item-id content-item-id})))
                       500)))))
          (reset! !editor-state {:editor editor :container container
-                               :page-number page-number :doc-id doc-id})
+                               :page-number page-number :doc-id doc-id
+                               :content-item-id content-item-id})
          editor))))
 
 (defn get-current-html!
@@ -128,7 +131,7 @@
   [index length]
   #?(:clj nil
      :cljs
-     (when-let [{:keys [editor page-number doc-id]} @!editor-state]
+     (when-let [{:keys [editor page-number doc-id content-item-id]} @!editor-state]
        (.formatText ^js editor index length
                     (clj->js {:background "#44C2FF"})
                     "api")
@@ -136,4 +139,5 @@
        (let [^js root (.-root editor)]
          (reset! !dirty-html {:html (.-innerHTML root)
                               :page page-number
-                              :doc-id doc-id})))))
+                              :doc-id doc-id
+                              :content-item-id content-item-id})))))

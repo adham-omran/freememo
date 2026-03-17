@@ -173,8 +173,10 @@
                 extracting-pages (e/server (e/watch !extracting-pages))
                 ocr-errors (e/server (e/watch !ocr-errors))
                 ;; Shared server data — hoisted so both editor and bottom panel can use them
+                ;; Guard: only save page-level edits (content-item-id nil), not extract-level
                 dirty-data (e/watch editor/!dirty-html)
-                save-result (when (some? dirty-data)
+                save-result (when (and (some? dirty-data)
+                                       (nil? (:content-item-id dirty-data)))
                               (e/server
                                 (e/Offload
                                   #(page/save-page-html-impl
