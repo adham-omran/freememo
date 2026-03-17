@@ -232,10 +232,10 @@
             (dom/text "Extract")
             (dom/On "click"
               (fn [_]
-                (when-let [{:keys [text index length]} (editor/get-selection!)]
-                  (when (seq text)
+                (when-let [{:keys [html index length]} (editor/get-selection-html!)]
+                  (when (seq html)
                     (editor/highlight-range! index length)
-                    (swap! !extract-state assoc :pending text :error nil))))
+                    (swap! !extract-state assoc :pending html :error nil))))
               nil))
           (when (:error extract-state)
             (dom/span

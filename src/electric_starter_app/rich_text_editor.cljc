@@ -125,6 +125,28 @@
             :index  (.-index sel)
             :length (.-length sel)})))))
 
+(defn get-selection-html!
+  "Get selected HTML and range from Quill. Returns nil if no selection.
+   Creates a temporary Quill instance to convert Delta → HTML."
+  []
+  #?(:clj nil
+     :cljs
+     (when-let [{:keys [editor]} @!editor-state]
+       (let [^js ed editor
+             ^js sel (.getSelection ed)]
+         (when (and sel (> (.-length sel) 0))
+           (let [idx (.-index sel)
+                 len (.-length sel)
+                 ^js delta (.getContents ed idx len)
+                 ^js temp-div (js/document.createElement "div")
+                 ^js temp-quill (new (.-Quill js/window) temp-div)
+                 _ (.setContents temp-quill delta)
+                 html (.-innerHTML (.-root temp-quill))]
+             {:html html
+              :text (.getText ed idx len)
+              :index idx
+              :length len}))))))
+
 (defn highlight-range!
   "Apply highlight formatting to a range in the Quill editor (SuperMemo extract blue).
    Also pushes the updated HTML to !dirty-html so the highlight is persisted."
