@@ -290,13 +290,19 @@
                             (when (not extracting?)
                               (reset! !extracting-client? false))))))) ;; end when llm-enabled?
 
-                    ;; OCR error display
+                    ;; OCR error display — auto-dismiss after 3 seconds
                     (when-let [ocr-err (get ocr-errors [selected-doc current-pdf-page])]
-                      (dom/div
-                        (dom/props {:style {:padding "6px 10px" :background "#fef2f2" :border "1px solid #fecaca"
-                                            :border-radius "var(--radius-sm)" :font-size "13px" :color "#991b1b"
-                                            :margin-top "var(--sp-1)"}})
-                        (dom/text ocr-err)))
+                      (let [!show (atom true)
+                            show (e/watch !show)]
+                        (dom/div
+                          (dom/props {:style {:padding "6px 10px" :background "#fef2f2" :border "1px solid #fecaca"
+                                              :border-radius "var(--radius-sm)" :font-size "13px" :color "#991b1b"
+                                              :margin-top "var(--sp-1)"
+                                              :opacity (if show "1" "0")
+                                              :transition "opacity 0.5s ease-out"}})
+                          (dom/text ocr-err)
+                          (e/client
+                            (js/setTimeout (fn [] (reset! !show false)) 3000)))))
 
                     ;; Save status indicator with fade-out
                     (when (some? dirty-data)
