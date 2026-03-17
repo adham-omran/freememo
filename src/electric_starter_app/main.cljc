@@ -59,7 +59,8 @@
 
               ;; Combined title + tab bar (single row)
               (dom/div
-                (dom/props {:style {:display "flex" :align-items "center" :border-bottom "2px solid var(--color-border)" :flex-shrink "0"}})
+                (dom/props {:class "tab-bar"
+                            :style {:display "flex" :align-items "center" :border-bottom "2px solid var(--color-border)" :flex-shrink "0"}})
 
                 ;; Inline title
                 (dom/span

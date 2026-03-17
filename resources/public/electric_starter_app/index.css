@@ -88,7 +88,7 @@ html, body {
 .btn-danger-fill:not(:disabled):hover { background: var(--color-danger-hover); }
 
 /* Small buttons */
-.btn-sm { padding: 4px 12px; font-size: 13px; }
+.btn-sm { padding: 4px 12px; font-size: 13px; white-space: nowrap; }
 
 /* Delete X button */
 .btn-delete-x {
@@ -192,6 +192,7 @@ html, body {
 .toolbar {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: var(--sp-2);
     padding: var(--sp-1) var(--sp-2);
     flex-shrink: 0;
@@ -294,4 +295,42 @@ input[type="number"]:not(.input):hover,
 select:not(.select):hover,
 textarea:hover {
     border-color: #999;
+}
+
+/* ── Tablet (≤1024px) ────────────────────────────────────────── */
+@media (max-width: 1024px) {
+    /* Tab bar: horizontal scroll instead of clip */
+    .tab-bar {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+    }
+    .tab-bar::-webkit-scrollbar { display: none; }
+
+    /* Quill toolbar: single scrollable row */
+    .ql-toolbar.ql-snow {
+        display: flex;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        padding: 4px !important;
+    }
+    .ql-toolbar .ql-formats {
+        margin-right: 8px !important;
+        flex-shrink: 0;
+    }
+}
+
+/* ── Mobile (≤640px) ─────────────────────────────────────────── */
+@media (max-width: 640px) {
+    .toolbar {
+        padding: 4px 6px;
+        gap: 6px;
+    }
+    .btn-sm {
+        padding: 4px 8px;
+        font-size: 12px;
+    }
+    .card { padding: var(--sp-3); }
+    .modal-content { padding: var(--sp-4); }
 }
