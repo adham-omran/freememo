@@ -89,15 +89,15 @@
               (and new-user? (not configured?)) "Set Up API Key"
               new-user?                          "Import Your First Document"
               has-due?                           "Continue Learning"
-              :else                              "Browse Documents"))
+              :else                              "Browse Library"))
           (dom/On "click"
             (fn [_]
               (navigate!
                 (cond
                   (and new-user? (not configured?)) :settings
-                  new-user?                          :pdf
+                  new-user?                          :import
                   has-due?                           :learn
-                  :else                              :pdf)))
+                  :else                              :library)))
             nil))
 
         ;; Secondary action link
@@ -108,13 +108,13 @@
               (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)" :cursor "pointer"
                                   :text-decoration "underline"}})
               (dom/text (if has-due? "or import more content" "or import more content"))
-              (dom/On "click" (fn [_] (navigate! :pdf)) nil))))
+              (dom/On "click" (fn [_] (navigate! :import)) nil))))
 
         ;; Section 3: Workflow Guide
         (dom/div
           (dom/props {:style {:margin-bottom "40px"}})
 
-          (e/for-by first [row [["Import"   "Add PDFs or web articles to your collection."    "Documents →" :pdf]
+          (e/for-by first [row [["Import"   "Add PDFs or web articles to your collection."    "Import →" :import]
                                 ["Read"     "Extract and structure content from your documents." "Learn →" :learn]
                                 ["Generate" "Create flashcards — basic, cloze, or reverse." "Learn →" :learn]
                                 ["Review"   "Spaced repetition schedules reviews. Sync to Anki when ready." "Queue →" :queue]]]

@@ -93,10 +93,14 @@
 (defn get-active-tab [user-id]
   (try
     (let [raw (db/get-setting user-id ACTIVE_TAB)
-          valid #{"home" "settings" "pdf" "learn"}]
+          valid #{"home" "settings" "library" "import" "learn" "queue"}]
       (if (valid raw)
         (keyword raw)
-        (if (= raw "workspace") :learn :home)))
+        (case raw
+          "pdf"       :library
+          "contents"  :library
+          "workspace" :learn
+          :home)))
     (catch Exception e
       (println "ERROR [get-active-tab]:" (.getMessage e))
       :home)))

@@ -3,15 +3,16 @@
             [hyperfiddle.electric-dom3 :as dom]
             [electric-starter-app.home-page :refer [HomePage]]
             [electric-starter-app.settings-page :refer [SettingsPage]]
-            [electric-starter-app.pdf-page :refer [PdfPage]]
+            [electric-starter-app.library-page :refer [LibraryPage]]
+            [electric-starter-app.import-page :refer [ImportPage]]
             [electric-starter-app.learn-page :refer [LearnPage]]
             [electric-starter-app.extract-page :refer [ExtractPage]]
-            [electric-starter-app.contents-page :refer [ContentsPage]]
             [electric-starter-app.queue-page :refer [QueuePage]]
             [electric-starter-app.login-page :refer [LoginPage]]
             #?(:clj [electric-starter-app.settings :as settings])))
 
 #?(:clj (defonce !settings-refresh (atom 0)))
+#?(:clj (defonce !library-refresh (atom 0)))
 
 (defn get-llm-enabled* [_refresh user-id]
   #?(:clj (settings/get-llm-enabled user-id)
@@ -80,14 +81,14 @@
                   (dom/On "click" (fn [_] (navigate! :learn)) nil))
 
                 (dom/button
-                  (dom/props {:style (tab-style :pdf)})
-                  (dom/text "Documents")
-                  (dom/On "click" (fn [_] (navigate! :pdf)) nil))
+                  (dom/props {:style (tab-style :library)})
+                  (dom/text "Library")
+                  (dom/On "click" (fn [_] (navigate! :library)) nil))
 
                 (dom/button
-                  (dom/props {:style (tab-style :contents)})
-                  (dom/text "Contents")
-                  (dom/On "click" (fn [_] (navigate! :contents)) nil))
+                  (dom/props {:style (tab-style :import)})
+                  (dom/text "Import")
+                  (dom/On "click" (fn [_] (navigate! :import)) nil))
 
                 (dom/button
                   (dom/props {:style (tab-style :queue)})
@@ -101,12 +102,12 @@
 
               ;; Tab content
               (dom/div
-                (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:extract :learn :contents :queue} active-tab) "hidden" "auto")}})
+                (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:extract :learn :library :queue} active-tab) "hidden" "auto")}})
                 (when (= active-tab :home) (HomePage navigate! user-id enc-key))
-                (when (= active-tab :contents) (ContentsPage user-id !nav-target navigate!))
+                (when (= active-tab :library) (LibraryPage user-id !nav-target navigate! !library-refresh))
+                (when (= active-tab :import) (ImportPage user-id !library-refresh))
                 (when (= active-tab :queue) (QueuePage user-id !nav-target navigate!))
                 (when (= active-tab :settings) (SettingsPage user-id username enc-key !settings-refresh))
-                (when (= active-tab :pdf) (PdfPage user-id !nav-target navigate!))
                 (when (= active-tab :learn) (LearnPage user-id enc-key !nav-target #(navigate! :extract) llm-enabled?))
                 (when (= active-tab :extract)
                   (ExtractPage user-id enc-key (:content-item-id (e/watch !nav-target)) navigate!
