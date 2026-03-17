@@ -57,6 +57,16 @@
                 (dom/text "Back to Learn")
                 (dom/On "click" (fn [_] (navigate! :learn)) nil))
               (dom/button
+                (dom/props {:class "btn btn-sm btn-secondary"
+                            :title "Remove from review queue (keep content)"})
+                (dom/text "Dismiss")
+                (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
+                      [?token _] (e/Token event)]
+                  (when-some [token ?token]
+                    (e/server (db/dismiss-topic "extract" content-item-id))
+                    (token)
+                    (navigate! :learn))))
+              (dom/button
                 (dom/props {:class "btn btn-sm btn-danger-fill" :style {:padding "4px 10px" :font-size "12px"}
                             :title "Delete this extract and its cards"})
                 (dom/text "Delete")

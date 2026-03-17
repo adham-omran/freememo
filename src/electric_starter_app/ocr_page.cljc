@@ -245,24 +245,7 @@
                               (token)))))
                       (dom/text "Done"))
 
-                    ;; Priority input
-                    (let [page-priority (e/server (db/get-page-priority selected-doc current-pdf-page))]
-                      (dom/label
-                        (dom/props {:style {:display "flex" :align-items "center" :gap "3px" :font-size "12px"}
-                                    :title "Page priority (0=highest, 100=lowest). Used to sort the reading queue."})
-                        (dom/text "P:")
-                        (e/for-by identity [_k [current-pdf-page]]
-                          (dom/input
-                            (dom/props {:type "number" :min "0" :max "100" :style {:width "52px" :font-size "13px" :padding "2px 4px"}})
-                            (set! (.-value dom/node) (str (or page-priority 50)))
-                            (let [change-event (dom/On "change" #(-> % .-target .-value js/parseInt) nil)
-                                  [?token _] (e/Token change-event)]
-                              (when-some [token ?token]
-                                (e/server (db/set-page-priority selected-doc current-pdf-page change-event))
-                                (e/server (swap! !refresh inc))
-                                (token)))))))
-
-                    (when llm-enabled?
+                    (when (and is-pdf llm-enabled?)
                       (let [extracting? (contains? extracting-pages [selected-doc current-pdf-page])
                             client-extracting? (e/client (e/watch !extracting-client?))
                             disabled? (or extracting? client-extracting?)]
