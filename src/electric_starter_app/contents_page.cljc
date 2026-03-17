@@ -4,14 +4,15 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    #?(:clj [electric-starter-app.db :as db])
-   #?(:clj [electric-starter-app.pdf :as pdf])))
+   #?(:clj [electric-starter-app.pdf :as pdf])
+   #?(:clj [clojure.string :as str])))
 
-;; Server wrappers
-(defn get-documents* [user-id]
+;; Server wrappers — _refresh param creates Electric reactive dependency
+(defn get-documents* [_refresh user-id]
   #?(:clj (vec (:documents (pdf/list-pdfs user-id)))
      :cljs nil))
 
-(defn get-tree-items* [user-id]
+(defn get-tree-items* [_refresh user-id]
   #?(:clj (vec (db/get-knowledge-tree user-id))
      :cljs nil))
 
@@ -125,7 +126,34 @@
           (e/for-by :content_items/id [item root-items]
             (ExtractNode item children-map 1 !nav-target navigate!)))))))
 
-;; Main contents page
+#?(:clj
+   (defn filter-tree-docs [docs filter-text]
+     (if (or (nil? filter-text) (str/blank? filter-text))
+       docs
+       (let [q (str/lower-case (str/trim filter-text))]
+         (filterv #(str/includes? (str/lower-case (or (:documents/filename %) "")) q) docs)))))
+
+;; Document tree view — used by LibraryPage
+;; Receives !refresh and filter-text from parent
+(e/defn DocumentTreeView [user-id !nav-target navigate! !refresh filter-text]
+  (e/client
+    (e/server
+      (let [refresh (e/watch !refresh)
+            all-documents (get-documents* refresh user-id)
+            documents (filter-tree-docs all-documents filter-text)
+            all-items (get-tree-items* refresh user-id)]
+        (e/client
+          (let [items-by-doc (group-by :content_items/document_id all-items)]
+            (if (seq documents)
+              (dom/div
+                (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
+                (e/for-by :documents/id [doc documents]
+                  (DocumentNode doc (get items-by-doc (:documents/id doc)) !nav-target navigate!)))
+              (dom/p
+                (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
+                (dom/text "No content yet. Import content from the Import tab.")))))))))
+
+;; Legacy ContentsPage — no longer routed, kept for reference
 (e/defn ContentsPage [user-id !nav-target navigate!]
   (e/client
     (dom/div
@@ -135,8 +163,8 @@
         (dom/props {:style {:margin "0 0 16px 0" :font-size "20px"}})
         (dom/text "Contents"))
 
-      (let [documents (e/server (get-documents* user-id))
-            all-items (e/server (get-tree-items* user-id))
+      (let [documents (e/server (get-documents* 0 user-id))
+            all-items (e/server (get-tree-items* 0 user-id))
             items-by-doc (group-by :content_items/document_id all-items)]
         (if (seq documents)
           (dom/div
@@ -145,4 +173,4 @@
               (DocumentNode doc (get items-by-doc (:documents/id doc)) !nav-target navigate!)))
           (dom/p
             (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
-            (dom/text "No content yet. Import a document from the Documents tab, then extract content items for study.")))))))
+            (dom/text "No content yet. Import a document, then extract content items for study.")))))))
