@@ -688,7 +688,7 @@
         UNION ALL
         SELECT 'extract', ci.id, d.filename AS title, ci.priority,
                ci.next_review_at, ci.interval_days, ci.status,
-               NULL AS source_type, SUBSTRING(ci.content FROM 1 FOR 100) AS content
+               NULL AS source_type, SUBSTRING(ci.content FROM 1 FOR 300) AS content
         FROM content_items ci JOIN documents d ON ci.document_id = d.id
         WHERE d.user_id = ?
        ) q ORDER BY CASE WHEN status = 'active' OR status IS NULL THEN 0 WHEN status = 'done' THEN 1 ELSE 2 END, priority ASC, next_review_at ASC NULLS FIRST"
@@ -792,7 +792,7 @@
         FROM documents d
         WHERE d.user_id = ? AND d.status IN ('dismissed', 'done')
         UNION ALL
-        SELECT 'extract', ci.id, SUBSTRING(ci.content FROM 1 FOR 100) AS title, ci.created_at AS uploaded_at, ci.status
+        SELECT 'extract', ci.id, SUBSTRING(ci.content FROM 1 FOR 300) AS title, ci.created_at AS uploaded_at, ci.status
         FROM content_items ci JOIN documents d ON ci.document_id = d.id
         WHERE d.user_id = ? AND ci.status IN ('dismissed', 'done')
         ORDER BY uploaded_at DESC"

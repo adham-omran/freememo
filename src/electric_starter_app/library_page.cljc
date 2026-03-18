@@ -13,8 +13,8 @@
           !filter-text (atom "")
           filter-text (e/watch !filter-text)]
       (dom/div
-        (dom/props {:style {:padding "var(--sp-4)" :max-width "900px" :height "100%"
-                            :display "flex" :flex-direction "column"}})
+        (dom/props {:style {:padding "var(--sp-4)" :max-width "1200px" :width "100%" :margin "0 auto"
+                            :height "100%" :display "flex" :flex-direction "column"}})
 
         ;; Header row: title + toggle
         (dom/div

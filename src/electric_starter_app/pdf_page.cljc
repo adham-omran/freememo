@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
+   [electric-starter-app.util :as util]
    #?(:clj [electric-starter-app.pdf :as pdf])
    #?(:clj [electric-starter-app.db :as db])
    #?(:clj [clojure.string :as str])
@@ -104,7 +105,7 @@
                                       (dom/span
                                         (dom/props {:style {:color "var(--color-primary)" :cursor "pointer" :text-decoration "underline"}
                                                     :title "Open in Learn tab"})
-                                        (dom/text filename)
+                                        (dom/text (util/display-name filename))
                                         (dom/On "click"
                                           (fn [_]
                                             (reset! !nav-target {:doc-id id})

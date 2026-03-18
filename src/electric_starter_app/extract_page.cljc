@@ -139,7 +139,7 @@
                                   :display "flex" :justify-content "center"
                                   :padding "24px 16px"}})
               (dom/div
-                (dom/props {:style {:width "100%" :max-width "800px"
+                (dom/props {:style {:width "100%"
                                     :display "flex" :flex-direction "column"}})
                 (RichTextEditorComponent {:initial-html content
                                           :page-number page-num

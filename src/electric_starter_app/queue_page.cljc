@@ -5,14 +5,12 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
+   [electric-starter-app.util :as util]
    #?(:clj [electric-starter-app.db :as db])))
 
 ;; Server wrappers
 (defn get-full-queue* [user-id]
   #?(:clj (vec (db/get-full-queue user-id)) :cljs nil))
-
-(defn get-review-calendar* [user-id]
-  #?(:clj (vec (db/get-review-calendar user-id 30)) :cljs nil))
 
 ;; Format due date for display
 (defn format-due [next-review-at status]
@@ -31,12 +29,6 @@
                  :else (.format due (java.time.format.DateTimeFormatter/ofPattern "MMM d")))))
      :cljs nil))
 
-;; Format calendar date for tooltip
-(defn format-calendar-date [sql-date]
-  #?(:clj (.format (.toLocalDate sql-date)
-            (java.time.format.DateTimeFormatter/ofPattern "MMM d"))
-     :cljs nil))
-
 ;; Prepare queue rows on server (add formatted fields)
 (defn prepare-queue-rows [user-id]
   #?(:clj
@@ -45,13 +37,9 @@
                    (let [topic-type (:topic_type row)
                          title (or (:title row) "")
                          content (or (:content row) "")
-                         ;; Strip HTML for extract display title (server-side, no reader conditional needed)
                          display-title (if (= topic-type "extract")
-                                         (let [text (clojure.string/replace content #"<[^>]*>" "")]
-                                           (if (> (count text) 80)
-                                             (str (subs text 0 80) "...")
-                                             text))
-                                         title)]
+                                         (util/extract-preview content 80)
+                                         (util/display-name title))]
                      {:topic-type topic-type
                       :id (:id row)
                       :title title
@@ -65,41 +53,26 @@
      :cljs nil))
 
 ;; Compute summary counts on server
+;; NULL next_review_at means "new/unreviewed" = due now (same logic as db/get-learning-queue-count)
 (defn compute-summary [rows]
   #?(:clj
      (let [now (java.time.LocalDate/now)
-           week-end (.plusDays now 7)]
+           week-end (.plusDays now 7)
+           active? #(not (#{"dismissed" "done"} (:status %)))]
        {:total (count rows)
         :inactive (count (filter #(#{"dismissed" "done"} (:status %)) rows))
         :due-today (count (filter (fn [r]
-                                    (and (= (:status r) "active")
-                                      (some? (:next-review r))
-                                      (let [due (.toLocalDate (.toLocalDateTime (:next-review r)))]
-                                        (not (.isAfter due now)))))
+                                    (and (active? r)
+                                      (or (nil? (:next-review r))
+                                          (let [due (.toLocalDate (.toLocalDateTime (:next-review r)))]
+                                            (not (.isAfter due now))))))
                             rows))
         :due-week (count (filter (fn [r]
-                                   (and (= (:status r) "active")
-                                     (some? (:next-review r))
-                                     (let [due (.toLocalDate (.toLocalDateTime (:next-review r)))]
-                                       (not (.isAfter due week-end)))))
+                                   (and (active? r)
+                                     (or (nil? (:next-review r))
+                                         (let [due (.toLocalDate (.toLocalDateTime (:next-review r)))]
+                                           (not (.isAfter due week-end))))))
                            rows))})
-     :cljs nil))
-
-;; Prepare calendar data on server
-(defn prepare-calendar [user-id]
-  #?(:clj
-     (let [raw (db/get-review-calendar user-id 30)
-           now (java.time.LocalDate/now)
-           date-counts (into {} (map (fn [row]
-                                       [(.toLocalDate (:review_date row))
-                                        (:count row)])
-                                  raw))]
-       (vec (for [i (range 30)]
-              (let [d (.plusDays now i)
-                    cnt (or (get date-counts d) 0)
-                    label (str (.format d (java.time.format.DateTimeFormatter/ofPattern "MMM d"))
-                            ": " cnt " topic" (when (not= cnt 1) "s"))]
-                {:count cnt :label label}))))
      :cljs nil))
 
 ;; --- UI Components ---
@@ -121,24 +94,6 @@
           (dom/div
             (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)" :margin-top "4px"}})
             (dom/text (first item))))))))
-
-(e/defn ReviewCalendar [calendar-data]
-  (e/client
-    (dom/div
-      (dom/props {:style {:display "flex" :gap "3px" :margin-bottom "16px" :flex-shrink "0"}})
-      (e/for [i (e/diff-by {} (range (count calendar-data)))]
-        (let [cell (e/server (nth calendar-data i nil))]
-          (when cell
-            (let [cnt (:count cell)
-                  color (cond
-                          (zero? cnt) "#f0f0f0"
-                          (<= cnt 3) "#bfdbfe"
-                          (<= cnt 7) "#60a5fa"
-                          :else "var(--color-primary)")]
-              (dom/div
-                (dom/props {:style {:width "20px" :height "20px" :border-radius "var(--radius-sm)"
-                                    :background color}
-                            :title (:label cell)})))))))))
 
 (e/defn QueueTable [items-vec item-count !nav-target navigate!]
   (e/client
@@ -233,16 +188,14 @@
 (e/defn QueuePage [user-id !nav-target navigate!]
   (e/client
     (dom/div
-      (dom/props {:style {:padding "16px" :max-width "900px" :height "100%"
-                          :display "flex" :flex-direction "column"}})
+      (dom/props {:style {:padding "16px" :max-width "1200px" :width "100%" :margin "0 auto"
+                          :height "100%" :display "flex" :flex-direction "column"}})
       (dom/h2
         (dom/props {:style {:margin "0 0 16px 0" :font-size "20px" :flex-shrink "0"}})
         (dom/text "Queue"))
 
       (let [items-vec (e/server (prepare-queue-rows user-id))
             item-count (e/server (count items-vec))
-            summary (e/server (compute-summary items-vec))
-            calendar (e/server (prepare-calendar user-id))]
+            summary (e/server (compute-summary items-vec))]
         (QueueSummary summary)
-        (ReviewCalendar calendar)
         (QueueTable items-vec item-count !nav-target navigate!)))))

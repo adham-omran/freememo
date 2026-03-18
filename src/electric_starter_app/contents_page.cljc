@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [electric-starter-app.util :as util]
    #?(:clj [electric-starter-app.db :as db])
    #?(:clj [electric-starter-app.pdf :as pdf])
    #?(:clj [clojure.string :as str])))
@@ -117,7 +118,7 @@
                         :title "Click to open"})
             (dom/On "mouseenter" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "underline")) nil)
             (dom/On "mouseleave" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "none")) nil)
-            (dom/text filename)
+            (dom/text (util/display-name filename))
             (dom/On "click"
               (fn [_]
                 (reset! !nav-target {:doc-id doc-id})
