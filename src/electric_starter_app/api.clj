@@ -8,7 +8,8 @@
     [electric-starter-app.crypto :as crypto]
     [electric-starter-app.google-oauth :as google-oauth]
     [clojure.java.io :as io]
-    [clojure.string]))
+    [clojure.string]
+    [cheshire.core :as json]))
 
 (defn- require-auth [request]
   (get-in request [:session :user-id]))
@@ -66,24 +67,24 @@
                         (.toByteArray baos)))
               result (pdf/save-pdf user-id filename bytes)]
           (if (:success result)
-            {:status 302
-             :headers {"Location" "/"}
-             :body ""}
+            {:status 200
+             :headers {"Content-Type" "application/json"}
+             :body (json/generate-string {:success true :doc_id (:id result)})}
             {:status 500
-             :headers {"Content-Type" "text/plain"}
-             :body (str "error: " (:error result))}))
+             :headers {"Content-Type" "application/json"}
+             :body (json/generate-string {:success false :error (:error result)})}))
         {:status 400
-         :headers {"Content-Type" "text/plain"}
-         :body "error: No file provided"})
+         :headers {"Content-Type" "application/json"}
+         :body (json/generate-string {:success false :error "No file provided"})})
       (catch Exception e
         (println "ERROR [upload-pdf-handler]:" (.getMessage e))
         (.printStackTrace e)
         {:status 500
-         :headers {"Content-Type" "text/plain"}
-         :body (str "error: " (.getMessage e))}))
-    {:status 302
-     :headers {"Location" "/"}
-     :body ""}))
+         :headers {"Content-Type" "application/json"}
+         :body (json/generate-string {:success false :error (.getMessage e)})}))
+    {:status 401
+     :headers {"Content-Type" "application/json"}
+     :body (json/generate-string {:success false :error "Not authenticated"})}))
 
 (defn get-pdf-handler [request]
   "Serve PDF file by ID from database."

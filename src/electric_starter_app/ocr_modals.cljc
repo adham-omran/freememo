@@ -170,16 +170,16 @@
                   (reset! !pre-prompt local-prompt)
                   (when (seq local-prompt)
                     (let [new-history (->> (cons local-prompt @!prompt-history)
-                                           (distinct)
-                                           (take 50)
-                                           (vec))]
+                                        (distinct)
+                                        (take 50)
+                                        (vec))]
                       (reset! !prompt-history new-history)
                       (reset! !history-save-trigger new-history)))
                   (swap! !prompt-gen-state update :queue conj
-                    {:id        (str (random-uuid))
+                    {:id (str (random-uuid))
                      :selection captured-selection
                      :pre-prompt local-prompt
-                     :kind      prompt-dialog-kind})
+                     :kind prompt-dialog-kind})
                   (reset! !show false))
                 nil))))))))
 
@@ -220,27 +220,27 @@
           (dom/On "pointerdown"
             (fn [e]
               #?(:cljs
-                 (let [inner  (.-currentTarget e)
-                       h3     (.querySelector inner "h3")]
+                 (let [inner (.-currentTarget e)
+                       h3 (.querySelector inner "h3")]
                    (when (and h3 (or (= (.-target e) h3)
-                                     (.contains h3 (.-target e))))
+                                   (.contains h3 (.-target e))))
                      (.preventDefault e)
-                     (let [rect    (.getBoundingClientRect inner)
-                           sx      (.-clientX e)
-                           sy      (.-clientY e)
-                           px      (.-left rect)
-                           py      (.-top rect)
+                     (let [rect (.getBoundingClientRect inner)
+                           sx (.-clientX e)
+                           sy (.-clientY e)
+                           px (.-left rect)
+                           py (.-top rect)
                            move-fn (fn [me]
                                      (set! (.-position (.-style inner)) "fixed")
                                      (set! (.-left (.-style inner))
-                                           (str (+ px (- (.-clientX me) sx)) "px"))
+                                       (str (+ px (- (.-clientX me) sx)) "px"))
                                      (set! (.-top (.-style inner))
-                                           (str (+ py (- (.-clientY me) sy)) "px"))
+                                       (str (+ py (- (.-clientY me) sy)) "px"))
                                      (set! (.-margin (.-style inner)) "0"))
-                           up-fn   (fn self [ue]
-                                     (.releasePointerCapture inner (.-pointerId ue))
-                                     (.removeEventListener inner "pointermove" move-fn)
-                                     (.removeEventListener inner "pointerup" self))]
+                           up-fn (fn self [ue]
+                                   (.releasePointerCapture inner (.-pointerId ue))
+                                   (.removeEventListener inner "pointermove" move-fn)
+                                   (.removeEventListener inner "pointerup" self))]
                        (.setPointerCapture inner (.-pointerId e))
                        (.addEventListener inner "pointermove" move-fn)
                        (.addEventListener inner "pointerup" up-fn))))))
@@ -253,14 +253,14 @@
             (dom/div
               (dom/label (dom/text "Question:"))
               (dom/textarea
-                (dom/props {:value question :rows 3
+                (dom/props {:dir "auto" :value question :rows 3
                             :style {:width "100%" :padding "var(--sp-2)" :margin-bottom "var(--sp-3)"
                                     :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !question ev))))
               (dom/label (dom/text "Answer:"))
               (dom/textarea
-                (dom/props {:value answer :rows 3
+                (dom/props {:dir "auto" :value answer :rows 3
                             :style {:width "100%" :padding "var(--sp-2)"
                                     :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
@@ -268,7 +268,7 @@
             (dom/div
               (dom/label (dom/text "Cloze:"))
               (dom/textarea
-                (dom/props {:value cloze :rows 4
+                (dom/props {:dir "auto" :value cloze :rows 4
                             :style {:width "100%" :padding "var(--sp-2)"
                                     :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
@@ -286,8 +286,8 @@
                     [?token ?error] (e/Token click-event)]
                 (when-some [token ?token]
                   (let [fields (if (= kind "basic")
-                                {:question question :answer answer}
-                                {:cloze cloze})
+                                 {:question question :answer answer}
+                                 {:cloze cloze})
                         result (e/server (cards/update-card card-id fields))]
                     (if (:success result)
                       (do
@@ -326,27 +326,27 @@
           (dom/On "pointerdown"
             (fn [e]
               #?(:cljs
-                 (let [inner  (.-currentTarget e)
-                       h3     (.querySelector inner "h3")]
+                 (let [inner (.-currentTarget e)
+                       h3 (.querySelector inner "h3")]
                    (when (and h3 (or (= (.-target e) h3)
-                                     (.contains h3 (.-target e))))
+                                   (.contains h3 (.-target e))))
                      (.preventDefault e)
-                     (let [rect    (.getBoundingClientRect inner)
-                           sx      (.-clientX e)
-                           sy      (.-clientY e)
-                           px      (.-left rect)
-                           py      (.-top rect)
+                     (let [rect (.getBoundingClientRect inner)
+                           sx (.-clientX e)
+                           sy (.-clientY e)
+                           px (.-left rect)
+                           py (.-top rect)
                            move-fn (fn [me]
                                      (set! (.-position (.-style inner)) "fixed")
                                      (set! (.-left (.-style inner))
-                                           (str (+ px (- (.-clientX me) sx)) "px"))
+                                       (str (+ px (- (.-clientX me) sx)) "px"))
                                      (set! (.-top (.-style inner))
-                                           (str (+ py (- (.-clientY me) sy)) "px"))
+                                       (str (+ py (- (.-clientY me) sy)) "px"))
                                      (set! (.-margin (.-style inner)) "0"))
-                           up-fn   (fn self [ue]
-                                     (.releasePointerCapture inner (.-pointerId ue))
-                                     (.removeEventListener inner "pointermove" move-fn)
-                                     (.removeEventListener inner "pointerup" self))]
+                           up-fn (fn self [ue]
+                                   (.releasePointerCapture inner (.-pointerId ue))
+                                   (.removeEventListener inner "pointermove" move-fn)
+                                   (.removeEventListener inner "pointerup" self))]
                        (.setPointerCapture inner (.-pointerId e))
                        (.addEventListener inner "pointermove" move-fn)
                        (.addEventListener inner "pointerup" up-fn))))))
@@ -375,14 +375,14 @@
             (dom/div
               (dom/label (dom/text "Question:"))
               (dom/textarea
-                (dom/props {:value question :rows 3
+                (dom/props {:dir "auto" :value question :rows 3
                             :style {:width "100%" :padding "var(--sp-2)" :margin-bottom "var(--sp-3)"
                                     :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !question ev))))
               (dom/label (dom/text "Answer:"))
               (dom/textarea
-                (dom/props {:value answer :rows 3
+                (dom/props {:dir "auto" :value answer :rows 3
                             :style {:width "100%" :padding "var(--sp-2)"
                                     :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
@@ -390,7 +390,7 @@
             (dom/div
               (dom/label (dom/text "Cloze:"))
               (dom/textarea
-                (dom/props {:value cloze :rows 4
+                (dom/props {:dir "auto" :value cloze :rows 4
                             :style {:width "100%" :padding "var(--sp-2)"
                                     :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
@@ -411,8 +411,8 @@
                     (dom/text "Error: " ?error)))
                 (when-some [token ?token]
                   (let [fields (if (= kind "basic")
-                                {:question question :answer answer}
-                                {:cloze cloze})
+                                 {:question question :answer answer}
+                                 {:cloze cloze})
                         result (e/server (cards/add-card doc-id page-number kind fields content-item-id source-reference))]
                     (if (:success result)
                       (do

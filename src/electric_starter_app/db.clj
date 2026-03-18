@@ -810,3 +810,20 @@
     (jdbc/execute-one! ds
       [(str "UPDATE " table " SET status = 'active', dismissed = false, next_review_at = NULL WHERE id = ?")
        id])))
+
+(defn batch-create-content-items
+  "Batch insert content items from auto-extract. Returns count of created items."
+  [document-id page-number items]
+  (when (seq items)
+    (let [rows (mapv (fn [item]
+                       {:document_id document-id
+                        :page_number page-number
+                        :kind "html"
+                        :content (sanitize-utf8 (:content item))
+                        :status "active"
+                        :priority 50})
+                     items)]
+      (jdbc/execute! ds
+        (sql/format {:insert-into :content_items
+                     :values rows}))
+      (count items))))
