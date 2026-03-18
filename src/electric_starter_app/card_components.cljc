@@ -6,6 +6,10 @@
    #?(:clj [electric-starter-app.cards :as cards])
    #?(:cljs [electric-starter-app.anki-sync-helpers :refer [anki-call!]])))
 
+;; RTL detection — checks if text starts with Arabic/Hebrew characters
+(defn rtl-text? [text]
+  (boolean (and text (re-find #"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF]" text))))
+
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 ;; Plain defn visible on both CLJ and CLJS — callers wrap in e/server
 (defn get-cards* [_refresh document-id page-number]
@@ -23,7 +27,7 @@
   #?(:cljs
      (when (seq note-ids)
        (-> (anki-call! "deleteNotes" {:notes (vec note-ids)})
-           (.catch (fn [_] nil))))
+         (.catch (fn [_] nil))))
      :clj nil))
 
 ;; Delete button — parameterized with !refresh atom
@@ -46,9 +50,9 @@
           (let [result (e/server (cards/delete-card click-event))]
             (if (:success result)
               (do (e/server (swap! !refresh inc))
-                  (when-some [note-id (:anki-note-id result)]
-                    (e/client (try-delete-anki-notes! [note-id])))
-                  (token))
+                (when-some [note-id (:anki-note-id result)]
+                  (e/client (try-delete-anki-notes! [note-id])))
+                (token))
               (token (:error result)))))))))
 
 ;; Card table row component
@@ -91,13 +95,15 @@
         ;; Front column
         (let [front-text (if (= kind "basic") question cloze)]
           (dom/td
-            (dom/props {:style {:padding "6px 8px"
+            (dom/props {:dir "auto"
+                        :style {:padding-block "6px" :padding-inline "8px"
                                 :border-bottom "1px solid var(--color-border)"}})
             (dom/text front-text)))
         ;; Back column
         (let [back-text (if (= kind "basic") (or answer "") "")]
           (dom/td
-            (dom/props {:style {:padding "6px 8px"
+            (dom/props {:dir "auto"
+                        :style {:padding-block "6px" :padding-inline "8px"
                                 :border-bottom "1px solid var(--color-border)"}})
             (dom/text back-text)))
         ;; Kind column

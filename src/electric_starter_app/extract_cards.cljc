@@ -5,7 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
-   [electric-starter-app.card-components :refer [CardRow get-cards-by-extract*]]
+   [electric-starter-app.card-components :refer [CardRow get-cards-by-extract* rtl-text?]]
    [electric-starter-app.ocr-modals :refer [EditCardModal AddCardModal]]))
 
 #?(:clj (defonce !refresh (atom 0)))
@@ -28,10 +28,10 @@
         (let [cards-vec (e/server (vec (:cards cards-result)))
               card-count (e/server (count cards-vec))
               unsynced-count (e/server (count (filter #(or (nil? (:flashcards/anki_synced_at %))
-                                                           (and (:flashcards/updated_at %)
-                                                                (pos? (compare (str (:flashcards/updated_at %))
-                                                                               (str (:flashcards/anki_synced_at %))))))
-                                                      (:cards cards-result))))
+                                                         (and (:flashcards/updated_at %)
+                                                           (pos? (compare (str (:flashcards/updated_at %))
+                                                                   (str (:flashcards/anki_synced_at %))))))
+                                                (:cards cards-result))))
               row-height 54]
           (dom/div
             (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
@@ -39,18 +39,24 @@
               (dom/div
                 (dom/props {:style {:padding "4px 12px" :font-size "12px" :color "#888"}})
                 (dom/text (str card-count " card" (when (not= card-count 1) "s")
-                               (when (pos? unsynced-count) (str " (" unsynced-count " unsynced)"))))))
+                            (when (pos? unsynced-count) (str " (" unsynced-count " unsynced)"))))))
             (if (pos? card-count)
               (let [[offset limit] (Scroll-window row-height card-count dom/node {:overquery-factor 1})
-                    occluded-height (clamp-left (* row-height (- card-count limit)) 0)]
+                    occluded-height (clamp-left (* row-height (- card-count limit)) 0)
+                    first-card (e/server (first cards-vec))
+                    rtl? (e/server (rtl-text? (or (:flashcards/question first-card)
+                                                (:flashcards/cloze first-card))))]
                 (dom/props {:class "tape-scroll"
                             :style {:--offset offset :--row-height (str row-height "px")}})
                 (dom/table
-                  (dom/props {:style {:width "100%"
+                  (dom/props {:dir (if rtl? "rtl" "ltr")
+                              :class "card-table"
+                              :style {:width "100%"
                                       :border-collapse "separate"
                                       :border-spacing "0"
                                       :table-layout "fixed"
                                       :font-size "13px"
+                                      :direction (if rtl? "rtl" "ltr")
                                       :grid-template-columns "24px 1fr 1fr 60px 40px 40px"}})
                   (e/for [i (Tape offset limit)]
                     (let [card (e/server (nth cards-vec i nil))]
