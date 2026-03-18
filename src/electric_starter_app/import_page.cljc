@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [electric-starter-app.util :as util]
    #?(:clj [electric-starter-app.db :as db])
    #?(:clj [electric-starter-app.wikipedia :as wiki])
    #?(:clj [electric-starter-app.html-cleaner :as cleaner])
@@ -353,4 +354,40 @@
               (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
               (dom/text "Fetch from any web page or Wikipedia")))
           (when show-url
-            (URLImportModal !show-url user-id !refresh !nav-target navigate!)))))))
+            (URLImportModal !show-url user-id !refresh !nav-target navigate!))))
+
+      ;; Recent imports
+      (let [refresh (e/server (e/watch !refresh))
+            recent-docs (e/server
+                          (vec (take 5 (db/get-documents user-id))))]
+        (when (seq recent-docs)
+          (dom/div
+            (dom/props {:style {:margin-top "32px"}})
+            (dom/h3
+              (dom/props {:style {:font-size "14px" :font-weight "600" :color "var(--color-text-secondary)"
+                                  :margin "0 0 12px 0"}})
+              (dom/text "Recent imports"))
+            (e/for-by :documents/id [doc recent-docs]
+              (let [doc-id (:documents/id doc)
+                    filename (or (:documents/filename doc) "")
+                    source-type (or (:documents/source_type doc) "pdf")]
+                (dom/div
+                  (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
+                                      :padding "8px 0" :border-bottom "1px solid var(--color-border)"}})
+                  (dom/span
+                    (dom/props {:class "type-badge"
+                                :style {:padding "2px 8px" :font-size "10px"
+                                        :background (case source-type
+                                                      "wikipedia" "#fef3c7"
+                                                      "web" "#e0f2fe"
+                                                      "#dcfce7")}})
+                    (dom/text (case source-type "wikipedia" "Wiki" "web" "Web" "PDF")))
+                  (dom/a
+                    (dom/props {:style {:font-size "14px" :color "var(--color-primary)" :cursor "pointer"
+                                        :text-decoration "none"}})
+                    (dom/text (util/display-name filename))
+                    (dom/On "click"
+                      (fn [_]
+                        (reset! !nav-target {:doc-id doc-id})
+                        (navigate! :learn))
+                      nil)))))))))))

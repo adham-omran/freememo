@@ -110,29 +110,16 @@
               (dom/text (if has-due? "or import more content" "or import more content"))
               (dom/On "click" (fn [_] (navigate! :import)) nil))))
 
-        ;; Section 3: Workflow Guide
+        ;; Section 3: Quick links (compact)
         (dom/div
-          (dom/props {:style {:margin-bottom "40px"}})
-
-          (e/for-by first [row [["Import" "Add PDFs or web articles to your reading queue." "Import →" :import]
-                                ["Read" "Process topics incrementally. Extract key passages, create cards, refine over time." "Learn →" :learn]
-                                ["Track" "Monitor progress across all topics. Spaced repetition handles the timing." "Queue →" :queue]]]
-            (let [[label description link-text target] row]
-              (dom/div
-                (dom/props {:style {:display "flex" :align-items "flex-start" :gap "16px" :padding "16px 0"
-                                    :border-bottom "1px solid var(--color-border)"}})
-                (dom/span
-                  (dom/props {:style {:width "80px" :flex-shrink "0" :font-weight "600"
-                                      :color "var(--color-primary)" :font-size "14px"}})
-                  (dom/text label))
-                (dom/span
-                  (dom/props {:style {:flex "1" :font-size "14px" :color "var(--color-text-secondary)"}})
-                  (dom/text description))
-                (dom/a
-                  (dom/props {:style {:flex-shrink "0" :font-size "13px" :color "var(--color-primary)"
-                                      :cursor "pointer" :text-decoration "none" :white-space "nowrap"}})
-                  (dom/text link-text)
-                  (dom/On "click" (fn [_] (navigate! target)) nil))))))
+          (dom/props {:style {:display "flex" :gap "12px" :margin-bottom "40px"}})
+          (e/for-by first [row [["Import" :import] ["Library" :library] ["Queue" :queue]]]
+            (let [[label target] row]
+              (dom/button
+                (dom/props {:class "btn btn-secondary"
+                            :style {:flex "1" :padding "10px 0" :font-size "13px"}})
+                (dom/text label)
+                (dom/On "click" (fn [_] (navigate! target)) nil)))))
 
         ;; Section 4: API Key Notice (only when not configured)
         (when-not configured?

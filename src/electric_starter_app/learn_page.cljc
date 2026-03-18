@@ -3,10 +3,9 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
-   [contrib.data :refer [clamp-left]]
    [electric-starter-app.learn-session :refer [LearnSession]]
    [electric-starter-app.ocr-page :refer [OcrPage]]
+   [electric-starter-app.util :as util]
    #?(:clj [electric-starter-app.db :as db])
    [electric-starter-app.card-components :as card-components]))
 
@@ -67,7 +66,8 @@
 (e/defn LearnOverview [user-id !mode]
   (e/client
     (dom/div
-      (dom/props {:style {:padding "16px" :max-width "900px" :height "100%" :display "flex" :flex-direction "column"}})
+      (dom/props {:style {:padding "16px" :max-width "1200px" :width "100%" :margin "0 auto"
+                          :height "100%" :display "flex" :flex-direction "column"}})
 
       (let [refresh (e/server (e/watch !refresh))
             due-count (e/server (get-learning-queue-count* refresh user-id))
@@ -90,82 +90,71 @@
               (dom/On "click" (fn [_] (reset! !mode :session)) nil))))
 
         (if (pos? due-count)
-          ;; Virtual-scrolled list of due topics
+          ;; Top 10 due topics (lightweight preview, not the full queue)
           (let [items-vec (e/server (get-learning-queue* refresh user-id))
                 item-count (e/server (count items-vec))
-                row-height 40
-                grid-cols "70px 1fr 60px 60px 80px 2fr"]
+                display-limit 10
+                grid-cols "70px 2fr 50px 70px"]
             (dom/div
               (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0"}})
 
               ;; Table header
-              (dom/table
-                (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "14px" :flex-shrink "0"}})
-                (dom/thead
-                  (dom/props {:style {:display "contents"}})
-                  (let [th-base {:padding "8px 10px" :border-bottom "2px solid var(--color-border)" :font-weight "600" :color "var(--color-text-primary)"}]
-                    (dom/tr
-                      (dom/props {:style {:display "contents"}})
-                      (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Type"))
-                      (dom/th (dom/props {:style (merge th-base {:text-align "left"})}) (dom/text "Document"))
-                      (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Page"))
-                      (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Pri"))
-                      (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Interval"))
-                      (dom/th (dom/props {:style (merge th-base {:text-align "left"})}) (dom/text "Content"))))))
-
-              ;; Scrollable body
               (dom/div
-                (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
-                (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 1})
-                      occluded-height (clamp-left (* row-height (- item-count limit)) 0)]
-                  (dom/props {:class "tape-scroll"
-                              :style {:--offset offset :--row-height (str row-height "px")}})
-                  (dom/table
-                    (dom/props {:style {:width "100%" :grid-template-columns grid-cols :font-size "14px"}})
-                    (e/for [i (Tape offset limit)]
-                      (let [item (e/server (nth items-vec i nil))]
-                        (when item
-                          (let [topic-type (:topic_type item)
-                                filename (or (:filename item) "-")
-                                page-num (:page_number item)
-                                priority (or (:priority item) 50)
-                                interval (or (:interval_days item) 1.0)
-                                content (or (:content item) "")
-                                is-doc (= topic-type "document")
-                                truncated (if is-doc
-                                            filename
-                                            (if (> (count content) 60)
-                                              (str (subs content 0 60) "...")
-                                              content))
-                                type-label (if is-doc "Doc" "Extract")
-                                type-color (if is-doc "#dcfce7" "#44C2FF")
-                                interval-str (if (< interval 1.0)
-                                               (str (int (* interval 24)) "h")
-                                               (str (int interval) "d"))]
-                            (dom/tr
-                              (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")
-                                                  :--order (inc i)}})
-                              (dom/td
-                                (dom/props {:style {:padding "8px 10px" :text-align "center"}})
-                                (dom/span
-                                  (dom/props {:class "type-badge" :style {:padding "2px 8px" :background type-color}})
-                                  (dom/text type-label)))
-                              (dom/td
-                                (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
-                                (dom/text filename))
-                              (dom/td
-                                (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#555"}})
-                                (dom/text (if is-doc "-" (str page-num))))
-                              (dom/td
-                                (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#555"}})
-                                (dom/text (str priority)))
-                              (dom/td
-                                (dom/props {:style {:padding "8px 10px" :text-align "center" :color "var(--color-text-secondary)" :font-size "12px"}})
-                                (dom/text interval-str))
-                              (dom/td
-                                (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
-                                (dom/text truncated))))))))
-                  (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))
+                (dom/props {:style {:display "grid" :grid-template-columns grid-cols :font-size "14px" :flex-shrink "0"}})
+                (let [th-base {:padding "8px 10px" :border-bottom "2px solid var(--color-border)" :font-weight "600" :color "var(--color-text-primary)"}]
+                  (dom/div (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Type"))
+                  (dom/div (dom/props {:style (merge th-base {:text-align "left"})}) (dom/text "Title"))
+                  (dom/div (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Pri"))
+                  (dom/div (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Due"))))
+
+              ;; Table body — top 10 rows
+              (dom/div
+                (dom/props {:style {:overflow-y "auto" :min-height "0"}})
+                (e/for-by identity [i (e/server (vec (range (min display-limit item-count))))]
+                  (let [item (e/server (nth items-vec i nil))]
+                    (when item
+                      (let [topic-type (e/server (:topic_type item))
+                            filename (e/server (or (:filename item) "-"))
+                            content (e/server (or (:content item) ""))
+                            priority (e/server (or (:priority item) 50))
+                            interval (e/server (or (:interval_days item) 1.0))
+                            is-doc (= topic-type "document")
+                            display-title (if is-doc
+                                            (util/display-name filename)
+                                            (util/extract-preview content 80))
+                            type-label (if is-doc "Doc" "Extract")
+                            type-color (if is-doc "#dcfce7" "#44C2FF")
+                            due-str (cond
+                                      (< interval 1.0) (str (int (* interval 24)) "h")
+                                      (= interval 1.0) "1d"
+                                      :else (str (int interval) "d"))]
+                        (dom/div
+                          (dom/props {:style {:display "grid" :grid-template-columns grid-cols
+                                              :border-bottom "1px solid #f0f0f0" :height "40px"
+                                              :align-items "center" :font-size "14px"}})
+                          (dom/div
+                            (dom/props {:style {:padding "8px 10px" :text-align "center"}})
+                            (dom/span
+                              (dom/props {:class "type-badge" :style {:padding "2px 8px" :background type-color}})
+                              (dom/text type-label)))
+                          (dom/div
+                            (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
+                            (dom/text display-title))
+                          (dom/div
+                            (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#555"}})
+                            (dom/text (str priority)))
+                          (dom/div
+                            (dom/props {:style {:padding "8px 10px" :text-align "center" :color "var(--color-text-secondary)" :font-size "12px"}})
+                            (dom/text due-str))))))))
+
+              ;; "N remaining" link to Queue
+              (when (> item-count display-limit)
+                (dom/div
+                  (dom/props {:style {:padding "12px 10px" :font-size "13px" :color "var(--color-text-secondary)"}})
+                  (dom/text (str "Showing " display-limit " of " item-count " due. "))
+                  (dom/a
+                    (dom/props {:style {:color "var(--color-primary)" :cursor "pointer" :text-decoration "none" :font-weight "500"}})
+                    (dom/text "See full queue →"))))))
 
           ;; Empty state
           (dom/p
@@ -192,7 +181,10 @@
                 (e/for-by :id [item inactive]
                   (let [topic-type (:topic_type item)
                         item-id (:id item)
-                        title (or (:title item) "-")
+                        raw-title (or (:title item) "-")
+                        title (if (= topic-type "extract")
+                                (util/extract-preview raw-title 80)
+                                (util/display-name raw-title))
                         item-status (or (:status item) "dismissed")
                         type-label (if (= topic-type "document") "Doc" "Extract")]
                     (dom/div
