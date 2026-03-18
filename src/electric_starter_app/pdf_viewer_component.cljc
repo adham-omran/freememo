@@ -1,9 +1,9 @@
 (ns electric-starter-app.pdf-viewer-component
   "PDF viewer UI component using PDF.js."
   (:require
-    [hyperfiddle.electric3 :as e]
-    [hyperfiddle.electric-dom3 :as dom]
-    [electric-starter-app.pdf-viewer :as viewer]))
+   [hyperfiddle.electric3 :as e]
+   [hyperfiddle.electric-dom3 :as dom]
+   [electric-starter-app.pdf-viewer :as viewer]))
 
 (e/defn PdfViewerComponent
   "Renders a PDF viewer for the given document ID and exposes current page number.
@@ -11,16 +11,16 @@
    Returns: The current page number (for OCR integration)."
   [{:keys [document-id initial-page on-navigate!]}]
   (e/client
-    (let [!page        (atom (or initial-page 1))
-          !total       (atom 0)
-          !container   (atom nil)
-          !viewer-div  (atom nil)
-          !input-val   (atom (str (or initial-page 1)))
+    (let [!page (atom (or initial-page 1))
+          !total (atom 0)
+          !container (atom nil)
+          !viewer-div (atom nil)
+          !input-val (atom (str (or initial-page 1)))
           !inp-focused (atom false)
-          page         (e/watch !page)
-          total        (e/watch !total)
-          input-val    (e/watch !input-val)
-          inp-focused  (e/watch !inp-focused)]
+          page (e/watch !page)
+          total (e/watch !total)
+          input-val (e/watch !input-val)
+          inp-focused (e/watch !inp-focused)]
 
       ;; Sync page → input-val when not typing
       (when (and (not inp-focused) (not= input-val (str page)))
@@ -156,13 +156,22 @@
                                   :border "1px solid #ccc"
                                   :border-radius "3px"}})
               (dom/option (dom/props {:value "page-width"}) (dom/text "Page Width"))
-              (dom/option (dom/props {:value "page-fit"})   (dom/text "Page Fit"))
+              (dom/option (dom/props {:value "page-fit"}) (dom/text "Page Fit"))
+              (dom/option (dom/props {:value "0.5"}) (dom/text "50%"))
+              (dom/option (dom/props {:value "0.75"}) (dom/text "75%"))
+              (dom/option (dom/props {:value "1.0"}) (dom/text "100%"))
+              (dom/option (dom/props {:value "1.25"}) (dom/text "125%"))
+              (dom/option (dom/props {:value "1.5"}) (dom/text "150%"))
+              (dom/option (dom/props {:value "2.0"}) (dom/text "200%"))
               (e/for [[t e] (dom/On-all "change")]
                 (when e
-                  (case (-> e .-target .-value)
-                    "page-width" (viewer/set-zoom-fit!)
-                    "page-fit"   (viewer/set-zoom-page-fit!)
-                    nil))
+                  (let [v (-> e .-target .-value)]
+                    (case v
+                      "page-width" (viewer/set-zoom-fit!)
+                      "page-fit" (viewer/set-zoom-page-fit!)
+                      (let [scale (js/parseFloat v)]
+                        (when-not (js/isNaN scale)
+                          (viewer/set-zoom! scale))))))
                 (t)))))
 
         ;; Viewer wrapper (relative positioning for absolute container inside)

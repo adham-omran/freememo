@@ -147,81 +147,84 @@
         (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0"}})
 
         ;; Fixed header
-        (dom/table
-          (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :flex-shrink "0"}})
-          (dom/thead
-            (let [th-base {:padding "8px 6px" :border-bottom "2px solid var(--color-border)" :font-weight "600" :color "var(--color-text-primary)"}]
-              (dom/tr
-                (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "50px"})}) (dom/text "Pri"))
-                (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "60px"})}) (dom/text "Type"))
-                (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "80px"})}) (dom/text "Due"))
-                (dom/th (dom/props {:style (merge th-base {:text-align "left" :padding "8px 10px"})}) (dom/text "Title"))))))
+        (let [grid-cols "50px 60px 80px 1fr"]
+          (dom/table
+            (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "14px" :flex-shrink "0"}})
+            (dom/thead
+              (dom/props {:style {:display "contents"}})
+              (let [th-base {:padding "8px 6px" :border-bottom "2px solid var(--color-border)" :font-weight "600" :color "var(--color-text-primary)"}]
+                (dom/tr
+                  (dom/props {:style {:display "contents"}})
+                  (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Pri"))
+                  (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Type"))
+                  (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Due"))
+                  (dom/th (dom/props {:style (merge th-base {:text-align "left" :padding "8px 10px"})}) (dom/text "Title"))))))
 
         ;; Scrollable body with virtual scroll
-        (let [row-height 36]
-          (dom/div
-            (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
-            (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 1})
-                  occluded-height (clamp-left (* row-height (- item-count limit)) 0)]
-              (dom/props {:class "tape-scroll"
-                          :style {:--offset offset :--row-height (str row-height "px")}})
-              (dom/table
-                (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px"}})
-                (e/for [i (Tape offset limit)]
-                  (let [item (e/server (nth items-vec i nil))]
-                    (when item
-                      (let [item-status (or (:status item) "active")
-                            inactive? (not= item-status "active")
-                            topic-type (:topic-type item)
-                            source-type (:source-type item)
-                            priority (:priority item)
-                            due-label (:due-label item)
-                            display-title (or (:display-title item) "")
-                            id (:id item)
+          (let [row-height 36]
+            (dom/div
+              (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
+              (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 1})
+                    occluded-height (clamp-left (* row-height (- item-count limit)) 0)]
+                (dom/props {:class "tape-scroll"
+                            :style {:--offset offset :--row-height (str row-height "px")}})
+                (dom/table
+                  (dom/props {:style {:width "100%" :grid-template-columns grid-cols :font-size "14px"}})
+                  (e/for [i (Tape offset limit)]
+                    (let [item (e/server (nth items-vec i nil))]
+                      (when item
+                        (let [item-status (or (:status item) "active")
+                              inactive? (not= item-status "active")
+                              topic-type (:topic-type item)
+                              source-type (:source-type item)
+                              priority (:priority item)
+                              due-label (:due-label item)
+                              display-title (or (:display-title item) "")
+                              id (:id item)
                             ;; Type badge
-                            [badge-text badge-color]
-                            (if (= topic-type "extract")
-                              ["Ext" "#44C2FF"]
-                              (case source-type
-                                "wikipedia" ["Wiki" "#fef3c7"]
-                                "web" ["Web" "#e0f2fe"]
-                                ["PDF" "#dcfce7"]))]
-                        (dom/tr
-                          (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")
-                                              :opacity (case item-status "done" "0.6" "dismissed" "0.4" "1")
-                                              :--order (inc i)}})
+                              [badge-text badge-color]
+                              (if (= topic-type "extract")
+                                ["Ext" "#44C2FF"]
+                                (case source-type
+                                  "wikipedia" ["Wiki" "#fef3c7"]
+                                  "web" ["Web" "#e0f2fe"]
+                                  ["PDF" "#dcfce7"]))]
+                          (dom/tr
+                            (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")
+                                                :opacity (case item-status "done" "0.6" "dismissed" "0.4" "1")
+                                                :--order (inc i)}})
                           ;; Priority
-                          (dom/td
-                            (dom/props {:style {:padding "4px 6px" :text-align "center" :color "#555" :width "50px" :font-size "13px"}})
-                            (dom/text (if inactive? "\u2014" (str (or priority "")))))
+                            (dom/td
+                              (dom/props {:style {:padding "4px 6px" :text-align "center" :color "#555" :font-size "13px"}})
+                              (dom/text (if inactive? "\u2014" (str (or priority "")))))
                           ;; Type badge
-                          (dom/td
-                            (dom/props {:style {:padding "4px 6px" :text-align "center" :width "60px"}})
-                            (dom/span
-                              (dom/props {:class "type-badge" :style {:background badge-color}})
-                              (dom/text badge-text)))
+                            (dom/td
+                              (dom/props {:style {:padding "4px 6px" :text-align "center"}})
+                              (dom/span
+                                (dom/props {:class "type-badge" :style {:background badge-color}})
+                                (dom/text badge-text)))
                           ;; Due / status
-                          (dom/td
-                            (dom/props {:style {:padding "4px 6px" :text-align "center" :width "80px" :font-size "12px"
-                                                :color (case due-label "done" "#16a34a" "dismissed" "#9ca3af" "#555")}})
-                            (dom/text due-label))
+                            (dom/td
+                              (dom/props {:style {:padding "4px 6px" :text-align "center" :font-size "12px"
+                                                  :color (case due-label "done" "#16a34a" "dismissed" "#9ca3af" "#555")}})
+                              (dom/text due-label))
                           ;; Title (clickable)
-                          (dom/td
-                            (dom/props {:style {:padding "4px 10px" :overflow "hidden" :text-overflow "ellipsis"
-                                                :white-space "nowrap" :cursor "pointer"}
-                                        :title display-title})
-                            (dom/On "mouseenter" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "underline")) nil)
-                            (dom/On "mouseleave" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "none")) nil)
-                            (dom/text display-title)
-                            (dom/On "click"
-                              (fn [_]
-                                (if (= topic-type "extract")
-                                  (do (reset! !nav-target {:content-item-id id})
-                                    (navigate! :extract))
-                                  (do (reset! !nav-target {:doc-id id})
-                                    (navigate! :learn))))
-                              nil))))))))
-              (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))
+                            (dom/td
+                              (dom/props {:style {:padding "4px 10px" :overflow "hidden" :text-overflow "ellipsis"
+                                                  :white-space "nowrap" :cursor "pointer"}
+                                          :title display-title})
+                              (dom/On "mouseenter" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "underline")) nil)
+                              (dom/On "mouseleave" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "none")) nil)
+                              (dom/text display-title)
+                              (dom/On "click"
+                                (fn [_]
+                                  (if (= topic-type "extract")
+                                    (do (reset! !nav-target {:content-item-id id})
+                                      (navigate! :extract))
+                                    (do (reset! !nav-target {:doc-id id})
+                                      (navigate! :learn))))
+                                nil))))))))
+                (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))))
 
       (dom/p
         (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px" :margin-top "24px"}})

@@ -1,9 +1,9 @@
 (ns electric-starter-app.home-page
   (:require
-    [hyperfiddle.electric3 :as e]
-    [hyperfiddle.electric-dom3 :as dom]
-    #?(:clj [electric-starter-app.settings :as settings])
-    #?(:clj [electric-starter-app.db :as db])))
+   [hyperfiddle.electric3 :as e]
+   [hyperfiddle.electric-dom3 :as dom]
+   #?(:clj [electric-starter-app.settings :as settings])
+   #?(:clj [electric-starter-app.db :as db])))
 
 (defn get-api-key-status* [user-id enc-key]
   #?(:clj (settings/get-openai-api-key-status user-id enc-key)
@@ -27,22 +27,22 @@
                days (.until today (if (instance? java.time.LocalDate review-date)
                                     review-date
                                     (.toLocalDate review-date))
-                          java.time.temporal.ChronoUnit/DAYS)]
+                      java.time.temporal.ChronoUnit/DAYS)]
            (cond
              (<= days 0) "today"
-             (= days 1)  "tomorrow"
-             :else        (str "in " days " days")))))
+             (= days 1) "tomorrow"
+             :else (str "in " days " days")))))
      :cljs nil))
 
-(e/defn HomePage [navigate! user-id enc-key]
+(e/defn HomePage [navigate! user-id enc-key !nav-target]
   (e/client
-    (let [api-status   (e/server (get-api-key-status* user-id enc-key))
-          configured?  (:configured? api-status)
-          queue-count  (e/server (get-queue-count* user-id))
-          total-count  (e/server (get-total-count* user-id))
-          next-review  (e/server (next-review-label* user-id))
-          new-user?    (zero? total-count)
-          has-due?     (pos? queue-count)]
+    (let [api-status (e/server (get-api-key-status* user-id enc-key))
+          configured? (:configured? api-status)
+          queue-count (e/server (get-queue-count* user-id))
+          total-count (e/server (get-total-count* user-id))
+          next-review (e/server (next-review-label* user-id))
+          new-user? (zero? total-count)
+          has-due? (pos? queue-count)]
       (dom/div
         (dom/props {:style {:padding "48px 24px" :max-width "640px" :margin "0 auto"}})
 
@@ -87,17 +87,17 @@
           (dom/text
             (cond
               (and new-user? (not configured?)) "Set Up API Key"
-              new-user?                          "Import Your First Document"
-              has-due?                           "Continue Learning"
-              :else                              "Browse Library"))
+              new-user? "Import Your First Document"
+              has-due? "Continue Learning"
+              :else "Browse Library"))
           (dom/On "click"
             (fn [_]
-              (navigate!
-                (cond
-                  (and new-user? (not configured?)) :settings
-                  new-user?                          :import
-                  has-due?                           :learn
-                  :else                              :library)))
+              (cond
+                (and new-user? (not configured?)) (navigate! :settings)
+                new-user? (navigate! :import)
+                has-due? (do (reset! !nav-target :start-session)
+                           (navigate! :learn))
+                :else (navigate! :library)))
             nil))
 
         ;; Secondary action link
@@ -114,9 +114,9 @@
         (dom/div
           (dom/props {:style {:margin-bottom "40px"}})
 
-          (e/for-by first [row [["Import" "Add PDFs or web articles to your reading queue."                                    "Import →" :import]
-                                ["Read"   "Process topics incrementally. Extract key passages, create cards, refine over time." "Learn →"  :learn]
-                                ["Track"  "Monitor progress across all topics. Spaced repetition handles the timing."           "Queue →"  :queue]]]
+          (e/for-by first [row [["Import" "Add PDFs or web articles to your reading queue." "Import →" :import]
+                                ["Read" "Process topics incrementally. Extract key passages, create cards, refine over time." "Learn →" :learn]
+                                ["Track" "Monitor progress across all topics. Spaced repetition handles the timing." "Queue →" :queue]]]
             (let [[label description link-text target] row]
               (dom/div
                 (dom/props {:style {:display "flex" :align-items "flex-start" :gap "16px" :padding "16px 0"

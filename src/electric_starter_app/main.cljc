@@ -103,7 +103,7 @@
               ;; Tab content
               (dom/div
                 (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:extract :learn :library :queue} active-tab) "hidden" "auto")}})
-                (when (= active-tab :home) (HomePage navigate! user-id enc-key))
+                (when (= active-tab :home) (HomePage navigate! user-id enc-key !nav-target))
                 (when (= active-tab :library) (LibraryPage user-id !nav-target navigate! !library-refresh))
                 (when (= active-tab :import) (ImportPage user-id !library-refresh))
                 (when (= active-tab :queue) (QueuePage user-id !nav-target navigate!))
