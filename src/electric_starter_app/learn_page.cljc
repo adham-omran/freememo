@@ -93,21 +93,24 @@
           ;; Virtual-scrolled list of due topics
           (let [items-vec (e/server (get-learning-queue* refresh user-id))
                 item-count (e/server (count items-vec))
-                row-height 40]
+                row-height 40
+                grid-cols "70px 1fr 60px 60px 80px 2fr"]
             (dom/div
               (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0"}})
 
               ;; Table header
               (dom/table
-                (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px" :flex-shrink "0"}})
+                (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "14px" :flex-shrink "0"}})
                 (dom/thead
+                  (dom/props {:style {:display "contents"}})
                   (let [th-base {:padding "8px 10px" :border-bottom "2px solid var(--color-border)" :font-weight "600" :color "var(--color-text-primary)"}]
                     (dom/tr
-                      (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "70px"})}) (dom/text "Type"))
+                      (dom/props {:style {:display "contents"}})
+                      (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Type"))
                       (dom/th (dom/props {:style (merge th-base {:text-align "left"})}) (dom/text "Document"))
-                      (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "60px"})}) (dom/text "Page"))
-                      (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "60px"})}) (dom/text "Pri"))
-                      (dom/th (dom/props {:style (merge th-base {:text-align "center" :width "80px"})}) (dom/text "Interval"))
+                      (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Page"))
+                      (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Pri"))
+                      (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Interval"))
                       (dom/th (dom/props {:style (merge th-base {:text-align "left"})}) (dom/text "Content"))))))
 
               ;; Scrollable body
@@ -118,7 +121,7 @@
                   (dom/props {:class "tape-scroll"
                               :style {:--offset offset :--row-height (str row-height "px")}})
                   (dom/table
-                    (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px"}})
+                    (dom/props {:style {:width "100%" :grid-template-columns grid-cols :font-size "14px"}})
                     (e/for [i (Tape offset limit)]
                       (let [item (e/server (nth items-vec i nil))]
                         (when item
@@ -143,7 +146,7 @@
                               (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")
                                                   :--order (inc i)}})
                               (dom/td
-                                (dom/props {:style {:padding "8px 10px" :text-align "center" :width "70px"}})
+                                (dom/props {:style {:padding "8px 10px" :text-align "center"}})
                                 (dom/span
                                   (dom/props {:class "type-badge" :style {:padding "2px 8px" :background type-color}})
                                   (dom/text type-label)))
@@ -151,13 +154,13 @@
                                 (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
                                 (dom/text filename))
                               (dom/td
-                                (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#555" :width "60px"}})
+                                (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#555"}})
                                 (dom/text (if is-doc "-" (str page-num))))
                               (dom/td
-                                (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#555" :width "60px"}})
+                                (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#555"}})
                                 (dom/text (str priority)))
                               (dom/td
-                                (dom/props {:style {:padding "8px 10px" :text-align "center" :color "var(--color-text-secondary)" :font-size "12px" :width "80px"}})
+                                (dom/props {:style {:padding "8px 10px" :text-align "center" :color "var(--color-text-secondary)" :font-size "12px"}})
                                 (dom/text interval-str))
                               (dom/td
                                 (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
@@ -256,7 +259,10 @@
           ;; Reactive watch — fires when "Open" or "View Source" sets nav-target
           nav-val (e/watch !nav-target)]
 
-      ;; Consume nav-target reactively: switch to browse mode when set
+      ;; Consume nav-target reactively
+      (when (= nav-val :start-session)
+        (reset! !mode :session)
+        (reset! !nav-target nil))
       (when (and (map? nav-val) (:doc-id nav-val))
         (reset! !browse-nav nav-val)
         (reset! !mode :browse)
