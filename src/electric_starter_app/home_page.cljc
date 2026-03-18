@@ -114,10 +114,9 @@
         (dom/div
           (dom/props {:style {:margin-bottom "40px"}})
 
-          (e/for-by first [row [["Import"   "Add PDFs or web articles to your collection."    "Import →" :import]
-                                ["Read"     "Extract and structure content from your documents." "Learn →" :learn]
-                                ["Generate" "Create flashcards — basic, cloze, or reverse." "Learn →" :learn]
-                                ["Review"   "Spaced repetition schedules reviews. Sync to Anki when ready." "Queue →" :queue]]]
+          (e/for-by first [row [["Import" "Add PDFs or web articles to your reading queue."                                    "Import →" :import]
+                                ["Read"   "Process topics incrementally. Extract key passages, create cards, refine over time." "Learn →"  :learn]
+                                ["Track"  "Monitor progress across all topics. Spaced repetition handles the timing."           "Queue →"  :queue]]]
             (let [[label description link-text target] row]
               (dom/div
                 (dom/props {:style {:display "flex" :align-items "flex-start" :gap "16px" :padding "16px 0"
