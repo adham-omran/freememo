@@ -15,10 +15,11 @@
   #?(:clj (vec (db/get-review-calendar user-id 30)) :cljs nil))
 
 ;; Format due date for display
-(defn format-due [next-review-at dismissed]
+(defn format-due [next-review-at status]
   #?(:clj
      (cond
-       dismissed "dismissed"
+       (= status "done") "done"
+       (= status "dismissed") "dismissed"
        (nil? next-review-at) "new"
        :else (let [now (java.time.LocalDate/now)
                    due (.toLocalDate (.toLocalDateTime next-review-at))
@@ -56,10 +57,10 @@
                       :title title
                       :priority (:priority row)
                       :next-review (:next_review_at row)
-                      :dismissed (:dismissed row)
+                      :status (or (:status row) "active")
                       :source-type (:source_type row)
                       :display-title display-title
-                      :due-label (format-due (:next_review_at row) (:dismissed row))}))
+                      :due-label (format-due (:next_review_at row) (or (:status row) "active"))}))
               raw)))
      :cljs nil))
 
@@ -69,15 +70,15 @@
      (let [now (java.time.LocalDate/now)
            week-end (.plusDays now 7)]
        {:total (count rows)
-        :dismissed (count (filter :dismissed rows))
+        :inactive (count (filter #(#{"dismissed" "done"} (:status %)) rows))
         :due-today (count (filter (fn [r]
-                                    (and (not (:dismissed r))
+                                    (and (= (:status r) "active")
                                       (some? (:next-review r))
                                       (let [due (.toLocalDate (.toLocalDateTime (:next-review r)))]
                                         (not (.isAfter due now)))))
                             rows))
         :due-week (count (filter (fn [r]
-                                   (and (not (:dismissed r))
+                                   (and (= (:status r) "active")
                                      (some? (:next-review r))
                                      (let [due (.toLocalDate (.toLocalDateTime (:next-review r)))]
                                        (not (.isAfter due week-end)))))
@@ -110,7 +111,7 @@
       (e/for-by first [item [["Due today" (:due-today summary)]
                              ["Due this week" (:due-week summary)]
                              ["Total topics" (:total summary)]
-                             ["Dismissed" (:dismissed summary)]]]
+                             ["Inactive" (:inactive summary)]]]
         (dom/div
           (dom/props {:style {:flex "1" :padding "12px" :background "var(--color-bg-subtle)"
                               :border-radius "var(--radius-md)" :text-align "center"}})
@@ -169,7 +170,8 @@
                 (e/for [i (Tape offset limit)]
                   (let [item (e/server (nth items-vec i nil))]
                     (when item
-                      (let [dismissed (:dismissed item)
+                      (let [item-status (or (:status item) "active")
+                            inactive? (not= item-status "active")
                             topic-type (:topic-type item)
                             source-type (:source-type item)
                             priority (:priority item)
@@ -186,21 +188,22 @@
                                 ["PDF" "#dcfce7"]))]
                         (dom/tr
                           (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")
-                                              :opacity (if dismissed "0.4" "1")
+                                              :opacity (case item-status "done" "0.6" "dismissed" "0.4" "1")
                                               :--order (inc i)}})
                           ;; Priority
                           (dom/td
                             (dom/props {:style {:padding "4px 6px" :text-align "center" :color "#555" :width "50px" :font-size "13px"}})
-                            (dom/text (if dismissed "\u2014" (str (or priority "")))))
+                            (dom/text (if inactive? "\u2014" (str (or priority "")))))
                           ;; Type badge
                           (dom/td
                             (dom/props {:style {:padding "4px 6px" :text-align "center" :width "60px"}})
                             (dom/span
                               (dom/props {:class "type-badge" :style {:background badge-color}})
                               (dom/text badge-text)))
-                          ;; Due
+                          ;; Due / status
                           (dom/td
-                            (dom/props {:style {:padding "4px 6px" :text-align "center" :color "#555" :width "80px" :font-size "12px"}})
+                            (dom/props {:style {:padding "4px 6px" :text-align "center" :width "80px" :font-size "12px"
+                                                :color (case due-label "done" "#16a34a" "dismissed" "#9ca3af" "#555")}})
                             (dom/text due-label))
                           ;; Title (clickable)
                           (dom/td
@@ -222,7 +225,7 @@
 
       (dom/p
         (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px" :margin-top "24px"}})
-        (dom/text "No topics in your queue yet. Import a document from the Documents tab \u2014 it will appear here automatically.")))))
+        (dom/text "No topics in your queue yet. Import a document from the Import tab \u2014 it will appear here automatically.")))))
 
 (e/defn QueuePage [user-id !nav-target navigate!]
   (e/client

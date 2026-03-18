@@ -35,13 +35,14 @@
     (let [id (:content_items/id item)
           children (get children-map id)
           has-children (boolean (seq children))
-          dismissed (:content_items/dismissed item)
+          item-status (or (:content_items/status item) "active")
           preview (content-preview (:content_items/content item) 60)
           !expanded (atom false)
           expanded (e/watch !expanded)]
       (dom/div
         (dom/props {:style {:padding-left "20px"
-                            :opacity (if dismissed "0.4" "1")}})
+                            :opacity (case item-status "done" "0.6" "dismissed" "0.4" "1")
+                            :border-left (when (= item-status "done") "2px solid #86efac")}})
         ;; Row
         (dom/div
           (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
@@ -82,7 +83,7 @@
     (let [doc-id (:documents/id doc)
           filename (:documents/filename doc)
           source-type (or (:documents/source_type doc) "pdf")
-          dismissed (:documents/dismissed doc)
+          doc-status (or (:documents/status doc) "active")
           type-label (case source-type "wikipedia" "Wiki" "web" "Web" "PDF")
           type-color (case source-type "wikipedia" "#fef3c7" "web" "#e0f2fe" "#dcfce7")
           ;; Build children map for this document's extracts
@@ -92,7 +93,8 @@
           !expanded (atom false)
           expanded (e/watch !expanded)]
       (dom/div
-        (dom/props {:style {:opacity (if dismissed "0.4" "1")}})
+        (dom/props {:style {:opacity (case doc-status "done" "0.6" "dismissed" "0.4" "1")
+                            :border-left (when (= doc-status "done") "2px solid #86efac")}})
         ;; Document row
         (dom/div
           (dom/props {:style {:display "flex" :align-items "center" :gap "8px"

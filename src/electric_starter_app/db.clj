@@ -176,9 +176,16 @@
                       REFERENCES content_items(id) ON DELETE CASCADE"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_content_items_parent ON content_items(parent_content_item_id)"])
 
-  ;; Dismissed flag for removing topics from queue without deleting
+  ;; Dismissed flag for removing topics from queue without deleting (legacy)
   (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS dismissed BOOLEAN DEFAULT false"])
   (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS dismissed BOOLEAN DEFAULT false"])
+
+  ;; Status column: 'active', 'done', 'dismissed' (replaces boolean dismissed)
+  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'"])
+  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'"])
+  ;; Backfill from legacy dismissed column
+  (jdbc/execute! ds ["UPDATE documents SET status = 'dismissed' WHERE dismissed = true AND (status IS NULL OR status = 'active')"])
+  (jdbc/execute! ds ["UPDATE content_items SET status = 'dismissed' WHERE dismissed = true AND (status IS NULL OR status = 'active')"])
 
   ;; Indexes for review queue queries
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_pages_next_review ON pages(next_review_at)"])
@@ -252,7 +259,7 @@
 
 (defn get-documents [user-id]
   (let [docs (jdbc/execute! ds
-               (sql/format {:select [:id :filename :file_size :uploaded_at :source_type :html_content]
+               (sql/format {:select [:id :filename :file_size :uploaded_at :source_type :html_content :status]
                             :from [:documents]
                             :where [:= :user_id user-id]
                             :order-by [[:uploaded_at :desc]]}))]
@@ -549,7 +556,7 @@
   [user-id]
   (jdbc/execute! ds
     (sql/format {:select [:ci/id :ci/document_id :ci/page_number :ci/content
-                          :ci/parent_content_item_id :ci/dismissed :ci/created_at]
+                          :ci/parent_content_item_id :ci/status :ci/created_at]
                  :from [[:content_items :ci]]
                  :join [[:documents :d] [:= :ci/document_id :d/id]]
                  :where [:= :d/user_id user-id]
@@ -621,7 +628,7 @@
         FROM documents d
         WHERE d.user_id = ?
           AND (d.next_review_at <= NOW() OR d.next_review_at IS NULL)
-          AND (d.dismissed = false OR d.dismissed IS NULL)
+          AND (d.status = 'active' OR d.status IS NULL)
         UNION ALL
         SELECT 'extract', ci.id, ci.document_id, ci.page_number, ci.priority,
                ci.next_review_at, ci.interval_days, ci.a_factor, ci.review_count,
@@ -629,7 +636,7 @@
         FROM content_items ci JOIN documents d ON ci.document_id = d.id
         WHERE d.user_id = ?
           AND (ci.next_review_at <= NOW() OR ci.next_review_at IS NULL)
-          AND (ci.dismissed = false OR ci.dismissed IS NULL)
+          AND (ci.status = 'active' OR ci.status IS NULL)
         ORDER BY priority ASC, next_review_at ASC NULLS FIRST"
        user-id user-id])
     (catch Exception e
@@ -644,11 +651,11 @@
                      (SELECT COUNT(*) FROM documents d
                       WHERE d.user_id = ?
                         AND (d.next_review_at <= NOW() OR d.next_review_at IS NULL)
-                        AND (d.dismissed = false OR d.dismissed IS NULL))
+                        AND (d.status = 'active' OR d.status IS NULL))
                    + (SELECT COUNT(*) FROM content_items ci JOIN documents d ON ci.document_id = d.id
                       WHERE d.user_id = ?
                         AND (ci.next_review_at <= NOW() OR ci.next_review_at IS NULL)
-                        AND (ci.dismissed = false OR ci.dismissed IS NULL))
+                        AND (ci.status = 'active' OR ci.status IS NULL))
                    AS total"
                   user-id user-id])]
     (or (:total result) 0)))
@@ -660,10 +667,10 @@
                  ["SELECT
                      (SELECT COUNT(*) FROM documents d
                       WHERE d.user_id = ?
-                        AND (d.dismissed = false OR d.dismissed IS NULL))
+                        AND (d.status = 'active' OR d.status IS NULL))
                    + (SELECT COUNT(*) FROM content_items ci JOIN documents d ON ci.document_id = d.id
                       WHERE d.user_id = ?
-                        AND (ci.dismissed = false OR ci.dismissed IS NULL))
+                        AND (ci.status = 'active' OR ci.status IS NULL))
                    AS total"
                   user-id user-id])]
     (or (:total result) 0)))
@@ -673,17 +680,18 @@
   [user-id]
   (try
     (jdbc/execute! ds
-      ["SELECT 'document' AS topic_type, d.id, d.filename AS title, d.priority,
-               d.next_review_at, d.interval_days, d.dismissed,
+      ["SELECT * FROM (
+        SELECT 'document' AS topic_type, d.id, d.filename AS title, d.priority,
+               d.next_review_at, d.interval_days, d.status,
                d.source_type, NULL AS content
         FROM documents d WHERE d.user_id = ?
         UNION ALL
         SELECT 'extract', ci.id, d.filename AS title, ci.priority,
-               ci.next_review_at, ci.interval_days, ci.dismissed,
+               ci.next_review_at, ci.interval_days, ci.status,
                NULL AS source_type, SUBSTRING(ci.content FROM 1 FOR 100) AS content
         FROM content_items ci JOIN documents d ON ci.document_id = d.id
         WHERE d.user_id = ?
-        ORDER BY dismissed ASC NULLS FIRST, priority ASC, next_review_at ASC NULLS FIRST"
+       ) q ORDER BY CASE WHEN status = 'active' OR status IS NULL THEN 0 WHEN status = 'done' THEN 1 ELSE 2 END, priority ASC, next_review_at ASC NULLS FIRST"
        user-id user-id])
     (catch Exception e
       (println "ERROR get-full-queue:" (.getMessage e))
@@ -697,14 +705,14 @@
         SELECT DATE(next_review_at) AS review_date, COUNT(*) AS cnt
         FROM documents WHERE user_id = ?
           AND next_review_at BETWEEN NOW() AND NOW() + ? * INTERVAL '1 day'
-          AND (dismissed = false OR dismissed IS NULL)
+          AND (status = 'active' OR status IS NULL)
         GROUP BY DATE(next_review_at)
         UNION ALL
         SELECT DATE(ci.next_review_at), COUNT(*)
         FROM content_items ci JOIN documents d ON ci.document_id = d.id
         WHERE d.user_id = ?
           AND ci.next_review_at BETWEEN NOW() AND NOW() + ? * INTERVAL '1 day'
-          AND (ci.dismissed = false OR ci.dismissed IS NULL)
+          AND (ci.status = 'active' OR ci.status IS NULL)
         GROUP BY DATE(ci.next_review_at)
       ) sub GROUP BY review_date ORDER BY review_date"
      user-id days user-id days]))
@@ -755,7 +763,17 @@
                 "document" "documents"
                 "extract" "content_items")]
     (jdbc/execute-one! ds
-      [(str "UPDATE " table " SET dismissed = true WHERE id = ?")
+      [(str "UPDATE " table " SET status = 'dismissed', dismissed = true WHERE id = ?")
+       id])))
+
+(defn done-topic
+  "Mark a topic as fully processed (extracted/carded everything useful)."
+  [topic-type id]
+  (let [table (case topic-type
+                "document" "documents"
+                "extract" "content_items")]
+    (jdbc/execute-one! ds
+      [(str "UPDATE " table " SET status = 'done' WHERE id = ?")
        id])))
 
 (defn delete-content-item
@@ -765,18 +783,18 @@
     (sql/format {:delete-from :content_items
                  :where [:= :id id]})))
 
-(defn get-dismissed-topics
-  "Get all dismissed documents and extracts for a user."
+(defn get-inactive-topics
+  "Get all non-active (dismissed + done) documents and extracts for a user."
   [user-id]
   (try
     (jdbc/execute! ds
-      ["SELECT 'document' AS topic_type, d.id, d.filename AS title, d.uploaded_at
+      ["SELECT 'document' AS topic_type, d.id, d.filename AS title, d.uploaded_at, d.status
         FROM documents d
-        WHERE d.user_id = ? AND d.dismissed = true
+        WHERE d.user_id = ? AND d.status IN ('dismissed', 'done')
         UNION ALL
-        SELECT 'extract', ci.id, SUBSTRING(ci.content FROM 1 FOR 100) AS title, ci.created_at AS uploaded_at
+        SELECT 'extract', ci.id, SUBSTRING(ci.content FROM 1 FOR 100) AS title, ci.created_at AS uploaded_at, ci.status
         FROM content_items ci JOIN documents d ON ci.document_id = d.id
-        WHERE d.user_id = ? AND ci.dismissed = true
+        WHERE d.user_id = ? AND ci.status IN ('dismissed', 'done')
         ORDER BY uploaded_at DESC"
        user-id user-id])
     (catch Exception e
@@ -784,11 +802,11 @@
       [])))
 
 (defn restore-topic
-  "Restore a dismissed topic back to the review queue."
+  "Restore a dismissed/done topic back to the active review queue."
   [topic-type id]
   (let [table (case topic-type
                 "document" "documents"
                 "extract" "content_items")]
     (jdbc/execute-one! ds
-      [(str "UPDATE " table " SET dismissed = false, next_review_at = NULL WHERE id = ?")
+      [(str "UPDATE " table " SET status = 'active', dismissed = false, next_review_at = NULL WHERE id = ?")
        id])))
