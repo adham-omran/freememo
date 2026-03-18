@@ -24,8 +24,8 @@
   #?(:clj (db/get-total-topic-count user-id)
      :cljs 0))
 
-(defn get-dismissed-topics* [_refresh user-id]
-  #?(:clj (vec (db/get-dismissed-topics user-id))
+(defn get-inactive-topics* [_refresh user-id]
+  #?(:clj (vec (db/get-inactive-topics user-id))
      :cljs nil))
 
 (defn restore-topic* [topic-type id]
@@ -168,32 +168,39 @@
           (dom/p
             (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px" :margin-top "24px"}})
             (dom/text (if (zero? total-count)
-                        "No topics yet. Import a document from the Documents tab to start learning."
+                        "No topics yet. Import a document from the Import tab to start learning."
                         "All caught up! No topics due for review."))))
 
-        ;; Dismissed items section
-        (let [!show-dismissed (atom false)
-              show-dismissed (e/watch !show-dismissed)
-              dismissed (when show-dismissed
-                          (e/server (get-dismissed-topics* refresh user-id)))]
+        ;; Inactive items section (done + dismissed)
+        (let [!show-inactive (atom false)
+              show-inactive (e/watch !show-inactive)
+              inactive (when show-inactive
+                         (e/server (get-inactive-topics* refresh user-id)))]
           (dom/div
             (dom/props {:style {:margin-top "24px" :border-top "1px solid var(--color-border)" :padding-top "12px"}})
             (dom/button
               (dom/props {:class "btn btn-sm btn-secondary" :style {:color "var(--color-text-secondary)"}})
-              (dom/text (if show-dismissed "Hide dismissed" "Show dismissed"))
-              (dom/On "click" (fn [_] (swap! !show-dismissed not)) nil))
+              (dom/text (if show-inactive "Hide inactive" "Show inactive"))
+              (dom/On "click" (fn [_] (swap! !show-inactive not)) nil))
 
-            (when (and show-dismissed (seq dismissed))
+            (when (and show-inactive (seq inactive))
               (dom/div
                 (dom/props {:style {:margin-top "8px"}})
-                (e/for-by :id [item dismissed]
+                (e/for-by :id [item inactive]
                   (let [topic-type (:topic_type item)
                         item-id (:id item)
                         title (or (:title item) "-")
+                        item-status (or (:status item) "dismissed")
                         type-label (if (= topic-type "document") "Doc" "Extract")]
                     (dom/div
                       (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
                                           :padding "8px 10px" :border-bottom "1px solid #f0f0f0"}})
+                      ;; Status badge
+                      (dom/span
+                        (dom/props {:style {:padding "2px 6px" :border-radius "4px" :font-size "10px" :font-weight "600"
+                                            :background (if (= item-status "done") "#dcfce7" "#f3f4f6")
+                                            :color (if (= item-status "done") "#16a34a" "#6b7280")}})
+                        (dom/text item-status))
                       (dom/span
                         (dom/props {:class "type-badge" :style {:padding "2px 8px"
                                                                 :background (if (= topic-type "document") "#dcfce7" "#44C2FF")}})

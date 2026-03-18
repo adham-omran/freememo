@@ -58,6 +58,17 @@
                 (dom/On "click" (fn [_] (navigate! :learn)) nil))
               (dom/button
                 (dom/props {:class "btn btn-sm btn-secondary"
+                            :style {:color "#16a34a" :border "1px solid #16a34a"}
+                            :title "Mark as fully processed (extracted/carded everything useful)"})
+                (dom/text "Done")
+                (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
+                      [?token _] (e/Token event)]
+                  (when-some [token ?token]
+                    (e/server (db/done-topic "extract" content-item-id))
+                    (token)
+                    (navigate! :learn))))
+              (dom/button
+                (dom/props {:class "btn btn-sm btn-secondary"
                             :title "Remove from review queue (keep content)"})
                 (dom/text "Dismiss")
                 (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)

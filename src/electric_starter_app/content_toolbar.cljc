@@ -195,11 +195,14 @@
                 (dom/text (str " (" gen-pending ")")))
               (dom/On "click"
                 (fn [_]
-                  (swap! !gen-state (fn [s]
-                                      (-> s
-                                        (update :queue conj {:id (str (random-uuid))
-                                                             :selection (editor/get-selected-text!)})
-                                        (assoc :error nil)))))
+                  (let [sel (editor/get-selection!)]
+                    (when sel
+                      (editor/highlight-range! (:index sel) (:length sel) :color "#FBBF24"))
+                    (swap! !gen-state (fn [s]
+                                        (-> s
+                                          (update :queue conj {:id (str (random-uuid))
+                                                               :selection (when sel (:text sel))})
+                                          (assoc :error nil))))))
                 nil)))
 
           ;; Generate with Prompt button
@@ -212,7 +215,10 @@
               (when (and (pos? pending) (nil? (:error prompt-gen-state)))
                 (dom/text (str " (" pending ")"))))
             (dom/On "click" (fn [_]
-                              (reset! !captured-selection (editor/get-selected-text!))
+                              (let [sel (editor/get-selection!)]
+                                (when sel
+                                  (editor/highlight-range! (:index sel) (:length sel) :color "#FBBF24"))
+                                (reset! !captured-selection (when sel (:text sel))))
                               (reset! !prompt-dialog-kind card-type)
                               (reset! !show-prompt-dialog true))
               nil)))) ;; end when llm-enabled? (generation UI)
