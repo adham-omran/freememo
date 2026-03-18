@@ -23,6 +23,7 @@
               doc-id (e/server (:content_items/document_id item))
               page-num (e/server (:content_items/page_number item))
               content (e/server (or (:content_items/content item) ""))
+              extract-status (e/server (or (:content_items/status item) "active"))
               filename (e/server
                          (when doc-id
                            (-> (db/get-documents-by-id user-id doc-id)
@@ -56,27 +57,49 @@
                 (dom/props {:class "btn btn-sm btn-secondary" :style {:background "#f0f0f0"}})
                 (dom/text "Back to Learn")
                 (dom/On "click" (fn [_] (navigate! :learn)) nil))
-              (dom/button
-                (dom/props {:class "btn btn-sm btn-secondary"
-                            :style {:color "#16a34a" :border "1px solid #16a34a"}
-                            :title "Mark as fully processed (extracted/carded everything useful)"})
-                (dom/text "Done")
-                (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
-                      [?token _] (e/Token event)]
-                  (when-some [token ?token]
-                    (e/server (db/done-topic "extract" content-item-id))
-                    (token)
-                    (navigate! :learn))))
-              (dom/button
-                (dom/props {:class "btn btn-sm btn-secondary"
-                            :title "Remove from review queue (keep content)"})
-                (dom/text "Dismiss")
-                (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
-                      [?token _] (e/Token event)]
-                  (when-some [token ?token]
-                    (e/server (db/dismiss-topic "extract" content-item-id))
-                    (token)
-                    (navigate! :learn))))
+              (if (= extract-status "active")
+                ;; Active: show Done + Dismiss
+                (dom/span
+                  (dom/props {:style {:display "contents"}})
+                  (dom/button
+                    (dom/props {:class "btn btn-sm btn-secondary"
+                                :style {:color "#16a34a" :border "1px solid #16a34a"}
+                                :title "Mark as fully processed (extracted/carded everything useful)"})
+                    (dom/text "Done")
+                    (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
+                          [?token _] (e/Token event)]
+                      (when-some [token ?token]
+                        (e/server (db/done-topic "extract" content-item-id))
+                        (token)
+                        (navigate! :learn))))
+                  (dom/button
+                    (dom/props {:class "btn btn-sm btn-secondary"
+                                :title "Remove from review queue (keep content)"})
+                    (dom/text "Dismiss")
+                    (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
+                          [?token _] (e/Token event)]
+                      (when-some [token ?token]
+                        (e/server (db/dismiss-topic "extract" content-item-id))
+                        (token)
+                        (navigate! :learn)))))
+                ;; Done/Dismissed: show Restore
+                (dom/span
+                  (dom/props {:style {:display "contents"}})
+                  (dom/span
+                    (dom/props {:style {:font-size "12px" :color (if (= extract-status "done") "#16a34a" "#9ca3af")
+                                        :font-weight "600"}})
+                    (dom/text extract-status))
+                  (dom/button
+                    (dom/props {:class "btn btn-sm btn-secondary"
+                                :style {:color "var(--color-primary)" :border "1px solid var(--color-primary)"}
+                                :title "Restore to active review queue"})
+                    (dom/text "Restore")
+                    (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
+                          [?token _] (e/Token event)]
+                      (when-some [token ?token]
+                        (e/server (db/restore-topic "extract" content-item-id))
+                        (token)
+                        (navigate! :learn))))))
               (dom/button
                 (dom/props {:class "btn btn-sm btn-danger-fill" :style {:padding "4px 10px" :font-size "12px"}
                             :title "Delete this extract and its cards"})
