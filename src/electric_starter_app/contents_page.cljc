@@ -60,7 +60,7 @@
           (dom/span
             (dom/props {:class "type-badge" :style {:background "#44C2FF"}})
             (dom/text "Ext"))
-          ;; Content preview — double-click opens
+          ;; Content preview — click opens
           (dom/span
             (dom/props {:style {:font-size "13px" :color "#333" :cursor "pointer"
                                 :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}
@@ -72,7 +72,22 @@
               (fn [_]
                 (reset! !nav-target {:content-item-id id})
                 (navigate! :extract))
-              nil)))
+              nil))
+          ;; Review button — only for extracts with children
+          (when has-children
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-secondary"
+                          :style {:padding "2px 6px" :font-size "10px" :flex-shrink "0"}
+                          :title "Review this extract and its children"})
+              (dom/text "Review")
+              (dom/On "click"
+                (fn [e]
+                  (.stopPropagation e)
+                  (reset! !nav-target {:subset-review {:topic-type "extract"
+                                                       :root-id id
+                                                       :root-name (or preview "(extract)")}})
+                  (navigate! :learn))
+                nil))))
         ;; Children
         (when (and expanded has-children)
           (e/for-by :content_items/id [child children]
@@ -112,7 +127,7 @@
           (dom/span
             (dom/props {:class "type-badge" :style {:background type-color}})
             (dom/text type-label))
-          ;; Filename — double-click opens
+          ;; Filename — click opens
           (dom/span
             (dom/props {:style {:font-size "14px" :font-weight "500" :color "#222" :cursor "pointer"}
                         :title "Click to open"})
@@ -122,6 +137,20 @@
             (dom/On "click"
               (fn [_]
                 (reset! !nav-target {:doc-id doc-id})
+                (navigate! :learn))
+              nil))
+          ;; Review button
+          (dom/button
+            (dom/props {:class "btn btn-sm btn-secondary"
+                        :style {:padding "2px 8px" :font-size "11px" :flex-shrink "0"}
+                        :title "Review all extracts in this document"})
+            (dom/text "Review")
+            (dom/On "click"
+              (fn [e]
+                (.stopPropagation e)
+                (reset! !nav-target {:subset-review {:topic-type "document"
+                                                     :root-id doc-id
+                                                     :root-name filename}})
                 (navigate! :learn))
               nil)))
         ;; Children (extracts)
