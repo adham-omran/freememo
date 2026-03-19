@@ -333,13 +333,19 @@
         (dom/div
           (dom/props {:class "card"})
           (dom/h3 (dom/props {:class "section-title"}) (dom/text "Keyboard Shortcuts"))
-          (dom/table
-            (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px"}})
-            (dom/tr
-              (dom/td (dom/props {:style {:padding "6px 0" :color "var(--color-text-secondary)" :width "180px"}})
-                (dom/text (str mod-key "+Shift+E")))
-              (dom/td (dom/props {:style {:padding "6px 0" :color "var(--color-text-primary)"}})
-                (dom/text "Extract topic from selection"))))
-          (dom/div
-            (dom/props {:class "hint" :style {:margin-top "8px"}})
-            (dom/text "More shortcuts coming soon.")))))))
+          (let [shortcut-row (fn [key desc]
+                              {:key (str mod-key "+Shift+" key) :desc desc})
+                shortcuts [(shortcut-row "E" "Extract topic from selection")
+                           (shortcut-row "G" "Generate cards")
+                           (shortcut-row "S" "Scan Page (OCR)")
+                           (shortcut-row "X" "Anki Sync")
+                           (shortcut-row "D" "Mark Done")
+                           (shortcut-row "L" "Postpone (Later)")]]
+            (dom/table
+              (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px"}})
+              (e/for-by :key [s shortcuts]
+                (dom/tr
+                  (dom/td (dom/props {:style {:padding "6px 0" :color "var(--color-text-secondary)" :width "180px"}})
+                    (dom/text (:key s)))
+                  (dom/td (dom/props {:style {:padding "6px 0" :color "var(--color-text-primary)"}})
+                    (dom/text (:desc s))))))))))))

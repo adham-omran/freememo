@@ -10,6 +10,7 @@
    [electric-starter-app.ocr-page :refer [start-drag!]]
    #?(:clj [electric-starter-app.db :as db])
    #?(:clj [electric-starter-app.settings :as settings])
+   [electric-starter-app.keyboard :as keyboard]
    [electric-starter-app.card-components :as card-components]))
 
 #?(:clj (defonce !refresh (atom 0)))
@@ -68,6 +69,8 @@
                                 :style {:color "#16a34a" :border "1px solid #16a34a"}
                                 :title "Mark as fully processed (extracted/carded everything useful)"})
                     (dom/text "Done")
+                    (reset! keyboard/!done-btn-ref dom/node)
+                    (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
                     (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
                           [?token _] (e/Token event)]
                       (when-some [token ?token]

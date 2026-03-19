@@ -6,7 +6,8 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [electric-starter-app.anki-sync-helpers :as helpers]
-   [electric-starter-app.anki-sync-panels :as panels]))
+   [electric-starter-app.anki-sync-panels :as panels]
+   [electric-starter-app.keyboard :as keyboard]))
 
 (e/defn AnkiSyncInnerBody
   "Form-config state (scope, fields, options, tags) + delegate to AnkiSyncSyncBody.
@@ -63,6 +64,8 @@
         (dom/text (if (and unsynced-count (pos? unsynced-count))
                     (str "Anki Sync (" unsynced-count ")...")
                     "Anki Sync..."))
+        (reset! keyboard/!anki-sync-btn-ref dom/node)
+        (e/on-unmount (fn [] (reset! keyboard/!anki-sync-btn-ref nil)))
         (dom/On "click" (fn [_] (reset! !show-modal true)) nil))
 
       ;; Modal
