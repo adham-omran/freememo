@@ -9,6 +9,7 @@
    [electric-starter-app.content-card-table :refer [ContentCardTable]]
    [electric-starter-app.ocr-page :refer [start-drag!]]
    #?(:clj [electric-starter-app.db :as db])
+   #?(:clj [electric-starter-app.settings :as settings])
    [electric-starter-app.card-components :as card-components]))
 
 #?(:clj (defonce !refresh (atom 0)))
@@ -19,7 +20,8 @@
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
 
       (if (some? content-item-id)
-        (let [item (e/server (when content-item-id (db/get-content-item-by-id content-item-id)))
+        (let [card-font-size (e/server (settings/get-card-font-size user-id))
+              item (e/server (when content-item-id (db/get-content-item-by-id content-item-id)))
               doc-id (e/server (:content_items/document_id item))
               page-num (e/server (:content_items/page_number item))
               content (e/server (or (:content_items/content item) ""))
@@ -159,7 +161,8 @@
 
               ;; Shared card table
               (ContentCardTable {:query-mode :extract
-                                 :content-item-id content-item-id}
+                                 :content-item-id content-item-id
+                                 :card-font-size card-font-size}
                 !refresh))))
 
         ;; No content-item-id

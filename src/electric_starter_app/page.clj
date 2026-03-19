@@ -1,31 +1,34 @@
 (ns electric-starter-app.page
   "Business logic for PDF page OCR operations."
   (:require
-    [electric-starter-app.db :as db]
-    [electric-starter-app.ocr :as ocr]))
+   [electric-starter-app.db :as db]
+   [electric-starter-app.ocr :as ocr]))
 
 (defn extract-page-text
   "Extract text from a specific page of a document and save to database.
-   Returns {:success true :text ...} or {:success false :error ...}"
-  [user-id document-id page-number enc-key]
-  (try
-    ;; Get the PDF bytes from database
-    (let [docs (db/get-documents-by-id user-id document-id)
-          doc (first docs)]
-      (if-not doc
-        {:success false :error "Document not found"}
-        (let [pdf-bytes (:documents/file_data doc)
-              ;; Extract text using OCR
-              result (ocr/extract-text user-id pdf-bytes (dec page-number) enc-key)]  ; Convert to 0-indexed
-          (if (:success result)
-            (do
-              ;; Save to database
-              (db/save-page-text document-id page-number (:text result))
-              {:success true :text (:text result)})
-            result))))
-    (catch Exception e
-      (println "ERROR [extract-page-text]:" (.getMessage e))
-      {:success false :error (str "Failed to extract text: " (.getMessage e))})))
+   Returns {:success true :text ...} or {:success false :error ...}
+   DPI defaults to 150 if not provided."
+  ([user-id document-id page-number enc-key]
+   (extract-page-text user-id document-id page-number enc-key 150))
+  ([user-id document-id page-number enc-key dpi]
+   (try
+     ;; Get the PDF bytes from database
+     (let [docs (db/get-documents-by-id user-id document-id)
+           doc (first docs)]
+       (if-not doc
+         {:success false :error "Document not found"}
+         (let [pdf-bytes (:documents/file_data doc)
+               ;; Extract text using OCR
+               result (ocr/extract-text user-id pdf-bytes (dec page-number) enc-key dpi)] ; Convert to 0-indexed
+           (if (:success result)
+             (do
+               ;; Save to database
+               (db/save-page-text document-id page-number (:text result))
+               {:success true :text (:text result)})
+             result))))
+     (catch Exception e
+       (println "ERROR [extract-page-text]:" (.getMessage e))
+       {:success false :error (str "Failed to extract text: " (.getMessage e))}))))
 
 (defn get-page-text
   "Retrieve saved OCR text for a page."
@@ -50,7 +53,7 @@
   "Save edited OCR text (as HTML) for a page. Returns {:success true} or {:success false :error msg}."
   [document-id page-number html]
   (try
-    (db/save-page-text document-id page-number html)  ; Reuse existing function, now stores HTML
+    (db/save-page-text document-id page-number html) ; Reuse existing function, now stores HTML
     {:success true}
     (catch Exception e
       (println "ERROR [save-page-html-impl]:" (.getMessage e))

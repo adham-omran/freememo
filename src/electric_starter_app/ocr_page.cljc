@@ -170,6 +170,9 @@
                 ;; Prompt generation queue (same shape)
                 !prompt-gen-state (atom {:queue [] :active nil :error nil})
                 prompt-gen-state (e/watch !prompt-gen-state)
+                ;; User settings
+                scan-dpi (e/server (settings/get-scan-dpi user-id))
+                card-font-size (e/server (settings/get-card-font-size user-id))
                 ;; Extraction tracking — server-side for true parallelism
                 scanning-pages (e/server (e/watch !scanning-pages))
                 ocr-errors (e/server (e/watch !ocr-errors))
@@ -276,7 +279,7 @@
                                   (do
                                     (future
                                       (try
-                                        (let [result (page/extract-page-text uid doc page ek)]
+                                        (let [result (page/extract-page-text uid doc page ek scan-dpi)]
                                           (if (:success result)
                                             (swap! !refresh inc)
                                             (swap! !ocr-errors assoc [doc page] (:error result))))
@@ -403,7 +406,8 @@
 
                 (ContentCardTable {:query-mode :page
                                    :doc-id selected-doc
-                                   :page-number current-pdf-page}
+                                   :page-number current-pdf-page
+                                   :card-font-size card-font-size}
                   !refresh)))))))))
 
 ;; Old inline toolbar + card table code was here — removed, now uses shared ContentToolbar + ContentCardTable
