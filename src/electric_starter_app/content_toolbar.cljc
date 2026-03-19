@@ -9,6 +9,7 @@
    [electric-starter-app.ocr-modals :refer [ExportModal PromptDialog AddCardModal]]
    #?(:clj [electric-starter-app.cards :as cards])
    #?(:clj [electric-starter-app.settings :as settings])
+   [electric-starter-app.keyboard :as keyboard]
    #?(:clj [electric-starter-app.db :as db])))
 
 (defn get-unsynced-count* [_refresh doc-id page-number content-item-id]
@@ -236,6 +237,8 @@
                                  "Extract selected text as a child content item"
                                  "Extract selected text as a content item")})
             (dom/text "Extract")
+            (reset! keyboard/!extract-btn-ref dom/node)
+            (e/on-unmount (fn [] (reset! keyboard/!extract-btn-ref nil)))
             (dom/On "click"
               (fn [_]
                 (when-let [{:keys [html index length]} (editor/get-selection-html!)]
