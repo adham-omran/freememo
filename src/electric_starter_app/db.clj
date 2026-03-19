@@ -180,12 +180,15 @@
   (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS dismissed BOOLEAN DEFAULT false"])
   (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS dismissed BOOLEAN DEFAULT false"])
 
-  ;; Status column: 'active', 'done', 'dismissed' (replaces boolean dismissed)
+  ;; Status column: 'active', 'done' (replaces boolean dismissed)
   (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'"])
   (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'"])
   ;; Backfill from legacy dismissed column
   (jdbc/execute! ds ["UPDATE documents SET status = 'dismissed' WHERE dismissed = true AND (status IS NULL OR status = 'active')"])
   (jdbc/execute! ds ["UPDATE content_items SET status = 'dismissed' WHERE dismissed = true AND (status IS NULL OR status = 'active')"])
+  ;; Migrate dismissed → done (dismiss concept removed)
+  (jdbc/execute! ds ["UPDATE documents SET status = 'done' WHERE status = 'dismissed'"])
+  (jdbc/execute! ds ["UPDATE content_items SET status = 'done' WHERE status = 'dismissed'"])
 
   ;; Indexes for review queue queries
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_pages_next_review ON pages(next_review_at)"])
@@ -661,7 +664,7 @@
     (or (:total result) 0)))
 
 (defn get-total-topic-count
-  "Count ALL topics (due and not due, excluding dismissed)."
+  "Count ALL topics (due and not due, excluding done)."
   [user-id]
   (let [result (jdbc/execute-one! ds
                  ["SELECT
@@ -756,16 +759,6 @@
              WHERE id = ?")
        (double days) id])))
 
-(defn dismiss-topic
-  "Remove a topic from the review queue without deleting it."
-  [topic-type id]
-  (let [table (case topic-type
-                "document" "documents"
-                "extract" "content_items")]
-    (jdbc/execute-one! ds
-      [(str "UPDATE " table " SET status = 'dismissed', dismissed = true WHERE id = ?")
-       id])))
-
 (defn done-topic
   "Mark a topic as fully processed (extracted/carded everything useful)."
   [topic-type id]
@@ -808,7 +801,7 @@
                 "document" "documents"
                 "extract" "content_items")]
     (jdbc/execute-one! ds
-      [(str "UPDATE " table " SET status = 'active', dismissed = false, next_review_at = NULL WHERE id = ?")
+      [(str "UPDATE " table " SET status = 'active', next_review_at = NULL WHERE id = ?")
        id])))
 
 ;; ---------------------------------------------------------------------------

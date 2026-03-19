@@ -41,13 +41,14 @@
           !expanded (atom false)
           expanded (e/watch !expanded)]
       (dom/div
-        (dom/props {:style {:padding-left "20px"
-                            :opacity (case item-status "done" "0.6" "dismissed" "0.4" "1")
-                            :border-left (when (= item-status "done") "2px solid #86efac")}})
+        (dom/props {:style {:padding-left "20px"}})
         ;; Row
         (dom/div
           (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
-                              :padding "4px 0" :border-bottom "1px solid #f5f5f5"}})
+                              :padding "4px 0" :border-bottom "1px solid #f5f5f5"
+                              :opacity (case item-status "done" "0.6" "1")
+                              :border-left (when (= item-status "done") "2px solid #86efac")
+                              :padding-left (when (= item-status "done") "8px")}})
           ;; Arrow
           (if has-children
             (dom/span
@@ -109,12 +110,13 @@
           !expanded (atom false)
           expanded (e/watch !expanded)]
       (dom/div
-        (dom/props {:style {:opacity (case doc-status "done" "0.6" "dismissed" "0.4" "1")
-                            :border-left (when (= doc-status "done") "2px solid #86efac")}})
         ;; Document row
         (dom/div
           (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
-                              :padding "6px 0" :border-bottom "1px solid #e8e8e8"}})
+                              :padding "6px 0" :border-bottom "1px solid #e8e8e8"
+                              :opacity (case doc-status "done" "0.6" "1")
+                              :border-left (when (= doc-status "done") "2px solid #86efac")
+                              :padding-left (when (= doc-status "done") "8px")}})
           ;; Arrow
           (if has-children
             (dom/span

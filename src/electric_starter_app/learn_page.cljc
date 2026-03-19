@@ -64,7 +64,7 @@
           (let [!nav (atom nav)]
             (OcrPage user-id enc-key !nav llm-enabled?)))))))
 
-(e/defn LearnOverview [user-id !mode]
+(e/defn LearnOverview [user-id !mode navigate!]
   (e/client
     (dom/div
       (dom/props {:style {:padding "16px" :max-width "1200px" :width "100%" :margin "0 auto"
@@ -155,7 +155,8 @@
                   (dom/text (str "Showing " display-limit " of " item-count " due. "))
                   (dom/a
                     (dom/props {:style {:color "var(--color-primary)" :cursor "pointer" :text-decoration "none" :font-weight "500"}})
-                    (dom/text "See full queue →"))))))
+                    (dom/text "See full queue →")
+                    (dom/On "click" (fn [_] (navigate! :queue)) nil))))))
 
           ;; Empty state
           (dom/p
@@ -164,7 +165,7 @@
                         "No topics yet. Import a document from the Import tab to start learning."
                         "All caught up! No topics due for review."))))
 
-        ;; Inactive items section (done + dismissed)
+        ;; Inactive items section (done)
         (let [!show-inactive (atom false)
               show-inactive (e/watch !show-inactive)
               inactive (when show-inactive
@@ -186,7 +187,7 @@
                         title (if (= topic-type "extract")
                                 (util/extract-preview raw-title 80)
                                 (util/display-name raw-title))
-                        item-status (or (:status item) "dismissed")
+                        item-status (or (:status item) "done")
                         type-label (if (= topic-type "document") "Doc" "Extract")]
                     (dom/div
                       (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
@@ -268,7 +269,7 @@
 
       (case mode
         :overview
-        (LearnOverview user-id !mode)
+        (LearnOverview user-id !mode navigate!)
 
         :browse
         (when browse-nav

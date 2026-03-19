@@ -10,6 +10,16 @@
    #?(:clj [electric-starter-app.extractor :as extractor])))
 
 ;; Server-side wrappers
+(defn format-timestamp* [ts]
+  #?(:clj (when ts
+            (let [fmt (java.time.format.DateTimeFormatter/ofPattern "MMM d, yyyy")
+                  instant (if (instance? java.sql.Timestamp ts)
+                            (.toInstant ts)
+                            (.toInstant ts))
+                  ldt (java.time.LocalDateTime/ofInstant instant (java.time.ZoneId/systemDefault))]
+              (.format ldt fmt)))
+     :cljs nil))
+
 (defn save-web-document* [user-id title html source-type source-url]
   #?(:clj (db/save-web-document user-id title (cleaner/clean-html html) source-type source-url)
      :cljs nil))
@@ -35,7 +45,7 @@
                 (let [{:keys [sections annotated-html]} result
                       clean-sections (mapv #(update % :content cleaner/clean-html) sections)]
                   (println (str "INFO [import] auto-extract: " (count clean-sections)
-                                " topics in " elapsed "ms"))
+                             " topics in " elapsed "ms"))
                   ;; Save content items
                   (when (seq clean-sections)
                     (db/batch-create-content-items document-id page-number clean-sections))
@@ -163,10 +173,10 @@
                                        did))]
                         (if doc-id
                           (do (e/server (swap! !refresh inc))
-                              (token)
-                              (reset! !show false)
-                              (reset! !nav-target {:doc-id doc-id})
-                              (navigate! :learn))
+                            (token)
+                            (reset! !show false)
+                            (reset! !nav-target {:doc-id doc-id})
+                            (navigate! :learn))
                           (token "Failed to save article")))
                       (token "Title and content are required"))))))))))))
 
@@ -230,24 +240,24 @@
                         ae? (:auto-extract event)]
                     (if (seq url-val)
                       (let [result (e/server
-                                    (let [fetch-result (fetch-url* url-val)]
-                                      (if (:success fetch-result)
-                                        (let [raw-html (:html fetch-result)
-                                              title (:title fetch-result)
-                                              did (save-web-document* user-id title raw-html
-                                                    (:source-type fetch-result) (:url fetch-result))]
-                                          (when (and ae? did)
+                                     (let [fetch-result (fetch-url* url-val)]
+                                       (if (:success fetch-result)
+                                         (let [raw-html (:html fetch-result)
+                                               title (:title fetch-result)
+                                               did (save-web-document* user-id title raw-html
+                                                     (:source-type fetch-result) (:url fetch-result))]
+                                           (when (and ae? did)
                                             ;; raw-html is already cleaned by fetch-url*
-                                            (try-auto-extract* did 1 raw-html))
-                                          {:success true :doc-id did})
-                                        {:success false :error (:error fetch-result)})))]
+                                             (try-auto-extract* did 1 raw-html))
+                                           {:success true :doc-id did})
+                                         {:success false :error (:error fetch-result)})))]
                         (if (:success result)
                           (if (:doc-id result)
                             (do (e/server (swap! !refresh inc))
-                                (token)
-                                (reset! !show false)
-                                (reset! !nav-target {:doc-id (:doc-id result)})
-                                (navigate! :learn))
+                              (token)
+                              (reset! !show false)
+                              (reset! !nav-target {:doc-id (:doc-id result)})
+                              (navigate! :learn))
                             (token "Failed to save article"))
                           (token (:error result))))
                       (token "Please enter a URL"))))))))))))
@@ -256,7 +266,7 @@
 (e/defn ImportPage [user-id !refresh !nav-target navigate! enc-key llm-enabled?]
   (e/client
     (dom/div
-      (dom/props {:style {:padding "var(--sp-4)" :max-width "720px"}})
+      (dom/props {:style {:padding "var(--sp-4)" :max-width "720px" :width "100%" :margin "0 auto"}})
       (dom/h2
         (dom/props {:style {:margin "0 0 4px 0" :font-size "20px"}})
         (dom/text "Import"))
@@ -276,9 +286,9 @@
                                 :padding "20px" :cursor "pointer" :transition "border-color 0.15s, box-shadow 0.15s"
                                 :background "var(--color-bg-surface)"}})
             (dom/On "mouseenter" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-primary)")
-                                        (set! (.-boxShadow (.-style (.-currentTarget e))) "0 0 0 1px var(--color-primary)")) nil)
+                                   (set! (.-boxShadow (.-style (.-currentTarget e))) "0 0 0 1px var(--color-primary)")) nil)
             (dom/On "mouseleave" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-border)")
-                                        (set! (.-boxShadow (.-style (.-currentTarget e))) "none")) nil)
+                                   (set! (.-boxShadow (.-style (.-currentTarget e))) "none")) nil)
             (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil)
             (dom/div
               (dom/props {:style {:font-size "24px" :margin-bottom "8px"}})
@@ -300,12 +310,12 @@
                       (let [form-data (js/FormData.)]
                         (.append form-data "file" file)
                         (-> (js/fetch "/api/upload-pdf" (clj->js {:method "POST" :body form-data}))
-                            (.then (fn [resp] (.json resp)))
-                            (.then (fn [^js data]
-                                     (when (.-success data)
-                                       (reset! !nav-target {:doc-id (.-doc_id data)})
-                                       (navigate! :learn))))
-                            (.catch (fn [err] (js/console.error "Upload failed:" err))))))))
+                          (.then (fn [resp] (.json resp)))
+                          (.then (fn [^js data]
+                                   (when (.-success data)
+                                     (reset! !nav-target {:doc-id (.-doc_id data)})
+                                     (navigate! :learn))))
+                          (.catch (fn [err] (js/console.error "Upload failed:" err))))))))
                 nil))))
 
         ;; Paste Article card
@@ -316,9 +326,9 @@
                                 :padding "20px" :cursor "pointer" :transition "border-color 0.15s, box-shadow 0.15s"
                                 :background "var(--color-bg-surface)"}})
             (dom/On "mouseenter" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-primary)")
-                                        (set! (.-boxShadow (.-style (.-currentTarget e))) "0 0 0 1px var(--color-primary)")) nil)
+                                   (set! (.-boxShadow (.-style (.-currentTarget e))) "0 0 0 1px var(--color-primary)")) nil)
             (dom/On "mouseleave" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-border)")
-                                        (set! (.-boxShadow (.-style (.-currentTarget e))) "none")) nil)
+                                   (set! (.-boxShadow (.-style (.-currentTarget e))) "none")) nil)
             (dom/On "click" (fn [_] (reset! !show-paste true)) nil)
             (dom/div
               (dom/props {:style {:font-size "24px" :margin-bottom "8px"}})
@@ -340,9 +350,9 @@
                                 :padding "20px" :cursor "pointer" :transition "border-color 0.15s, box-shadow 0.15s"
                                 :background "var(--color-bg-surface)"}})
             (dom/On "mouseenter" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-primary)")
-                                        (set! (.-boxShadow (.-style (.-currentTarget e))) "0 0 0 1px var(--color-primary)")) nil)
+                                   (set! (.-boxShadow (.-style (.-currentTarget e))) "0 0 0 1px var(--color-primary)")) nil)
             (dom/On "mouseleave" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-border)")
-                                        (set! (.-boxShadow (.-style (.-currentTarget e))) "none")) nil)
+                                   (set! (.-boxShadow (.-style (.-currentTarget e))) "none")) nil)
             (dom/On "click" (fn [_] (reset! !show-url true)) nil)
             (dom/div
               (dom/props {:style {:font-size "24px" :margin-bottom "8px"}})
@@ -370,7 +380,8 @@
             (e/for-by :documents/id [doc recent-docs]
               (let [doc-id (:documents/id doc)
                     filename (or (:documents/filename doc) "")
-                    source-type (or (:documents/source_type doc) "pdf")]
+                    source-type (or (:documents/source_type doc) "pdf")
+                    uploaded (e/server (format-timestamp* (:documents/uploaded_at doc)))]
                 (dom/div
                   (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
                                       :padding "8px 0" :border-bottom "1px solid var(--color-border)"}})
@@ -383,11 +394,14 @@
                                                       "#dcfce7")}})
                     (dom/text (case source-type "wikipedia" "Wiki" "web" "Web" "PDF")))
                   (dom/a
-                    (dom/props {:style {:font-size "14px" :color "var(--color-primary)" :cursor "pointer"
-                                        :text-decoration "none"}})
+                    (dom/props {:style {:flex "1" :font-size "14px" :color "var(--color-primary)" :cursor "pointer"
+                                        :text-decoration "none" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
                     (dom/text (util/display-name filename))
                     (dom/On "click"
                       (fn [_]
                         (reset! !nav-target {:doc-id doc-id})
                         (navigate! :learn))
-                      nil)))))))))))
+                      nil))
+                  (dom/span
+                    (dom/props {:style {:font-size "12px" :color "var(--color-text-hint)" :white-space "nowrap" :flex-shrink "0"}})
+                    (dom/text (or uploaded ""))))))))))))

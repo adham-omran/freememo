@@ -17,7 +17,7 @@
   #?(:clj
      (cond
        (= status "done") "done"
-       (= status "dismissed") "dismissed"
+       (= status "done") "done"
        (nil? next-review-at) "new"
        :else (let [now (java.time.LocalDate/now)
                    due (.toLocalDate (.toLocalDateTime next-review-at))
@@ -58,9 +58,9 @@
   #?(:clj
      (let [now (java.time.LocalDate/now)
            week-end (.plusDays now 7)
-           active? #(not (#{"dismissed" "done"} (:status %)))]
+           active? #(not (#{"done"} (:status %)))]
        {:total (count rows)
-        :inactive (count (filter #(#{"dismissed" "done"} (:status %)) rows))
+        :inactive (count (filter #(#{"done"} (:status %)) rows))
         :due-today (count (filter (fn [r]
                                     (and (active? r)
                                       (or (nil? (:next-review r))
@@ -146,7 +146,7 @@
                                   ["PDF" "#dcfce7"]))]
                           (dom/tr
                             (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")
-                                                :opacity (case item-status "done" "0.6" "dismissed" "0.4" "1")
+                                                :opacity (case item-status "done" "0.6" "1")
                                                 :--order (inc i)}})
                           ;; Priority
                             (dom/td
@@ -161,7 +161,7 @@
                           ;; Due / status
                             (dom/td
                               (dom/props {:style {:padding "4px 6px" :text-align "center" :font-size "12px"
-                                                  :color (case due-label "done" "#16a34a" "dismissed" "#9ca3af" "#555")}})
+                                                  :color (case due-label "done" "#16a34a" "#555")}})
                               (dom/text due-label))
                           ;; Title (clickable)
                             (dom/td

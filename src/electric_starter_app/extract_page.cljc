@@ -58,7 +58,7 @@
                 (dom/text "Back to Learn")
                 (dom/On "click" (fn [_] (navigate! :learn)) nil))
               (if (= extract-status "active")
-                ;; Active: show Done + Dismiss
+                ;; Active: show Done
                 (dom/span
                   (dom/props {:style {:display "contents"}})
                   (dom/button
@@ -72,22 +72,12 @@
                         (e/server (db/done-topic "extract" content-item-id))
                         (token)
                         (navigate! :learn))))
-                  (dom/button
-                    (dom/props {:class "btn btn-sm btn-secondary"
-                                :title "Remove from review queue (keep content)"})
-                    (dom/text "Dismiss")
-                    (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
-                          [?token _] (e/Token event)]
-                      (when-some [token ?token]
-                        (e/server (db/dismiss-topic "extract" content-item-id))
-                        (token)
-                        (navigate! :learn)))))
-                ;; Done/Dismissed: show Restore
+)
+                ;; Done: show Restore
                 (dom/span
                   (dom/props {:style {:display "contents"}})
                   (dom/span
-                    (dom/props {:style {:font-size "12px" :color (if (= extract-status "done") "#16a34a" "#9ca3af")
-                                        :font-weight "600"}})
+                    (dom/props {:style {:font-size "12px" :color "#16a34a" :font-weight "600"}})
                     (dom/text extract-status))
                   (dom/button
                     (dom/props {:class "btn btn-sm btn-secondary"
