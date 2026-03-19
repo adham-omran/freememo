@@ -4,6 +4,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [electric-starter-app.learn-session :refer [LearnSession]]
+   [electric-starter-app.subset-review :refer [SubsetReviewSession]]
    [electric-starter-app.ocr-page :refer [OcrPage]]
    [electric-starter-app.util :as util]
    #?(:clj [electric-starter-app.db :as db])
@@ -241,13 +242,14 @@
                               (e/client (card-components/try-delete-anki-notes! note-ids))
                               (token))))))))))))))))
 
-(e/defn LearnPage [user-id enc-key !nav-target navigate-to-extract! llm-enabled?]
+(e/defn LearnPage [user-id enc-key !nav-target navigate-to-extract! navigate! llm-enabled?]
   (e/client
     (let [!mode (atom :overview)
           mode (e/watch !mode)
           !browse-nav (atom nil)
           browse-nav (e/watch !browse-nav)
           !queue-idx (atom 0)
+          !subset-state (atom nil)
           ;; Reactive watch — fires when "Open" or "View Source" sets nav-target
           nav-val (e/watch !nav-target)]
 
@@ -258,6 +260,10 @@
       (when (and (map? nav-val) (:doc-id nav-val))
         (reset! !browse-nav nav-val)
         (reset! !mode :browse)
+        (reset! !nav-target nil))
+      (when (and (map? nav-val) (:subset-review nav-val))
+        (reset! !subset-state (:subset-review nav-val))
+        (reset! !mode :subset-review)
         (reset! !nav-target nil))
 
       (case mode
@@ -275,4 +281,10 @@
             (fn [doc-id page]
               (reset! !browse-nav {:doc-id doc-id :page page})
               (reset! !mode :browse))
+            llm-enabled?))
+
+        :subset-review
+        (when-let [{:keys [topic-type root-id root-name]} (e/watch !subset-state)]
+          (SubsetReviewSession user-id enc-key topic-type root-id root-name
+            (fn [] (navigate! :library))
             llm-enabled?))))))

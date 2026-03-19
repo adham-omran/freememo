@@ -811,6 +811,105 @@
       [(str "UPDATE " table " SET status = 'active', dismissed = false, next_review_at = NULL WHERE id = ?")
        id])))
 
+;; ---------------------------------------------------------------------------
+;; Subset Review
+;; ---------------------------------------------------------------------------
+
+(defn get-subtree-for-document
+  "Fetch a document + all its content_items (any nesting depth) as a flat list."
+  [user-id document-id]
+  (jdbc/execute! ds
+    ["SELECT 'document' AS topic_type, d.id, d.id AS document_id, 0 AS page_number,
+             d.priority, d.next_review_at, d.interval_days, d.a_factor,
+             d.review_count, d.last_review_at, d.status,
+             NULL AS content, d.filename, NULL::integer AS parent_content_item_id
+      FROM documents d WHERE d.id = ? AND d.user_id = ?
+      UNION ALL
+      SELECT 'extract', ci.id, ci.document_id, ci.page_number, ci.priority,
+             ci.next_review_at, ci.interval_days, ci.a_factor,
+             ci.review_count, ci.last_review_at, ci.status,
+             ci.content, d.filename, ci.parent_content_item_id
+      FROM content_items ci JOIN documents d ON ci.document_id = d.id
+      WHERE ci.document_id = ? AND d.user_id = ?"
+     document-id user-id document-id user-id]))
+
+(defn get-subtree-for-extract
+  "Fetch an extract and all its descendants via recursive CTE."
+  [user-id content-item-id]
+  (jdbc/execute! ds
+    ["WITH RECURSIVE subtree AS (
+        SELECT ci.* FROM content_items ci WHERE ci.id = ?
+        UNION ALL
+        SELECT child.* FROM content_items child
+        JOIN subtree parent ON child.parent_content_item_id = parent.id
+      )
+      SELECT 'extract' AS topic_type, s.id, s.document_id, s.page_number,
+             s.priority, s.next_review_at, s.interval_days, s.a_factor,
+             s.review_count, s.last_review_at, s.status,
+             s.content, d.filename, s.parent_content_item_id
+      FROM subtree s JOIN documents d ON s.document_id = d.id
+      WHERE d.user_id = ?"
+     content-item-id user-id]))
+
+(defn- tree-order-items
+  "Sort items in depth-first tree order: page_number ASC, id ASC for siblings."
+  [items]
+  (let [id-set (set (map :id items))
+        by-parent (group-by :parent_content_item_id items)
+        ;; Roots = items whose parent is not in the result set (or nil).
+        roots (->> items
+                   (filter #(not (id-set (:parent_content_item_id %))))
+                   (sort-by (juxt :page_number :id)))]
+    (loop [result []
+           stack (vec (reverse roots))]
+      (if (empty? stack)
+        result
+        (let [node (peek stack)
+              children (->> (get by-parent (:id node))
+                            (sort-by (juxt :page_number :id))
+                            reverse vec)]
+          (recur (conj result node)
+                 (into (pop stack) children)))))))
+
+(defn get-subset-review-queue
+  "Get the subset review queue for a document or extract subtree.
+   Filters out dismissed/done items and items already reviewed today.
+   Annotates each item with :outstanding? based on next_review_at."
+  [user-id topic-type root-id]
+  (let [raw (case topic-type
+              "document" (get-subtree-for-document user-id root-id)
+              "extract"  (get-subtree-for-extract user-id root-id))
+        now (java.sql.Timestamp. (System/currentTimeMillis))
+        today (java.time.LocalDate/now)]
+    (->> raw
+         ;; Keep only active items
+         (filter #(#{"active" nil} (:status %)))
+         ;; Skip items reviewed today
+         (remove (fn [item]
+                   (when-let [la (:last_review_at item)]
+                     (= today (.. la toInstant (atZone (java.time.ZoneId/systemDefault)) toLocalDate)))))
+         ;; Tree-order
+         tree-order-items
+         ;; Annotate outstanding
+         (mapv (fn [item]
+                 (let [nra (:next_review_at item)]
+                   (assoc item :outstanding?
+                     (or (nil? nra)
+                         (.before nra now)))))))))
+
+(defn touch-topic
+  "Update last_review_at without advancing the interval.
+   For non-outstanding items in subset review."
+  [topic-type id]
+  (let [table (case topic-type
+                "document" "documents"
+                "extract"  "content_items")]
+    (jdbc/execute-one! ds
+      [(str "UPDATE " table
+            " SET last_review_at = NOW(), review_count = COALESCE(review_count, 0) + 1"
+            " WHERE id = ?")
+       id])))
+
 (defn batch-create-content-items
   "Batch insert content items from auto-extract. Returns count of created items."
   [document-id page-number items]
