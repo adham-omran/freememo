@@ -194,6 +194,8 @@
                               :else "Generate"))
               (when (and gen-active? (nil? (:error gen-state)))
                 (dom/text (str " (" gen-pending ")")))
+              (reset! keyboard/!generate-btn-ref dom/node)
+              (e/on-unmount (fn [] (reset! keyboard/!generate-btn-ref nil)))
               (dom/On "click"
                 (fn [_]
                   (let [sel (editor/get-selection!)]

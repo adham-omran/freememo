@@ -260,6 +260,8 @@
                                             :cursor (if disabled? "not-allowed" "pointer")}
                                     :disabled disabled?})
                         (dom/text (if disabled? "Scanning..." "Scan Page"))
+                        (reset! keyboard/!scan-btn-ref dom/node)
+                        (e/on-unmount (fn [] (reset! keyboard/!scan-btn-ref nil)))
                         (let [click-event (dom/On "click"
                                             (fn [_]
                                               (when-not @!scanning-client?

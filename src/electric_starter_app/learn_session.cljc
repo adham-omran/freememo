@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [electric-starter-app.ocr-page :refer [OcrPage]]
    [electric-starter-app.extract-page :refer [ExtractPage]]
+   [electric-starter-app.keyboard :as keyboard]
    #?(:clj [electric-starter-app.db :as db])))
 
 (defn advance-topic* [topic-type id]
@@ -32,6 +33,8 @@
                           :color "#16a34a" :border "1px solid #16a34a"}
                   :title "Mark as fully processed (extracted/carded everything useful)"})
       (dom/text "Done")
+      (reset! keyboard/!done-btn-ref dom/node)
+      (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
       (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
             [?token _error] (e/Token event)]
         (when-some [token ?token]
@@ -93,6 +96,8 @@
             (dom/props {:class "btn btn-secondary" :style {:padding "8px 20px"}})
 
             (dom/text "Postpone")
+            (reset! keyboard/!postpone-btn-ref dom/node)
+            (e/on-unmount (fn [] (reset! keyboard/!postpone-btn-ref nil)))
             (dom/On "click" (fn [_] (reset! !show-postpone true)) nil)))
 
         ;; Next button
