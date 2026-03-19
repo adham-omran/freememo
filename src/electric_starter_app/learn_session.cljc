@@ -62,7 +62,6 @@
                           :value (e/watch !postpone-days)
                           :style {:width "60px" :padding "4px 8px" :font-size "14px"
                                   :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"}})
-
               (dom/On "input" (fn [e] (reset! !postpone-days (-> e .-target .-value))) nil))
             (dom/span
               (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
@@ -96,8 +95,6 @@
             (dom/props {:class "btn btn-secondary" :style {:padding "8px 20px"}})
 
             (dom/text "Postpone")
-            (reset! keyboard/!postpone-btn-ref dom/node)
-            (e/on-unmount (fn [] (reset! keyboard/!postpone-btn-ref nil)))
             (dom/On "click" (fn [_] (reset! !show-postpone true)) nil)))
 
         ;; Next button

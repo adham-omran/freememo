@@ -340,7 +340,7 @@
                            (shortcut-row "S" "Scan Page (OCR)")
                            (shortcut-row "X" "Anki Sync")
                            (shortcut-row "D" "Mark Done")
-                           (shortcut-row "L" "Postpone (Later)")]]
+]]
             (dom/table
               (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px"}})
               (e/for-by :key [s shortcuts]

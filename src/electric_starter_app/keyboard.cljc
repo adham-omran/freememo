@@ -28,7 +28,7 @@
          "s" (click-ref! !scan-btn-ref e)        ; Scan Page (OCR)
          "x" (click-ref! !anki-sync-btn-ref e)  ; Anki Sync
          "d" (click-ref! !done-btn-ref e)        ; Mark Done
-         "l" (click-ref! !postpone-btn-ref e)    ; Postpone (L = Later)
+         ;; Postpone shortcut deferred — needs focus management for days input
          nil))))
 
 #?(:cljs
