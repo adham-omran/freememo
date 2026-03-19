@@ -36,6 +36,8 @@
 (def LLM_ENABLED "llm_enabled")
 (def LAST_DOCUMENT "last_document")
 (def PRE_PROMPT_HISTORY "pre_prompt_history")
+(def CARD_FONT_SIZE "card_font_size")
+(def SCAN_DPI "scan_dpi")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
 
 ;; OpenAI key helpers
@@ -290,6 +292,36 @@
     (catch Exception e
       (println "ERROR [save-pre-prompt-history]:" (.getMessage e))
       {:success false :error "Failed to save prompt history"})))
+
+(defn get-card-font-size [user-id]
+  (try
+    (Integer/parseInt (or (db/get-setting user-id CARD_FONT_SIZE) "13"))
+    (catch Exception _ 13)))
+
+(defn save-card-font-size [user-id value]
+  (try
+    (let [parsed (Integer/parseInt (str value))
+          clamped (max 10 (min 20 parsed))]
+      (db/set-setting user-id CARD_FONT_SIZE (str clamped))
+      {:success true})
+    (catch Exception e
+      (println "ERROR [save-card-font-size]:" (.getMessage e))
+      {:success false :error "Failed to save card font size"})))
+
+(defn get-scan-dpi [user-id]
+  (try
+    (Integer/parseInt (or (db/get-setting user-id SCAN_DPI) "150"))
+    (catch Exception _ 150)))
+
+(defn save-scan-dpi [user-id value]
+  (try
+    (let [parsed (Integer/parseInt (str value))
+          clamped (max 72 (min 300 parsed))]
+      (db/set-setting user-id SCAN_DPI (str clamped))
+      {:success true})
+    (catch Exception e
+      (println "ERROR [save-scan-dpi]:" (.getMessage e))
+      {:success false :error "Failed to save scan DPI"})))
 
 (defn save-anki-sync-settings [user-id {:keys [scope deck basic-model cloze-model allow-dupes use-header header-text]}]
   (try

@@ -5,6 +5,10 @@
    [hyperfiddle.electric-dom3 :as dom]
    #?(:clj [electric-starter-app.settings :as settings])))
 
+(defn mac-platform? []
+  #?(:cljs (boolean (re-find #"(?i)mac" (str (.-platform js/navigator))))
+     :clj false))
+
 (e/defn SettingsPage [user-id username enc-key !settings-refresh]
   (e/client
     (dom/div
@@ -217,55 +221,125 @@
                     (e/server (settings/save-verbosity user-id change-event))
                     (token))))
               (dom/div (dom/props {:class "hint"})
-                (dom/text "Controls detail level of generated flashcards"))))))
+                (dom/text "Controls detail level of generated flashcards")))
+
+            ;; Scan Quality (DPI)
+            (let [server-dpi (e/server (settings/get-scan-dpi user-id))
+                  !dpi (atom (str server-dpi))
+                  dpi (e/watch !dpi)]
+              (dom/div
+                (dom/props {:class "field"})
+                (dom/label (dom/props {:class "label"}) (dom/text "Scan Quality (DPI)"))
+                (dom/select
+                  (dom/props {:value dpi :class "select"})
+                  (dom/option (dom/props {:value "72"}) (dom/text "Low (72 DPI)"))
+                  (dom/option (dom/props {:value "150"}) (dom/text "Standard (150 DPI)"))
+                  (dom/option (dom/props {:value "300"}) (dom/text "High (300 DPI)"))
+                  (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                        [?token ?error] (e/Token change-event)]
+                    (when (some? change-event)
+                      (reset! !dpi change-event))
+                    (when-some [token ?token]
+                      (e/server (settings/save-scan-dpi user-id change-event))
+                      (token))))
+                (dom/div (dom/props {:class "hint"})
+                  (dom/text "Higher quality improves text recognition but increases processing time and API cost"))))))
+
+      ;; ── Appearance section ──
+        (let [server-font-size (e/server (settings/get-card-font-size user-id))
+              !font-size (atom server-font-size)
+              font-size (e/watch !font-size)]
+          (dom/div
+            (dom/props {:class "card"})
+            (dom/h3 (dom/props {:class "section-title"}) (dom/text "Appearance"))
+            (dom/div
+              (dom/props {:class "field"})
+              (dom/label
+                (dom/props {:style {:display "flex" :align-items "center" :gap "10px"}})
+                (dom/span (dom/props {:class "label" :style {:margin-bottom "0"}})
+                  (dom/text "Card Table Font Size"))
+                (e/for-by identity [_k [:font-size-input]]
+                  (dom/input
+                    (dom/props {:type "number" :min "10" :max "20"
+                                :style {:width "56px" :font-size "13px" :padding "4px 6px"
+                                        :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"}})
+                    (set! (.-value dom/node) (str font-size))
+                    (let [change-event (dom/On "change" #(-> % .-target .-value js/parseInt) nil)
+                          [?token _] (e/Token change-event)]
+                      (when (some? change-event)
+                        (reset! !font-size change-event))
+                      (when-some [token ?token]
+                        (e/server (settings/save-card-font-size user-id change-event))
+                        (token)))))
+                (dom/span (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
+                  (dom/text "px")))
+              (dom/div (dom/props {:class "hint"})
+                (dom/text "Adjusts text size in the flashcard table (10-20px)")))))
 
       ;; ── Anki Sync section ──
-      (let [server-source-mode (e/server (settings/get-source-display-mode user-id))
-            !source-mode (atom server-source-mode)
-            source-mode (e/watch !source-mode)]
+        (let [server-source-mode (e/server (settings/get-source-display-mode user-id))
+              !source-mode (atom server-source-mode)
+              source-mode (e/watch !source-mode)]
+          (dom/div
+            (dom/props {:class "card"})
+            (dom/h3 (dom/props {:class "section-title"}) (dom/text "Anki Sync"))
+            (dom/div
+              (dom/props {:class "field"})
+              (dom/label (dom/props {:class "label"}) (dom/text "Source Display Mode"))
+              (dom/div
+                (dom/props {:style {:display "flex" :flex-direction "column" :gap "10px" :margin-top "4px"}})
+                (dom/label
+                  (dom/props {:style {:display "flex" :align-items "flex-start" :gap "8px" :cursor "pointer"}})
+                  (dom/input
+                    (dom/props {:type "radio" :name "source-display-mode" :value "append"
+                                :checked (= source-mode "append")
+                                :style {:margin-top "3px"}})
+                    (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                          [?token ?error] (e/Token change-event)]
+                      (when (some? change-event)
+                        (reset! !source-mode change-event))
+                      (when-some [token ?token]
+                        (e/server (settings/save-source-display-mode user-id change-event))
+                        (e/server (swap! !settings-refresh inc))
+                        (token))))
+                  (dom/div
+                    (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
+                      (dom/text "Append to card"))
+                    (dom/div (dom/props {:class "hint"})
+                      (dom/text "Source text appended to card content during Anki sync"))))
+                (dom/label
+                  (dom/props {:style {:display "flex" :align-items "flex-start" :gap "8px" :cursor "pointer"}})
+                  (dom/input
+                    (dom/props {:type "radio" :name "source-display-mode" :value "field"
+                                :checked (= source-mode "field")
+                                :style {:margin-top "3px"}})
+                    (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                          [?token ?error] (e/Token change-event)]
+                      (when (some? change-event)
+                        (reset! !source-mode change-event))
+                      (when-some [token ?token]
+                        (e/server (settings/save-source-display-mode user-id change-event))
+                        (e/server (swap! !settings-refresh inc))
+                        (token))))
+                  (dom/div
+                    (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
+                      (dom/text "Separate field"))
+                    (dom/div (dom/props {:class "hint"})
+                      (dom/text "Source sent as a separate \"Source\" Anki field")))))))))
+
+      ;; ── Keyboard Shortcuts section (read-only) ──
+      (let [mac? (e/client (mac-platform?))
+            mod-key (if mac? "Cmd" "Ctrl")]
         (dom/div
           (dom/props {:class "card"})
-          (dom/h3 (dom/props {:class "section-title"}) (dom/text "Anki Sync"))
+          (dom/h3 (dom/props {:class "section-title"}) (dom/text "Keyboard Shortcuts"))
+          (dom/table
+            (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px"}})
+            (dom/tr
+              (dom/td (dom/props {:style {:padding "6px 0" :color "var(--color-text-secondary)" :width "180px"}})
+                (dom/text (str mod-key "+Shift+E")))
+              (dom/td (dom/props {:style {:padding "6px 0" :color "var(--color-text-primary)"}})
+                (dom/text "Extract topic from selection"))))
           (dom/div
-            (dom/props {:class "field"})
-            (dom/label (dom/props {:class "label"}) (dom/text "Source Display Mode"))
-            (dom/div
-              (dom/props {:style {:display "flex" :flex-direction "column" :gap "10px" :margin-top "4px"}})
-              (dom/label
-                (dom/props {:style {:display "flex" :align-items "flex-start" :gap "8px" :cursor "pointer"}})
-                (dom/input
-                  (dom/props {:type "radio" :name "source-display-mode" :value "append"
-                              :checked (= source-mode "append")
-                              :style {:margin-top "3px"}})
-                  (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                        [?token ?error] (e/Token change-event)]
-                    (when (some? change-event)
-                      (reset! !source-mode change-event))
-                    (when-some [token ?token]
-                      (e/server (settings/save-source-display-mode user-id change-event))
-                      (e/server (swap! !settings-refresh inc))
-                      (token))))
-                (dom/div
-                  (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
-                    (dom/text "Append to card"))
-                  (dom/div (dom/props {:class "hint"})
-                    (dom/text "Source text appended to card content during Anki sync"))))
-              (dom/label
-                (dom/props {:style {:display "flex" :align-items "flex-start" :gap "8px" :cursor "pointer"}})
-                (dom/input
-                  (dom/props {:type "radio" :name "source-display-mode" :value "field"
-                              :checked (= source-mode "field")
-                              :style {:margin-top "3px"}})
-                  (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                        [?token ?error] (e/Token change-event)]
-                    (when (some? change-event)
-                      (reset! !source-mode change-event))
-                    (when-some [token ?token]
-                      (e/server (settings/save-source-display-mode user-id change-event))
-                      (e/server (swap! !settings-refresh inc))
-                      (token))))
-                (dom/div
-                  (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
-                    (dom/text "Separate field"))
-                  (dom/div (dom/props {:class "hint"})
-                    (dom/text "Source sent as a separate \"Source\" Anki field")))))))))))
+            (dom/props {:class "hint" :style {:margin-top "8px"}})
+            (dom/text "More shortcuts coming soon.")))))))

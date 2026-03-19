@@ -11,7 +11,7 @@
    [electric-starter-app.card-components :refer [CardRow get-cards* get-cards-by-extract* rtl-text?]]
    [electric-starter-app.ocr-modals :refer [EditCardModal]]))
 
-(e/defn ContentCardTable [{:keys [query-mode doc-id page-number content-item-id]} !refresh]
+(e/defn ContentCardTable [{:keys [query-mode doc-id page-number content-item-id card-font-size]} !refresh]
   (e/client
     (let [refresh (e/server (e/watch !refresh))
           cards-result (e/server
@@ -32,7 +32,8 @@
                                                            (pos? (compare (str (:flashcards/updated_at %))
                                                                    (str (:flashcards/anki_synced_at %))))))
                                                 (:cards cards-result))))
-              row-height 54]
+              font-sz (or card-font-size 13)
+              row-height (+ font-sz 41)]
           (dom/div
             (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
             (when (pos? card-count)
@@ -55,7 +56,7 @@
                                       :border-collapse "separate"
                                       :border-spacing "0"
                                       :table-layout "fixed"
-                                      :font-size "13px"
+                                      :font-size (str font-sz "px")
                                       :direction (if rtl? "rtl" "ltr")
                                       :grid-template-columns "24px 1fr 1fr 60px 40px 40px"}})
                   (e/for [i (Tape offset limit)]
