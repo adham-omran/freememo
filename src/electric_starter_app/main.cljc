@@ -9,6 +9,7 @@
             [electric-starter-app.extract-page :refer [ExtractPage]]
             [electric-starter-app.queue-page :refer [QueuePage]]
             [electric-starter-app.login-page :refer [LoginPage]]
+            [electric-starter-app.keyboard :as keyboard]
             #?(:clj [electric-starter-app.settings :as settings])))
 
 #?(:clj (defonce !settings-refresh (atom 0)))

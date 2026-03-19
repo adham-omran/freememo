@@ -18,12 +18,13 @@
    #?(:clj [electric-starter-app.pdf :as pdf])
    #?(:clj [electric-starter-app.cards :as cards])
    #?(:clj [electric-starter-app.settings :as settings])
+   [electric-starter-app.keyboard :as keyboard]
    #?(:clj [electric-starter-app.db :as db])))
 
 #?(:clj (defonce !refresh (atom 0))) ; Server-side refresh trigger
-#?(:clj (defonce !extracting-pages (atom #{}))) ; #{[doc-id page-num]} currently extracting
+#?(:clj (defonce !scanning-pages (atom #{}))) ; #{[doc-id page-num]} currently scanning via OCR
 #?(:clj (defonce !ocr-errors (atom {}))) ; {[doc-id page-num] "error message"}
-#?(:cljs (defonce !extracting-client? (atom false))) ; Client-side flag: set true immediately on click to prevent rapid re-clicks before server state round-trips
+#?(:cljs (defonce !scanning-client? (atom false))) ; Client-side flag: set true immediately on click to prevent rapid re-clicks before server state round-trips
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 #?(:clj (defn get-page-text* [_refresh document-id page-number]
@@ -170,7 +171,7 @@
                 !prompt-gen-state (atom {:queue [] :active nil :error nil})
                 prompt-gen-state (e/watch !prompt-gen-state)
                 ;; Extraction tracking — server-side for true parallelism
-                extracting-pages (e/server (e/watch !extracting-pages))
+                scanning-pages (e/server (e/watch !scanning-pages))
                 ocr-errors (e/server (e/watch !ocr-errors))
                 ;; Shared server data — hoisted so both editor and bottom panel can use them
                 ;; Guard: only save page-level edits (content-item-id nil), not extract-level
@@ -246,20 +247,20 @@
                       (dom/text "Done"))
 
                     (when (and is-pdf llm-enabled?)
-                      (let [extracting? (contains? extracting-pages [selected-doc current-pdf-page])
-                            client-extracting? (e/client (e/watch !extracting-client?))
-                            disabled? (or extracting? client-extracting?)]
+                      (let [scanning? (contains? scanning-pages [selected-doc current-pdf-page])
+                            client-scanning? (e/client (e/watch !scanning-client?))
+                            disabled? (or scanning? client-scanning?)]
                       (dom/button
                         (dom/props {:class "btn btn-sm btn-primary"
                                     :style {:padding "4px 12px" :font-size "14px"
                                             :background (if disabled? "#ccc" "var(--color-primary)")
                                             :cursor (if disabled? "not-allowed" "pointer")}
                                     :disabled disabled?})
-                        (dom/text (if disabled? "Extracting..." "Extract Text"))
+                        (dom/text (if disabled? "Scanning..." "Scan Page"))
                         (let [click-event (dom/On "click"
                                             (fn [_]
-                                              (when-not @!extracting-client?
-                                                (reset! !extracting-client? true)
+                                              (when-not @!scanning-client?
+                                                (reset! !scanning-client? true)
                                                 {:id (str (random-uuid)) :page current-pdf-page}))
                                             nil)
                               [?token ?error] (e/Token click-event)]
@@ -269,8 +270,8 @@
                                     doc selected-doc
                                     uid user-id
                                     ek enc-key]
-                                (when-not (contains? @!extracting-pages [doc page])
-                                  (swap! !extracting-pages conj [doc page])
+                                (when-not (contains? @!scanning-pages [doc page])
+                                  (swap! !scanning-pages conj [doc page])
                                   (swap! !ocr-errors dissoc [doc page])
                                   (do
                                     (future
@@ -282,13 +283,13 @@
                                         (catch Exception e
                                           (swap! !ocr-errors assoc [doc page] (.getMessage e)))
                                         (finally
-                                          (swap! !extracting-pages disj [doc page]))))
+                                          (swap! !scanning-pages disj [doc page]))))
                                     :started))))
                             (token))
                           ;; Reset client flag once server confirms extraction is running (or completes)
                           (e/client
-                            (when (not extracting?)
-                              (reset! !extracting-client? false))))))) ;; end when llm-enabled?
+                            (when (not scanning?)
+                              (reset! !scanning-client? false))))))) ;; end when llm-enabled?
 
                     ;; OCR error display — auto-dismiss after 3 seconds
                     (when-let [ocr-err (get ocr-errors [selected-doc current-pdf-page])]
@@ -377,7 +378,7 @@
                                                   :doc-id selected-doc}))
                       (dom/p
                         (dom/props {:style {:color "gray"}})
-                        (dom/text "No text extracted yet. Click 'Extract Text' to process this page."))))))
+                        (dom/text "No text scanned yet. Click 'Scan Page' to process this page."))))))
 
               ;; Vertical drag handle (full width)
               (dom/div
