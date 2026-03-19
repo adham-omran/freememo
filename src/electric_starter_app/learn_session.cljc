@@ -19,27 +19,9 @@
   #?(:clj (db/postpone-topic topic-type id days)
      :cljs nil))
 
-(defn dismiss-topic* [topic-type id]
-  #?(:clj (db/dismiss-topic topic-type id)
-     :cljs nil))
-
 (defn done-topic* [topic-type id]
   #?(:clj (db/done-topic topic-type id)
      :cljs nil))
-
-;; Dismiss button — isolated e/defn
-(e/defn DismissButton [topic-type topic-id !queue-idx]
-  (e/client
-    (dom/button
-      (dom/props {:class "btn btn-sm btn-secondary" :style {:padding "4px 10px" :background "transparent" :color "var(--color-text-secondary)"}
-                  :title "Remove from review queue (keep content)"})
-      (dom/text "Dismiss")
-      (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
-            [?token _error] (e/Token event)]
-        (when-some [token ?token]
-          (e/server (dismiss-topic* topic-type topic-id))
-          (token)
-          (swap! !queue-idx inc))))))
 
 ;; Done button — marks topic as fully processed
 (e/defn DoneButton [topic-type topic-id !queue-idx]
@@ -147,9 +129,8 @@
           (dom/text "\u2190 Back to Learn")
           (dom/On "click" (fn [_] (reset! !queue-idx 0) (reset! !mode :overview)) nil))
 
-        ;; Done + Dismiss
+        ;; Done
         (DoneButton topic-type topic-id !queue-idx)
-        (DismissButton topic-type topic-id !queue-idx)
 
         ;; Filename / source link
         (if is-doc

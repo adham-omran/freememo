@@ -56,7 +56,7 @@
                 (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0"}})
 
                 ;; Table header
-                (let [grid-cols "1fr 60px 80px 140px 80px"]
+                (let [grid-cols "1fr 60px 80px 140px 140px"]
                   (dom/table
                     (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "14px" :flex-shrink "0"}})
                     (let [th-style {:padding "8px 10px" :border-bottom "2px solid var(--color-border)" :font-weight "600" :color "var(--color-text-label)"}]
@@ -126,9 +126,22 @@
                                     (dom/td
                                       (dom/props {:style {:padding "8px 10px" :color "var(--color-text-secondary)"}})
                                       (dom/text (or uploaded "-")))
-                                    ;; Delete
+                                    ;; Actions: Review + Delete
                                     (dom/td
-                                      (dom/props {:style {:padding "8px 10px" :text-align "center"}})
+                                      (dom/props {:style {:padding "8px 10px" :text-align "center" :display "flex" :gap "4px" :justify-content "center" :align-items "center"}})
+                                      (dom/button
+                                        (dom/props {:class "btn btn-sm btn-secondary"
+                                                    :style {:padding "3px 10px"}
+                                                    :title "Review all extracts in this document"})
+                                        (dom/text "Review")
+                                        (dom/On "click"
+                                          (fn [e]
+                                            (.stopPropagation e)
+                                            (reset! !nav-target {:subset-review {:topic-type "document"
+                                                                                 :root-id id
+                                                                                 :root-name filename}})
+                                            (navigate! :learn))
+                                          nil))
                                       (let [!deleting (atom false)
                                             deleting (e/watch !deleting)]
                                         (dom/button

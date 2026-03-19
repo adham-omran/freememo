@@ -52,11 +52,11 @@
                      (wrap-multipart-params) ; 1b. parse multipart form data (file uploads)
                      (wrap-params) ; 1a. boilerplate – parse request URL parameters.
                      (wrap-session {:cookie-attrs {:same-site :lax :http-only true}})) ; 0. session middleware (outermost – runs first)
-                   {:host "0.0.0.0", :port 8080, :join? false
+                   {:host "0.0.0.0", :port 9090, :join? false
                     :ws-idle-timeout (* 60 1000)          ; 60 seconds in milliseconds
                     :ws-max-binary-size (* 100 1024 1024) ; 100MB - for demo
                     :ws-max-text-size (* 100 1024 1024)}))  ; 100M - for demo.
-     (log/info "👉 http://0.0.0.0:8080")))
+     (log/info "👉 http://0.0.0.0:9090")))
 
 (declare browser-process)
 #?(:cljs ; client entrypoint
