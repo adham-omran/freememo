@@ -260,6 +260,31 @@
                      :do-nothing true})))
     doc-id))
 
+(defn save-epub-document
+  "Save an EPUB as a document with raw bytes and extracted HTML on a single page."
+  [user-id title file-bytes file-size html-content]
+  (let [doc (first (jdbc/execute! ds
+                     (sql/format {:insert-into :documents
+                                  :values [{:user_id user-id
+                                            :filename title
+                                            :file_data file-bytes
+                                            :file_size file-size
+                                            :mime_type "application/epub+zip"
+                                            :source_type "epub"
+                                            :html_content html-content
+                                            :source_reference title}]
+                                  :returning [:id]})))
+        doc-id (:documents/id doc)]
+    (when doc-id
+      (jdbc/execute! ds
+        (sql/format {:insert-into :pages
+                     :values [{:document_id doc-id
+                               :page_number 1
+                               :text html-content}]
+                     :on-conflict [:document_id :page_number]
+                     :do-nothing true})))
+    doc-id))
+
 (defn get-documents [user-id]
   (let [docs (jdbc/execute! ds
                (sql/format {:select [:id :filename :file_size :uploaded_at :source_type :html_content :status]

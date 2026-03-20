@@ -143,6 +143,7 @@
                                 (case source-type
                                   "wikipedia" ["Wiki" "#fef3c7"]
                                   "web" ["Web" "#e0f2fe"]
+                                  "epub" ["EPUB" "#f3e8ff"]
                                   ["PDF" "#dcfce7"]))]
                           (dom/tr
                             (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")

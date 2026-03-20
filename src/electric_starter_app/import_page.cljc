@@ -262,6 +262,179 @@
                           (token (:error result))))
                       (token "Please enter a URL"))))))))))))
 
+(e/defn UploadPDFModal [!show !nav-target navigate!]
+  (e/client
+    (let [!file-input (atom nil)
+          !uploading (atom false)
+          uploading (e/watch !uploading)]
+      (dom/div
+        (dom/props {:class "modal-backdrop"})
+        (dom/On "click" (fn [e]
+                          (when (= (.-target e) (.-currentTarget e))
+                            (reset! !show false)))
+          nil)
+        (dom/div
+          (dom/props {:class "modal-content" :style {:width "500px" :max-width "90%"}})
+          (dom/h3
+            (dom/props {:style {:margin "0 0 16px 0" :font-size "16px"}})
+            (dom/text "Upload PDF"))
+          (dom/p
+            (dom/props {:style {:margin "0 0 12px 0" :font-size "13px" :color "var(--color-text-secondary)"}})
+            (dom/text "Select a PDF file from your device."))
+
+          ;; Shared upload fn
+          (let [do-upload!
+                (fn [file]
+                  (when (and file (not @!uploading))
+                    (reset! !uploading true)
+                    (let [form-data (js/FormData.)]
+                      (.append form-data "file" file)
+                      (-> (js/fetch "/api/upload-pdf" (clj->js {:method "POST" :body form-data}))
+                        (.then (fn [resp] (.json resp)))
+                        (.then (fn [^js data]
+                                 (reset! !uploading false)
+                                 (if (.-success data)
+                                   (do (reset! !show false)
+                                     (reset! !nav-target {:doc-id (.-doc_id data)})
+                                     (navigate! :learn))
+                                   (js/alert (or (.-error data) "PDF upload failed")))))
+                        (.catch (fn [err]
+                                  (reset! !uploading false)
+                                  (js/console.error "Upload failed:" err)))))))]
+
+            ;; Drop zone / file picker
+            (dom/div
+              (dom/props {:style {:border "2px dashed var(--color-border)" :border-radius "var(--radius-md)"
+                                  :padding "32px" :text-align "center" :cursor "pointer"
+                                  :margin-bottom "var(--sp-3)" :transition "border-color 0.15s, background 0.15s"}})
+              (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil)
+              (dom/On "mouseenter" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-primary)")) nil)
+              (dom/On "mouseleave" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-border)")
+                                     (set! (.-background (.-style (.-currentTarget e))) "")) nil)
+              (dom/On "dragover" (fn [e] (.preventDefault e)
+                                   (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-primary)")
+                                   (set! (.-background (.-style (.-currentTarget e))) "var(--color-bg-subtle)")) nil)
+              (dom/On "dragleave" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-border)")
+                                    (set! (.-background (.-style (.-currentTarget e))) "")) nil)
+              (dom/On "drop" (fn [e] (.preventDefault e)
+                               (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-border)")
+                               (set! (.-background (.-style (.-currentTarget e))) "")
+                               (do-upload! (-> e .-dataTransfer .-files (aget 0)))) nil)
+              (dom/div
+                (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
+                (dom/text "Drop a PDF here or click to browse")))
+
+            ;; Hidden file input
+            (dom/input
+              (dom/props {:type "file" :accept "application/pdf" :style {:display "none"}})
+              (reset! !file-input dom/node)
+              (dom/On "change" (fn [e] (do-upload! (-> e .-target .-files (aget 0)))) nil))
+
+            ;; Buttons
+            (dom/div
+              (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
+              (dom/button
+                (dom/props {:class "btn btn-secondary"})
+                (dom/text "Cancel")
+                (dom/On "click" (fn [_] (reset! !show false)) nil))
+              (dom/button
+                (dom/props {:class "btn btn-primary" :style {:font-weight "600"}
+                            :disabled uploading})
+                (dom/text (if uploading "Uploading..." "Upload"))
+                (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil)))))))))
+
+(e/defn UploadEPUBModal [!show !nav-target navigate!]
+  (e/client
+    (let [!file-input (atom nil)
+          !auto-extract (atom false)
+          !uploading (atom false)
+          uploading (e/watch !uploading)]
+      (dom/div
+        (dom/props {:class "modal-backdrop"})
+        (dom/On "click" (fn [e]
+                          (when (= (.-target e) (.-currentTarget e))
+                            (reset! !show false)))
+          nil)
+        (dom/div
+          (dom/props {:class "modal-content" :style {:width "500px" :max-width "90%"}})
+          (dom/h3
+            (dom/props {:style {:margin "0 0 16px 0" :font-size "16px"}})
+            (dom/text "Upload EPUB"))
+          (dom/p
+            (dom/props {:style {:margin "0 0 12px 0" :font-size "13px" :color "var(--color-text-secondary)"}})
+            (dom/text "Select an EPUB ebook file. Text and images will be extracted automatically."))
+
+          ;; Shared upload fn
+          (let [do-upload!
+                (fn [file]
+                  (when (and file (not @!uploading))
+                    (reset! !uploading true)
+                    (let [form-data (js/FormData.)]
+                      (.append form-data "file" file)
+                      (.append form-data "auto_extract" (str @!auto-extract))
+                      (-> (js/fetch "/api/upload-epub" (clj->js {:method "POST" :body form-data}))
+                        (.then (fn [resp] (.json resp)))
+                        (.then (fn [^js data]
+                                 (reset! !uploading false)
+                                 (if (.-success data)
+                                   (do (reset! !show false)
+                                     (reset! !nav-target {:doc-id (.-doc_id data)})
+                                     (navigate! :learn))
+                                   (js/alert (or (.-error data) "EPUB import failed")))))
+                        (.catch (fn [err]
+                                  (reset! !uploading false)
+                                  (js/console.error "EPUB upload failed:" err)))))))]
+
+            ;; Drop zone / file picker
+            (dom/div
+              (dom/props {:style {:border "2px dashed var(--color-border)" :border-radius "var(--radius-md)"
+                                  :padding "32px" :text-align "center" :cursor "pointer"
+                                  :margin-bottom "var(--sp-3)" :transition "border-color 0.15s, background 0.15s"}})
+              (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil)
+              (dom/On "mouseenter" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-primary)")) nil)
+              (dom/On "mouseleave" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-border)")
+                                     (set! (.-background (.-style (.-currentTarget e))) "")) nil)
+              (dom/On "dragover" (fn [e] (.preventDefault e)
+                                   (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-primary)")
+                                   (set! (.-background (.-style (.-currentTarget e))) "var(--color-bg-subtle)")) nil)
+              (dom/On "dragleave" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-border)")
+                                    (set! (.-background (.-style (.-currentTarget e))) "")) nil)
+              (dom/On "drop" (fn [e] (.preventDefault e)
+                               (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-border)")
+                               (set! (.-background (.-style (.-currentTarget e))) "")
+                               (do-upload! (-> e .-dataTransfer .-files (aget 0)))) nil)
+              (dom/div
+                (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
+                (dom/text "Drop an EPUB here or click to browse")))
+
+            ;; Hidden file input
+            (dom/input
+              (dom/props {:type "file" :accept ".epub,application/epub+zip" :style {:display "none"}})
+              (reset! !file-input dom/node)
+              (dom/On "change" (fn [e] (do-upload! (-> e .-target .-files (aget 0)))) nil))
+
+            ;; Options
+            (dom/div
+              (dom/props {:style {:margin-bottom "var(--sp-3)" :display "flex" :flex-direction "column" :gap "8px"}})
+              (dom/label
+                (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "13px" :cursor "pointer"}})
+                (dom/input (dom/props {:type "checkbox"})
+                  (dom/On "change" (fn [e] (reset! !auto-extract (-> e .-target .-checked))) nil))
+                (dom/text "Auto-extract into topics")))
+
+            ;; Buttons
+            (dom/div
+              (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
+              (dom/button
+                (dom/props {:class "btn btn-secondary"})
+                (dom/text "Cancel")
+                (dom/On "click" (fn [_] (reset! !show false)) nil))
+              (dom/button
+                (dom/props {:class "btn btn-primary" :style {:font-weight "600"}
+                            :disabled uploading})
+                (dom/text (if uploading "Processing..." "Upload"))
+                (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil)))))))))
+
 ;; Main Import page component
 (e/defn ImportPage [user-id !refresh !nav-target navigate! enc-key llm-enabled?]
   (e/client
@@ -274,7 +447,8 @@
                             :gap "12px"}})
 
         ;; Upload PDF card
-        (let [!file-input (atom nil)]
+        (let [!show-pdf (atom false)
+              show-pdf (e/watch !show-pdf)]
           (dom/div
             (dom/props {:style {:border "1px solid var(--color-border)" :border-radius "var(--radius-md)"
                                 :padding "20px" :cursor "pointer" :transition "border-color 0.15s, box-shadow 0.15s"
@@ -283,7 +457,7 @@
                                    (set! (.-boxShadow (.-style (.-currentTarget e))) "0 0 0 1px var(--color-primary)")) nil)
             (dom/On "mouseleave" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-border)")
                                    (set! (.-boxShadow (.-style (.-currentTarget e))) "none")) nil)
-            (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil)
+            (dom/On "click" (fn [_] (reset! !show-pdf true)) nil)
             (dom/div
               (dom/props {:style {:font-size "24px" :margin-bottom "8px"}})
               (dom/text "\uD83D\uDCC4"))
@@ -292,25 +466,9 @@
               (dom/text "Upload PDF"))
             (dom/div
               (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
-              (dom/text "Select a PDF file from your device"))
-            ;; Hidden file input (AJAX upload)
-            (dom/input
-              (dom/props {:type "file" :accept "application/pdf" :style {:display "none"}})
-              (reset! !file-input dom/node)
-              (dom/On "change"
-                (fn [e]
-                  (let [file (-> e .-target .-files (aget 0))]
-                    (when file
-                      (let [form-data (js/FormData.)]
-                        (.append form-data "file" file)
-                        (-> (js/fetch "/api/upload-pdf" (clj->js {:method "POST" :body form-data}))
-                          (.then (fn [resp] (.json resp)))
-                          (.then (fn [^js data]
-                                   (when (.-success data)
-                                     (reset! !nav-target {:doc-id (.-doc_id data)})
-                                     (navigate! :learn))))
-                          (.catch (fn [err] (js/console.error "Upload failed:" err))))))))
-                nil))))
+              (dom/text "Select a PDF file from your device")))
+          (when show-pdf
+            (UploadPDFModal !show-pdf !nav-target navigate!)))
 
         ;; Paste Article card
         (let [!show-paste (atom false)
@@ -358,7 +516,31 @@
               (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
               (dom/text "Fetch from any web page or Wikipedia")))
           (when show-url
-            (URLImportModal !show-url user-id !refresh !nav-target navigate!))))
+            (URLImportModal !show-url user-id !refresh !nav-target navigate!)))
+
+        ;; Upload EPUB card
+        (let [!show-epub (atom false)
+              show-epub (e/watch !show-epub)]
+          (dom/div
+            (dom/props {:style {:border "1px solid var(--color-border)" :border-radius "var(--radius-md)"
+                                :padding "20px" :cursor "pointer" :transition "border-color 0.15s, box-shadow 0.15s"
+                                :background "var(--color-bg-surface)"}})
+            (dom/On "mouseenter" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-primary)")
+                                   (set! (.-boxShadow (.-style (.-currentTarget e))) "0 0 0 1px var(--color-primary)")) nil)
+            (dom/On "mouseleave" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-border)")
+                                   (set! (.-boxShadow (.-style (.-currentTarget e))) "none")) nil)
+            (dom/On "click" (fn [_] (reset! !show-epub true)) nil)
+            (dom/div
+              (dom/props {:style {:font-size "24px" :margin-bottom "8px"}})
+              (dom/text "\uD83D\uDCD6"))
+            (dom/div
+              (dom/props {:style {:font-size "14px" :font-weight "600" :margin-bottom "4px"}})
+              (dom/text "Upload EPUB"))
+            (dom/div
+              (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
+              (dom/text "Import an EPUB ebook file")))
+          (when show-epub
+            (UploadEPUBModal !show-epub !nav-target navigate!))))
 
       ;; Recent imports
       (let [refresh (e/server (e/watch !refresh))
@@ -385,8 +567,9 @@
                                         :background (case source-type
                                                       "wikipedia" "#fef3c7"
                                                       "web" "#e0f2fe"
+                                                      "epub" "#f3e8ff"
                                                       "#dcfce7")}})
-                    (dom/text (case source-type "wikipedia" "Wiki" "web" "Web" "PDF")))
+                    (dom/text (case source-type "wikipedia" "Wiki" "web" "Web" "epub" "EPUB" "PDF")))
                   (dom/a
                     (dom/props {:style {:flex "1" :font-size "14px" :color "var(--color-primary)" :cursor "pointer"
                                         :text-decoration "none" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})

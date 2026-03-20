@@ -2,11 +2,14 @@
   "REST API handlers for file upload, page text save, and authentication."
   (:require
     [electric-starter-app.pdf :as pdf]
+    [electric-starter-app.epub :as epub]
     [electric-starter-app.page :as page]
     [electric-starter-app.db :as db]
     [electric-starter-app.auth :as auth]
     [electric-starter-app.crypto :as crypto]
     [electric-starter-app.google-oauth :as google-oauth]
+    [electric-starter-app.extractor :as extractor]
+    [electric-starter-app.html-cleaner :as cleaner]
     [clojure.java.io :as io]
     [clojure.string]
     [cheshire.core :as json]))
@@ -78,6 +81,51 @@
          :body (json/generate-string {:success false :error "No file provided"})})
       (catch Exception e
         (println "ERROR [upload-pdf-handler]:" (.getMessage e))
+        (.printStackTrace e)
+        {:status 500
+         :headers {"Content-Type" "application/json"}
+         :body (json/generate-string {:success false :error (.getMessage e)})}))
+    {:status 401
+     :headers {"Content-Type" "application/json"}
+     :body (json/generate-string {:success false :error "Not authenticated"})}))
+
+(defn upload-epub-handler [request]
+  (if-let [user-id (require-auth request)]
+    (try
+      (if-let [file (get-in request [:params "file"])]
+        (let [filename (:filename file)
+              tempfile (:tempfile file)
+              auto-extract? (= "true" (get-in request [:params "auto_extract"]))
+              bytes (with-open [in (io/input-stream tempfile)]
+                      (let [baos (java.io.ByteArrayOutputStream.)]
+                        (io/copy in baos)
+                        (.toByteArray baos)))
+              result (epub/process-epub bytes)]
+          (if (:error result)
+            {:status 400
+             :headers {"Content-Type" "application/json"}
+             :body (json/generate-string {:success false :error (:error result)})}
+            (let [{:keys [title html]} result
+                  display-name (or title filename "Untitled EPUB")
+                  doc-id (db/save-epub-document user-id display-name bytes (alength bytes) html)]
+              (when (and auto-extract? doc-id html)
+                (try
+                  (when-let [{:keys [sections annotated-html]} (extractor/extract-and-annotate html)]
+                    (let [clean-sections (mapv #(update % :content cleaner/clean-html) sections)]
+                      (when (seq clean-sections)
+                        (db/batch-create-content-items doc-id 1 clean-sections))
+                      (when annotated-html
+                        (db/save-page-text doc-id 1 annotated-html))))
+                  (catch Exception e
+                    (println "WARN [upload-epub] auto-extract failed:" (.getMessage e)))))
+              {:status 200
+               :headers {"Content-Type" "application/json"}
+               :body (json/generate-string {:success true :doc_id doc-id})})))
+        {:status 400
+         :headers {"Content-Type" "application/json"}
+         :body (json/generate-string {:success false :error "No file provided"})})
+      (catch Exception e
+        (println "ERROR [upload-epub-handler]:" (.getMessage e))
         (.printStackTrace e)
         {:status 500
          :headers {"Content-Type" "application/json"}
@@ -183,6 +231,9 @@
 
       (and (= uri "/api/upload-pdf") (= method :post))
       (upload-pdf-handler request)
+
+      (and (= uri "/api/upload-epub") (= method :post))
+      (upload-epub-handler request)
 
       (and (re-matches #"/api/pdf/\d+" uri) (= method :get))
       (get-pdf-handler request)
