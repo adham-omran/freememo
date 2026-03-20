@@ -96,26 +96,27 @@
         (let [filename (:filename file)
               tempfile (:tempfile file)
               auto-extract? (= "true" (get-in request [:params "auto_extract"]))
+              image-mode (keyword (or (get-in request [:params "image_mode"]) "reduce"))
               bytes (with-open [in (io/input-stream tempfile)]
                       (let [baos (java.io.ByteArrayOutputStream.)]
                         (io/copy in baos)
                         (.toByteArray baos)))
-              result (epub/process-epub bytes)]
+              result (epub/process-epub bytes image-mode)]
           (if (:error result)
             {:status 400
              :headers {"Content-Type" "application/json"}
              :body (json/generate-string {:success false :error (:error result)})}
-            (let [{:keys [title html]} result
+            (let [{:keys [title chapters]} result
                   display-name (or title filename "Untitled EPUB")
-                  doc-id (db/save-epub-document user-id display-name bytes (alength bytes) html)]
-              (when (and auto-extract? doc-id html)
+                  {:keys [doc-id chapter-ids]} (db/save-epub-document user-id display-name bytes (alength bytes) chapters)]
+              (when (and auto-extract? doc-id (seq chapter-ids))
                 (try
-                  (when-let [{:keys [sections annotated-html]} (extractor/extract-and-annotate html)]
-                    (let [clean-sections (mapv #(update % :content cleaner/clean-html) sections)]
-                      (when (seq clean-sections)
-                        (db/batch-create-content-items doc-id 1 clean-sections))
-                      (when annotated-html
-                        (db/save-page-text doc-id 1 annotated-html))))
+                  (doseq [[ch-id ch] (map vector chapter-ids chapters)]
+                    (when (and ch-id (seq (:html ch)))
+                      (when-let [{:keys [sections]} (extractor/extract-and-annotate (:html ch))]
+                        (let [clean-sections (mapv #(update % :content cleaner/clean-html) sections)]
+                          (doseq [section clean-sections]
+                            (db/save-content-item doc-id 1 "html" (:content section) ch-id))))))
                   (catch Exception e
                     (println "WARN [upload-epub] auto-extract failed:" (.getMessage e)))))
               {:status 200
@@ -127,6 +128,27 @@
       (catch Exception e
         (println "ERROR [upload-epub-handler]:" (.getMessage e))
         (.printStackTrace e)
+        {:status 500
+         :headers {"Content-Type" "application/json"}
+         :body (json/generate-string {:success false :error (.getMessage e)})}))
+    {:status 401
+     :headers {"Content-Type" "application/json"}
+     :body (json/generate-string {:success false :error "Not authenticated"})}))
+
+(defn create-topic-handler [request]
+  (if-let [user-id (require-auth request)]
+    (try
+      (let [title (or (get-in request [:params "title"]) "New Topic")
+            {:keys [doc-id content-item-id]} (db/create-empty-topic user-id title)]
+        (if doc-id
+          {:status 200
+           :headers {"Content-Type" "application/json"}
+           :body (json/generate-string {:success true :doc_id doc-id :content_item_id content-item-id})}
+          {:status 500
+           :headers {"Content-Type" "application/json"}
+           :body (json/generate-string {:success false :error "Failed to create topic"})}))
+      (catch Exception e
+        (println "ERROR [create-topic-handler]:" (.getMessage e))
         {:status 500
          :headers {"Content-Type" "application/json"}
          :body (json/generate-string {:success false :error (.getMessage e)})}))
@@ -234,6 +256,9 @@
 
       (and (= uri "/api/upload-epub") (= method :post))
       (upload-epub-handler request)
+
+      (and (= uri "/api/create-topic") (= method :post))
+      (create-topic-handler request)
 
       (and (re-matches #"/api/pdf/\d+" uri) (= method :get))
       (get-pdf-handler request)

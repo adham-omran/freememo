@@ -347,6 +347,7 @@
   (e/client
     (let [!file-input (atom nil)
           !auto-extract (atom false)
+          !image-mode (atom "reduce")
           !uploading (atom false)
           uploading (e/watch !uploading)]
       (dom/div
@@ -372,6 +373,7 @@
                     (let [form-data (js/FormData.)]
                       (.append form-data "file" file)
                       (.append form-data "auto_extract" (str @!auto-extract))
+                      (.append form-data "image_mode" @!image-mode)
                       (-> (js/fetch "/api/upload-epub" (clj->js {:method "POST" :body form-data}))
                         (.then (fn [resp] (.json resp)))
                         (.then (fn [^js data]
@@ -415,7 +417,26 @@
 
             ;; Options
             (dom/div
-              (dom/props {:style {:margin-bottom "var(--sp-3)" :display "flex" :flex-direction "column" :gap "8px"}})
+              (dom/props {:style {:margin-bottom "var(--sp-3)" :display "flex" :flex-direction "column" :gap "10px"}})
+
+              ;; Image handling
+              (dom/div
+                (dom/props {:style {:display "flex" :flex-direction "column" :gap "6px"}})
+                (dom/span
+                  (dom/props {:style {:font-size "13px" :font-weight "500" :color "var(--color-text-label)"}})
+                  (dom/text "Images"))
+                (dom/label
+                  (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "13px" :cursor "pointer"}})
+                  (dom/input (dom/props {:type "radio" :name "image_mode" :value "reduce" :checked true})
+                    (dom/On "change" (fn [_] (reset! !image-mode "reduce")) nil))
+                  (dom/text "Reduce size — shrink for faster loading"))
+                (dom/label
+                  (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "13px" :cursor "pointer"}})
+                  (dom/input (dom/props {:type "radio" :name "image_mode" :value "strip"})
+                    (dom/On "change" (fn [_] (reset! !image-mode "strip")) nil))
+                  (dom/text "Strip images — text only")))
+
+              ;; Auto-extract
               (dom/label
                 (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "13px" :cursor "pointer"}})
                 (dom/input (dom/props {:type "checkbox"})
@@ -434,6 +455,59 @@
                             :disabled uploading})
                 (dom/text (if uploading "Processing..." "Upload"))
                 (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil)))))))))
+
+(e/defn NewTopicModal [!show !nav-target navigate!]
+  (e/client
+    (let [!title (atom "")
+          !creating (atom false)
+          creating (e/watch !creating)]
+      (dom/div
+        (dom/props {:class "modal-backdrop"})
+        (dom/On "click" (fn [e]
+                          (when (= (.-target e) (.-currentTarget e))
+                            (reset! !show false)))
+          nil)
+        (dom/div
+          (dom/props {:class "modal-content" :style {:width "500px" :max-width "90%"}})
+          (dom/h3
+            (dom/props {:style {:margin "0 0 16px 0" :font-size "16px"}})
+            (dom/text "New Topic"))
+          (dom/p
+            (dom/props {:style {:margin "0 0 12px 0" :font-size "13px" :color "var(--color-text-secondary)"}})
+            (dom/text "Create a blank topic. You can add content later."))
+          (dom/input
+            (dom/props {:type "text" :placeholder "Topic title..."
+                        :class "input input-full" :style {:padding "10px 12px" :margin-bottom "var(--sp-3)"}})
+            (dom/On "input" (fn [e] (reset! !title (-> e .-target .-value))) nil))
+          (dom/div
+            (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
+            (dom/button
+              (dom/props {:class "btn btn-secondary"})
+              (dom/text "Cancel")
+              (dom/On "click" (fn [_] (reset! !show false)) nil))
+            (dom/button
+              (dom/props {:class "btn btn-primary" :style {:font-weight "600"}
+                          :disabled creating})
+              (dom/text (if creating "Creating..." "Create"))
+              (dom/On "click"
+                (fn [_]
+                  (when-not @!creating
+                    (reset! !creating true)
+                    (let [form-data (js/FormData.)]
+                      (.append form-data "title" (let [t @!title] (if (seq t) t "New Topic")))
+                      (-> (js/fetch "/api/create-topic" (clj->js {:method "POST" :body form-data}))
+                        (.then (fn [resp] (.json resp)))
+                        (.then (fn [^js data]
+                                 (reset! !creating false)
+                                 (if (.-success data)
+                                   (do (reset! !show false)
+                                     (reset! !nav-target {:content-item-id (.-content_item_id data)})
+                                     (navigate! :extract))
+                                   (js/alert (or (.-error data) "Failed to create topic")))))
+                        (.catch (fn [err]
+                                  (reset! !creating false)
+                                  (js/console.error "Create topic failed:" err)))))))
+                nil))))))))
 
 ;; Main Import page component
 (e/defn ImportPage [user-id !refresh !nav-target navigate! enc-key llm-enabled?]
@@ -540,7 +614,31 @@
               (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
               (dom/text "Import an EPUB ebook file")))
           (when show-epub
-            (UploadEPUBModal !show-epub !nav-target navigate!))))
+            (UploadEPUBModal !show-epub !nav-target navigate!)))
+
+        ;; New Topic card
+        (let [!show-topic (atom false)
+              show-topic (e/watch !show-topic)]
+          (dom/div
+            (dom/props {:style {:border "1px solid var(--color-border)" :border-radius "var(--radius-md)"
+                                :padding "20px" :cursor "pointer" :transition "border-color 0.15s, box-shadow 0.15s"
+                                :background "var(--color-bg-surface)"}})
+            (dom/On "mouseenter" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-primary)")
+                                   (set! (.-boxShadow (.-style (.-currentTarget e))) "0 0 0 1px var(--color-primary)")) nil)
+            (dom/On "mouseleave" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-border)")
+                                   (set! (.-boxShadow (.-style (.-currentTarget e))) "none")) nil)
+            (dom/On "click" (fn [_] (reset! !show-topic true)) nil)
+            (dom/div
+              (dom/props {:style {:font-size "24px" :margin-bottom "8px"}})
+              (dom/text "\u270F\uFE0F"))
+            (dom/div
+              (dom/props {:style {:font-size "14px" :font-weight "600" :margin-bottom "4px"}})
+              (dom/text "New Topic"))
+            (dom/div
+              (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
+              (dom/text "Create a blank topic to write in")))
+          (when show-topic
+            (NewTopicModal !show-topic !nav-target navigate!))))
 
       ;; Recent imports
       (let [refresh (e/server (e/watch !refresh))
@@ -568,8 +666,9 @@
                                                       "wikipedia" "#fef3c7"
                                                       "web" "#e0f2fe"
                                                       "epub" "#f3e8ff"
+                                                      "topic" "#f3e8ff"
                                                       "#dcfce7")}})
-                    (dom/text (case source-type "wikipedia" "Wiki" "web" "Web" "epub" "EPUB" "PDF")))
+                    (dom/text (case source-type "wikipedia" "Wiki" "web" "Web" "epub" "EPUB" "topic" "Topic" "PDF")))
                   (dom/a
                     (dom/props {:style {:flex "1" :font-size "14px" :color "var(--color-primary)" :cursor "pointer"
                                         :text-decoration "none" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
