@@ -92,11 +92,13 @@
                                                              "wikipedia" "Wiki"
                                                              "web" "Web"
                                                              "epub" "EPUB"
+                                                             "topic" "Topic"
                                                              "PDF"))
                                       type-color (e/server (case source-type
                                                              "wikipedia" "#fef3c7"
                                                              "web" "#e0f2fe"
                                                              "epub" "#f3e8ff"
+                                                             "topic" "#f3e8ff"
                                                              "#dcfce7"))]
                                   (dom/tr
                                     (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")

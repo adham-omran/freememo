@@ -5,6 +5,9 @@
             [clojure.string :as str])
   (:import [java.util.zip ZipInputStream ZipEntry]
            [java.io ByteArrayInputStream ByteArrayOutputStream]
+           [java.awt.image BufferedImage]
+           [java.awt RenderingHints]
+           [javax.imageio ImageIO IIOImage ImageWriteParam]
            [org.jsoup Jsoup]
            [org.jsoup.nodes Document Element]
            [java.util Base64]))
@@ -20,7 +23,7 @@
         (if (.isDirectory entry)
           (recur entries)
           (let [baos (ByteArrayOutputStream.)
-                buf  (byte-array 8192)]
+                buf (byte-array 8192)]
             (loop []
               (let [n (.read zis buf)]
                 (when (pos? n)
@@ -64,7 +67,7 @@
                    "")
         ;; Decode percent-encoded characters in href
         decoded-href (try (java.net.URLDecoder/decode rel-href "UTF-8")
-                          (catch Exception _ rel-href))
+                       (catch Exception _ rel-href))
         ;; Strip fragment identifiers
         clean-href (first (str/split decoded-href #"#"))
         full-path (if (str/blank? base-dir)
@@ -77,8 +80,8 @@
                                (= part "..") (if (seq acc) (pop acc) acc)
                                (= part ".") acc
                                :else (conj acc part)))
-                           []
-                           parts)]
+                     []
+                     parts)]
     (str/join "/" normalized)))
 
 ;; ── DRM detection ───────────────────────────────────────────────
@@ -95,16 +98,16 @@
               (let [method (.selectFirst ed "EncryptionMethod")
                     algo (when method (.attr method "Algorithm"))]
                 (and algo
-                     (not= algo "http://www.idpf.org/2008/embedding")
+                  (not= algo "http://www.idpf.org/2008/embedding")
                      ;; Also check if it encrypts non-font content
-                     (let [cipher-ref (.selectFirst ed "CipherReference")
-                           uri (when cipher-ref (.attr cipher-ref "URI"))]
-                       (when uri
-                         (not (or (str/ends-with? (str/lower-case uri) ".ttf")
-                                  (str/ends-with? (str/lower-case uri) ".otf")
-                                  (str/ends-with? (str/lower-case uri) ".woff")
-                                  (str/ends-with? (str/lower-case uri) ".woff2"))))))))
-            encrypted-data))))
+                  (let [cipher-ref (.selectFirst ed "CipherReference")
+                        uri (when cipher-ref (.attr cipher-ref "URI"))]
+                    (when uri
+                      (not (or (str/ends-with? (str/lower-case uri) ".ttf")
+                             (str/ends-with? (str/lower-case uri) ".otf")
+                             (str/ends-with? (str/lower-case uri) ".woff")
+                             (str/ends-with? (str/lower-case uri) ".woff2"))))))))
+        encrypted-data))))
 
 ;; ── OPF parsing ─────────────────────────────────────────────────
 
@@ -132,47 +135,108 @@
      :spine-ids spine-ids
      :opf-path opf-path}))
 
-;; ── Image inlining ──────────────────────────────────────────────
+;; ── Image handling ──────────────────────────────────────────────
+
+(def ^:private max-thumbnail-width 600)
 
 (defn- mime-for-extension
   "Guess MIME type from file extension."
   [path]
   (let [lower (str/lower-case (or path ""))]
     (cond
-      (str/ends-with? lower ".png")  "image/png"
-      (str/ends-with? lower ".jpg")  "image/jpeg"
+      (str/ends-with? lower ".png") "image/png"
+      (str/ends-with? lower ".jpg") "image/jpeg"
       (str/ends-with? lower ".jpeg") "image/jpeg"
-      (str/ends-with? lower ".gif")  "image/gif"
-      (str/ends-with? lower ".svg")  "image/svg+xml"
+      (str/ends-with? lower ".gif") "image/gif"
+      (str/ends-with? lower ".svg") "image/svg+xml"
       (str/ends-with? lower ".webp") "image/webp"
       :else "application/octet-stream")))
 
-(defn- inline-images
-  "Replace img src attributes with base64 data URIs using ZIP entries."
-  [^Document html-doc xhtml-path entries manifest opf-path]
+(defn- svg? [mime]
+  (= mime "image/svg+xml"))
+
+(defn- resize-image-bytes
+  "Resize image bytes to max-width, re-encoding as JPEG. Returns resized bytes or nil."
+  [^bytes img-bytes max-width]
+  (try
+    (let [^BufferedImage src-img (ImageIO/read (ByteArrayInputStream. img-bytes))]
+      (when src-img
+        (let [src-w (.getWidth src-img)
+              src-h (.getHeight src-img)]
+          (if (<= src-w max-width)
+            ;; Already small enough — re-encode as JPEG to save space
+            (let [baos (ByteArrayOutputStream.)]
+              (ImageIO/write src-img "jpg" baos)
+              (.toByteArray baos))
+            ;; Scale down
+            (let [scale (/ (double max-width) src-w)
+                  dst-w max-width
+                  dst-h (max 1 (int (* src-h scale)))
+                  dst-img (BufferedImage. dst-w dst-h BufferedImage/TYPE_INT_RGB)
+                  g (.createGraphics dst-img)]
+              (.setRenderingHint g RenderingHints/KEY_INTERPOLATION RenderingHints/VALUE_INTERPOLATION_BILINEAR)
+              (.drawImage g src-img 0 0 dst-w dst-h nil)
+              (.dispose g)
+              (let [baos (ByteArrayOutputStream.)]
+                (ImageIO/write dst-img "jpg" baos)
+                (.toByteArray baos)))))))
+    (catch Exception e
+      (println "WARN [epub] resize-image failed:" (.getMessage e))
+      nil)))
+
+(defn- process-images
+  "Process img elements based on image-mode (:reduce or :strip)."
+  [^Document html-doc xhtml-path entries image-mode]
   (let [imgs (.select html-doc "img[src]")]
     (doseq [^Element img imgs]
-      (let [src (.attr img "src")]
-        (when-not (str/starts-with? src "data:")
-          ;; Resolve image path relative to the XHTML file
-          (let [img-path (resolve-path xhtml-path src)
-                img-bytes (get entries img-path)]
-            (if img-bytes
-              (let [mime (mime-for-extension img-path)
-                    b64 (.encodeToString (Base64/getEncoder) img-bytes)
-                    data-uri (str "data:" mime ";base64," b64)]
-                (.attr img "src" data-uri))
-              ;; Image not found — remove the broken img
-              (.remove img))))))))
+      (if (= image-mode :strip)
+        (.remove img)
+        ;; :reduce mode
+        (let [src (.attr img "src")]
+          (if (str/starts-with? src "data:")
+            nil ;; already inline, leave it
+            (let [img-path (resolve-path xhtml-path src)
+                  img-bytes (get entries img-path)]
+              (if img-bytes
+                (let [mime (mime-for-extension img-path)]
+                  (if (svg? mime)
+                    ;; SVGs are already small text — inline as-is
+                    (let [b64 (.encodeToString (Base64/getEncoder) img-bytes)]
+                      (.attr img "src" (str "data:" mime ";base64," b64)))
+                    ;; Raster image — resize then inline
+                    (if-let [resized (resize-image-bytes img-bytes max-thumbnail-width)]
+                      (let [b64 (.encodeToString (Base64/getEncoder) resized)]
+                        (.attr img "src" (str "data:image/jpeg;base64," b64)))
+                      (.remove img))))
+                ;; Image not found
+                (.remove img)))))))))
+
 
 ;; ── Main processing ─────────────────────────────────────────────
 
+(defn- extract-chapter-title
+  "Extract a title from the first heading in an XHTML body, or use the filename."
+  [^Element body href]
+  (let [heading (some #(.selectFirst body %) ["h1" "h2" "h3"])]
+    (if heading
+      (let [text (str/trim (.text heading))]
+        (if (str/blank? text)
+          (last (str/split (or href "chapter") #"/"))
+          text))
+      (-> (or href "chapter")
+        (str/split #"/")
+        last
+        (str/replace #"\.(xhtml|html|htm)$" "")))))
+
 (defn process-epub
   "Extract text and metadata from an EPUB file.
-   Returns {:title :author :html} on success, or {:error \"...\"} on failure."
-  [file-bytes]
+   image-mode is :reduce (resize to thumbnails, default) or :strip (remove all images).
+   Returns {:title :author :chapters [{:html :title} ...]} on success,
+   or {:error \"...\"} on failure."
+  [file-bytes image-mode]
   (try
-    (let [entries (read-zip-entries file-bytes)]
+    (let [entries (read-zip-entries file-bytes)
+          image-mode (or image-mode :reduce)]
       ;; Check for DRM
       (if (drm-protected? entries)
         {:error "This EPUB is DRM-protected and cannot be imported. Please use a DRM-free version."}
@@ -181,33 +245,36 @@
         (if-let [opf-path (find-opf-path entries)]
           (if-let [opf-bytes (get entries opf-path)]
             (let [{:keys [title creator manifest spine-ids]} (parse-opf opf-bytes opf-path)
-                  ;; Process each spine item
-                  html-parts
+                  ;; Process each spine item into a chapter
+                  chapters
                   (reduce
-                    (fn [parts spine-id]
+                    (fn [chs spine-id]
                       (if-let [{:keys [href media-type]} (get manifest spine-id)]
                         (let [xhtml-path (resolve-path opf-path href)
                               xhtml-bytes (get entries xhtml-path)]
                           (if (and xhtml-bytes
-                                   (or (str/includes? (or media-type "") "xhtml")
-                                       (str/includes? (or media-type "") "html")))
+                                (or (str/includes? (or media-type "") "xhtml")
+                                  (str/includes? (or media-type "") "html")))
                             (let [doc (Jsoup/parse (String. xhtml-bytes "UTF-8"))
-                                  _ (inline-images doc xhtml-path entries manifest opf-path)
+                                  _ (process-images doc xhtml-path entries image-mode)
                                   body (.selectFirst doc "body")]
                               (if body
-                                (conj parts (.html body))
-                                parts))
-                            ;; Skip non-HTML spine items (e.g., images)
-                            parts))
-                        parts))
+                                (let [body-html (.html body)
+                                      cleaned (cleaner/clean-html body-html)]
+                                  (if (str/blank? (str/trim (or cleaned "")))
+                                    chs ;; skip empty chapters
+                                    (conj chs {:title (extract-chapter-title body href)
+                                               :html cleaned})))
+                                chs))
+                            chs))
+                        chs))
                     []
-                    spine-ids)
-                  ;; Concatenate and clean
-                  combined-html (str/join "\n<hr>\n" html-parts)
-                  cleaned-html (cleaner/clean-html combined-html)]
-              {:title (or title "Untitled EPUB")
-               :author creator
-               :html cleaned-html})
+                    spine-ids)]
+              (if (seq chapters)
+                {:title (or title "Untitled EPUB")
+                 :author creator
+                 :chapters chapters}
+                {:error "No readable content found in this EPUB"}))
 
             {:error "Could not read package document (OPF file)"})
           {:error "Invalid EPUB: no container.xml or missing rootfile"})))

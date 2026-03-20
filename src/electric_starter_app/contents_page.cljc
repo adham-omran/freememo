@@ -37,6 +37,8 @@
           children (get children-map id)
           has-children (boolean (seq children))
           item-status (or (:content_items/status item) "active")
+          item-kind (or (:content_items/kind item) "html")
+          is-topic (= item-kind "topic")
           preview (content-preview (:content_items/content item) 60)
           !expanded (atom false)
           expanded (e/watch !expanded)]
@@ -59,8 +61,8 @@
             (dom/span (dom/props {:style {:width "16px" :flex-shrink "0"}})))
           ;; Type badge
           (dom/span
-            (dom/props {:class "type-badge" :style {:background "#44C2FF"}})
-            (dom/text "Ext"))
+            (dom/props {:class "type-badge" :style {:background (if is-topic "#f3e8ff" "#44C2FF")}})
+            (dom/text (if is-topic "Topic" "Ext")))
           ;; Content preview — click opens
           (dom/span
             (dom/props {:style {:font-size "13px" :color "#333" :cursor "pointer"
@@ -101,8 +103,8 @@
           filename (:documents/filename doc)
           source-type (or (:documents/source_type doc) "pdf")
           doc-status (or (:documents/status doc) "active")
-          type-label (case source-type "wikipedia" "Wiki" "web" "Web" "epub" "EPUB" "PDF")
-          type-color (case source-type "wikipedia" "#fef3c7" "web" "#e0f2fe" "epub" "#f3e8ff" "#dcfce7")
+          type-label (case source-type "wikipedia" "Wiki" "web" "Web" "epub" "EPUB" "topic" "Topic" "PDF")
+          type-color (case source-type "wikipedia" "#fef3c7" "web" "#e0f2fe" "epub" "#f3e8ff" "topic" "#f3e8ff" "#dcfce7")
           ;; Build children map for this document's extracts
           children-map (group-by :content_items/parent_content_item_id items-for-doc)
           root-items (get children-map nil)

@@ -47,6 +47,7 @@
                       :next-review (:next_review_at row)
                       :status (or (:status row) "active")
                       :source-type (:source_type row)
+                      :kind (:kind row)
                       :display-title display-title
                       :due-label (format-due (:next_review_at row) (or (:status row) "active"))}))
               raw)))
@@ -64,14 +65,14 @@
         :due-today (count (filter (fn [r]
                                     (and (active? r)
                                       (or (nil? (:next-review r))
-                                          (let [due (.toLocalDate (.toLocalDateTime (:next-review r)))]
-                                            (not (.isAfter due now))))))
+                                        (let [due (.toLocalDate (.toLocalDateTime (:next-review r)))]
+                                          (not (.isAfter due now))))))
                             rows))
         :due-week (count (filter (fn [r]
                                    (and (active? r)
                                      (or (nil? (:next-review r))
-                                         (let [due (.toLocalDate (.toLocalDateTime (:next-review r)))]
-                                           (not (.isAfter due week-end))))))
+                                       (let [due (.toLocalDate (.toLocalDateTime (:next-review r)))]
+                                         (not (.isAfter due week-end))))))
                            rows))})
      :cljs nil))
 
@@ -137,13 +138,17 @@
                               display-title (or (:display-title item) "")
                               id (:id item)
                             ;; Type badge
+                              item-kind (:kind item)
                               [badge-text badge-color]
                               (if (= topic-type "extract")
-                                ["Ext" "#44C2FF"]
+                                (if (= item-kind "topic")
+                                  ["Topic" "#f3e8ff"]
+                                  ["Ext" "#44C2FF"])
                                 (case source-type
                                   "wikipedia" ["Wiki" "#fef3c7"]
                                   "web" ["Web" "#e0f2fe"]
                                   "epub" ["EPUB" "#f3e8ff"]
+                                  "topic" ["Topic" "#f3e8ff"]
                                   ["PDF" "#dcfce7"]))]
                           (dom/tr
                             (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")
