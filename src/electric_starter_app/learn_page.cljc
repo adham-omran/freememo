@@ -67,8 +67,8 @@
 (e/defn LearnOverview [user-id !mode navigate!]
   (e/client
     (dom/div
-      (dom/props {:style {:padding "16px" :max-width "1200px" :width "100%" :margin "0 auto"
-                          :height "100%" :display "flex" :flex-direction "column"}})
+      (dom/props {:class "page-container"
+                  :style {:height "100%" :display "flex" :flex-direction "column"}})
 
       (let [refresh (e/server (e/watch !refresh))
             due-count (e/server (get-learning-queue-count* refresh user-id))
@@ -77,18 +77,15 @@
         ;; Header with count and Learn button
         (dom/div
           (dom/props {:style {:display "flex" :align-items "center" :gap "16px" :margin-bottom "16px" :flex-shrink "0"}})
-          (dom/h2
-            (dom/props {:style {:margin "0" :font-size "20px"}})
-            (dom/text "Learn"))
-          (dom/span
-            (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}
-                        :title "Documents and extracts scheduled for review"})
-            (dom/text (str due-count " topics due")))
           (when (pos? due-count)
             (dom/button
               (dom/props {:class "btn btn-primary" :style {:padding "8px 24px" :font-size "15px" :font-weight "600"}})
               (dom/text "Start Learning")
-              (dom/On "click" (fn [_] (reset! !mode :session)) nil))))
+              (dom/On "click" (fn [_] (reset! !mode :session)) nil)))
+          (dom/span
+            (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}
+                        :title "Documents and extracts scheduled for review"})
+            (dom/text (str due-count " topics due"))))
 
         (if (pos? due-count)
           ;; Top 10 due topics (lightweight preview, not the full queue)

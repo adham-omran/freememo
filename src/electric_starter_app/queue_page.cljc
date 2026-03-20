@@ -188,11 +188,8 @@
 (e/defn QueuePage [user-id !nav-target navigate!]
   (e/client
     (dom/div
-      (dom/props {:style {:padding "16px" :max-width "1200px" :width "100%" :margin "0 auto"
-                          :height "100%" :display "flex" :flex-direction "column"}})
-      (dom/h2
-        (dom/props {:style {:margin "0 0 16px 0" :font-size "20px" :flex-shrink "0"}})
-        (dom/text "Queue"))
+      (dom/props {:class "page-container"
+                  :style {:height "100%" :display "flex" :flex-direction "column"}})
 
       (let [items-vec (e/server (prepare-queue-rows user-id))
             item-count (e/server (count items-vec))

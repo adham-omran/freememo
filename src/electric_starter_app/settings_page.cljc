@@ -12,10 +12,7 @@
 (e/defn SettingsPage [user-id username enc-key !settings-refresh]
   (e/client
     (dom/div
-      (dom/props {:style {:padding "24px" :max-width "600px" :margin "0 auto"}})
-
-      (dom/h2 (dom/props {:style {:font-size "20px" :font-weight "600" :margin "0 0 20px 0"}})
-        (dom/text "Settings"))
+      (dom/props {:class "page-container"})
 
       ;; ── Account section ──
       (dom/div
