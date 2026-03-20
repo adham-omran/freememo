@@ -13,16 +13,21 @@
           !filter-text (atom "")
           filter-text (e/watch !filter-text)]
       (dom/div
-        (dom/props {:style {:padding "var(--sp-4)" :max-width "1200px" :width "100%" :margin "0 auto"
-                            :height "100%" :display "flex" :flex-direction "column"}})
+        (dom/props {:class "page-container"
+                    :style {:height "100%" :display "flex" :flex-direction "column"}})
 
-        ;; Header row: title + toggle
+        ;; Header row: search + toggle
         (dom/div
-          (dom/props {:style {:display "flex" :align-items "center" :justify-content "space-between"
+          (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
                               :margin-bottom "12px"}})
-          (dom/h2
-            (dom/props {:style {:margin "0" :font-size "20px"}})
-            (dom/text "Library"))
+
+          ;; Search filter
+          (dom/input
+            (dom/props {:type "text" :placeholder "Filter documents..."
+                        :class "input" :style {:flex "1" :max-width "400px"}})
+            (dom/On "input" (fn [e] (reset! !filter-text (-> e .-target .-value))) nil))
+
+          (dom/div (dom/props {:style {:flex "1"}}))
 
           ;; Segmented toggle
           (dom/div
@@ -43,12 +48,6 @@
                                   :color (if (= view-mode :tree) "#fff" "var(--color-text-secondary)")}})
               (dom/text "Tree")
               (dom/On "click" (fn [_] (reset! !view-mode :tree)) nil))))
-
-        ;; Search filter
-        (dom/input
-          (dom/props {:type "text" :placeholder "Filter documents..."
-                      :class "input" :style {:width "100%" :max-width "400px" :margin-bottom "var(--sp-3)"}})
-          (dom/On "input" (fn [e] (reset! !filter-text (-> e .-target .-value))) nil))
 
         ;; View content
         (if (= view-mode :list)

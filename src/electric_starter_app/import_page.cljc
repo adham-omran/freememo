@@ -266,13 +266,7 @@
 (e/defn ImportPage [user-id !refresh !nav-target navigate! enc-key llm-enabled?]
   (e/client
     (dom/div
-      (dom/props {:style {:padding "var(--sp-4)" :max-width "720px" :width "100%" :margin "0 auto"}})
-      (dom/h2
-        (dom/props {:style {:margin "0 0 4px 0" :font-size "20px"}})
-        (dom/text "Import"))
-      (dom/p
-        (dom/props {:style {:margin "0 0 24px 0" :font-size "14px" :color "var(--color-text-secondary)"}})
-        (dom/text "Add content to your library."))
+      (dom/props {:class "page-container"})
 
       ;; Import cards
       (dom/div

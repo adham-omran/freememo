@@ -44,7 +44,7 @@
           new-user? (zero? total-count)
           has-due? (pos? queue-count)]
       (dom/div
-        (dom/props {:style {:padding "48px 24px" :max-width "640px" :margin "0 auto"}})
+        (dom/props {:class "page-container" :style {:padding-top "48px"}})
 
         ;; Section 1: Hero + Adaptive Status Line
         (dom/h1
