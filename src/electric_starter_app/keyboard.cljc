@@ -1,4 +1,6 @@
-(ns electric-starter-app.keyboard)
+(ns electric-starter-app.keyboard
+  #?(:cljs (:import [goog.ui KeyboardShortcutHandler]))
+  #?(:cljs (:require [goog.events :as gevents])))
 
 ;; Button refs — available on both CLJ and CLJS (no reader conditional)
 ;; to avoid frame mismatch when referenced in e/defn bodies.
@@ -10,30 +12,32 @@
 (defonce !postpone-btn-ref (atom nil))
 
 #?(:cljs
-   (defn- click-ref! [ref-atom e]
-     (when-let [btn @ref-atom]
-       (when-not (.-disabled btn)
-         (.preventDefault e)
-         (.click btn)))))
-
-;; Capture-phase listener on js/document — fires before any child
-;; element can stopPropagation, guaranteeing global hotkeys work
-;; even when Quill editor or modals have focus.
-#?(:cljs
-   (defn- handle-keydown! [e]
-     (when (and (.-shiftKey e) (or (.-metaKey e) (.-ctrlKey e)))
-       (case (.toLowerCase (.-key e))
-         "e" (click-ref! !extract-btn-ref e)    ; Extract topic
-         "g" (click-ref! !generate-btn-ref e)   ; Generate cards
-         "s" (click-ref! !scan-btn-ref e)        ; Scan Page (OCR)
-         "x" (click-ref! !anki-sync-btn-ref e)  ; Anki Sync
-         "d" (click-ref! !done-btn-ref e)        ; Mark Done
-         ;; Postpone shortcut deferred — needs focus management for days input
-         nil))))
+   (def ^:private shortcut->ref
+     {"extract"   !extract-btn-ref
+      "generate"  !generate-btn-ref
+      "scan"      !scan-btn-ref
+      "anki-sync" !anki-sync-btn-ref
+      "done"      !done-btn-ref}))
 
 #?(:cljs
-   (defonce _init-keyboard-listener
-     (do (.addEventListener js/document "keydown"
-           handle-keydown!
-           #js {:capture true})
-         true)))
+   (defn- on-shortcut [e]
+     (when-let [ref-atom (get shortcut->ref (.-identifier e))]
+       (when-let [btn @ref-atom]
+         (when-not (.-disabled btn)
+           (.click btn))))))
+
+#?(:cljs
+   (defonce handler
+     (let [h (KeyboardShortcutHandler. js/document)]
+       ;; Allow shortcuts to fire even in contentEditable (Quill editor).
+       ;; Without this, Closure blocks all shortcuts when focus is in
+       ;; contentEditable — modifierShortcutsAreGlobal_ only applies to
+       ;; form elements (input/textarea/select), not contentEditable.
+       (.setAllShortcutsAreGlobal h true)
+       (.registerShortcut h "extract"   "meta+shift+e")
+       (.registerShortcut h "generate"  "meta+shift+g")
+       (.registerShortcut h "scan"      "meta+shift+s")
+       (.registerShortcut h "anki-sync" "meta+shift+x")
+       (.registerShortcut h "done"      "meta+shift+d")
+       (gevents/listen h "shortcut" on-shortcut)
+       h)))
