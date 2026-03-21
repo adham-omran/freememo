@@ -147,38 +147,55 @@
                                             (navigate! :learn))
                                           nil))
                                       (let [!deleting (atom false)
-                                            deleting (e/watch !deleting)]
+                                            deleting (e/watch !deleting)
+                                            !show-confirm (atom false)
+                                            show-confirm (e/watch !show-confirm)]
                                         (dom/button
                                           (dom/props {:disabled deleting
                                                       :class "btn btn-sm btn-danger-fill"
                                                       :style {:padding "3px 10px"
                                                               :background (if deleting "#999" "var(--color-danger)")
                                                               :cursor (if deleting "not-allowed" "pointer")}})
-
                                           (dom/text (if deleting "..." "Delete"))
-                                          (let [click-event (dom/On "click"
-                                                              (fn [_]
-                                                                #?(:cljs
-                                                                   (when (js/confirm "Delete this document? All pages, extracts, and cards will be permanently removed.")
-                                                                     id)
-                                                                   :clj nil))
-                                                              nil)
-                                                [?token ?error] (e/Token click-event)]
-                                            (when ?error
-                                              (dom/span
-                                                (dom/props {:style {:color "var(--color-danger)" :font-size "11px" :margin-left "var(--sp-1)"}})
-                                                (dom/text ?error)))
-                                            (when-some [token ?token]
-                                              (reset! !deleting true)
-                                              (let [note-ids (e/server (db/get-anki-note-ids-for-document click-event))
-                                                    result (e/server (pdf/delete-pdf user-id click-event))]
-                                                (if (:success result)
-                                                  (do (reset! !deleting false)
-                                                    (e/server (swap! !refresh inc))
-                                                    (e/client (card-components/try-delete-anki-notes! note-ids))
-                                                    (token))
-                                                  (do (reset! !deleting false)
-                                                    (token (:error result))))))))))))))))
+                                          (dom/On "click" (fn [_] (reset! !show-confirm true)) nil))
+                                        (dom/div
+                                          (dom/props {:class "modal-backdrop"
+                                                      :style {:display (if show-confirm "flex" "none")}})
+                                          (dom/On "click" (fn [_] (reset! !show-confirm false)) nil)
+                                          (dom/On "keydown" (fn [e] (when (= (.-key e) "Escape") (reset! !show-confirm false))) nil)
+                                          (dom/div
+                                            (dom/props {:class "modal-content modal-sm"})
+                                            (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+                                            (dom/div
+                                              (dom/props {:class "confirm-modal-body"})
+                                              (dom/p (dom/text "Delete this document? All pages, extracts, and cards will be permanently removed.")))
+                                            (dom/div
+                                              (dom/props {:class "confirm-modal-actions"})
+                                              (dom/button
+                                                (dom/props {:class "btn btn-secondary"})
+                                                (dom/text "Cancel")
+                                                (dom/On "click" (fn [_] (reset! !show-confirm false)) nil))
+                                              (dom/button
+                                                (dom/props {:class "btn btn-danger-fill"})
+                                                (dom/text "Delete")
+                                                (let [event (dom/On "click" (fn [_] id) nil)
+                                                      [?token ?error] (e/Token event)]
+                                                  (when ?error
+                                                    (dom/span
+                                                      (dom/props {:style {:color "var(--color-danger)" :font-size "11px"}})
+                                                      (dom/text ?error)))
+                                                  (when-some [token ?token]
+                                                    (reset! !deleting true)
+                                                    (reset! !show-confirm false)
+                                                    (let [note-ids (e/server (db/get-anki-note-ids-for-document event))
+                                                          result (e/server (pdf/delete-pdf user-id event))]
+                                                      (if (:success result)
+                                                        (do (reset! !deleting false)
+                                                          (e/server (swap! !refresh inc))
+                                                          (e/client (card-components/try-delete-anki-notes! note-ids))
+                                                          (token))
+                                                        (do (reset! !deleting false)
+                                                          (token (:error result)))))))))))))))))))
                         (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))
 
                   ;; Empty state

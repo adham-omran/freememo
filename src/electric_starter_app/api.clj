@@ -84,7 +84,7 @@
         (.printStackTrace e)
         {:status 500
          :headers {"Content-Type" "application/json"}
-         :body (json/generate-string {:success false :error (.getMessage e)})}))
+         :body (json/generate-string {:success false :error "Upload failed. Please try again with a different file."})}))
     {:status 401
      :headers {"Content-Type" "application/json"}
      :body (json/generate-string {:success false :error "Not authenticated"})}))
@@ -130,7 +130,7 @@
         (.printStackTrace e)
         {:status 500
          :headers {"Content-Type" "application/json"}
-         :body (json/generate-string {:success false :error (.getMessage e)})}))
+         :body (json/generate-string {:success false :error "Upload failed. Please try again with a different file."})}))
     {:status 401
      :headers {"Content-Type" "application/json"}
      :body (json/generate-string {:success false :error "Not authenticated"})}))
@@ -151,7 +151,7 @@
         (println "ERROR [create-topic-handler]:" (.getMessage e))
         {:status 500
          :headers {"Content-Type" "application/json"}
-         :body (json/generate-string {:success false :error (.getMessage e)})}))
+         :body (json/generate-string {:success false :error "Failed to create topic. Please try again."})}))
     {:status 401
      :headers {"Content-Type" "application/json"}
      :body (json/generate-string {:success false :error "Not authenticated"})}))
@@ -236,7 +236,7 @@
       (println "ERROR [save-page-text-handler]:" (.getMessage e))
       {:status 500
        :headers {"Content-Type" "text/plain"}
-       :body (str "error: " (.getMessage e))})))
+       :body "error: Failed to save page text. Please try again."})))
 
 (defn api-routes [request]
   (let [uri (:uri request)

@@ -698,7 +698,7 @@
         WHERE d.user_id = ?
           AND (ci.next_review_at <= NOW() OR ci.next_review_at IS NULL)
           AND (ci.status = 'active' OR ci.status IS NULL)
-        ORDER BY priority ASC, next_review_at ASC NULLS FIRST"
+        ORDER BY priority ASC, next_review_at ASC NULLS FIRST, id ASC"
        user-id user-id])
     (catch Exception e
       (println "ERROR get-learning-queue:" (.getMessage e))

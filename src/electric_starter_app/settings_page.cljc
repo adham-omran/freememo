@@ -59,6 +59,13 @@
           (dom/props {:class "card"})
           (dom/h3 (dom/props {:class "section-title"}) (dom/text "AI Features"))
 
+          ;; BYOK explainer
+          (dom/div
+            (dom/props {:style {:padding "12px 14px" :background "#f0f4ff" :border-radius "var(--radius-md)"
+                                :margin-bottom "var(--sp-4)" :font-size "13px" :line-height "1.5"
+                                :color "var(--color-text-secondary)"}})
+            (dom/text "Incremental reading, spaced repetition, and Anki sync are always free. AI features (OCR and flashcard generation) use OpenAI and require your own API key -- bring your own key, pay only for what you use."))
+
           ;; LLM toggle
           (dom/div
             (dom/props {:class "field"})
@@ -81,7 +88,7 @@
                   (dom/text "Enable LLM features"))
                 (dom/div
                   (dom/props {:class "hint"})
-                  (dom/text "OCR text extraction and flashcard generation. Requires an OpenAI API key.")))))
+                  (dom/text "OCR text extraction and flashcard generation. Requires your own OpenAI API key.")))))
 
           (when llm-enabled
             ;; API Key
@@ -136,8 +143,18 @@
                     (dom/props {:style {:margin-top "0" :margin-bottom "4px" :font-size "17px"}})
                     (dom/text "OpenAI API Key"))
                   (dom/p
+                    (dom/props {:style {:margin-top "0" :margin-bottom "8px" :font-size "13px" :color "#6b7280"}})
+                    (dom/text "FreeMemo uses OpenAI to scan documents and generate flashcards. "))
+                  (dom/p
+                    (dom/props {:style {:margin-top "0" :margin-bottom "8px" :font-size "13px" :color "#6b7280"}})
+                    (dom/a
+                      (dom/props {:href "https://platform.openai.com/api-keys" :target "_blank" :rel "noopener"
+                                  :style {:color "var(--color-primary)" :text-decoration "underline"}})
+                      (dom/text "Get your API key from OpenAI"))
+                    (dom/text "."))
+                  (dom/p
                     (dom/props {:style {:margin-top "0" :margin-bottom "16px" :font-size "13px" :color "#6b7280"}})
-                    (dom/text "Enter your key and click Save. Saving an empty value clears your stored key."))
+                    (dom/text "Your key is encrypted and stored securely. Saving an empty value clears it."))
                   (dom/input
                     (dom/props {:type "password"
                                 :value draft-key
@@ -331,13 +348,13 @@
           (dom/props {:class "card"})
           (dom/h3 (dom/props {:class "section-title"}) (dom/text "Keyboard Shortcuts"))
           (let [shortcut-row (fn [key desc]
-                              {:key (str mod-key "+Shift+" key) :desc desc})
+                               {:key (str mod-key "+Shift+" key) :desc desc})
                 shortcuts [(shortcut-row "E" "Extract topic from selection")
                            (shortcut-row "G" "Generate cards")
                            (shortcut-row "S" "Scan Page (OCR)")
                            (shortcut-row "X" "Anki Sync")
                            (shortcut-row "D" "Mark Done")
-]]
+                           ]]
             (dom/table
               (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px"}})
               (e/for-by :key [s shortcuts]

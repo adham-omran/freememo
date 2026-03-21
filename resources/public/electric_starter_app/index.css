@@ -244,6 +244,16 @@ html, body {
     background: var(--color-border);
     flex-shrink: 0;
     transition: background 0.15s;
+    touch-action: none;
+    user-select: none;
+    position: relative;
+    z-index: 1;
+}
+.split-divider-h::before {
+    content: '';
+    position: absolute;
+    top: 0; bottom: 0;
+    left: -19px; right: -19px;
 }
 .split-divider-h:hover,
 .split-divider-h:active { background: #90caf9; }
@@ -254,6 +264,16 @@ html, body {
     background: var(--color-border);
     flex-shrink: 0;
     transition: background 0.15s;
+    touch-action: none;
+    user-select: none;
+    position: relative;
+    z-index: 1;
+}
+.split-divider-v::before {
+    content: '';
+    position: absolute;
+    left: 0; right: 0;
+    top: -38px; bottom: 0;
 }
 .split-divider-v:hover,
 .split-divider-v:active { background: #90caf9; }
@@ -352,4 +372,183 @@ textarea:hover {
     }
     .card { padding: var(--sp-3); }
     .modal-content { padding: var(--sp-4); }
+}
+
+/* ── Dark Mode (system preference) ───────────────────────────── */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --color-primary: #3b82f6;
+        --color-primary-hover: #2563eb;
+        --color-primary-light: #1e40af;
+        --color-danger: #ef4444;
+        --color-danger-hover: #dc2626;
+        --color-success: #22c55e;
+        --color-warning: #f59e0b;
+
+        --color-text-primary: #e5e7eb;
+        --color-text-secondary: #9ca3af;
+        --color-text-hint: #6b7280;
+        --color-text-label: #d1d5db;
+
+        --color-border: #374151;
+        --color-bg-page: #111827;
+        --color-bg-card: #1f2937;
+        --color-bg-subtle: #1a2332;
+
+        --shadow-card: 0 1px 3px rgba(0,0,0,0.3);
+        --shadow-modal: 0 8px 30px rgba(0,0,0,0.5);
+        --backdrop-color: rgba(0,0,0,0.6);
+    }
+
+    .modal-content { background: var(--color-bg-card); }
+
+    /* Quill editor */
+    .ql-container,
+    .ql-editor {
+        background: var(--color-bg-card);
+        color: var(--color-text-primary);
+    }
+    .ql-toolbar {
+        background: var(--color-bg-subtle);
+        border-color: var(--color-border) !important;
+    }
+    .ql-toolbar .ql-stroke { stroke: var(--color-text-secondary) !important; }
+    .ql-toolbar .ql-fill { fill: var(--color-text-secondary) !important; }
+    .ql-toolbar .ql-picker-label { color: var(--color-text-secondary) !important; }
+    .ql-container.ql-snow { border-color: var(--color-border) !important; }
+    .ql-toolbar.ql-snow { border-color: var(--color-border) !important; }
+    .ql-editor.ql-blank::before { color: var(--color-text-hint) !important; }
+
+    /* Virtual scroll table hover */
+    .tape-scroll table tr:hover td { background: #263040; }
+
+    /* Badges — keep readable */
+    .badge-success { background: #166534; color: #bbf7d0; }
+    .badge-warning { background: #854d0e; color: #fef08a; }
+    .badge-error   { background: #991b1b; color: #fecaca; }
+
+    /* Login page hero panel */
+    .login-hero,
+    .login-left { background: #1a2744; }
+
+    /* Secondary button hover */
+    .btn-secondary:not(:disabled):hover { background: #374151; }
+
+    /* Danger outline button hover */
+    .btn-danger:not(:disabled):hover { background: #35181a; }
+
+    /* Input hover */
+    .input:hover,
+    input[type="text"]:not(.input):hover,
+    input[type="password"]:not(.input):hover,
+    input[type="number"]:not(.input):hover,
+    select:not(.select):hover,
+    textarea:hover { border-color: #6b7280; }
+
+    /* Help icon */
+    .help-icon { border-color: #4b5563; }
+    .help-icon:hover {
+        background: #374151;
+        border-color: #6b7280;
+    }
+
+    /* Split divider active */
+    .split-divider-h:hover,
+    .split-divider-h:active,
+    .split-divider-v:hover,
+    .split-divider-v:active { background: #2563eb; }
+}
+
+/* ── Skeleton Loading Animation ──────────────────────────────── */
+.skeleton {
+    background: linear-gradient(90deg, var(--color-border) 25%, var(--color-bg-subtle) 50%, var(--color-border) 75%);
+    background-size: 200% 100%;
+    animation: skeleton-pulse 1.5s ease-in-out infinite;
+    border-radius: var(--radius-sm);
+}
+@keyframes skeleton-pulse {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+.skeleton-text { height: 14px; margin-bottom: 8px; }
+.skeleton-text:last-child { width: 60%; }
+.skeleton-row { height: 40px; margin-bottom: 4px; }
+
+/* ── Confirm Modal ───────────────────────────────────────────── */
+.confirm-modal-body {
+    text-align: center;
+    padding: var(--sp-4) 0;
+}
+.confirm-modal-body p {
+    font-size: 14px;
+    color: var(--color-text-secondary);
+    margin: 0 0 var(--sp-6) 0;
+    line-height: 1.5;
+}
+.confirm-modal-actions {
+    display: flex;
+    justify-content: center;
+    gap: var(--sp-3);
+}
+
+/* ── Login Page Split Layout ─────────────────────────────────── */
+.login-layout {
+    display: flex;
+    min-height: 100vh;
+}
+.login-layout {
+    background: var(--color-bg-page);
+}
+.login-hero,
+.login-left {
+    flex: 1 1 55%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 60px 48px;
+    background: linear-gradient(135deg, #f0f4ff 0%, #e8eeff 100%);
+    box-sizing: border-box;
+}
+.login-form-panel,
+.login-right {
+    flex: 1 1 40%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+    background: var(--color-bg-page);
+    box-sizing: border-box;
+}
+@media (max-width: 768px) {
+    .login-layout {
+        flex-direction: column;
+    }
+    .login-hero,
+    .login-left {
+        padding: 32px 24px 24px;
+        flex: none;
+        min-height: auto;
+    }
+    .login-form-panel,
+    .login-right {
+        padding: 24px;
+        flex: none;
+        min-height: auto;
+    }
+}
+
+/* ── Progress Spinner ────────────────────────────────────────── */
+.spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    vertical-align: middle;
+    margin-right: 6px;
+}
+@keyframes spin {
+    to { transform: rotate(360deg); }
 }
