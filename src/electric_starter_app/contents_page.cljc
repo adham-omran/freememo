@@ -106,8 +106,10 @@
           type-label (case source-type "wikipedia" "Wiki" "web" "Web" "epub" "EPUB" "topic" "Topic" "PDF")
           type-color (case source-type "wikipedia" "#fef3c7" "web" "#e0f2fe" "epub" "#f3e8ff" "topic" "#f3e8ff" "#dcfce7")
           ;; Build children map for this document's extracts
+          ;; Topics have a single content_item that IS the topic — don't show it as a child
+          is-topic (= source-type "topic")
           children-map (group-by :content_items/parent_content_item_id items-for-doc)
-          root-items (get children-map nil)
+          root-items (when-not is-topic (get children-map nil))
           has-children (boolean (seq root-items))
           !expanded (atom false)
           expanded (e/watch !expanded)]

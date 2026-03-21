@@ -59,7 +59,7 @@
   #?(:clj
      (let [now (java.time.LocalDate/now)
            week-end (.plusDays now 7)
-           active? #(not (#{"done"} (:status %)))]
+           active? #(#{"active" nil} (:status %))]
        {:total (count rows)
         :inactive (count (filter #(#{"done"} (:status %)) rows))
         :due-today (count (filter (fn [r]

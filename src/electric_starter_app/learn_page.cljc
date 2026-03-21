@@ -6,6 +6,7 @@
    [electric-starter-app.learn-session :refer [LearnSession]]
    [electric-starter-app.subset-review :refer [SubsetReviewSession]]
    [electric-starter-app.ocr-page :refer [OcrPage]]
+   [electric-starter-app.extract-page :refer [ExtractPage]]
    [electric-starter-app.util :as util]
    #?(:clj [electric-starter-app.db :as db])
    [electric-starter-app.card-components :as card-components]))
@@ -36,33 +37,56 @@
   #?(:clj (db/delete-content-item id)
      :cljs nil))
 
-(e/defn LearnBrowse [user-id enc-key nav !mode llm-enabled?]
+(defn get-topic-content-item-id* [doc-id]
+  #?(:clj (when doc-id
+            (:content_items/id (first (db/get-content-items doc-id 1))))
+     :cljs nil))
+
+(e/defn LearnBrowseTopic [user-id enc-key doc-id filename !mode llm-enabled?]
   (e/client
-    (let [doc-id (:doc-id nav)
-          filename (e/server
-                     (when doc-id
-                       (-> (db/get-documents-by-id user-id doc-id)
-                         first
-                         :documents/filename)))]
+    (dom/div
+      (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
       (dom/div
-        (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
+        (dom/props {:class "header-bar" :style {:gap "12px"}})
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-secondary"})
+          (dom/text "Back to Overview")
+          (dom/On "click" (fn [_] (reset! !mode :overview)) nil))
+        (dom/span
+          (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
+          (dom/text (str "Browsing: " (or filename "topic")))))
+      (dom/div
+        (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
+        (let [ci-id (e/server (get-topic-content-item-id* doc-id))]
+          (ExtractPage user-id enc-key ci-id
+            (fn [_tab] (reset! !mode :overview))
+            nil
+            llm-enabled?))))))
 
-        ;; Header bar
-        (dom/div
-          (dom/props {:class "header-bar" :style {:gap "12px"}})
-          (dom/button
-            (dom/props {:class "btn btn-sm btn-secondary"})
-            (dom/text "Back to Overview")
-            (dom/On "click" (fn [_] (reset! !mode :overview)) nil))
-          (dom/span
-            (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
-            (dom/text (str "Browsing: " (or filename "document")))))
+(e/defn LearnBrowseDoc [user-id enc-key nav filename !mode llm-enabled?]
+  (e/client
+    (dom/div
+      (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
+      (dom/div
+        (dom/props {:class "header-bar" :style {:gap "12px"}})
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-secondary"})
+          (dom/text "Back to Overview")
+          (dom/On "click" (fn [_] (reset! !mode :overview)) nil))
+        (dom/span
+          (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
+          (dom/text (str "Browsing: " (or filename "document")))))
+      (dom/div
+        (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
+        (let [!nav (atom nav)]
+          (OcrPage user-id enc-key !nav llm-enabled?))))))
 
-        ;; OcrPage workspace
-        (dom/div
-          (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-          (let [!nav (atom nav)]
-            (OcrPage user-id enc-key !nav llm-enabled?)))))))
+(defn get-doc-source-type* [user-id doc-id]
+  #?(:clj (when doc-id
+            (or (:documents/source_type
+                 (first (db/get-documents-by-id user-id doc-id)))
+              "pdf"))
+     :cljs nil))
 
 (e/defn LearnOverview [user-id !mode navigate!]
   (e/client
@@ -215,30 +239,47 @@
                             (e/server (swap! !refresh inc))
                             (token))))
                       ;; Delete button
-                      (dom/button
-                        (dom/props {:class "btn btn-sm btn-danger-fill" :style {:padding "3px 10px" :font-size "12px"}})
-
-                        (dom/text "Delete")
-                        (let [event (dom/On "click"
-                                      (fn [_]
-                                        #?(:cljs
-                                           (when (js/confirm "Permanently delete this item?")
-                                             :delete)
-                                           :clj nil))
-                                      nil)
-                              [?token _] (e/Token event)]
-                          (when-some [token ?token]
-                            (let [note-ids (e/server
-                                             (if (= topic-type "document")
-                                               (db/get-anki-note-ids-for-document item-id)
-                                               (db/get-anki-note-ids-for-content-item item-id)))]
-                              (e/server
-                                (if (= topic-type "document")
-                                  (db/delete-document user-id item-id)
-                                  (db/delete-content-item item-id)))
-                              (e/server (swap! !refresh inc))
-                              (e/client (card-components/try-delete-anki-notes! note-ids))
-                              (token))))))))))))))))
+                      (let [!show-confirm-delete (atom false)
+                            show-confirm-delete (e/watch !show-confirm-delete)]
+                        (dom/button
+                          (dom/props {:class "btn btn-sm btn-danger-fill" :style {:padding "3px 10px" :font-size "12px"}})
+                          (dom/text "Delete")
+                          (dom/On "click" (fn [_] (reset! !show-confirm-delete true)) nil))
+                        (dom/div
+                          (dom/props {:class "modal-backdrop"
+                                      :style {:display (if show-confirm-delete "flex" "none")}})
+                          (dom/On "click" (fn [_] (reset! !show-confirm-delete false)) nil)
+                          (dom/On "keydown" (fn [e] (when (= (.-key e) "Escape") (reset! !show-confirm-delete false))) nil)
+                          (dom/div
+                            (dom/props {:class "modal-content modal-sm"})
+                            (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+                            (dom/div
+                              (dom/props {:class "confirm-modal-body"})
+                              (dom/p (dom/text "Permanently delete this item?")))
+                            (dom/div
+                              (dom/props {:class "confirm-modal-actions"})
+                              (dom/button
+                                (dom/props {:class "btn btn-secondary"})
+                                (dom/text "Cancel")
+                                (dom/On "click" (fn [_] (reset! !show-confirm-delete false)) nil))
+                              (dom/button
+                                (dom/props {:class "btn btn-danger-fill"})
+                                (dom/text "Delete")
+                                (let [event (dom/On "click" (fn [_] :confirmed) nil)
+                                      [?token _] (e/Token event)]
+                                  (when-some [token ?token]
+                                    (let [note-ids (e/server
+                                                     (if (= topic-type "document")
+                                                       (db/get-anki-note-ids-for-document item-id)
+                                                       (db/get-anki-note-ids-for-content-item item-id)))]
+                                      (e/server
+                                        (if (= topic-type "document")
+                                          (db/delete-document user-id item-id)
+                                          (db/delete-content-item item-id)))
+                                      (e/server (swap! !refresh inc))
+                                      (e/client (card-components/try-delete-anki-notes! note-ids))
+                                      (reset! !show-confirm-delete false)
+                                      (token))))))))))))))))))))
 
 (e/defn LearnPage [user-id enc-key !nav-target navigate-to-extract! navigate! llm-enabled?]
   (e/client
@@ -270,7 +311,12 @@
 
         :browse
         (when browse-nav
-          (LearnBrowse user-id enc-key browse-nav !mode llm-enabled?))
+          (let [doc-id (:doc-id browse-nav)
+                source-type (e/server (get-doc-source-type* user-id doc-id))
+                filename (e/server (:documents/filename (first (db/get-documents-by-id user-id doc-id))))]
+            (case source-type
+              "topic" (LearnBrowseTopic user-id enc-key doc-id filename !mode llm-enabled?)
+              (LearnBrowseDoc user-id enc-key browse-nav filename !mode llm-enabled?))))
 
         :session
         (let [refresh (e/server (e/watch !refresh))

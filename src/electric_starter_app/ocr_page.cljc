@@ -40,32 +40,37 @@
             {:done (count (filter :pages/is_done pages))
              :total (count pages)})))
 
-;; Drag helper for split-pane dividers
+;; Query wrapper for document source reference
+#?(:clj (defn get-document-source* [_refresh document-id]
+          (db/get-document-source document-id)))
+
+;; Drag helper for split-pane dividers (PointerEvent API — works for mouse, touch, and stylus)
 (defn start-drag!
-  "Begin a split-pane drag. Call from a mousedown handler.
+  "Begin a split-pane drag. Call from a pointerdown handler.
    axis: :x for horizontal, :y for vertical."
   [e axis !pct]
   #?(:clj nil
      :cljs
      (do
        (.preventDefault e)
-       (let [horizontal? (= axis :x)
+       (let [target (.-currentTarget e)
+             horizontal? (= axis :x)
              start-pos (if horizontal? (.-clientX e) (.-clientY e))
              start-pct @!pct
-             parent (-> e .-target .-parentElement)
+             parent (.-parentElement target)
              parent-size (if horizontal? (.-offsetWidth parent) (.-offsetHeight parent))
              on-move (fn [me]
                        (let [delta (- (if horizontal? (.-clientX me) (.-clientY me)) start-pos)
                              delta-pct (* (/ delta parent-size) 100)
                              new-pct (-> (+ start-pct delta-pct) (max 15) (min 85))]
                          (reset! !pct new-pct)))
-             on-up (atom nil)]
-         (reset! on-up
-           (fn [_]
-             (.removeEventListener js/document "mousemove" on-move)
-             (.removeEventListener js/document "mouseup" @on-up)))
-         (.addEventListener js/document "mousemove" on-move)
-         (.addEventListener js/document "mouseup" @on-up)))))
+             on-up (fn self [ue]
+                     (.releasePointerCapture target (.-pointerId ue))
+                     (.removeEventListener target "pointermove" on-move)
+                     (.removeEventListener target "pointerup" self))]
+         (.setPointerCapture target (.-pointerId e))
+         (.addEventListener target "pointermove" on-move)
+         (.addEventListener target "pointerup" on-up)))))
 
 
 (e/defn OcrPage [user-id enc-key !nav-target llm-enabled?]
@@ -180,7 +185,7 @@
                 ;; Guard: only save page-level edits (content-item-id nil), not extract-level
                 dirty-data (e/watch editor/!dirty-html)
                 save-result (when (and (some? dirty-data)
-                                       (nil? (:content-item-id dirty-data)))
+                                    (nil? (:content-item-id dirty-data)))
                               (e/server
                                 (e/Offload
                                   #(page/save-page-html-impl
@@ -217,7 +222,7 @@
                   (dom/div
                     (dom/props {:class "split-divider-h"
                                 :title "Drag to resize panels"})
-                    (dom/On "mousedown" (fn [e] (start-drag! e :x !left-pct)) nil)))
+                    (dom/On "pointerdown" (fn [e] (start-drag! e :x !left-pct)) nil)))
 
                 ;; RIGHT: Editor (full width for web articles)
                 (dom/div
@@ -253,49 +258,49 @@
                       (let [scanning? (contains? scanning-pages [selected-doc current-pdf-page])
                             client-scanning? (e/client (e/watch !scanning-client?))
                             disabled? (or scanning? client-scanning?)]
-                      (dom/button
-                        (dom/props {:class "btn btn-sm btn-primary"
-                                    :style {:padding "4px 12px" :font-size "14px"
-                                            :background (if disabled? "#ccc" "var(--color-primary)")
-                                            :cursor (if disabled? "not-allowed" "pointer")}
-                                    :disabled disabled?})
-                        (dom/text (if disabled? "Scanning..." "Scan Page"))
-                        (reset! keyboard/!scan-btn-ref dom/node)
-                        (e/on-unmount (fn [] (reset! keyboard/!scan-btn-ref nil)))
-                        (let [click-event (dom/On "click"
-                                            (fn [_]
-                                              (when-not @!scanning-client?
-                                                (reset! !scanning-client? true)
-                                                {:id (str (random-uuid)) :page current-pdf-page}))
-                                            nil)
-                              [?token ?error] (e/Token click-event)]
-                          (when-some [token ?token]
-                            (e/server
-                              (let [page (:page click-event)
-                                    doc selected-doc
-                                    uid user-id
-                                    ek enc-key]
-                                (when-not (contains? @!scanning-pages [doc page])
-                                  (swap! !scanning-pages conj [doc page])
-                                  (swap! !ocr-errors dissoc [doc page])
-                                  (do
-                                    (future
-                                      (try
-                                        (let [result (page/extract-page-text uid doc page ek scan-dpi)]
-                                          (if (:success result)
-                                            (swap! !refresh inc)
-                                            (swap! !ocr-errors assoc [doc page] (:error result))))
-                                        (catch Exception e
-                                          (swap! !ocr-errors assoc [doc page] (.getMessage e)))
-                                        (finally
-                                          (swap! !scanning-pages disj [doc page]))))
-                                    :started))))
-                            (token))
+                        (dom/button
+                          (dom/props {:class "btn btn-sm btn-primary"
+                                      :style {:padding "4px 12px" :font-size "14px"
+                                              :background (if disabled? "#ccc" "var(--color-primary)")
+                                              :cursor (if disabled? "not-allowed" "pointer")}
+                                      :disabled disabled?})
+                          (dom/text (if disabled? "Scanning..." "Scan Page"))
+                          (reset! keyboard/!scan-btn-ref dom/node)
+                          (e/on-unmount (fn [] (reset! keyboard/!scan-btn-ref nil)))
+                          (let [click-event (dom/On "click"
+                                              (fn [_]
+                                                (when-not @!scanning-client?
+                                                  (reset! !scanning-client? true)
+                                                  {:id (str (random-uuid)) :page current-pdf-page}))
+                                              nil)
+                                [?token ?error] (e/Token click-event)]
+                            (when-some [token ?token]
+                              (e/server
+                                (let [page (:page click-event)
+                                      doc selected-doc
+                                      uid user-id
+                                      ek enc-key]
+                                  (when-not (contains? @!scanning-pages [doc page])
+                                    (swap! !scanning-pages conj [doc page])
+                                    (swap! !ocr-errors dissoc [doc page])
+                                    (do
+                                      (future
+                                        (try
+                                          (let [result (page/extract-page-text uid doc page ek scan-dpi)]
+                                            (if (:success result)
+                                              (swap! !refresh inc)
+                                              (swap! !ocr-errors assoc [doc page] (:error result))))
+                                          (catch Exception e
+                                            (swap! !ocr-errors assoc [doc page] (.getMessage e)))
+                                          (finally
+                                            (swap! !scanning-pages disj [doc page]))))
+                                      :started))))
+                              (token))
                           ;; Reset client flag once server confirms extraction is running (or completes)
-                          (e/client
-                            (when (not scanning?)
-                              (reset! !scanning-client? false))))))) ;; end when llm-enabled?
-
+                            (e/client
+                              (when (not scanning?)
+                                (reset! !scanning-client? false))))))) ;; end when llm-enabled?
+                    
                     ;; OCR error display — auto-dismiss after 3 seconds
                     (when-let [ocr-err (get ocr-errors [selected-doc current-pdf-page])]
                       (let [!show (atom true)
@@ -330,7 +335,7 @@
                               2000))))))
 
                   ;; Source reference — collapsed to compact editable field in page header
-                  (let [current-source (e/server (db/get-document-source selected-doc))
+                  (let [current-source (e/server (get-document-source* refresh selected-doc))
                         !editing-source (atom false)
                         editing-source (e/watch !editing-source)]
                     (if editing-source
@@ -354,8 +359,9 @@
                                   [?token _] (e/Token event)]
                               (when-some [token ?token]
                                 (e/server (db/update-document-source selected-doc event))
-                                (reset! !editing-source false)
-                                (token)))))
+                                (e/server (swap! !refresh inc))
+                                (token)
+                                (reset! !editing-source false)))))
                         (dom/button
                           (dom/props {:style {:padding "2px 8px" :font-size "11px" :background "#f0f0f0"
                                               :border "1px solid var(--color-border)" :border-radius "3px" :cursor "pointer"}})
@@ -389,7 +395,7 @@
               (dom/div
                 (dom/props {:class "split-divider-v"
                             :title "Drag to resize panels"})
-                (dom/On "mousedown" (fn [e] (start-drag! e :y !top-pct)) nil))
+                (dom/On "pointerdown" (fn [e] (start-drag! e :y !top-pct)) nil))
 
               ;; BOTTOM PANEL: Shared toolbar + card table
               (dom/div
