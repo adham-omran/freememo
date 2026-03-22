@@ -3,6 +3,7 @@
   (:require
    [electric-starter-app.db :as db]
    [electric-starter-app.crypto :as crypto]
+   [taoensso.telemere :as tel]
    [clojure.string :as str]))
 
 ;; Toggle: set to false from REPL to disable shared key fallback
@@ -69,7 +70,7 @@
   (try
     (Integer/parseInt (or (db/get-setting user-id CARD_COUNT) "5"))
     (catch Exception e
-      (println "ERROR [get-card-count]:" (.getMessage e))
+      (tel/error! {:id ::get-card-count} e)
       5)))
 
 (defn get-reasoning [user-id]
@@ -82,14 +83,14 @@
   (try
     (= "true" (db/get-setting user-id CONTEXT_ENABLED))
     (catch Exception e
-      (println "ERROR [get-context-enabled]:" (.getMessage e))
+      (tel/error! {:id ::get-context-enabled} e)
       false)))
 
 (defn get-context-pages [user-id]
   (try
     (Integer/parseInt (or (db/get-setting user-id CONTEXT_PAGES) "3"))
     (catch Exception e
-      (println "ERROR [get-context-pages]:" (.getMessage e))
+      (tel/error! {:id ::get-context-pages} e)
       3)))
 
 (defn get-active-tab [user-id]
@@ -104,14 +105,14 @@
           "workspace" :learn
           :home)))
     (catch Exception e
-      (println "ERROR [get-active-tab]:" (.getMessage e))
+      (tel/error! {:id ::get-active-tab} e)
       :home)))
 
 (defn get-card-type [user-id]
   (try
     (or (db/get-setting user-id CARD_TYPE) "basic")
     (catch Exception e
-      (println "ERROR [get-card-type]:" (.getMessage e))
+      (tel/error! {:id ::get-card-type} e)
       "basic")))
 
 (defn get-source-display-mode [user-id]
@@ -124,7 +125,7 @@
     (db/set-setting user-id SOURCE_DISPLAY_MODE mode)
     {:success true}
     (catch Exception e
-      (println "ERROR [save-source-display-mode]:" (.getMessage e))
+      (tel/error! {:id ::save-source-display-mode} e)
       {:success false :error "Failed to save source display mode"})))
 
 (defn get-llm-enabled [user-id]
@@ -136,7 +137,7 @@
     (db/set-setting user-id LLM_ENABLED (str (boolean value)))
     {:success true}
     (catch Exception e
-      (println "ERROR [save-llm-enabled]:" (.getMessage e))
+      (tel/error! {:id ::save-llm-enabled} e)
       {:success false :error "Failed to save LLM enabled"})))
 
 (defn get-anki-scope [user-id]
@@ -167,7 +168,7 @@
       (db/set-setting user-id OPENAI_API_KEY (crypto/encrypt trimmed enc-key))
       {:success true})
     (catch Exception e
-      (println "ERROR [save-openai-api-key]:" (.getMessage e))
+      (tel/error! {:id ::save-openai-api-key} e)
       {:success false :error "Failed to save API key"})))
 
 (defn save-model [user-id value]
@@ -175,7 +176,7 @@
     (db/set-setting user-id MODEL value)
     {:success true}
     (catch Exception e
-      (println "ERROR [save-model]:" (.getMessage e))
+      (tel/error! {:id ::save-model} e)
       {:success false :error "Failed to save model"})))
 
 (defn save-reasoning [user-id value]
@@ -183,7 +184,7 @@
     (db/set-setting user-id REASONING value)
     {:success true}
     (catch Exception e
-      (println "ERROR [save-reasoning]:" (.getMessage e))
+      (tel/error! {:id ::save-reasoning} e)
       {:success false :error "Failed to save reasoning"})))
 
 (defn save-verbosity [user-id value]
@@ -191,7 +192,7 @@
     (db/set-setting user-id VERBOSITY value)
     {:success true}
     (catch Exception e
-      (println "ERROR [save-verbosity]:" (.getMessage e))
+      (tel/error! {:id ::save-verbosity} e)
       {:success false :error "Failed to save verbosity"})))
 
 (defn save-context-enabled [user-id value]
@@ -199,7 +200,7 @@
     (db/set-setting user-id CONTEXT_ENABLED (str value))
     {:success true}
     (catch Exception e
-      (println "ERROR [save-context-enabled]:" (.getMessage e))
+      (tel/error! {:id ::save-context-enabled} e)
       {:success false :error "Failed to save context enabled"})))
 
 (defn save-context-pages [user-id value]
@@ -209,7 +210,7 @@
       (db/set-setting user-id CONTEXT_PAGES (str clamped))
       {:success true})
     (catch Exception e
-      (println "ERROR [save-context-pages]:" (.getMessage e))
+      (tel/error! {:id ::save-context-pages} e)
       {:success false :error "Failed to save context pages"})))
 
 (defn save-card-type [user-id value]
@@ -219,7 +220,7 @@
     (db/set-setting user-id CARD_TYPE value)
     {:success true}
     (catch Exception e
-      (println "ERROR [save-card-type]:" (.getMessage e))
+      (tel/error! {:id ::save-card-type} e)
       {:success false :error "Failed to save card type"})))
 
 (defn save-active-tab [user-id tab]
@@ -227,7 +228,7 @@
     (db/set-setting user-id ACTIVE_TAB (name tab))
     {:success true}
     (catch Exception e
-      (println "ERROR [save-active-tab]:" (.getMessage e))
+      (tel/error! {:id ::save-active-tab} e)
       {:success false :error "Failed to save active tab"})))
 
 (defn save-card-count [user-id value]
@@ -237,7 +238,7 @@
       (db/set-setting user-id CARD_COUNT (str clamped))
       {:success true})
     (catch Exception e
-      (println "ERROR [save-card-count]:" (.getMessage e))
+      (tel/error! {:id ::save-card-count} e)
       {:success false :error "Failed to save card count"})))
 
 (defn get-last-document [user-id]
@@ -252,7 +253,7 @@
     (db/set-setting user-id LAST_DOCUMENT (str doc-id))
     {:success true}
     (catch Exception e
-      (println "ERROR [save-last-document]:" (.getMessage e))
+      (tel/error! {:id ::save-last-document} e)
       {:success false})))
 
 (defn get-last-page [user-id doc-id]
@@ -266,7 +267,7 @@
     (db/set-setting user-id (str "last_page_" doc-id) (str page))
     {:success true}
     (catch Exception e
-      (println "ERROR [save-last-page]:" (.getMessage e))
+      (tel/error! {:id ::save-last-page} e)
       {:success false})))
 
 (defn add-to-history [history new-prompt]
@@ -282,7 +283,7 @@
         (vec (remove str/blank? (str/split-lines raw)))
         []))
     (catch Exception e
-      (println "ERROR [get-pre-prompt-history]:" (.getMessage e))
+      (tel/error! {:id ::get-pre-prompt-history} e)
       [])))
 
 (defn save-pre-prompt-history [user-id history-vec]
@@ -290,7 +291,7 @@
     (db/set-setting user-id PRE_PROMPT_HISTORY (str/join "\n" history-vec))
     {:success true}
     (catch Exception e
-      (println "ERROR [save-pre-prompt-history]:" (.getMessage e))
+      (tel/error! {:id ::save-pre-prompt-history} e)
       {:success false :error "Failed to save prompt history"})))
 
 (defn get-card-font-size [user-id]
@@ -305,7 +306,7 @@
       (db/set-setting user-id CARD_FONT_SIZE (str clamped))
       {:success true})
     (catch Exception e
-      (println "ERROR [save-card-font-size]:" (.getMessage e))
+      (tel/error! {:id ::save-card-font-size} e)
       {:success false :error "Failed to save card font size"})))
 
 (defn get-scan-dpi [user-id]
@@ -320,7 +321,7 @@
       (db/set-setting user-id SCAN_DPI (str clamped))
       {:success true})
     (catch Exception e
-      (println "ERROR [save-scan-dpi]:" (.getMessage e))
+      (tel/error! {:id ::save-scan-dpi} e)
       {:success false :error "Failed to save scan DPI"})))
 
 (defn save-anki-sync-settings [user-id {:keys [scope deck basic-model cloze-model allow-dupes use-header header-text]}]
@@ -334,5 +335,5 @@
     (when (some? header-text) (db/set-setting user-id ANKI_HEADER_TEXT header-text))
     {:success true}
     (catch Exception e
-      (println "ERROR [save-anki-sync-settings]:" (.getMessage e))
+      (tel/error! {:id ::save-anki-sync-settings} e)
       {:success false :error "Failed to save Anki sync settings"})))

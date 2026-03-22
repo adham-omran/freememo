@@ -2,7 +2,8 @@
   "OCR text extraction using OpenAI Vision API."
   (:require
    [electric-starter-app.settings :as settings]
-   [wkok.openai-clojure.api :as api])
+   [wkok.openai-clojure.api :as api]
+   [taoensso.telemere :as tel])
   (:import
    [org.apache.pdfbox Loader]
    [org.apache.pdfbox.rendering PDFRenderer]
@@ -81,7 +82,7 @@ IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return
                   clojure.string/trim)]
        {:success true :text text})
      (catch Exception e
-       (println "ERROR [extract-text]:" (.getMessage e))
+       (tel/error! {:id ::extract-text} e)
        {:success false :error (let [msg (.getMessage e)]
                                 (cond
                                   (re-find #"(?i)API key not configured" (str msg))

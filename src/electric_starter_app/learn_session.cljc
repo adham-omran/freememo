@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [electric-starter-app.logging :as log]
    [electric-starter-app.ocr-page :refer [OcrPage]]
    [electric-starter-app.extract-page :refer [ExtractPage]]
    [electric-starter-app.keyboard :as keyboard]
@@ -103,6 +104,7 @@
             (when-some [token ?token]
               (e/server (advance-topic* topic-id))
               (token)
+              (log/log-debug (str "Session advancing idx=" (inc @!queue-idx)))
               (swap! !queue-idx inc))))))))
 
 ;; Badge display for topic kinds

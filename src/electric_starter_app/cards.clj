@@ -4,6 +4,7 @@
     [electric-starter-app.db :as db]
     [electric-starter-app.settings :as settings]
     [wkok.openai-clojure.api :as api]
+    [taoensso.telemere :as tel]
     [clojure.java.io :as io]
     [clojure.edn :as edn]
     [clojure.string :as str]))
@@ -37,7 +38,7 @@
         io/resource
         slurp)
     (catch Exception e
-      (println "ERROR [load-prompt-template]:" (.getMessage e))
+      (tel/error! {:id ::load-prompt-template} e)
       nil)))
 
 ;; Prompt building
@@ -116,9 +117,9 @@
     (try
       (edn/read-string cleaned)
       (catch Exception e
-        (println "ERROR [parse-edn-response]: Failed to parse EDN")
-        (println "Raw response:" raw-text)
-        (println "Cleaned response:" cleaned)
+        (tel/error! {:id ::parse-edn-response
+                     :data {:raw raw-text :cleaned cleaned}}
+          "Failed to parse EDN response from OpenAI")
         (throw (ex-info "Failed to parse EDN response from OpenAI"
                         {:raw raw-text :cleaned cleaned}))))))
 
@@ -155,15 +156,17 @@
           {:success true :cards cards}
 
           (>= attempt 3)
-          (do (println "ERROR [generate-cards*]: Count mismatch after 3 attempts."
-                       "Expected:" card-count "Got:" actual-count)
+          (do (tel/log! {:level :error :id ::generate-cards-count-mismatch
+                                :data {:expected card-count :got actual-count}}
+                "Count mismatch after 3 attempts")
               {:success false
                :error (str "LLM returned " actual-count " cards instead of "
                            card-count " after 3 attempts")})
 
           :else
-          (do (println "WARN [generate-cards*]: Attempt" attempt "returned" actual-count
-                       "cards, expected" card-count "— retrying")
+          (do (tel/log! {:level :warn :id ::generate-cards-retry
+                               :data {:attempt attempt :expected card-count :got actual-count}}
+                "Card count mismatch, retrying")
               (recur (inc attempt))))))))
 
 (defn generate-basic-cards
@@ -178,9 +181,10 @@
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}"
   [opts]
   (try
-    (generate-cards* opts build-basic-prompt)
+    (tel/trace! {:id ::generate-basic}
+      (generate-cards* opts build-basic-prompt))
     (catch Exception e
-      (println "ERROR [generate-basic-cards]:" (.getMessage e))
+      (tel/error! {:id ::generate-basic-cards} e)
       {:success false :error (humanize-error (.getMessage e))})))
 
 (defn generate-cloze-cards
@@ -189,9 +193,10 @@
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}"
   [opts]
   (try
-    (generate-cards* opts build-cloze-prompt)
+    (tel/trace! {:id ::generate-cloze}
+      (generate-cards* opts build-cloze-prompt))
     (catch Exception e
-      (println "ERROR [generate-cloze-cards]:" (.getMessage e))
+      (tel/error! {:id ::generate-cloze-cards} e)
       {:success false :error (humanize-error (.getMessage e))})))
 
 ;; Card persistence
@@ -226,7 +231,7 @@
        (db/insert-flashcards! rows)
        {:success true})
      (catch Exception e
-       (println "ERROR [save-cards]:" (.getMessage e))
+       (tel/error! {:id ::save-cards} e)
        {:success false :error (.getMessage e)}))))
 
 (defn add-card
@@ -243,7 +248,7 @@
                    [{:c (:cloze fields)}])]
        (save-cards topic-id root-topic-id kind cards source-reference))
      (catch Exception e
-       (println "ERROR [add-card]:" (.getMessage e))
+       (tel/error! {:id ::add-card} e)
        {:success false :error (.getMessage e)}))))
 
 (defn get-cards
@@ -253,7 +258,7 @@
     (let [cards (db/get-flashcards topic-id)]
       {:success true :cards cards})
     (catch Exception e
-      (println "ERROR [get-cards]:" (.getMessage e))
+      (tel/error! {:id ::get-cards} e)
       {:success false :error (.getMessage e)})))
 
 (defn delete-card
@@ -264,7 +269,7 @@
           note-id (:flashcards/anki_note_id deleted)]
       {:success true :anki-note-id note-id})
     (catch Exception e
-      (println "ERROR [delete-card]:" (.getMessage e))
+      (tel/error! {:id ::delete-card} e)
       {:success false :error (.getMessage e)})))
 
 (defn update-card
@@ -285,7 +290,7 @@
     {:success true}
 
     (catch Exception e
-      (println "ERROR [update-card]:" (.getMessage e))
+      (tel/error! {:id ::update-card} e)
       {:success false :error (.getMessage e)})))
 
 ;; CSV Export
@@ -310,16 +315,17 @@
           all-cards (if topic-id
                      (db/get-flashcards topic-id)
                      (db/get-all-flashcards root-topic-id))
-          _ (println "  Found" (count all-cards) "cards before filtering")
-          _ (when (seq all-cards)
-              (println "  Card kinds in DB:" (set (map :flashcards/kind all-cards))))
+          _ (tel/log! {:level :debug :id ::export-pre-filter
+                             :data {:count (count all-cards)
+                                    :kinds (set (map :flashcards/kind all-cards))}}
+              "Cards loaded before filtering")
           ;; Filter by kind if specified
           cards (if kind
-                  (do
-                    (println "  Filtering for kind:" (pr-str kind))
-                    (filter #(= (:flashcards/kind %) kind) all-cards))
+                  (filter #(= (:flashcards/kind %) kind) all-cards)
                   all-cards)
-          _ (println "  Found" (count cards) "cards after kind filter")
+          _ (tel/log! {:level :debug :id ::export-post-filter
+                              :data {:count (count cards) :kind kind}}
+              "Cards after kind filter")
           _ (when-not (seq cards)
               (throw (ex-info "No cards to export" {:count (count all-cards) :kind kind})))
           ;; Format header text if provided
@@ -346,12 +352,15 @@
           kind-suffix (if kind (str "_" kind) "")
           topic-suffix (if topic-id (str "_topic" topic-id) "_all")
           filename (str doc-filename topic-suffix kind-suffix ".csv")]
-      (println "  SUCCESS: Generated" filename "with" (count cards) "cards")
+      (tel/log! {:level :info :id ::export-success
+                       :data {:filename filename :count (count cards)}}
+        "CSV export complete")
       (let [card-ids (mapv :flashcards/id cards)]
         (db/mark-cards-exported card-ids))
       {:success true :csv csv-string :filename filename})
     (catch Exception e
       (let [error-msg (or (ex-message e) (.getMessage e))]
-        (println "ERROR [export-cards-csv]:" error-msg)
-        (println "  Root topic ID:" root-topic-id ", Topic ID:" topic-id ", Kind:" kind)
+        (tel/error! {:id ::export-cards-csv
+                     :data {:root-topic-id root-topic-id :topic-id topic-id :kind kind}}
+          error-msg)
         {:success false :error error-msg}))))

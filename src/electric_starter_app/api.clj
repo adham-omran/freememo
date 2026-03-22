@@ -10,6 +10,7 @@
     [electric-starter-app.google-oauth :as google-oauth]
     [electric-starter-app.extractor :as extractor]
     [electric-starter-app.html-cleaner :as cleaner]
+    [taoensso.telemere :as tel]
     [clojure.java.io :as io]
     [clojure.string]
     [cheshire.core :as json]))
@@ -80,8 +81,7 @@
          :headers {"Content-Type" "application/json"}
          :body (json/generate-string {:success false :error "No file provided"})})
       (catch Exception e
-        (println "ERROR [upload-pdf-handler]:" (.getMessage e))
-        (.printStackTrace e)
+        (tel/error! {:id ::upload-pdf-handler} e)
         {:status 500
          :headers {"Content-Type" "application/json"}
          :body (json/generate-string {:success false :error "Upload failed. Please try again with a different file."})}))
@@ -122,7 +122,7 @@
                                                :title (or (first (re-find #"[^<]+" (:content section))) "Extract")
                                                :content (:content section)}))))))
                   (catch Exception e
-                    (println "WARN [upload-epub] auto-extract failed:" (.getMessage e)))))
+                    (tel/log! {:level :warn :id ::upload-epub-auto-extract} (.getMessage e)))))
               {:status 200
                :headers {"Content-Type" "application/json"}
                :body (json/generate-string {:success true :doc_id topic-id})})))
@@ -130,8 +130,7 @@
          :headers {"Content-Type" "application/json"}
          :body (json/generate-string {:success false :error "No file provided"})})
       (catch Exception e
-        (println "ERROR [upload-epub-handler]:" (.getMessage e))
-        (.printStackTrace e)
+        (tel/error! {:id ::upload-epub-handler} e)
         {:status 500
          :headers {"Content-Type" "application/json"}
          :body (json/generate-string {:success false :error "Upload failed. Please try again with a different file."})}))
@@ -152,7 +151,7 @@
            :headers {"Content-Type" "application/json"}
            :body (json/generate-string {:success false :error "Failed to create topic"})}))
       (catch Exception e
-        (println "ERROR [create-topic-handler]:" (.getMessage e))
+        (tel/error! {:id ::create-topic-handler} e)
         {:status 500
          :headers {"Content-Type" "application/json"}
          :body (json/generate-string {:success false :error "Failed to create topic. Please try again."})}))
@@ -175,7 +174,7 @@
           {:status 404
            :body "PDF not found"}))
       (catch Exception e
-        (println "ERROR [get-pdf-handler]:" (.getMessage e))
+        (tel/error! {:id ::get-pdf-handler} e)
         {:status 500
          :body "Internal server error"}))
     {:status 302
@@ -218,7 +217,7 @@
            :headers {"Location" "/"}
            :session {:user-id user-id :username username :enc-key enc-key}})
         (catch Exception e
-          (println "ERROR [google-callback-handler]:" (.getMessage e))
+          (tel/error! {:id ::google-callback-handler} e)
           {:status 302
            :headers {"Location" "/"}
            :session {:auth-error "Google sign-in failed — please try again"}})))))
@@ -238,7 +237,7 @@
          :headers {"Content-Type" "text/plain"}
          :body "Missing required parameters: document_id, page_number, html"}))
     (catch Exception e
-      (println "ERROR [save-page-text-handler]:" (.getMessage e))
+      (tel/error! {:id ::save-page-text-handler} e)
       {:status 500
        :headers {"Content-Type" "text/plain"}
        :body "error: Failed to save page text. Please try again."})))

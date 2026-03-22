@@ -5,6 +5,7 @@
     [cheshire.core :as json]
     [clojure.java.io :as io]
     [clojure.string]
+    [taoensso.telemere :as tel]
     [electric-starter-app.db :as db]
     [electric-starter-app.crypto :as crypto])
   (:import [java.util Base64]))
@@ -16,10 +17,10 @@
     (if-let [resource (io/resource "google_client.json")]
       (let [raw (json/parse-string (slurp resource) true)
             web (:web raw)]
-        (println "Google OAuth: loaded credentials from google_client.json")
+        (tel/log! :info "Google OAuth: loaded credentials from google_client.json")
         web)
       (do
-        (println "Google OAuth: google_client.json not found, using env vars")
+        (tel/log! :info "Google OAuth: google_client.json not found, using env vars")
         nil))))
 
 (defn- client-id []

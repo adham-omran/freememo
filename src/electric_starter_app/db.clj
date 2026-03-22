@@ -6,6 +6,7 @@
    [next.jdbc :as jdbc]
    [next.jdbc.result-set :as rs]
    [honey.sql :as sql]
+   [taoensso.telemere :as tel]
    [clojure.string :as str]))
 
 (declare sanitize-utf8)
@@ -44,7 +45,7 @@
              WHERE table_name = 'topics' AND table_schema = 'public'"])))
 
 (defn setup-schema []
-  (println "Setting up database schema...")
+  (tel/log! :info "Setting up database schema")
 
   ;; Enable pgcrypto for password hashing
   (jdbc/execute! ds ["CREATE EXTENSION IF NOT EXISTS pgcrypto"])
@@ -68,7 +69,7 @@
                       ["SELECT column_name FROM information_schema.columns
                         WHERE table_name = 'settings' AND column_name = 'user_id'"])]
     (when-not has-user-id
-      (println "Migrating settings table to per-user...")
+      (tel/log! :info "Migrating settings table to per-user")
       (jdbc/execute! ds ["DROP TABLE IF EXISTS settings"])
       (jdbc/execute! ds ["
         CREATE TABLE IF NOT EXISTS settings (
@@ -166,7 +167,7 @@
                           ON flashcards(topic_id, kind, cloze) WHERE question IS NULL"])
       (catch Exception _ nil)))
 
-  (println "Database ready."))
+  (tel/log! :info "Database ready"))
 
 ;; ---------------------------------------------------------------------------
 ;; Data migration (old tables → topics)
@@ -176,11 +177,11 @@
   "Migrate documents, pages, content_items → unified topics table.
    Preserves document IDs. Pages and content_items get new IDs."
   []
-  (println "=== Starting migration to unified topics model ===")
+  (tel/log! :info "Starting migration to unified topics model")
   (jdbc/with-transaction [tx ds]
     ;; 1. Migrate documents → topics (preserve IDs)
     (let [doc-count (:count (jdbc/execute-one! tx ["SELECT COUNT(*) AS count FROM documents"]))]
-      (println (str "Migrating " doc-count " documents..."))
+      (tel/log! {:level :info :id ::migrate-documents :data {:count doc-count}} "Migrating documents")
       (jdbc/execute! tx
         ["INSERT INTO topics (id, user_id, parent_id, kind, title, content, source_url, source_reference,
                               status, priority, interval_days, a_factor, next_review_at, last_review_at,
@@ -202,7 +203,7 @@
     ;; 2. Migrate document files → topic_files
     (let [file-count (:count (jdbc/execute-one! tx
                                ["SELECT COUNT(*) AS count FROM documents WHERE file_data IS NOT NULL"]))]
-      (println (str "Migrating " file-count " document files..."))
+      (tel/log! {:level :info :id ::migrate-files :data {:count file-count}} "Migrating document files")
       (jdbc/execute! tx
         ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
           SELECT id, file_data, file_size, mime_type
@@ -211,7 +212,7 @@
 
     ;; 3. Migrate pages → topics (new IDs, build mapping)
     (let [page-count (:count (jdbc/execute-one! tx ["SELECT COUNT(*) AS count FROM pages"]))]
-      (println (str "Migrating " page-count " pages..."))
+      (tel/log! {:level :info :id ::migrate-pages :data {:count page-count}} "Migrating pages")
       ;; Create temp mapping table
       (jdbc/execute! tx ["CREATE TEMP TABLE page_id_map (old_page_id INTEGER PRIMARY KEY, new_topic_id INTEGER)"])
       ;; Insert pages as topics one by one and build mapping
@@ -249,7 +250,7 @@
 
     ;; 4. Migrate content_items → topics (two passes)
     (let [ci-count (:count (jdbc/execute-one! tx ["SELECT COUNT(*) AS count FROM content_items"]))]
-      (println (str "Migrating " ci-count " content items..."))
+      (tel/log! {:level :info :id ::migrate-content-items :data {:count ci-count}} "Migrating content items")
       (jdbc/execute! tx ["CREATE TEMP TABLE ci_id_map (old_ci_id INTEGER PRIMARY KEY, new_topic_id INTEGER)"])
 
       ;; Pass 1: content_items without parent_content_item_id
@@ -304,7 +305,7 @@
                                                    :review_count (or (:review_count ci) 0)
                                                    :created_at (:created_at ci)}]
                                          :returning [:id]}
-                                        {:builder-fn rs/as-unqualified-maps}))]
+                              {:builder-fn rs/as-unqualified-maps}))]
             (when-let [new-id (:id new-topic)]
               (jdbc/execute! tx
                 ["INSERT INTO ci_id_map (old_ci_id, new_topic_id) VALUES (?, ?)
@@ -350,7 +351,7 @@
                                                    :review_count (or (:review_count ci) 0)
                                                    :created_at (:created_at ci)}]
                                          :returning [:id]}
-                                        {:builder-fn rs/as-unqualified-maps}))]
+                              {:builder-fn rs/as-unqualified-maps}))]
             (when-let [new-id (:id new-topic)]
               (jdbc/execute! tx
                 ["INSERT INTO ci_id_map (old_ci_id, new_topic_id) VALUES (?, ?)
@@ -358,7 +359,7 @@
                  (:id ci) new-id]))))))
 
     ;; 5. Migrate flashcards — set topic_id and root_topic_id
-    (println "Migrating flashcards...")
+    (tel/log! :info "Migrating flashcards")
     ;; Cards linked to content_items
     (jdbc/execute! tx
       ["UPDATE flashcards f SET
@@ -399,7 +400,8 @@
                          ) AS page_topics
                          WHERE topics.parent_id = page_topics.page_id"])]
       (when (pos? (or (:next.jdbc/update-count reparented) 0))
-        (println (str "Reparented " (:next.jdbc/update-count reparented) " extracts from orphan page topics"))))
+        (tel/log! {:level :info :id ::reparent-extracts :data {:count (:next.jdbc/update-count reparented)}}
+          "Reparented extracts from orphan page topics")))
     (jdbc/execute! tx
       ["DELETE FROM topics
         WHERE kind = 'page'
@@ -410,7 +412,7 @@
       ["SELECT setval('topics_id_seq', GREATEST((SELECT COALESCE(MAX(id), 1) FROM topics), 1))"])
 
     ;; 7. Rename old tables
-    (println "Renaming old tables...")
+    (tel/log! :info "Renaming old tables")
     (jdbc/execute! tx ["ALTER TABLE IF EXISTS content_items RENAME TO content_items_old"])
     (jdbc/execute! tx ["ALTER TABLE IF EXISTS pages RENAME TO pages_old"])
     (jdbc/execute! tx ["ALTER TABLE IF EXISTS documents RENAME TO documents_old"])
@@ -423,8 +425,9 @@
     (let [topic-count (:count (jdbc/execute-one! tx ["SELECT COUNT(*) AS count FROM topics"]))
           file-count (:count (jdbc/execute-one! tx ["SELECT COUNT(*) AS count FROM topic_files"]))
           card-count (:count (jdbc/execute-one! tx ["SELECT COUNT(*) AS count FROM flashcards WHERE topic_id IS NOT NULL"]))]
-      (println (str "=== Migration complete: " topic-count " topics, "
-                 file-count " files, " card-count " flashcards linked ===")))))
+      (tel/log! {:level :info :id ::migration-complete
+                 :data {:topics topic-count :files file-count :flashcards card-count}}
+        "Migration complete"))))
 
 ;; ---------------------------------------------------------------------------
 ;; Settings (unchanged)
@@ -1000,10 +1003,9 @@
          AND kind != 'page'
          AND (next_review_at <= NOW() OR next_review_at IS NULL)
          AND (status = 'active' OR status IS NULL)
-       ORDER BY priority ASC, next_review_at ASC NULLS FIRST, id ASC"
-      user-id])
+       ORDER BY priority ASC, next_review_at ASC NULLS FIRST, id ASC" user-id])
     (catch Exception e
-      (println "ERROR get-learning-queue:" (.getMessage e))
+      (tel/error! {:id ::get-learning-queue} e)
       [])))
 
 (defn get-learning-queue-count
@@ -1040,10 +1042,9 @@
        WHERE user_id = ? AND kind != 'page'
        ORDER BY CASE WHEN status = 'active' OR status IS NULL THEN 0
                      WHEN status = 'done' THEN 1 ELSE 2 END,
-                priority ASC, next_review_at ASC NULLS FIRST, id ASC"
-      user-id])
+                priority ASC, next_review_at ASC NULLS FIRST, id ASC" user-id])
     (catch Exception e
-      (println "ERROR get-full-queue:" (.getMessage e))
+      (tel/error! {:id ::get-full-queue} e)
       [])))
 
 (defn get-review-calendar
@@ -1070,10 +1071,9 @@
        WHERE user_id = ?
          AND kind != 'page'
          AND status IN ('dismissed', 'done')
-       ORDER BY created_at DESC"
-      user-id])
+       ORDER BY created_at DESC" user-id])
     (catch Exception e
-      (println "ERROR get-inactive-topics:" (.getMessage e))
+      (tel/error! {:id ::get-inactive-topics} e)
       [])))
 
 ;; ---------------------------------------------------------------------------

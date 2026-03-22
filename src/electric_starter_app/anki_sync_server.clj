@@ -3,7 +3,8 @@
    recording pushed note IDs, and applying pull updates."
   (:require
     [electric-starter-app.db :as db]
-    [electric-starter-app.settings :as settings]))
+    [electric-starter-app.settings :as settings]
+    [taoensso.telemere :as tel]))
 
 (defn load-anki-preferences
   "Load saved Anki sync preferences for a user."
@@ -18,7 +19,7 @@
              :use-header  (settings/get-anki-use-header user-id)
              :header-text (settings/get-anki-header-text user-id)}}
     (catch Exception e
-      (println "ERROR [load-anki-preferences]:" (.getMessage e))
+      (tel/error! {:id ::load-anki-preferences} e)
       {:success false :prefs {}})))
 
 (defn get-cards-for-sync
@@ -32,7 +33,7 @@
                   (db/get-all-flashcards root-topic-id))]
       {:success true :cards cards})
     (catch Exception e
-      (println "ERROR [get-cards-for-sync]:" (.getMessage e))
+      (tel/error! {:id ::get-cards-for-sync} e)
       {:success false :error (.getMessage e)})))
 
 (defn record-pushed-notes
@@ -46,7 +47,7 @@
             pairs))
     {:success true :count (count pairs)}
     (catch Exception e
-      (println "ERROR [record-pushed-notes]:" (.getMessage e))
+      (tel/error! {:id ::record-pushed-notes} e)
       {:success false :error (.getMessage e)})))
 
 (defn apply-pull-updates
@@ -68,5 +69,5 @@
         (db/delete-flashcard! id)))
     {:success true :count (count updates) :deleted (count (or deleted-card-ids []))}
     (catch Exception e
-      (println "ERROR [apply-pull-updates]:" (.getMessage e))
+      (tel/error! {:id ::apply-pull-updates} e)
       {:success false :error (.getMessage e)})))

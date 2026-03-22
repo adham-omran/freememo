@@ -2,7 +2,8 @@
   "Business logic for PDF document management."
   (:require
     [electric-starter-app.db :as db]
-    [electric-starter-app.ocr :as ocr]))
+    [electric-starter-app.ocr :as ocr]
+    [taoensso.telemere :as tel]))
 
 (defn save-pdf [user-id filename file-bytes]
   (try
@@ -16,7 +17,7 @@
             topic-id (:topics/id topic)]
         {:success true :id topic-id}))
     (catch Exception e
-      (println "ERROR [save-pdf]:" (.getMessage e))
+      (tel/error! {:id ::save-pdf} e)
       {:success false :error (str "Failed to save PDF: " (.getMessage e))})))
 
 (defn list-pdfs [user-id]
@@ -24,7 +25,7 @@
     (let [docs (db/get-root-topics user-id)]
       {:success true :documents docs})
     (catch Exception e
-      (println "ERROR [list-pdfs]:" (.getMessage e))
+      (tel/error! {:id ::list-pdfs} e)
       {:success false :error "Failed to load PDFs"})))
 
 (defn delete-pdf [user-id id]
@@ -32,5 +33,5 @@
     (db/delete-topic-for-user! user-id id)
     {:success true}
     (catch Exception e
-      (println "ERROR [delete-pdf]:" (.getMessage e))
+      (tel/error! {:id ::delete-pdf} e)
       {:success false :error "Failed to delete PDF"})))

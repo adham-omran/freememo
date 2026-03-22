@@ -1,6 +1,7 @@
 (ns electric-starter-app.main
   (:require [hyperfiddle.electric3 :as e]
             [hyperfiddle.electric-dom3 :as dom]
+            [electric-starter-app.logging :as log]
             [electric-starter-app.home-page :refer [HomePage]]
             [electric-starter-app.settings-page :refer [SettingsPage]]
             [electric-starter-app.library-page :refer [LibraryPage]]
@@ -55,6 +56,7 @@
                                (reset! !active-tab tab)
                                (reset! !tab-to-save tab))
                               ([tab nav]
+                               (log/log-debug (str "Navigation tab=" tab " nav=" (pr-str nav)))
                                (reset! !nav-target nav)
                                (reset! !active-tab tab)
                                (reset! !tab-to-save tab)))]

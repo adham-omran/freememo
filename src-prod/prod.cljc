@@ -17,6 +17,7 @@
    #?(:clj clojure.edn)
    #?(:clj clojure.java.io)
    #?(:clj [clojure.tools.logging :as log])
+   #?(:clj [electric-starter-app.logging :as logging])
    #?(:clj [electric-starter-app.db :as db])
    #?(:clj [electric-starter-app.api :as api])))
 
@@ -32,6 +33,7 @@
 
 #?(:clj ; server entrypoint
    (defn -main [& {:strs [] :as args}] ; clojure.main entrypoint, args are strings
+     (logging/init!)
      (let [config
            ;; Client and server versions must match in prod (dev is not concerned)
            ;; `src-build/build.clj` will compute the common version and store it in `resources/electric-manifest.edn`

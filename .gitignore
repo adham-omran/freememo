@@ -17,3 +17,4 @@ node_modules
 .clj-kondo
 /resources/google_client.json
 /resources/openai.txt
+logs/
