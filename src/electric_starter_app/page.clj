@@ -33,8 +33,10 @@
   [parent-id page-number]
   (try
     (if-let [page (db/get-page-text parent-id page-number)]
-      {:success true :text (:topics/content page)}
-      {:success false :error "No text found for this page"})
+      (if-let [text (:topics/content page)]
+        {:success true :text text}
+        {:success false :error "No text scanned yet"})
+      {:success false :error "Page not found"})
     (catch Exception e
       {:success false :error (.getMessage e)})))
 
