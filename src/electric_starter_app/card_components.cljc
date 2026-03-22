@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [electric-starter-app.logging :as log]
    #?(:clj [electric-starter-app.cards :as cards])
    #?(:cljs [electric-starter-app.anki-sync-helpers :refer [anki-call!]])))
 
@@ -111,7 +112,7 @@
             (dom/text "\u270E")
             (dom/On "click" (fn [_]
                               (let [data {:id id :kind kind :question question :answer answer :cloze cloze}]
-                                (println "EDIT CLICK data:" (pr-str data))
+                                (log/log-debug (str "Edit card clicked id=" id " kind=" kind))
                                 (reset! !editing-card data))) nil)))
         ;; Delete column
         (dom/td

@@ -2,6 +2,7 @@
   "EPUB parsing: extracts metadata and HTML content from .epub files.
    An EPUB is a ZIP archive containing XHTML chapters, images, and metadata."
   (:require [electric-starter-app.html-cleaner :as cleaner]
+            [taoensso.telemere :as tel]
             [clojure.string :as str])
   (:import [java.util.zip ZipInputStream ZipEntry]
            [java.io ByteArrayInputStream ByteArrayOutputStream]
@@ -181,7 +182,7 @@
                 (ImageIO/write dst-img "jpg" baos)
                 (.toByteArray baos)))))))
     (catch Exception e
-      (println "WARN [epub] resize-image failed:" (.getMessage e))
+      (tel/log! {:level :warn :id ::resize-image} (.getMessage e))
       nil)))
 
 (defn- process-images
@@ -279,5 +280,5 @@
             {:error "Could not read package document (OPF file)"})
           {:error "Invalid EPUB: no container.xml or missing rootfile"})))
     (catch Exception e
-      (println "ERROR [epub/process-epub]:" (.getMessage e))
+      (tel/error! {:id ::process-epub} e)
       {:error (str "Failed to parse EPUB: " (.getMessage e))})))

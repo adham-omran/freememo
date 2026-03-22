@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [electric-starter-app.logging :as log]
    [electric-starter-app.util :as util]
    #?(:clj [electric-starter-app.db :as db])
    #?(:clj [electric-starter-app.wikipedia :as wiki])
@@ -42,8 +43,7 @@
               (when result
                 (let [{:keys [sections annotated-html]} result
                       clean-sections (mapv #(update % :content cleaner/clean-html) sections)]
-                  (println (str "INFO [import] auto-extract: " (count clean-sections)
-                             " topics in " elapsed "ms"))
+                  (log/log-info (str "Auto-extract complete section-count=" (count clean-sections) " elapsed-ms=" elapsed))
                   ;; Save child topics
                   (when (seq clean-sections)
                     (db/batch-create-topics! topic-id clean-sections))
@@ -52,7 +52,7 @@
                     (db/update-topic-content! topic-id annotated-html))))
               nil)
             (catch Exception e
-              (println "WARN [import] auto-extract failed:" (.getMessage e))
+              (log/log-warn (str "Auto-extract failed: " (.getMessage e)))
               nil))
      :cljs nil))
 
@@ -296,7 +296,7 @@
                                    (js/alert (or (.-error data) "PDF upload failed")))))
                         (.catch (fn [err]
                                   (reset! !uploading false)
-                                  (js/console.error "Upload failed:" err)))))))]
+                                  (js/console.error "PDF upload failed:" err)))))))]
 
             ;; Drop zone / file picker
             (dom/div

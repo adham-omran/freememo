@@ -6,6 +6,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
+   [electric-starter-app.logging :as log]
    [electric-starter-app.rich-text-editor :as editor]
    [electric-starter-app.anki-sync :refer [AnkiSyncButton]]
    [electric-starter-app.ocr-modals :refer [ExportModal PromptDialog AddCardModal]]
@@ -263,7 +264,8 @@
                                                                  :content-text content-text
                                                                  :page-number page-number
                                                                  :source-ref source-ref})
-                                            (assoc :error nil))))))
+                                            (assoc :error nil))))
+                      (log/log-info (str "Card generation enqueued topic-id=" topic-id " card-type=" card-type " card-count=" card-count-val))))
                   nil)))
 
           ;; Generate with Prompt button
@@ -283,7 +285,7 @@
                                 (reset! !prompt-dialog-kind card-type)
                                 (reset! !show-prompt-dialog true))
                 nil)))) ;; end when llm-enabled? (generation UI)
-
+        
         ;; Extract button — create child topic from selected text
         (let [!extract-state (atom {:pending nil :error nil})
               extract-state (e/watch !extract-state)
@@ -333,6 +335,7 @@
           (when-some [current (:active gen-state)]
             (let [[?token _?error] (e/Token (:id current))]
               (when-some [token ?token]
+                (log/log-trace "Generation token opened")
                 ;; Read captured values from queue item (not reactive bindings)
                 (let [cur-topic-id (or (:topic-id current) topic-id)
                       cur-root-topic-id (or (:root-topic-id current) root-topic-id)
@@ -370,10 +373,12 @@
                       (swap! !gen-state assoc :active nil :error (:error generate-result)))
                     (let [generated-cards (e/server (:cards generate-result))
                           save-result (e/server (save-cards-for-topic cur-topic-id cur-root-topic-id cur-card-type generated-cards cur-source-ref))]
+                      (log/log-info (str "Card generation complete card-count=" (count generated-cards)))
                       (if (:success save-result)
-                        (do (e/server (swap! !refresh inc))
-                          (token)
-                          (swap! !gen-state assoc :active nil))
+                        (do (token)
+                          (log/log-debug (str "Cards saved topic-id=" cur-topic-id " root=" cur-root-topic-id))
+                          (swap! !gen-state assoc :active nil)
+                          (e/server (swap! !refresh inc)))
                         (do (token (:error save-result))
                           (swap! !gen-state assoc :active nil)))))))))
 
@@ -427,12 +432,12 @@
                     (let [generated-cards (e/server (:cards generate-result))
                           save-result (e/server (save-cards-for-topic cur-topic-id cur-root-topic-id kind generated-cards cur-source-ref))]
                       (if (:success save-result)
-                        (do (e/server (swap! !refresh inc))
-                          (token)
-                          (swap! !prompt-gen-state assoc :active nil))
+                        (do (token)
+                          (swap! !prompt-gen-state assoc :active nil)
+                          (e/server (swap! !refresh inc)))
                         (do (token (:error save-result))
                           (swap! !prompt-gen-state assoc :active nil)))))))))) ;; end when llm-enabled? (queue processors)
-
+        
         ;; Add new card button — uses AddCardModal with topic-id and root-topic-id
         (let [!show-add (atom false)
               show-add (e/watch !show-add)]

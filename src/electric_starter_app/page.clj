@@ -2,7 +2,8 @@
   "Business logic for PDF page OCR operations."
   (:require
    [electric-starter-app.db :as db]
-   [electric-starter-app.ocr :as ocr]))
+   [electric-starter-app.ocr :as ocr]
+   [taoensso.telemere :as tel]))
 
 (defn extract-page-text
   "Extract text from a specific page of a PDF topic and save to database.
@@ -24,7 +25,7 @@
                {:success true :text (:text result)})
              result))))
      (catch Exception e
-       (println "ERROR [extract-page-text]:" (.getMessage e))
+       (tel/error! {:id ::extract-page-text} e)
        {:success false :error (str "Failed to extract text: " (.getMessage e))}))))
 
 (defn get-page-text
@@ -53,5 +54,5 @@
     (db/save-page-text! parent-id page-number html)
     {:success true}
     (catch Exception e
-      (println "ERROR [save-page-html-impl]:" (.getMessage e))
+      (tel/error! {:id ::save-page-html-impl} e)
       {:success false :error "Failed to save text"})))

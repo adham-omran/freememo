@@ -5,6 +5,7 @@
    #?(:clj [shadow.cljs.devtools.api :as shadow-cljs-compiler])
    #?(:clj [shadow.cljs.devtools.server :as shadow-cljs-compiler-server])
    #?(:clj [clojure.tools.logging :as log])
+   #?(:clj [electric-starter-app.logging :as logging])
    #?(:clj [electric-starter-app.db :as db])
    #?(:clj [electric-starter-app.api :as api])
 
@@ -28,6 +29,7 @@
 
 #?(:clj ; server entrypoint
    (defn -main [& args]
+     (logging/init!)
      (log/info "Starting Electric compiler and server...")
 
      ;; Initialize database

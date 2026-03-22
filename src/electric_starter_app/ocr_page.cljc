@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [electric-starter-app.logging :as log]
    [electric-starter-app.pdf-viewer-component :refer [PdfViewerComponent]]
    [electric-starter-app.rich-text-editor-component :refer [RichTextEditorComponent]]
    [electric-starter-app.rich-text-editor :as editor]
@@ -168,6 +169,10 @@
                 ;; Auto-save: one-way editor → DB. Don't clear !dirty-html, don't bump !refresh.
                 dirty-data (e/watch editor/!dirty-html)
                 !last-saved-ocr (atom nil)
+                _ (when (and (some? dirty-data)
+                          (= (:topic-id dirty-data) page-topic-id)
+                          (not= (:html dirty-data) (e/watch !last-saved-ocr)))
+                    (log/log-debug (str "Auto-save triggered topic-id=" (:topic-id dirty-data))))
                 save-result (when (and (some? dirty-data)
                                     (= (:topic-id dirty-data) page-topic-id)
                                     (not= (:html dirty-data) (e/watch !last-saved-ocr)))
@@ -271,12 +276,14 @@
                                   (when-not (contains? @!scanning-pages [doc page])
                                     (swap! !scanning-pages conj [doc page])
                                     (swap! !ocr-errors dissoc [doc page])
+                                    (log/log-info (str "OCR scan started topic-id=" doc " page=" page))
                                     (do
                                       (future
                                         (try
                                           (let [result (page/extract-page-text uid doc page ek scan-dpi)]
                                             (if (:success result)
-                                              (swap! !refresh inc)
+                                              (do (log/log-info (str "OCR scan complete topic-id=" doc " page=" page))
+                                                (swap! !refresh inc))
                                               (swap! !ocr-errors assoc [doc page] (:error result))))
                                           (catch Exception e
                                             (swap! !ocr-errors assoc [doc page] (.getMessage e)))

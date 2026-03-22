@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [electric-starter-app.logging :as log]
    [electric-starter-app.rich-text-editor :as editor]
    [electric-starter-app.rich-text-editor-component :refer [RichTextEditorComponent]]
    [electric-starter-app.content-toolbar :refer [ContentToolbar]]
@@ -58,6 +59,7 @@
             (when (and (some? dirty-data)
                     (= (:topic-id dirty-data) topic-id)
                     (not= (:html dirty-data) (e/watch !last-saved)))
+              (log/log-debug (str "Extract auto-save topic-id=" topic-id))
               (let [html-to-save (:html dirty-data)
                     result (e/server
                              (e/Offload
@@ -65,7 +67,7 @@
                                   (db/update-topic-content! topic-id html-to-save)
                                   {:success true}
                                   (catch Exception e
-                                    (println "ERROR [extract-page save]:" (.getMessage e))
+                                    (log/log-error (str "Extract save error: " (.getMessage e)))
                                     {:success false :error (.getMessage e)}))))]
                 (when (:success result)
                   (reset! !last-saved html-to-save)))))
@@ -152,6 +154,7 @@
                               (let [note-ids (e/server (db/get-anki-note-ids topic-id))]
                                 (e/server (db/delete-topic! topic-id))
                                 (e/client (card-components/try-delete-anki-notes! note-ids))
+                                (log/log-info (str "Topic deleted topic-id=" topic-id))
                                 (token)
                                 (reset! !delete-state :deleted))))))))))
               (let [label (if (nil? page-number)

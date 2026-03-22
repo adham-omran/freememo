@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [electric-starter-app.logging :as log]
    [electric-starter-app.learn-session :refer [LearnSession]]
    [electric-starter-app.subset-review :refer [SubsetReviewSession]]
    [electric-starter-app.ocr-page :refer [OcrPage]]
@@ -277,6 +278,7 @@
         (reset! !mode :session)
         (reset! !nav-target nil))
       (when (and (map? nav-val) (:topic-id nav-val))
+        (log/log-debug (str "Browse nav set nav=" (pr-str nav-val)))
         (reset! !browse-nav nav-val)
         (reset! !mode :browse)
         (reset! !nav-target nil))

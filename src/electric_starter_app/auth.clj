@@ -2,6 +2,7 @@
   "User authentication with pgcrypto password hashing."
   (:require
     [electric-starter-app.db :as db]
+    [taoensso.telemere :as tel]
     [next.jdbc :as jdbc]))
 
 (defn create-user [username password]
@@ -13,7 +14,7 @@
     (catch org.postgresql.util.PSQLException e
       (if (.contains (.getMessage e) "duplicate key")
         {:success false :error "Username already taken"}
-        (do (println "ERROR [create-user]:" (.getMessage e))
+        (do (tel/error! {:id ::create-user} e)
             {:success false :error "Failed to create account"})))))
 
 (defn authenticate [username password]
@@ -25,5 +26,5 @@
         {:success true :user-id (:users/id result) :username (:users/username result)}
         {:success false :error "Invalid username or password"}))
     (catch Exception e
-      (println "ERROR [authenticate]:" (.getMessage e))
+      (tel/error! {:id ::authenticate} e)
       {:success false :error "Authentication failed"})))
