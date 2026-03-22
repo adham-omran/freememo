@@ -70,15 +70,46 @@
            (.setContents editor delta))
          ;; Immediate text-change: sets !dirty-html on every user edit
          ;; e/Offload-latch in callers handles rapid updates via "latest-wins" semantics
+         ;; Text-change listener reads topic-id from !editor-state (mutable ref)
+         ;; so it stays correct across page navigations without reinit
          (.on editor "text-change"
            (fn [_delta _oldDelta source]
              (when (= source "user")
-               (let [^js root (.-root editor)]
+               (let [^js root (.-root editor)
+                     current-topic-id (:topic-id @!editor-state)]
                  (reset! !dirty-html {:html (.-innerHTML root)
-                                      :topic-id topic-id})))))
+                                      :topic-id current-topic-id})))))
          (reset! !editor-state {:editor editor :container container
                                 :topic-id topic-id})
          editor))))
+
+(defn set-content!
+  "Update Quill content without destroying the editor.
+   Uses source 'api' so text-change listener does NOT fire.
+   Does NOT set !dirty-html — caller decides persistence."
+  [html]
+  #?(:clj nil
+     :cljs
+     (when-let [{:keys [editor]} @!editor-state]
+       (let [^js ed editor
+             ^js clipboard (.-clipboard ed)
+             cleaned (-> (or html "")
+                       (str/replace #"^```html\s*\n?" "")
+                       (str/replace #"^```\s*\n?" "")
+                       (str/replace #"\n?```\s*$" "")
+                       str/trim)
+             delta (.convert clipboard cleaned)]
+         (.setContents ed delta "api")
+         true))))
+
+(defn update-topic-id!
+  "Update the topic-id in editor state without reinitializing Quill.
+   The text-change listener reads from !editor-state, so this ensures
+   dirty-html is tagged with the correct topic-id after page navigation."
+  [new-topic-id]
+  #?(:cljs (when @!editor-state
+             (swap! !editor-state assoc :topic-id new-topic-id))
+     :clj nil))
 
 (defn get-current-html!
   "Read innerHTML from the current editor. Client-side only, never enters Electric reactive graph."
