@@ -26,10 +26,10 @@
           (let [node dom/node]
             ;; Wait for initial-html to arrive (may be stale/nil at frame creation),
             ;; then init Quill once. Subsequent initial-html changes are ignored.
-            (when (and (not @!initialized) (some? initial-html))
+            (when (not @!initialized)
               (reset! !initialized true)
               (log/log-debug (str "Editor init topic-id=" topic-id " html-len=" (count initial-html)))
-              (js/setTimeout (fn [] (editor/init-editor! node initial-html topic-id)) 0))
+              (js/setTimeout (fn [] (editor/init-editor! node (or initial-html "") topic-id)) 0))
             (e/on-unmount
               (fn []
                 (editor/destroy-editor!)))))))))
