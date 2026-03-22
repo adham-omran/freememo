@@ -44,6 +44,7 @@
               parent-id (e/server (:topics/parent_id topic))
               parent-topic (e/server (when parent-id (db/get-topic parent-id)))
               page-number (e/server (:topics/page_number parent-topic))
+              parent-title (e/server (:topics/title parent-topic))
               parent-content (e/server (or (:topics/content parent-topic) ""))
               ;; Root topic — for filename, kind, source scoping
               root-topic-id (e/server (get-root-topic-id topic-id))
@@ -157,16 +158,19 @@
                                 (log/log-info (str "Topic deleted topic-id=" topic-id))
                                 (token)
                                 (reset! !delete-state :deleted))))))))))
-              (let [label (if (nil? page-number)
-                            (or filename "Untitled")
-                            (str (or filename "Unknown") " \u2014 p. " page-number))]
+              (let [parent-is-intermediate (and parent-id root-topic-id (not= parent-id root-topic-id))
+                    label (if parent-is-intermediate
+                            (or parent-title "Untitled")
+                            (if (nil? page-number)
+                              (or filename "Untitled")
+                              (str (or filename "Unknown") " \u2014 p. " page-number)))]
                 (if view-source!
                   (dom/span
                     (dom/props {:style {:color "var(--color-primary)" :font-size "13px" :cursor "pointer"
                                         :text-decoration "underline"}
                                 :title "View source"})
                     (dom/text label)
-                    (dom/On "click" (fn [_] (view-source! root-topic-id page-number root-kind)) nil))
+                    (dom/On "click" (fn [_] (view-source! (if parent-is-intermediate parent-id root-topic-id) page-number root-kind)) nil))
                   (dom/span
                     (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px"}})
                     (dom/text label))))))
