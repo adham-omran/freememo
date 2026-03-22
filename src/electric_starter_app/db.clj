@@ -1105,18 +1105,21 @@
     (:id result)))
 
 (defn get-subtree
-  "Get a topic and all its descendants via recursive CTE."
+  "Get a topic and all its descendants via recursive CTE.
+   Selects from topics directly (not the CTE alias) so JDBC metadata
+   reports the correct table name and next.jdbc produces :topics/xxx keys."
   [user-id root-id]
   (jdbc/execute! ds
-    ["WITH RECURSIVE subtree AS (
-        SELECT * FROM topics WHERE id = ?
+    ["WITH RECURSIVE subtree(id) AS (
+        SELECT id FROM topics WHERE id = ?
         UNION ALL
-        SELECT child.* FROM topics child
-        JOIN subtree parent ON child.parent_id = parent.id
+        SELECT child.id FROM topics child
+        JOIN subtree ON child.parent_id = subtree.id
       )
-      SELECT s.*, NULL AS topic_type FROM subtree s
-      WHERE s.user_id = ? OR s.user_id IS NULL
-      ORDER BY s.parent_id ASC NULLS FIRST, s.page_number ASC NULLS LAST, s.id ASC"
+      SELECT t.* FROM topics t
+      JOIN subtree s ON t.id = s.id
+      WHERE t.user_id = ? OR t.user_id IS NULL
+      ORDER BY t.parent_id ASC NULLS FIRST, t.page_number ASC NULLS LAST, t.id ASC"
      root-id user-id]))
 
 (defn- tree-order-items
@@ -1149,7 +1152,7 @@
          ;; Exclude page topics from review
       (remove #(= "page" (:topics/kind %)))
          ;; Keep only active items
-      (filter #(#{"active" nil} (:topics/status %)))
+      (filter #(let [s (:topics/status %)] (or (= s "active") (nil? s))))
          ;; Skip items reviewed today
       (remove (fn [item]
                 (when-let [la (:topics/last_review_at item)]
