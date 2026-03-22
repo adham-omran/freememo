@@ -3,17 +3,17 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [electric-starter-app.logging :as log]
    [electric-starter-app.rich-text-editor :as editor]))
 
 (e/defn RichTextEditorComponent
   "Renders a rich text editor. Remounts when topic-id changes (page/topic navigation).
-   initial-html is captured once on mount — subsequent reactive changes are ignored
-   so that !refresh bumps don't reinitialize the editor."
+   Waits for initial-html to be non-nil before initializing Quill.
+   Once initialized, subsequent changes to initial-html are ignored (e.g., from !refresh bumps)."
   [{:keys [initial-html topic-id]}]
   (e/client
     (e/for-by identity [_k [[topic-id]]]
-      ;; Capture initial-html once on mount via plain atom deref (not e/watch)
-      (let [!captured-html (atom initial-html)]
+      (let [!initialized (atom false)]
         (dom/div
           (dom/props {:class "quill-editor-wrapper"
                       :style {:border "1px solid #ccc"
@@ -23,12 +23,13 @@
                               :min-height "200px"}
                       :data-role "widget"})
 
-          (let [node dom/node
-                timer-id (js/setTimeout
-                           (fn [] (editor/init-editor! node @!captured-html topic-id))
-                           0)]
-            ;; Cleanup on unmount — cancel pending init and destroy editor
+          (let [node dom/node]
+            ;; Wait for initial-html to arrive (may be stale/nil at frame creation),
+            ;; then init Quill once. Subsequent initial-html changes are ignored.
+            (when (and (not @!initialized) (some? initial-html))
+              (reset! !initialized true)
+              (log/log-debug (str "Editor init topic-id=" topic-id " html-len=" (count initial-html)))
+              (js/setTimeout (fn [] (editor/init-editor! node initial-html topic-id)) 0))
             (e/on-unmount
               (fn []
-                (js/clearTimeout timer-id)
                 (editor/destroy-editor!)))))))))

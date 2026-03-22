@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [electric-starter-app.logging :as log]
    [clojure.string :as str]))
 
 ;; Global singleton — mirrors pdf_viewer.cljc pattern
@@ -41,6 +42,7 @@
   #?(:clj nil
      :cljs
      (when (and container (.-Quill js/window))
+       (log/log-debug (str "init-editor! topic-id=" topic-id " html-len=" (count initial-html)))
        ;; Destroy previous editor if any
        (destroy-editor!)
        ;; Clear dirty flag — fresh content, no pending saves
