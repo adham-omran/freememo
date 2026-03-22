@@ -50,9 +50,14 @@
                                :border-bottom (if (= active-tab key) "2px solid var(--color-primary)" "2px solid transparent")
                                :margin-bottom "-2px"})
                   !nav-target (atom nil)
-                  navigate! (fn [tab]
-                              (reset! !active-tab tab)
-                              (reset! !tab-to-save tab))]
+                  navigate! (fn
+                              ([tab]
+                               (reset! !active-tab tab)
+                               (reset! !tab-to-save tab))
+                              ([tab nav]
+                               (reset! !nav-target nav)
+                               (reset! !active-tab tab)
+                               (reset! !tab-to-save tab)))]
 
               ;; Persist active tab on change
               (when-some [token ?token]
@@ -111,9 +116,9 @@
                 (when (= active-tab :settings) (SettingsPage user-id username enc-key !settings-refresh))
                 (when (= active-tab :learn) (LearnPage user-id enc-key !nav-target #(navigate! :extract) navigate! llm-enabled?))
                 (when (= active-tab :extract)
-                  (ExtractPage user-id enc-key (:content-item-id (e/watch !nav-target)) navigate!
-                    (fn [doc-id page]
-                      (reset! !nav-target {:doc-id doc-id :page page})
+                  (ExtractPage user-id enc-key (:topic-id (e/watch !nav-target)) navigate!
+                    (fn [topic-id page & [kind]]
+                      (reset! !nav-target {:topic-id topic-id :kind (or kind "pdf") :page page})
                       (navigate! :learn))
                     llm-enabled?)))))
 

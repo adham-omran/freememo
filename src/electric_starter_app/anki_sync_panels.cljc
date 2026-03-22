@@ -7,7 +7,8 @@
    [electric-starter-app.anki-sync-helpers :as helpers]
    [electric-starter-app.anki-sync-form :as form]
    #?(:clj [electric-starter-app.anki-sync-server :as sync])
-   #?(:clj [electric-starter-app.settings :as settings])))
+   #?(:clj [electric-starter-app.settings :as settings])
+   #?(:clj [electric-starter-app.db :as db])))
 
 (e/defn AnkiSyncExecutor
   "Handles push/pull execution and server recording.
@@ -88,9 +89,14 @@
     (e/client
       (when (= sync-phase :pulling)
         (let [page-num (when (= scope "Current Page") current-pdf-page)
+              page-topic-id (when page-num
+                              (e/server
+                                (:topics/id
+                                  (first (filter #(= (:topics/page_number %) page-num)
+                                           (db/list-pages selected-doc))))))
               cards-result (e/server (sync/get-cards-for-sync
-                                       {:document-id selected-doc
-                                        :page-number page-num}))]
+                                       {:topic-id page-topic-id
+                                        :root-topic-id selected-doc}))]
           (if-not (:success cards-result)
             (do (reset! !error (:error cards-result))
               (reset! !phase :error))
@@ -101,9 +107,14 @@
     (e/client
       (when (= sync-phase :pushing)
         (let [page-num (when (= scope "Current Page") current-pdf-page)
+              page-topic-id (when page-num
+                              (e/server
+                                (:topics/id
+                                  (first (filter #(= (:topics/page_number %) page-num)
+                                           (db/list-pages selected-doc))))))
               cards-result (e/server (sync/get-cards-for-sync
-                                       {:document-id selected-doc
-                                        :page-number page-num}))]
+                                       {:topic-id page-topic-id
+                                        :root-topic-id selected-doc}))]
           (if-not (:success cards-result)
             (do (reset! !error (:error cards-result))
               (reset! !phase :error))

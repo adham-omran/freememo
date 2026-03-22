@@ -6,29 +6,29 @@
    [electric-starter-app.rich-text-editor :as editor]))
 
 (e/defn RichTextEditorComponent
-  "Renders a rich text editor. Pure imperative widget — no callbacks, no reactive state.
-   Props: {:initial-html <string> :page-number <int> :doc-id <int> :content-item-id <int|nil>}
-   Always (re)creates the editor on the current DOM node. init-editor! is idempotent
-   (destroys previous instance first)."
-  [{:keys [initial-html page-number doc-id content-item-id]}]
+  "Renders a rich text editor. Remounts when topic-id changes (page/topic navigation).
+   initial-html is captured once on mount — subsequent reactive changes are ignored
+   so that !refresh bumps don't reinitialize the editor."
+  [{:keys [initial-html topic-id]}]
   (e/client
-    (e/for-by identity [_k [[initial-html doc-id page-number content-item-id]]]
-      (dom/div
-        (dom/props {:class "quill-editor-wrapper"
-                    :style {:border "1px solid #ccc"
-                            :border-radius "4px"
-                            :background "#fff"
-                            :flex "1"
-                            :min-height "200px"}
-                    :data-role "widget"})
+    (e/for-by identity [_k [[topic-id]]]
+      ;; Capture initial-html once on mount via plain atom deref (not e/watch)
+      (let [!captured-html (atom initial-html)]
+        (dom/div
+          (dom/props {:class "quill-editor-wrapper"
+                      :style {:border "1px solid #ccc"
+                              :border-radius "4px"
+                              :background "#fff"
+                              :flex "1"
+                              :min-height "200px"}
+                      :data-role "widget"})
 
-        (let [node dom/node
-              timer-id (js/setTimeout
-                         (fn [] (editor/init-editor! node initial-html page-number doc-id
-                                  :content-item-id content-item-id))
-                         0)]
-          ;; Cleanup on unmount — cancel pending init and destroy editor
-          (e/on-unmount
-            (fn []
-              (js/clearTimeout timer-id)
-              (editor/destroy-editor!))))))))
+          (let [node dom/node
+                timer-id (js/setTimeout
+                           (fn [] (editor/init-editor! node @!captured-html topic-id))
+                           0)]
+            ;; Cleanup on unmount — cancel pending init and destroy editor
+            (e/on-unmount
+              (fn []
+                (js/clearTimeout timer-id)
+                (editor/destroy-editor!)))))))))

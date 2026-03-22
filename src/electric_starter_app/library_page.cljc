@@ -51,5 +51,5 @@
 
         ;; View content
         (if (= view-mode :list)
-          (DocumentListView user-id !nav-target navigate! !refresh filter-text)
+          (DocumentListView user-id !nav-target navigate! !refresh)
           (DocumentTreeView user-id !nav-target navigate! !refresh filter-text))))))

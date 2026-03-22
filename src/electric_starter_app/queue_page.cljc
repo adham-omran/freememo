@@ -1,5 +1,5 @@
 (ns electric-starter-app.queue-page
-  "Queue page — shows all topics (documents + extracts) with summary, calendar heatmap, and virtual-scrolled table."
+  "Queue page — shows all topics with summary, calendar heatmap, and virtual-scrolled table."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -8,19 +8,20 @@
    [electric-starter-app.util :as util]
    #?(:clj [electric-starter-app.db :as db])))
 
-;; Server wrappers
-(defn get-full-queue* [user-id]
-  #?(:clj (vec (db/get-full-queue user-id)) :cljs nil))
+;; Safe timestamp → LocalDate conversion (works with both java.util.Date and java.sql.Timestamp)
+(defn- ts->local-date [ts]
+  #?(:clj (when ts
+            (.toLocalDate (java.time.LocalDateTime/ofInstant (.toInstant ts) (java.time.ZoneId/systemDefault))))
+     :cljs nil))
 
 ;; Format due date for display
 (defn format-due [next-review-at status]
   #?(:clj
      (cond
        (= status "done") "done"
-       (= status "done") "done"
        (nil? next-review-at) "new"
        :else (let [now (java.time.LocalDate/now)
-                   due (.toLocalDate (.toLocalDateTime next-review-at))
+                   due (ts->local-date next-review-at)
                    days (.between java.time.temporal.ChronoUnit/DAYS now due)]
                (cond
                  (<= days 0) "today"
@@ -29,32 +30,44 @@
                  :else (.format due (java.time.format.DateTimeFormatter/ofPattern "MMM d")))))
      :cljs nil))
 
+;; Badge display for topic kinds
+(defn kind-badge [kind parent-id]
+  (case kind
+    "pdf" ["PDF" "#dcfce7"]
+    "epub" ["EPUB" "#f3e8ff"]
+    ("web" "wikipedia") ["Web" "#e0f2fe"]
+    (if parent-id
+      ["Extract" "#44C2FF"]
+      ["Topic" "#f3e8ff"])))
+
 ;; Prepare queue rows on server (add formatted fields)
 (defn prepare-queue-rows [user-id]
   #?(:clj
      (let [raw (db/get-full-queue user-id)]
        (vec (map (fn [row]
-                   (let [topic-type (:topic_type row)
-                         title (or (:title row) "")
-                         content (or (:content row) "")
-                         display-title (if (= topic-type "extract")
-                                         (util/extract-preview content 80)
-                                         (util/display-name title))]
-                     {:topic-type topic-type
-                      :id (:id row)
+                   (let [kind (:topics/kind row)
+                         parent-id (:topics/parent_id row)
+                         title (or (:topics/title row) "")
+                         content (or (:topics/content row) "")
+                         is-root (nil? parent-id)
+                         display-title (if is-root
+                                         (util/display-name title)
+                                         (let [preview (util/extract-preview content 80)]
+                                           (if (seq preview) preview title)))]
+                     {:id (:topics/id row)
+                      :kind kind
+                      :parent-id parent-id
                       :title title
-                      :priority (:priority row)
-                      :next-review (:next_review_at row)
-                      :status (or (:status row) "active")
-                      :source-type (:source_type row)
-                      :kind (:kind row)
+                      :priority (:topics/priority row)
+                      :next-review (:topics/next_review_at row)
+                      :status (or (:topics/status row) "active")
+                      :source-url (:topics/source_url row)
                       :display-title display-title
-                      :due-label (format-due (:next_review_at row) (or (:status row) "active"))}))
+                      :due-label (format-due (:topics/next_review_at row) (or (:topics/status row) "active"))}))
               raw)))
      :cljs nil))
 
 ;; Compute summary counts on server
-;; NULL next_review_at means "new/unreviewed" = due now (same logic as db/get-learning-queue-count)
 (defn compute-summary [rows]
   #?(:clj
      (let [now (java.time.LocalDate/now)
@@ -65,13 +78,13 @@
         :due-today (count (filter (fn [r]
                                     (and (active? r)
                                       (or (nil? (:next-review r))
-                                        (let [due (.toLocalDate (.toLocalDateTime (:next-review r)))]
+                                        (let [due (ts->local-date (:next-review r))]
                                           (not (.isAfter due now))))))
                             rows))
         :due-week (count (filter (fn [r]
                                    (and (active? r)
                                      (or (nil? (:next-review r))
-                                       (let [due (.toLocalDate (.toLocalDateTime (:next-review r)))]
+                                       (let [due (ts->local-date (:next-review r))]
                                          (not (.isAfter due week-end))))))
                            rows))})
      :cljs nil))
@@ -131,25 +144,13 @@
                       (when item
                         (let [item-status (or (:status item) "active")
                               inactive? (not= item-status "active")
-                              topic-type (:topic-type item)
-                              source-type (:source-type item)
+                              kind (:kind item)
+                              parent-id (:parent-id item)
                               priority (:priority item)
                               due-label (:due-label item)
                               display-title (or (:display-title item) "")
                               id (:id item)
-                            ;; Type badge
-                              item-kind (:kind item)
-                              [badge-text badge-color]
-                              (if (= topic-type "extract")
-                                (if (= item-kind "topic")
-                                  ["Topic" "#f3e8ff"]
-                                  ["Ext" "#44C2FF"])
-                                (case source-type
-                                  "wikipedia" ["Wiki" "#fef3c7"]
-                                  "web" ["Web" "#e0f2fe"]
-                                  "epub" ["EPUB" "#f3e8ff"]
-                                  "topic" ["Topic" "#f3e8ff"]
-                                  ["PDF" "#dcfce7"]))]
+                              [badge-text badge-color] (kind-badge kind parent-id)]
                           (dom/tr
                             (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")
                                                 :opacity (case item-status "done" "0.6" "1")
@@ -179,11 +180,12 @@
                               (dom/text display-title)
                               (dom/On "click"
                                 (fn [_]
-                                  (if (= topic-type "extract")
-                                    (do (reset! !nav-target {:content-item-id id})
-                                      (navigate! :extract))
-                                    (do (reset! !nav-target {:doc-id id})
-                                      (navigate! :learn))))
+                                  (case kind
+                                    ("pdf" "epub")
+                                    (do (reset! !nav-target {:topic-id id :kind kind :title display-title})
+                                      (navigate! :learn))
+                                    (do (reset! !nav-target {:topic-id id})
+                                      (navigate! :extract))))
                                 nil))))))))
                 (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))))
 

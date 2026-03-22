@@ -108,20 +108,24 @@
              :body (json/generate-string {:success false :error (:error result)})}
             (let [{:keys [title chapters]} result
                   display-name (or title filename "Untitled EPUB")
-                  {:keys [doc-id chapter-ids]} (db/save-epub-document user-id display-name bytes (alength bytes) chapters)]
-              (when (and auto-extract? doc-id (seq chapter-ids))
+                  {:keys [topic-id chapter-ids]} (db/create-epub-topic! user-id display-name bytes (alength bytes) chapters)]
+              (when (and auto-extract? topic-id (seq chapter-ids))
                 (try
                   (doseq [[ch-id ch] (map vector chapter-ids chapters)]
                     (when (and ch-id (seq (:html ch)))
                       (when-let [{:keys [sections]} (extractor/extract-and-annotate (:html ch))]
                         (let [clean-sections (mapv #(update % :content cleaner/clean-html) sections)]
                           (doseq [section clean-sections]
-                            (db/save-content-item doc-id 1 "html" (:content section) ch-id))))))
+                            (db/create-topic! {:user-id user-id
+                                               :parent-id ch-id
+                                               :kind "basic"
+                                               :title (or (first (re-find #"[^<]+" (:content section))) "Extract")
+                                               :content (:content section)}))))))
                   (catch Exception e
                     (println "WARN [upload-epub] auto-extract failed:" (.getMessage e)))))
               {:status 200
                :headers {"Content-Type" "application/json"}
-               :body (json/generate-string {:success true :doc_id doc-id})})))
+               :body (json/generate-string {:success true :doc_id topic-id})})))
         {:status 400
          :headers {"Content-Type" "application/json"}
          :body (json/generate-string {:success false :error "No file provided"})})
@@ -139,11 +143,11 @@
   (if-let [user-id (require-auth request)]
     (try
       (let [title (or (get-in request [:params "title"]) "New Topic")
-            {:keys [doc-id content-item-id]} (db/create-empty-topic user-id title)]
-        (if doc-id
+            {:keys [topic-id]} (db/create-standalone-topic! user-id title)]
+        (if topic-id
           {:status 200
            :headers {"Content-Type" "application/json"}
-           :body (json/generate-string {:success true :doc_id doc-id :content_item_id content-item-id})}
+           :body (json/generate-string {:success true :doc_id topic-id})}
           {:status 500
            :headers {"Content-Type" "application/json"}
            :body (json/generate-string {:success false :error "Failed to create topic"})}))
@@ -157,16 +161,17 @@
      :body (json/generate-string {:success false :error "Not authenticated"})}))
 
 (defn get-pdf-handler [request]
-  "Serve PDF file by ID from database."
-  (if-let [user-id (require-auth request)]
+  "Serve PDF file by topic ID from database."
+  (if-let [_user-id (require-auth request)]
     (try
       (let [uri (:uri request)
-            doc-id (-> uri (clojure.string/split #"/") last parse-long)]
-        (if-let [doc (first (db/get-documents-by-id user-id doc-id))]
-          {:status 200
-           :headers {"Content-Type" "application/pdf"
-                     "Content-Disposition" (str "inline; filename=\"" (:documents/filename doc) "\"")}
-           :body (io/input-stream (:documents/file_data doc))}
+            topic-id (-> uri (clojure.string/split #"/") last parse-long)]
+        (if-let [file-row (db/get-topic-file topic-id)]
+          (let [topic (db/get-topic topic-id)]
+            {:status 200
+             :headers {"Content-Type" "application/pdf"
+                       "Content-Disposition" (str "inline; filename=\"" (:topics/title topic) "\"")}
+             :body (io/input-stream (:topic_files/file_data file-row))})
           {:status 404
            :body "PDF not found"}))
       (catch Exception e
@@ -221,11 +226,11 @@
 (defn save-page-text-handler [request]
   (try
     (let [params (:params request)
-          document-id (some-> (get params "document_id") parse-long)
+          parent-id (some-> (get params "document_id") parse-long)
           page-number (some-> (get params "page_number") parse-long)
           html (get params "html")]
-      (if (and document-id page-number html)
-        (let [result (page/save-page-html-impl document-id page-number html)]
+      (if (and parent-id page-number html)
+        (let [result (page/save-page-html-impl parent-id page-number html)]
           {:status (if (:success result) 200 500)
            :headers {"Content-Type" "text/plain"}
            :body (if (:success result) "ok" (str "error: " (:error result)))})
@@ -272,4 +277,4 @@
       (and (= uri "/auth/google/callback") (= method :get))
       (google-callback-handler request)
 
-      :else nil)))  ; return nil to pass through to next middleware
+      :else nil)))

@@ -1,4 +1,5 @@
-{:builds
+{:nrepl {:port 9009}
+ :builds
  {:dev  {:target :browser
          :devtools {:loader-mode :default, :watch-dir "resources/public"}
          :output-dir "resources/public/electric_starter_app/js"

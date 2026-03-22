@@ -1,23 +1,36 @@
 (ns electric-starter-app.content-card-table
   "Unified card table component — virtual-scrolled card list with edit/delete.
-   Supports two query modes:
-     :page    — query by (doc-id, page-number) via get-cards*
-     :extract — query by content-item-id via get-cards-by-extract*"
+   Queries by topic-id (page or extract topic)."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
-   [electric-starter-app.card-components :refer [CardRow get-cards* get-cards-by-extract* rtl-text?]]
-   [electric-starter-app.ocr-modals :refer [EditCardModal]]))
+   [electric-starter-app.card-components :refer [CardRow rtl-text?]]
+   [electric-starter-app.ocr-modals :refer [EditCardModal]]
+   #?(:clj [electric-starter-app.db :as db])))
 
-(e/defn ContentCardTable [{:keys [query-mode doc-id page-number content-item-id card-font-size]} !refresh]
+;; Query wrapper: takes refresh arg to create Electric reactive dependency
+;; For root topics (no parent), fetches ALL descendant cards via get-all-flashcards.
+;; For child topics (extracts, pages), fetches cards for that specific topic.
+(defn get-cards-for-topic* [_refresh topic-id]
+  #?(:clj (try
+            (if-not topic-id
+              {:success true :cards []}
+              (let [topic (db/get-topic topic-id)
+                    is-root? (nil? (:topics/parent_id topic))
+                    cards (if is-root?
+                            (db/get-all-flashcards topic-id)
+                            (db/get-flashcards topic-id))]
+                {:success true :cards cards}))
+            (catch Exception e
+              {:success false :error (.getMessage e)}))
+     :cljs nil))
+
+(e/defn ContentCardTable [{:keys [topic-id card-font-size]} !refresh]
   (e/client
     (let [refresh (e/server (e/watch !refresh))
-          cards-result (e/server
-                         (case query-mode
-                           :page (get-cards* refresh doc-id page-number)
-                           :extract (get-cards-by-extract* refresh content-item-id)))
+          cards-result (e/server (get-cards-for-topic* refresh topic-id))
           !editing-card (atom nil)
           editing-card (e/watch !editing-card)]
 

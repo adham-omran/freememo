@@ -11,20 +11,22 @@
 #?(:clj (defonce !refresh (atom 0)))
 
 ;; Server wrappers — _refresh creates reactive dependency
-(defn get-subset-queue* [_refresh user-id topic-type root-id]
-  #?(:clj (vec (db/get-subset-review-queue user-id topic-type root-id))
+(defn get-subset-queue* [_refresh user-id root-id]
+  #?(:clj (vec (db/get-subset-review-queue user-id root-id))
      :cljs nil))
 
-(defn advance-topic* [topic-type id]
-  #?(:clj (db/advance-topic topic-type id)
-     :cljs nil))
-
-(defn touch-topic* [topic-type id]
-  #?(:clj (db/touch-topic topic-type id)
-     :cljs nil))
+;; Badge display for topic kinds
+(defn kind-badge [kind parent-id]
+  (case kind
+    "pdf" ["PDF" "#dcfce7"]
+    "epub" ["EPUB" "#f3e8ff"]
+    ("web" "wikipedia") ["Web" "#e0f2fe"]
+    (if parent-id
+      ["Extract" "#44C2FF"]
+      ["Topic" "#f3e8ff"])))
 
 ;; Bottom bar — Next button with split behavior (outstanding vs non-outstanding)
-(e/defn SubsetBottomBar [topic-type topic-id outstanding? !queue-idx]
+(e/defn SubsetBottomBar [topic-id outstanding? !queue-idx]
   (e/client
     (dom/div
       (dom/props {:style {:display "flex" :align-items "center" :justify-content "center"
@@ -46,18 +48,17 @@
           (when-some [token ?token]
             (e/server
               (if outstanding?
-                (advance-topic* topic-type topic-id)
-                (touch-topic* topic-type topic-id)))
+                (db/advance-topic! topic-id)
+                (db/touch-topic! topic-id)))
             (token)
             (swap! !queue-idx inc)))))))
 
 ;; Session header — banner, counter, back button
 (e/defn SubsetSessionHeader [item !queue-idx idx total outstanding-remaining root-name on-exit!]
   (e/client
-    (let [topic-type (:topic_type item)
-          is-doc (= topic-type "document")
-          type-label (if is-doc "Doc" "Extract")
-          type-color (if is-doc "#dcfce7" "#44C2FF")
+    (let [kind (:topics/kind item)
+          parent-id (:topics/parent_id item)
+          [type-label type-color] (kind-badge kind parent-id)
           outstanding? (:outstanding? item)]
       (dom/div
         (dom/props {:class "header-bar" :style {:gap "8px"}})
@@ -90,16 +91,16 @@
         (dom/span
           (dom/props {:style {:margin-left "auto" :color "var(--color-text-secondary)" :font-size "13px"}})
           (dom/text (str (inc idx) " / " total
-                         (when (pos? outstanding-remaining)
-                           (str "  (" outstanding-remaining " outstanding)")))))))))
+                      (when (pos? outstanding-remaining)
+                        (str "  (" outstanding-remaining " outstanding)")))))))))
 
-;; Main subset review session
-(e/defn SubsetReviewSession [user-id enc-key topic-type root-id root-name on-exit! llm-enabled?]
+;; Main subset review session — no more topic-type parameter
+(e/defn SubsetReviewSession [user-id enc-key root-id root-name on-exit! llm-enabled?]
   (e/client
     (let [!queue-idx (atom 0)
           idx (e/watch !queue-idx)
           refresh (e/server (e/watch !refresh))
-          queue-vec (e/server (get-subset-queue* refresh user-id topic-type root-id))
+          queue-vec (e/server (get-subset-queue* refresh user-id root-id))
           total (count queue-vec)]
       (dom/div
         (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
@@ -126,10 +127,10 @@
 
           ;; Active topic
           (let [item (nth queue-vec idx nil)
-                topic-type-current (:topic_type item)
-                topic-id (:id item)
+                kind (:topics/kind item)
+                topic-id (:topics/id item)
                 outstanding? (:outstanding? item)
-                is-doc (= topic-type-current "document")
+                show-pdf? (#{"pdf" "epub"} kind)
                 ;; Count remaining outstanding items (from current idx onward)
                 outstanding-remaining (count (filter :outstanding? (subvec queue-vec idx)))]
             (when item
@@ -137,18 +138,18 @@
               (SubsetSessionHeader item !queue-idx idx total outstanding-remaining root-name on-exit!)
 
               ;; Content
-              (if is-doc
+              (if show-pdf?
                 (dom/div
                   (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
                   (dom/div
                     (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                    (let [!nav (atom {:doc-id (:document_id item)})]
+                    (let [!nav (atom {:topic-id topic-id})]
                       (OcrPage user-id enc-key !nav llm-enabled?)))
-                  (SubsetBottomBar topic-type-current topic-id outstanding? !queue-idx))
+                  (SubsetBottomBar topic-id outstanding? !queue-idx))
 
                 (dom/div
                   (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
                   (dom/div
                     (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
                     (ExtractPage user-id enc-key topic-id nil nil llm-enabled?))
-                  (SubsetBottomBar topic-type-current topic-id outstanding? !queue-idx))))))))))
+                  (SubsetBottomBar topic-id outstanding? !queue-idx))))))))))

@@ -1,18 +1,13 @@
 (ns electric-starter-app.contents-page
-  "Contents tab — knowledge tree showing documents → extracts → sub-extracts."
+  "Contents tab — knowledge tree showing topics and sub-topics."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [electric-starter-app.util :as util]
    #?(:clj [electric-starter-app.db :as db])
-   #?(:clj [electric-starter-app.pdf :as pdf])
    #?(:clj [clojure.string :as str])))
 
-;; Server wrappers — _refresh param creates Electric reactive dependency
-(defn get-documents* [_refresh user-id]
-  #?(:clj (vec (:documents (pdf/list-pdfs user-id)))
-     :cljs nil))
-
+;; Server wrapper — _refresh param creates Electric reactive dependency
 (defn get-tree-items* [_refresh user-id]
   #?(:clj (vec (db/get-knowledge-tree user-id))
      :cljs nil))
@@ -20,8 +15,7 @@
 ;; Truncate HTML content to plain text preview
 (defn content-preview [content max-len]
   (when (and content (seq content))
-    (let [;; Strip HTML tags for preview
-          text #?(:cljs (let [tmp (js/document.createElement "div")]
+    (let [text #?(:cljs (let [tmp (js/document.createElement "div")]
                           (set! (.-innerHTML tmp) content)
                           (.-textContent tmp))
                   :clj (clojure.string/replace content #"<[^>]*>" ""))
@@ -30,16 +24,28 @@
                     text)]
       trimmed)))
 
-;; Extract tree node — recursive component
-(e/defn ExtractNode [item children-map depth !nav-target navigate!]
+#?(:clj
+   (defn extract-roots [items]
+     (filterv #(nil? (:topics/parent_id %)) items)))
+
+#?(:clj
+   (defn filter-root-topics [topics filter-text]
+     (if (or (nil? filter-text) (str/blank? filter-text))
+       topics
+       (let [q (str/lower-case (str/trim filter-text))]
+         (filterv #(str/includes? (str/lower-case (or (:topics/title %) "")) q) topics)))))
+
+;; Child topic node — recursive component
+(e/defn TopicChildNode [item children-map depth !nav-target navigate!]
   (e/client
-    (let [id (:content_items/id item)
+    (let [id (:topics/id item)
           children (get children-map id)
           has-children (boolean (seq children))
-          item-status (or (:content_items/status item) "active")
-          item-kind (or (:content_items/kind item) "html")
-          is-topic (= item-kind "topic")
-          preview (content-preview (:content_items/content item) 60)
+          item-status (or (:topics/status item) "active")
+          item-kind (or (:topics/kind item) "basic")
+          preview (or (:topics/title item)
+                    (content-preview (:topics/content item) 60)
+                    "(empty)")
           !expanded (atom false)
           expanded (e/watch !expanded)]
       (dom/div
@@ -60,9 +66,16 @@
               (dom/On "click" (fn [e] (.stopPropagation e) (swap! !expanded not)) nil))
             (dom/span (dom/props {:style {:width "16px" :flex-shrink "0"}})))
           ;; Type badge
-          (dom/span
-            (dom/props {:class "type-badge" :style {:background (if is-topic "#f3e8ff" "#44C2FF")}})
-            (dom/text (if is-topic "Topic" "Ext")))
+          (let [[badge-label badge-color]
+                (case item-kind
+                  "basic" ["Topic" "#f3e8ff"]
+                  ("web" "wikipedia") ["Web" "#e0f2fe"]
+                  "epub" ["EPUB" "#f3e8ff"]
+                  "pdf" ["PDF" "#dcfce7"]
+                  ["Topic" "#f3e8ff"])]
+            (dom/span
+              (dom/props {:class "type-badge" :style {:background badge-color}})
+              (dom/text badge-label)))
           ;; Content preview — click opens
           (dom/span
             (dom/props {:style {:font-size "13px" :color "#333" :cursor "pointer"
@@ -70,57 +83,60 @@
                         :title "Click to open"})
             (dom/On "mouseenter" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "underline")) nil)
             (dom/On "mouseleave" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "none")) nil)
-            (dom/text (or preview "(empty)"))
+            (dom/text preview)
             (dom/On "click"
               (fn [_]
-                (reset! !nav-target {:content-item-id id})
+                (reset! !nav-target {:topic-id id})
                 (navigate! :extract))
               nil))
-          ;; Review button — only for extracts with children
+          ;; Review button — only for nodes with children
           (when has-children
             (dom/button
               (dom/props {:class "btn btn-sm btn-secondary"
                           :style {:padding "2px 6px" :font-size "10px" :flex-shrink "0"}
-                          :title "Review this extract and its children"})
+                          :title "Review this topic and its children"})
               (dom/text "Review")
               (dom/On "click"
                 (fn [e]
                   (.stopPropagation e)
-                  (reset! !nav-target {:subset-review {:topic-type "extract"
-                                                       :root-id id
-                                                       :root-name (or preview "(extract)")}})
+                  (reset! !nav-target {:subset-review {:root-id id
+                                                       :root-name preview}})
                   (navigate! :learn))
                 nil))))
         ;; Children
         (when (and expanded has-children)
-          (e/for-by :content_items/id [child children]
-            (ExtractNode child children-map (inc depth) !nav-target navigate!)))))))
+          (e/for-by :topics/id [child children]
+            (TopicChildNode child children-map (inc depth) !nav-target navigate!)))))))
 
-;; Document root node
-(e/defn DocumentNode [doc items-for-doc !nav-target navigate!]
+;; Root topic node
+(e/defn TopicRootNode [topic children-map !nav-target navigate!]
   (e/client
-    (let [doc-id (:documents/id doc)
-          filename (:documents/filename doc)
-          source-type (or (:documents/source_type doc) "pdf")
-          doc-status (or (:documents/status doc) "active")
-          type-label (case source-type "wikipedia" "Wiki" "web" "Web" "epub" "EPUB" "topic" "Topic" "PDF")
-          type-color (case source-type "wikipedia" "#fef3c7" "web" "#e0f2fe" "epub" "#f3e8ff" "topic" "#f3e8ff" "#dcfce7")
-          ;; Build children map for this document's extracts
-          ;; Topics have a single content_item that IS the topic — don't show it as a child
-          is-topic (= source-type "topic")
-          children-map (group-by :content_items/parent_content_item_id items-for-doc)
-          root-items (when-not is-topic (get children-map nil))
-          has-children (boolean (seq root-items))
+    (let [topic-id (:topics/id topic)
+          title (or (:topics/title topic) "Untitled")
+          kind (or (:topics/kind topic) "basic")
+          topic-status (or (:topics/status topic) "active")
+          type-label (case kind "pdf" "PDF" "web" "Web" "wikipedia" "Web" "epub" "EPUB" "basic" "Topic" "Topic")
+          type-color (case kind "pdf" "#dcfce7" "web" "#e0f2fe" "wikipedia" "#e0f2fe" "epub" "#f3e8ff" "basic" "#f3e8ff" "#f3e8ff")
+          raw-children (get children-map topic-id)
+          ;; For PDFs/EPUBs, flatten through page nodes to show extracts directly
+          children (if (#{"pdf" "epub" "web" "wikipedia"} kind)
+                     (vec (mapcat (fn [child]
+                                    (if (= "page" (:topics/kind child))
+                                      (get children-map (:topics/id child))
+                                      [child]))
+                            raw-children))
+                     raw-children)
+          has-children (boolean (seq children))
           !expanded (atom false)
           expanded (e/watch !expanded)]
       (dom/div
-        ;; Document row
+        ;; Root topic row
         (dom/div
           (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
                               :padding "6px 0" :border-bottom "1px solid #e8e8e8"
-                              :opacity (case doc-status "done" "0.6" "1")
-                              :border-left (when (= doc-status "done") "2px solid #86efac")
-                              :padding-left (when (= doc-status "done") "8px")}})
+                              :opacity (case topic-status "done" "0.6" "1")
+                              :border-left (when (= topic-status "done") "2px solid #86efac")
+                              :padding-left (when (= topic-status "done") "8px")}})
           ;; Arrow
           (if has-children
             (dom/span
@@ -133,43 +149,35 @@
           (dom/span
             (dom/props {:class "type-badge" :style {:background type-color}})
             (dom/text type-label))
-          ;; Filename — click opens
+          ;; Title — click opens
           (dom/span
             (dom/props {:style {:font-size "14px" :font-weight "500" :color "#222" :cursor "pointer"}
                         :title "Click to open"})
             (dom/On "mouseenter" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "underline")) nil)
             (dom/On "mouseleave" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "none")) nil)
-            (dom/text (util/display-name filename))
+            (dom/text (util/display-name title))
             (dom/On "click"
               (fn [_]
-                (reset! !nav-target {:doc-id doc-id})
+                (reset! !nav-target {:topic-id topic-id :kind kind :title title})
                 (navigate! :learn))
               nil))
           ;; Review button
           (dom/button
             (dom/props {:class "btn btn-sm btn-secondary"
                         :style {:padding "2px 8px" :font-size "11px" :flex-shrink "0"}
-                        :title "Review all extracts in this document"})
+                        :title "Review all topics under this document"})
             (dom/text "Review")
             (dom/On "click"
               (fn [e]
                 (.stopPropagation e)
-                (reset! !nav-target {:subset-review {:topic-type "document"
-                                                     :root-id doc-id
-                                                     :root-name filename}})
+                (reset! !nav-target {:subset-review {:root-id topic-id
+                                                     :root-name title}})
                 (navigate! :learn))
               nil)))
-        ;; Children (extracts)
+        ;; Children
         (when (and expanded has-children)
-          (e/for-by :content_items/id [item root-items]
-            (ExtractNode item children-map 1 !nav-target navigate!)))))))
-
-#?(:clj
-   (defn filter-tree-docs [docs filter-text]
-     (if (or (nil? filter-text) (str/blank? filter-text))
-       docs
-       (let [q (str/lower-case (str/trim filter-text))]
-         (filterv #(str/includes? (str/lower-case (or (:documents/filename %) "")) q) docs)))))
+          (e/for-by :topics/id [child children]
+            (TopicChildNode child children-map 1 !nav-target navigate!)))))))
 
 ;; Document tree view — used by LibraryPage
 ;; Receives !refresh and filter-text from parent
@@ -177,16 +185,16 @@
   (e/client
     (e/server
       (let [refresh (e/watch !refresh)
-            all-documents (get-documents* refresh user-id)
-            documents (filter-tree-docs all-documents filter-text)
-            all-items (get-tree-items* refresh user-id)]
+            all-items (get-tree-items* refresh user-id)
+            all-roots (extract-roots all-items)
+            roots (filter-root-topics all-roots filter-text)]
         (e/client
-          (let [items-by-doc (group-by :content_items/document_id all-items)]
-            (if (seq documents)
+          (let [children-map (group-by :topics/parent_id all-items)]
+            (if (seq roots)
               (dom/div
                 (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
-                (e/for-by :documents/id [doc documents]
-                  (DocumentNode doc (get items-by-doc (:documents/id doc)) !nav-target navigate!)))
+                (e/for-by :topics/id [topic roots]
+                  (TopicRootNode topic children-map !nav-target navigate!)))
               (dom/p
                 (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
                 (dom/text "No content yet. Import content from the Import tab.")))))))))
@@ -201,14 +209,14 @@
         (dom/props {:style {:margin "0 0 16px 0" :font-size "20px"}})
         (dom/text "Contents"))
 
-      (let [documents (e/server (get-documents* 0 user-id))
-            all-items (e/server (get-tree-items* 0 user-id))
-            items-by-doc (group-by :content_items/document_id all-items)]
-        (if (seq documents)
+      (let [all-items (e/server (get-tree-items* 0 user-id))
+            children-map (group-by :topics/parent_id all-items)
+            roots (get children-map nil)]
+        (if (seq roots)
           (dom/div
             (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
-            (e/for-by :documents/id [doc documents]
-              (DocumentNode doc (get items-by-doc (:documents/id doc)) !nav-target navigate!)))
+            (e/for-by :topics/id [topic roots]
+              (TopicRootNode topic children-map !nav-target navigate!)))
           (dom/p
             (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
-            (dom/text "No content yet. Import a document, then extract content items for study.")))))))
+            (dom/text "No content yet. Import a document, then extract content for study.")))))))

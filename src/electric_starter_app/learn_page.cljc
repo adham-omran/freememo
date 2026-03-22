@@ -29,20 +29,30 @@
   #?(:clj (vec (db/get-inactive-topics user-id))
      :cljs nil))
 
-(defn restore-topic* [topic-type id]
-  #?(:clj (db/restore-topic topic-type id)
-     :cljs nil))
+;; Badge display for topic kinds
+(defn kind-badge [kind parent-id]
+  (case kind
+    "pdf" ["PDF" "#dcfce7"]
+    "epub" ["EPUB" "#f3e8ff"]
+    ("web" "wikipedia") ["Web" "#e0f2fe"]
+    (if parent-id
+      ["Extract" "#44C2FF"]
+      ["Topic" "#f3e8ff"])))
 
-(defn delete-content-item* [id]
-  #?(:clj (db/delete-content-item id)
-     :cljs nil))
+(e/defn LearnBrowseTopic [user-id enc-key topic-id title !mode llm-enabled?]
+  (e/client
+    (let [exists? (e/server (some? (db/get-topic topic-id)))]
+      (if exists?
+        (dom/div
+          (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
+          (ExtractPage user-id enc-key topic-id
+            (fn
+              ([_tab] (reset! !mode :overview))
+              ([_tab _nav] (reset! !mode :overview)))
+            nil llm-enabled?))
+        (do (reset! !mode :overview) nil)))))
 
-(defn get-topic-content-item-id* [doc-id]
-  #?(:clj (when doc-id
-            (:content_items/id (first (db/get-content-items doc-id 1))))
-     :cljs nil))
-
-(e/defn LearnBrowseTopic [user-id enc-key doc-id filename !mode llm-enabled?]
+(e/defn LearnBrowseDoc [user-id enc-key nav title !mode llm-enabled?]
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
@@ -54,39 +64,11 @@
           (dom/On "click" (fn [_] (reset! !mode :overview)) nil))
         (dom/span
           (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
-          (dom/text (str "Browsing: " (or filename "topic")))))
-      (dom/div
-        (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-        (let [ci-id (e/server (get-topic-content-item-id* doc-id))]
-          (ExtractPage user-id enc-key ci-id
-            (fn [_tab] (reset! !mode :overview))
-            nil
-            llm-enabled?))))))
-
-(e/defn LearnBrowseDoc [user-id enc-key nav filename !mode llm-enabled?]
-  (e/client
-    (dom/div
-      (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-      (dom/div
-        (dom/props {:class "header-bar" :style {:gap "12px"}})
-        (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary"})
-          (dom/text "Back to Overview")
-          (dom/On "click" (fn [_] (reset! !mode :overview)) nil))
-        (dom/span
-          (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
-          (dom/text (str "Browsing: " (or filename "document")))))
+          (dom/text (str "Browsing: " (or title "document")))))
       (dom/div
         (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
         (let [!nav (atom nav)]
           (OcrPage user-id enc-key !nav llm-enabled?))))))
-
-(defn get-doc-source-type* [user-id doc-id]
-  #?(:clj (when doc-id
-            (or (:documents/source_type
-                 (first (db/get-documents-by-id user-id doc-id)))
-              "pdf"))
-     :cljs nil))
 
 (e/defn LearnOverview [user-id !mode navigate!]
   (e/client
@@ -108,11 +90,11 @@
               (dom/On "click" (fn [_] (reset! !mode :session)) nil)))
           (dom/span
             (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}
-                        :title "Documents and extracts scheduled for review"})
+                        :title "Topics scheduled for review"})
             (dom/text (str due-count " topics due"))))
 
         (if (pos? due-count)
-          ;; Top 10 due topics (lightweight preview, not the full queue)
+          ;; Top 10 due topics
           (let [items-vec (e/server (get-learning-queue* refresh user-id))
                 item-count (e/server (count items-vec))
                 display-limit 10
@@ -135,17 +117,18 @@
                 (e/for-by identity [i (e/server (vec (range (min display-limit item-count))))]
                   (let [item (e/server (nth items-vec i nil))]
                     (when item
-                      (let [topic-type (e/server (:topic_type item))
-                            filename (e/server (or (:filename item) "-"))
-                            content (e/server (or (:content item) ""))
-                            priority (e/server (or (:priority item) 50))
-                            interval (e/server (or (:interval_days item) 1.0))
-                            is-doc (= topic-type "document")
-                            display-title (if is-doc
-                                            (util/display-name filename)
-                                            (util/extract-preview content 80))
-                            type-label (if is-doc "Doc" "Extract")
-                            type-color (if is-doc "#dcfce7" "#44C2FF")
+                      (let [kind (e/server (:topics/kind item))
+                            parent-id (e/server (:topics/parent_id item))
+                            title (e/server (or (:topics/title item) "-"))
+                            content (e/server (or (:topics/content item) ""))
+                            priority (e/server (or (:topics/priority item) 50))
+                            interval (e/server (or (:topics/interval_days item) 1.0))
+                            is-root (nil? parent-id)
+                            display-title (if is-root
+                                            (util/display-name title)
+                                            (let [preview (util/extract-preview content 80)]
+                                              (if (seq preview) preview title)))
+                            [type-label type-color] (kind-badge kind parent-id)
                             due-str (cond
                                       (< interval 1.0) (str (int (* interval 24)) "h")
                                       (= interval 1.0) "1d"
@@ -201,15 +184,16 @@
             (when (and show-inactive (seq inactive))
               (dom/div
                 (dom/props {:style {:margin-top "8px"}})
-                (e/for-by :id [item inactive]
-                  (let [topic-type (:topic_type item)
-                        item-id (:id item)
-                        raw-title (or (:title item) "-")
-                        title (if (= topic-type "extract")
+                (e/for-by :topics/id [item inactive]
+                  (let [item-id (:topics/id item)
+                        kind (:topics/kind item)
+                        parent-id (:topics/parent_id item)
+                        raw-title (or (:topics/title item) "-")
+                        title (if parent-id
                                 (util/extract-preview raw-title 80)
                                 (util/display-name raw-title))
-                        item-status (or (:status item) "done")
-                        type-label (if (= topic-type "document") "Doc" "Extract")]
+                        item-status (or (:topics/status item) "done")
+                        [type-label type-color] (kind-badge kind parent-id)]
                     (dom/div
                       (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
                                           :padding "8px 10px" :border-bottom "1px solid #f0f0f0"}})
@@ -220,8 +204,7 @@
                                             :color (if (= item-status "done") "#16a34a" "#6b7280")}})
                         (dom/text item-status))
                       (dom/span
-                        (dom/props {:class "type-badge" :style {:padding "2px 8px"
-                                                                :background (if (= topic-type "document") "#dcfce7" "#44C2FF")}})
+                        (dom/props {:class "type-badge" :style {:padding "2px 8px" :background type-color}})
                         (dom/text type-label))
                       (dom/span
                         (dom/props {:style {:flex "1" :font-size "13px" :overflow "hidden"
@@ -230,12 +213,11 @@
                       ;; Restore button
                       (dom/button
                         (dom/props {:class "btn btn-sm btn-primary" :style {:padding "3px 10px" :font-size "12px"}})
-
                         (dom/text "Restore")
                         (let [event (dom/On "click" (fn [_] :restore) nil)
                               [?token _] (e/Token event)]
                           (when-some [token ?token]
-                            (e/server (restore-topic* topic-type item-id))
+                            (e/server (db/restore-topic! item-id))
                             (e/server (swap! !refresh inc))
                             (token))))
                       ;; Delete button
@@ -268,14 +250,12 @@
                                 (let [event (dom/On "click" (fn [_] :confirmed) nil)
                                       [?token _] (e/Token event)]
                                   (when-some [token ?token]
-                                    (let [note-ids (e/server
-                                                     (if (= topic-type "document")
-                                                       (db/get-anki-note-ids-for-document item-id)
-                                                       (db/get-anki-note-ids-for-content-item item-id)))]
-                                      (e/server
-                                        (if (= topic-type "document")
-                                          (db/delete-document user-id item-id)
-                                          (db/delete-content-item item-id)))
+                                    (let [is-root (nil? parent-id)
+                                          note-ids (e/server
+                                                     (if is-root
+                                                       (db/get-all-anki-note-ids item-id)
+                                                       (db/get-anki-note-ids item-id)))]
+                                      (e/server (db/delete-topic! item-id))
                                       (e/server (swap! !refresh inc))
                                       (e/client (card-components/try-delete-anki-notes! note-ids))
                                       (reset! !show-confirm-delete false)
@@ -296,7 +276,7 @@
       (when (= nav-val :start-session)
         (reset! !mode :session)
         (reset! !nav-target nil))
-      (when (and (map? nav-val) (:doc-id nav-val))
+      (when (and (map? nav-val) (:topic-id nav-val))
         (reset! !browse-nav nav-val)
         (reset! !mode :browse)
         (reset! !nav-target nil))
@@ -311,24 +291,26 @@
 
         :browse
         (when browse-nav
-          (let [doc-id (:doc-id browse-nav)
-                source-type (e/server (get-doc-source-type* user-id doc-id))
-                filename (e/server (:documents/filename (first (db/get-documents-by-id user-id doc-id))))]
-            (case source-type
-              "topic" (LearnBrowseTopic user-id enc-key doc-id filename !mode llm-enabled?)
-              (LearnBrowseDoc user-id enc-key browse-nav filename !mode llm-enabled?))))
+          (let [topic-id (:topic-id browse-nav)
+                kind (:kind browse-nav)
+                title (:title browse-nav)]
+            (case kind
+              ("pdf" "epub") (LearnBrowseDoc user-id enc-key
+                               {:topic-id topic-id :page (:page browse-nav)}
+                               title !mode llm-enabled?)
+              (LearnBrowseTopic user-id enc-key topic-id title !mode llm-enabled?))))
 
         :session
         (let [refresh (e/server (e/watch !refresh))
               queue-vec (e/server (get-learning-queue* refresh user-id))]
           (LearnSession user-id enc-key queue-vec !queue-idx !mode !refresh !nav-target navigate-to-extract!
-            (fn [doc-id page]
-              (reset! !browse-nav {:doc-id doc-id :page page})
+            (fn [topic-id page & [kind]]
+              (reset! !browse-nav {:topic-id topic-id :kind (or kind "pdf") :title nil :page page})
               (reset! !mode :browse))
             llm-enabled?))
 
         :subset-review
-        (when-let [{:keys [topic-type root-id root-name]} (e/watch !subset-state)]
-          (SubsetReviewSession user-id enc-key topic-type root-id root-name
+        (when-let [{:keys [root-id root-name]} (e/watch !subset-state)]
+          (SubsetReviewSession user-id enc-key root-id root-name
             (fn [] (navigate! :library))
             llm-enabled?))))))

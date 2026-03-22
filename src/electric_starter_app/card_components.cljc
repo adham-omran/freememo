@@ -10,17 +10,6 @@
 (defn rtl-text? [text]
   (boolean (and text (re-find #"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF]" text))))
 
-;; Query wrapper: takes refresh arg to create Electric reactive dependency
-;; Plain defn visible on both CLJ and CLJS — callers wrap in e/server
-(defn get-cards* [_refresh document-id page-number]
-  #?(:clj (cards/get-cards document-id page-number)
-     :cljs nil))
-
-;; Query wrapper for extract-level cards
-(defn get-cards-by-extract* [_refresh content-item-id]
-  #?(:clj (cards/get-cards-by-content-item content-item-id)
-     :cljs nil))
-
 (defn try-delete-anki-notes!
   "Fire-and-forget: attempt to delete notes from Anki. Silently ignores errors."
   [note-ids]

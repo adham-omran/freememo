@@ -6,25 +6,22 @@
 
 (defn save-pdf [user-id filename file-bytes]
   (try
-    (let [file-size (alength file-bytes)
-          mime-type "application/pdf"]
+    (let [file-size (alength file-bytes)]
       ;; Validate file size (100MB limit matching WebSocket config)
       (when (> file-size (* 100 1024 1024))
         (throw (ex-info "File too large" {:size file-size})))
 
-      ;; Save to database and create page stubs
-      (let [result     (db/save-document user-id filename file-bytes file-size mime-type)
-            doc-id     (:documents/id (first result))
-            page-count (ocr/get-page-count file-bytes)]
-        (db/create-page-stubs doc-id page-count)
-        {:success true :id doc-id}))
+      (let [page-count (ocr/get-page-count file-bytes)
+            topic (db/create-pdf-topic! user-id filename file-bytes file-size page-count)
+            topic-id (:topics/id topic)]
+        {:success true :id topic-id}))
     (catch Exception e
       (println "ERROR [save-pdf]:" (.getMessage e))
       {:success false :error (str "Failed to save PDF: " (.getMessage e))})))
 
 (defn list-pdfs [user-id]
   (try
-    (let [docs (db/get-documents user-id)]
+    (let [docs (db/get-root-topics user-id)]
       {:success true :documents docs})
     (catch Exception e
       (println "ERROR [list-pdfs]:" (.getMessage e))
@@ -32,7 +29,7 @@
 
 (defn delete-pdf [user-id id]
   (try
-    (db/delete-document user-id id)
+    (db/delete-topic-for-user! user-id id)
     {:success true}
     (catch Exception e
       (println "ERROR [delete-pdf]:" (.getMessage e))
