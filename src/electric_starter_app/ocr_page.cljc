@@ -3,46 +3,48 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window]]
-   [contrib.data :refer [clamp-left]]
    [electric-starter-app.pdf-viewer-component :refer [PdfViewerComponent]]
    [electric-starter-app.rich-text-editor-component :refer [RichTextEditorComponent]]
    [electric-starter-app.rich-text-editor :as editor]
    [electric-starter-app.components :refer [Typeahead]]
    [electric-starter-app.anki-sync :refer [AnkiSyncButton]]
    [electric-starter-app.ocr-modals :refer [ExportModal PromptDialog EditCardModal AddCardModal]]
-   [electric-starter-app.card-components :refer [CardRow get-cards*]]
    [electric-starter-app.content-toolbar :refer [ContentToolbar]]
    [electric-starter-app.content-card-table :refer [ContentCardTable]]
    #?(:clj [electric-starter-app.page :as page])
-   #?(:clj [electric-starter-app.pdf :as pdf])
    #?(:clj [electric-starter-app.cards :as cards])
    #?(:clj [electric-starter-app.settings :as settings])
    [electric-starter-app.keyboard :as keyboard]
    #?(:clj [electric-starter-app.db :as db])))
 
 #?(:clj (defonce !refresh (atom 0))) ; Server-side refresh trigger
-#?(:clj (defonce !scanning-pages (atom #{}))) ; #{[doc-id page-num]} currently scanning via OCR
-#?(:clj (defonce !ocr-errors (atom {}))) ; {[doc-id page-num] "error message"}
+#?(:clj (defonce !scanning-pages (atom #{}))) ; #{[root-topic-id page-num]} currently scanning via OCR
+#?(:clj (defonce !ocr-errors (atom {}))) ; {[root-topic-id page-num] "error message"}
 #?(:cljs (defonce !scanning-client? (atom false))) ; Client-side flag: set true immediately on click to prevent rapid re-clicks before server state round-trips
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
-#?(:clj (defn get-page-text* [_refresh document-id page-number]
-          (page/get-page-text document-id page-number)))
+#?(:clj (defn get-page-text* [_refresh parent-id page-number]
+          (page/get-page-text parent-id page-number)))
 
 ;; Query wrapper for page done status
-#?(:clj (defn get-page-done-status* [_refresh document-id page-number]
-          (db/get-page-done-status document-id page-number)))
+#?(:clj (defn get-page-done-status* [_refresh parent-id page-number]
+          (db/get-page-done-status parent-id page-number)))
 
 ;; Page completion stats for a document
-#?(:clj (defn get-page-stats* [_refresh document-id]
-          (let [pages (db/list-pages document-id)]
-            {:done (count (filter :pages/is_done pages))
+#?(:clj (defn get-page-stats* [_refresh parent-id]
+          (let [pages (db/list-pages parent-id)]
+            {:done (count (filter #(= "done" (:topics/status %)) pages))
              :total (count pages)})))
 
-;; Query wrapper for document source reference
-#?(:clj (defn get-document-source* [_refresh document-id]
-          (db/get-document-source document-id)))
+;; Query wrapper for topic source reference
+#?(:clj (defn get-topic-source* [_refresh topic-id]
+          (db/get-topic-source topic-id)))
+
+;; Resolve page topic ID from (parent-id, page-number) — needed for card operations
+#?(:clj (defn get-page-topic-id* [_refresh parent-id page-number]
+          (when (and parent-id page-number)
+            (let [pages (db/list-pages parent-id)]
+              (:topics/id (first (filter #(= (:topics/page_number %) page-number) pages)))))))
 
 ;; Drag helper for split-pane dividers (PointerEvent API — works for mouse, touch, and stylus)
 (defn start-drag!
@@ -77,22 +79,22 @@
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-      (let [docs-result (e/server (pdf/list-pdfs user-id))
+      (let [root-topics (e/server (db/get-root-topics user-id))
             last-doc-id (e/server (settings/get-last-document user-id))
             refresh (e/server (e/watch !refresh))
-            documents (:documents docs-result)
-            valid-last-doc (when (some #(= (:documents/id %) last-doc-id) documents)
+            ;; Find valid last doc among root topics
+            valid-last-doc (when (some #(= (:topics/id %) last-doc-id) root-topics)
                              last-doc-id)
-            doc-by-name (into {} (map (fn [d] [(:documents/filename d) (:documents/id d)]) documents))
-            id-to-name (into {} (map (fn [d] [(:documents/id d) (:documents/filename d)]) documents))
-            source-by-id (into {} (map (fn [d] [(:documents/id d) (or (:documents/source_type d) "pdf")]) documents))
-            filenames (mapv :documents/filename documents)
-            last-doc-name (some #(when (= (:documents/id %) valid-last-doc) (:documents/filename %)) documents)
+            ;; Build lookup maps using topic fields
+            doc-by-name (into {} (map (fn [t] [(:topics/title t) (:topics/id t)]) root-topics))
+            id-to-name (into {} (map (fn [t] [(:topics/id t) (:topics/title t)]) root-topics))
+            kind-by-id (into {} (map (fn [t] [(:topics/id t) (or (:topics/kind t) "basic")]) root-topics))
+            filenames (mapv :topics/title root-topics)
+            last-doc-name (some #(when (= (:topics/id %) valid-last-doc) (:topics/title %)) root-topics)
             !selected-name (atom last-doc-name)
             selected-name (e/watch !selected-name)
             selected-doc (get doc-by-name selected-name)
-            is-pdf (= (get source-by-id selected-doc) "pdf")
-            ocr-source-ref (e/server (when selected-doc (db/get-document-source selected-doc)))
+            is-pdf (= (get kind-by-id selected-doc) "pdf")
             !doc-commit (atom nil)
             doc-commit (e/watch !doc-commit)
             [?commit-token _] (e/Token doc-commit)
@@ -106,8 +108,8 @@
                            (get-page-stats* refresh selected-doc)))]
 
         ;; Handle navigation from Queue tab — only consume after doc-name resolves
-        (when-some [{:keys [doc-id page]} nav-target]
-          (when-some [doc-name (get id-to-name doc-id)]
+        (when-some [{:keys [topic-id page]} nav-target]
+          (when-some [doc-name (get id-to-name topic-id)]
             (reset! !nav-specified true)
             (reset! !selected-name doc-name)
             (reset! !doc-commit doc-name)
@@ -123,7 +125,7 @@
 
         (cond
           ;; Success with documents
-          (and (:success docs-result) (seq documents))
+          (seq root-topics)
           (when-not (e/watch !nav-specified)
             (dom/div
               (dom/props {:style {:flex-shrink "0" :padding "8px 0"
@@ -136,17 +138,11 @@
                   (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)" :white-space "nowrap" :margin-right "var(--sp-2)"}})
                   (dom/text (:done page-stats) " / " (:total page-stats) " pages done")))))
 
-          ;; Success but no documents
-          (:success docs-result)
+          ;; No documents
+          :else
           (dom/div
             (dom/props {:style {:padding "8px 0"}})
-            (dom/p (dom/text "No documents yet. Go to the Documents tab to upload a PDF, paste an article, or import a URL.")))
-
-          ;; Error case
-          :else
-          (dom/p
-            (dom/props {:style {:color "red"}})
-            (dom/text "Error loading documents: " (or (:error docs-result) "Unknown error"))))
+            (dom/p (dom/text "No documents yet. Go to the Documents tab to upload a PDF, paste an article, or import a URL."))))
 
         ;; Main content (shows when document is selected)
         (when selected-doc
@@ -161,37 +157,29 @@
                 ;; Bridge current-pdf-page via atom so it's available at outer scope
                 !current-page (atom 1)
                 current-pdf-page (e/watch !current-page)
-                ;; Pre-prompt state (session-persistent)
-                !pre-prompt (atom "")
-                !show-prompt-dialog (atom false)
-                show-prompt-dialog (e/watch !show-prompt-dialog)
-                !prompt-dialog-kind (atom nil)
-                prompt-dialog-kind (e/watch !prompt-dialog-kind)
-                !captured-selection (atom nil)
-                captured-selection (e/watch !captured-selection)
-                ;; Generation queue — {:queue [...] :active nil-or-request :error nil}
-                !gen-state (atom {:queue [] :active nil :error nil})
-                gen-state (e/watch !gen-state)
-                ;; Prompt generation queue (same shape)
-                !prompt-gen-state (atom {:queue [] :active nil :error nil})
-                prompt-gen-state (e/watch !prompt-gen-state)
+                ;; Resolve page topic ID for card operations
+                page-topic-id (e/server (get-page-topic-id* refresh selected-doc current-pdf-page))
                 ;; User settings
                 scan-dpi (e/server (settings/get-scan-dpi user-id))
                 card-font-size (e/server (settings/get-card-font-size user-id))
                 ;; Extraction tracking — server-side for true parallelism
                 scanning-pages (e/server (e/watch !scanning-pages))
                 ocr-errors (e/server (e/watch !ocr-errors))
-                ;; Shared server data — hoisted so both editor and bottom panel can use them
-                ;; Guard: only save page-level edits (content-item-id nil), not extract-level
+                ;; Auto-save: one-way editor → DB. Don't clear !dirty-html, don't bump !refresh.
                 dirty-data (e/watch editor/!dirty-html)
+                !last-saved-ocr (atom nil)
                 save-result (when (and (some? dirty-data)
-                                    (nil? (:content-item-id dirty-data)))
+                                    (= (:topic-id dirty-data) page-topic-id)
+                                    (not= (:html dirty-data) (e/watch !last-saved-ocr)))
                               (e/server
                                 (e/Offload
-                                  #(page/save-page-html-impl
-                                     (:doc-id dirty-data)
-                                     (:page dirty-data)
-                                     (:html dirty-data)))))
+                                  #(try
+                                     (db/update-topic-content! (:topic-id dirty-data) (:html dirty-data))
+                                     {:success true}
+                                     (catch Exception e
+                                       {:success false :error (.getMessage e)})))))
+                _ (when (:success save-result)
+                    (reset! !last-saved-ocr (:html dirty-data)))
                 text-result (e/server (get-page-text* refresh selected-doc current-pdf-page))
                 page-text (e/server (when (:success text-result) (:text text-result)))
                 is-done (e/server (get-page-done-status* refresh selected-doc current-pdf-page))]
@@ -249,7 +237,7 @@
                                                nil)
                                 [?token ?error] (e/Token change-event)]
                             (when-some [token ?token]
-                              (e/server (db/toggle-page-done selected-doc (:page change-event)))
+                              (e/server (db/toggle-page-done! selected-doc (:page change-event)))
                               (e/server (swap! !refresh inc))
                               (token)))))
                       (dom/text "Done"))
@@ -335,7 +323,7 @@
                               2000))))))
 
                   ;; Source reference — collapsed to compact editable field in page header
-                  (let [current-source (e/server (get-document-source* refresh selected-doc))
+                  (let [current-source (e/server (get-topic-source* refresh selected-doc))
                         !editing-source (atom false)
                         editing-source (e/watch !editing-source)]
                     (if editing-source
@@ -358,7 +346,7 @@
                             (let [event (dom/On "change" #(-> % .-target .-value) nil)
                                   [?token _] (e/Token event)]
                               (when-some [token ?token]
-                                (e/server (db/update-document-source selected-doc event))
+                                (e/server (db/update-topic-source! selected-doc event))
                                 (e/server (swap! !refresh inc))
                                 (token)
                                 (reset! !editing-source false)))))
@@ -385,8 +373,7 @@
                       (dom/div
                         (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
                         (RichTextEditorComponent {:initial-html (:text text-result)
-                                                  :page-number current-pdf-page
-                                                  :doc-id selected-doc}))
+                                                  :topic-id page-topic-id}))
                       (dom/p
                         (dom/props {:style {:color "gray"}})
                         (dom/text "No text scanned yet. Click 'Scan Page' to process this page."))))))
@@ -403,20 +390,15 @@
 
                 (ContentToolbar {:user-id user-id
                                  :enc-key enc-key
-                                 :doc-id selected-doc
+                                 :topic-id page-topic-id
+                                 :root-topic-id selected-doc
                                  :page-number current-pdf-page
                                  :content-text page-text
-                                 :content-item-id nil
                                  :context-mode :page
                                  :context-tooltip "Include context for better cards. With a selection: current page + N previous pages. Without: N previous pages."
                                  :llm-enabled? llm-enabled?}
                   !refresh)
 
-                (ContentCardTable {:query-mode :page
-                                   :doc-id selected-doc
-                                   :page-number current-pdf-page
+                (ContentCardTable {:topic-id page-topic-id
                                    :card-font-size card-font-size}
                   !refresh)))))))))
-
-;; Old inline toolbar + card table code was here — removed, now uses shared ContentToolbar + ContentCardTable
-(comment "dead code removed")

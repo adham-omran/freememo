@@ -23,13 +23,13 @@
 
 (defn get-cards-for-sync
   "Get flashcards for Anki sync.
-   opts: {:document-id N, :page-number N-or-nil}
-   When page-number is nil, returns all cards for the document."
-  [{:keys [document-id page-number]}]
+   opts: {:topic-id N, :root-topic-id N}
+   When topic-id is nil, returns all cards for the root topic."
+  [{:keys [topic-id root-topic-id]}]
   (try
-    (let [cards (if page-number
-                  (db/get-flashcards document-id page-number)
-                  (db/get-all-flashcards document-id))]
+    (let [cards (if topic-id
+                  (db/get-flashcards topic-id)
+                  (db/get-all-flashcards root-topic-id))]
       {:success true :cards cards})
     (catch Exception e
       (println "ERROR [get-cards-for-sync]:" (.getMessage e))
@@ -61,11 +61,11 @@
                      answer   (assoc :answer answer)
                      cloze    (assoc :cloze cloze))]
         (when (seq fields)
-          (db/update-flashcard card-id fields)
+          (db/update-flashcard! card-id fields)
           (db/mark-anki-synced card-id))))
     (when (seq deleted-card-ids)
       (doseq [id deleted-card-ids]
-        (db/delete-flashcard id)))
+        (db/delete-flashcard! id)))
     {:success true :count (count updates) :deleted (count (or deleted-card-ids []))}
     (catch Exception e
       (println "ERROR [apply-pull-updates]:" (.getMessage e))

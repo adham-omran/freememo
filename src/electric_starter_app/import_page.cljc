@@ -13,15 +13,13 @@
 (defn format-timestamp* [ts]
   #?(:clj (when ts
             (let [fmt (java.time.format.DateTimeFormatter/ofPattern "MMM d, yyyy")
-                  instant (if (instance? java.sql.Timestamp ts)
-                            (.toInstant ts)
-                            (.toInstant ts))
+                  instant (.toInstant ts)
                   ldt (java.time.LocalDateTime/ofInstant instant (java.time.ZoneId/systemDefault))]
               (.format ldt fmt)))
      :cljs nil))
 
-(defn save-web-document* [user-id title html source-type source-url]
-  #?(:clj (db/save-web-document user-id title (cleaner/clean-html html) source-type source-url)
+(defn create-web-topic* [user-id title html source-url]
+  #?(:clj (db/create-web-topic! user-id title (cleaner/clean-html html) source-url)
      :cljs nil))
 
 (defn clean-html* [html]
@@ -34,9 +32,9 @@
 
 (defn try-auto-extract*
   "Best-effort auto-extract: segments HTML into topics, highlights section headings
-   in the page HTML, and batch-inserts content items. Returns nil.
+   in the topic HTML, and batch-inserts child topics. Returns nil.
    Logs and swallows errors so the import still succeeds."
-  [document-id page-number html]
+  [topic-id html]
   #?(:clj (try
             (let [start (System/currentTimeMillis)
                   result (extractor/extract-and-annotate html)
@@ -46,12 +44,12 @@
                       clean-sections (mapv #(update % :content cleaner/clean-html) sections)]
                   (println (str "INFO [import] auto-extract: " (count clean-sections)
                              " topics in " elapsed "ms"))
-                  ;; Save content items
+                  ;; Save child topics
                   (when (seq clean-sections)
-                    (db/batch-create-content-items document-id page-number clean-sections))
-                  ;; Update page text with highlighted HTML (bypasses cleaner — Quill-compatible)
+                    (db/batch-create-topics! topic-id clean-sections))
+                  ;; Update topic content with highlighted HTML
                   (when annotated-html
-                    (db/save-page-text document-id page-number annotated-html))))
+                    (db/update-topic-content! topic-id annotated-html))))
               nil)
             (catch Exception e
               (println "WARN [import] auto-extract failed:" (.getMessage e))
@@ -162,20 +160,19 @@
                         url-val (:url event)
                         ae? (:auto-extract event)]
                     (if (and (seq title-val) (seq html-val))
-                      (let [doc-id (e/server
-                                     (let [did (save-web-document* user-id title-val html-val "web"
-                                                 (when (seq url-val) url-val))]
-                                       (when (and ae? did)
-                                         (try-auto-extract*
-                                           did 1
-                                           ;; Use the cleaned HTML (same as what save-web-document stored)
-                                           (clean-html* html-val)))
-                                       did))]
-                        (if doc-id
+                      (let [topic-id (e/server
+                                       (let [tid (create-web-topic* user-id title-val html-val
+                                                   (when (seq url-val) url-val))]
+                                         (when (and ae? tid)
+                                           (try-auto-extract*
+                                             tid
+                                             (clean-html* html-val)))
+                                         tid))]
+                        (if topic-id
                           (do (e/server (swap! !refresh inc))
                             (token)
                             (reset! !show false)
-                            (reset! !nav-target {:doc-id doc-id})
+                            (reset! !nav-target {:topic-id topic-id})
                             (navigate! :learn))
                           (token "Failed to save article")))
                       (token "Title and content are required"))))))))))))
@@ -244,19 +241,18 @@
                                        (if (:success fetch-result)
                                          (let [raw-html (:html fetch-result)
                                                title (:title fetch-result)
-                                               did (save-web-document* user-id title raw-html
-                                                     (:source-type fetch-result) (:url fetch-result))]
-                                           (when (and ae? did)
-                                            ;; raw-html is already cleaned by fetch-url*
-                                             (try-auto-extract* did 1 raw-html))
-                                           {:success true :doc-id did})
+                                               tid (create-web-topic* user-id title raw-html
+                                                     (:url fetch-result))]
+                                           (when (and ae? tid)
+                                             (try-auto-extract* tid raw-html))
+                                           {:success true :topic-id tid})
                                          {:success false :error (:error fetch-result)})))]
                         (if (:success result)
-                          (if (:doc-id result)
+                          (if (:topic-id result)
                             (do (e/server (swap! !refresh inc))
                               (token)
                               (reset! !show false)
-                              (reset! !nav-target {:doc-id (:doc-id result)})
+                              (reset! !nav-target {:topic-id (:topic-id result)})
                               (navigate! :learn))
                             (token "Failed to save article"))
                           (token (:error result))))
@@ -295,7 +291,7 @@
                                  (reset! !uploading false)
                                  (if (.-success data)
                                    (do (reset! !show false)
-                                     (reset! !nav-target {:doc-id (.-doc_id data)})
+                                     (reset! !nav-target {:topic-id (or (.-topic_id data) (.-doc_id data)) :kind "pdf"})
                                      (navigate! :learn))
                                    (js/alert (or (.-error data) "PDF upload failed")))))
                         (.catch (fn [err]
@@ -380,7 +376,7 @@
                                  (reset! !uploading false)
                                  (if (.-success data)
                                    (do (reset! !show false)
-                                     (reset! !nav-target {:doc-id (.-doc_id data)})
+                                     (reset! !nav-target {:topic-id (or (.-topic_id data) (.-doc_id data)) :kind "epub"})
                                      (navigate! :learn))
                                    (js/alert (or (.-error data) "EPUB import failed")))))
                         (.catch (fn [err]
@@ -456,11 +452,9 @@
                 (dom/text (if uploading "Processing..." "Upload"))
                 (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil)))))))))
 
-(e/defn NewTopicModal [!show !nav-target navigate!]
+(e/defn NewTopicModal [!show user-id !refresh !nav-target navigate!]
   (e/client
-    (let [!title (atom "")
-          !creating (atom false)
-          creating (e/watch !creating)]
+    (let [!title (atom "")]
       (dom/div
         (dom/props {:class "modal-backdrop"})
         (dom/On "click" (fn [e]
@@ -486,28 +480,26 @@
               (dom/text "Cancel")
               (dom/On "click" (fn [_] (reset! !show false)) nil))
             (dom/button
-              (dom/props {:class "btn btn-primary" :style {:font-weight "600"}
-                          :disabled creating})
-              (dom/text (if creating "Creating..." "Create"))
-              (dom/On "click"
-                (fn [_]
-                  (when-not @!creating
-                    (reset! !creating true)
-                    (let [form-data (js/FormData.)]
-                      (.append form-data "title" (let [t @!title] (if (seq t) t "New Topic")))
-                      (-> (js/fetch "/api/create-topic" (clj->js {:method "POST" :body form-data}))
-                        (.then (fn [resp] (.json resp)))
-                        (.then (fn [^js data]
-                                 (reset! !creating false)
-                                 (if (.-success data)
-                                   (do (reset! !show false)
-                                     (reset! !nav-target {:content-item-id (.-content_item_id data)})
-                                     (navigate! :extract))
-                                   (js/alert (or (.-error data) "Failed to create topic")))))
-                        (.catch (fn [err]
-                                  (reset! !creating false)
-                                  (js/console.error "Create topic failed:" err)))))))
-                nil))))))))
+              (dom/props {:class "btn btn-primary" :style {:font-weight "600"}})
+              (let [event (dom/On "click" (fn [_] @!title) nil)
+                    [?token ?error] (e/Token event)
+                    creating? (some? ?token)]
+                (dom/props {:disabled creating?
+                            :style {:cursor (if creating? "not-allowed" "pointer")}})
+                (dom/text (if creating? "Creating..." "Create"))
+                (when ?error
+                  (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-1)"}})
+                    (dom/text ?error)))
+                (when-some [token ?token]
+                  (let [title-val (if (seq event) event "New Topic")
+                        result (e/server (db/create-standalone-topic! user-id title-val))]
+                    (if (:topic-id result)
+                      (do (e/server (swap! !refresh inc))
+                        (token)
+                        (reset! !show false)
+                        (reset! !nav-target {:topic-id (:topic-id result)})
+                        (navigate! :learn))
+                      (token "Failed to create topic"))))))))))))
 
 ;; Main Import page component
 (e/defn ImportPage [user-id !refresh !nav-target navigate! enc-key llm-enabled?]
@@ -638,46 +630,46 @@
               (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
               (dom/text "Create a blank topic to write in")))
           (when show-topic
-            (NewTopicModal !show-topic !nav-target navigate!))))
+            (NewTopicModal !show-topic user-id !refresh !nav-target navigate!))))
 
       ;; Recent imports
       (let [refresh (e/server (e/watch !refresh))
-            recent-docs (e/server
-                          (vec (take 5 (db/get-documents user-id))))]
-        (when (seq recent-docs)
+            recent-topics (e/server
+                            (vec (take 5 (db/get-root-topics user-id))))]
+        (when (seq recent-topics)
           (dom/div
             (dom/props {:style {:margin-top "32px"}})
             (dom/h3
               (dom/props {:style {:font-size "14px" :font-weight "600" :color "var(--color-text-secondary)"
                                   :margin "0 0 12px 0"}})
               (dom/text "Recent imports"))
-            (e/for-by :documents/id [doc recent-docs]
-              (let [doc-id (:documents/id doc)
-                    filename (or (:documents/filename doc) "")
-                    source-type (or (:documents/source_type doc) "pdf")
-                    uploaded (e/server (format-timestamp* (:documents/uploaded_at doc)))]
+            (e/for-by :topics/id [topic recent-topics]
+              (let [topic-id (:topics/id topic)
+                    title (or (:topics/title topic) "")
+                    kind (or (:topics/kind topic) "basic")
+                    created (e/server (format-timestamp* (:topics/created_at topic)))]
                 (dom/div
                   (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
                                       :padding "8px 0" :border-bottom "1px solid var(--color-border)"}})
                   (dom/span
                     (dom/props {:class "type-badge"
                                 :style {:padding "2px 8px" :font-size "10px"
-                                        :background (case source-type
-                                                      "wikipedia" "#fef3c7"
-                                                      "web" "#e0f2fe"
+                                        :background (case kind
+                                                      "pdf" "#dcfce7"
+                                                      ("web" "wikipedia") "#e0f2fe"
                                                       "epub" "#f3e8ff"
-                                                      "topic" "#f3e8ff"
-                                                      "#dcfce7")}})
-                    (dom/text (case source-type "wikipedia" "Wiki" "web" "Web" "epub" "EPUB" "topic" "Topic" "PDF")))
+                                                      "basic" "#f3e8ff"
+                                                      "#f3e8ff")}})
+                    (dom/text (case kind "pdf" "PDF" ("web" "wikipedia") "Web" "epub" "EPUB" "basic" "Topic" "Topic")))
                   (dom/a
                     (dom/props {:style {:flex "1" :font-size "14px" :color "var(--color-primary)" :cursor "pointer"
                                         :text-decoration "none" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
-                    (dom/text (util/display-name filename))
+                    (dom/text (util/display-name title))
                     (dom/On "click"
                       (fn [_]
-                        (reset! !nav-target {:doc-id doc-id})
+                        (reset! !nav-target {:topic-id topic-id})
                         (navigate! :learn))
                       nil))
                   (dom/span
                     (dom/props {:style {:font-size "12px" :color "var(--color-text-hint)" :white-space "nowrap" :flex-shrink "0"}})
-                    (dom/text (or uploaded ""))))))))))))
+                    (dom/text (or created ""))))))))))))

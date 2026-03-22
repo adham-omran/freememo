@@ -1,9 +1,11 @@
 (ns electric-starter-app.content-toolbar
   "Unified card generation toolbar for both page-level and extract-level content.
-   Replaces extract_toolbar.cljc and the inline toolbar in ocr_page.cljc."
+   Replaces extract_toolbar.cljc and the inline toolbar in ocr_page.cljc.
+   Uses topic-id + root-topic-id instead of doc-id + page-number + content-item-id."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [clojure.string :as str]
    [electric-starter-app.rich-text-editor :as editor]
    [electric-starter-app.anki-sync :refer [AnkiSyncButton]]
    [electric-starter-app.ocr-modals :refer [ExportModal PromptDialog AddCardModal]]
@@ -13,32 +15,78 @@
    #?(:clj [electric-starter-app.db :as db])
    [electric-starter-app.settings-page :refer [mac-platform?]]))
 
-(defn get-unsynced-count* [_refresh doc-id page-number content-item-id]
-  #?(:clj (db/get-unsynced-card-count doc-id page-number content-item-id)
+;; Unsynced card count — single topic-id
+(defn get-unsynced-count* [_refresh topic-id]
+  #?(:clj (db/get-unsynced-card-count topic-id)
      :cljs 0))
+
+;; Save generated cards to DB using topic-id and root-topic-id
+(defn save-cards-for-topic [topic-id root-topic-id kind generated-cards source-ref]
+  #?(:clj
+     (try
+       (let [rows (mapv (fn [card]
+                          (cond-> {:topic_id topic-id
+                                   :root_topic_id root-topic-id
+                                   :kind kind}
+                            (= kind "basic") (assoc :question (:q card) :answer (:a card))
+                            (= kind "cloze") (assoc :cloze (:c card))
+                            source-ref (assoc :source_reference source-ref)))
+                    generated-cards)]
+         (db/insert-flashcards! rows)
+         {:success true})
+       (catch Exception e
+         {:success false :error (.getMessage e)}))
+     :cljs nil))
+
+;; Get context from previous pages (for page-mode card generation)
+(defn get-context-pages* [root-topic-id page-number context-window]
+  #?(:clj
+     (let [start-page (max 1 (- page-number context-window))
+           end-page (dec page-number)]
+       (when (>= end-page start-page)
+         (let [pages (db/get-context-pages root-topic-id start-page end-page)]
+           (when (seq pages)
+             (->> pages
+               (map :topics/content)
+               (str/join "\n\n---\n\n"))))))
+     :cljs nil))
+
+;; Create an extract child topic — wrapped in try/catch outside e/defn
+(defn create-extract-topic-safe! [parent-id user-id content title]
+  #?(:clj (try
+            (db/create-topic! {:parent-id parent-id
+                               :user-id user-id
+                               :content content
+                               :kind "basic"
+                               :title title})
+            {:success true}
+            (catch Exception e
+              {:success false :error (.getMessage e)}))
+     :cljs nil))
 
 ;; State map keys:
 ;; {:user-id       — user identifier
 ;;  :enc-key       — encryption key
-;;  :doc-id        — document id
-;;  :page-number   — current page number
+;;  :topic-id      — the entity (page or extract topic) where cards are created
+;;  :root-topic-id — the root topic for scoping (PDF root, standalone root, etc.)
+;;  :page-number   — current page number (for page-level context queries, nil for non-PDF)
 ;;  :content-text  — full text (page text for :page mode, extract text for :extract mode)
-;;  :content-item-id — nil for page-level, id for extract-level
+;;  :parent-content — parent topic's content (for extract context, nil for page mode)
 ;;  :context-mode  — :page or :extract
 ;;  :context-tooltip — string for the Context checkbox title attribute
-;;  :!refresh      — server-side refresh atom, passed from the caller's namespace
+;;  :llm-enabled?  — whether LLM features are enabled
 ;; }
 
 (e/defn ContentToolbar [state !refresh]
   (e/client
     (let [mod-key (if (mac-platform?) "Cmd" "Ctrl")
-          {:keys [user-id enc-key doc-id page-number content-text
-                  content-item-id context-mode context-tooltip llm-enabled?]} state
-          ;; Fetch document source reference for card propagation
-          source-ref (e/server (db/get-document-source doc-id))
+          {:keys [user-id enc-key topic-id root-topic-id page-number content-text
+                  parent-content context-mode context-tooltip llm-enabled?]} state
+          ;; Fetch source reference from root topic for card propagation
+          source-ref (e/server (db/get-topic-source root-topic-id))
           ;; Unsynced card count — uses refresh wrapper for reactivity
           toolbar-refresh (e/server (e/watch !refresh))
-          unsynced-count (e/server (get-unsynced-count* toolbar-refresh doc-id page-number content-item-id))
+          unsynced-count (e/server (get-unsynced-count* toolbar-refresh topic-id))
           ;; Load settings from server
           server-context-enabled (e/server (settings/get-context-enabled user-id))
           server-context-pages (e/server (settings/get-context-pages user-id))
@@ -208,7 +256,13 @@
                       (swap! !gen-state (fn [s]
                                           (-> s
                                             (update :queue conj {:id (str (random-uuid))
-                                                                 :selection (when sel (:text sel))})
+                                                                 :selection (when sel (:text sel))
+                                                                 :topic-id topic-id
+                                                                 :root-topic-id root-topic-id
+                                                                 :card-type card-type
+                                                                 :content-text content-text
+                                                                 :page-number page-number
+                                                                 :source-ref source-ref})
                                             (assoc :error nil))))))
                   nil)))
 
@@ -229,10 +283,8 @@
                                 (reset! !prompt-dialog-kind card-type)
                                 (reset! !show-prompt-dialog true))
                 nil)))) ;; end when llm-enabled? (generation UI)
-        
-        ;; Extract button — create content item from selected text
-        ;; For :page mode, content-item-id is nil so this creates a top-level extract.
-        ;; For :extract mode, content-item-id is the parent so this creates a child extract.
+
+        ;; Extract button — create child topic from selected text
         (let [!extract-state (atom {:pending nil :error nil})
               extract-state (e/watch !extract-state)
               pending (:pending extract-state)]
@@ -240,8 +292,8 @@
             (dom/props {:class "btn btn-sm btn-primary"
                         :style {:font-weight "500"}
                         :title (if (= context-mode :extract)
-                                 (str "Extract selected text as a child content item (" mod-key "+Shift+E)")
-                                 (str "Extract selected text as a content item (" mod-key "+Shift+E)"))})
+                                 (str "Extract selected text as a child topic (" mod-key "+Shift+E)")
+                                 (str "Extract selected text as a topic (" mod-key "+Shift+E)"))})
             (dom/text "Extract")
             (reset! keyboard/!extract-btn-ref dom/node)
             (e/on-unmount (fn [] (reset! keyboard/!extract-btn-ref nil)))
@@ -258,12 +310,15 @@
               (dom/text (:error extract-state))))
           (let [[?token _] (e/Token pending)]
             (when-some [token ?token]
-              (let [result (e/server (db/save-content-item doc-id page-number "html" pending content-item-id))]
-                (if result
+              (let [title (let [raw (str/replace (or pending "") #"<[^>]+>" "")]
+                            (if (str/blank? raw) "Extract" (subs raw 0 (min 80 (count raw)))))
+                    result (e/server
+                             (create-extract-topic-safe! topic-id user-id pending title))]
+                (if (:success result)
                   (do (reset! !extract-state {:pending nil :error nil})
                     (token))
-                  (do (reset! !extract-state {:pending nil :error "Failed to save extract"})
-                    (token "Failed to save extract")))))))
+                  (do (reset! !extract-state {:pending nil :error (or (:error result) "Failed to save extract")})
+                    (token (or (:error result) "Failed to save extract"))))))))
 
         (when llm-enabled?
         ;; Auto-advance: when not processing and queue has items, start next
@@ -273,30 +328,37 @@
 
         ;; Queue processor — processes one generation request at a time
         ;; Context computation differs by mode:
-        ;; - :extract mode with selection: content-text as context; without: get-extract-page-context
+        ;; - :extract mode with selection: content-text as context; without: parent-content
         ;; - :page mode with selection: prev-pages + current page; without: prev-pages only
           (when-some [current (:active gen-state)]
             (let [[?token _?error] (e/Token (:id current))]
               (when-some [token ?token]
-                (let [content (or (:selection current) content-text)
+                ;; Read captured values from queue item (not reactive bindings)
+                (let [cur-topic-id (or (:topic-id current) topic-id)
+                      cur-root-topic-id (or (:root-topic-id current) root-topic-id)
+                      cur-card-type (or (:card-type current) card-type)
+                      cur-content-text (or (:content-text current) content-text)
+                      cur-page-number (or (:page-number current) page-number)
+                      cur-source-ref (:source-ref current)
+                      content (or (:selection current) cur-content-text)
                       context-text
                       (when use-context
                         (case context-mode
                           :extract
                           (if (:selection current)
-                            content-text
-                            (e/server (cards/get-extract-page-context doc-id page-number)))
+                            cur-content-text
+                            parent-content)
 
                           :page
-                          (let [prev-context (e/server (cards/get-context-pages doc-id page-number context-window))]
+                          (let [prev-context (e/server (get-context-pages* cur-root-topic-id cur-page-number context-window))]
                             (if (:selection current)
                               (if prev-context
-                                (str prev-context "\n\n---\n\n" content-text)
-                                content-text)
+                                (str prev-context "\n\n---\n\n" cur-content-text)
+                                cur-content-text)
                               prev-context))))
 
                       generate-result (e/server
-                                        (if (= card-type "basic")
+                                        (if (= cur-card-type "basic")
                                           (cards/generate-basic-cards
                                             {:content content :context context-text
                                              :card-count card-count-val :user-id user-id :enc-key enc-key})
@@ -307,7 +369,7 @@
                     (do (token (:error generate-result))
                       (swap! !gen-state assoc :active nil :error (:error generate-result)))
                     (let [generated-cards (e/server (:cards generate-result))
-                          save-result (e/server (cards/save-cards doc-id page-number card-type generated-cards content-item-id source-ref))]
+                          save-result (e/server (save-cards-for-topic cur-topic-id cur-root-topic-id cur-card-type generated-cards cur-source-ref))]
                       (if (:success save-result)
                         (do (e/server (swap! !refresh inc))
                           (token)
@@ -324,7 +386,13 @@
           (when-some [current (:active prompt-gen-state)]
             (let [[?token _?error] (e/Token (:id current))]
               (when-some [token ?token]
-                (let [content (or (:selection current) content-text)
+                ;; Read captured values from queue item with fallback to reactive bindings
+                (let [cur-topic-id (or (:topic-id current) topic-id)
+                      cur-root-topic-id (or (:root-topic-id current) root-topic-id)
+                      cur-content-text (or (:content-text current) content-text)
+                      cur-page-number (or (:page-number current) page-number)
+                      cur-source-ref (or (:source-ref current) source-ref)
+                      content (or (:selection current) cur-content-text)
                       prompt-text (:pre-prompt current)
                       kind (:kind current)
                       context-text
@@ -332,15 +400,15 @@
                         (case context-mode
                           :extract
                           (if (:selection current)
-                            content-text
-                            (e/server (cards/get-extract-page-context doc-id page-number)))
+                            cur-content-text
+                            parent-content)
 
                           :page
-                          (let [prev-context (e/server (cards/get-context-pages doc-id page-number context-window))]
+                          (let [prev-context (e/server (get-context-pages* cur-root-topic-id cur-page-number context-window))]
                             (if (:selection current)
                               (if prev-context
-                                (str prev-context "\n\n---\n\n" content-text)
-                                content-text)
+                                (str prev-context "\n\n---\n\n" cur-content-text)
+                                cur-content-text)
                               prev-context))))
 
                       generate-result (e/server
@@ -357,15 +425,15 @@
                     (do (token (:error generate-result))
                       (swap! !prompt-gen-state assoc :active nil :error (:error generate-result)))
                     (let [generated-cards (e/server (:cards generate-result))
-                          save-result (e/server (cards/save-cards doc-id page-number kind generated-cards content-item-id source-ref))]
+                          save-result (e/server (save-cards-for-topic cur-topic-id cur-root-topic-id kind generated-cards cur-source-ref))]
                       (if (:success save-result)
                         (do (e/server (swap! !refresh inc))
                           (token)
                           (swap! !prompt-gen-state assoc :active nil))
                         (do (token (:error save-result))
                           (swap! !prompt-gen-state assoc :active nil)))))))))) ;; end when llm-enabled? (queue processors)
-        
-        ;; Add new card button — uses AddCardModal directly with caller-provided !refresh
+
+        ;; Add new card button — uses AddCardModal with topic-id and root-topic-id
         (let [!show-add (atom false)
               show-add (e/watch !show-add)]
           (dom/button
@@ -373,7 +441,7 @@
             (dom/text "Add new")
             (dom/On "click" (fn [_] (reset! !show-add true)) nil))
           (when show-add
-            (AddCardModal !show-add card-type doc-id page-number !refresh content-item-id source-ref)))
+            (AddCardModal !show-add card-type topic-id root-topic-id !refresh source-ref)))
 
         ;; Separator
         (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
@@ -388,13 +456,13 @@
                         "Export..."))
             (dom/On "click" (fn [_] (reset! !show-export true)) nil))
           (when show-export
-            (ExportModal !show-export doc-id page-number user-id)))
+            (ExportModal !show-export topic-id root-topic-id user-id)))
 
         ;; Separator
         (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
 
-        ;; Anki Sync button
-        (AnkiSyncButton user-id doc-id page-number card-type !refresh unsynced-count))
+        ;; Anki Sync button — pass root-topic-id as the doc-id equivalent
+        (AnkiSyncButton user-id root-topic-id page-number card-type !refresh unsynced-count))
 
       ;; Pre-prompt modal dialog (LLM only)
       (when (and llm-enabled? show-prompt-dialog)

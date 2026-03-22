@@ -1,13 +1,20 @@
 (ns electric-starter-app.db
-  "Database connection and schema management for PostgreSQL."
+  "Database connection and schema management for PostgreSQL.
+   Unified topics model — all entities (documents, pages, extracts) are topics
+   in a parent_id tree."
   (:require
    [next.jdbc :as jdbc]
+   [next.jdbc.result-set :as rs]
    [honey.sql :as sql]
    [clojure.string :as str]))
 
 (declare sanitize-utf8)
+(declare migrate-to-topics!)
 
+;; ---------------------------------------------------------------------------
 ;; Connection configuration
+;; ---------------------------------------------------------------------------
+
 (def db-config
   {:dbtype "postgresql"
    :host (or (System/getenv "DB_HOST") "localhost")
@@ -19,14 +26,30 @@
 ;; HikariCP datasource (connection pool)
 (defonce ds (jdbc/get-datasource db-config))
 
+;; ---------------------------------------------------------------------------
 ;; Schema setup
+;; ---------------------------------------------------------------------------
+
+(defn- old-tables-exist?
+  "Check if the legacy documents table exists (migration indicator)."
+  []
+  (some? (jdbc/execute-one! ds
+           ["SELECT 1 FROM information_schema.tables
+             WHERE table_name = 'documents' AND table_schema = 'public'"])))
+
+(defn- topics-table-exists?
+  []
+  (some? (jdbc/execute-one! ds
+           ["SELECT 1 FROM information_schema.tables
+             WHERE table_name = 'topics' AND table_schema = 'public'"])))
+
 (defn setup-schema []
   (println "Setting up database schema...")
 
   ;; Enable pgcrypto for password hashing
   (jdbc/execute! ds ["CREATE EXTENSION IF NOT EXISTS pgcrypto"])
 
-  ;; Create users table (before settings, since settings references it)
+  ;; Create users table
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
@@ -35,13 +58,12 @@
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )"])
 
-  ;; Google OAuth migrations: add google_id and email columns, allow NULL password_hash
+  ;; Google OAuth migrations
   (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT UNIQUE"])
   (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT"])
   (jdbc/execute! ds ["ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL"])
 
-  ;; Migrate settings: drop old global table, recreate with user_id
-  ;; Check if settings table exists and lacks user_id column
+  ;; Settings table (per-user key-value)
   (let [has-user-id (jdbc/execute-one! ds
                       ["SELECT column_name FROM information_schema.columns
                         WHERE table_name = 'settings' AND column_name = 'user_id'"])]
@@ -57,157 +79,357 @@
           PRIMARY KEY (user_id, key)
         )"])))
 
-  ;; Create documents table
+  ;; Topics table (unified: documents + pages + content_items)
   (jdbc/execute! ds ["
-    CREATE TABLE IF NOT EXISTS documents (
+    CREATE TABLE IF NOT EXISTS topics (
       id SERIAL PRIMARY KEY,
-      filename TEXT NOT NULL,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      parent_id INTEGER REFERENCES topics(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL DEFAULT 'basic',
+      title TEXT NOT NULL,
+      content TEXT,
+      page_number INTEGER,
+      source_url TEXT,
+      source_reference TEXT,
+      status TEXT DEFAULT 'active',
+      priority INTEGER DEFAULT 50,
+      interval_days REAL DEFAULT 1.0,
+      a_factor REAL DEFAULT 2.0,
+      next_review_at TIMESTAMP,
+      last_review_at TIMESTAMP,
+      review_count INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"])
+
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_parent ON topics(parent_id)"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_user ON topics(user_id)"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_next_review ON topics(next_review_at)"])
+  (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_topics_page
+                      ON topics(parent_id, page_number) WHERE page_number IS NOT NULL"])
+
+  ;; Topic files (binary storage, split from old documents.file_data)
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS topic_files (
+      id SERIAL PRIMARY KEY,
+      topic_id INTEGER NOT NULL UNIQUE REFERENCES topics(id) ON DELETE CASCADE,
       file_data BYTEA NOT NULL,
-      file_size INTEGER NOT NULL,
-      mime_type TEXT NOT NULL,
-      uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      file_size INTEGER,
+      mime_type TEXT
     )"])
 
-  ;; Add user_id column to documents (nullable — existing orphaned docs survive)
-  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE SET NULL"])
-
-  ;; Web import: extend documents for non-PDF content
-  (jdbc/execute! ds ["ALTER TABLE documents ALTER COLUMN file_data DROP NOT NULL"])
-  (jdbc/execute! ds ["ALTER TABLE documents ALTER COLUMN file_size DROP NOT NULL"])
-  (jdbc/execute! ds ["ALTER TABLE documents ALTER COLUMN mime_type DROP NOT NULL"])
-  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_type TEXT DEFAULT 'pdf'"])
-  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_url TEXT"])
-  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS html_content TEXT"])
-
-  ;; Create pages table for OCR text storage
-  (jdbc/execute! ds ["
-    CREATE TABLE IF NOT EXISTS pages (
-      id SERIAL PRIMARY KEY,
-      document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-      page_number INTEGER NOT NULL,
-      text TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(document_id, page_number)
-    )"])
-
-  ;; Add is_done column to pages table (migration)
-  (jdbc/execute! ds ["ALTER TABLE pages ADD COLUMN IF NOT EXISTS is_done BOOLEAN DEFAULT NULL"])
-
-  ;; Add priority column to pages table (migration)
-  (jdbc/execute! ds ["ALTER TABLE pages ADD COLUMN IF NOT EXISTS priority INTEGER DEFAULT 50"])
-
-  ;; Create flashcards table
+  ;; Flashcards table — create if not exists, then add new columns
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS flashcards (
       id SERIAL PRIMARY KEY,
-      document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-      page_number INTEGER NOT NULL,
+      document_id INTEGER,
+      page_number INTEGER,
       kind TEXT NOT NULL,
       question TEXT,
       answer TEXT,
       cloze TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(document_id, page_number, kind, question, cloze)
-    )"])
-
-  (jdbc/execute! ds ["
-    CREATE INDEX IF NOT EXISTS idx_flashcards_document_page
-      ON flashcards(document_id, page_number)"])
-
-  ;; Create content_items table (must exist before flashcards FK reference)
-  (jdbc/execute! ds ["
-    CREATE TABLE IF NOT EXISTS content_items (
-      id SERIAL PRIMARY KEY,
-      document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-      page_number INTEGER NOT NULL,
-      kind TEXT NOT NULL DEFAULT 'html',
-      content TEXT NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )"])
-  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_content_items_document_page
-                      ON content_items(document_id, page_number)"])
 
-  ;; Link flashcards to their parent extract (NULL = page-level card from OcrPage)
-  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS content_item_id INTEGER
-                      REFERENCES content_items(id) ON DELETE CASCADE"])
-  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_content_item ON flashcards(content_item_id)"])
-
-  ;; Source reference columns
-  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS source_reference TEXT"])
+  ;; Add all flashcard columns (idempotent)
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS content_item_id INTEGER"])
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS source_reference TEXT"])
-
-  ;; Backfill source_reference on documents from filename + URL
-  (jdbc/execute! ds ["UPDATE documents
-                      SET source_reference = filename || CASE WHEN source_url IS NOT NULL THEN ' — ' || source_url ELSE '' END
-                      WHERE source_reference IS NULL OR source_reference = ''"])
-  ;; Backfill source_reference on existing cards from their parent document
-  (jdbc/execute! ds ["UPDATE flashcards f
-                      SET source_reference = d.source_reference
-                      FROM documents d
-                      WHERE f.document_id = d.id
-                        AND (f.source_reference IS NULL OR f.source_reference = '')
-                        AND d.source_reference IS NOT NULL
-                        AND d.source_reference != ''"])
-
-  ;; Anki sync columns on flashcards
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_note_id BIGINT DEFAULT NULL"])
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_synced_at TIMESTAMP DEFAULT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS topic_id INTEGER REFERENCES topics(id) ON DELETE CASCADE"])
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS root_topic_id INTEGER REFERENCES topics(id) ON DELETE CASCADE"])
+
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_topic ON flashcards(topic_id)"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_root_topic ON flashcards(root_topic_id)"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_anki_note_id ON flashcards(anki_note_id) WHERE anki_note_id IS NOT NULL"])
 
-  ;; Track card edits for sync-after-edit detection
-  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NULL"])
+  ;; Run migration if old tables exist
+  (when (old-tables-exist?)
+    (migrate-to-topics!))
 
-  ;; Scheduling columns for incremental reading (pages)
-  (jdbc/execute! ds ["ALTER TABLE pages ADD COLUMN IF NOT EXISTS interval_days REAL DEFAULT 1.0"])
-  (jdbc/execute! ds ["ALTER TABLE pages ADD COLUMN IF NOT EXISTS a_factor REAL DEFAULT 2.0"])
-  (jdbc/execute! ds ["ALTER TABLE pages ADD COLUMN IF NOT EXISTS next_review_at TIMESTAMP DEFAULT NULL"])
-  (jdbc/execute! ds ["ALTER TABLE pages ADD COLUMN IF NOT EXISTS last_review_at TIMESTAMP DEFAULT NULL"])
-  (jdbc/execute! ds ["ALTER TABLE pages ADD COLUMN IF NOT EXISTS review_count INTEGER DEFAULT 0"])
-
-  ;; Scheduling columns for incremental reading (content_items)
-  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS priority INTEGER DEFAULT 50"])
-  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS interval_days REAL DEFAULT 1.0"])
-  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS a_factor REAL DEFAULT 2.0"])
-  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS next_review_at TIMESTAMP DEFAULT NULL"])
-  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS last_review_at TIMESTAMP DEFAULT NULL"])
-  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS review_count INTEGER DEFAULT 0"])
-
-  ;; Parent-child hierarchy for extract-from-extract (SuperMemo-style)
-  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS parent_content_item_id INTEGER
-                      REFERENCES content_items(id) ON DELETE CASCADE"])
-  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_content_items_parent ON content_items(parent_content_item_id)"])
-
-  ;; Dismissed flag for removing topics from queue without deleting (legacy)
-  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS dismissed BOOLEAN DEFAULT false"])
-  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS dismissed BOOLEAN DEFAULT false"])
-
-  ;; Status column: 'active', 'done' (replaces boolean dismissed)
-  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'"])
-  (jdbc/execute! ds ["ALTER TABLE content_items ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active'"])
-  ;; Backfill from legacy dismissed column
-  (jdbc/execute! ds ["UPDATE documents SET status = 'dismissed' WHERE dismissed = true AND (status IS NULL OR status = 'active')"])
-  (jdbc/execute! ds ["UPDATE content_items SET status = 'dismissed' WHERE dismissed = true AND (status IS NULL OR status = 'active')"])
-  ;; Migrate dismissed → done (dismiss concept removed)
-  (jdbc/execute! ds ["UPDATE documents SET status = 'done' WHERE status = 'dismissed'"])
-  (jdbc/execute! ds ["UPDATE content_items SET status = 'done' WHERE status = 'dismissed'"])
-
-  ;; Indexes for review queue queries
-  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_pages_next_review ON pages(next_review_at)"])
-  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_content_items_next_review ON content_items(next_review_at)"])
-
-  ;; Scheduling columns for documents (incremental reading at document level)
-  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS priority INTEGER DEFAULT 50"])
-  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS interval_days REAL DEFAULT 1.0"])
-  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS a_factor REAL DEFAULT 2.0"])
-  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS next_review_at TIMESTAMP DEFAULT NULL"])
-  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS last_review_at TIMESTAMP DEFAULT NULL"])
-  (jdbc/execute! ds ["ALTER TABLE documents ADD COLUMN IF NOT EXISTS review_count INTEGER DEFAULT 0"])
-  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_documents_next_review ON documents(next_review_at)"])
+  ;; After migration: drop legacy columns if they still exist and add new unique constraint
+  (when (and (topics-table-exists?)
+          (not (old-tables-exist?)))
+    ;; Drop legacy flashcard columns (safe — migration already moved data)
+    (try
+      (jdbc/execute! ds ["ALTER TABLE flashcards DROP COLUMN IF EXISTS document_id"])
+      (jdbc/execute! ds ["ALTER TABLE flashcards DROP COLUMN IF EXISTS page_number"])
+      (jdbc/execute! ds ["ALTER TABLE flashcards DROP COLUMN IF EXISTS content_item_id"])
+      (catch Exception _ nil))
+    ;; Unique constraints — two partial indexes to handle NULLs correctly
+    ;; (PostgreSQL treats NULL != NULL in B-tree indexes, so a single index with nullable columns can't prevent duplicates)
+    (try
+      (jdbc/execute! ds ["DROP INDEX IF EXISTS idx_flashcards_unique_topic"])
+      (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_unique_basic
+                          ON flashcards(topic_id, kind, question) WHERE cloze IS NULL"])
+      (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_unique_cloze
+                          ON flashcards(topic_id, kind, cloze) WHERE question IS NULL"])
+      (catch Exception _ nil)))
 
   (println "Database ready."))
 
-;; Query functions
+;; ---------------------------------------------------------------------------
+;; Data migration (old tables → topics)
+;; ---------------------------------------------------------------------------
+
+(defn migrate-to-topics!
+  "Migrate documents, pages, content_items → unified topics table.
+   Preserves document IDs. Pages and content_items get new IDs."
+  []
+  (println "=== Starting migration to unified topics model ===")
+  (jdbc/with-transaction [tx ds]
+    ;; 1. Migrate documents → topics (preserve IDs)
+    (let [doc-count (:count (jdbc/execute-one! tx ["SELECT COUNT(*) AS count FROM documents"]))]
+      (println (str "Migrating " doc-count " documents..."))
+      (jdbc/execute! tx
+        ["INSERT INTO topics (id, user_id, parent_id, kind, title, content, source_url, source_reference,
+                              status, priority, interval_days, a_factor, next_review_at, last_review_at,
+                              review_count, created_at)
+          SELECT id, user_id, NULL,
+                 CASE source_type WHEN 'topic' THEN 'basic' WHEN 'pdf' THEN 'pdf'
+                                  WHEN 'epub' THEN 'epub' WHEN 'web' THEN 'web'
+                                  ELSE COALESCE(source_type, 'basic') END,
+                 COALESCE(filename, 'Untitled'), html_content, source_url, source_reference,
+                 COALESCE(status, 'active'), COALESCE(priority, 50),
+                 COALESCE(interval_days, 1.0), COALESCE(a_factor, 2.0),
+                 next_review_at, last_review_at, COALESCE(review_count, 0), uploaded_at
+          FROM documents
+          ON CONFLICT (id) DO NOTHING"]))
+
+    ;; Reset sequence past max document ID to avoid conflicts with auto-generated IDs
+    (jdbc/execute! tx ["SELECT setval('topics_id_seq', (SELECT COALESCE(MAX(id), 0) FROM topics))"])
+
+    ;; 2. Migrate document files → topic_files
+    (let [file-count (:count (jdbc/execute-one! tx
+                               ["SELECT COUNT(*) AS count FROM documents WHERE file_data IS NOT NULL"]))]
+      (println (str "Migrating " file-count " document files..."))
+      (jdbc/execute! tx
+        ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
+          SELECT id, file_data, file_size, mime_type
+          FROM documents WHERE file_data IS NOT NULL
+          ON CONFLICT (topic_id) DO NOTHING"]))
+
+    ;; 3. Migrate pages → topics (new IDs, build mapping)
+    (let [page-count (:count (jdbc/execute-one! tx ["SELECT COUNT(*) AS count FROM pages"]))]
+      (println (str "Migrating " page-count " pages..."))
+      ;; Create temp mapping table
+      (jdbc/execute! tx ["CREATE TEMP TABLE page_id_map (old_page_id INTEGER PRIMARY KEY, new_topic_id INTEGER)"])
+      ;; Insert pages as topics one by one and build mapping
+      (let [pages (jdbc/execute! tx
+                    ["SELECT p.id AS page_id, p.document_id, p.page_number, p.text, p.is_done,
+                              p.priority, p.interval_days, p.a_factor, p.next_review_at,
+                              p.last_review_at, p.review_count, p.created_at, d.user_id
+                       FROM pages p JOIN documents d ON p.document_id = d.id
+                       ORDER BY p.id"]
+                    {:builder-fn rs/as-unqualified-maps})]
+        (doseq [p pages]
+          (let [new-topic (jdbc/execute-one! tx
+                            ["INSERT INTO topics (user_id, parent_id, kind, title, content, page_number,
+                                                  status, priority, interval_days, a_factor,
+                                                  next_review_at, last_review_at, review_count, created_at)
+                              VALUES (?, ?, 'page', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              ON CONFLICT (parent_id, page_number) WHERE page_number IS NOT NULL
+                              DO NOTHING
+                              RETURNING id"
+                             (:user_id p) (:document_id p) (str "Page " (:page_number p))
+                             (:text p) (:page_number p)
+                             (if (true? (:is_done p)) "done" "active")
+                             (or (:priority p) 50)
+                             (or (:interval_days p) 1.0)
+                             (or (:a_factor p) 2.0)
+                             (:next_review_at p) (:last_review_at p)
+                             (or (:review_count p) 0)
+                             (:created_at p)]
+                            {:builder-fn rs/as-unqualified-maps})]
+            (when-let [new-id (:id new-topic)]
+              (jdbc/execute! tx
+                ["INSERT INTO page_id_map (old_page_id, new_topic_id) VALUES (?, ?)
+                    ON CONFLICT DO NOTHING"
+                 (:page_id p) new-id]))))))
+
+    ;; 4. Migrate content_items → topics (two passes)
+    (let [ci-count (:count (jdbc/execute-one! tx ["SELECT COUNT(*) AS count FROM content_items"]))]
+      (println (str "Migrating " ci-count " content items..."))
+      (jdbc/execute! tx ["CREATE TEMP TABLE ci_id_map (old_ci_id INTEGER PRIMARY KEY, new_topic_id INTEGER)"])
+
+      ;; Pass 1: content_items without parent_content_item_id
+      (let [items (jdbc/execute! tx
+                    ["SELECT ci.id, ci.document_id, ci.page_number, ci.kind, ci.content,
+                            ci.status, ci.priority, ci.interval_days, ci.a_factor,
+                            ci.next_review_at, ci.last_review_at, ci.review_count,
+                            ci.created_at, d.user_id
+                     FROM content_items ci JOIN documents d ON ci.document_id = d.id
+                     WHERE ci.parent_content_item_id IS NULL
+                     ORDER BY ci.id"]
+                    {:builder-fn rs/as-unqualified-maps})]
+        (doseq [ci items]
+          ;; Find parent: if page_number is set, look up the page topic; otherwise use document_id
+          (let [parent-id (if-let [pn (:page_number ci)]
+                            (or (:new_topic_id
+                                 (jdbc/execute-one! tx
+                                   ["SELECT new_topic_id FROM page_id_map pm
+                                      JOIN pages p ON pm.old_page_id = p.id
+                                      WHERE p.document_id = ? AND p.page_number = ?"
+                                    (:document_id ci) pn]
+                                   {:builder-fn rs/as-unqualified-maps}))
+                                ;; Fallback: look up directly in topics
+                              (:id
+                               (jdbc/execute-one! tx
+                                 ["SELECT id FROM topics WHERE parent_id = ? AND page_number = ?"
+                                  (:document_id ci) pn]
+                                 {:builder-fn rs/as-unqualified-maps}))
+                                ;; Last resort: use document as parent
+                              (:document_id ci))
+                            (:document_id ci))
+                ci-kind (or (:kind ci) "html")
+                title (let [raw (or (:content ci) "")]
+                        (-> raw
+                          (str/replace #"<[^>]+>" "")
+                          (subs 0 (min 80 (count (str/replace raw #"<[^>]+>" ""))))
+                          str/trim
+                          (#(if (str/blank? %) "Extract" %))))
+                new-topic (jdbc/execute-one! tx
+                            (sql/format {:insert-into :topics
+                                         :values [{:user_id (:user_id ci)
+                                                   :parent_id parent-id
+                                                   :kind "basic"
+                                                   :title title
+                                                   :content (sanitize-utf8 (:content ci))
+                                                   :status (or (:status ci) "active")
+                                                   :priority (or (:priority ci) 50)
+                                                   :interval_days (or (:interval_days ci) 1.0)
+                                                   :a_factor (or (:a_factor ci) 2.0)
+                                                   :next_review_at (:next_review_at ci)
+                                                   :last_review_at (:last_review_at ci)
+                                                   :review_count (or (:review_count ci) 0)
+                                                   :created_at (:created_at ci)}]
+                                         :returning [:id]}
+                                        {:builder-fn rs/as-unqualified-maps}))]
+            (when-let [new-id (:id new-topic)]
+              (jdbc/execute! tx
+                ["INSERT INTO ci_id_map (old_ci_id, new_topic_id) VALUES (?, ?)
+                  ON CONFLICT DO NOTHING"
+                 (:id ci) new-id])))))
+
+      ;; Pass 2: content_items with parent_content_item_id
+      (let [items (jdbc/execute! tx
+                    ["SELECT ci.id, ci.document_id, ci.page_number, ci.kind, ci.content,
+                            ci.parent_content_item_id, ci.status, ci.priority,
+                            ci.interval_days, ci.a_factor, ci.next_review_at,
+                            ci.last_review_at, ci.review_count, ci.created_at, d.user_id
+                     FROM content_items ci JOIN documents d ON ci.document_id = d.id
+                     WHERE ci.parent_content_item_id IS NOT NULL
+                     ORDER BY ci.id"]
+                    {:builder-fn rs/as-unqualified-maps})]
+        (doseq [ci items]
+          (let [parent-id (or (:new_topic_id
+                               (jdbc/execute-one! tx
+                                 ["SELECT new_topic_id FROM ci_id_map WHERE old_ci_id = ?"
+                                  (:parent_content_item_id ci)]
+                                 {:builder-fn rs/as-unqualified-maps}))
+                            (:document_id ci))
+                title (let [raw (or (:content ci) "")]
+                        (-> raw
+                          (str/replace #"<[^>]+>" "")
+                          (subs 0 (min 80 (count (str/replace raw #"<[^>]+>" ""))))
+                          str/trim
+                          (#(if (str/blank? %) "Extract" %))))
+                new-topic (jdbc/execute-one! tx
+                            (sql/format {:insert-into :topics
+                                         :values [{:user_id (:user_id ci)
+                                                   :parent_id parent-id
+                                                   :kind "basic"
+                                                   :title title
+                                                   :content (sanitize-utf8 (:content ci))
+                                                   :status (or (:status ci) "active")
+                                                   :priority (or (:priority ci) 50)
+                                                   :interval_days (or (:interval_days ci) 1.0)
+                                                   :a_factor (or (:a_factor ci) 2.0)
+                                                   :next_review_at (:next_review_at ci)
+                                                   :last_review_at (:last_review_at ci)
+                                                   :review_count (or (:review_count ci) 0)
+                                                   :created_at (:created_at ci)}]
+                                         :returning [:id]}
+                                        {:builder-fn rs/as-unqualified-maps}))]
+            (when-let [new-id (:id new-topic)]
+              (jdbc/execute! tx
+                ["INSERT INTO ci_id_map (old_ci_id, new_topic_id) VALUES (?, ?)
+                  ON CONFLICT DO NOTHING"
+                 (:id ci) new-id]))))))
+
+    ;; 5. Migrate flashcards — set topic_id and root_topic_id
+    (println "Migrating flashcards...")
+    ;; Cards linked to content_items
+    (jdbc/execute! tx
+      ["UPDATE flashcards f SET
+          topic_id = m.new_topic_id,
+          root_topic_id = f.document_id
+        FROM ci_id_map m
+        WHERE f.content_item_id = m.old_ci_id
+          AND f.topic_id IS NULL"])
+    ;; Cards linked to pages (no content_item_id)
+    (jdbc/execute! tx
+      ["UPDATE flashcards f SET
+          topic_id = pm.new_topic_id,
+          root_topic_id = f.document_id
+        FROM page_id_map pm
+        JOIN pages p ON pm.old_page_id = p.id
+        WHERE f.content_item_id IS NULL
+          AND f.document_id = p.document_id
+          AND f.page_number = p.page_number
+          AND f.topic_id IS NULL"])
+    ;; Any remaining cards without topic_id — set root_topic_id at least
+    (jdbc/execute! tx
+      ["UPDATE flashcards SET root_topic_id = document_id
+        WHERE root_topic_id IS NULL AND document_id IS NOT NULL"])
+    ;; Backfill: cards with null topic_id get topic_id = root_topic_id
+    (jdbc/execute! tx
+      ["UPDATE flashcards SET topic_id = root_topic_id
+        WHERE topic_id IS NULL AND root_topic_id IS NOT NULL"])
+
+    ;; 5b. Fix web/wikipedia articles: reparent extracts from orphan "Page 1" topics to root
+    ;; Old web/wikipedia imports created dummy page rows; migration turned them into page topics
+    (let [reparented (jdbc/execute-one! tx
+                       ["UPDATE topics SET parent_id = page_topics.parent_id
+                         FROM (
+                           SELECT p.id as page_id, p.parent_id
+                           FROM topics p
+                           JOIN topics r ON p.parent_id = r.id
+                           WHERE p.kind = 'page' AND r.kind IN ('web', 'wikipedia')
+                         ) AS page_topics
+                         WHERE topics.parent_id = page_topics.page_id"])]
+      (when (pos? (or (:next.jdbc/update-count reparented) 0))
+        (println (str "Reparented " (:next.jdbc/update-count reparented) " extracts from orphan page topics"))))
+    (jdbc/execute! tx
+      ["DELETE FROM topics
+        WHERE kind = 'page'
+          AND parent_id IN (SELECT id FROM topics WHERE kind IN ('web', 'wikipedia'))"])
+
+    ;; 6. Reset sequence
+    (jdbc/execute! tx
+      ["SELECT setval('topics_id_seq', GREATEST((SELECT COALESCE(MAX(id), 1) FROM topics), 1))"])
+
+    ;; 7. Rename old tables
+    (println "Renaming old tables...")
+    (jdbc/execute! tx ["ALTER TABLE IF EXISTS content_items RENAME TO content_items_old"])
+    (jdbc/execute! tx ["ALTER TABLE IF EXISTS pages RENAME TO pages_old"])
+    (jdbc/execute! tx ["ALTER TABLE IF EXISTS documents RENAME TO documents_old"])
+
+    ;; Clean up temp tables
+    (jdbc/execute! tx ["DROP TABLE IF EXISTS page_id_map"])
+    (jdbc/execute! tx ["DROP TABLE IF EXISTS ci_id_map"])
+
+    ;; Print stats
+    (let [topic-count (:count (jdbc/execute-one! tx ["SELECT COUNT(*) AS count FROM topics"]))
+          file-count (:count (jdbc/execute-one! tx ["SELECT COUNT(*) AS count FROM topic_files"]))
+          card-count (:count (jdbc/execute-one! tx ["SELECT COUNT(*) AS count FROM flashcards WHERE topic_id IS NOT NULL"]))]
+      (println (str "=== Migration complete: " topic-count " topics, "
+                 file-count " files, " card-count " flashcards linked ===")))))
+
+;; ---------------------------------------------------------------------------
+;; Settings (unchanged)
+;; ---------------------------------------------------------------------------
+
 (defn get-setting [user-id key]
   (-> (jdbc/execute-one! ds
         (sql/format {:select [:value]
@@ -225,329 +447,10 @@
                  :do-update-set {:value value
                                  :updated_at [:now]}})))
 
-;; Document queries
-(defn save-document [user-id filename file-bytes file-size mime-type]
-  (jdbc/execute! ds
-    (sql/format {:insert-into :documents
-                 :values [{:user_id user-id
-                           :filename filename
-                           :file_data file-bytes
-                           :file_size file-size
-                           :mime_type mime-type
-                           :source_reference filename}]
-                 :returning [:id]})))
+;; ---------------------------------------------------------------------------
+;; Google OAuth user queries (unchanged)
+;; ---------------------------------------------------------------------------
 
-(defn save-web-document
-  "Save a web article as a document with a single page containing the HTML."
-  [user-id title html-content source-type source-url]
-  (let [source-ref (str title (when source-url (str " — " source-url)))
-        doc (first (jdbc/execute! ds
-                     (sql/format {:insert-into :documents
-                                  :values [{:user_id user-id
-                                            :filename title
-                                            :source_type source-type
-                                            :source_url source-url
-                                            :html_content html-content
-                                            :source_reference source-ref}]
-                                  :returning [:id]})))
-        doc-id (:documents/id doc)]
-    (when doc-id
-      ;; Create single page with the HTML content
-      (jdbc/execute! ds
-        (sql/format {:insert-into :pages
-                     :values [{:document_id doc-id
-                               :page_number 1
-                               :text html-content}]
-                     :on-conflict [:document_id :page_number]
-                     :do-nothing true})))
-    doc-id))
-
-(defn save-epub-document
-  "Save an EPUB as a document with raw bytes and one content_item (Topic) per chapter.
-   chapters is a vector of {:html \"...\" :title \"...\"} maps.
-   Returns {:doc-id :chapter-ids [id1 id2 ...]}."
-  [user-id title file-bytes file-size chapters]
-  (let [doc (first (jdbc/execute! ds
-                     (sql/format {:insert-into :documents
-                                  :values [{:user_id user-id
-                                            :filename title
-                                            :file_data file-bytes
-                                            :file_size file-size
-                                            :mime_type "application/epub+zip"
-                                            :source_type "epub"
-                                            :source_reference title}]
-                                  :returning [:id]})))
-        doc-id (:documents/id doc)
-        chapter-ids (when (and doc-id (seq chapters))
-                      (mapv (fn [i ch]
-                              (let [result (jdbc/execute-one! ds
-                                             (sql/format {:insert-into :content_items
-                                                          :values [{:document_id doc-id
-                                                                    :page_number (inc i)
-                                                                    :kind "topic"
-                                                                    :content (sanitize-utf8 (:html ch))
-                                                                    :status "active"
-                                                                    :priority 50}]
-                                                          :returning [:id]}))]
-                                (:content_items/id result)))
-                        (range (count chapters))
-                        chapters))]
-    {:doc-id doc-id :chapter-ids (vec (remove nil? chapter-ids))}))
-
-(defn create-empty-topic
-  "Create a standalone empty Topic — a lightweight document + one content_item."
-  [user-id title]
-  (let [doc (first (jdbc/execute! ds
-                     (sql/format {:insert-into :documents
-                                  :values [{:user_id user-id
-                                            :filename (or title "New Topic")
-                                            :source_type "topic"
-                                            :source_reference (or title "New Topic")}]
-                                  :returning [:id]})))
-        doc-id (:documents/id doc)
-        ci (when doc-id
-             (jdbc/execute-one! ds
-               (sql/format {:insert-into :content_items
-                            :values [{:document_id doc-id
-                                      :page_number 1
-                                      :kind "topic"
-                                      :content ""
-                                      :status "active"
-                                      :priority 50}]
-                            :returning [:id]})))]
-    {:doc-id doc-id
-     :content-item-id (when ci (:content_items/id ci))}))
-
-(defn get-documents [user-id]
-  (let [docs (jdbc/execute! ds
-               (sql/format {:select [:id :filename :file_size :uploaded_at :source_type :html_content :status]
-                            :from [:documents]
-                            :where [:= :user_id user-id]
-                            :order-by [[:uploaded_at :desc]]}))]
-    (mapv (fn [d]
-            (let [size (or (:documents/file_size d)
-                         (when-let [html (:documents/html_content d)]
-                           (count (.getBytes html "UTF-8"))))]
-              (-> d
-                (assoc :documents/file_size size)
-                (dissoc :documents/html_content))))
-      docs)))
-
-(defn delete-document [user-id id]
-  (jdbc/execute! ds
-    (sql/format {:delete-from :documents
-                 :where [:and
-                         [:= :id id]
-                         [:= :user_id user-id]]})))
-
-(defn get-documents-by-id
-  "Retrieve a document by its ID, scoped to user."
-  [user-id id]
-  (jdbc/execute! ds
-    (sql/format {:select [:*]
-                 :from [:documents]
-                 :where [:and
-                         [:= :id id]
-                         [:= :user_id user-id]]})))
-
-(defn update-document-source [document-id source-reference]
-  (jdbc/execute-one! ds
-    (sql/format {:update :documents
-                 :set {:source_reference source-reference}
-                 :where [:= :id document-id]})))
-
-(defn get-document-source [document-id]
-  (:documents/source_reference
-   (jdbc/execute-one! ds
-     (sql/format {:select [:source_reference]
-                  :from [:documents]
-                  :where [:= :id document-id]}))))
-
-;; Page queries
-(defn save-page-text
-  "Save or update OCR text for a specific page of a document.
-   Uses UPSERT pattern (ON CONFLICT DO UPDATE)."
-  [document-id page-number text]
-  (jdbc/execute! ds
-    ["INSERT INTO pages (document_id, page_number, text, updated_at)
-      VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-      ON CONFLICT (document_id, page_number)
-      DO UPDATE SET text = excluded.text, updated_at = CURRENT_TIMESTAMP"
-     document-id page-number text]))
-
-(defn create-page-stubs
-  "Batch-insert empty page rows for a newly uploaded document.
-   Uses ON CONFLICT DO NOTHING so existing rows (from OCR) are never overwritten."
-  [document-id page-count]
-  (when (pos? page-count)
-    (jdbc/execute! ds
-      (sql/format {:insert-into :pages
-                   :columns [:document_id :page_number]
-                   :values (mapv (fn [n] [document-id n]) (range 1 (inc page-count)))
-                   :on-conflict [:document_id :page_number]
-                   :do-nothing true}))))
-
-(defn get-page-text
-  "Retrieve text for a specific page."
-  [document-id page-number]
-  (jdbc/execute-one! ds
-    (sql/format {:select [:text]
-                 :from [:pages]
-                 :where [:and
-                         [:= :document_id document-id]
-                         [:= :page_number page-number]]})))
-
-(defn list-pages
-  "List all pages with OCR text for a document."
-  [document-id]
-  (jdbc/execute! ds
-    (sql/format {:select [:*]
-                 :from [:pages]
-                 :where [:= :document_id document-id]
-                 :order-by [[:page_number :asc]]})))
-
-(defn get-page-done-status
-  "Get the is_done status for a specific page. Returns boolean."
-  [document-id page-number]
-  (let [result (jdbc/execute-one! ds
-                 (sql/format {:select [:is_done]
-                              :from [:pages]
-                              :where [:and
-                                      [:= :document_id document-id]
-                                      [:= :page_number page-number]]}))]
-    (if result
-      (or (:pages/is_done result) false) ; NULL or false -> false, true -> true
-      false))) ; Page doesn't exist yet -> false
-
-(defn get-page-priority
-  "Get the priority for a specific page. Returns integer (default 50)."
-  [document-id page-number]
-  (let [result (jdbc/execute-one! ds
-                 (sql/format {:select [:priority]
-                              :from [:pages]
-                              :where [:and
-                                      [:= :document_id document-id]
-                                      [:= :page_number page-number]]}))]
-    (or (:pages/priority result) 50)))
-
-(defn set-page-priority
-  "Set the priority for a specific page (0=highest, 100=lowest).
-   Upserts the row so it works even without extracted text."
-  [document-id page-number priority]
-  (jdbc/execute! ds
-    ["INSERT INTO pages (document_id, page_number, priority, updated_at)
-      VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-      ON CONFLICT (document_id, page_number)
-      DO UPDATE SET priority = excluded.priority, updated_at = CURRENT_TIMESTAMP"
-     document-id page-number priority]))
-
-(defn get-reading-queue
-  "Returns all non-done pages for a user's documents, sorted by priority."
-  [user-id]
-  (jdbc/execute! ds
-    (sql/format {:select [:p/document_id :p/page_number :p/priority :d/filename]
-                 :from [[:pages :p]]
-                 :join [[:documents :d] [:= :p/document_id :d/id]]
-                 :where [:and [:= :d/user_id user-id]
-                         [:or [:= :p/is_done false] [:= :p/is_done nil]]]
-                 :order-by [[:p/priority :asc] [:d/id :asc] [:p/page_number :asc]]})))
-
-(defn toggle-page-done
-  "Toggle the is_done status for a specific page.
-   Upserts the row so it works even if text has never been extracted."
-  [document-id page-number]
-  (jdbc/execute-one! ds
-    ["INSERT INTO pages (document_id, page_number, is_done, updated_at)
-      VALUES (?, ?, true, CURRENT_TIMESTAMP)
-      ON CONFLICT (document_id, page_number)
-      DO UPDATE SET
-        is_done = CASE WHEN pages.is_done = true THEN false ELSE true END,
-        updated_at = CURRENT_TIMESTAMP"
-     document-id page-number]))
-
-;; Flashcard queries
-(defn insert-flashcards
-  "Batch insert flashcards. Uses ON CONFLICT DO NOTHING to prevent duplicates."
-  [rows]
-  (when (seq rows)
-    (jdbc/execute! ds
-      (sql/format {:insert-into :flashcards
-                   :values rows
-                   :on-conflict []
-                   :do-nothing true}))))
-
-(defn get-flashcards
-  "Get ALL flashcards for a page (used by sync, export). Includes extract cards."
-  [document-id page-number]
-  (jdbc/execute! ds
-    (sql/format {:select [:*]
-                 :from [:flashcards]
-                 :where [:and
-                         [:= :document_id document-id]
-                         [:= :page_number page-number]]
-                 :order-by [[:created_at :asc]]})))
-
-(defn get-flashcards-by-content-item
-  "Get all flashcards for a specific content item (extract)."
-  [content-item-id]
-  (jdbc/execute! ds
-    (sql/format {:select [:*]
-                 :from [:flashcards]
-                 :where [:= :content_item_id content-item-id]
-                 :order-by [[:created_at :asc]]})))
-
-(defn get-all-flashcards
-  "Get all flashcards for a document (all pages)."
-  [document-id]
-  (jdbc/execute! ds
-    (sql/format {:select [:*]
-                 :from [:flashcards]
-                 :where [:= :document_id document-id]
-                 :order-by [[:page_number :asc] [:created_at :asc]]})))
-
-(defn delete-flashcard
-  "Delete a single flashcard by ID. Returns the deleted row (including anki_note_id)."
-  [card-id]
-  (jdbc/execute-one! ds
-    ["DELETE FROM flashcards WHERE id = ? RETURNING id, anki_note_id" card-id]))
-
-(defn get-anki-note-ids-for-document
-  "Get all anki_note_ids for a document's flashcards (for bulk Anki cleanup before cascade delete)."
-  [document-id]
-  (->> (jdbc/execute! ds
-         ["SELECT anki_note_id FROM flashcards WHERE document_id = ? AND anki_note_id IS NOT NULL"
-          document-id])
-    (mapv :flashcards/anki_note_id)))
-
-(defn get-anki-note-ids-for-content-item
-  "Get all anki_note_ids for an extract's flashcards (for bulk Anki cleanup before cascade delete)."
-  [content-item-id]
-  (->> (jdbc/execute! ds
-         ["SELECT anki_note_id FROM flashcards WHERE content_item_id = ? AND anki_note_id IS NOT NULL"
-          content-item-id])
-    (mapv :flashcards/anki_note_id)))
-
-(defn update-flashcard
-  "Update flashcard content fields. Sets updated_at for sync tracking."
-  [card-id fields]
-  (jdbc/execute-one! ds
-    (sql/format {:update :flashcards
-                 :set (assoc fields :updated_at [:now])
-                 :where [:= :id card-id]})))
-
-(defn get-context-pages
-  "Get text from previous N pages for context. Returns pages in ascending order."
-  [document-id start-page end-page]
-  (jdbc/execute! ds
-    (sql/format {:select [:page_number :text]
-                 :from [:pages]
-                 :where [:and
-                         [:= :document_id document-id]
-                         [:>= :page_number start-page]
-                         [:<= :page_number end-page]]
-                 :order-by [[:page_number :asc]]})))
-
-;; Google OAuth user queries
 (defn get-user-by-google-id [google-id]
   (jdbc/execute-one! ds
     (sql/format {:select [:id :username :email]
@@ -562,7 +465,9 @@
                  :do-update-set {:email email}
                  :returning [:id :username]})))
 
-;; Content item queries
+;; ---------------------------------------------------------------------------
+;; Utility
+;; ---------------------------------------------------------------------------
 
 (defn sanitize-utf8
   "Re-encode string through UTF-8 to strip invalid byte sequences."
@@ -570,60 +475,414 @@
   (when s
     (String. (.getBytes (str s) "UTF-8") "UTF-8")))
 
-(defn save-content-item
-  ([document-id page-number kind content]
-   (save-content-item document-id page-number kind content nil))
-  ([document-id page-number kind content parent-content-item-id]
-   (jdbc/execute-one! ds
-     (sql/format {:insert-into :content_items
-                  :values [(cond-> {:document_id document-id
-                                    :page_number page-number
-                                    :kind kind
-                                    :content (sanitize-utf8 content)}
-                             parent-content-item-id
-                             (assoc :parent_content_item_id parent-content-item-id))]
-                  :returning [:id]}))))
+;; ---------------------------------------------------------------------------
+;; Topic CRUD
+;; ---------------------------------------------------------------------------
 
-(defn get-content-items [document-id page-number]
+(defn create-topic!
+  "Create a topic. attrs is a map with keys:
+   :user-id :kind :title :parent-id :content :page-number
+   :source-url :source-reference :status :priority
+   Returns the created row with :topics/id."
+  [attrs]
+  (let [row (cond-> {:kind (or (:kind attrs) "basic")
+                     :title (or (:title attrs) "Untitled")
+                     :status (or (:status attrs) "active")
+                     :priority (or (:priority attrs) 50)}
+              (:user-id attrs) (assoc :user_id (:user-id attrs))
+              (:parent-id attrs) (assoc :parent_id (:parent-id attrs))
+              (:content attrs) (assoc :content (sanitize-utf8 (:content attrs)))
+              (:page-number attrs) (assoc :page_number (:page-number attrs))
+              (:source-url attrs) (assoc :source_url (:source-url attrs))
+              (:source-reference attrs) (assoc :source_reference (:source-reference attrs)))]
+    (jdbc/execute-one! ds
+      (sql/format {:insert-into :topics
+                   :values [row]
+                   :returning [:*]}))))
+
+(defn get-topic
+  "Get a topic by ID."
+  [id]
+  (jdbc/execute-one! ds
+    (sql/format {:select [:*]
+                 :from [:topics]
+                 :where [:= :id id]})))
+
+(defn get-topic-for-user
+  "Get a topic by ID, scoped to a user (checks user_id on the root)."
+  [user-id id]
+  (jdbc/execute-one! ds
+    (sql/format {:select [:*]
+                 :from [:topics]
+                 :where [:and [:= :id id] [:= :user_id user-id]]})))
+
+(defn get-root-topics
+  "Get all root topics for a user (parent_id IS NULL). Replaces get-documents.
+   Includes file_size from topic_files or content length."
+  [user-id]
+  (let [topics (jdbc/execute! ds
+                 (sql/format {:select [:t/id :t/title :t/kind :t/source_url :t/source_reference
+                                       :t/status :t/priority :t/created_at :t/content
+                                       :tf/file_size]
+                              :from [[:topics :t]]
+                              :left-join [[:topic_files :tf] [:= :t/id :tf/topic_id]]
+                              :where [:and [:= :t/user_id user-id] [:= :t/parent_id nil]]
+                              :order-by [[:t/created_at :desc]]}))]
+    (mapv (fn [t]
+            (let [size (or (:topic_files/file_size t)
+                         (when-let [c (:topics/content t)]
+                           (count (.getBytes c "UTF-8"))))]
+              (-> t
+                (assoc :topics/file_size size)
+                (dissoc :topics/content :topic_files/file_size))))
+      topics)))
+
+(defn get-children
+  "Get direct children of a topic, ordered by page_number then created_at."
+  [parent-id]
   (jdbc/execute! ds
     (sql/format {:select [:*]
-                 :from [:content_items]
-                 :where [:and [:= :document_id document-id]
-                         [:= :page_number page-number]]
-                 :order-by [[:created_at :asc]]})))
+                 :from [:topics]
+                 :where [:= :parent_id parent-id]
+                 :order-by [[:page_number :asc-nulls-last] [:created_at :asc]]})))
 
-(defn get-content-item-by-id [id]
+(defn update-topic-content!
+  "Update the content of a topic."
+  [id content]
   (jdbc/execute-one! ds
-    (sql/format {:select [:*] :from [:content_items] :where [:= :id id]})))
-
-(defn update-content-item-content [id content]
-  (jdbc/execute-one! ds
-    (sql/format {:update :content_items
+    (sql/format {:update :topics
                  :set {:content (sanitize-utf8 content)}
                  :where [:= :id id]})))
 
-(defn get-all-content-items
-  "Get all content items for a user across all documents, newest first."
-  [user-id]
-  (jdbc/execute! ds
-    (sql/format {:select [:ci/id :ci/document_id :ci/page_number :ci/content :ci/created_at :d/filename]
-                 :from [[:content_items :ci]]
-                 :join [[:documents :d] [:= :ci/document_id :d/id]]
-                 :where [:= :d/user_id user-id]
-                 :order-by [[:ci/created_at :desc]]})))
+(defn update-topic-source!
+  "Update source_reference on a topic."
+  [id source-reference]
+  (jdbc/execute-one! ds
+    (sql/format {:update :topics
+                 :set {:source_reference source-reference}
+                 :where [:= :id id]})))
 
-(defn get-knowledge-tree
-  "Fetch all content_items with parent references for building the knowledge tree."
-  [user-id]
-  (jdbc/execute! ds
-    (sql/format {:select [:ci/id :ci/document_id :ci/page_number :ci/content :ci/kind
-                          :ci/parent_content_item_id :ci/status :ci/created_at]
-                 :from [[:content_items :ci]]
-                 :join [[:documents :d] [:= :ci/document_id :d/id]]
-                 :where [:= :d/user_id user-id]
-                 :order-by [[:ci/document_id :asc] [:ci/page_number :asc] [:ci/created_at :asc]]})))
+(defn get-topic-source
+  "Get the source_reference for a topic."
+  [id]
+  (:topics/source_reference
+   (jdbc/execute-one! ds
+     (sql/format {:select [:source_reference]
+                  :from [:topics]
+                  :where [:= :id id]}))))
 
-;; Anki sync functions
+(defn delete-topic!
+  "Delete a topic by ID. CASCADE handles children + flashcards."
+  [id]
+  (jdbc/execute! ds
+    (sql/format {:delete-from :topics
+                 :where [:= :id id]})))
+
+(defn delete-topic-for-user!
+  "Delete a topic scoped to user."
+  [user-id id]
+  (jdbc/execute! ds
+    (sql/format {:delete-from :topics
+                 :where [:and [:= :id id] [:= :user_id user-id]]})))
+
+(defn batch-create-topics!
+  "Batch insert child topics under parent-id. items is a seq of maps with :content.
+   Returns count of created items."
+  [parent-id items]
+  (when (seq items)
+    (let [parent (get-topic parent-id)
+          user-id (:topics/user_id parent)
+          rows (mapv (fn [item]
+                       {:user_id user-id
+                        :parent_id parent-id
+                        :kind "basic"
+                        :title (let [raw (or (:content item) "")]
+                                 (-> raw
+                                   (str/replace #"<[^>]+>" "")
+                                   (subs 0 (min 80 (count (str/replace raw #"<[^>]+>" ""))))
+                                   str/trim
+                                   (#(if (str/blank? %) "Extract" %))))
+                        :content (sanitize-utf8 (:content item))
+                        :status "active"
+                        :priority 50})
+                 items)]
+      (jdbc/execute! ds
+        (sql/format {:insert-into :topics
+                     :values rows}))
+      (count items))))
+
+;; ---------------------------------------------------------------------------
+;; File operations
+;; ---------------------------------------------------------------------------
+
+(defn get-topic-file
+  "Get the binary file data for a topic (PDF/EPUB)."
+  [topic-id]
+  (jdbc/execute-one! ds
+    (sql/format {:select [:file_data :file_size :mime_type]
+                 :from [:topic_files]
+                 :where [:= :topic_id topic-id]})))
+
+(defn save-topic-file!
+  "Store binary file for a topic. Upserts."
+  [topic-id file-bytes file-size mime-type]
+  (jdbc/execute! ds
+    ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT (topic_id)
+      DO UPDATE SET file_data = excluded.file_data, file_size = excluded.file_size, mime_type = excluded.mime_type"
+     topic-id file-bytes file-size mime-type]))
+
+;; ---------------------------------------------------------------------------
+;; Compound creation helpers
+;; ---------------------------------------------------------------------------
+
+(defn create-pdf-topic!
+  "Create a PDF root topic with file data and page stubs.
+   Returns the result with :topics/id."
+  [user-id filename file-bytes file-size page-count]
+  (jdbc/with-transaction [tx ds]
+    (let [topic (jdbc/execute-one! tx
+                  (sql/format {:insert-into :topics
+                               :values [{:user_id user-id
+                                         :kind "pdf"
+                                         :title filename
+                                         :source_reference filename}]
+                               :returning [:id]}))
+          topic-id (:topics/id topic)]
+      ;; Store file
+      (jdbc/execute! tx
+        ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
+          VALUES (?, ?, ?, ?)"
+         topic-id file-bytes file-size "application/pdf"])
+      ;; Create page stubs
+      (when (pos? page-count)
+        (doseq [n (range 1 (inc page-count))]
+          (jdbc/execute! tx
+            ["INSERT INTO topics (user_id, parent_id, kind, title, page_number)
+              VALUES (?, ?, 'page', ?, ?)
+              ON CONFLICT (parent_id, page_number) WHERE page_number IS NOT NULL
+              DO NOTHING"
+             user-id topic-id (str "Page " n) n])))
+      topic)))
+
+(defn create-web-topic!
+  "Create a web article topic. Returns topic-id."
+  [user-id title html-content source-url]
+  (let [source-ref (str title (when source-url (str " — " source-url)))
+        topic (jdbc/execute-one! ds
+                (sql/format {:insert-into :topics
+                             :values [{:user_id user-id
+                                       :kind "web"
+                                       :title (or title "Web Article")
+                                       :content (sanitize-utf8 html-content)
+                                       :source_url source-url
+                                       :source_reference source-ref}]
+                             :returning [:id]}))]
+    (:topics/id topic)))
+
+(defn create-epub-topic!
+  "Create an EPUB root topic with file and chapter children.
+   chapters is a vec of {:html :title} maps.
+   Returns {:topic-id N :chapter-ids [...]}"
+  [user-id title file-bytes file-size chapters]
+  (jdbc/with-transaction [tx ds]
+    (let [topic (jdbc/execute-one! tx
+                  (sql/format {:insert-into :topics
+                               :values [{:user_id user-id
+                                         :kind "epub"
+                                         :title (or title "Untitled EPUB")
+                                         :source_reference (or title "Untitled EPUB")}]
+                               :returning [:id]}))
+          topic-id (:topics/id topic)]
+      ;; Store file
+      (jdbc/execute! tx
+        ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
+          VALUES (?, ?, ?, ?)"
+         topic-id file-bytes file-size "application/epub+zip"])
+      ;; Create chapter children
+      (let [chapter-ids (when (seq chapters)
+                          (mapv (fn [i ch]
+                                  (let [result (jdbc/execute-one! tx
+                                                 (sql/format {:insert-into :topics
+                                                              :values [{:user_id user-id
+                                                                        :parent_id topic-id
+                                                                        :kind "basic"
+                                                                        :title (or (:title ch) (str "Chapter " (inc i)))
+                                                                        :content (sanitize-utf8 (:html ch))
+                                                                        :page_number (inc i)
+                                                                        :status "active"
+                                                                        :priority 50}]
+                                                              :returning [:id]}))]
+                                    (:topics/id result)))
+                            (range (count chapters))
+                            chapters))]
+        {:topic-id topic-id :chapter-ids (vec (remove nil? chapter-ids))}))))
+
+(defn create-standalone-topic!
+  "Create a standalone empty topic. Returns {:topic-id N}."
+  [user-id title]
+  (let [topic (jdbc/execute-one! ds
+                (sql/format {:insert-into :topics
+                             :values [{:user_id user-id
+                                       :kind "basic"
+                                       :title (or title "New Topic")
+                                       :content ""
+                                       :source_reference (or title "New Topic")}]
+                             :returning [:id]}))]
+    {:topic-id (:topics/id topic)}))
+
+;; ---------------------------------------------------------------------------
+;; Page-specific operations (kind='page' child topics)
+;; ---------------------------------------------------------------------------
+
+(defn create-page-stubs!
+  "Batch-insert empty page topics for a parent. ON CONFLICT DO NOTHING."
+  [parent-id page-count user-id]
+  (when (pos? page-count)
+    (doseq [n (range 1 (inc page-count))]
+      (jdbc/execute! ds
+        ["INSERT INTO topics (user_id, parent_id, kind, title, page_number)
+          VALUES (?, ?, 'page', ?, ?)
+          ON CONFLICT (parent_id, page_number) WHERE page_number IS NOT NULL
+          DO NOTHING"
+         user-id parent-id (str "Page " n) n]))))
+
+(defn save-page-text!
+  "Save or update OCR text for a page topic (by parent + page_number).
+   Upserts the page topic row."
+  [parent-id page-number text]
+  (jdbc/execute! ds
+    ["INSERT INTO topics (parent_id, kind, title, content, page_number,
+                          user_id)
+      SELECT ?, 'page', ?, ?, ?,
+             (SELECT user_id FROM topics WHERE id = ?)
+      WHERE NOT EXISTS (SELECT 1 FROM topics WHERE parent_id = ? AND page_number = ?)
+      ON CONFLICT DO NOTHING"
+     parent-id (str "Page " page-number) text page-number
+     parent-id parent-id page-number])
+  ;; Update existing
+  (jdbc/execute! ds
+    ["UPDATE topics SET content = ?
+      WHERE parent_id = ? AND page_number = ?"
+     text parent-id page-number]))
+
+(defn get-page-text
+  "Get the content (OCR text) for a page by parent + page_number."
+  [parent-id page-number]
+  (jdbc/execute-one! ds
+    (sql/format {:select [:content]
+                 :from [:topics]
+                 :where [:and
+                         [:= :parent_id parent-id]
+                         [:= :page_number page-number]]})))
+
+(defn list-pages
+  "List all page topics for a parent, ordered by page_number."
+  [parent-id]
+  (jdbc/execute! ds
+    (sql/format {:select [:*]
+                 :from [:topics]
+                 :where [:and [:= :parent_id parent-id] [:= :kind "page"]]
+                 :order-by [[:page_number :asc]]})))
+
+(defn get-page-done-status
+  "Check if a page is done. Returns boolean."
+  [parent-id page-number]
+  (let [result (jdbc/execute-one! ds
+                 (sql/format {:select [:status]
+                              :from [:topics]
+                              :where [:and
+                                      [:= :parent_id parent-id]
+                                      [:= :page_number page-number]]}))]
+    (= "done" (:topics/status result))))
+
+(defn toggle-page-done!
+  "Toggle a page topic between 'active' and 'done' status."
+  [parent-id page-number]
+  (jdbc/execute-one! ds
+    ["UPDATE topics SET status = CASE WHEN status = 'done' THEN 'active' ELSE 'done' END
+      WHERE parent_id = ? AND page_number = ?"
+     parent-id page-number]))
+
+(defn get-context-pages
+  "Get content from page topics in a range, for card generation context."
+  [parent-id start-page end-page]
+  (jdbc/execute! ds
+    (sql/format {:select [:page_number :content]
+                 :from [:topics]
+                 :where [:and
+                         [:= :parent_id parent-id]
+                         [:= :kind "page"]
+                         [:>= :page_number start-page]
+                         [:<= :page_number end-page]]
+                 :order-by [[:page_number :asc]]})))
+
+;; ---------------------------------------------------------------------------
+;; Flashcard operations
+;; ---------------------------------------------------------------------------
+
+(defn insert-flashcards!
+  "Batch insert flashcards. Rows should include :topic_id and :root_topic_id.
+   Uses ON CONFLICT DO NOTHING to prevent duplicates."
+  [rows]
+  (when (seq rows)
+    (jdbc/execute! ds
+      (sql/format {:insert-into :flashcards
+                   :values rows
+                   :on-conflict []
+                   :do-nothing true}))))
+
+(defn get-flashcards
+  "Get all flashcards for a specific topic (page or extract)."
+  [topic-id]
+  (if topic-id
+    (jdbc/execute! ds
+      (sql/format {:select [:*]
+                   :from [:flashcards]
+                   :where [:= :topic_id topic-id]
+                   :order-by [[:created_at :asc]]}))
+    []))
+
+(defn get-all-flashcards
+  "Get all flashcards under a root topic."
+  [root-topic-id]
+  (jdbc/execute! ds
+    (sql/format {:select [:*]
+                 :from [:flashcards]
+                 :where [:= :root_topic_id root-topic-id]
+                 :order-by [[:created_at :asc]]})))
+
+(defn delete-flashcard!
+  "Delete a single flashcard by ID. Returns the deleted row."
+  [card-id]
+  (jdbc/execute-one! ds
+    ["DELETE FROM flashcards WHERE id = ? RETURNING id, anki_note_id" card-id]))
+
+(defn update-flashcard!
+  "Update flashcard content fields. Sets updated_at for sync tracking."
+  [card-id fields]
+  (jdbc/execute-one! ds
+    (sql/format {:update :flashcards
+                 :set (assoc fields :updated_at [:now])
+                 :where [:= :id card-id]})))
+
+(defn get-anki-note-ids
+  "Get anki_note_ids for a specific topic's flashcards."
+  [topic-id]
+  (->> (jdbc/execute! ds
+         ["SELECT anki_note_id FROM flashcards WHERE topic_id = ? AND anki_note_id IS NOT NULL"
+          topic-id])
+    (mapv :flashcards/anki_note_id)))
+
+(defn get-all-anki-note-ids
+  "Get all anki_note_ids under a root topic."
+  [root-topic-id]
+  (->> (jdbc/execute! ds
+         ["SELECT anki_note_id FROM flashcards WHERE root_topic_id = ? AND anki_note_id IS NOT NULL"
+          root-topic-id])
+    (mapv :flashcards/anki_note_id)))
+
 (defn set-anki-note-id
   "Set anki_note_id and anki_synced_at for a flashcard."
   [card-id anki-note-id]
@@ -655,325 +914,251 @@
         card-ids))))
 
 (defn get-unsynced-card-count
-  "Count unsynced cards, scoped to extract, page, or document.
-   - content-item-id provided: count only that extract's cards
-   - page-number provided (no content-item-id): count all cards on the page
-   - neither: count all cards in document"
-  [document-id page-number content-item-id]
-  (let [base-where "document_id = ? AND (anki_synced_at IS NULL OR (updated_at IS NOT NULL AND updated_at > anki_synced_at))"
-        [sql & params]
-        (cond
-          content-item-id
-          [(str "SELECT COUNT(*) AS cnt FROM flashcards WHERE " base-where " AND content_item_id = ?")
-           document-id content-item-id]
-
-          page-number
-          [(str "SELECT COUNT(*) AS cnt FROM flashcards WHERE " base-where " AND page_number = ?")
-           document-id page-number]
-
-          :else
-          [(str "SELECT COUNT(*) AS cnt FROM flashcards WHERE " base-where)
-           document-id])
-        result (jdbc/execute-one! ds (into [sql] params))]
+  "Count unsynced cards for a specific topic."
+  [topic-id]
+  (let [result (jdbc/execute-one! ds
+                 ["SELECT COUNT(*) AS cnt FROM flashcards
+                   WHERE topic_id = ? AND (anki_synced_at IS NULL OR (updated_at IS NOT NULL AND updated_at > anki_synced_at))"
+                  topic-id])]
     (or (:cnt result) 0)))
 
-;; Learning queue functions
+(defn get-unsynced-card-count-for-root
+  "Count unsynced cards for an entire root topic tree."
+  [root-topic-id]
+  (let [result (jdbc/execute-one! ds
+                 ["SELECT COUNT(*) AS cnt FROM flashcards
+                   WHERE root_topic_id = ? AND (anki_synced_at IS NULL OR (updated_at IS NOT NULL AND updated_at > anki_synced_at))"
+                  root-topic-id])]
+    (or (:cnt result) 0)))
+
+;; ---------------------------------------------------------------------------
+;; Scheduling (unified — no topic-type dispatch)
+;; ---------------------------------------------------------------------------
+
+(defn advance-topic!
+  "Advance a topic's review schedule using A-Factor algorithm."
+  [id]
+  (jdbc/execute-one! ds
+    ["UPDATE topics
+      SET interval_days = COALESCE(interval_days, 1.0) * COALESCE(a_factor, 2.0),
+          next_review_at = NOW() + (COALESCE(interval_days, 1.0) * COALESCE(a_factor, 2.0)) * INTERVAL '1 day',
+          last_review_at = NOW(),
+          review_count = COALESCE(review_count, 0) + 1
+      WHERE id = ?"
+     id]))
+
+(defn update-topic-priority!
+  "Update a topic's priority (0=highest, 100=lowest)."
+  [id priority]
+  (jdbc/execute-one! ds
+    ["UPDATE topics SET priority = ? WHERE id = ?" priority id]))
+
+(defn postpone-topic!
+  "Postpone a topic by N days without changing interval/a-factor."
+  [id days]
+  (jdbc/execute-one! ds
+    ["UPDATE topics
+      SET next_review_at = NOW() + ? * INTERVAL '1 day',
+          last_review_at = NOW()
+      WHERE id = ?"
+     (double days) id]))
+
+(defn done-topic!
+  "Mark a topic as done."
+  [id]
+  (jdbc/execute-one! ds
+    ["UPDATE topics SET status = 'done' WHERE id = ?" id]))
+
+(defn restore-topic!
+  "Restore a done topic back to active queue."
+  [id]
+  (jdbc/execute-one! ds
+    ["UPDATE topics SET status = 'active', next_review_at = NULL WHERE id = ?" id]))
+
+(defn touch-topic!
+  "Update last_review_at without advancing the interval."
+  [id]
+  (jdbc/execute-one! ds
+    ["UPDATE topics
+      SET last_review_at = NOW(), review_count = COALESCE(review_count, 0) + 1
+      WHERE id = ?"
+     id]))
+
+;; ---------------------------------------------------------------------------
+;; Queue queries (single SELECT, no UNION ALL)
+;; ---------------------------------------------------------------------------
+
 (defn get-learning-queue
-  "Unified queue of due documents and extracts for incremental reading."
+  "Due topics for incremental reading. Single query, no UNION."
   [user-id]
   (try
     (jdbc/execute! ds
-      ["SELECT 'document' AS topic_type, d.id, d.id AS document_id, 0 AS page_number,
-               d.priority, d.next_review_at, d.interval_days, d.a_factor, d.review_count,
-               NULL AS content, d.filename
-        FROM documents d
-        WHERE d.user_id = ?
-          AND (d.next_review_at <= NOW() OR d.next_review_at IS NULL)
-          AND (d.status = 'active' OR d.status IS NULL)
-        UNION ALL
-        SELECT 'extract', ci.id, ci.document_id, ci.page_number, ci.priority,
-               ci.next_review_at, ci.interval_days, ci.a_factor, ci.review_count,
-               ci.content, d.filename
-        FROM content_items ci JOIN documents d ON ci.document_id = d.id
-        WHERE d.user_id = ?
-          AND (ci.next_review_at <= NOW() OR ci.next_review_at IS NULL)
-          AND (ci.status = 'active' OR ci.status IS NULL)
-        ORDER BY priority ASC, next_review_at ASC NULLS FIRST, id ASC"
-       user-id user-id])
+      ["SELECT id, parent_id, kind, title, content, priority, next_review_at,
+              interval_days, a_factor, review_count, status, source_url, source_reference
+       FROM topics
+       WHERE user_id = ?
+         AND kind != 'page'
+         AND (next_review_at <= NOW() OR next_review_at IS NULL)
+         AND (status = 'active' OR status IS NULL)
+       ORDER BY priority ASC, next_review_at ASC NULLS FIRST, id ASC"
+      user-id])
     (catch Exception e
       (println "ERROR get-learning-queue:" (.getMessage e))
       [])))
 
 (defn get-learning-queue-count
-  "Count of due topics without fetching content."
+  "Count of due topics."
   [user-id]
   (let [result (jdbc/execute-one! ds
-                 ["SELECT
-                     (SELECT COUNT(*) FROM documents d
-                      WHERE d.user_id = ?
-                        AND (d.next_review_at <= NOW() OR d.next_review_at IS NULL)
-                        AND (d.status = 'active' OR d.status IS NULL))
-                   + (SELECT COUNT(*) FROM content_items ci JOIN documents d ON ci.document_id = d.id
-                      WHERE d.user_id = ?
-                        AND (ci.next_review_at <= NOW() OR ci.next_review_at IS NULL)
-                        AND (ci.status = 'active' OR ci.status IS NULL))
-                   AS total"
-                  user-id user-id])]
+                 ["SELECT COUNT(*) AS total FROM topics
+                   WHERE user_id = ?
+                     AND kind != 'page'
+                     AND (next_review_at <= NOW() OR next_review_at IS NULL)
+                     AND (status = 'active' OR status IS NULL)"
+                  user-id])]
     (or (:total result) 0)))
 
 (defn get-total-topic-count
-  "Count ALL topics (due and not due, excluding done)."
+  "Count ALL topics (due and not due, excluding done and pages)."
   [user-id]
   (let [result (jdbc/execute-one! ds
-                 ["SELECT
-                     (SELECT COUNT(*) FROM documents d
-                      WHERE d.user_id = ?
-                        AND (d.status = 'active' OR d.status IS NULL))
-                   + (SELECT COUNT(*) FROM content_items ci JOIN documents d ON ci.document_id = d.id
-                      WHERE d.user_id = ?
-                        AND (ci.status = 'active' OR ci.status IS NULL))
-                   AS total"
-                  user-id user-id])]
+                 ["SELECT COUNT(*) AS total FROM topics
+                   WHERE user_id = ?
+                     AND kind != 'page'
+                     AND (status = 'active' OR status IS NULL)"
+                  user-id])]
     (or (:total result) 0)))
 
 (defn get-full-queue
-  "Get ALL topics (documents + extracts) ordered by priority. No date filter."
+  "All topics with scheduling info. No date filter."
   [user-id]
   (try
     (jdbc/execute! ds
-      ["SELECT * FROM (
-        SELECT 'document' AS topic_type, d.id, d.filename AS title, d.priority,
-               d.next_review_at, d.interval_days, d.status,
-               d.source_type, NULL AS content, NULL AS kind
-        FROM documents d WHERE d.user_id = ?
-        UNION ALL
-        SELECT 'extract', ci.id, d.filename AS title, ci.priority,
-               ci.next_review_at, ci.interval_days, ci.status,
-               d.source_type, SUBSTRING(ci.content FROM 1 FOR 300) AS content, ci.kind
-        FROM content_items ci JOIN documents d ON ci.document_id = d.id
-        WHERE d.user_id = ?
-       ) q ORDER BY CASE WHEN status = 'active' OR status IS NULL THEN 0 WHEN status = 'done' THEN 1 ELSE 2 END, priority ASC, next_review_at ASC NULLS FIRST, id ASC"
-       user-id user-id])
+      ["SELECT id, parent_id, kind, title, priority, next_review_at,
+              interval_days, status, content, source_url
+       FROM topics
+       WHERE user_id = ? AND kind != 'page'
+       ORDER BY CASE WHEN status = 'active' OR status IS NULL THEN 0
+                     WHEN status = 'done' THEN 1 ELSE 2 END,
+                priority ASC, next_review_at ASC NULLS FIRST, id ASC"
+      user-id])
     (catch Exception e
       (println "ERROR get-full-queue:" (.getMessage e))
       [])))
 
 (defn get-review-calendar
-  "Get topic counts per day for the next N days."
+  "Topic counts per day for the next N days."
   [user-id days]
   (jdbc/execute! ds
-    ["SELECT review_date, SUM(cnt) AS count FROM (
-        SELECT DATE(next_review_at) AS review_date, COUNT(*) AS cnt
-        FROM documents WHERE user_id = ?
-          AND next_review_at BETWEEN NOW() AND NOW() + ? * INTERVAL '1 day'
-          AND (status = 'active' OR status IS NULL)
-        GROUP BY DATE(next_review_at)
-        UNION ALL
-        SELECT DATE(ci.next_review_at), COUNT(*)
-        FROM content_items ci JOIN documents d ON ci.document_id = d.id
-        WHERE d.user_id = ?
-          AND ci.next_review_at BETWEEN NOW() AND NOW() + ? * INTERVAL '1 day'
-          AND (ci.status = 'active' OR ci.status IS NULL)
-        GROUP BY DATE(ci.next_review_at)
-      ) sub GROUP BY review_date ORDER BY review_date"
-     user-id days user-id days]))
-
-(defn advance-topic
-  "Advance a topic's review schedule using A-Factor algorithm."
-  [topic-type id]
-  (let [table (case topic-type
-                "document" "documents"
-                "page" "pages"
-                "extract" "content_items")]
-    (jdbc/execute-one! ds
-      [(str "UPDATE " table "
-             SET interval_days = COALESCE(interval_days, 1.0) * COALESCE(a_factor, 2.0),
-                 next_review_at = NOW() + (COALESCE(interval_days, 1.0) * COALESCE(a_factor, 2.0)) * INTERVAL '1 day',
-                 last_review_at = NOW(),
-                 review_count = COALESCE(review_count, 0) + 1
-             WHERE id = ?")
-       id])))
-
-(defn update-topic-priority
-  "Update a topic's priority (0=highest, 100=lowest)."
-  [topic-type id priority]
-  (let [table (case topic-type
-                "document" "documents"
-                "extract" "content_items")]
-    (jdbc/execute-one! ds
-      [(str "UPDATE " table " SET priority = ? WHERE id = ?")
-       priority id])))
-
-(defn postpone-topic
-  "Postpone a topic by N days without changing its interval/a-factor."
-  [topic-type id days]
-  (let [table (case topic-type
-                "document" "documents"
-                "extract" "content_items")]
-    (jdbc/execute-one! ds
-      [(str "UPDATE " table "
-             SET next_review_at = NOW() + ? * INTERVAL '1 day',
-                 last_review_at = NOW()
-             WHERE id = ?")
-       (double days) id])))
-
-(defn done-topic
-  "Mark a topic as fully processed (extracted/carded everything useful)."
-  [topic-type id]
-  (let [table (case topic-type
-                "document" "documents"
-                "extract" "content_items")]
-    (jdbc/execute-one! ds
-      [(str "UPDATE " table " SET status = 'done' WHERE id = ?")
-       id])))
-
-(defn delete-content-item
-  "Delete a content item (extract) and cascade to children + flashcards."
-  [id]
-  (jdbc/execute! ds
-    (sql/format {:delete-from :content_items
-                 :where [:= :id id]})))
+    ["SELECT DATE(next_review_at) AS review_date, COUNT(*) AS count
+      FROM topics
+      WHERE user_id = ?
+        AND kind != 'page'
+        AND next_review_at BETWEEN NOW() AND NOW() + ? * INTERVAL '1 day'
+        AND (status = 'active' OR status IS NULL)
+      GROUP BY DATE(next_review_at)
+      ORDER BY review_date"
+     user-id days]))
 
 (defn get-inactive-topics
-  "Get all non-active (dismissed + done) documents and extracts for a user."
+  "Get all non-active (done) topics for a user."
   [user-id]
   (try
     (jdbc/execute! ds
-      ["SELECT 'document' AS topic_type, d.id, d.filename AS title, d.uploaded_at, d.status
-        FROM documents d
-        WHERE d.user_id = ? AND d.status IN ('dismissed', 'done')
-        UNION ALL
-        SELECT 'extract', ci.id, SUBSTRING(ci.content FROM 1 FOR 300) AS title, ci.created_at AS uploaded_at, ci.status
-        FROM content_items ci JOIN documents d ON ci.document_id = d.id
-        WHERE d.user_id = ? AND ci.status IN ('dismissed', 'done')
-        ORDER BY uploaded_at DESC"
-       user-id user-id])
+      ["SELECT id, parent_id, kind, title, created_at, status
+       FROM topics
+       WHERE user_id = ?
+         AND kind != 'page'
+         AND status IN ('dismissed', 'done')
+       ORDER BY created_at DESC"
+      user-id])
     (catch Exception e
-      (println "ERROR get-dismissed-topics:" (.getMessage e))
+      (println "ERROR get-inactive-topics:" (.getMessage e))
       [])))
 
-(defn restore-topic
-  "Restore a dismissed/done topic back to the active review queue."
-  [topic-type id]
-  (let [table (case topic-type
-                "document" "documents"
-                "extract" "content_items")]
-    (jdbc/execute-one! ds
-      [(str "UPDATE " table " SET status = 'active', next_review_at = NULL WHERE id = ?")
-       id])))
-
 ;; ---------------------------------------------------------------------------
-;; Subset Review
+;; Tree navigation + Knowledge tree
 ;; ---------------------------------------------------------------------------
 
-(defn get-subtree-for-document
-  "Fetch a document + all its content_items (any nesting depth) as a flat list."
-  [user-id document-id]
+(defn get-knowledge-tree
+  "Fetch all topics with parent references for building the knowledge tree.
+   Includes page topics so parent chain (PDF → page → extract) is intact."
+  [user-id]
   (jdbc/execute! ds
-    ["SELECT 'document' AS topic_type, d.id, d.id AS document_id, 0 AS page_number,
-             d.priority, d.next_review_at, d.interval_days, d.a_factor,
-             d.review_count, d.last_review_at, d.status,
-             NULL AS content, d.filename, NULL::integer AS parent_content_item_id
-      FROM documents d WHERE d.id = ? AND d.user_id = ?
-      UNION ALL
-      SELECT 'extract', ci.id, ci.document_id, ci.page_number, ci.priority,
-             ci.next_review_at, ci.interval_days, ci.a_factor,
-             ci.review_count, ci.last_review_at, ci.status,
-             ci.content, d.filename, ci.parent_content_item_id
-      FROM content_items ci JOIN documents d ON ci.document_id = d.id
-      WHERE ci.document_id = ? AND d.user_id = ?"
-     document-id user-id document-id user-id]))
+    (sql/format {:select [:id :parent_id :title :content :kind :status :created_at :page_number]
+                 :from [:topics]
+                 :where [:= :user_id user-id]
+                 :order-by [[:parent_id :asc-nulls-first] [:page_number :asc-nulls-first] [:created_at :asc]]})))
 
-(defn get-subtree-for-extract
-  "Fetch an extract and all its descendants via recursive CTE."
-  [user-id content-item-id]
+(defn get-root-topic-id
+  "Walk up parent_id chain to find the root topic. Returns the root topic's ID."
+  [topic-id]
+  (let [result (jdbc/execute-one! ds
+                 ["WITH RECURSIVE ancestors AS (
+                     SELECT id, parent_id FROM topics WHERE id = ?
+                     UNION ALL
+                     SELECT t.id, t.parent_id FROM topics t
+                     JOIN ancestors a ON t.id = a.parent_id
+                   )
+                   SELECT id FROM ancestors WHERE parent_id IS NULL"
+                  topic-id])]
+    (:id result)))
+
+(defn get-subtree
+  "Get a topic and all its descendants via recursive CTE."
+  [user-id root-id]
   (jdbc/execute! ds
     ["WITH RECURSIVE subtree AS (
-        SELECT ci.* FROM content_items ci WHERE ci.id = ?
+        SELECT * FROM topics WHERE id = ?
         UNION ALL
-        SELECT child.* FROM content_items child
-        JOIN subtree parent ON child.parent_content_item_id = parent.id
+        SELECT child.* FROM topics child
+        JOIN subtree parent ON child.parent_id = parent.id
       )
-      SELECT 'extract' AS topic_type, s.id, s.document_id, s.page_number,
-             s.priority, s.next_review_at, s.interval_days, s.a_factor,
-             s.review_count, s.last_review_at, s.status,
-             s.content, d.filename, s.parent_content_item_id
-      FROM subtree s JOIN documents d ON s.document_id = d.id
-      WHERE d.user_id = ?"
-     content-item-id user-id]))
+      SELECT s.*, NULL AS topic_type FROM subtree s
+      WHERE s.user_id = ? OR s.user_id IS NULL
+      ORDER BY s.parent_id ASC NULLS FIRST, s.page_number ASC NULLS LAST, s.id ASC"
+     root-id user-id]))
 
 (defn- tree-order-items
-  "Sort items in depth-first tree order: page_number ASC, id ASC for siblings."
+  "Sort items in depth-first tree order."
   [items]
-  (let [id-set (set (map :id items))
-        by-parent (group-by :parent_content_item_id items)
-        ;; Roots = items whose parent is not in the result set (or nil).
+  (let [id-set (set (map :topics/id items))
+        by-parent (group-by :topics/parent_id items)
         roots (->> items
-                (filter #(not (id-set (:parent_content_item_id %))))
-                (sort-by (juxt :page_number :id)))]
+                (filter #(not (id-set (:topics/parent_id %))))
+                (sort-by (juxt :topics/page_number :topics/id)))]
     (loop [result []
            stack (vec (reverse roots))]
       (if (empty? stack)
         result
         (let [node (peek stack)
-              children (->> (get by-parent (:id node))
-                         (sort-by (juxt :page_number :id))
+              children (->> (get by-parent (:topics/id node))
+                         (sort-by (juxt :topics/page_number :topics/id))
                          reverse vec)]
           (recur (conj result node)
             (into (pop stack) children)))))))
 
 (defn get-subset-review-queue
-  "Get the subset review queue for a document or extract subtree.
-   Filters out dismissed/done items and items already reviewed today.
-   Annotates each item with :outstanding? based on next_review_at."
-  [user-id topic-type root-id]
-  (let [raw (case topic-type
-              "document" (get-subtree-for-document user-id root-id)
-              "extract" (get-subtree-for-extract user-id root-id))
+  "Get the subset review queue for a topic subtree.
+   Filters out done items and items reviewed today. Annotates :outstanding?."
+  [user-id root-id]
+  (let [raw (get-subtree user-id root-id)
         now (java.sql.Timestamp. (System/currentTimeMillis))
         today (java.time.LocalDate/now)]
     (->> raw
+         ;; Exclude page topics from review
+      (remove #(= "page" (:topics/kind %)))
          ;; Keep only active items
-      (filter #(#{"active" nil} (:status %)))
+      (filter #(#{"active" nil} (:topics/status %)))
          ;; Skip items reviewed today
       (remove (fn [item]
-                (when-let [la (:last_review_at item)]
+                (when-let [la (:topics/last_review_at item)]
                   (= today (.. la toInstant (atZone (java.time.ZoneId/systemDefault)) toLocalDate)))))
          ;; Tree-order
       tree-order-items
          ;; Annotate outstanding
       (mapv (fn [item]
-              (let [nra (:next_review_at item)]
+              (let [nra (:topics/next_review_at item)]
                 (assoc item :outstanding?
                   (or (nil? nra)
                     (.before nra now)))))))))
-
-(defn touch-topic
-  "Update last_review_at without advancing the interval.
-   For non-outstanding items in subset review."
-  [topic-type id]
-  (let [table (case topic-type
-                "document" "documents"
-                "extract" "content_items")]
-    (jdbc/execute-one! ds
-      [(str "UPDATE " table
-         " SET last_review_at = NOW(), review_count = COALESCE(review_count, 0) + 1"
-         " WHERE id = ?")
-       id])))
-
-(defn batch-create-content-items
-  "Batch insert content items from auto-extract. Returns count of created items."
-  [document-id page-number items]
-  (when (seq items)
-    (let [rows (mapv (fn [item]
-                       {:document_id document-id
-                        :page_number page-number
-                        :kind "html"
-                        :content (sanitize-utf8 (:content item))
-                        :status "active"
-                        :priority 50})
-                 items)]
-      (jdbc/execute! ds
-        (sql/format {:insert-into :content_items
-                     :values rows}))
-      (count items))))

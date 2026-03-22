@@ -5,25 +5,22 @@
    [electric-starter-app.ocr :as ocr]))
 
 (defn extract-page-text
-  "Extract text from a specific page of a document and save to database.
+  "Extract text from a specific page of a PDF topic and save to database.
+   topic-id is the root PDF topic ID.
    Returns {:success true :text ...} or {:success false :error ...}
    DPI defaults to 150 if not provided."
-  ([user-id document-id page-number enc-key]
-   (extract-page-text user-id document-id page-number enc-key 150))
-  ([user-id document-id page-number enc-key dpi]
+  ([user-id topic-id page-number enc-key]
+   (extract-page-text user-id topic-id page-number enc-key 150))
+  ([user-id topic-id page-number enc-key dpi]
    (try
-     ;; Get the PDF bytes from database
-     (let [docs (db/get-documents-by-id user-id document-id)
-           doc (first docs)]
-       (if-not doc
+     (let [file-row (db/get-topic-file topic-id)]
+       (if-not file-row
          {:success false :error "Document not found"}
-         (let [pdf-bytes (:documents/file_data doc)
-               ;; Extract text using OCR
-               result (ocr/extract-text user-id pdf-bytes (dec page-number) enc-key dpi)] ; Convert to 0-indexed
+         (let [pdf-bytes (:topic_files/file_data file-row)
+               result (ocr/extract-text user-id pdf-bytes (dec page-number) enc-key dpi)]
            (if (:success result)
              (do
-               ;; Save to database
-               (db/save-page-text document-id page-number (:text result))
+               (db/save-page-text! topic-id page-number (:text result))
                {:success true :text (:text result)})
              result))))
      (catch Exception e
@@ -32,28 +29,28 @@
 
 (defn get-page-text
   "Retrieve saved OCR text for a page."
-  [document-id page-number]
+  [parent-id page-number]
   (try
-    (if-let [page (db/get-page-text document-id page-number)]
-      {:success true :text (:pages/text page)}
+    (if-let [page (db/get-page-text parent-id page-number)]
+      {:success true :text (:topics/content page)}
       {:success false :error "No text found for this page"})
     (catch Exception e
       {:success false :error (.getMessage e)})))
 
 (defn list-extracted-pages
   "List all pages that have been OCR processed for a document."
-  [document-id]
+  [parent-id]
   (try
-    (let [pages (db/list-pages document-id)]
+    (let [pages (db/list-pages parent-id)]
       {:success true :pages pages})
     (catch Exception e
       {:success false :error (.getMessage e)})))
 
 (defn save-page-html-impl
   "Save edited OCR text (as HTML) for a page. Returns {:success true} or {:success false :error msg}."
-  [document-id page-number html]
+  [parent-id page-number html]
   (try
-    (db/save-page-text document-id page-number html) ; Reuse existing function, now stores HTML
+    (db/save-page-text! parent-id page-number html)
     {:success true}
     (catch Exception e
       (println "ERROR [save-page-html-impl]:" (.getMessage e))

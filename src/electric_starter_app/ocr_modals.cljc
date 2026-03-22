@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
    [electric-starter-app.components :refer [Typeahead]]
+   #?(:clj [electric-starter-app.db :as db])
    #?(:clj [electric-starter-app.cards :as cards])))
 
 ;; Browser download helper
@@ -19,8 +20,8 @@
        (.revokeObjectURL js/URL url))))
 
 ;; Export modal
-;; !show-export: atom bool  selected-doc: int  current-pdf-page: int  user-id: int
-(e/defn ExportModal [!show-export selected-doc current-pdf-page user-id]
+;; !show-export: atom bool  topic-id: current topic  root-topic-id: root topic  user-id: int
+(e/defn ExportModal [!show-export topic-id root-topic-id user-id]
   (e/client
     (let [!export-scope (atom "Current Page")
           export-scope (e/watch !export-scope)
@@ -100,8 +101,9 @@
                   (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-2)"}})
                     (dom/text "Error: " ?error)))
                 (when-some [token ?token]
-                  (let [export-opts {:document-id selected-doc
-                                     :page-number (when (= export-scope "Current Page") current-pdf-page)
+                  (let [export-opts {:topic-id topic-id
+                                     :root-topic-id root-topic-id
+                                     :scope export-scope
                                      :header-text (when use-header header-text)
                                      :user-id user-id}]
                     (if (= export-kind "Both")
@@ -187,20 +189,17 @@
 (e/defn EditCardModal [!editing-card !refresh]
   (e/client
     (let [editing-card (e/watch !editing-card)
-          _ (println "MODAL editing-card:" (pr-str editing-card))
           card-id (:id editing-card)
           kind (:kind editing-card)
           init-q (or (:question editing-card) "")
           init-a (or (:answer editing-card) "")
           init-c (or (:cloze editing-card) "")
-          _ (println "MODAL init values q:" (pr-str init-q) "a:" (pr-str init-a) "c:" (pr-str init-c))
           !question (atom init-q)
           !answer (atom init-a)
           !cloze (atom init-c)
           question (e/watch !question)
           answer (e/watch !answer)
-          cloze (e/watch !cloze)
-          _ (println "MODAL watched values q:" (pr-str question) "a:" (pr-str answer) "c:" (pr-str cloze))]
+          cloze (e/watch !cloze)]
       (dom/div
         (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
                             :background "transparent" :display "flex" :align-items "center"
@@ -296,8 +295,16 @@
                         (token))
                       (token (:error result)))))))))))))
 
-;; Add card modal
-(e/defn AddCardModal [!show-add card-type doc-id page-number !refresh content-item-id source-reference]
+(defn insert-flashcards-safe! [rows]
+  #?(:clj (try
+            (db/insert-flashcards! rows)
+            {:success true}
+            (catch Exception e
+              {:success false :error (.getMessage e)}))
+     :cljs nil))
+
+;; Add card modal — uses topic-id and root-topic-id instead of doc-id + page-number
+(e/defn AddCardModal [!show-add card-type topic-id root-topic-id !refresh source-reference]
   (e/client
     (let [!kind (atom card-type)
           kind (e/watch !kind)
@@ -410,10 +417,19 @@
                   (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-2)"}})
                     (dom/text "Error: " ?error)))
                 (when-some [token ?token]
-                  (let [fields (if (= kind "basic")
-                                 {:question question :answer answer}
-                                 {:cloze cloze})
-                        result (e/server (cards/add-card doc-id page-number kind fields content-item-id source-reference))]
+                  (let [card-data (if (= kind "basic")
+                                    [{:q question :a answer}]
+                                    [{:c cloze}])
+                        rows (e/server
+                               (mapv (fn [card]
+                                       (cond-> {:topic_id topic-id
+                                                :root_topic_id root-topic-id
+                                                :kind kind}
+                                         (= kind "basic") (assoc :question (:q card) :answer (:a card))
+                                         (= kind "cloze") (assoc :cloze (:c card))
+                                         source-reference (assoc :source_reference source-reference)))
+                                 card-data))
+                        result (e/server (insert-flashcards-safe! rows))]
                     (if (:success result)
                       (do
                         (e/server (swap! !refresh inc))

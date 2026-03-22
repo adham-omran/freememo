@@ -16,42 +16,59 @@
 #?(:clj (defonce !refresh (atom 0)))
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
-#?(:clj (defn get-content-item-by-id* [_refresh content-item-id]
-          (when content-item-id (db/get-content-item-by-id content-item-id))))
+#?(:clj (defn get-topic-by-id* [_refresh topic-id]
+          (when topic-id (db/get-topic topic-id))))
 
-(e/defn ExtractPage [user-id enc-key content-item-id navigate! view-source! llm-enabled?]
+;; Walk up parent chain to find the root topic (parent_id IS NULL)
+#?(:clj (defn get-root-topic-id [topic-id]
+          (when topic-id
+            (loop [id topic-id]
+              (let [t (db/get-topic id)]
+                (if (or (nil? t) (nil? (:topics/parent_id t)))
+                  id
+                  (recur (:topics/parent_id t))))))))
+
+(e/defn ExtractPage [user-id enc-key topic-id navigate! view-source! llm-enabled?]
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
 
-      (if (some? content-item-id)
+      (if (some? topic-id)
         (let [card-font-size (e/server (settings/get-card-font-size user-id))
               refresh (e/server (e/watch !refresh))
-              item (e/server (get-content-item-by-id* refresh content-item-id))
-              doc-id (e/server (:content_items/document_id item))
-              page-num (e/server (:content_items/page_number item))
-              item-kind (e/server (:content_items/kind item))
-              content (e/server (or (:content_items/content item) ""))
-              extract-status (e/server (or (:content_items/status item) "active"))
-              doc-row (e/server (when doc-id (first (db/get-documents-by-id user-id doc-id))))
-              filename (e/server (:documents/filename doc-row))
-              doc-source-type (e/server (or (:documents/source_type doc-row) "pdf"))]
+              topic (e/server (get-topic-by-id* refresh topic-id))
+              content (e/server (or (:topics/content topic) ""))
+              extract-status (e/server (or (:topics/status topic) "active"))
+              ;; Parent topic — for page_number and parent content (context)
+              parent-id (e/server (:topics/parent_id topic))
+              parent-topic (e/server (when parent-id (db/get-topic parent-id)))
+              page-number (e/server (:topics/page_number parent-topic))
+              parent-content (e/server (or (:topics/content parent-topic) ""))
+              ;; Root topic — for filename, kind, source scoping
+              root-topic-id (e/server (get-root-topic-id topic-id))
+              root-topic (e/server (when (not= root-topic-id topic-id) (db/get-topic root-topic-id)))
+              filename (e/server (:topics/title (or root-topic topic)))
+              root-kind (e/server (:topics/kind (or root-topic topic)))]
 
-          ;; Auto-save dirty edits to content_items table
-          ;; Guard: only save when the edit belongs to THIS extract (not stale page-level edits)
-          (let [dirty-data (e/watch editor/!dirty-html)]
+          ;; Auto-save dirty edits to topic content
+          ;; Auto-save: one-way editor → DB. Don't clear !dirty-html, don't bump !refresh.
+          ;; Track last-saved to prevent re-saving identical content.
+          (let [dirty-data (e/watch editor/!dirty-html)
+                !last-saved (atom nil)]
             (when (and (some? dirty-data)
-                    (= (:content-item-id dirty-data) content-item-id))
-              (let [result (e/server
+                    (= (:topic-id dirty-data) topic-id)
+                    (not= (:html dirty-data) (e/watch !last-saved)))
+              (let [html-to-save (:html dirty-data)
+                    result (e/server
                              (e/Offload
                                #(try
-                                  (db/update-content-item-content content-item-id (:html dirty-data))
+                                  (db/update-topic-content! topic-id html-to-save)
                                   {:success true}
                                   (catch Exception e
                                     (println "ERROR [extract-page save]:" (.getMessage e))
                                     {:success false :error (.getMessage e)}))))]
                 (when (:success result)
-                  (reset! editor/!dirty-html nil)))))
+                  (reset! !last-saved html-to-save)))))
 
 
           ;; Header: breadcrumb + back button (hidden when embedded in learn session)
@@ -78,10 +95,10 @@
                     (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
                           [?token _] (e/Token event)]
                       (when-some [token ?token]
-                        (e/server (db/done-topic "extract" content-item-id))
+                        (e/server (db/done-topic! topic-id))
                         (token)
                         (navigate! :learn)))))
-                
+
                 ;; Done: show Restore
                 (dom/span
                   (dom/props {:style {:display "contents"}})
@@ -96,62 +113,57 @@
                     (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
                           [?token _] (e/Token event)]
                       (when-some [token ?token]
-                        (e/server (db/restore-topic "extract" content-item-id))
+                        (e/server (db/restore-topic! topic-id))
                         (token)
                         (navigate! :learn))))))
-              (let [!show-confirm-delete (atom false)
-                    show-confirm-delete (e/watch !show-confirm-delete)]
+              (let [!delete-state (atom nil)
+                    delete-state (e/watch !delete-state)]
+                ;; Reactive navigation — fires when delete completes
+                (when (= delete-state :deleted)
+                  (navigate! :learn))
                 (dom/button
                   (dom/props {:class "btn btn-sm btn-danger-fill" :style {:padding "4px 10px" :font-size "12px"}
                               :title "Delete this extract and its cards"})
                   (dom/text "Delete")
-                  (dom/On "click" (fn [_] (reset! !show-confirm-delete true)) nil))
-                (dom/div
-                  (dom/props {:class "modal-backdrop"
-                              :style {:display (if show-confirm-delete "flex" "none")}})
-                  (dom/On "click" (fn [_] (reset! !show-confirm-delete false)) nil)
-                  (dom/On "keydown" (fn [e] (when (= (.-key e) "Escape") (reset! !show-confirm-delete false))) nil)
+                  (dom/On "click" (fn [_] (reset! !delete-state :confirming)) nil))
+                (when (= delete-state :confirming)
                   (dom/div
-                    (dom/props {:class "modal-content modal-sm"})
-                    (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+                    (dom/props {:class "modal-backdrop"})
+                    (dom/On "click" (fn [_] (reset! !delete-state nil)) nil)
+                    (dom/On "keydown" (fn [e] (when (= (.-key e) "Escape") (reset! !delete-state nil))) nil)
                     (dom/div
-                      (dom/props {:class "confirm-modal-body"})
-                      (dom/p (dom/text "Delete this extract and all its cards?")))
-                    (dom/div
-                      (dom/props {:class "confirm-modal-actions"})
-                      (dom/button
-                        (dom/props {:class "btn btn-secondary"})
-                        (dom/text "Cancel")
-                        (dom/On "click" (fn [_] (reset! !show-confirm-delete false)) nil))
-                      (dom/button
-                        (dom/props {:class "btn btn-danger-fill"})
-                        (dom/text "Delete")
-                        (let [event (dom/On "click" (fn [_] :confirmed) nil)
-                              [?token _] (e/Token event)]
-                          (when-some [token ?token]
-                            (let [note-ids (e/server (db/get-anki-note-ids-for-content-item content-item-id))]
-                              (e/server
-                                (db/delete-content-item content-item-id)
-                                ;; Standalone topics: the content_item is the only child of the document.
-                                ;; Delete the parent document too, otherwise it remains orphaned.
-                                ;; Only for source_type="topic" — never for pdf/epub/web which have
-                                ;; multiple content items sharing one document.
-                                (when (= doc-source-type "topic")
-                                  (db/delete-document user-id doc-id)))
-                              (e/client (card-components/try-delete-anki-notes! note-ids))
-                              (reset! !show-confirm-delete false)
-                              (token)
-                              (navigate! :learn)))))))))
-              (let [label (if (= item-kind "topic")
+                      (dom/props {:class "modal-content modal-sm"})
+                      (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+                      (dom/div
+                        (dom/props {:class "confirm-modal-body"})
+                        (dom/p (dom/text "Delete this extract and all its cards?")))
+                      (dom/div
+                        (dom/props {:class "confirm-modal-actions"})
+                        (dom/button
+                          (dom/props {:class "btn btn-secondary"})
+                          (dom/text "Cancel")
+                          (dom/On "click" (fn [_] (reset! !delete-state nil)) nil))
+                        (dom/button
+                          (dom/props {:class "btn btn-danger-fill"})
+                          (dom/text "Delete")
+                          (let [event (dom/On "click" (fn [_] :confirmed) nil)
+                                [?token _] (e/Token event)]
+                            (when-some [token ?token]
+                              (let [note-ids (e/server (db/get-anki-note-ids topic-id))]
+                                (e/server (db/delete-topic! topic-id))
+                                (e/client (card-components/try-delete-anki-notes! note-ids))
+                                (token)
+                                (reset! !delete-state :deleted))))))))))
+              (let [label (if (nil? page-number)
                             (or filename "Untitled")
-                            (str (or filename "Unknown") " \u2014 p. " page-num))]
+                            (str (or filename "Unknown") " \u2014 p. " page-number))]
                 (if view-source!
                   (dom/span
                     (dom/props {:style {:color "var(--color-primary)" :font-size "13px" :cursor "pointer"
                                         :text-decoration "underline"}
-                                :title "View source PDF page"})
+                                :title "View source"})
                     (dom/text label)
-                    (dom/On "click" (fn [_] (view-source! doc-id page-num)) nil))
+                    (dom/On "click" (fn [_] (view-source! root-topic-id page-number root-kind)) nil))
                   (dom/span
                     (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px"}})
                     (dom/text label))))))
@@ -169,9 +181,7 @@
                 (dom/props {:style {:width "100%"
                                     :display "flex" :flex-direction "column"}})
                 (RichTextEditorComponent {:initial-html content
-                                          :page-number page-num
-                                          :doc-id doc-id
-                                          :content-item-id content-item-id})))
+                                          :topic-id topic-id})))
 
             ;; Draggable divider
             (dom/div
@@ -182,25 +192,29 @@
             (dom/div
               (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0" :overflow "hidden"}})
 
-              ;; Shared toolbar
-              (ContentToolbar {:user-id user-id
-                               :enc-key enc-key
-                               :doc-id doc-id
-                               :page-number page-num
-                               :content-text content
-                               :content-item-id content-item-id
-                               :context-mode :extract
-                               :context-tooltip "Include context for better cards. With a selection: extract text. Without: original page text."
-                               :llm-enabled? llm-enabled?}
-                !refresh)
+              ;; Shared toolbar — content-text from !dirty-html (live) or server content (initial)
+              (let [dirty (e/watch editor/!dirty-html)
+                    live-content (if (and dirty (= (:topic-id dirty) topic-id))
+                                   (:html dirty)
+                                   content)]
+                (ContentToolbar {:user-id user-id
+                                 :enc-key enc-key
+                                 :topic-id topic-id
+                                 :root-topic-id root-topic-id
+                                 :page-number page-number
+                                 :content-text live-content
+                                 :parent-content parent-content
+                                 :context-mode :extract
+                                 :context-tooltip "Include context for better cards. With a selection: extract text. Without: original page text."
+                                 :llm-enabled? llm-enabled?}
+                  !refresh))
 
               ;; Shared card table
-              (ContentCardTable {:query-mode :extract
-                                 :content-item-id content-item-id
+              (ContentCardTable {:topic-id topic-id
                                  :card-font-size card-font-size}
                 !refresh))))
 
-        ;; No content-item-id
+        ;; No topic-id
         (dom/div
           (dom/props {:style {:padding "32px" :text-align "center" :color "var(--color-text-secondary)"}})
           (dom/text "No extract selected.")

@@ -8,24 +8,24 @@
    [electric-starter-app.keyboard :as keyboard]
    #?(:clj [electric-starter-app.db :as db])))
 
-(defn advance-topic* [topic-type id]
-  #?(:clj (db/advance-topic topic-type id)
+(defn advance-topic* [id]
+  #?(:clj (db/advance-topic! id)
      :cljs nil))
 
-(defn update-topic-priority* [topic-type id priority]
-  #?(:clj (db/update-topic-priority topic-type id priority)
+(defn update-topic-priority* [id priority]
+  #?(:clj (db/update-topic-priority! id priority)
      :cljs nil))
 
-(defn postpone-topic* [topic-type id days]
-  #?(:clj (db/postpone-topic topic-type id days)
+(defn postpone-topic* [id days]
+  #?(:clj (db/postpone-topic! id days)
      :cljs nil))
 
-(defn done-topic* [topic-type id]
-  #?(:clj (db/done-topic topic-type id)
+(defn done-topic* [id]
+  #?(:clj (db/done-topic! id)
      :cljs nil))
 
 ;; Done button — marks topic as fully processed
-(e/defn DoneButton [topic-type topic-id !queue-idx]
+(e/defn DoneButton [topic-id !queue-idx]
   (e/client
     (dom/button
       (dom/props {:class "btn btn-sm btn-secondary"
@@ -38,12 +38,12 @@
       (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
             [?token _error] (e/Token event)]
         (when-some [token ?token]
-          (e/server (done-topic* topic-type topic-id))
+          (e/server (done-topic* topic-id))
           (token)
           (swap! !queue-idx inc))))))
 
 ;; Shared bottom bar with Postpone + Next
-(e/defn BottomBar [topic-type topic-id !queue-idx]
+(e/defn BottomBar [topic-id !queue-idx]
   (e/client
     (let [!show-postpone (atom false)
           show-postpone (e/watch !show-postpone)
@@ -68,7 +68,6 @@
               (dom/text "days"))
             (dom/button
               (dom/props {:class "btn btn-primary" :style {:padding "6px 16px"}})
-
               (dom/text "Go")
               (let [event (dom/On "click"
                             (fn [_]
@@ -80,73 +79,85 @@
                 (when-some [token ?token]
                   (when-some [days (:days event)]
                     (when (pos? days)
-                      (e/server (postpone-topic* topic-type topic-id days))))
+                      (e/server (postpone-topic* topic-id days))))
                   (reset! !show-postpone false)
                   (token)
                   (swap! !queue-idx inc))))
             (dom/button
               (dom/props {:class "btn btn-sm btn-secondary" :style {:padding "6px 12px"}})
-
               (dom/text "Cancel")
               (dom/On "click" (fn [_] (reset! !show-postpone false)) nil)))
 
           ;; Collapsed postpone button
           (dom/button
             (dom/props {:class "btn btn-secondary" :style {:padding "8px 20px"}})
-
             (dom/text "Postpone")
             (dom/On "click" (fn [_] (reset! !show-postpone true)) nil)))
 
         ;; Next button
         (dom/button
           (dom/props {:class "btn btn-primary" :style {:padding "8px 28px" :font-size "15px" :font-weight "600"}})
-
           (dom/text "Next")
           (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
                 [?token _error] (e/Token event)]
             (when-some [token ?token]
-              (e/server (advance-topic* topic-type topic-id))
+              (e/server (advance-topic* topic-id))
               (token)
               (swap! !queue-idx inc))))))))
+
+;; Badge display for topic kinds
+(defn kind-badge [kind parent-id]
+  (case kind
+    "pdf" ["PDF" "#dcfce7"]
+    "epub" ["EPUB" "#f3e8ff"]
+    ("web" "wikipedia") ["Web" "#e0f2fe"]
+    (if parent-id
+      ["Extract" "#44C2FF"]
+      ["Topic" "#f3e8ff"])))
 
 ;; Session header bar
 (e/defn SessionHeader [item !queue-idx !mode idx total view-source!]
   (e/client
-    (let [topic-type (:topic_type item)
-          topic-id (:id item)
-          document-id (:document_id item)
-          filename (or (:filename item) "-")
-          page-num (:page_number item)
-          priority (or (:priority item) 50)
-          is-doc (= topic-type "document")
-          type-label (cond is-doc "Doc" (= topic-type "extract") "Extract" :else "Page")
-          type-color (cond is-doc "#dcfce7" (= topic-type "extract") "#44C2FF" :else "#e0f2fe")]
+    (let [topic-id (:topics/id item)
+          kind (:topics/kind item)
+          parent-id (:topics/parent_id item)
+          title (or (:topics/title item) "-")
+          priority (or (:topics/priority item) 50)
+          is-root (nil? parent-id)
+          ;; For child items, fetch root topic's title and kind
+          root-topic (when parent-id
+                       (e/server
+                         (let [root-id (db/get-root-topic-id topic-id)]
+                           (db/get-topic root-id))))
+          root-title (when root-topic (:topics/title root-topic))
+          root-kind (when root-topic (:topics/kind root-topic))
+          [type-label type-color] (kind-badge kind parent-id)]
 
       (dom/div
         (dom/props {:class "header-bar" :style {:gap "8px"}})
         ;; Back to Learn
         (dom/button
           (dom/props {:class "btn btn-sm btn-secondary"})
-
           (dom/text "\u2190 Back to Learn")
           (dom/On "click" (fn [_] (reset! !queue-idx 0) (reset! !mode :overview)) nil))
 
         ;; Done
-        (DoneButton topic-type topic-id !queue-idx)
+        (DoneButton topic-id !queue-idx)
 
-        ;; Filename / source link
-        (if is-doc
+        ;; Title / source link
+        (if is-root
           (dom/span
             (dom/props {:style {:color "#555" :font-size "13px"}})
-            (dom/text filename))
+            (dom/text title))
           (dom/span
             (dom/props {:style {:color "var(--color-primary)" :font-size "13px" :cursor "pointer"
                                 :text-decoration "underline"}
-                        :title "View source PDF page"})
-            (dom/text (str filename "  p." page-num))
-            (dom/On "click"
-              (fn [_] (view-source! document-id page-num))
-              nil)))
+                        :title "View source"})
+            (dom/text (or root-title title))
+            (when (and view-source! parent-id)
+              (dom/On "click"
+                (fn [_] (view-source! parent-id nil root-kind))
+                nil))))
 
         ;; Type badge
         (dom/span
@@ -167,7 +178,7 @@
               (let [change-event (dom/On "change" #(-> % .-target .-value js/parseInt) nil)
                     [?token _] (e/Token change-event)]
                 (when-some [token ?token]
-                  (e/server (update-topic-priority* topic-type topic-id change-event))
+                  (e/server (update-topic-priority* topic-id change-event))
                   (token))))))
 
         ;; Counter
@@ -198,7 +209,6 @@
               (dom/text "Return to Overview to browse your topics."))
             (dom/button
               (dom/props {:class "btn btn-primary" :style {:padding "10px 28px" :font-size "15px" :font-weight "600"}})
-
               (dom/text "Back to Overview")
               (let [event (dom/On "click" (fn [_] :back) nil)
                     [?token _error] (e/Token event)]
@@ -210,27 +220,27 @@
 
           ;; Active topic
           (let [item (nth queue-vec idx nil)
-                topic-type (:topic_type item)
-                topic-id (:id item)
-                is-doc (= topic-type "document")]
+                kind (:topics/kind item)
+                topic-id (:topics/id item)
+                show-pdf? (#{"pdf" "epub"} kind)]
 
             (when item
               ;; Header
               (SessionHeader item !queue-idx !mode idx total view-source!)
 
               ;; Content
-              (if is-doc
+              (if show-pdf?
                 (dom/div
                   (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
                   (dom/div
                     (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                    (let [!nav (atom {:doc-id (:document_id item)})]
+                    (let [!nav (atom {:topic-id topic-id})]
                       (OcrPage user-id enc-key !nav llm-enabled?)))
-                  (BottomBar topic-type topic-id !queue-idx))
+                  (BottomBar topic-id !queue-idx))
 
                 (dom/div
                   (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
                   (dom/div
                     (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
                     (ExtractPage user-id enc-key topic-id nil nil llm-enabled?))
-                  (BottomBar topic-type topic-id !queue-idx))))))))))
+                  (BottomBar topic-id !queue-idx))))))))))

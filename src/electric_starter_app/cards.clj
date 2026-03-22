@@ -50,7 +50,6 @@
         context (when has-context? (load-prompt-template "context.md"))]
     (when (and system basic)
       (str system
-           ;; Insert pre-prompt between system and basic
            (when (and pre-prompt (not (str/blank? pre-prompt)))
              (str "\n\n## Custom Question Format\n\n"
                   "Use the following pattern for your questions:\n\n"
@@ -72,7 +71,6 @@
         context (when has-context? (load-prompt-template "context-cloze.md"))]
     (when (and system cloze)
       (str system
-           ;; Insert pre-prompt between system and cloze
            (when (and pre-prompt (not (str/blank? pre-prompt)))
              (str "\n\n## Custom Question Format\n\n"
                   "Use the following pattern for your questions:\n\n"
@@ -88,21 +86,21 @@
 ;; Context retrieval
 (defn get-context-pages
   "Get text from previous N pages for context.
-   Returns concatenated text from pages in range."
-  [document-id page-number context-window]
+   parent-id is the root PDF topic. Returns concatenated text from pages in range."
+  [parent-id page-number context-window]
   (let [start-page (max 1 (- page-number context-window))
         end-page (dec page-number)]
     (when (>= end-page start-page)
-      (let [pages (db/get-context-pages document-id start-page end-page)]
+      (let [pages (db/get-context-pages parent-id start-page end-page)]
         (when (seq pages)
           (->> pages
-               (map :pages/text)
+               (map :topics/content)
                (str/join "\n\n---\n\n")))))))
 
 (defn get-extract-page-context
   "Get the original PDF page text for use as context when generating cards from an extract."
-  [document-id page-number]
-  (when-let [page-text (:pages/text (first (db/get-context-pages document-id page-number page-number)))]
+  [parent-id page-number]
+  (when-let [page-text (:topics/content (first (db/get-context-pages parent-id page-number page-number)))]
     page-text))
 
 ;; OpenAI API calls
@@ -110,8 +108,7 @@
   "Parse OpenAI response as EDN. Handles markdown code fences.
    Returns parsed EDN or throws exception."
   [raw-text]
-  (let [;; Strip markdown code fences if present
-        cleaned (-> raw-text
+  (let [cleaned (-> raw-text
                     str/trim
                     (str/replace #"^```(?:clojure|edn)?\s*\n?" "")
                     (str/replace #"\n?```\s*$" "")
@@ -188,14 +185,7 @@
 
 (defn generate-cloze-cards
   "Generate cloze deletion flashcards using OpenAI API.
-   Options:
-   - :content - The main text to generate cards from (required)
-   - :context - Optional context text from previous pages
-   - :card-count - Number of cards to generate (default from settings)
-   - :model - OpenAI model to use (default from settings)
-   - :user-id - User ID for settings lookup
-   - :pre-prompt - Optional custom formatting instructions
-   - :enc-key - Base64 key from session for API key decryption
+   Options same as generate-basic-cards.
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}"
   [opts]
   (try
@@ -209,82 +199,68 @@
   "Save generated cards to the database.
    For basic cards: expects [{:q \"...\" :a \"...\"}]
    For cloze cards: expects [{:c \"...\"}]
-   Optional content-item-id links cards to a specific extract.
+   topic-id: the page or extract topic that owns these cards.
+   root-topic-id: the root PDF/EPUB/web/basic topic.
    Optional source-reference propagates document source info to each card."
-  ([document-id page-number kind cards]
-   (save-cards document-id page-number kind cards nil))
-  ([document-id page-number kind cards content-item-id]
-   (save-cards document-id page-number kind cards content-item-id nil))
-  ([document-id page-number kind cards content-item-id source-reference]
+  ([topic-id root-topic-id kind cards]
+   (save-cards topic-id root-topic-id kind cards nil))
+  ([topic-id root-topic-id kind cards source-reference]
    (try
      (let [rows (map (fn [card]
                        (cond-> (if (= kind "basic")
-                                 {:document_id document-id
-                                  :page_number page-number
+                                 {:topic_id topic-id
+                                  :root_topic_id root-topic-id
                                   :kind kind
                                   :question (:q card)
                                   :answer (:a card)
                                   :cloze nil}
-                                 {:document_id document-id
-                                  :page_number page-number
+                                 {:topic_id topic-id
+                                  :root_topic_id root-topic-id
                                   :kind kind
                                   :question nil
                                   :answer nil
                                   :cloze (:c card)})
-                         content-item-id
-                         (assoc :content_item_id content-item-id)
                          source-reference
                          (assoc :source_reference source-reference)))
                      cards)]
-       (db/insert-flashcards rows)
+       (db/insert-flashcards! rows)
        {:success true})
      (catch Exception e
        (println "ERROR [save-cards]:" (.getMessage e))
        {:success false :error (.getMessage e)}))))
 
 (defn add-card
-  "Manually add a single flashcard. Optional content-item-id links to an extract.
+  "Manually add a single flashcard.
+   topic-id: the page or extract topic.
+   root-topic-id: the root topic.
    Optional source-reference propagates document source info to the card."
-  ([document-id page-number kind fields]
-   (add-card document-id page-number kind fields nil))
-  ([document-id page-number kind fields content-item-id]
-   (add-card document-id page-number kind fields content-item-id nil))
-  ([document-id page-number kind fields content-item-id source-reference]
+  ([topic-id root-topic-id kind fields]
+   (add-card topic-id root-topic-id kind fields nil))
+  ([topic-id root-topic-id kind fields source-reference]
    (try
      (let [cards (if (= kind "basic")
                    [{:q (:question fields) :a (:answer fields)}]
                    [{:c (:cloze fields)}])]
-       (save-cards document-id page-number kind cards content-item-id source-reference))
+       (save-cards topic-id root-topic-id kind cards source-reference))
      (catch Exception e
        (println "ERROR [add-card]:" (.getMessage e))
        {:success false :error (.getMessage e)}))))
 
 (defn get-cards
-  "Get all flashcards for a specific document page."
-  [document-id page-number]
+  "Get all flashcards for a specific topic (page or extract)."
+  [topic-id]
   (try
-    (let [cards (db/get-flashcards document-id page-number)]
+    (let [cards (db/get-flashcards topic-id)]
       {:success true :cards cards})
     (catch Exception e
       (println "ERROR [get-cards]:" (.getMessage e))
-      {:success false :error (.getMessage e)})))
-
-
-(defn get-cards-by-content-item
-  "Get all flashcards for a specific content item (extract)."
-  [content-item-id]
-  (try
-    (let [cards (db/get-flashcards-by-content-item content-item-id)]
-      {:success true :cards cards})
-    (catch Exception e
-      (println "ERROR [get-cards-by-content-item]:" (.getMessage e))
       {:success false :error (.getMessage e)})))
 
 (defn delete-card
   "Delete a single flashcard by ID. Returns {:success true :anki-note-id N} if the card was synced."
   [card-id]
   (try
-    (let [deleted (db/delete-flashcard card-id)
+    (let [deleted (db/delete-flashcard! card-id)
           note-id (:flashcards/anki_note_id deleted)]
       {:success true :anki-note-id note-id})
     (catch Exception e
@@ -295,7 +271,6 @@
   "Update a flashcard with validation. Returns {:success bool :error string}"
   [card-id updated-fields]
   (try
-    ;; Validate non-empty fields
     (when (and (contains? updated-fields :question)
                (str/blank? (:question updated-fields)))
       (throw (ex-info "Question cannot be empty" {})))
@@ -306,8 +281,7 @@
                (str/blank? (:cloze updated-fields)))
       (throw (ex-info "Cloze text cannot be empty" {})))
 
-    ;; Execute update
-    (db/update-flashcard card-id updated-fields)
+    (db/update-flashcard! card-id updated-fields)
     {:success true}
 
     (catch Exception e
@@ -318,25 +292,24 @@
 (defn export-cards-csv
   "Export flashcards as CSV for Anki import.
    Options:
-   - document-id: ID of the document
-   - page-number: Page number to export (nil = all pages)
+   - root-topic-id: root topic ID (replaces document-id)
+   - topic-id: specific topic to export (nil = all under root)
    - kind: \"basic\", \"cloze\", or nil (all kinds)
    - header-text: Optional text to prepend to each card's front
    Returns {:success true :csv \"...\" :filename \"...\"}
    or {:success false :error \"...\"}"
-  [{:keys [document-id page-number kind header-text user-id]}]
+  [{:keys [root-topic-id topic-id kind header-text]}]
   (try
-    (let [;; Get document info for filename and tags
-          doc (first (db/get-documents-by-id user-id document-id))
-          _ (when-not doc
-              (throw (ex-info "Document not found" {:document-id document-id})))
-          doc-filename (-> (:documents/filename doc)
+    (let [root (db/get-topic root-topic-id)
+          _ (when-not root
+              (throw (ex-info "Topic not found" {:root-topic-id root-topic-id})))
+          doc-filename (-> (:topics/title root)
                            (str/replace #"\.pdf$" "")
                            (str/replace #"[^a-zA-Z0-9_-]" "_"))
           ;; Query cards
-          all-cards (if page-number
-                     (db/get-flashcards document-id page-number)
-                     (db/get-all-flashcards document-id))
+          all-cards (if topic-id
+                     (db/get-flashcards topic-id)
+                     (db/get-all-flashcards root-topic-id))
           _ (println "  Found" (count all-cards) "cards before filtering")
           _ (when (seq all-cards)
               (println "  Card kinds in DB:" (set (map :flashcards/kind all-cards))))
@@ -355,20 +328,14 @@
           ;; Format as CSV (comma-separated, with quoted fields)
           csv-lines (map (fn [card]
                           (let [card-kind (:flashcards/kind card)
-                                page (:flashcards/page_number card)
-                                ;; Tag format: "filename - pageN" (matching original)
-                                tag (str doc-filename " - " page)
-                                ;; Build front field
+                                tag doc-filename
                                 front (if (= card-kind "basic")
                                        (str (when header-html header-html)
                                             "<p>" (:flashcards/question card) "</p>")
-                                       ;; Cloze: just the cloze text
                                        (str "<p>" (:flashcards/cloze card) "</p>"))
-                                ;; Build back field
                                 back (if (= card-kind "basic")
                                       (str "<p>" (:flashcards/answer card) "</p>")
                                       "")
-                                ;; Escape quotes and wrap in quotes
                                 escape-csv (fn [s]
                                             (str "\"" (str/replace (or s "") "\"" "\"\"") "\""))]
                             (str (escape-csv front) ","
@@ -376,17 +343,15 @@
                                  (escape-csv tag))))
                         cards)
           csv-string (str/join "\n" csv-lines)
-          ;; Generate filename
           kind-suffix (if kind (str "_" kind) "")
-          page-suffix (if page-number (str "_page" page-number) "_all")
-          filename (str doc-filename page-suffix kind-suffix ".csv")]
+          topic-suffix (if topic-id (str "_topic" topic-id) "_all")
+          filename (str doc-filename topic-suffix kind-suffix ".csv")]
       (println "  SUCCESS: Generated" filename "with" (count cards) "cards")
-      ;; Mark exported cards as synced
       (let [card-ids (mapv :flashcards/id cards)]
         (db/mark-cards-exported card-ids))
       {:success true :csv csv-string :filename filename})
     (catch Exception e
       (let [error-msg (or (ex-message e) (.getMessage e))]
         (println "ERROR [export-cards-csv]:" error-msg)
-        (println "  Document ID:" document-id ", Page:" page-number ", Kind:" kind)
+        (println "  Root topic ID:" root-topic-id ", Topic ID:" topic-id ", Kind:" kind)
         {:success false :error error-msg}))))
