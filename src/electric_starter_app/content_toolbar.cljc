@@ -361,13 +361,14 @@
                               prev-context))))
 
                       generate-result (e/server
-                                        (if (= cur-card-type "basic")
-                                          (cards/generate-basic-cards
-                                            {:content content :context context-text
-                                             :card-count card-count-val :user-id user-id :enc-key enc-key})
-                                          (cards/generate-cloze-cards
-                                            {:content content :context context-text
-                                             :card-count card-count-val :user-id user-id :enc-key enc-key})))]
+                                        (e/Offload
+                                          #(if (= cur-card-type "basic")
+                                             (cards/generate-basic-cards
+                                               {:content content :context context-text
+                                                :card-count card-count-val :user-id user-id :enc-key enc-key})
+                                             (cards/generate-cloze-cards
+                                               {:content content :context context-text
+                                                :card-count card-count-val :user-id user-id :enc-key enc-key}))))]
                   (if-not (:success generate-result)
                     (do (token (:error generate-result))
                       (swap! !gen-state assoc :active nil :error (:error generate-result)))
@@ -417,15 +418,16 @@
                               prev-context))))
 
                       generate-result (e/server
-                                        (if (= kind "basic")
-                                          (cards/generate-basic-cards
-                                            {:content content :context context-text
-                                             :card-count card-count-val :user-id user-id
-                                             :enc-key enc-key :pre-prompt prompt-text})
-                                          (cards/generate-cloze-cards
-                                            {:content content :context context-text
-                                             :card-count card-count-val :user-id user-id
-                                             :enc-key enc-key :pre-prompt prompt-text})))]
+                                        (e/Offload
+                                          #(if (= kind "basic")
+                                             (cards/generate-basic-cards
+                                               {:content content :context context-text
+                                                :card-count card-count-val :user-id user-id
+                                                :enc-key enc-key :pre-prompt prompt-text})
+                                             (cards/generate-cloze-cards
+                                               {:content content :context context-text
+                                                :card-count card-count-val :user-id user-id
+                                                :enc-key enc-key :pre-prompt prompt-text}))))]
                   (if-not (:success generate-result)
                     (do (token (:error generate-result))
                       (swap! !prompt-gen-state assoc :active nil :error (:error generate-result)))

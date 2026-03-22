@@ -160,6 +160,7 @@
                 current-pdf-page (e/watch !current-page)
                 ;; Resolve page topic ID for card operations
                 page-topic-id (e/server (get-page-topic-id* refresh selected-doc current-pdf-page))
+                _ (log/log-debug (str "page-topic-id=" page-topic-id " for page=" current-pdf-page))
                 ;; User settings
                 scan-dpi (e/server (settings/get-scan-dpi user-id))
                 card-font-size (e/server (settings/get-card-font-size user-id))
@@ -186,6 +187,7 @@
                 _ (when (:success save-result)
                     (reset! !last-saved-ocr (:html dirty-data)))
                 text-result (e/server (get-page-text* refresh selected-doc current-pdf-page))
+                _ (log/log-debug (str "text-result success=" (:success text-result) " page=" current-pdf-page " html-len=" (count (:text text-result))))
                 page-text (e/server (when (:success text-result) (:text text-result)))
                 is-done (e/server (get-page-done-status* refresh selected-doc current-pdf-page))]
 
