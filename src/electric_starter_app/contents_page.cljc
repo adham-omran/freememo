@@ -43,9 +43,7 @@
           has-children (boolean (seq children))
           item-status (or (:topics/status item) "active")
           item-kind (or (:topics/kind item) "basic")
-          preview (or (:topics/title item)
-                    (content-preview (:topics/content item) 60)
-                    "(empty)")
+          preview (or (:topics/title item) "(empty)")
           !expanded (atom false)
           expanded (e/watch !expanded)]
       (dom/div

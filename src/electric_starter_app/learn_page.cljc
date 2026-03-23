@@ -31,14 +31,12 @@
      :cljs nil))
 
 ;; Badge display for topic kinds
-(defn kind-badge [kind parent-id]
+(defn kind-badge [kind]
   (case kind
     "pdf" ["PDF" "#dcfce7"]
     "epub" ["EPUB" "#f3e8ff"]
     ("web" "wikipedia") ["Web" "#e0f2fe"]
-    (if parent-id
-      ["Extract" "#44C2FF"]
-      ["Topic" "#f3e8ff"])))
+    ["Topic" "#f3e8ff"]))
 
 (e/defn LearnBrowseTopic [user-id enc-key topic-id title !mode llm-enabled?]
   (e/client
@@ -129,7 +127,7 @@
                                             (util/display-name title)
                                             (let [preview (util/extract-preview content 80)]
                                               (if (seq preview) preview title)))
-                            [type-label type-color] (kind-badge kind parent-id)
+                            [type-label type-color] (kind-badge kind)
                             due-str (cond
                                       (< interval 1.0) (str (int (* interval 24)) "h")
                                       (= interval 1.0) "1d"
@@ -194,7 +192,7 @@
                                 (util/extract-preview raw-title 80)
                                 (util/display-name raw-title))
                         item-status (or (:topics/status item) "done")
-                        [type-label type-color] (kind-badge kind parent-id)]
+                        [type-label type-color] (kind-badge kind)]
                     (dom/div
                       (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
                                           :padding "8px 10px" :border-bottom "1px solid #f0f0f0"}})

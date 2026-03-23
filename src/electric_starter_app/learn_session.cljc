@@ -108,14 +108,12 @@
               (swap! !queue-idx inc))))))))
 
 ;; Badge display for topic kinds
-(defn kind-badge [kind parent-id]
+(defn kind-badge [kind]
   (case kind
     "pdf" ["PDF" "#dcfce7"]
     "epub" ["EPUB" "#f3e8ff"]
     ("web" "wikipedia") ["Web" "#e0f2fe"]
-    (if parent-id
-      ["Extract" "#44C2FF"]
-      ["Topic" "#f3e8ff"])))
+    ["Topic" "#f3e8ff"]))
 
 ;; Session header bar
 (e/defn SessionHeader [item !queue-idx !mode idx total view-source!]
@@ -133,7 +131,7 @@
                            (db/get-topic root-id))))
           root-title (when root-topic (:topics/title root-topic))
           root-kind (when root-topic (:topics/kind root-topic))
-          [type-label type-color] (kind-badge kind parent-id)]
+          [type-label type-color] (kind-badge kind)]
 
       (dom/div
         (dom/props {:class "header-bar" :style {:gap "8px"}})

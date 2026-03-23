@@ -1085,7 +1085,7 @@
    Includes page topics so parent chain (PDF → page → extract) is intact."
   [user-id]
   (jdbc/execute! ds
-    (sql/format {:select [:id :parent_id :title :content :kind :status :created_at :page_number]
+    (sql/format {:select [:id :parent_id :title :kind :status :created_at :page_number]
                  :from [:topics]
                  :where [:= :user_id user-id]
                  :order-by [[:parent_id :asc-nulls-first] [:page_number :asc-nulls-first] [:created_at :asc]]})))

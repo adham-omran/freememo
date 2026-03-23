@@ -31,14 +31,12 @@
      :cljs nil))
 
 ;; Badge display for topic kinds
-(defn kind-badge [kind parent-id]
+(defn kind-badge [kind]
   (case kind
     "pdf" ["PDF" "#dcfce7"]
     "epub" ["EPUB" "#f3e8ff"]
     ("web" "wikipedia") ["Web" "#e0f2fe"]
-    (if parent-id
-      ["Extract" "#44C2FF"]
-      ["Topic" "#f3e8ff"])))
+    ["Topic" "#f3e8ff"]))
 
 ;; Prepare queue rows on server (add formatted fields)
 (defn prepare-queue-rows [user-id]
@@ -150,7 +148,7 @@
                               due-label (:due-label item)
                               display-title (or (:display-title item) "")
                               id (:id item)
-                              [badge-text badge-color] (kind-badge kind parent-id)]
+                              [badge-text badge-color] (kind-badge kind)]
                           (dom/tr
                             (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")
                                                 :opacity (case item-status "done" "0.6" "1")
