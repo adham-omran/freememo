@@ -161,16 +161,19 @@
 
 (defn get-pdf-handler [request]
   "Serve PDF file by topic ID from database."
-  (if-let [_user-id (require-auth request)]
+  (if-let [user-id (require-auth request)]
     (try
       (let [uri (:uri request)
-            topic-id (-> uri (clojure.string/split #"/") last parse-long)]
-        (if-let [file-row (db/get-topic-file topic-id)]
-          (let [topic (db/get-topic topic-id)]
+            topic-id (-> uri (clojure.string/split #"/") last parse-long)
+            topic (db/get-topic topic-id)]
+        (if (and topic (= (:topics/user_id topic) user-id))
+          (if-let [file-row (db/get-topic-file topic-id)]
             {:status 200
              :headers {"Content-Type" "application/pdf"
                        "Content-Disposition" (str "inline; filename=\"" (:topics/title topic) "\"")}
-             :body (io/input-stream (:topic_files/file_data file-row))})
+             :body (io/input-stream (:topic_files/file_data file-row))}
+            {:status 404
+             :body "PDF not found"})
           {:status 404
            :body "PDF not found"}))
       (catch Exception e
