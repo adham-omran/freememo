@@ -258,6 +258,8 @@ html, body {
 @media (pointer: coarse) {
     .split-divider-h { width: 16px; }
     .split-divider-h::before { left: -8px; right: -8px; }
+    .split-divider-v { height: 16px; }
+    .split-divider-v::before { top: -8px; bottom: -8px; }
 }
 .split-divider-h:hover,
 .split-divider-h:active { background: #90caf9; }
@@ -364,6 +366,23 @@ textarea:hover {
     .ql-toolbar .ql-formats {
         margin-right: 8px !important;
         flex-shrink: 0;
+    }
+
+    /* Header bar: allow wrapping on narrow screens */
+    .header-bar {
+        flex-wrap: wrap;
+    }
+
+    /* Content toolbar: horizontal scroll instead of multi-row wrap */
+    .toolbar {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    /* Card table: ensure min width so columns aren't clipped */
+    .card-table {
+        min-width: 500px;
     }
 }
 
