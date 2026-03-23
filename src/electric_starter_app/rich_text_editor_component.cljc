@@ -25,12 +25,16 @@
                           :min-height "200px"}
                   :data-role "widget"})
 
-      (let [node dom/node]
-        ;; Init once — Quill persists for the component's lifetime
-        (when-not (some? (:editor @editor/!editor-state))
-          (log/log-debug (str "Editor init topic-id=" topic-id " html-len=" (count initial-html)))
-          (js/setTimeout (fn [] (editor/init-editor! node (or initial-html "") topic-id)) 0))
-        (e/on-unmount (fn [] (editor/destroy-editor!)))
+      (let [node dom/node
+            ;; Init once — Quill persists for the component's lifetime.
+            ;; Capture timer-id so we can cancel on unmount (prevents ghost editor
+            ;; on detached DOM when Electric processes atom resets as separate waves).
+            timer-id (when-not (some? (:editor @editor/!editor-state))
+                       (log/log-debug (str "Editor init topic-id=" topic-id " html-len=" (count initial-html)))
+                       (js/setTimeout (fn [] (editor/init-editor! node (or initial-html "") topic-id)) 0))]
+        (e/on-unmount (fn []
+                        (when timer-id (js/clearTimeout timer-id))
+                        (editor/destroy-editor!)))
 
         ;; Update topic-id in editor state (page navigation)
         ;; Text-change listener reads from !editor-state, so dirty-html gets correct topic-id
@@ -39,7 +43,10 @@
         ;; Update content in-place when initial-html changes reactively
         ;; (page navigation, OCR scan, !refresh re-fetch)
         ;; Skip if user has unsaved edits — "don't damage user input"
+        ;; e/watch on !editor-state ensures re-trigger after init-editor! creates the editor
         (when (some? initial-html)
-          (let [dirty (e/watch editor/!dirty-html)]
-            (when-not (and dirty (= (:topic-id dirty) topic-id))
+          (let [dirty (e/watch editor/!dirty-html)
+                editor-state (e/watch editor/!editor-state)]
+            (when (and (some? editor-state)
+                       (not (and dirty (= (:topic-id dirty) topic-id))))
               (editor/set-content! initial-html))))))))

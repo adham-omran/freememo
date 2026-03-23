@@ -130,7 +130,7 @@
                 kind (:topics/kind item)
                 topic-id (:topics/id item)
                 outstanding? (:outstanding? item)
-                show-pdf? (#{"pdf" "epub"} kind)
+                show-pdf? (= kind "pdf")
                 ;; Count remaining outstanding items (from current idx onward)
                 outstanding-remaining (count (filter :outstanding? (subvec queue-vec idx)))]
             (when item
