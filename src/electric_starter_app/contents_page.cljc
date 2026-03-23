@@ -153,9 +153,9 @@
                                   (dom/On "click"
                                     (fn [_]
                                       (if is-root
-                                        (do (reset! !nav-target {:topic-id id :kind kind :title title})
+                                        (do (reset! !nav-target {:topic-id id :kind kind :title title :origin :library})
                                           (navigate! :learn))
-                                        (do (reset! !nav-target {:topic-id id})
+                                        (do (reset! !nav-target {:topic-id id :origin :library})
                                           (navigate! :extract))))
                                     nil))
                                 ;; File size (root only)

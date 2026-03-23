@@ -118,11 +118,12 @@
                 (when (= active-tab :settings) (SettingsPage user-id username enc-key !settings-refresh))
                 (when (= active-tab :learn) (LearnPage user-id enc-key !nav-target #(navigate! :extract) navigate! llm-enabled?))
                 (when (= active-tab :extract)
-                  (ExtractPage user-id enc-key (:topic-id (e/watch !nav-target)) navigate!
-                    (fn [topic-id page & [kind]]
-                      (reset! !nav-target {:topic-id topic-id :kind (or kind "pdf") :page page})
-                      (navigate! :learn))
-                    llm-enabled?)))))
+                  (let [nav (e/watch !nav-target)]
+                    (ExtractPage user-id enc-key (:topic-id nav) navigate!
+                      (fn [topic-id page & [kind]]
+                        (reset! !nav-target {:topic-id topic-id :kind (or kind "pdf") :page page})
+                        (navigate! :learn))
+                      llm-enabled? (:origin nav)))))))
 
           ;; Not authenticated: render login page
           (LoginPage auth-error))))))

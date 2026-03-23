@@ -180,9 +180,9 @@
                                 (fn [_]
                                   (case kind
                                     ("pdf" "epub")
-                                    (do (reset! !nav-target {:topic-id id :kind kind :title display-title})
+                                    (do (reset! !nav-target {:topic-id id :kind kind :title display-title :origin :queue})
                                       (navigate! :learn))
-                                    (do (reset! !nav-target {:topic-id id})
+                                    (do (reset! !nav-target {:topic-id id :origin :queue})
                                       (navigate! :extract))))
                                 nil))))))))
                 (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))))
