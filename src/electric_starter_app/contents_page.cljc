@@ -6,6 +6,7 @@
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
    [electric-starter-app.util :as util]
+   [electric-starter-app.card-components :as card-components]
    #?(:clj [electric-starter-app.db :as db])
    #?(:clj [clojure.string :as str])))
 
@@ -43,18 +44,18 @@
                                       (if (= "page" (:topics/kind c))
                                         (get children-map (:topics/id c))
                                         [c]))
-                                    raw-children))
+                              raw-children))
                        raw-children)
             has-children (boolean (seq children))
             expanded? (contains? expanded-set id)
             new-stack (if (and expanded? has-children)
                         (into rest-stack
-                              (mapv (fn [c] {:depth (inc depth) :topic c :is-root false})
-                                    (reverse children)))
+                          (mapv (fn [c] {:depth (inc depth) :topic c :is-root false})
+                            (reverse children)))
                         rest-stack)]
         (recur new-stack
-               (conj result {:depth depth :topic topic
-                             :has-children has-children :is-root is-root}))))))
+          (conj result {:depth depth :topic topic
+                        :has-children has-children :is-root is-root}))))))
 
 ;; Badge for topic kind
 (defn kind-badge [kind]
@@ -77,6 +78,8 @@
           (let [children-map (group-by :topics/parent_id all-items)
                 !expanded-set (atom #{})
                 expanded-set (e/watch !expanded-set)
+                !show-confirm (atom nil)
+                show-confirm (e/watch !show-confirm)
                 flat-rows (flatten-tree roots children-map expanded-set)
                 row-count (count flat-rows)
                 row-height 36
@@ -101,6 +104,8 @@
                                 kind (or (:topics/kind topic) "basic")
                                 topic-status (or (:topics/status topic) "active")
                                 expanded? (contains? expanded-set id)
+                                file-size (:topics/file_size topic)
+                                created-at (:topics/created_at topic)
                                 [badge-text badge-color] (kind-badge kind)
                                 display-title (if is-root (util/display-name title) title)]
                             (dom/tr
@@ -137,7 +142,8 @@
                                 ;; Title
                                 (dom/span
                                   (dom/props {:class "tree-title"
-                                              :style {:font-size (if is-root "14px" "13px")
+                                              :style {:flex "1" :min-width "0"
+                                                      :font-size (if is-root "14px" "13px")
                                                       :font-weight (if is-root "500" "400")
                                                       :color (if is-root "#222" "#333")
                                                       :cursor "pointer"
@@ -148,10 +154,22 @@
                                     (fn [_]
                                       (if is-root
                                         (do (reset! !nav-target {:topic-id id :kind kind :title title})
-                                            (navigate! :learn))
+                                          (navigate! :learn))
                                         (do (reset! !nav-target {:topic-id id})
-                                            (navigate! :extract))))
+                                          (navigate! :extract))))
                                     nil))
+                                ;; File size (root only)
+                                (when (and is-root (some? file-size) (pos? file-size))
+                                  (dom/span
+                                    (dom/props {:style {:font-size "11px" :color "var(--color-text-secondary)"
+                                                        :flex-shrink "0" :white-space "nowrap"}})
+                                    (dom/text (e/server (util/format-bytes file-size)))))
+                                ;; Created date (root only)
+                                (when (and is-root (some? created-at))
+                                  (dom/span
+                                    (dom/props {:style {:font-size "11px" :color "var(--color-text-secondary)"
+                                                        :flex-shrink "0" :white-space "nowrap"}})
+                                    (dom/text (e/server (util/format-timestamp created-at)))))
                                 ;; Review button (only for nodes with children)
                                 (when has-children
                                   (dom/button
@@ -165,8 +183,46 @@
                                         (reset! !nav-target {:subset-review {:root-id id
                                                                              :root-name title}})
                                         (navigate! :learn))
-                                      nil))))))))))
-                  (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))
+                                      nil)))
+                                ;; Delete button (root only)
+                                (when is-root
+                                  (dom/button
+                                    (dom/props {:class "btn btn-sm btn-danger-fill"
+                                                :style {:padding "2px 6px" :font-size "10px" :flex-shrink "0"}})
+                                    (dom/text "Delete")
+                                    (dom/On "click" (fn [e] (.stopPropagation e) (reset! !show-confirm id)) nil))))))))))
+                  (dom/div (dom/props {:style {:height (str occluded-height "px")}}))
+                  ;; Delete confirm dialog
+                  (when (some? show-confirm)
+                    (dom/div
+                      (dom/props {:class "modal-backdrop"})
+                      (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil)
+                      (dom/On "keydown" (fn [e] (when (= (.-key e) "Escape") (reset! !show-confirm nil))) nil)
+                      (dom/div
+                        (dom/props {:class "modal-content modal-sm"})
+                        (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+                        (dom/div
+                          (dom/props {:class "confirm-modal-body"})
+                          (dom/p (dom/text "Delete this topic? All children, extracts, and cards will be permanently removed.")))
+                        (dom/div
+                          (dom/props {:class "confirm-modal-actions"})
+                          (dom/button
+                            (dom/props {:class "btn btn-secondary"})
+                            (dom/text "Cancel")
+                            (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil))
+                          (dom/button
+                            (dom/props {:class "btn btn-danger-fill"})
+                            (dom/text "Delete")
+                            (let [event (dom/On "click" (fn [_] show-confirm) nil)
+                                  [?token ?error] (e/Token event)]
+                              (when-some [token ?token]
+                                (let [topic-to-delete event
+                                      note-ids (e/server (vec (db/get-all-anki-note-ids topic-to-delete)))]
+                                  (e/server (db/delete-topic-for-user! user-id topic-to-delete))
+                                  (e/server (swap! !refresh inc))
+                                  (e/client (card-components/try-delete-anki-notes! note-ids))
+                                  (reset! !show-confirm nil)
+                                  (token)))))))))))
               (dom/p
                 (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
                 (dom/text "No content yet. Import content from the Import tab.")))))))))

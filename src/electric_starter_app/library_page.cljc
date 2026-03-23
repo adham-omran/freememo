@@ -1,55 +1,27 @@
 (ns electric-starter-app.library-page
-  "Library tab — merged document list + contents tree with view toggle."
+  "Library tab — knowledge tree view with filter."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [electric-starter-app.pdf-page :refer [DocumentListView]]
    [electric-starter-app.contents-page :refer [DocumentTreeView]]))
 
 (e/defn LibraryPage [user-id !nav-target navigate! !refresh]
   (e/client
-    (let [!view-mode (atom :list)
-          view-mode (e/watch !view-mode)
-          !filter-text (atom "")
+    (let [!filter-text (atom "")
           filter-text (e/watch !filter-text)]
       (dom/div
         (dom/props {:class "page-container"
                     :style {:height "100%" :display "flex" :flex-direction "column"}})
 
-        ;; Header row: search + toggle
+        ;; Header row: search filter
         (dom/div
           (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
                               :margin-bottom "12px"}})
 
-          ;; Search filter
           (dom/input
             (dom/props {:type "text" :placeholder "Filter documents..."
                         :class "input" :style {:flex "1" :max-width "400px"}})
-            (dom/On "input" (fn [e] (reset! !filter-text (-> e .-target .-value))) nil))
+            (dom/On "input" (fn [e] (reset! !filter-text (-> e .-target .-value))) nil)))
 
-          (dom/div (dom/props {:style {:flex "1"}}))
-
-          ;; Segmented toggle
-          (dom/div
-            (dom/props {:style {:display "flex" :border "1px solid var(--color-border)"
-                                :border-radius "var(--radius-md)" :overflow "hidden"}})
-            (dom/button
-              (dom/props {:style {:padding "4px 12px" :font-size "12px" :border "none" :cursor "pointer"
-                                  :font-weight (if (= view-mode :list) "600" "400")
-                                  :background (if (= view-mode :list) "var(--color-primary)" "transparent")
-                                  :color (if (= view-mode :list) "#fff" "var(--color-text-secondary)")}})
-              (dom/text "List")
-              (dom/On "click" (fn [_] (reset! !view-mode :list)) nil))
-            (dom/button
-              (dom/props {:style {:padding "4px 12px" :font-size "12px" :border "none" :cursor "pointer"
-                                  :border-left "1px solid var(--color-border)"
-                                  :font-weight (if (= view-mode :tree) "600" "400")
-                                  :background (if (= view-mode :tree) "var(--color-primary)" "transparent")
-                                  :color (if (= view-mode :tree) "#fff" "var(--color-text-secondary)")}})
-              (dom/text "Tree")
-              (dom/On "click" (fn [_] (reset! !view-mode :tree)) nil))))
-
-        ;; View content
-        (if (= view-mode :list)
-          (DocumentListView user-id !nav-target navigate! !refresh)
-          (DocumentTreeView user-id !nav-target navigate! !refresh filter-text))))))
+        ;; Tree view
+        (DocumentTreeView user-id !nav-target navigate! !refresh filter-text)))))

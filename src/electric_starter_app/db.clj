@@ -1085,10 +1085,14 @@
    Includes page topics so parent chain (PDF → page → extract) is intact."
   [user-id]
   (jdbc/execute! ds
-    (sql/format {:select [:id :parent_id :title :kind :status :created_at :page_number]
-                 :from [:topics]
-                 :where [:= :user_id user-id]
-                 :order-by [[:parent_id :asc-nulls-first] [:page_number :asc-nulls-first] [:created_at :asc]]})))
+    (sql/format {:select [[:t.id :id] [:t.parent_id :parent_id] [:t.title :title]
+                          [:t.kind :kind] [:t.status :status] [:t.created_at :created_at]
+                          [:t.page_number :page_number]
+                          [[:coalesce :tf.file_size [:octet_length [:coalesce :t.content ""]]] :file_size]]
+                 :from [[:topics :t]]
+                 :left-join [[:topic_files :tf] [:= :tf.topic_id :t.id]]
+                 :where [:= :t.user_id user-id]
+                 :order-by [[:t.parent_id :asc-nulls-first] [:t.page_number :asc-nulls-first] [:t.created_at :asc]]})))
 
 (defn get-root-topic-id
   "Walk up parent_id chain to find the root topic. Returns the root topic's ID."
