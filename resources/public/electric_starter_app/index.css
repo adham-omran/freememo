@@ -292,6 +292,9 @@ html, body {
 }
 .tape-scroll table tr:hover td { background: #f5f7fa; }
 
+/* ── Tree View ───────────────────────────────────────────────── */
+.tree-title:hover { text-decoration: underline; }
+
 /* ── Card Table RTL ───────────────────────────────────────────── */
 /* dir="auto" on .card-table handles column flip via CSS Grid.
    Additional rules for RTL-aware spacing and alignment. */

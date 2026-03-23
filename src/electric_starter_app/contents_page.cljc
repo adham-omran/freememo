@@ -1,8 +1,10 @@
 (ns electric-starter-app.contents-page
-  "Contents tab — knowledge tree showing topics and sub-topics."
+  "Contents tab — knowledge tree with flatten + virtual scroll."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
+   [contrib.data :refer [clamp-left]]
    [electric-starter-app.util :as util]
    #?(:clj [electric-starter-app.db :as db])
    #?(:clj [clojure.string :as str])))
@@ -11,18 +13,6 @@
 (defn get-tree-items* [_refresh user-id]
   #?(:clj (vec (db/get-knowledge-tree user-id))
      :cljs nil))
-
-;; Truncate HTML content to plain text preview
-(defn content-preview [content max-len]
-  (when (and content (seq content))
-    (let [text #?(:cljs (let [tmp (js/document.createElement "div")]
-                          (set! (.-innerHTML tmp) content)
-                          (.-textContent tmp))
-                  :clj (clojure.string/replace content #"<[^>]*>" ""))
-          trimmed (if (> (count text) max-len)
-                    (str (subs text 0 max-len) "...")
-                    text)]
-      trimmed)))
 
 #?(:clj
    (defn extract-roots [items]
@@ -35,150 +25,47 @@
        (let [q (str/lower-case (str/trim filter-text))]
          (filterv #(str/includes? (str/lower-case (or (:topics/title %) "")) q) topics)))))
 
-;; Child topic node — recursive component
-(e/defn TopicChildNode [item children-map depth !nav-target navigate!]
-  (e/client
-    (let [id (:topics/id item)
-          children (get children-map id)
-          has-children (boolean (seq children))
-          item-status (or (:topics/status item) "active")
-          item-kind (or (:topics/kind item) "basic")
-          preview (or (:topics/title item) "(empty)")
-          !expanded (atom false)
-          expanded (e/watch !expanded)]
-      (dom/div
-        (dom/props {:style {:padding-left "20px"}})
-        ;; Row
-        (dom/div
-          (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
-                              :padding "4px 0" :border-bottom "1px solid #f5f5f5"
-                              :opacity (case item-status "done" "0.6" "1")
-                              :border-left (when (= item-status "done") "2px solid #86efac")
-                              :padding-left (when (= item-status "done") "8px")}})
-          ;; Arrow
-          (if has-children
-            (dom/span
-              (dom/props {:style {:width "16px" :font-size "10px" :cursor "pointer"
-                                  :user-select "none" :text-align "center" :flex-shrink "0"}})
-              (dom/text (if expanded "\u25BC" "\u25B6"))
-              (dom/On "click" (fn [e] (.stopPropagation e) (swap! !expanded not)) nil))
-            (dom/span (dom/props {:style {:width "16px" :flex-shrink "0"}})))
-          ;; Type badge
-          (let [[badge-label badge-color]
-                (case item-kind
-                  "basic" ["Topic" "#f3e8ff"]
-                  ("web" "wikipedia") ["Web" "#e0f2fe"]
-                  "epub" ["EPUB" "#f3e8ff"]
-                  "pdf" ["PDF" "#dcfce7"]
-                  ["Topic" "#f3e8ff"])]
-            (dom/span
-              (dom/props {:class "type-badge" :style {:background badge-color}})
-              (dom/text badge-label)))
-          ;; Content preview — click opens
-          (dom/span
-            (dom/props {:style {:font-size "13px" :color "#333" :cursor "pointer"
-                                :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}
-                        :title "Click to open"})
-            (dom/On "mouseenter" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "underline")) nil)
-            (dom/On "mouseleave" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "none")) nil)
-            (dom/text preview)
-            (dom/On "click"
-              (fn [_]
-                (reset! !nav-target {:topic-id id})
-                (navigate! :extract))
-              nil))
-          ;; Review button — only for nodes with children
-          (when has-children
-            (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary"
-                          :style {:padding "2px 6px" :font-size "10px" :flex-shrink "0"}
-                          :title "Review this topic and its children"})
-              (dom/text "Review")
-              (dom/On "click"
-                (fn [e]
-                  (.stopPropagation e)
-                  (reset! !nav-target {:subset-review {:root-id id
-                                                       :root-name preview}})
-                  (navigate! :learn))
-                nil))))
-        ;; Children
-        (when (and expanded has-children)
-          (e/for-by :topics/id [child children]
-            (TopicChildNode child children-map (inc depth) !nav-target navigate!)))))))
+;; Flatten tree into a linear list respecting expand state.
+;; Returns [{:depth N :topic <map> :has-children bool :is-root bool}]
+(defn flatten-tree [roots children-map expanded-set]
+  (loop [stack (mapv (fn [r] {:depth 0 :topic r :is-root true}) (reverse roots))
+         result []]
+    (if (empty? stack)
+      result
+      (let [{:keys [depth topic is-root]} (peek stack)
+            rest-stack (pop stack)
+            id (:topics/id topic)
+            kind (:topics/kind topic)
+            raw-children (get children-map id)
+            ;; For PDFs/EPUBs/web, flatten through page nodes to show extracts directly
+            children (if (and is-root (#{"pdf" "epub" "web" "wikipedia"} kind))
+                       (vec (mapcat (fn [c]
+                                      (if (= "page" (:topics/kind c))
+                                        (get children-map (:topics/id c))
+                                        [c]))
+                                    raw-children))
+                       raw-children)
+            has-children (boolean (seq children))
+            expanded? (contains? expanded-set id)
+            new-stack (if (and expanded? has-children)
+                        (into rest-stack
+                              (mapv (fn [c] {:depth (inc depth) :topic c :is-root false})
+                                    (reverse children)))
+                        rest-stack)]
+        (recur new-stack
+               (conj result {:depth depth :topic topic
+                             :has-children has-children :is-root is-root}))))))
 
-;; Root topic node
-(e/defn TopicRootNode [topic children-map !nav-target navigate!]
-  (e/client
-    (let [topic-id (:topics/id topic)
-          title (or (:topics/title topic) "Untitled")
-          kind (or (:topics/kind topic) "basic")
-          topic-status (or (:topics/status topic) "active")
-          type-label (case kind "pdf" "PDF" "web" "Web" "wikipedia" "Web" "epub" "EPUB" "basic" "Topic" "Topic")
-          type-color (case kind "pdf" "#dcfce7" "web" "#e0f2fe" "wikipedia" "#e0f2fe" "epub" "#f3e8ff" "basic" "#f3e8ff" "#f3e8ff")
-          raw-children (get children-map topic-id)
-          ;; For PDFs/EPUBs, flatten through page nodes to show extracts directly
-          children (if (#{"pdf" "epub" "web" "wikipedia"} kind)
-                     (vec (mapcat (fn [child]
-                                    (if (= "page" (:topics/kind child))
-                                      (get children-map (:topics/id child))
-                                      [child]))
-                            raw-children))
-                     raw-children)
-          has-children (boolean (seq children))
-          !expanded (atom false)
-          expanded (e/watch !expanded)]
-      (dom/div
-        ;; Root topic row
-        (dom/div
-          (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
-                              :padding "6px 0" :border-bottom "1px solid #e8e8e8"
-                              :opacity (case topic-status "done" "0.6" "1")
-                              :border-left (when (= topic-status "done") "2px solid #86efac")
-                              :padding-left (when (= topic-status "done") "8px")}})
-          ;; Arrow
-          (if has-children
-            (dom/span
-              (dom/props {:style {:width "16px" :font-size "11px" :cursor "pointer"
-                                  :user-select "none" :text-align "center" :flex-shrink "0"}})
-              (dom/text (if expanded "\u25BC" "\u25B6"))
-              (dom/On "click" (fn [e] (.stopPropagation e) (swap! !expanded not)) nil))
-            (dom/span (dom/props {:style {:width "16px" :flex-shrink "0"}})))
-          ;; Type badge
-          (dom/span
-            (dom/props {:class "type-badge" :style {:background type-color}})
-            (dom/text type-label))
-          ;; Title — click opens
-          (dom/span
-            (dom/props {:style {:font-size "14px" :font-weight "500" :color "#222" :cursor "pointer"}
-                        :title "Click to open"})
-            (dom/On "mouseenter" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "underline")) nil)
-            (dom/On "mouseleave" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "none")) nil)
-            (dom/text (util/display-name title))
-            (dom/On "click"
-              (fn [_]
-                (reset! !nav-target {:topic-id topic-id :kind kind :title title})
-                (navigate! :learn))
-              nil))
-          ;; Review button
-          (dom/button
-            (dom/props {:class "btn btn-sm btn-secondary"
-                        :style {:padding "2px 8px" :font-size "11px" :flex-shrink "0"}
-                        :title "Review all topics under this document"})
-            (dom/text "Review")
-            (dom/On "click"
-              (fn [e]
-                (.stopPropagation e)
-                (reset! !nav-target {:subset-review {:root-id topic-id
-                                                     :root-name title}})
-                (navigate! :learn))
-              nil)))
-        ;; Children
-        (when (and expanded has-children)
-          (e/for-by :topics/id [child children]
-            (TopicChildNode child children-map 1 !nav-target navigate!)))))))
+;; Badge for topic kind
+(defn kind-badge [kind]
+  (case kind
+    "pdf" ["PDF" "#dcfce7"]
+    "epub" ["EPUB" "#f3e8ff"]
+    ("web" "wikipedia") ["Web" "#e0f2fe"]
+    ["Topic" "#f3e8ff"]))
 
 ;; Document tree view — used by LibraryPage
-;; Receives !refresh and filter-text from parent
+;; Flatten + virtual scroll for performance
 (e/defn DocumentTreeView [user-id !nav-target navigate! !refresh filter-text]
   (e/client
     (e/server
@@ -187,12 +74,99 @@
             all-roots (extract-roots all-items)
             roots (filter-root-topics all-roots filter-text)]
         (e/client
-          (let [children-map (group-by :topics/parent_id all-items)]
-            (if (seq roots)
+          (let [children-map (group-by :topics/parent_id all-items)
+                !expanded-set (atom #{})
+                expanded-set (e/watch !expanded-set)
+                flat-rows (flatten-tree roots children-map expanded-set)
+                row-count (count flat-rows)
+                row-height 36
+                ;; Ref to scroll container — used to preserve scrollTop across expand/collapse
+                !scroll-node (atom nil)]
+            (if (pos? row-count)
               (dom/div
                 (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
-                (e/for-by :topics/id [topic roots]
-                  (TopicRootNode topic children-map !nav-target navigate!)))
+                (reset! !scroll-node dom/node)
+                (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 1})
+                      occluded-height (clamp-left (* row-height (- row-count limit)) 0)]
+                  (dom/props {:class "tape-scroll"
+                              :style {:--offset offset :--row-height (str row-height "px")}})
+                  (dom/table
+                    (dom/props {:style {:width "100%" :font-size "14px"}})
+                    (e/for [i (Tape offset limit)]
+                      (let [row (nth flat-rows i nil)]
+                        (when row
+                          (let [{:keys [depth topic has-children is-root]} row
+                                id (:topics/id topic)
+                                title (or (:topics/title topic) "(empty)")
+                                kind (or (:topics/kind topic) "basic")
+                                topic-status (or (:topics/status topic) "active")
+                                expanded? (contains? expanded-set id)
+                                [badge-text badge-color] (kind-badge kind)
+                                display-title (if is-root (util/display-name title) title)]
+                            (dom/tr
+                              (dom/props {:style {:height (str row-height "px")
+                                                  :opacity (case topic-status "done" "0.6" "1")
+                                                  :--order (inc i)}})
+                              ;; Single cell with indentation
+                              (dom/td
+                                (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
+                                                    :padding-left (str (* depth 20) "px")
+                                                    :height (str row-height "px")
+                                                    :border-bottom "1px solid #f0f0f0"
+                                                    :border-left (when (= topic-status "done") "2px solid #86efac")}})
+                                ;; Arrow
+                                (if has-children
+                                  (dom/span
+                                    (dom/props {:style {:width "16px" :font-size "10px" :cursor "pointer"
+                                                        :user-select "none" :text-align "center" :flex-shrink "0"}})
+                                    (dom/text (if expanded? "\u25BC" "\u25B6"))
+                                    (dom/On "click"
+                                      (fn [e]
+                                        (.stopPropagation e)
+                                        (let [sn @!scroll-node
+                                              st (when sn (.-scrollTop sn))]
+                                          (swap! !expanded-set (fn [s] (if (contains? s id) (disj s id) (conj s id))))
+                                          (when st
+                                            (js/requestAnimationFrame (fn [] (set! (.-scrollTop sn) st))))))
+                                      nil))
+                                  (dom/span (dom/props {:style {:width "16px" :flex-shrink "0"}})))
+                                ;; Badge
+                                (dom/span
+                                  (dom/props {:class "type-badge" :style {:background badge-color}})
+                                  (dom/text badge-text))
+                                ;; Title
+                                (dom/span
+                                  (dom/props {:class "tree-title"
+                                              :style {:font-size (if is-root "14px" "13px")
+                                                      :font-weight (if is-root "500" "400")
+                                                      :color (if is-root "#222" "#333")
+                                                      :cursor "pointer"
+                                                      :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}
+                                              :title display-title})
+                                  (dom/text display-title)
+                                  (dom/On "click"
+                                    (fn [_]
+                                      (if is-root
+                                        (do (reset! !nav-target {:topic-id id :kind kind :title title})
+                                            (navigate! :learn))
+                                        (do (reset! !nav-target {:topic-id id})
+                                            (navigate! :extract))))
+                                    nil))
+                                ;; Review button (only for nodes with children)
+                                (when has-children
+                                  (dom/button
+                                    (dom/props {:class "btn btn-sm btn-secondary"
+                                                :style {:padding "2px 6px" :font-size "10px" :flex-shrink "0"}
+                                                :title "Review this topic and its children"})
+                                    (dom/text "Review")
+                                    (dom/On "click"
+                                      (fn [e]
+                                        (.stopPropagation e)
+                                        (reset! !nav-target {:subset-review {:root-id id
+                                                                             :root-name title}})
+                                        (navigate! :learn))
+                                      nil))))))))))
+                  (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))
               (dom/p
                 (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
                 (dom/text "No content yet. Import content from the Import tab.")))))))))
@@ -213,8 +187,7 @@
         (if (seq roots)
           (dom/div
             (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
-            (e/for-by :topics/id [topic roots]
-              (TopicRootNode topic children-map !nav-target navigate!)))
+            (dom/text "Use Library tab for tree view."))
           (dom/p
             (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
             (dom/text "No content yet. Import a document, then extract content for study.")))))))
