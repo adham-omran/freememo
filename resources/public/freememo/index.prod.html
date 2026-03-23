@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+    <head>
+	<meta charset="utf-8"/>
+	<title>FreeMemo — Incremental Reading with Spaced Repetition</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="description" content="Import PDFs, EPUBs, and articles. AI generates flashcards. Review with spaced repetition. Sync to Anki.">
+	<meta property="og:title" content="FreeMemo — Incremental Reading with Spaced Repetition">
+	<meta property="og:description" content="Import documents, generate flashcards with AI, and learn with spaced repetition. Supports PDF, EPUB, and web articles.">
+	<meta property="og:type" content="website">
+	<meta name="twitter:card" content="summary_large_image">
+	<meta name="twitter:title" content="FreeMemo">
+	<meta name="twitter:description" content="Import documents, generate flashcards with AI, and learn with spaced repetition.">
+	<link rel="stylesheet" href="/freememo/index.css" type="text/css" media="screen" />
+	<link rel="icon" type="image/svg+xml" href="/freememo/favicon.svg">
+	<link rel="apple-touch-icon" sizes="180x180" href="/freememo/favicon.svg">
+
+	<!-- PDF.js Core + Viewer -->
+	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf_viewer.min.css">
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf_viewer.min.js"></script>
+	<script>
+	    if (typeof pdfjsLib !== 'undefined') {
+		pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+	    }
+	</script>
+
+	<!-- Quill Rich Text Editor (alternative to TipTap, better CDN support) -->
+	<link href="https://cdn.quilljs.com/1.3.7/quill.snow.css" rel="stylesheet">
+	<script src="https://cdn.quilljs.com/1.3.7/quill.min.js"></script>
+	<style>
+	    .ql-container {
+		min-height: 400px;
+		background: #fff;
+		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+	    }
+	    .ql-editor {
+		min-height: 400px;
+		font-size: 16px;
+		line-height: 1.6;
+	    }
+	    .ql-toolbar {
+		background: #f8f9fa;
+		border-bottom: 2px solid #dee2e6;
+	    }
+	    /* RTL support */
+	    .ql-editor[dir="rtl"] {
+		text-align: right;
+	    }
+	</style>
+
+	<!-- Ensure cache busting on deployment – inject main.BUILD-HASH.js -->
+	<!-- $key$ is a template string. See src-prod/prod.cljc/wrap-prod-index-page -->
+	<script defer type="text/javascript" src="/freememo/$:hyperfiddle.client.module/main$"></script>
+    </head>
+    <body></body>
+</html>

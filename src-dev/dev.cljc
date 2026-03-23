@@ -1,13 +1,13 @@
 (ns dev ; jetty 10+ – the default
   (:require
-   electric-starter-app.main
+   freememo.main
 
    #?(:clj [shadow.cljs.devtools.api :as shadow-cljs-compiler])
    #?(:clj [shadow.cljs.devtools.server :as shadow-cljs-compiler-server])
    #?(:clj [clojure.tools.logging :as log])
-   #?(:clj [electric-starter-app.logging :as logging])
-   #?(:clj [electric-starter-app.db :as db])
-   #?(:clj [electric-starter-app.api :as api])
+   #?(:clj [freememo.logging :as logging])
+   #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.api :as api])
 
    #?(:clj [nrepl.server :as nrepl])
    #?(:clj [ring.adapter.jetty :as ring])
@@ -44,12 +44,12 @@
      (def server (ring/run-jetty
                    (-> ; ring middlewares – applied bottom up:
                      (fn [ring-request] ; 6. index page fallback
-                         (-> (ring-response/resource-response "index.dev.html" {:root "public/electric_starter_app"})
+                         (-> (ring-response/resource-response "index.dev.html" {:root "public/freememo"})
                            (ring-response/content-type "text/html")))
                      (wrap-resource "public") ; 5. serve assets from disk.
                      (wrap-content-type) ; 4. boilerplate – to server assets with correct mime/type.
                      (electric-ring/wrap-electric-websocket ; 3. install Electric server.
-                       (fn [ring-request] (electric-starter-app.main/electric-boot ring-request))) ; boot server-side Electric process
+                       (fn [ring-request] (freememo.main/electric-boot ring-request))) ; boot server-side Electric process
                      (wrap-api-routes) ; 2. API routes
                      (wrap-multipart-params) ; 1b. parse multipart form data (file uploads)
                      (wrap-params) ; 1a. boilerplate – parse request URL parameters.
@@ -64,7 +64,7 @@
 #?(:cljs ; client entrypoint
    (defn ^:dev/after-load ^:export -main []
      (set! browser-process
-       ((electric-starter-app.main/electric-boot nil)))))  ; boot client-side Electric process
+       ((freememo.main/electric-boot nil)))))  ; boot client-side Electric process
 
 #?(:cljs
    (defn ^:dev/before-load stop! [] ; for hot code reload at dev time

@@ -123,7 +123,7 @@ volumes:
 #
 # Notes:
 # - Database data persists in 'postgres-data' volume
-# - App requires DB_HOST, DB_PORT, etc. environment variables (modify src/electric_starter_app/db.clj first)
+# - App requires DB_HOST, DB_PORT, etc. environment variables (modify src/freememo/db.clj first)
 # - PostgreSQL is only accessible from within Docker network (not exposed externally)
 # - Use a reverse proxy (nginx/Caddy) in front of port 8080 for HTTPS
 # - Adjust PostgreSQL settings based on your VPS resources

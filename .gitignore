@@ -18,3 +18,4 @@ node_modules
 /resources/google_client.json
 /resources/openai.txt
 logs/
+/resources/public/freememo/js/

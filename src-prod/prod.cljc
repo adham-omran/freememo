@@ -1,7 +1,7 @@
 (ns prod ; jetty 10+ – the default
   #?(:cljs (:require-macros [prod :refer [comptime-resource]]))
   (:require
-   electric-starter-app.main
+   freememo.main
 
    #?(:clj [ring.adapter.jetty :as ring])
    #?(:clj [ring.util.response :as ring-response])
@@ -17,9 +17,9 @@
    #?(:clj clojure.edn)
    #?(:clj clojure.java.io)
    #?(:clj [clojure.tools.logging :as log])
-   #?(:clj [electric-starter-app.logging :as logging])
-   #?(:clj [electric-starter-app.db :as db])
-   #?(:clj [electric-starter-app.api :as api])))
+   #?(:clj [freememo.logging :as logging])
+   #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.api :as api])))
 
 (defmacro comptime-resource [filename] (some-> filename clojure.java.io/resource slurp clojure.edn/read-string))
 
@@ -45,7 +45,7 @@
              {:host "0.0.0.0", :port (Integer/parseInt (or (System/getenv "PORT") "8080")),
               :resources-path "public"
               ;; shadow-cljs build manifest path, to get the fingerprinted main.sha1.js file to ensure cache invalidation
-              :manifest-path "public/electric_starter_app/js/manifest.edn"})]
+              :manifest-path "public/freememo/js/manifest.edn"})]
        (log/info (pr-str config))
        (assert (string? (:hyperfiddle/electric-user-version config)))
 
@@ -59,7 +59,7 @@
            (wrap-content-type)
            (wrap-not-modified)
            (wrap-ensure-cache-bust-on-server-deployment)
-           (electric-ring/wrap-electric-websocket (fn [ring-request] (electric-starter-app.main/electric-boot ring-request)))
+           (electric-ring/wrap-electric-websocket (fn [ring-request] (freememo.main/electric-boot ring-request)))
            (electric-ring/wrap-reject-stale-client config) ; ensures electric client and servers stays in sync.
            (wrap-api-routes)
            (wrap-multipart-params)
@@ -79,7 +79,7 @@
    (defn ^:export -main []
      ;; client-side electric process boot happens here
      ((electric-client/reload-when-stale ; hard-reload the page to fetch new assets when a new server version is deployed
-        (electric-starter-app.main/electric-boot nil)))))  ; boot client-side Electric process
+        (freememo.main/electric-boot nil)))))  ; boot client-side Electric process
 
 
 #?(:clj
@@ -114,7 +114,7 @@
      (fn [ring-req]
        (assert (string? (:resources-path config)))
        (assert (string? (:manifest-path config)))
-       (if-let [response (ring-response/resource-response (str (:resources-path config) "/electric_starter_app/index.prod.html"))]
+       (if-let [response (ring-response/resource-response (str (:resources-path config) "/freememo/index.prod.html"))]
          (if-let [module (get-compiled-javascript-modules (:manifest-path config))]
            (-> (ring-response/response (template (slurp (:body response)) (merge config module)))
              (ring-response/content-type "text/html")
