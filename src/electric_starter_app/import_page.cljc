@@ -376,8 +376,7 @@
                                  (reset! !uploading false)
                                  (if (.-success data)
                                    (do (reset! !show false)
-                                     (reset! !nav-target {:topic-id (or (.-topic_id data) (.-doc_id data)) :kind "epub"})
-                                     (navigate! :learn))
+                                     (navigate! :library))
                                    (js/alert (or (.-error data) "EPUB import failed")))))
                         (.catch (fn [err]
                                   (reset! !uploading false)

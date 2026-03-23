@@ -1147,25 +1147,25 @@
 
 (defn get-subset-review-queue
   "Get the subset review queue for a topic subtree.
-   Filters out done items and items reviewed today. Annotates :outstanding?."
-  [user-id root-id]
+   Filters out done items. Annotates :outstanding?.
+   When include-reviewed-today? is false (default), also filters out items reviewed today."
+  [user-id root-id & {:keys [include-reviewed-today?] :or {include-reviewed-today? false}}]
   (let [raw (get-subtree user-id root-id)
         now (java.sql.Timestamp. (System/currentTimeMillis))
         today (java.time.LocalDate/now)]
-    (->> raw
-         ;; Exclude page topics from review
-      (remove #(= "page" (:topics/kind %)))
-         ;; Keep only active items
-      (filter #(let [s (:topics/status %)] (or (= s "active") (nil? s))))
-         ;; Skip items reviewed today
-      (remove (fn [item]
-                (when-let [la (:topics/last_review_at item)]
-                  (= today (.. la toInstant (atZone (java.time.ZoneId/systemDefault)) toLocalDate)))))
-         ;; Tree-order
-      tree-order-items
-         ;; Annotate outstanding
+    (let [active (->> raw
+                      (remove #(= "page" (:topics/kind %)))
+                      (filter #(let [s (:topics/status %)] (or (= s "active") (nil? s)))))
+          filtered (if include-reviewed-today?
+                     active
+                     (remove (fn [item]
+                               (when-let [la (:topics/last_review_at item)]
+                                 (= today (.. la toInstant (atZone (java.time.ZoneId/systemDefault)) toLocalDate))))
+                             active))
+          ordered (tree-order-items filtered)]
       (mapv (fn [item]
               (let [nra (:topics/next_review_at item)]
                 (assoc item :outstanding?
                   (or (nil? nra)
-                    (.before nra now)))))))))
+                      (.before nra now)))))
+            ordered))))
