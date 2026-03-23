@@ -13,7 +13,7 @@
 
 (defn log-debug [msg]
   #?(:clj (tel/log! :debug msg)
-     :cljs (js/console.log "[DEBUG]" msg)))
+     :cljs (when js/goog.DEBUG (js/console.log "[DEBUG]" msg))))
 
 (defn log-warn [msg]
   #?(:clj (tel/log! :warn msg)
