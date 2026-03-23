@@ -33,26 +33,38 @@
          ;; Enable copy from PDF text layer.
          ;; The standalone PDFViewer component doesn't include copy support.
          ;; The browser won't fire a `copy` event because activeElement is BODY
-         ;; (not a focusable/editable element). Intercept Cmd+C / Ctrl+C and
-         ;; write to clipboard via the async Clipboard API.
-         (.addEventListener js/document "keydown"
-           (fn [^js e]
-             (when (and (or (.-metaKey e) (.-ctrlKey e))
-                        (= "c" (.-key e))
-                        (not (.-defaultPrevented e)))
-               (let [sel (js/window.getSelection)
-                     text (.toString sel)
-                     anchor (.-anchorNode sel)
-                     in-pdf? (when anchor
-                               (some? (.closest (if (= 1 (.-nodeType anchor))
-                                                  anchor
-                                                  (.-parentElement anchor))
-                                       ".pdfViewer")))]
-                 (when (and in-pdf? (seq text))
-                   (.preventDefault e)
-                   (-> (js/navigator.clipboard.writeText text)
-                       (.catch (fn [err] (js/console.warn "Clipboard write failed:" err))))))))
-           true)
+         ;; (not a focusable/editable element).
+
+         ;; Helper: write PDF selection to clipboard if selection is inside .pdfViewer
+         (letfn [(copy-pdf-selection! []
+                   (let [sel (js/window.getSelection)
+                         text (.toString sel)
+                         anchor (.-anchorNode sel)
+                         in-pdf? (when anchor
+                                   (some? (.closest (if (= 1 (.-nodeType anchor))
+                                                      anchor
+                                                      (.-parentElement anchor))
+                                            ".pdfViewer")))]
+                     (when (and in-pdf? (seq text))
+                       (-> (js/navigator.clipboard.writeText text)
+                           (.catch (fn [err] (js/console.warn "Clipboard write failed:" err))))
+                       true)))]
+
+           ;; Cmd+C / Ctrl+C
+           (.addEventListener js/document "keydown"
+             (fn [^js e]
+               (when (and (or (.-metaKey e) (.-ctrlKey e))
+                          (= "c" (.-key e))
+                          (not (.-defaultPrevented e)))
+                 (when (copy-pdf-selection!)
+                   (.preventDefault e))))
+             true)
+
+           ;; Right-click: pre-write to clipboard when context menu opens,
+           ;; so "Copy" in the menu copies the correct text.
+           (.addEventListener js/document "contextmenu"
+             (fn [_] (copy-pdf-selection!))
+             true))
 
          ;; Load PDF document
          (-> (.getDocument pdfjs pdf-url)
