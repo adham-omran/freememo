@@ -1,6 +1,8 @@
 (ns electric-starter-app.util
   "Shared utility functions for display formatting."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str])
+  #?(:clj (:import [java.time LocalDateTime ZoneId]
+                    [java.time.format DateTimeFormatter])))
 
 (defn strip-html-tags
   "Remove HTML tags from a string, collapse whitespace, and trim.
@@ -41,3 +43,18 @@
   ([html] (extract-preview html 80))
   ([html n]
    (truncate (strip-html-tags html) n)))
+
+(defn format-bytes [n]
+  #?(:clj (cond
+            (nil? n) "0 B"
+            (< n 1024) (str n " B")
+            (< n (* 1024 1024)) (format "%.1f KB" (/ (double n) 1024))
+            :else (format "%.1f MB" (/ (double n) (* 1024 1024))))
+     :cljs nil))
+
+(defn format-timestamp [ts]
+  #?(:clj (when ts
+            (let [inst (.toInstant ts)
+                  ldt (LocalDateTime/ofInstant inst (ZoneId/systemDefault))]
+              (.format ldt (DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm"))))
+     :cljs nil))
