@@ -95,17 +95,25 @@
             (dom/text "Postpone")
             (dom/On "click" (fn [_] (reset! !show-postpone true)) nil)))
 
-        ;; Next button
-        (dom/button
-          (dom/props {:class "btn btn-primary" :style {:padding "8px 28px" :font-size "15px" :font-weight "600"}})
-          (dom/text "Next")
-          (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
-                [?token _error] (e/Token event)]
-            (when-some [token ?token]
-              (e/server (advance-topic* topic-id))
-              (token)
-              (log/log-debug (str "Session advancing idx=" (inc @!queue-idx)))
-              (swap! !queue-idx inc))))))))
+        ;; Next button — disabled briefly after click to prevent skipping during content load
+        (let [!busy (atom false)
+              busy (e/watch !busy)]
+          (dom/button
+            (dom/props {:class "btn btn-primary"
+                        :disabled busy
+                        :style {:padding "8px 28px" :font-size "15px" :font-weight "600"
+                                :opacity (if busy "0.5" "1")
+                                :cursor (if busy "not-allowed" "pointer")}})
+            (dom/text "Next")
+            (let [event (dom/On "click" (fn [_] (when-not @!busy (str (random-uuid)))) nil)
+                  [?token _error] (e/Token event)]
+              (when-some [token ?token]
+                (reset! !busy true)
+                (e/server (advance-topic* topic-id))
+                (token)
+                (log/log-debug (str "Session advancing idx=" (inc @!queue-idx)))
+                (swap! !queue-idx inc)
+                (js/setTimeout (fn [] (reset! !busy false)) 500)))))))))
 
 ;; Badge display for topic kinds
 (defn kind-badge [kind]
