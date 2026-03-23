@@ -1,7 +1,7 @@
 (ns prod-jetty9 ; run with `clj -M:prod:jetty9 -m prod-jetty9`
   #?(:cljs (:require-macros [prod-jetty9 :refer [comptime-resource]]))
   (:require
-   electric-starter-app.main
+   freememo.main
 
    #?(:clj [ring.adapter.jetty :as ring])
    #?(:clj [ring.util.response :as ring-response])
@@ -33,7 +33,7 @@
              {:host "0.0.0.0", :port (or (some-> http-port parse-long) 8080),
               :resources-path "public"
               ;; shadow-cljs build manifest path, to get the fingerprinted main.sha1.js file to ensure cache invalidation
-              :manifest-path "public/electric_starter_app/js/manifest.edn"})]
+              :manifest-path "public/freememo/js/manifest.edn"})]
        (log/info (pr-str config))
        (assert (string? (:hyperfiddle/electric-user-version config)))
        (ring/run-jetty
@@ -46,7 +46,7 @@
          {:host (:host config), :port (:port config), :join? false
           :configurator (fn [server]
                           (electric-jetty9/electric-jetty9-ws-install server "/"
-                            (fn [ring-request] (electric-starter-app.main/electric-boot ring-request))
+                            (fn [ring-request] (freememo.main/electric-boot ring-request))
                             (fn [next-handler]
                               (-> next-handler
                                 (electric-jetty9/wrap-reject-stale-client config)
@@ -60,7 +60,7 @@
    (defn ^:export -main []
      ;; client-side electric process boot happens here
      ((electric-client/reload-when-stale ; hard-reload the page to fetch new assets when a new server version is deployed
-        (electric-starter-app.main/electric-boot nil)))))  ; boot client-side Electric process
+        (freememo.main/electric-boot nil)))))  ; boot client-side Electric process
 
 
 #?(:clj
@@ -95,7 +95,7 @@
      (fn [ring-req]
        (assert (string? (:resources-path config)))
        (assert (string? (:manifest-path config)))
-       (if-let [response (ring-response/resource-response (str (:resources-path config) "/electric_starter_app/index.prod.html"))]
+       (if-let [response (ring-response/resource-response (str (:resources-path config) "/freememo/index.prod.html"))]
          (if-let [module (get-compiled-javascript-modules (:manifest-path config))]
            (-> (ring-response/response (template (slurp (:body response)) (merge config module)))
              (ring-response/content-type "text/html")
