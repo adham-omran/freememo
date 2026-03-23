@@ -221,8 +221,8 @@
                                   (e/server (db/delete-topic-for-user! user-id topic-to-delete))
                                   (e/server (swap! !refresh inc))
                                   (e/client (card-components/try-delete-anki-notes! note-ids))
-                                  (reset! !show-confirm nil)
-                                  (token)))))))))))
+                                  (token)
+                                  (reset! !show-confirm nil))))))))))
               (dom/p
                 (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
                 (dom/text "No content yet. Import content from the Import tab.")))))))))
