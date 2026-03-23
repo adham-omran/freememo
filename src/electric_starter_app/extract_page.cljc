@@ -178,7 +178,8 @@
                     (dom/text label))))))
 
           ;; Split pane: editor top / toolbar+cards bottom
-          (let [!top-pct (atom 75)
+          (let [!top-pct (atom #?(:cljs (if (< (.-innerHeight js/window) 900) 50 75)
+                             :clj 75))
                 top-pct (e/watch !top-pct)]
 
             ;; Editor area
