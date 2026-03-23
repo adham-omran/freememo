@@ -76,6 +76,11 @@
          (.addEventListener target "pointerup" on-up)))))
 
 
+;; Responsive split pane default — plain defn avoids #? inside e/defn (frame mismatch)
+(defn default-split-pct []
+  #?(:cljs (if (< (.-innerHeight js/window) 900) 50 75)
+     :clj 75))
+
 (e/defn OcrPage [user-id enc-key !nav-target llm-enabled?]
   (e/client
     (dom/div
@@ -151,8 +156,7 @@
                 !page-to-save (atom nil)
                 page-to-save (e/watch !page-to-save)
                 [?page-token _] (e/Token page-to-save)
-                !top-pct (atom #?(:cljs (if (< (.-innerHeight js/window) 900) 50 75)
-                                       :clj 75))
+                !top-pct (atom (default-split-pct))
                 top-pct (e/watch !top-pct)
                 !left-pct (atom 50)
                 left-pct (e/watch !left-pct)

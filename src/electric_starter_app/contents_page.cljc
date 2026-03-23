@@ -222,7 +222,7 @@
                                   (e/server (swap! !refresh inc))
                                   (e/client (card-components/try-delete-anki-notes! note-ids))
                                   (token)
-                                  (reset! !show-confirm nil))))))))))
+                                  (reset! !show-confirm nil)))))))))))
               (dom/p
                 (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
                 (dom/text "No content yet. Import content from the Import tab.")))))))))
