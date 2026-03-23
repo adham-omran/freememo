@@ -253,7 +253,11 @@ html, body {
     content: '';
     position: absolute;
     top: 0; bottom: 0;
-    left: -19px; right: -19px;
+    left: -4px; right: -4px;
+}
+@media (pointer: coarse) {
+    .split-divider-h { width: 16px; }
+    .split-divider-h::before { left: -8px; right: -8px; }
 }
 .split-divider-h:hover,
 .split-divider-h:active { background: #90caf9; }
