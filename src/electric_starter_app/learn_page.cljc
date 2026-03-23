@@ -297,7 +297,7 @@
                 kind (:kind browse-nav)
                 title (:title browse-nav)]
             (case kind
-              ("pdf" "epub") (LearnBrowseDoc user-id enc-key
+              "pdf" (LearnBrowseDoc user-id enc-key
                                {:topic-id topic-id :page (:page browse-nav)}
                                title !mode llm-enabled?)
               (LearnBrowseTopic user-id enc-key topic-id title !mode llm-enabled?))))

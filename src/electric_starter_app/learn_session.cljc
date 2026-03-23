@@ -224,7 +224,7 @@
           (let [item (nth queue-vec idx nil)
                 kind (:topics/kind item)
                 topic-id (:topics/id item)
-                show-pdf? (#{"pdf" "epub"} kind)]
+                show-pdf? (= kind "pdf")]
 
             (when item
               ;; Header

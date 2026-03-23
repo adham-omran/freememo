@@ -164,7 +164,9 @@
                             (if (nil? page-number)
                               (or filename "Untitled")
                               (str (or filename "Unknown") " \u2014 p. " page-number)))]
-                (if view-source!
+                (if (and view-source!
+                         (or (= root-kind "pdf")  ;; PDFs always have page context
+                             parent-is-intermediate))  ;; extracts under chapters can navigate to parent
                   (dom/span
                     (dom/props {:style {:color "var(--color-primary)" :font-size "13px" :cursor "pointer"
                                         :text-decoration "underline"}
