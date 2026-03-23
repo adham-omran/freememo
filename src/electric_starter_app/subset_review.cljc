@@ -36,20 +36,27 @@
         (dom/props {:style {:font-size "12px" :color (if outstanding? "#16a34a" "var(--color-text-hint)")}})
         (dom/text (if outstanding? "Due — will advance schedule" "Not due — read-only")))
 
-      ;; Next button
-      (dom/button
-        (dom/props {:class (if outstanding? "btn btn-primary" "btn btn-secondary")
-                    :style {:padding "8px 28px" :font-size "15px" :font-weight "600"}})
-        (dom/text "Next")
-        (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
-              [?token _error] (e/Token event)]
-          (when-some [token ?token]
-            (e/server
-              (if outstanding?
-                (db/advance-topic! topic-id)
-                (db/touch-topic! topic-id)))
-            (token)
-            (swap! !queue-idx inc)))))))
+      ;; Next button — disabled briefly after click to prevent skipping during content load
+      (let [!busy (atom false)
+            busy (e/watch !busy)]
+        (dom/button
+          (dom/props {:class (if outstanding? "btn btn-primary" "btn btn-secondary")
+                      :disabled busy
+                      :style {:padding "8px 28px" :font-size "15px" :font-weight "600"
+                              :opacity (if busy "0.5" "1")
+                              :cursor (if busy "not-allowed" "pointer")}})
+          (dom/text "Next")
+          (let [event (dom/On "click" (fn [_] (when-not @!busy (str (random-uuid)))) nil)
+                [?token _error] (e/Token event)]
+            (when-some [token ?token]
+              (reset! !busy true)
+              (e/server
+                (if outstanding?
+                  (db/advance-topic! topic-id)
+                  (db/touch-topic! topic-id)))
+              (token)
+              (swap! !queue-idx inc)
+              (js/setTimeout (fn [] (reset! !busy false)) 500))))))))
 
 ;; Session header — banner, counter, back button
 (e/defn SubsetSessionHeader [item !queue-idx idx total outstanding-remaining root-name on-exit!]
