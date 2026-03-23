@@ -38,7 +38,7 @@
     ("web" "wikipedia") ["Web" "#e0f2fe"]
     ["Topic" "#f3e8ff"]))
 
-(e/defn LearnBrowseTopic [user-id enc-key topic-id title !mode llm-enabled?]
+(e/defn LearnBrowseTopic [user-id enc-key topic-id title !mode llm-enabled? origin navigate!]
   (e/client
     (let [exists? (e/server (some? (db/get-topic topic-id)))]
       (if exists?
@@ -46,12 +46,12 @@
           (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
           (ExtractPage user-id enc-key topic-id
             (fn
-              ([_tab] (reset! !mode :overview))
-              ([_tab _nav] (reset! !mode :overview)))
-            nil llm-enabled?))
+              ([_tab] (if origin (navigate! origin) (reset! !mode :overview)))
+              ([_tab _nav] (if origin (navigate! origin) (reset! !mode :overview))))
+            nil llm-enabled? origin))
         (do (reset! !mode :overview) nil)))))
 
-(e/defn LearnBrowseDoc [user-id enc-key nav title !mode llm-enabled?]
+(e/defn LearnBrowseDoc [user-id enc-key nav title !mode llm-enabled? origin navigate!]
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
@@ -59,8 +59,8 @@
         (dom/props {:class "header-bar" :style {:gap "12px"}})
         (dom/button
           (dom/props {:class "btn btn-sm btn-secondary"})
-          (dom/text "Back to Overview")
-          (dom/On "click" (fn [_] (reset! !mode :overview)) nil))
+          (dom/text (case origin :queue "Back to Queue" :library "Back to Library" "Back to Overview"))
+          (dom/On "click" (fn [_] (if origin (navigate! origin) (reset! !mode :overview))) nil))
         (dom/span
           (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
           (dom/text (str "Browsing: " (or title "document")))))
@@ -293,12 +293,14 @@
         (when browse-nav
           (let [topic-id (:topic-id browse-nav)
                 kind (:kind browse-nav)
-                title (:title browse-nav)]
+                title (:title browse-nav)
+                origin (:origin browse-nav)]
             (case kind
               "pdf" (LearnBrowseDoc user-id enc-key
                                {:topic-id topic-id :page (:page browse-nav)}
-                               title !mode llm-enabled?)
-              (LearnBrowseTopic user-id enc-key topic-id title !mode llm-enabled?))))
+                               title !mode llm-enabled? origin navigate!)
+              (LearnBrowseTopic user-id enc-key topic-id title !mode llm-enabled? origin navigate!))))
+
 
         :session
         (let [refresh (e/server (e/watch !refresh))

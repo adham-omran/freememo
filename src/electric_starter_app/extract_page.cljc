@@ -34,7 +34,7 @@
   #?(:cljs (if (< (.-innerHeight js/window) 900) 50 75)
      :clj 75))
 
-(e/defn ExtractPage [user-id enc-key topic-id navigate! view-source! llm-enabled?]
+(e/defn ExtractPage [user-id enc-key topic-id navigate! view-source! llm-enabled? origin]
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
@@ -87,8 +87,8 @@
                                   :border-bottom "1px solid var(--color-border)"}})
               (dom/button
                 (dom/props {:class "btn btn-sm btn-secondary" :style {:background "#f0f0f0"}})
-                (dom/text "Back to Learn")
-                (dom/On "click" (fn [_] (navigate! :learn)) nil))
+                (dom/text (case origin :queue "Back to Queue" :library "Back to Library" "Back to Learn"))
+                (dom/On "click" (fn [_] (navigate! (or origin :learn))) nil))
               (if (= extract-status "active")
                 ;; Active: show Done
                 (dom/span
@@ -105,7 +105,7 @@
                       (when-some [token ?token]
                         (e/server (db/done-topic! topic-id))
                         (token)
-                        (navigate! :learn)))))
+                        (navigate! (or origin :learn))))))
 
                 ;; Done: show Restore
                 (dom/span
@@ -123,12 +123,12 @@
                       (when-some [token ?token]
                         (e/server (db/restore-topic! topic-id))
                         (token)
-                        (navigate! :learn))))))
+                        (navigate! (or origin :learn)))))))
               (let [!delete-state (atom nil)
                     delete-state (e/watch !delete-state)]
                 ;; Reactive navigation — fires when delete completes
                 (when (= delete-state :deleted)
-                  (navigate! :learn))
+                  (navigate! (or origin :learn)))
                 (dom/button
                   (dom/props {:class "btn btn-sm btn-danger-fill" :style {:padding "4px 10px" :font-size "12px"}
                               :title "Delete this extract and its cards"})
@@ -237,4 +237,4 @@
             (dom/button
               (dom/props {:class "btn btn-sm btn-secondary" :style {:padding "6px 16px" :background "#f0f0f0"}})
               (dom/text "Go to Learn")
-              (dom/On "click" (fn [_] (navigate! :learn)) nil))))))))
+              (dom/On "click" (fn [_] (navigate! (or origin :learn))) nil))))))))
