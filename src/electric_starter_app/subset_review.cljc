@@ -16,14 +16,12 @@
      :cljs nil))
 
 ;; Badge display for topic kinds
-(defn kind-badge [kind parent-id]
+(defn kind-badge [kind]
   (case kind
     "pdf" ["PDF" "#dcfce7"]
     "epub" ["EPUB" "#f3e8ff"]
     ("web" "wikipedia") ["Web" "#e0f2fe"]
-    (if parent-id
-      ["Extract" "#44C2FF"]
-      ["Topic" "#f3e8ff"])))
+    ["Topic" "#f3e8ff"]))
 
 ;; Bottom bar — Next button with split behavior (outstanding vs non-outstanding)
 (e/defn SubsetBottomBar [topic-id outstanding? !queue-idx]
@@ -58,7 +56,7 @@
   (e/client
     (let [kind (:topics/kind item)
           parent-id (:topics/parent_id item)
-          [type-label type-color] (kind-badge kind parent-id)
+          [type-label type-color] (kind-badge kind)
           outstanding? (:outstanding? item)]
       (dom/div
         (dom/props {:class "header-bar" :style {:gap "8px"}})
