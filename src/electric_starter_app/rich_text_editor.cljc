@@ -47,12 +47,15 @@
        (destroy-editor!)
        ;; Clear dirty flag — fresh content, no pending saves
        (reset! !dirty-html nil)
-       (let [Quill (.-Quill js/window)
+       (let [t0 (js/performance.now)
+             Quill (.-Quill js/window)
              cleaned-html (-> (or initial-html "")
                             (str/replace #"^```html\s*\n?" "")
                             (str/replace #"^```\s*\n?" "")
                             (str/replace #"\n?```\s*$" "")
                             str/trim)
+             t1 (js/performance.now)
+             _ (js/console.log "[Editor perf] clean:" (.toFixed (- t1 t0) 1) "ms, html-len:" (count cleaned-html))
              ^js editor (new Quill container
                           (clj->js {:theme "snow"
                                     :modules {:toolbar [["bold" "italic" "underline" "strike"]
@@ -64,10 +67,18 @@
                                                         [{"direction" "rtl"}]
                                                         ["clean"]]}
                                     :placeholder "Enter text..."}))
+             t2 (js/performance.now)
+             _ (js/console.log "[Editor perf] Quill init:" (.toFixed (- t2 t1) 1) "ms")
              ^js clipboard (.-clipboard editor)
-             delta (.convert clipboard cleaned-html)]
+             t3 (js/performance.now)
+             delta (.convert clipboard cleaned-html)
+             t4 (js/performance.now)
+             _ (js/console.log "[Editor perf] clipboard.convert:" (.toFixed (- t4 t3) 1) "ms")]
          (when (seq cleaned-html)
-           (.setContents editor delta))
+           (.setContents editor delta)
+           (let [t5 (js/performance.now)]
+             (js/console.log "[Editor perf] setContents:" (.toFixed (- t5 t4) 1) "ms")
+             (js/console.log "[Editor perf] TOTAL:" (.toFixed (- t5 t0) 1) "ms")))
          ;; Immediate text-change: sets !dirty-html on every user edit
          ;; e/Offload-latch in callers handles rapid updates via "latest-wins" semantics
          ;; Text-change listener reads topic-id from !editor-state (mutable ref)
@@ -98,8 +109,13 @@
                        (str/replace #"^```\s*\n?" "")
                        (str/replace #"\n?```\s*$" "")
                        str/trim)
-             delta (.convert clipboard cleaned)]
-         (.setContents ed delta "api")
+             current-html (.-innerHTML (.-root ed))]
+         ;; Skip if content hasn't changed (preserves scroll + highlights)
+         (when (not= (count cleaned) (count current-html))
+           (let [delta (.convert clipboard cleaned)]
+             (.setText ed "" "api")
+             (.setContents ed delta "api")
+             (.clear (.-history ed))))
          true))))
 
 (defn update-topic-id!
