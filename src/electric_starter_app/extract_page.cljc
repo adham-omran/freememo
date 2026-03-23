@@ -29,6 +29,11 @@
                   id
                   (recur (:topics/parent_id t))))))))
 
+;; Responsive split pane default — plain defn avoids #? inside e/defn (frame mismatch)
+(defn default-split-pct []
+  #?(:cljs (if (< (.-innerHeight js/window) 900) 50 75)
+     :clj 75))
+
 (e/defn ExtractPage [user-id enc-key topic-id navigate! view-source! llm-enabled?]
   (e/client
     (dom/div
@@ -178,8 +183,7 @@
                     (dom/text label))))))
 
           ;; Split pane: editor top / toolbar+cards bottom
-          (let [!top-pct (atom #?(:cljs (if (< (.-innerHeight js/window) 900) 50 75)
-                             :clj 75))
+          (let [!top-pct (atom (default-split-pct))
                 top-pct (e/watch !top-pct)]
 
             ;; Editor area
