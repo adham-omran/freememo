@@ -29,6 +29,37 @@
     (str content "\n<hr><small style='color:#999'>Source: " source-ref "</small>")
     content))
 
+;; TODO: How to turn into a task? (m/sp CLOJURE-CODE)
+;; TODO: How to deal with JS Promise?
+
+;; First: how to craft a task to turn a fetch to a task
+
+#?(:cljs
+   (defn to-future! [token task]
+     (js/Promise.
+       (fn [resolve reject]
+         (.finally token (task resolve reject))))))
+
+#?(:cljs
+   (defn from-future
+     ([f]
+      (fn [success failure]
+        (let [box (volatile! nil)
+              token (js/Promise.
+                      (fn [resolve _]
+                        (vreset! box resolve)))
+              resolve @box]
+          (.then (f token)
+            (fn [x]
+              (resolve nil)
+              (success x))
+            (fn [e]
+              (resolve nil)
+              (failure e)))
+          #(resolve nil))))
+     ([f & args]
+      (from-future #(apply f % args)))))
+
 #?(:cljs
    (defn anki-call!
      "Call AnkiConnect API. Returns a Promise resolving to the result value."
@@ -49,6 +80,31 @@
                     (throw (js/Error. (str (:error result)))))
                   (:result result)))))))
 
+;; #?(:cljs (println (to-future! (anki-call! "getTags" nil))))
+
+#?(:cljs
+   (let [params nil
+         action "getTags"
+         f (from-future (fn [token]
+                          (-> (js/fetch "http://127.0.0.1:8765"
+                                (clj->js {:method "POST"
+                                          :headers {"Content-Type" "application/json"}
+                                          :body (js/JSON.stringify
+                                                  (clj->js (cond-> {:action action :version 6}
+                                                             params (assoc :params params))))}))
+                            (.then (fn [resp]
+                                     (when-not (.-ok resp)
+                                       (throw (js/Error. (str "HTTP " (.-status resp)))))
+                                     (.json resp)))
+                            (.then (fn [json]
+                                     (let [result (js->clj json :keywordize-keys true)]
+                                       (when (:error result)
+                                         (throw (js/Error. (str (:error result)))))
+                                       (:result result))))))) ]
+     (f js/console.log js/console.error)))
+
+
+;; TODO: First thought, why three anki-call in sequence? m/join
 #?(:cljs
    (defn fetch-anki-config!
      "Fetch decks + models + tags from Anki. Returns Promise of {:decks [...] :models [...] :tags [...]}."
@@ -185,7 +241,7 @@
                      deleted (reduce
                                (fn [acc [card anki-note]]
                                  (let [anki-note (if (map? anki-note) anki-note
-                                                   (js->clj anki-note :keywordize-keys true))]
+                                                     (js->clj anki-note :keywordize-keys true))]
                                    (if (or (empty? anki-note) (nil? (:noteId anki-note)))
                                      (conj acc (:flashcards/id card))
                                      acc)))
@@ -194,15 +250,15 @@
                      ;; Build id->card for non-deleted cards
                      id->card (into {} (keep (fn [[card anki-note]]
                                                (let [anki-note (if (map? anki-note) anki-note
-                                                                 (js->clj anki-note :keywordize-keys true))]
+                                                                   (js->clj anki-note :keywordize-keys true))]
                                                  (when-let [nid (:noteId anki-note)]
                                                    [nid card])))
-                                             pairs))
+                                         pairs))
                      ;; Detect updates for cards that still exist in Anki
                      updates (reduce
                                (fn [acc anki-note]
                                  (let [anki-note (if (map? anki-note) anki-note
-                                                   (js->clj anki-note :keywordize-keys true))
+                                                     (js->clj anki-note :keywordize-keys true))
                                        note-id (:noteId anki-note)
                                        card (get id->card note-id)]
                                    (if-not card
@@ -280,7 +336,7 @@
                   (reset! !result result)
                   (if (seq (:pairs result))
                     (do (reset! !push-pairs (:pairs result))
-                      (reset! !phase :recording))
+                        (reset! !phase :recording))
                     (reset! !phase :done))))
          (.catch (fn [err]
                    (reset! !error (.-message err))
@@ -299,11 +355,11 @@
          (.then (fn [result]
                   (if (and (empty? (:updates result)) (empty? (:deleted result)))
                     (do (reset! !result result)
-                      (reset! !phase :done))
+                        (reset! !phase :done))
                     (do (reset! !result result)
-                      (reset! !pull-updates {:updates (:updates result)
-                                             :deleted (:deleted result)})
-                      (reset! !phase :recording)))))
+                        (reset! !pull-updates {:updates (:updates result)
+                                               :deleted (:deleted result)})
+                        (reset! !phase :recording)))))
          (.catch (fn [err]
                    (reset! !error (.-message err))
                    (reset! !phase :error))))
