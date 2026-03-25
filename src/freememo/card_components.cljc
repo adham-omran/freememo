@@ -16,8 +16,9 @@
   [note-ids]
   #?(:cljs
      (when (seq note-ids)
-       (-> (anki-call! "deleteNotes" {:notes (vec note-ids)})
-         (.catch (fn [_] nil))))
+       ((anki-call! "deleteNotes" {:notes (vec note-ids)})
+        (fn [_] nil)
+        (fn [_] nil)))
      :clj nil))
 
 ;; Delete button — parameterized with !refresh atom
