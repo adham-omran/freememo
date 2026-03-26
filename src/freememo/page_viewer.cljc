@@ -22,7 +22,6 @@
 #?(:clj (defonce !refresh (atom 0))) ; Server-side refresh trigger
 #?(:clj (defonce !scanning-pages (atom #{}))) ; #{[root-topic-id page-num]} currently scanning via OCR
 #?(:clj (defonce !ocr-errors (atom {}))) ; {[root-topic-id page-num] "error message"}
-#?(:cljs (defonce !scanning-client? (atom false))) ; Client-side flag: set true immediately on click to prevent rapid re-clicks before server state round-trips
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 #?(:clj (defn get-page-text* [_refresh parent-id page-number]
@@ -230,8 +229,7 @@
 
                     (when (and is-pdf llm-enabled?)
                       (let [scanning? (contains? scanning-pages [selected-doc current-pdf-page])
-                            client-scanning? (e/client (e/watch !scanning-client?))
-                            disabled? (or scanning? client-scanning?)]
+                            disabled? scanning?]
                         (dom/button
                           (dom/props {:class "btn btn-sm btn-primary"
                                       :style {:padding "4px 12px" :font-size "14px"
@@ -242,10 +240,7 @@
                           (reset! keyboard/!scan-btn-ref dom/node)
                           (e/on-unmount (fn [] (reset! keyboard/!scan-btn-ref nil)))
                           (let [click-event (dom/On "click"
-                                              (fn [_]
-                                                (when-not @!scanning-client?
-                                                  (reset! !scanning-client? true)
-                                                  {:id (str (random-uuid)) :page current-pdf-page}))
+                                              (fn [_] {:id (str (random-uuid)) :page current-pdf-page})
                                               nil)
                                 [?token ?error] (e/Token click-event)]
                             (when-some [token ?token]
@@ -254,28 +249,30 @@
                                       doc selected-doc
                                       uid user-id
                                       ek enc-key]
-                                  (when-not (contains? @!scanning-pages [doc page])
-                                    (swap! !scanning-pages conj [doc page])
-                                    (swap! !ocr-errors dissoc [doc page])
-                                    (log/log-info (str "OCR scan started topic-id=" doc " page=" page))
+                                  (if (contains? @!scanning-pages [doc page])
+                                    (log/log-info (str "OCR scan already in progress topic-id=" doc " page=" page))
                                     (do
+                                      (swap! !scanning-pages conj [doc page])
+                                      (swap! !ocr-errors dissoc [doc page])
+                                      (log/log-info (str "OCR scan started topic-id=" doc " page=" page " scanning-pages=" (pr-str @!scanning-pages)))
                                       (future
                                         (try
+                                          (log/log-info (str "OCR future executing topic-id=" doc " page=" page))
                                           (let [result (page/extract-page-text uid doc page ek scan-dpi)]
                                             (if (:success result)
                                               (do (log/log-info (str "OCR scan complete topic-id=" doc " page=" page))
+                                                (log/log-debug (str "OCR incrementing !refresh, current=" @!refresh))
                                                 (swap! !refresh inc))
-                                              (swap! !ocr-errors assoc [doc page] (:error result))))
+                                              (do (log/log-info (str "OCR scan failed topic-id=" doc " page=" page " error=" (:error result)))
+                                                (swap! !ocr-errors assoc [doc page] (:error result)))))
                                           (catch Exception e
+                                            (log/log-info (str "OCR scan exception topic-id=" doc " page=" page " ex=" (.getMessage e)))
                                             (swap! !ocr-errors assoc [doc page] (.getMessage e)))
                                           (finally
+                                            (log/log-info (str "OCR scan cleanup topic-id=" doc " page=" page " removing from scanning-pages"))
                                             (swap! !scanning-pages disj [doc page]))))
                                       :started))))
-                              (token))
-                          ;; Reset client flag once server confirms extraction is running (or completes)
-                            (e/client
-                              (when (not scanning?)
-                                (reset! !scanning-client? false))))))) ;; end when llm-enabled?
+                              (token)))))) ;; end when llm-enabled?
                     
                     ;; OCR error display — auto-dismiss after 3 seconds
                     (when-let [ocr-err (get ocr-errors [selected-doc current-pdf-page])]
