@@ -33,6 +33,31 @@
              (set! (.-innerHTML ct) "")))
          (reset! !editor-state nil)))))
 
+(defn- add-toolbar-tooltips!
+  "Add title attributes to Quill toolbar buttons for hover tooltips."
+  [editor]
+  #?(:cljs
+     (when-let [^js toolbar-el (some-> ^js editor .-container .-parentNode
+                                  (.querySelector ".ql-toolbar"))]
+       (doseq [[selector title] [[".ql-bold" "Bold"]
+                                  [".ql-italic" "Italic"]
+                                  [".ql-underline" "Underline"]
+                                  [".ql-strike" "Strikethrough"]
+                                  [".ql-header[value=\"1\"]" "Heading 1"]
+                                  [".ql-header[value=\"2\"]" "Heading 2"]
+                                  [".ql-header[value=\"3\"]" "Heading 3"]
+                                  [".ql-list[value=\"ordered\"]" "Numbered List"]
+                                  [".ql-list[value=\"bullet\"]" "Bullet List"]
+                                  [".ql-align .ql-picker-label" "Alignment"]
+                                  [".ql-color .ql-picker-label" "Text Color"]
+                                  [".ql-background .ql-picker-label" "Background Color"]
+                                  [".ql-size .ql-picker-label" "Font Size"]
+                                  [".ql-direction" "Text Direction (RTL)"]
+                                  [".ql-clean" "Clear Formatting"]]]
+         (when-let [^js el (.querySelector toolbar-el selector)]
+           (.setAttribute el "title" title))))
+     :clj nil))
+
 (defn init-editor!
   "Initialize Quill editor in the given container with initial HTML.
    Destroys any existing editor first (singleton).
@@ -84,6 +109,7 @@
                                       :topic-id current-topic-id})))))
          (reset! !editor-state {:editor editor :container container
                                 :topic-id topic-id})
+         (add-toolbar-tooltips! editor)
          editor))))
 
 (defn set-content!
