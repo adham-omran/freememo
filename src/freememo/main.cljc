@@ -53,6 +53,8 @@
                   !nav-target (atom nil)
                   navigate! (fn
                               ([tab]
+                               (when (= @!active-tab tab)
+                                 (reset! !nav-target :go-home))
                                (reset! !active-tab tab)
                                (reset! !tab-to-save tab))
                               ([tab nav]
