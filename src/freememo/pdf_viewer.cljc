@@ -131,3 +131,44 @@
              (let [^js eb event-bus]
                (.on eb "pagechanging"
                     (fn [^js e] (callback (.-pageNumber e))))))))
+
+(defn setup-pinch-zoom!
+  "Enable pinch-to-zoom on the PDF viewer container for touch devices."
+  [container]
+  #?(:clj nil
+     :cljs
+     (let [!pinch-start-dist (atom nil)
+           !pinch-start-scale (atom nil)
+           touch-dist (fn [^js e]
+                        (let [t (.-touches e)]
+                          (when (>= (.-length t) 2)
+                            (let [^js t0 (.item t 0)
+                                  ^js t1 (.item t 1)
+                                  dx (- (.-clientX t0) (.-clientX t1))
+                                  dy (- (.-clientY t0) (.-clientY t1))]
+                              (js/Math.sqrt (+ (* dx dx) (* dy dy)))))))]
+       (.addEventListener container "touchstart"
+         (fn [^js e]
+           (when (>= (.-length (.-touches e)) 2)
+             (reset! !pinch-start-dist (touch-dist e))
+             (reset! !pinch-start-scale
+               (when-let [{:keys [viewer]} @!viewer-state]
+                 (.-currentScale ^js viewer)))))
+         #js {:passive true})
+       (.addEventListener container "touchmove"
+         (fn [^js e]
+           (when-let [start-dist @!pinch-start-dist]
+             (when-let [start-scale @!pinch-start-scale]
+               (when-let [curr-dist (touch-dist e)]
+                 (when (> start-dist 0)
+                   (.preventDefault e)
+                   (let [ratio (/ curr-dist start-dist)
+                         new-scale (* start-scale (min 5 (max 0.25 ratio)))]
+                     (set-zoom! new-scale)))))))
+         #js {:passive false})
+       (.addEventListener container "touchend"
+         (fn [^js e]
+           (when (< (.-length (.-touches e)) 2)
+             (reset! !pinch-start-dist nil)
+             (reset! !pinch-start-scale nil)))
+         #js {:passive true}))))

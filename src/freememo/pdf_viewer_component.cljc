@@ -212,7 +212,9 @@
                                                   (when on-navigate! (on-navigate! page-num))))
                         ;; Jump to initial page after pages are rendered
                         (when (and initial-page (> initial-page 1))
-                          (viewer/go-to-page-after-load! initial-page))))))
+                          (viewer/go-to-page-after-load! initial-page))
+                        ;; Enable pinch-to-zoom on touch devices
+                        (viewer/setup-pinch-zoom! @!container)))))
                 100)))))
 
       ;; Return current page number for OCR integration
