@@ -48,4 +48,12 @@
        (tel/add-handler! :log-file
          (tel/handler:file
            {:path "logs/app.log"
-            :output-fn (tel/format-signal-fn {})})))))
+            :output-fn (tel/format-signal-fn {})})))
+
+     ;; Catch uncaught exceptions on any thread (e.g. Electric reactor, futures)
+     (Thread/setDefaultUncaughtExceptionHandler
+       (reify Thread$UncaughtExceptionHandler
+         (uncaughtException [_ thread ex]
+           (tel/error! {:id ::uncaught-exception
+                        :data {:thread (.getName thread)}}
+             ex))))))
