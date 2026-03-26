@@ -216,6 +216,8 @@
                         (dom/input
                           (dom/props {:type "checkbox"})
                           (set! (.-checked dom/node) is-done)
+                          (reset! keyboard/!done-btn-ref dom/node)
+                          (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
                           (let [change-event (dom/On "change"
                                                (fn [e] {:checked (-> e .-target .-checked)
                                                         :page current-pdf-page})

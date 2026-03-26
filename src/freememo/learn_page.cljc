@@ -272,6 +272,10 @@
           nav-val (e/watch !nav-target)]
 
       ;; Consume nav-target reactively
+      (when (= nav-val :go-home)
+        (reset! !mode :overview)
+        (reset! !browse-nav nil)
+        (reset! !nav-target nil))
       (when (= nav-val :start-session)
         (reset! !mode :session)
         (reset! !nav-target nil))
