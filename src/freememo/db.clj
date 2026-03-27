@@ -1087,7 +1087,7 @@
   (jdbc/execute! ds
     (sql/format {:select [[:t.id :id] [:t.parent_id :parent_id] [:t.title :title]
                           [:t.kind :kind] [:t.status :status] [:t.created_at :created_at]
-                          [:t.page_number :page_number]
+                          [:t.page_number :page_number] [:t.last_review_at :last_review_at]
                           [[:coalesce :tf.file_size [:octet_length [:coalesce :t.content ""]]] :file_size]]
                  :from [[:topics :t]]
                  :left-join [[:topic_files :tf] [:= :tf.topic_id :t.id]]
