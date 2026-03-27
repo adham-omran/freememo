@@ -584,12 +584,14 @@ textarea:hover {
         padding: 32px 24px 24px;
         flex: none;
         min-height: auto;
+        order: 2;
     }
     .login-form-panel,
     .login-right {
         padding: 24px;
         flex: none;
         min-height: auto;
+        order: 1;
     }
 }
 
