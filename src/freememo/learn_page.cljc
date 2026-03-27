@@ -97,7 +97,7 @@
           (let [items-vec (e/server (get-learning-queue* refresh user-id))
                 item-count (e/server (count items-vec))
                 display-limit 10
-                grid-cols "70px 2fr 50px 70px"]
+                grid-cols "70px 1fr"]
             (dom/div
               (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0"}})
 
@@ -106,9 +106,7 @@
                 (dom/props {:style {:display "grid" :grid-template-columns grid-cols :font-size "14px" :flex-shrink "0"}})
                 (let [th-base {:padding "8px 10px" :border-bottom "2px solid var(--color-border)" :font-weight "600" :color "var(--color-text-primary)"}]
                   (dom/div (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Type"))
-                  (dom/div (dom/props {:style (merge th-base {:text-align "left"})}) (dom/text "Title"))
-                  (dom/div (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Pri"))
-                  (dom/div (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Due"))))
+                  (dom/div (dom/props {:style (merge th-base {:text-align "left"})}) (dom/text "Title"))))
 
               ;; Table body — top 10 rows
               (dom/div
@@ -120,18 +118,12 @@
                             parent-id (e/server (:topics/parent_id item))
                             title (e/server (or (:topics/title item) "-"))
                             content (e/server (or (:topics/content item) ""))
-                            priority (e/server (or (:topics/priority item) 50))
-                            interval (e/server (or (:topics/interval_days item) 1.0))
                             is-root (nil? parent-id)
                             display-title (if is-root
                                             (util/display-name title)
                                             (let [preview (util/extract-preview content 80)]
                                               (if (seq preview) preview title)))
-                            [type-label type-color] (kind-badge kind)
-                            due-str (cond
-                                      (< interval 1.0) (str (int (* interval 24)) "h")
-                                      (= interval 1.0) "1d"
-                                      :else (str (int interval) "d"))]
+                            [type-label type-color] (kind-badge kind)]
                         (dom/div
                           (dom/props {:style {:display "grid" :grid-template-columns grid-cols
                                               :border-bottom "1px solid #f0f0f0" :height "40px"
@@ -143,13 +135,7 @@
                               (dom/text type-label)))
                           (dom/div
                             (dom/props {:style {:padding "8px 10px" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
-                            (dom/text display-title))
-                          (dom/div
-                            (dom/props {:style {:padding "8px 10px" :text-align "center" :color "#555"}})
-                            (dom/text (str priority)))
-                          (dom/div
-                            (dom/props {:style {:padding "8px 10px" :text-align "center" :color "var(--color-text-secondary)" :font-size "12px"}})
-                            (dom/text due-str))))))))
+                            (dom/text display-title))))))))
 
               ;; "N remaining" link to Queue
               (when (> item-count display-limit)
