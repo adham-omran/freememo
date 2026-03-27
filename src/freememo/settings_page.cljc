@@ -61,7 +61,7 @@
             (dom/props {:style {:padding "12px 14px" :background "#f0f4ff" :border-radius "var(--radius-md)"
                                 :margin-bottom "var(--sp-4)" :font-size "13px" :line-height "1.5"
                                 :color "var(--color-text-secondary)"}})
-            (dom/text "Incremental reading, spaced repetition, and Anki sync are always free. AI features (OCR and flashcard generation) use OpenAI and require your own API key -- bring your own key, pay only for what you use."))
+            (dom/text "Incremental reading and Anki sync are always free. AI features (OCR and flashcard generation) use OpenAI and require your own API key -- bring your own key, pay only for what you use."))
 
           ;; LLM toggle
           (dom/div

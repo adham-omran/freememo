@@ -36,7 +36,7 @@
       (dom/p
         (dom/props {:style {:font-size "18px" :color "var(--color-text-secondary)" :margin "0 0 44px"
                             :line-height "1.5" :max-width "420px"}})
-        (dom/text "Incremental reading with spaced repetition"))
+        (dom/text "Incremental reading with AI flashcards"))
 
       ;; Features
       (dom/div
@@ -45,9 +45,7 @@
           "Bring in PDFs, EPUBs, and web articles -- all in one place.")
         (FeatureItem "2" "AI-generated flashcards"
           "Key concepts are extracted automatically and turned into review cards.")
-        (FeatureItem "3" "Spaced repetition"
-          "An optimized schedule surfaces cards right when you need to review them.")
-        (FeatureItem "4" "Anki sync"
+        (FeatureItem "3" "Anki sync"
           "Push cards directly to your Anki collection -- no manual export needed."))
 
       ;; Pricing note
