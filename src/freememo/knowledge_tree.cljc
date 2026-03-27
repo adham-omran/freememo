@@ -142,6 +142,8 @@
                                 ;; Title
                                 (dom/span
                                   (dom/props {:class "tree-title"
+                                              :tabindex 0
+                                              :role "link"
                                               :style {:flex "1" :min-width "0"
                                                       :font-size (if is-root "14px" "13px")
                                                       :font-weight (if is-root "500" "400")
@@ -157,6 +159,12 @@
                                           (navigate! :learn))
                                         (do (reset! !nav-target {:topic-id id :origin :library})
                                           (navigate! :extract))))
+                                    nil)
+                                  (dom/On "keydown"
+                                    (fn [e]
+                                      (when (or (= (.-key e) "Enter") (= (.-key e) " "))
+                                        (.preventDefault e)
+                                        (.click (.-currentTarget e))))
                                     nil))
                                 ;; File size (root only)
                                 (when (and is-root (some? file-size) (pos? file-size))
