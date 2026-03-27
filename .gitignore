@@ -19,3 +19,6 @@ node_modules
 /resources/openai.txt
 logs/
 /resources/public/freememo/js/
+/.calva/
+/.playwright-mcp/
+/db-backup/

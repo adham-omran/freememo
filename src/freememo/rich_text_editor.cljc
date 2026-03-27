@@ -58,6 +58,43 @@
            (.setAttribute el "title" title))))
      :clj nil))
 
+(defn- setup-mobile-keyboard-suppression!
+  "On touch devices, suppress virtual keyboard until double-tap.
+   Sets inputmode=\"none\" on .ql-editor; double-tap removes it and
+   refocuses to trigger keyboard. Blur re-adds the attribute."
+  [^js editor]
+  #?(:cljs
+     (let [mq (.matchMedia js/window "(pointer: coarse)")]
+       (when (.-matches mq)
+         (let [^js root        (.-root editor)
+               !last-tap       (atom 0)
+               !refocusing     (atom false)
+               suppress!       (fn [] (.setAttribute root "inputmode" "none"))
+               enter-edit!     (fn []
+                                 (.removeAttribute root "inputmode")
+                                 (reset! !refocusing true)
+                                 (.blur root)
+                                 (js/requestAnimationFrame
+                                   (fn []
+                                     (.focus root)
+                                     (reset! !refocusing false))))]
+           ;; Double-tap detection via touchend timing
+           (.addEventListener root "touchend"
+             (fn [^js e]
+               (when (zero? (.-length (.-touches e)))
+                 (let [now     (js/Date.now)
+                       elapsed (- now @!last-tap)]
+                   (reset! !last-tap now)
+                   (when (< elapsed 300)
+                     (enter-edit!)))))
+             #js {:passive true})
+           ;; Re-suppress on blur (tap outside, back button, app switch)
+           (.addEventListener root "blur"
+             (fn [_] (when-not @!refocusing (suppress!))))
+           ;; Initial suppression
+           (suppress!))))
+     :clj nil))
+
 (defn init-editor!
   "Initialize Quill editor in the given container with initial HTML.
    Destroys any existing editor first (singleton).
@@ -110,6 +147,7 @@
          (reset! !editor-state {:editor editor :container container
                                 :topic-id topic-id})
          (add-toolbar-tooltips! editor)
+         (setup-mobile-keyboard-suppression! editor)
          editor))))
 
 (defn set-content!
