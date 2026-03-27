@@ -202,13 +202,38 @@
         ;; Separator
           (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
 
-        ;; Card count
+        ;; Card count with +/- stepper for touch devices
           (dom/span
-            (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}})
+            (dom/props {:class "card-count-control"
+                        :style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}})
             (dom/text "#")
+
+            ;; Decrement button (visible on touch only via CSS)
+            (dom/button
+              (dom/props {:class "card-count-btn"
+                          :title "Decrease card count"
+                          :style {:width "28px" :height "28px" :border "1px solid #ccc"
+                                  :border-radius "4px" :background "#f8f9fa"
+                                  :font-size "16px" :cursor "pointer" :display "flex"
+                                  :align-items "center" :justify-content "center"
+                                  :padding "0"}})
+              (dom/text "\u2212")
+              ;; Prevent focus change — preserves Quill selection
+              (dom/On "mousedown" (fn [e] (.preventDefault e)) nil)
+              (let [click (dom/On "click" (fn [_] :dec) nil)
+                    [?token _] (e/Token click)]
+                (when (some? click)
+                  (swap! !card-count (fn [v] (max 1 (dec v)))))
+                (when-some [token ?token]
+                  (e/server (settings/save-card-count user-id card-count-val))
+                  (token))))
+
+            ;; Number input (keyboard suppressed on touch via inputmode)
             (dom/input
               (dom/props {:type "number" :min "1" :max "50" :value (str card-count-val)
+                          :inputmode "none"
                           :title "Number of flashcards to generate (1-50)"
+                          :class "card-count-input"
                           :style {:padding "2px 4px" :font-size "13px" :width "50px"}})
               (let [input-event (dom/On "change"
                                   (fn [e] (let [v (-> e .-target .-value)]
@@ -220,9 +245,26 @@
                 (when-some [token ?token]
                   (e/server (settings/save-card-count user-id input-event))
                   (token))))
-            (dom/span
-              (dom/props {:style {:font-size "11px" :color "#999"}})
-              (dom/text "(1-50)")))
+
+            ;; Increment button (visible on touch only via CSS)
+            (dom/button
+              (dom/props {:class "card-count-btn"
+                          :title "Increase card count"
+                          :style {:width "28px" :height "28px" :border "1px solid #ccc"
+                                  :border-radius "4px" :background "#f8f9fa"
+                                  :font-size "16px" :cursor "pointer" :display "flex"
+                                  :align-items "center" :justify-content "center"
+                                  :padding "0"}})
+              (dom/text "+")
+              ;; Prevent focus change — preserves Quill selection
+              (dom/On "mousedown" (fn [e] (.preventDefault e)) nil)
+              (let [click (dom/On "click" (fn [_] :inc) nil)
+                    [?token _] (e/Token click)]
+                (when (some? click)
+                  (swap! !card-count (fn [v] (min 50 (inc v)))))
+                (when-some [token ?token]
+                  (e/server (settings/save-card-count user-id card-count-val))
+                  (token)))))
 
         ;; Generate buttons group
           (dom/div
