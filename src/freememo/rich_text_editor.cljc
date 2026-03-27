@@ -62,7 +62,7 @@
   "On touch devices, suppress virtual keyboard until double-tap.
    Sets inputmode=\"none\" on .ql-editor; double-tap removes it and
    refocuses to trigger keyboard. Blur re-adds the attribute."
-  [^js editor]
+  [editor]
   #?(:cljs
      (let [mq (.matchMedia js/window "(pointer: coarse)")]
        (when (.-matches mq)
