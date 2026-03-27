@@ -53,7 +53,7 @@
 
         (dom/p
           (dom/props {:style {:font-size "1rem" :color "var(--color-text-secondary)" :margin "0 0 16px 0"}})
-          (dom/text "Incremental reading with spaced repetition."))
+          (dom/text "Incremental reading with AI flashcards."))
 
         (dom/p
           (dom/props {:style {:font-size "14px" :color "var(--color-text-secondary)" :margin "0 0 32px 0"}})

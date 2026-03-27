@@ -1,47 +1,147 @@
-This app requires a PSQL server, run that with docker-compose.yml that's included.
+# FreeMemo
 
-Run with `clj -M:dev -m dev`. This starts the Electric dev server (port 8080) and an nREPL server (port 7888) in the same JVM.
+Incremental reading with AI-generated flashcards. Import PDFs, EPUBs, and web articles, extract key concepts into reviewable cards, and sync with Anki.
 
-The nREPL server on port 7888 is auto-discovered by clojure-mcp, enabling Claude Code's Clojure MCP tools (eval, edit, etc.).
+**Try it at [freememo.net](https://freememo.net)** -- no setup required. Or self-host using the instructions below.
 
-Below is the default README for the starter app, ignore it I guess.
+Built with [Hyperfiddle Electric v3](https://github.com/hyperfiddle/electric) (Clojure/ClojureScript) -- a reactive framework where client and server code coexist in the same `.cljc` files with automatic WebSocket sync.
 
-# Electric v3 Starter App
+## Features
 
-## Links
+- **Import** -- PDFs, EPUBs, web articles (paste or Wikipedia lookup)
+- **AI flashcard generation** -- OpenAI extracts key concepts into basic and cloze cards
+- **OCR** -- OpenAI Vision converts PDF pages to editable semantic HTML
+- **Rich text editor** -- Quill-based editor with highlighting and selection-based card generation
+- **Anki sync** -- Push/pull cards directly to your Anki collection via AnkiConnect
+- **PDF viewer** -- In-browser rendering via PDF.js with zoom and navigation
 
-* Electric github with source code: https://github.com/hyperfiddle/electric
-* Tutorial: https://electric.hyperfiddle.net/
+## Quick Start
 
-## Getting started - dev setup
+### Prerequisites
 
-* Shell: `clj -A:dev -X dev/-main`.
-* Login instructions will be printed
-* REPL: `:dev` deps alias, `(dev/-main)` at the REPL to start dev build
-* App will start on http://localhost:8080
-* Hot code reloading works: edit -> save -> see app reload in browser
+- **Java 17+**
+- **Clojure CLI** ([install guide](https://clojure.org/guides/install_clojure))
+- **Docker** (for PostgreSQL)
+- **Node.js** (for shadow-cljs)
 
-> [!WARNING]
-> Electric dev environments must run **one single JVM** that is shared by both the Clojure REPL and shadow-cljs ClojureScript compilation process! Electric uses a custom hot code reloading strategy to ensure that the Electric frontend and backend processes (DAGs) stay in sync as you change one or the other. This starter repo achieves this by booting shadow from the dev entrypoint[src-dev/dev.cljc](src-dev/dev.cljc). I believe this is compatible with both Calva and Cursive's "happy path" shadow-cljs support. For other editors, watch out as your boot sequence may run shadow-cljs in a second process! You will experience undefined behavior.
+### Run
 
-## Deployment
+```bash
+# Start PostgreSQL
+docker compose up -d
 
-```shell
-# Prod build
+# Start dev server (hot reload, port 8080)
+clj -M:dev -m dev
+```
+
+Open http://localhost:8080. The nREPL server starts on port 9009.
+
+### Configuration
+
+Navigate to **Settings** in the UI and enter your OpenAI API key. All settings are persisted per-user in the database.
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Framework | Electric v3 -- reactive full-stack Clojure |
+| Database | PostgreSQL 16 (next.jdbc + HikariCP + HoneySQL) |
+| Build | deps.edn + shadow-cljs |
+| PDF rendering | PDF.js 3.11.174 (CDN) |
+| Rich text | Quill 1.3.7 (CDN) |
+| Logging | Telemere (structured, CLJ + CLJS) |
+| AI | OpenAI GPT-4o (card generation) + Vision (OCR) |
+
+## Project Structure
+
+```
+src/freememo/
+  main.cljc              -- Root component, tab routing, auth gate
+  login_page.cljc        -- Login/signup (Google OAuth + username/password)
+  settings_page.cljc     -- API key, model, verbosity (auto-save)
+  import_page.cljc       -- Paste/Wikipedia import
+  pdf_page.cljc          -- PDF upload + document list
+  ocr_page.cljc          -- Main workspace: PDF viewer + editor + card table
+  content_toolbar.cljc   -- Generation controls: card type, count, generate, export
+  learn_page.cljc        -- Review sessions
+  rich_text_editor.cljc  -- Quill integration (global singleton)
+  pdf_viewer.cljc        -- PDF.js integration
+  keyboard.cljc          -- Global keyboard shortcuts
+  anki_sync*.cljc        -- Anki sync (connect, push, pull)
+  db.clj                 -- PostgreSQL schema, queries, connection pool
+  cards.clj              -- OpenAI card generation + prompt templates
+  ocr.clj                -- PDFBox rendering + OpenAI Vision OCR
+  api.clj                -- Ring routes (upload, PDF serving)
+  settings.clj           -- Per-user key-value settings
+```
+
+## Database
+
+PostgreSQL 16 via `docker-compose.yml`. Default connection: `cardmaker:dev@localhost:5432/cardmaker`.
+
+Schema auto-creates on first startup (no migration framework). Configure via environment variables for production:
+
+| Variable | Default |
+|----------|---------|
+| `DB_HOST` | `localhost` |
+| `DB_PORT` | `5432` |
+| `DB_NAME` | `cardmaker` |
+| `DB_USER` | `cardmaker` |
+| `DB_PASSWORD` | `dev` |
+
+## Production
+
+```bash
+# Build client
 clj -X:build:prod build-client
+
+# Run production server
 clj -M:prod -m prod
 
-# Uberjar (optional)
-clj -X:build:prod uberjar :build/jar-name "app.jar"
-java -cp target/app.jar clojure.main -m prod
+# Or build an uberjar
+clj -X:build:prod uberjar
+java -jar target/app.jar
+```
 
-# Docker
-docker build --build-arg VERSION=$(git rev-parse HEAD) -t electric3-starter-app:latest .
-docker run --rm -it -p 8080:8080 electric3-starter-app:latest
+### Docker
 
-# Fly
-fly deploy --remote-only --build-arg VERSION=$(git rev-parse HEAD)
+```bash
+docker build -t freememo:latest .
+docker run -d --name freememo -p 8080:8080 \
+  -e DB_HOST=your-db-host \
+  -e DB_PASSWORD=your-password \
+  freememo:latest
+```
+
+Or with Docker Compose (app + database):
+
+```bash
+docker compose -f docker-compose.prod.yml up -d
+```
+
+### Reverse Proxy
+
+The app runs on port 8080. For HTTPS, put it behind nginx or Caddy. **WebSocket support is required** -- Electric v3 uses persistent WebSocket connections.
+
+nginx essentials:
+```nginx
+location / {
+    proxy_pass http://localhost:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_read_timeout 300s;
+    client_max_body_size 100M;
+}
+```
+
+Caddy (automatic HTTPS):
+```
+your-domain.com {
+    reverse_proxy localhost:8080
+}
 ```
 
 ## License
-Electric v3 is **free for bootstrappers and non-commercial use,** and otherwise available commercially under a business source available license, see: [Electric v3 license change](https://tana.pub/lQwRvGRaQ7hM/electric-v3-license-change) (2024 Oct). License activation is experimentally implemented through the Electric compiler, requiring **compile-time** login for **dev builds only**. That means: no license check at runtime, no login in prod builds, CI/CD etc, no licensing code even on the classpath at runtime. This is experimental, but seems to be working great so far. We do not currently require any account approval steps, just log in. There will be a EULA at some point once we finalize the non-commercial license, for now we are focused on enterprise deals which are different.
+
+Electric v3 is free for bootstrappers and non-commercial use, and available commercially under a business source license. See [Electric v3 license](https://tana.pub/lQwRvGRaQ7hM/electric-v3-license-change).
