@@ -541,6 +541,7 @@ textarea:hover {
 .login-layout {
     display: flex;
     min-height: 100vh;
+    overflow-x: hidden;
 }
 .login-layout {
     background: var(--color-bg-page);

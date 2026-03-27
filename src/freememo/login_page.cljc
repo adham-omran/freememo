@@ -66,7 +66,7 @@
       (dom/props {:class "login-right"})
       (dom/div
         (dom/props {:style {:background "var(--color-bg-card)" :padding "40px" :border-radius "var(--radius-lg)"
-                            :box-shadow "0 8px 30px rgba(0,0,0,0.12)" :width "360px" :max-width "100%"}})
+                            :box-shadow "0 8px 30px rgba(0,0,0,0.12)" :width "100%" :max-width "360px"}})
         (dom/h1
           (dom/props {:style {:text-align "center" :margin-bottom "24px" :color "var(--color-text-primary)"}})
 
