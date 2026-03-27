@@ -565,17 +565,7 @@ textarea:hover {
     background: var(--color-bg-page);
     box-sizing: border-box;
 }
-@media (min-width: 601px) and (max-width: 900px) {
-    .login-hero,
-    .login-left {
-        padding: 40px 24px;
-    }
-    .login-form-panel,
-    .login-right {
-        padding: 24px;
-    }
-}
-@media (max-width: 600px) {
+@media (max-width: 900px) {
     .login-layout {
         flex-direction: column;
     }
