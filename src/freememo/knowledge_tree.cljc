@@ -26,6 +26,14 @@
        (let [q (str/lower-case (str/trim filter-text))]
          (filterv #(str/includes? (str/lower-case (or (:topics/title %) "")) q) topics)))))
 
+#?(:clj
+   (defn sort-root-topics [topics sort-key]
+     (case sort-key
+       "recent"  (vec (sort-by :topics/created_at #(compare %2 %1) topics))
+       "oldest"  (vec (sort-by :topics/created_at #(compare %1 %2) topics))
+       "alpha"   (vec (sort-by #(str/lower-case (or (:topics/title %) "")) topics))
+       topics)))
+
 ;; Flatten tree into a linear list respecting expand state.
 ;; Returns [{:depth N :topic <map> :has-children bool :is-root bool}]
 (defn flatten-tree [roots children-map expanded-set]
@@ -67,13 +75,13 @@
 
 ;; Document tree view — used by LibraryPage
 ;; Flatten + virtual scroll for performance
-(e/defn DocumentTreeView [user-id !nav-target navigate! !refresh filter-text]
+(e/defn DocumentTreeView [user-id !nav-target navigate! !refresh filter-text sort-key]
   (e/client
     (e/server
       (let [refresh (e/watch !refresh)
             all-items (get-tree-items* refresh user-id)
             all-roots (extract-roots all-items)
-            roots (filter-root-topics all-roots filter-text)]
+            roots (sort-root-topics (filter-root-topics all-roots filter-text) sort-key)]
         (e/client
           (let [children-map (group-by :topics/parent_id all-items)
                 !expanded-set (atom #{})
