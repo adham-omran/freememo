@@ -623,3 +623,34 @@ textarea:hover {
 @keyframes spin {
     to { transform: rotate(360deg); }
 }
+
+/* ── Tooltip (data-tooltip attribute, instant on hover) ───────── */
+[data-tooltip] {
+    position: relative;
+}
+[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%) translateY(4px);
+    padding: 6px 10px;
+    background: hsla(0, 0%, 20%, 0.85);
+    backdrop-filter: blur(2px);
+    color: #fff;
+    font-size: 12px;
+    line-height: 1.4;
+    border-radius: 4px;
+    white-space: pre-wrap;
+    max-width: min(40ch, calc(100vw - 2rem));
+    overflow-wrap: break-word;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.15s ease, visibility 0.15s ease;
+    z-index: 1000;
+}
+[data-tooltip]:hover::after {
+    opacity: 1;
+    visibility: visible;
+}

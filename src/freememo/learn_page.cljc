@@ -78,12 +78,16 @@
             (dom/text (str "Browsing: " (or title "document"))))
           (when (and page-stats (pos? (:total page-stats)))
             (let [remaining (:remaining page-stats)
-                  tooltip (if (seq remaining)
+                  tooltip (cond
+                            (empty? remaining) "All pages done!"
+                            (<= (count remaining) 20)
                             (str "Remaining: " (clojure.string/join ", " remaining))
-                            "All pages done!")]
+                            :else
+                            (str "Remaining: " (clojure.string/join ", " (take 20 remaining))
+                                 " ... and " (- (count remaining) 20) " more"))]
               (dom/span
                 (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px" :margin-left "auto" :cursor "default"}
-                            :title tooltip})
+                            :data-tooltip tooltip})
                 (dom/text (:done page-stats) " / " (:total page-stats) " pages done"))))))
       (dom/div
         (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
