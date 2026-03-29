@@ -24,6 +24,19 @@
     text
     (str "<p>" text "</p>")))
 
+(defn strip-html
+  "Remove all HTML tags and push-time decorations from Anki field text.
+   Strips the source suffix (<hr>...) appended by append-source during push,
+   then removes all remaining HTML tags. Preserves line breaks from <br>."
+  [text]
+  (if (str/blank? text)
+    text
+    (-> text
+        (str/replace #"\n?<hr>[\s\S]*$" "")  ;; strip source decoration (appended during push)
+        (str/replace #"<br\s*/?>" "\n")       ;; preserve line breaks
+        (str/replace #"<[^>]*>" "")           ;; strip all remaining tags
+        str/trim)))
+
 (defn append-source
   "Append source reference HTML to card content when source-display-mode is 'append'."
   [content source-ref]
@@ -235,14 +248,14 @@
                                                    (:value (get fields-map (keyword fname))))
                                        update-map
                                        (if basic?
-                                         (let [q (get-field (first basic-fields))
-                                               a (get-field (second basic-fields))
+                                         (let [q (strip-html (get-field (first basic-fields)))
+                                               a (strip-html (get-field (second basic-fields)))
                                                local-q (or (:flashcards/question card) "")
                                                local-a (or (:flashcards/answer card) "")]
                                            (when (or (not= q local-q) (not= a local-a))
                                              {:card-id (:flashcards/id card)
                                               :question q :answer a}))
-                                         (let [c (get-field (first cloze-fields))
+                                         (let [c (strip-html (get-field (first cloze-fields)))
                                                local-c (or (:flashcards/cloze card) "")]
                                            (when (not= c local-c)
                                              {:card-id (:flashcards/id card)
