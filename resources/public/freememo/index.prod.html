@@ -4,6 +4,7 @@
 	<meta charset="utf-8"/>
 	<title>FreeMemo — Incremental Reading</title>
 	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="color-scheme" content="light dark">
 	<meta name="description" content="Import PDFs, EPUBs, and articles. AI generates flashcards. Sync to Anki.">
 	<meta property="og:title" content="FreeMemo — Incremental Reading">
 	<meta property="og:description" content="Import documents and generate flashcards with AI. Supports PDF, EPUB, and web articles.">
@@ -28,26 +29,7 @@
 	<!-- Quill Rich Text Editor (alternative to TipTap, better CDN support) -->
 	<link href="https://cdn.quilljs.com/1.3.7/quill.snow.css" rel="stylesheet">
 	<script src="https://cdn.quilljs.com/1.3.7/quill.min.js"></script>
-	<style>
-	    .ql-container {
-		min-height: 400px;
-		background: #fff;
-		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-	    }
-	    .ql-editor {
-		min-height: 400px;
-		font-size: 16px;
-		line-height: 1.6;
-	    }
-	    .ql-toolbar {
-		background: #f8f9fa;
-		border-bottom: 2px solid #dee2e6;
-	    }
-	    /* RTL support */
-	    .ql-editor[dir="rtl"] {
-		text-align: right;
-	    }
-	</style>
+	<!-- Quill overrides now in index.css (with dark mode support) -->
 
 	<!-- Ensure cache busting on deployment – inject main.BUILD-HASH.js -->
 	<!-- $key$ is a template string. See src-prod/prod.cljc/wrap-prod-index-page -->

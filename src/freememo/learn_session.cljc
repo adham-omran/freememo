@@ -31,7 +31,7 @@
     (dom/button
       (dom/props {:class "btn btn-sm btn-secondary"
                   :style {:padding "4px 10px" :background "transparent"
-                          :color "#16a34a" :border "1px solid #16a34a"}
+                          :color "var(--color-success-dark)" :border "1px solid var(--color-success-dark)"}
                   :title "Mark as fully processed (extracted/carded everything useful)"})
       (dom/text "Done")
       (reset! keyboard/!done-btn-ref dom/node)
@@ -118,10 +118,10 @@
 ;; Badge display for topic kinds
 (defn kind-badge [kind]
   (case kind
-    "pdf" ["PDF" "#dcfce7"]
-    "epub" ["EPUB" "#f3e8ff"]
-    ("web" "wikipedia") ["Web" "#e0f2fe"]
-    ["Topic" "#f3e8ff"]))
+    "pdf" ["PDF" "var(--color-badge-pdf)"]
+    "epub" ["EPUB" "var(--color-badge-epub)"]
+    ("web" "wikipedia") ["Web" "var(--color-badge-web)"]
+    ["Topic" "var(--color-badge-epub)"]))
 
 ;; Session header bar
 (e/defn SessionHeader [item !queue-idx !mode idx total view-source!]
@@ -155,7 +155,7 @@
         ;; Title / source link
         (if is-root
           (dom/span
-            (dom/props {:style {:color "#555" :font-size "13px"}})
+            (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px"}})
             (dom/text title))
           (dom/span
             (dom/props {:style {:color "var(--color-primary)" :font-size "13px" :cursor "pointer"

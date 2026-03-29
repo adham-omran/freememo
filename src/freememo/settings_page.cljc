@@ -58,7 +58,7 @@
 
           ;; BYOK explainer
           (dom/div
-            (dom/props {:style {:padding "12px 14px" :background "#f0f4ff" :border-radius "var(--radius-md)"
+            (dom/props {:style {:padding "12px 14px" :background "var(--color-info-bg)" :border-radius "var(--radius-md)"
                                 :margin-bottom "var(--sp-4)" :font-size "13px" :line-height "1.5"
                                 :color "var(--color-text-secondary)"}})
             (dom/text "Incremental reading and Anki sync are always free. AI features (OCR and flashcard generation) use OpenAI and require your own API key -- bring your own key, pay only for what you use."))
@@ -92,7 +92,7 @@
             (dom/div
               (dom/props {:class "field"
                           :style {:padding "14px" :background "var(--color-bg-subtle)"
-                                  :border-radius "var(--radius-md)" :border "1px solid #f3f4f6"}})
+                                  :border-radius "var(--radius-md)" :border "1px solid var(--color-bg-hover)"}})
               (dom/div
                 (dom/props {:style {:display "flex" :align-items "center" :justify-content "space-between"
                                     :margin-bottom "4px"}})
@@ -140,17 +140,17 @@
                     (dom/props {:style {:margin-top "0" :margin-bottom "4px" :font-size "17px"}})
                     (dom/text "OpenAI API Key"))
                   (dom/p
-                    (dom/props {:style {:margin-top "0" :margin-bottom "8px" :font-size "13px" :color "#6b7280"}})
+                    (dom/props {:style {:margin-top "0" :margin-bottom "8px" :font-size "13px" :color "var(--color-text-hint)"}})
                     (dom/text "FreeMemo uses OpenAI to scan documents and generate flashcards. "))
                   (dom/p
-                    (dom/props {:style {:margin-top "0" :margin-bottom "8px" :font-size "13px" :color "#6b7280"}})
+                    (dom/props {:style {:margin-top "0" :margin-bottom "8px" :font-size "13px" :color "var(--color-text-hint)"}})
                     (dom/a
                       (dom/props {:href "https://platform.openai.com/api-keys" :target "_blank" :rel "noopener"
                                   :style {:color "var(--color-primary)" :text-decoration "underline"}})
                       (dom/text "Get your API key from OpenAI"))
                     (dom/text "."))
                   (dom/p
-                    (dom/props {:style {:margin-top "0" :margin-bottom "16px" :font-size "13px" :color "#6b7280"}})
+                    (dom/props {:style {:margin-top "0" :margin-bottom "16px" :font-size "13px" :color "var(--color-text-hint)"}})
                     (dom/text "Your key is encrypted and stored securely. Saving an empty value clears it."))
                   (dom/input
                     (dom/props {:type "password"
@@ -164,7 +164,7 @@
                   (when key-save-error
                     (dom/div
                       (dom/props {:style {:margin-top "10px" :font-size "13px" :color "var(--color-danger)"
-                                          :padding "8px 10px" :background "#fef2f2" :border-radius "var(--radius-sm)"}})
+                                          :padding "8px 10px" :background "var(--color-danger-bg)" :border-radius "var(--radius-sm)"}})
                       (dom/text key-save-error)))
                   (dom/div
                     (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "10px"

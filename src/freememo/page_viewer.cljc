@@ -206,7 +206,7 @@
                   (dom/div
                     (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-2)" :padding "var(--sp-1) var(--sp-2)" :flex-shrink "0"}})
                     (dom/span
-                      (dom/props {:style {:font-weight "600" :font-size "13px" :color "#444"}})
+                      (dom/props {:style {:font-weight "600" :font-size "13px" :color "var(--color-text-primary)"}})
                       (dom/text "p." current-pdf-page))
 
                     ;; Mark as done checkbox
@@ -236,7 +236,7 @@
                         (dom/button
                           (dom/props {:class "btn btn-sm btn-primary"
                                       :style {:padding "4px 12px" :font-size "14px"
-                                              :background (if disabled? "#ccc" "var(--color-primary)")
+                                              :background (if disabled? "var(--color-border)" "var(--color-primary)")
                                               :cursor (if disabled? "not-allowed" "pointer")}
                                       :disabled disabled?})
                           (dom/text (if disabled? "Scanning..." "Scan Page"))
@@ -282,8 +282,8 @@
                       (let [!show (atom true)
                             show (e/watch !show)]
                         (dom/div
-                          (dom/props {:style {:padding "6px 10px" :background "#fef2f2" :border "1px solid #fecaca"
-                                              :border-radius "var(--radius-sm)" :font-size "13px" :color "#991b1b"
+                          (dom/props {:style {:padding "6px 10px" :background "var(--color-danger-bg)" :border "1px solid var(--color-danger-light)"
+                                              :border-radius "var(--radius-sm)" :font-size "13px" :color "var(--color-danger-dark)"
                                               :margin-top "var(--sp-1)"
                                               :opacity (if show "1" "0")
                                               :transition "opacity 0.5s ease-out"}})
@@ -327,7 +327,7 @@
                           (dom/input
                             (dom/props {:type "text"
                                         :placeholder "Source reference"
-                                        :style {:flex "1" :padding "2px 6px" :font-size "12px" :color "#555"
+                                        :style {:flex "1" :padding "2px 6px" :font-size "12px" :color "var(--color-text-secondary)"
                                                 :border "1px solid var(--color-border)" :border-radius "3px"
                                                 :background "var(--color-bg-card)"}})
                             (set! (.-value dom/node) (or current-source ""))
@@ -339,7 +339,7 @@
                                 (token)
                                 (reset! !editing-source false)))))
                         (dom/button
-                          (dom/props {:style {:padding "2px 8px" :font-size "11px" :background "#f0f0f0"
+                          (dom/props {:style {:padding "2px 8px" :font-size "11px" :background "var(--color-bg-subtle)"
                                               :border "1px solid var(--color-border)" :border-radius "3px" :cursor "pointer"}})
                           (dom/text "Close")
                           (dom/On "click" (fn [_] (reset! !editing-source false)) nil)))
@@ -363,7 +363,7 @@
                         (RichTextEditorComponent {:initial-html (:text text-result)
                                                   :topic-id page-topic-id}))
                       (dom/p
-                        (dom/props {:style {:color "gray"}})
+                        (dom/props {:style {:color "var(--color-text-hint)"}})
                         (dom/text "No text scanned yet. Click 'Scan Page' to process this page."))))))
 
               ;; Vertical drag handle (full width)

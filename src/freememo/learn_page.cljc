@@ -42,10 +42,10 @@
 ;; Badge display for topic kinds
 (defn kind-badge [kind]
   (case kind
-    "pdf" ["PDF" "#dcfce7"]
-    "epub" ["EPUB" "#f3e8ff"]
-    ("web" "wikipedia") ["Web" "#e0f2fe"]
-    ["Topic" "#f3e8ff"]))
+    "pdf" ["PDF" "var(--color-badge-pdf)"]
+    "epub" ["EPUB" "var(--color-badge-epub)"]
+    ("web" "wikipedia") ["Web" "var(--color-badge-web)"]
+    ["Topic" "var(--color-badge-epub)"]))
 
 (e/defn LearnBrowseTopic [user-id enc-key topic-id title !mode llm-enabled? origin navigate!]
   (e/client
@@ -151,7 +151,7 @@
                             [type-label type-color] (kind-badge kind)]
                         (dom/div
                           (dom/props {:style {:display "grid" :grid-template-columns grid-cols
-                                              :border-bottom "1px solid #f0f0f0" :height "40px"
+                                              :border-bottom "1px solid var(--color-bg-subtle)" :height "40px"
                                               :align-items "center" :font-size "14px"}})
                           (dom/div
                             (dom/props {:style {:padding "8px 10px" :text-align "center"}})
@@ -206,12 +206,12 @@
                         [type-label type-color] (kind-badge kind)]
                     (dom/div
                       (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
-                                          :padding "8px 10px" :border-bottom "1px solid #f0f0f0"}})
+                                          :padding "8px 10px" :border-bottom "1px solid var(--color-bg-subtle)"}})
                       ;; Status badge
                       (dom/span
                         (dom/props {:style {:padding "2px 6px" :border-radius "4px" :font-size "10px" :font-weight "600"
-                                            :background (if (= item-status "done") "#dcfce7" "#f3f4f6")
-                                            :color (if (= item-status "done") "#16a34a" "#6b7280")}})
+                                            :background (if (= item-status "done") "var(--color-success-light)" "var(--color-bg-hover)")
+                                            :color (if (= item-status "done") "var(--color-success-dark)" "var(--color-text-hint)")}})
                         (dom/text item-status))
                       (dom/span
                         (dom/props {:class "type-badge" :style {:padding "2px 8px" :background type-color}})

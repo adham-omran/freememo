@@ -18,9 +18,9 @@
   (e/client
     (dom/div
       (dom/props {:class "quill-editor-wrapper"
-                  :style {:border "1px solid #ccc"
+                  :style {:border "1px solid var(--color-border)"
                           :border-radius "4px"
-                          :background "#fff"
+                          :background "var(--color-bg-card)"
                           :flex "1"
                           :min-height "200px"}
                   :data-role "widget"})

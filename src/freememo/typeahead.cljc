@@ -73,7 +73,7 @@
               (dom/div
                 (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "15px"
                                     :background (cond
-                                                  (= i active-idx) "#d0e8ff"
+                                                  (= i active-idx) "var(--color-highlight)"
                                                   (odd? i)         "var(--color-bg-subtle)"
                                                   :else            "var(--color-bg-card)")}})
                 (dom/text item)
