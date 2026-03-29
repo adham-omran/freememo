@@ -15,9 +15,12 @@
 #?(:clj (defonce !refresh (atom 0)))
 
 (defn get-browse-page-stats* [_refresh parent-id]
-  #?(:clj (let [pages (db/list-pages parent-id)]
-            {:done (count (filter #(= "done" (:topics/status %)) pages))
-             :total (count pages)})
+  #?(:clj (let [pages (db/list-pages parent-id)
+                remaining (sort (map :topics/page_number
+                                  (remove #(= "done" (:topics/status %)) pages)))]
+            {:done (- (count pages) (count remaining))
+             :total (count pages)
+             :remaining remaining})
      :cljs nil))
 
 (defn get-learning-queue* [_refresh user-id]
@@ -74,9 +77,14 @@
             (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
             (dom/text (str "Browsing: " (or title "document"))))
           (when (and page-stats (pos? (:total page-stats)))
-            (dom/span
-              (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px" :margin-left "auto"}})
-              (dom/text (:done page-stats) " / " (:total page-stats) " pages done")))))
+            (let [remaining (:remaining page-stats)
+                  tooltip (if (seq remaining)
+                            (str "Remaining: " (clojure.string/join ", " remaining))
+                            "All pages done!")]
+              (dom/span
+                (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px" :margin-left "auto" :cursor "default"}
+                            :title tooltip})
+                (dom/text (:done page-stats) " / " (:total page-stats) " pages done"))))))
       (dom/div
         (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
         (let [!nav (atom nav)]
