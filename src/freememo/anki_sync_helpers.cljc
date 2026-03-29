@@ -9,11 +9,12 @@
 ;; ---------------------------------------------------------------------------
 
 (defn prepend-header
-  "Prepend optional HTML header to note front text."
+  "Prepend optional HTML header to note front text.
+   Tagged with fm-header class so pull can strip it without contaminating the question."
   [front use-header header-text]
   (let [base (or front "")]
     (if (and use-header (not (str/blank? header-text)))
-      (str "<p>" header-text "</p>" base)
+      (str "<p class=\"fm-header\">" header-text "</p>" base)
       base)))
 
 (defn wrap-p
@@ -26,22 +27,22 @@
 
 (defn strip-html
   "Remove all HTML tags and push-time decorations from Anki field text.
-   Strips the source suffix (<hr>...) appended by append-source during push,
-   then removes all remaining HTML tags. Preserves line breaks from <br>."
+   Strips: fm-header tagged headers, source suffix (<hr>...), then all remaining HTML tags."
   [text]
   (if (str/blank? text)
     text
     (-> text
-        (str/replace #"\n?<hr>[\s\S]*$" "")  ;; strip source decoration (appended during push)
-        (str/replace #"<br\s*/?>" "\n")       ;; preserve line breaks
-        (str/replace #"<[^>]*>" "")           ;; strip all remaining tags
+        (str/replace #"<p[^>]*class=\"fm-header\"[^>]*>.*?</p>" "")  ;; strip tagged header
+        (str/replace #"\n?<hr[^>]*class=\"fm-source\"[^>]*>[\s\S]*$" "")  ;; strip tagged source
+        (str/replace #"<br\s*/?>" "\n")        ;; preserve line breaks
+        (str/replace #"<[^>]*>" "")            ;; strip all remaining tags
         str/trim)))
 
 (defn append-source
   "Append source reference HTML to card content when source-display-mode is 'append'."
   [content source-ref]
   (if (and (not (str/blank? source-ref)))
-    (str content "\n<hr><small style='color:#999'>Source: " source-ref "</small>")
+    (str content "\n<hr class=\"fm-source\"><small style='color:#999'>Source: " source-ref "</small>")
     content))
 
 #?(:cljs
