@@ -7,73 +7,120 @@
 ;; Global viewer state (similar to electric-fiddle reference)
 (defonce !viewer-state (atom nil))
 
+;; Track the loaded PDFDocumentProxy so we can destroy it on cleanup
+(defonce !pdf-doc (atom nil))
+
+;; Init generation — incremented in init-viewer!; stale async callbacks check & skip
+(defonce !init-gen (atom 0))
+
+
+(defn destroy-viewer!
+  "Tear down the current PDF.js viewer and release resources."
+  []
+  #?(:clj nil
+     :cljs
+     (do
+       (js/console.log "[PDF] destroy-viewer!" "has-viewer?" (some? @!viewer-state) "has-doc?" (some? @!pdf-doc))
+       (when-let [{:keys [viewer]} @!viewer-state]
+         (try (.cleanup ^js viewer) (catch :default _)))
+       (when-let [^js doc @!pdf-doc]
+         (try (.destroy doc) (catch :default _)))
+       (reset! !pdf-doc nil)
+       (reset! !viewer-state nil))))
+
+;; Copy-to-clipboard helper — registered once globally
+#?(:cljs
+   (defonce _clipboard-listeners
+     (let [copy-pdf-selection!
+           (fn []
+             (let [sel (js/window.getSelection)
+                   text (.toString sel)
+                   anchor (.-anchorNode sel)
+                   in-pdf? (when anchor
+                             (some? (.closest (if (= 1 (.-nodeType anchor))
+                                               anchor
+                                               (.-parentElement anchor))
+                                     ".pdfViewer")))]
+               (when (and in-pdf? (seq text))
+                 (-> (js/navigator.clipboard.writeText text)
+                     (.catch (fn [err] (js/console.warn "Clipboard write failed:" err))))
+                 true)))]
+       ;; Cmd+C / Ctrl+C
+       (.addEventListener js/document "keydown"
+         (fn [^js e]
+           (when (and (or (.-metaKey e) (.-ctrlKey e))
+                      (= "c" (.-key e))
+                      (not (.-defaultPrevented e)))
+             (when (copy-pdf-selection!)
+               (.preventDefault e))))
+         true)
+       ;; Right-click: pre-write to clipboard when context menu opens
+       (.addEventListener js/document "contextmenu"
+         (fn [_] (copy-pdf-selection!))
+         true)
+       true)))
+
 (defn init-viewer!
   "Initialize PDF.js viewer with given container and PDF URL.
+   Destroys any previous viewer first.
    Calls on-ready callback when PDF is loaded with (pdf viewer) args."
   [container viewer-div pdf-url on-ready]
   #?(:clj nil
      :cljs
      (when (and container viewer-div (.-pdfjsLib js/window) (.-pdfjsViewer js/window))
-       (let [^js pdfjs        (.-pdfjsLib js/window)
-             ^js viewer-ns    (.-pdfjsViewer js/window)
-             ^js event-bus    (new (.-EventBus viewer-ns))
-             ^js link-service (new (.-PDFLinkService viewer-ns) (clj->js {:eventBus event-bus}))
-             ^js viewer       (new (.-PDFViewer viewer-ns)
-                                   (clj->js {:container container
-                                             :viewer viewer-div
-                                             :eventBus event-bus
-                                             :linkService link-service
-                                             :textLayerMode 2      ; Enable text selection
-                                             :annotationMode 2}))] ; Enable annotations
-         (.setViewer link-service viewer)
-         (reset! !viewer-state {:viewer viewer
-                                :event-bus event-bus
-                                :link-service link-service})
+       ;; Increment generation FIRST — this is a plain defn, not Electric reactive,
+       ;; so swap! always increments correctly. Any previous init's async callbacks
+       ;; will see a stale generation and skip.
+       (let [my-gen (swap! !init-gen inc)]
+         (js/console.log "[PDF] init-viewer!" "gen=" my-gen "url=" pdf-url)
+         ;; Destroy previous viewer to release memory and detach event listeners
+         (destroy-viewer!)
+         ;; Clear any residual DOM from old viewer
+         (set! (.-innerHTML viewer-div) "")
+         (set! (.-scrollTop container) 0)
 
-         ;; Enable copy from PDF text layer.
-         ;; The standalone PDFViewer component doesn't include copy support.
-         ;; The browser won't fire a `copy` event because activeElement is BODY
-         ;; (not a focusable/editable element).
+         (let [^js pdfjs        (.-pdfjsLib js/window)
+               ^js viewer-ns    (.-pdfjsViewer js/window)
+               ^js event-bus    (new (.-EventBus viewer-ns))
+               ^js link-service (new (.-PDFLinkService viewer-ns) (clj->js {:eventBus event-bus}))
+               ^js viewer       (new (.-PDFViewer viewer-ns)
+                                     (clj->js {:container container
+                                               :viewer viewer-div
+                                               :eventBus event-bus
+                                               :linkService link-service
+                                               :textLayerMode 2
+                                               :annotationMode 2}))]
+           (.setViewer link-service viewer)
+           (reset! !viewer-state {:viewer viewer
+                                  :event-bus event-bus
+                                  :link-service link-service})
 
-         ;; Helper: write PDF selection to clipboard if selection is inside .pdfViewer
-         (letfn [(copy-pdf-selection! []
-                   (let [sel (js/window.getSelection)
-                         text (.toString sel)
-                         anchor (.-anchorNode sel)
-                         in-pdf? (when anchor
-                                   (some? (.closest (if (= 1 (.-nodeType anchor))
-                                                      anchor
-                                                      (.-parentElement anchor))
-                                            ".pdfViewer")))]
-                     (when (and in-pdf? (seq text))
-                       (-> (js/navigator.clipboard.writeText text)
-                           (.catch (fn [err] (js/console.warn "Clipboard write failed:" err))))
-                       true)))]
-
-           ;; Cmd+C / Ctrl+C
-           (.addEventListener js/document "keydown"
-             (fn [^js e]
-               (when (and (or (.-metaKey e) (.-ctrlKey e))
-                          (= "c" (.-key e))
-                          (not (.-defaultPrevented e)))
-                 (when (copy-pdf-selection!)
-                   (.preventDefault e))))
-             true)
-
-           ;; Right-click: pre-write to clipboard when context menu opens,
-           ;; so "Copy" in the menu copies the correct text.
-           (.addEventListener js/document "contextmenu"
-             (fn [_] (copy-pdf-selection!))
-             true))
-
-         ;; Load PDF document
-         (-> (.getDocument pdfjs pdf-url)
-             (.-promise)
-             (.then (fn [^js pdf]
-                      (.setDocument viewer pdf)
-                      (.setDocument link-service pdf nil)
-                      (when on-ready (on-ready pdf viewer))))
-             (.catch (fn [err] (js/console.error "PDF load error:" err))))))))
+           ;; Load PDF document
+           (-> (.getDocument pdfjs pdf-url)
+               (.-promise)
+               (.then (fn [^js pdf]
+                        ;; Guard: only proceed if this is still the latest init.
+                        ;; If another init-viewer! ran while we were loading,
+                        ;; our viewer was already destroyed — skip silently.
+                        (if (= my-gen @!init-gen)
+                          (do
+                            (js/console.log "[PDF] document loaded, gen=" my-gen "numPages=" (.-numPages pdf))
+                            (reset! !pdf-doc pdf)
+                            (.setDocument viewer pdf)
+                            (.setDocument link-service pdf nil)
+                            ;; Set page-width zoom after pages are initialized
+                            (.on event-bus "pagesloaded"
+                                 (fn []
+                                   (js/console.log "[PDF] pagesloaded: scale=" (.-currentScale viewer)
+                                                   "scrollH=" (.-scrollHeight container)
+                                                   "pages=" (.-pagesCount viewer))
+                                   (set! (.-currentScaleValue viewer) "page-width")
+                                   (js/console.log "[PDF] after page-width: scale=" (.-currentScale viewer)
+                                                   "scrollH=" (.-scrollHeight container)))
+                                 (clj->js {:once true}))
+                            (when on-ready (on-ready pdf viewer)))
+                          (js/console.log "[PDF] SKIPPING stale init, gen=" my-gen "current=" @!init-gen))))
+               (.catch (fn [err] (js/console.error "PDF load error:" err)))))))))
 
 (defn go-to-page!
   "Navigate to specific page number (1-indexed)."

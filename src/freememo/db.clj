@@ -1001,7 +1001,7 @@
        FROM topics
        WHERE user_id = ?
          AND kind != 'page'
-         AND (next_review_at <= NOW() OR next_review_at IS NULL)
+         AND (next_review_at::date <= CURRENT_DATE OR next_review_at IS NULL)
          AND (status = 'active' OR status IS NULL)
        ORDER BY priority ASC, next_review_at ASC NULLS FIRST, id ASC" user-id])
     (catch Exception e
@@ -1015,7 +1015,7 @@
                  ["SELECT COUNT(*) AS total FROM topics
                    WHERE user_id = ?
                      AND kind != 'page'
-                     AND (next_review_at <= NOW() OR next_review_at IS NULL)
+                     AND (next_review_at::date <= CURRENT_DATE OR next_review_at IS NULL)
                      AND (status = 'active' OR status IS NULL)"
                   user-id])]
     (or (:total result) 0)))

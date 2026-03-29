@@ -186,10 +186,11 @@
                 (when is-pdf
                   (dom/div
                     (dom/props {:style {:width (str left-pct "%") :min-width "0" :overflow "hidden"}})
-                    (reset! !current-page
-                      (PdfViewerComponent {:document-id selected-doc
-                                           :initial-page initial-page
-                                           :on-navigate! (fn [p] (reset! !page-to-save p))})))
+                    (e/for-by identity [_k [selected-doc]]
+                      (reset! !current-page
+                        (PdfViewerComponent {:document-id selected-doc
+                                             :initial-page initial-page
+                                             :on-navigate! (fn [p] (reset! !page-to-save p))}))))
 
                   ;; Horizontal drag handle
                   (dom/div

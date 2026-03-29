@@ -190,31 +190,38 @@
                                 :overflow "auto"
                                 :background "#525659"}})
             (reset! !container dom/node)
+            (e/on-unmount
+              (fn []
+                (js/console.log "[PDF-COMP] unmount")
+                (viewer/destroy-viewer!)))
 
             (dom/div
               (dom/props {:class "pdfViewer"})
               (reset! !viewer-div dom/node)
 
-              ;; Initialize PDF.js viewer after DOM elements exist
+              ;; Initialize PDF.js viewer after DOM elements exist.
+              ;; CRITICAL: document-id and initial-page must ONLY appear inside fn closures.
+              ;; Electric treats fn bodies as opaque (no reactive tracking).
+              ;;
+              ;; It doesn't matter if this setTimeout fires multiple times —
+              ;; init-viewer! has its own generation guard that skips stale async
+              ;; callbacks. Only the latest init-viewer! call's promise proceeds.
               (js/setTimeout
                 (fn []
-                  (let [pdf-url (str "/api/pdf/" document-id)]
-                    (viewer/init-viewer!
-                      @!container
-                      @!viewer-div
-                      pdf-url
-                      (fn [^js pdf _]
-                        ;; On PDF loaded
-                        (reset! !total (.-numPages pdf))
-                        ;; Listen for page changes from PDF.js
-                        (viewer/on-page-change! (fn [page-num]
-                                                  (reset! !page page-num)
-                                                  (when on-navigate! (on-navigate! page-num))))
-                        ;; Jump to initial page after pages are rendered
-                        (when (and initial-page (> initial-page 1))
-                          (viewer/go-to-page-after-load! initial-page))
-                        ;; Enable pinch-to-zoom on touch devices
-                        (viewer/setup-pinch-zoom! @!container)))))
+                  (js/console.log "[PDF-COMP] setTimeout fired")
+                  (viewer/init-viewer!
+                    @!container
+                    @!viewer-div
+                    (str "/api/pdf/" document-id)
+                    (fn [^js pdf _]
+                      (js/console.log "[PDF-COMP] on-ready, numPages=" (.-numPages pdf))
+                      (reset! !total (.-numPages pdf))
+                      (viewer/on-page-change! (fn [page-num]
+                                                (reset! !page page-num)
+                                                (when on-navigate! (on-navigate! page-num))))
+                      (when (and initial-page (> initial-page 1))
+                        (viewer/go-to-page-after-load! initial-page))
+                      (viewer/setup-pinch-zoom! @!container))))
                 100)))))
 
       ;; Return current page number for OCR integration
