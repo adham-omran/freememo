@@ -33,10 +33,10 @@
 ;; Badge display for topic kinds
 (defn kind-badge [kind]
   (case kind
-    "pdf" ["PDF" "#dcfce7"]
-    "epub" ["EPUB" "#f3e8ff"]
-    ("web" "wikipedia") ["Web" "#e0f2fe"]
-    ["Topic" "#f3e8ff"]))
+    "pdf" ["PDF" "var(--color-badge-pdf)"]
+    "epub" ["EPUB" "var(--color-badge-epub)"]
+    ("web" "wikipedia") ["Web" "var(--color-badge-web)"]
+    ["Topic" "var(--color-badge-epub)"]))
 
 ;; Prepare queue rows on server (add formatted fields)
 (defn prepare-queue-rows [user-id]
@@ -101,7 +101,7 @@
           (dom/props {:style {:flex "1" :padding "12px" :background "var(--color-bg-subtle)"
                               :border-radius "var(--radius-md)" :text-align "center"}})
           (dom/div
-            (dom/props {:style {:font-size "24px" :font-weight "700" :color "#222"}})
+            (dom/props {:style {:font-size "24px" :font-weight "700" :color "var(--color-text-primary)"}})
             (dom/text (second item)))
           (dom/div
             (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)" :margin-top "4px"}})
@@ -150,12 +150,12 @@
                               id (:id item)
                               [badge-text badge-color] (kind-badge kind)]
                           (dom/tr
-                            (dom/props {:style {:border-bottom "1px solid #f0f0f0" :height (str row-height "px")
+                            (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)" :height (str row-height "px")
                                                 :opacity (case item-status "done" "0.6" "1")
                                                 :--order (inc i)}})
                           ;; Priority
                             (dom/td
-                              (dom/props {:style {:padding "4px 6px" :text-align "center" :color "#555" :font-size "13px"}})
+                              (dom/props {:style {:padding "4px 6px" :text-align "center" :color "var(--color-text-secondary)" :font-size "13px"}})
                               (dom/text (if inactive? "\u2014" (str (or priority "")))))
                           ;; Type badge
                             (dom/td
@@ -166,7 +166,7 @@
                           ;; Due / status
                             (dom/td
                               (dom/props {:style {:padding "4px 6px" :text-align "center" :font-size "12px"
-                                                  :color (case due-label "done" "#16a34a" "#555")}})
+                                                  :color (case due-label "done" "var(--color-success-dark)" "var(--color-text-secondary)")}})
                               (dom/text due-label))
                           ;; Title (clickable)
                             (dom/td

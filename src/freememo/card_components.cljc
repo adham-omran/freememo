@@ -31,11 +31,11 @@
             [?token ?error] (e/Token click-event)]
         (dom/props {:disabled (some? ?token)
                     :class "btn-delete-x"
-                    :style {:background (if (some? ?token) "#999" "var(--color-danger)")
+                    :style {:background (if (some? ?token) "var(--color-text-hint)" "var(--color-danger)")
                             :cursor (if (some? ?token) "not-allowed" "pointer")}})
         (when ?error
           (dom/div
-            (dom/props {:style {:color "red" :font-size "11px"}})
+            (dom/props {:style {:color "var(--color-danger)" :font-size "11px"}})
             (dom/text ?error)))
         (when-some [token ?token]
           (let [result (e/server (cards/delete-card click-event))]
@@ -82,7 +82,7 @@
           (dom/props {:style {:color (case sync-st
                                        :unsynced "var(--color-warning)"
                                        :synced "var(--color-success)"
-                                       :modified "#eab308")}}))
+                                       :modified "var(--color-warning)")}}))
         ;; Front column
         (let [front-text (if (= kind "basic") question cloze)]
           (dom/td
@@ -107,7 +107,7 @@
           (dom/props {:style {:padding "6px 4px" :width "40px" :text-align "center"
                               :border-bottom "1px solid var(--color-border)"}})
           (dom/button
-            (dom/props {:style {:padding "2px 6px" :background "var(--color-primary)" :color "white"
+            (dom/props {:style {:padding "2px 6px" :background "var(--color-primary)" :color "var(--color-bg-card)"
                                 :border "none" :border-radius "var(--radius-sm)" :cursor "pointer"
                                 :font-size "12px"}})
             (dom/text "\u270E")

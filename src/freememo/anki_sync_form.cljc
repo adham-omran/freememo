@@ -65,7 +65,7 @@
                 (dom/props {:type "button"
                             :style {:background "none" :border "none" :cursor "pointer"
                                     :padding "0" :font-size "13px" :line-height "1"
-                                    :color "#555"}})
+                                    :color "var(--color-text-secondary)"}})
                 (dom/text "\u00d7")
                 (dom/On "click" (fn [_] (swap! !tags (fn [ts] (vec (remove #{t} ts))))) nil))))
           ;; Text input
@@ -130,9 +130,9 @@
               (dom/div
                 (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "14px"
                                     :background (cond
-                                                  (= i active-idx) "#d0e8ff"
-                                                  (odd? i)         "#f9f9f9"
-                                                  :else            "white")}})
+                                                  (= i active-idx) "var(--color-highlight)"
+                                                  (odd? i)         "var(--color-bg-subtle)"
+                                                  :else            "var(--color-bg-card)")}})
                 (dom/text t)
                 (dom/On "mousemove" (fn [_] (reset! !active-idx i)) nil)
                 (dom/On "mousedown"

@@ -68,10 +68,10 @@
 ;; Badge for topic kind
 (defn kind-badge [kind]
   (case kind
-    "pdf" ["PDF" "#dcfce7"]
-    "epub" ["EPUB" "#f3e8ff"]
-    ("web" "wikipedia") ["Web" "#e0f2fe"]
-    ["Topic" "#f3e8ff"]))
+    "pdf" ["PDF" "var(--color-badge-pdf)"]
+    "epub" ["EPUB" "var(--color-badge-epub)"]
+    ("web" "wikipedia") ["Web" "var(--color-badge-web)"]
+    ["Topic" "var(--color-badge-epub)"]))
 
 ;; Document tree view — used by LibraryPage
 ;; Flatten + virtual scroll for performance
@@ -125,8 +125,8 @@
                                 (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
                                                     :padding-left (str (* depth 20) "px")
                                                     :height (str row-height "px")
-                                                    :border-bottom "1px solid #f0f0f0"
-                                                    :border-left (when (= topic-status "done") "2px solid #86efac")}})
+                                                    :border-bottom "1px solid var(--color-bg-subtle)"
+                                                    :border-left (when (= topic-status "done") "2px solid var(--color-success-lighter)")}})
                                 ;; Arrow
                                 (if has-children
                                   (dom/span
@@ -155,7 +155,7 @@
                                               :style {:flex "1" :min-width "0"
                                                       :font-size (if is-root "14px" "13px")
                                                       :font-weight (if is-root "500" "400")
-                                                      :color (if is-root "#222" "#333")
+                                                      :color (if is-root "var(--color-text-primary)" "var(--color-text-primary)")
                                                       :cursor "pointer"
                                                       :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}
                                               :title display-title})

@@ -86,7 +86,7 @@
                                   :padding "var(--sp-2) var(--sp-4)" :flex-shrink "0"
                                   :border-bottom "1px solid var(--color-border)"}})
               (dom/button
-                (dom/props {:class "btn btn-sm btn-secondary" :style {:background "#f0f0f0"}})
+                (dom/props {:class "btn btn-sm btn-secondary" :style {:background "var(--color-bg-subtle)"}})
                 (dom/text (case origin :queue "Back to Queue" :library "Back to Library" "Back to Learn"))
                 (dom/On "click" (fn [_] (navigate! (or origin :learn))) nil))
               (if (= extract-status "active")
@@ -95,7 +95,7 @@
                   (dom/props {:style {:display "contents"}})
                   (dom/button
                     (dom/props {:class "btn btn-sm btn-secondary"
-                                :style {:color "#16a34a" :border "1px solid #16a34a"}
+                                :style {:color "var(--color-success-dark)" :border "1px solid var(--color-success-dark)"}
                                 :title "Mark as fully processed (extracted/carded everything useful)"})
                     (dom/text "Done")
                     (reset! keyboard/!done-btn-ref dom/node)
@@ -111,7 +111,7 @@
                 (dom/span
                   (dom/props {:style {:display "contents"}})
                   (dom/span
-                    (dom/props {:style {:font-size "12px" :color "#16a34a" :font-weight "600"}})
+                    (dom/props {:style {:font-size "12px" :color "var(--color-success-dark)" :font-weight "600"}})
                     (dom/text extract-status))
                   (dom/button
                     (dom/props {:class "btn btn-sm btn-secondary"
@@ -235,6 +235,6 @@
           (dom/div
             (dom/props {:style {:margin-top "12px"}})
             (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary" :style {:padding "6px 16px" :background "#f0f0f0"}})
+              (dom/props {:class "btn btn-sm btn-secondary" :style {:padding "6px 16px" :background "var(--color-bg-subtle)"}})
               (dom/text "Go to Learn")
               (dom/On "click" (fn [_] (navigate! (or origin :learn))) nil))))))))

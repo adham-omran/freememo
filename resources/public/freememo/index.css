@@ -16,9 +16,52 @@
     --color-text-label: #374151;
 
     --color-border: #e0e0e0;
+    --color-border-light: #ddd;
     --color-bg-page: #f8fafc;
     --color-bg-card: #fff;
     --color-bg-subtle: #f9fafb;
+    --color-bg-input: #fff;
+    --color-bg-hover: #f3f4f6;
+    --color-bg-toolbar: #f5f5f5;
+    --color-text-disabled: #999;
+
+    /* Status: success */
+    --color-success-dark: #16a34a;
+    --color-success-light: #dcfce7;
+    --color-success-lighter: #86efac;
+
+    /* Status: danger */
+    --color-danger-light: #fecaca;
+    --color-danger-dark: #991b1b;
+    --color-danger-bg: #fef2f2;
+
+    /* Status: warning */
+    --color-warning-light: #fde68a;
+    --color-warning-dark: #92400e;
+    --color-warning-bg: #fffbeb;
+
+    /* Badges */
+    --color-badge-pdf: #dcfce7;
+    --color-badge-web: #e0f2fe;
+    --color-badge-epub: #f3e8ff;
+
+    /* Interactive */
+    --color-highlight: #d0e8ff;
+    --color-highlight-gold: #FBBF24;
+    --color-highlight-extract: #44C2FF;
+    --color-divider-active: #90caf9;
+    --color-disabled-bg: #94a3b8;
+
+    /* Info */
+    --color-info-bg: #f0f4ff;
+    --color-info-bg-light: #eff6ff;
+
+    /* PDF viewer */
+    --color-pdf-bg: #525659;
+
+    /* Tooltip */
+    --color-tooltip-bg: hsla(0, 0%, 20%, 0.85);
+    --color-tooltip-text: #fff;
 
     --radius-sm: 4px;
     --radius-md: 6px;
@@ -442,6 +485,25 @@ textarea:hover {
     .modal-content { padding: var(--sp-4); }
 }
 
+/* ── Quill Editor Overrides ───────────────────────────────────── */
+.ql-container {
+    min-height: 100px;
+    background: var(--color-bg-card);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.ql-editor {
+    min-height: 100px;
+    font-size: 16px;
+    line-height: 1.6;
+}
+.ql-toolbar {
+    background: var(--color-bg-subtle);
+    border-bottom: 2px solid var(--color-border);
+}
+.ql-editor[dir="rtl"] {
+    text-align: right;
+}
+
 /* ── Dark Mode (system preference) ───────────────────────────── */
 @media (prefers-color-scheme: dark) {
     :root {
@@ -459,9 +521,44 @@ textarea:hover {
         --color-text-label: #d1d5db;
 
         --color-border: #374151;
+        --color-border-light: #374151;
         --color-bg-page: #111827;
         --color-bg-card: #1f2937;
         --color-bg-subtle: #1a2332;
+        --color-bg-input: #1f2937;
+        --color-bg-hover: #263040;
+        --color-bg-toolbar: #1f2937;
+        --color-text-disabled: #6b7280;
+
+        --color-success-dark: #4ade80;
+        --color-success-light: #14532d;
+        --color-success-lighter: #22c55e;
+
+        --color-danger-light: #7f1d1d;
+        --color-danger-dark: #fca5a5;
+        --color-danger-bg: #451a1a;
+
+        --color-warning-light: #78350f;
+        --color-warning-dark: #fbbf24;
+        --color-warning-bg: #451a03;
+
+        --color-badge-pdf: #14532d;
+        --color-badge-web: #0c4a6e;
+        --color-badge-epub: #3b0764;
+
+        --color-highlight: #1e3a5f;
+        --color-highlight-gold: #f59e0b;
+        --color-highlight-extract: #0891b2;
+        --color-divider-active: #2563eb;
+        --color-disabled-bg: #4b5563;
+
+        --color-info-bg: #1e293b;
+        --color-info-bg-light: #172554;
+
+        --color-pdf-bg: #1a1a1a;
+
+        --color-tooltip-bg: hsla(0, 0%, 80%, 0.9);
+        --color-tooltip-text: #111;
 
         --shadow-card: 0 1px 3px rgba(0,0,0,0.3);
         --shadow-modal: 0 8px 30px rgba(0,0,0,0.5);
@@ -635,9 +732,9 @@ textarea:hover {
     left: 50%;
     transform: translateX(-50%) translateY(4px);
     padding: 6px 10px;
-    background: hsla(0, 0%, 20%, 0.85);
+    background: var(--color-tooltip-bg);
     backdrop-filter: blur(2px);
-    color: #fff;
+    color: var(--color-tooltip-text);
     font-size: 12px;
     line-height: 1.4;
     border-radius: 4px;

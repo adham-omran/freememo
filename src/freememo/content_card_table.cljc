@@ -51,7 +51,7 @@
             (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
             (when (pos? card-count)
               (dom/div
-                (dom/props {:style {:padding "4px 12px" :font-size "12px" :color "#888"}})
+                (dom/props {:style {:padding "4px 12px" :font-size "12px" :color "var(--color-text-hint)"}})
                 (dom/text (str card-count " card" (when (not= card-count 1) "s")
                             (when (pos? unsynced-count) (str " (" unsynced-count " unsynced)"))))))
             (if (pos? card-count)
@@ -78,8 +78,8 @@
                         (CardRow card !editing-card !refresh (inc i))))))
                 (dom/div (dom/props {:style {:height (str occluded-height "px")}})))
               (dom/p
-                (dom/props {:style {:color "gray" :font-size "13px" :padding "8px 12px"}})
+                (dom/props {:style {:color "var(--color-text-hint)" :font-size "13px" :padding "8px 12px"}})
                 (dom/text "No cards yet. Use the Generate button above to create flashcards from this content.")))))
         (dom/div
-          (dom/props {:style {:color "red" :font-size "13px" :padding "8px 12px"}})
+          (dom/props {:style {:color "var(--color-danger)" :font-size "13px" :padding "8px 12px"}})
           (dom/text "Error loading cards: " (:error cards-result)))))))

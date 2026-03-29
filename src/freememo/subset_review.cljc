@@ -18,10 +18,10 @@
 ;; Badge display for topic kinds
 (defn kind-badge [kind]
   (case kind
-    "pdf" ["PDF" "#dcfce7"]
-    "epub" ["EPUB" "#f3e8ff"]
-    ("web" "wikipedia") ["Web" "#e0f2fe"]
-    ["Topic" "#f3e8ff"]))
+    "pdf" ["PDF" "var(--color-badge-pdf)"]
+    "epub" ["EPUB" "var(--color-badge-epub)"]
+    ("web" "wikipedia") ["Web" "var(--color-badge-web)"]
+    ["Topic" "var(--color-badge-epub)"]))
 
 ;; Bottom bar — Next button with split behavior (outstanding vs non-outstanding)
 (e/defn SubsetBottomBar [topic-id outstanding? !queue-idx]
@@ -33,7 +33,7 @@
 
       ;; Outstanding indicator
       (dom/span
-        (dom/props {:style {:font-size "12px" :color (if outstanding? "#16a34a" "var(--color-text-hint)")}})
+        (dom/props {:style {:font-size "12px" :color (if outstanding? "var(--color-success-dark)" "var(--color-text-hint)")}})
         (dom/text (if outstanding? "Due — will advance schedule" "Not due — read-only")))
 
       ;; Next button — disabled briefly after click to prevent skipping during content load
@@ -77,7 +77,7 @@
         ;; Subset Review banner
         (dom/span
           (dom/props {:style {:font-size "13px" :font-weight "600" :color "var(--color-primary)"
-                              :padding "2px 8px" :background "#eff6ff" :border-radius "var(--radius-sm)"}})
+                              :padding "2px 8px" :background "var(--color-info-bg-light)" :border-radius "var(--radius-sm)"}})
           (dom/text (str "Subset Review: " (util/display-name root-name))))
 
         ;; Type badge
@@ -88,8 +88,8 @@
         ;; Outstanding badge
         (dom/span
           (dom/props {:style {:padding "2px 6px" :border-radius "4px" :font-size "10px" :font-weight "600"
-                              :background (if outstanding? "#dcfce7" "#f3f4f6")
-                              :color (if outstanding? "#16a34a" "#6b7280")}})
+                              :background (if outstanding? "var(--color-success-light)" "var(--color-bg-hover)")
+                              :color (if outstanding? "var(--color-success-dark)" "var(--color-text-hint)")}})
           (dom/text (if outstanding? "Due" "Not due")))
 
         ;; Counter

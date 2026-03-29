@@ -654,11 +654,11 @@
                     (dom/props {:class "type-badge"
                                 :style {:padding "2px 8px" :font-size "10px"
                                         :background (case kind
-                                                      "pdf" "#dcfce7"
-                                                      ("web" "wikipedia") "#e0f2fe"
-                                                      "epub" "#f3e8ff"
-                                                      "basic" "#f3e8ff"
-                                                      "#f3e8ff")}})
+                                                      "pdf" "var(--color-badge-pdf)"
+                                                      ("web" "wikipedia") "var(--color-badge-web)"
+                                                      "epub" "var(--color-badge-epub)"
+                                                      "basic" "var(--color-badge-epub)"
+                                                      "var(--color-badge-epub)")}})
                     (dom/text (case kind "pdf" "PDF" ("web" "wikipedia") "Web" "epub" "EPUB" "basic" "Topic" "Topic")))
                   (dom/a
                     (dom/props {:style {:flex "1" :font-size "14px" :color "var(--color-primary)" :cursor "pointer"

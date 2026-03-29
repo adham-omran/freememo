@@ -164,10 +164,10 @@
               (when-some [token ?token]
                 (e/server (settings/save-context-pages user-id input-event))
                 (token))))
-          (dom/span (dom/props {:style {:font-size "11px" :color "#999"}}) (dom/text "pages"))
+          (dom/span (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)"}}) (dom/text "pages"))
 
         ;; Separator
-          (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
+          (dom/span (dom/props {:style {:color "var(--color-border)"}}) (dom/text "|"))
 
         ;; Card type radios
           (dom/label
@@ -200,7 +200,7 @@
             (dom/text "Cloze"))
 
         ;; Separator
-          (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
+          (dom/span (dom/props {:style {:color "var(--color-border)"}}) (dom/text "|"))
 
         ;; Card count with +/- stepper for touch devices
           (dom/span
@@ -212,8 +212,8 @@
             (dom/button
               (dom/props {:class "card-count-btn"
                           :title "Decrease card count"
-                          :style {:width "28px" :height "28px" :border "1px solid #ccc"
-                                  :border-radius "4px" :background "#f8f9fa"
+                          :style {:width "28px" :height "28px" :border "1px solid var(--color-border)"
+                                  :border-radius "4px" :background "var(--color-bg-subtle)"
                                   :font-size "16px" :cursor "pointer" :display "flex"
                                   :align-items "center" :justify-content "center"
                                   :padding "0"}})
@@ -250,8 +250,8 @@
             (dom/button
               (dom/props {:class "card-count-btn"
                           :title "Increase card count"
-                          :style {:width "28px" :height "28px" :border "1px solid #ccc"
-                                  :border-radius "4px" :background "#f8f9fa"
+                          :style {:width "28px" :height "28px" :border "1px solid var(--color-border)"
+                                  :border-radius "4px" :background "var(--color-bg-subtle)"
                                   :font-size "16px" :cursor "pointer" :display "flex"
                                   :align-items "center" :justify-content "center"
                                   :padding "0"}})
@@ -276,7 +276,7 @@
                   no-content? (empty? content-text)]
               (dom/button
                 (dom/props {:class "btn btn-sm btn-primary"
-                            :style {:background (cond no-content? "#94a3b8" gen-active? "var(--color-primary-light)" :else "var(--color-primary)")
+                            :style {:background (cond no-content? "var(--color-disabled-bg)" gen-active? "var(--color-primary-light)" :else "var(--color-primary)")
                                     :cursor (if no-content? "not-allowed" "pointer")
                                     :font-weight "bold"}
                             :disabled no-content?
@@ -295,7 +295,7 @@
                   (fn [_]
                     (let [sel (editor/get-selection!)]
                       (when sel
-                        (editor/highlight-range! (:index sel) (:length sel) :color "#FBBF24"))
+                        (editor/highlight-range! (:index sel) (:length sel) :color "var(--color-highlight-gold)"))
                       (swap! !gen-state (fn [s]
                                           (-> s
                                             (update :queue conj {:id (str (random-uuid))
@@ -322,7 +322,7 @@
               (dom/On "click" (fn [_]
                                 (let [sel (editor/get-selection!)]
                                   (when sel
-                                    (editor/highlight-range! (:index sel) (:length sel) :color "#FBBF24"))
+                                    (editor/highlight-range! (:index sel) (:length sel) :color "var(--color-highlight-gold)"))
                                   (reset! !captured-selection (when sel (:text sel))))
                                 (reset! !prompt-dialog-kind card-type)
                                 (reset! !show-prompt-dialog true))
@@ -350,7 +350,7 @@
               nil))
           (when (:error extract-state)
             (dom/span
-              (dom/props {:style {:color "red" :font-size "12px"}})
+              (dom/props {:style {:color "var(--color-danger)" :font-size "12px"}})
               (dom/text (:error extract-state))))
           (let [[?token _] (e/Token pending)]
             (when-some [token ?token]
@@ -493,7 +493,7 @@
             (AddCardModal !show-add card-type topic-id root-topic-id !refresh source-ref)))
 
         ;; Separator
-        (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
+        (dom/span (dom/props {:style {:color "var(--color-border)"}}) (dom/text "|"))
 
         ;; Export button + modal
         (let [!show-export (atom false)
@@ -508,7 +508,7 @@
             (ExportModal !show-export topic-id root-topic-id user-id)))
 
         ;; Separator
-        (dom/span (dom/props {:style {:color "#ccc"}}) (dom/text "|"))
+        (dom/span (dom/props {:style {:color "var(--color-border)"}}) (dom/text "|"))
 
         ;; Anki Sync button — pass root-topic-id as the doc-id equivalent
         (AnkiSyncButton user-id root-topic-id page-number card-type !refresh unsynced-count))

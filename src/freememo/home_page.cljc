@@ -124,13 +124,13 @@
         ;; Section 4: API Key Notice (only when not configured)
         (when-not configured?
           (dom/div
-            (dom/props {:style {:background "#fffbeb" :border "1px solid #fde68a" :border-radius "var(--radius-md)"
+            (dom/props {:style {:background "var(--color-warning-bg)" :border "1px solid var(--color-warning-light)" :border-radius "var(--radius-md)"
                                 :padding "12px 16px" :display "flex" :align-items "center" :gap "8px"}})
             (dom/span
-              (dom/props {:style {:font-size "13px" :color "#92400e" :flex "1"}})
+              (dom/props {:style {:font-size "13px" :color "var(--color-warning-dark)" :flex "1"}})
               (dom/text "OpenAI API key not configured."))
             (dom/a
-              (dom/props {:style {:font-size "13px" :color "#92400e" :font-weight "600" :cursor "pointer"
+              (dom/props {:style {:font-size "13px" :color "var(--color-warning-dark)" :font-weight "600" :cursor "pointer"
                                   :text-decoration "underline"}})
               (dom/text "Configure in Settings")
               (dom/On "click" (fn [_] (navigate! :settings)) nil))))))))
