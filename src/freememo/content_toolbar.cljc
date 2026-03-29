@@ -220,7 +220,7 @@
               (dom/text "\u2212")
               ;; Prevent focus change — preserves Quill selection
               (dom/On "mousedown" (fn [e] (.preventDefault e)) nil)
-              (let [click (dom/On "click" (fn [_] :dec) nil)
+              (let [click (dom/On "click" (fn [_] (js/Date.now)) nil)
                     [?token _] (e/Token click)]
                 (when (some? click)
                   (swap! !card-count (fn [v] (max 1 (dec v)))))
@@ -258,7 +258,7 @@
               (dom/text "+")
               ;; Prevent focus change — preserves Quill selection
               (dom/On "mousedown" (fn [e] (.preventDefault e)) nil)
-              (let [click (dom/On "click" (fn [_] :inc) nil)
+              (let [click (dom/On "click" (fn [_] (js/Date.now)) nil)
                     [?token _] (e/Token click)]
                 (when (some? click)
                   (swap! !card-count (fn [v] (min 50 (inc v)))))
