@@ -6,13 +6,19 @@
    [freememo.logging :as log]
    [freememo.learn-session :refer [LearnSession]]
    [freememo.subset-review :refer [SubsetReviewSession]]
-   [freememo.page-viewer :refer [OcrPage]]
+   [freememo.page-viewer :as page-viewer :refer [OcrPage]]
    [freememo.extract-page :refer [ExtractPage]]
    [freememo.util :as util]
    #?(:clj [freememo.db :as db])
    [freememo.card-components :as card-components]))
 
 #?(:clj (defonce !refresh (atom 0)))
+
+(defn get-browse-page-stats* [_refresh parent-id]
+  #?(:clj (let [pages (db/list-pages parent-id)]
+            {:done (count (filter #(= "done" (:topics/status %)) pages))
+             :total (count pages)})
+     :cljs nil))
 
 (defn get-learning-queue* [_refresh user-id]
   #?(:clj (vec (db/get-learning-queue user-id))
@@ -55,15 +61,22 @@
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-      (dom/div
-        (dom/props {:class "header-bar" :style {:gap "12px"}})
-        (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary"})
-          (dom/text (case origin :queue "Back to Queue" :library "Back to Library" "Back to Overview"))
-          (dom/On "click" (fn [_] (if origin (navigate! origin) (reset! !mode :overview))) nil))
-        (dom/span
-          (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
-          (dom/text (str "Browsing: " (or title "document")))))
+      (let [topic-id (:topic-id nav)
+            pv-refresh (e/server (e/watch page-viewer/!refresh))
+            page-stats (e/server (get-browse-page-stats* pv-refresh topic-id))]
+        (dom/div
+          (dom/props {:class "header-bar" :style {:gap "12px"}})
+          (dom/button
+            (dom/props {:class "btn btn-sm btn-secondary"})
+            (dom/text (case origin :queue "Back to Queue" :library "Back to Library" "Back to Overview"))
+            (dom/On "click" (fn [_] (if origin (navigate! origin) (reset! !mode :overview))) nil))
+          (dom/span
+            (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
+            (dom/text (str "Browsing: " (or title "document"))))
+          (when (and page-stats (pos? (:total page-stats)))
+            (dom/span
+              (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px" :margin-left "auto"}})
+              (dom/text (:done page-stats) " / " (:total page-stats) " pages done")))))
       (dom/div
         (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
         (let [!nav (atom nav)]
@@ -287,8 +300,8 @@
                 origin (:origin browse-nav)]
             (case kind
               "pdf" (LearnBrowseDoc user-id enc-key
-                               {:topic-id topic-id :page (:page browse-nav)}
-                               title !mode llm-enabled? origin navigate!)
+                      {:topic-id topic-id :page (:page browse-nav)}
+                      title !mode llm-enabled? origin navigate!)
               (LearnBrowseTopic user-id enc-key topic-id title !mode llm-enabled? origin navigate!))))
 
 
