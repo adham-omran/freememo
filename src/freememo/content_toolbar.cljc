@@ -12,9 +12,11 @@
    [freememo.card-modals :refer [ExportModal PromptDialog AddCardModal]]
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.settings :as settings])
+   #?(:clj [missionary.core :as m])
    [freememo.keyboard :as keyboard]
    #?(:clj [freememo.db :as db])
-   [freememo.util :refer [mac-platform?]]))
+   [freememo.util :refer [mac-platform?]])
+  #?(:clj (:import [missionary Cancelled])))
 
 ;; Unsynced card count — single topic-id
 (defn get-unsynced-count* [_refresh topic-id]
@@ -64,6 +66,76 @@
             (catch Exception e
               {:success false :error (.getMessage e)}))
      :cljs nil))
+
+;; ---------------------------------------------------------------------------
+;; Missionary card generation processor
+;; ---------------------------------------------------------------------------
+
+#?(:clj (defonce card-gen-mbx (m/mbx)))
+#?(:clj (defonce !card-gen-status (atom {})))
+;; ^^ {topic-id {:active-id nil, :error nil, :pending 0}}
+
+(defn generate-and-save! [item]
+  #?(:clj
+     (try
+       (let [{:keys [content context card-type card-count user-id enc-key
+                     topic-id root-topic-id source-ref pre-prompt]} item
+             gen-result (if (= card-type "basic")
+                          (cards/generate-basic-cards
+                            (cond-> {:content content :context context
+                                     :card-count card-count :user-id user-id :enc-key enc-key}
+                              pre-prompt (assoc :pre-prompt pre-prompt)))
+                          (cards/generate-cloze-cards
+                            (cond-> {:content content :context context
+                                     :card-count card-count :user-id user-id :enc-key enc-key}
+                              pre-prompt (assoc :pre-prompt pre-prompt))))]
+         (if-not (:success gen-result)
+           gen-result
+           (save-cards-for-topic topic-id root-topic-id card-type (:cards gen-result) source-ref)))
+       (catch Exception e
+         {:success false :error (.getMessage e)}))
+     :cljs nil))
+
+(defn enqueue-card-gen! [item]
+  #?(:clj
+     (let [tid (:topic-id item)]
+       (log/log-info (str "Card gen enqueued topic=" tid))
+       (swap! !card-gen-status update tid
+         (fn [s] (update (or s {:active-id nil :error nil :pending 0}) :pending inc)))
+       (card-gen-mbx item)
+       :enqueued)
+     :cljs nil))
+
+;; Infinite flow that reads from the mailbox one item at a time
+#?(:clj
+   (defn mbx-flow []
+     (m/ap (loop []
+             (let [item (m/? card-gen-mbx)]
+               (m/amb item (recur)))))))
+
+#?(:clj
+   (defonce card-gen-processor-cancel
+     ((m/reduce
+        (fn [_ _] nil) nil
+        (m/ap
+          (let [item (m/?> 3 (mbx-flow))
+                tid (:topic-id item)]
+            (swap! !card-gen-status update tid assoc :active-id (:id item) :error nil)
+            (let [result (m/? (m/timeout
+                                (m/via m/blk (generate-and-save! item))
+                                60000
+                                {:success false :error "Card generation timed out"}))]
+              (swap! !card-gen-status update tid
+                (fn [s] (-> s
+                          (assoc :active-id nil)
+                          (update :pending #(max 0 (dec (or % 0)))))))
+              (if (:success result)
+                (do (log/log-info (str "Card gen complete topic=" tid))
+                  (when-let [!ref (:!refresh item)] (swap! !ref inc)))
+                (do (log/log-info (str "Card gen failed topic=" tid " error=" (:error result)))
+                  (swap! !card-gen-status update tid assoc :error (:error result))))))))
+      (fn [_] nil)
+      (fn [e] (log/log-error (str "Card gen processor crashed: " e))))))
 
 ;; State map keys:
 ;; {:user-id       — user identifier
@@ -116,12 +188,16 @@
           prompt-dialog-kind (e/watch !prompt-dialog-kind)
           !captured-selection (atom nil)
           captured-selection (e/watch !captured-selection)
+          !prompt-submit (atom nil)
+          prompt-submit (e/watch !prompt-submit)
+          !gen-click (atom nil)
+          gen-click (e/watch !gen-click)
 
-          ;; Generation queues
-          !gen-state (atom {:queue [] :active nil :error nil})
-          gen-state (e/watch !gen-state)
-          !prompt-gen-state (atom {:queue [] :active nil :error nil})
-          prompt-gen-state (e/watch !prompt-gen-state)
+          ;; Generation status (global processor, keyed by topic-id)
+          card-gen-status (e/server (get (e/watch !card-gen-status) topic-id))
+          gen-pending (or (:pending card-gen-status) 0)
+          gen-active? (or (some? (:active-id card-gen-status)) (pos? gen-pending))
+          gen-error (:error card-gen-status)
 
           ;; Unique radio group name to avoid collision when both page and extract toolbars exist
           radio-name (if (= context-mode :extract) "extract-card-type" "card-type")]
@@ -263,9 +339,7 @@
             (dom/props {:style {:display "flex" :gap "8px" :margin-left "auto"}})
 
           ;; Generate button
-            (let [gen-pending (+ (count (:queue gen-state)) (if (:active gen-state) 1 0))
-                  gen-active? (pos? gen-pending)
-                  no-content? (empty? content-text)]
+            (let [no-content? (empty? content-text)]
               (dom/button
                 (dom/props {:class "btn btn-sm btn-primary"
                             :style {:background (cond no-content? "var(--color-disabled-bg)" gen-active? "var(--color-primary-light)" :else "var(--color-primary)")
@@ -274,12 +348,12 @@
                             :disabled no-content?
                             :title (if no-content? "Extract text first to generate flashcards"
                                      (str "Generate flashcards from editor text or selected text (" mod-key "+Shift+G)"))})
-                (when (and gen-active? (nil? (:error gen-state)))
+                (when (and gen-active? (nil? gen-error))
                   (dom/span (dom/props {:class "spinner"})))
-                (dom/text (cond (:error gen-state) (:error gen-state)
+                (dom/text (cond gen-error gen-error
                             gen-active? "Generating..."
                             :else "Generate"))
-                (when (and gen-active? (nil? (:error gen-state)))
+                (when (and gen-active? (nil? gen-error))
                   (dom/text (str " (" gen-pending ")")))
                 (reset! keyboard/!generate-btn-ref dom/node)
                 (e/on-unmount (fn [] (reset! keyboard/!generate-btn-ref nil)))
@@ -288,18 +362,7 @@
                     (let [sel (editor/get-selection!)]
                       (when sel
                         (editor/highlight-range! (:index sel) (:length sel) :color "var(--color-highlight-gold)"))
-                      (swap! !gen-state (fn [s]
-                                          (-> s
-                                            (update :queue conj {:id (str (random-uuid))
-                                                                 :selection (when sel (:text sel))
-                                                                 :topic-id topic-id
-                                                                 :root-topic-id root-topic-id
-                                                                 :card-type card-type
-                                                                 :content-text content-text
-                                                                 :page-number page-number
-                                                                 :source-ref source-ref})
-                                            (assoc :error nil))))
-                      (log/log-info (str "Card generation enqueued topic-id=" topic-id " card-type=" card-type " card-count=" card-count-val))))
+                      (reset! !gen-click {:id (str (random-uuid)) :selection-text (when sel (:text sel))})))
                   nil)))
 
           ;; Generate with Prompt button
@@ -307,10 +370,7 @@
               (dom/props {:class "btn btn-sm btn-secondary"
                           :style {:font-weight "500"}
                           :title "Add custom instructions to guide card generation"})
-              (dom/text (or (:error prompt-gen-state) "Generate with Prompt..."))
-              (let [pending (+ (count (:queue prompt-gen-state)) (if (:active prompt-gen-state) 1 0))]
-                (when (and (pos? pending) (nil? (:error prompt-gen-state)))
-                  (dom/text (str " (" pending ")"))))
+              (dom/text "Generate with Prompt...")
               (dom/On "click" (fn [_]
                                 (let [sel (editor/get-selection!)]
                                   (when sel
@@ -356,123 +416,32 @@
                   (do (reset! !extract-state {:pending nil :error (or (:error result) "Failed to save extract")})
                     (token (or (:error result) "Failed to save extract"))))))))
 
-        (when llm-enabled?
-        ;; Auto-advance: when not processing and queue has items, start next
-          (when (and (nil? (:active gen-state)) (seq (:queue gen-state)))
-            (swap! !gen-state (fn [{:keys [queue]}]
-                                {:active (first queue) :queue (vec (rest queue))})))
-
-        ;; Queue processor — processes one generation request at a time
-        ;; Context computation differs by mode:
-        ;; - :extract mode with selection: content-text as context; without: parent-content
-        ;; - :page mode with selection: prev-pages + current page; without: prev-pages only
-          (when-some [current (:active gen-state)]
-            (let [[?token _?error] (e/Token (:id current))]
-              (when-some [token ?token]
-                (log/log-trace "Generation token opened")
-                ;; Read captured values from queue item (not reactive bindings)
-                (let [cur-topic-id (or (:topic-id current) topic-id)
-                      cur-root-topic-id (or (:root-topic-id current) root-topic-id)
-                      cur-card-type (or (:card-type current) card-type)
-                      cur-content-text (or (:content-text current) content-text)
-                      cur-page-number (or (:page-number current) page-number)
-                      cur-source-ref (:source-ref current)
-                      content (or (:selection current) cur-content-text)
-                      context-text
-                      (when use-context
-                        (case context-mode
-                          :extract
-                          (if (:selection current)
-                            cur-content-text
-                            parent-content)
-
-                          :page
-                          (let [prev-context (e/server (get-context-pages* cur-root-topic-id cur-page-number context-window))]
-                            (if (:selection current)
-                              (if prev-context
-                                (str prev-context "\n\n---\n\n" cur-content-text)
-                                cur-content-text)
-                              prev-context))))
-
-                      generate-result (e/server
-                                        (e/Offload
-                                          #(if (= cur-card-type "basic")
-                                             (cards/generate-basic-cards
-                                               {:content content :context context-text
-                                                :card-count card-count-val :user-id user-id :enc-key enc-key})
-                                             (cards/generate-cloze-cards
-                                               {:content content :context context-text
-                                                :card-count card-count-val :user-id user-id :enc-key enc-key}))))]
-                  (if-not (:success generate-result)
-                    (do (token (:error generate-result))
-                      (swap! !gen-state assoc :active nil :error (:error generate-result)))
-                    (let [generated-cards (e/server (:cards generate-result))
-                          save-result (e/server (save-cards-for-topic cur-topic-id cur-root-topic-id cur-card-type generated-cards cur-source-ref))]
-                      (log/log-info (str "Card generation complete card-count=" (count generated-cards)))
-                      (if (:success save-result)
-                        (do (token)
-                          (log/log-debug (str "Cards saved topic-id=" cur-topic-id " root=" cur-root-topic-id))
-                          (swap! !gen-state assoc :active nil)
-                          (e/server (swap! !refresh inc)))
-                        (do (token (:error save-result))
-                          (swap! !gen-state assoc :active nil)))))))))
-
-        ;; Auto-advance for prompt queue
-          (when (and (nil? (:active prompt-gen-state)) (seq (:queue prompt-gen-state)))
-            (swap! !prompt-gen-state (fn [{:keys [queue]}]
-                                       {:active (first queue) :queue (vec (rest queue))})))
-
-        ;; Prompt queue processor
-          (when-some [current (:active prompt-gen-state)]
-            (let [[?token _?error] (e/Token (:id current))]
-              (when-some [token ?token]
-                ;; Read captured values from queue item with fallback to reactive bindings
-                (let [cur-topic-id (or (:topic-id current) topic-id)
-                      cur-root-topic-id (or (:root-topic-id current) root-topic-id)
-                      cur-content-text (or (:content-text current) content-text)
-                      cur-page-number (or (:page-number current) page-number)
-                      cur-source-ref (or (:source-ref current) source-ref)
-                      content (or (:selection current) cur-content-text)
-                      prompt-text (:pre-prompt current)
-                      kind (:kind current)
-                      context-text
-                      (when use-context
-                        (case context-mode
-                          :extract
-                          (if (:selection current)
-                            cur-content-text
-                            parent-content)
-
-                          :page
-                          (let [prev-context (e/server (get-context-pages* cur-root-topic-id cur-page-number context-window))]
-                            (if (:selection current)
-                              (if prev-context
-                                (str prev-context "\n\n---\n\n" cur-content-text)
-                                cur-content-text)
-                              prev-context))))
-
-                      generate-result (e/server
-                                        (e/Offload
-                                          #(if (= kind "basic")
-                                             (cards/generate-basic-cards
-                                               {:content content :context context-text
-                                                :card-count card-count-val :user-id user-id
-                                                :enc-key enc-key :pre-prompt prompt-text})
-                                             (cards/generate-cloze-cards
-                                               {:content content :context context-text
-                                                :card-count card-count-val :user-id user-id
-                                                :enc-key enc-key :pre-prompt prompt-text}))))]
-                  (if-not (:success generate-result)
-                    (do (token (:error generate-result))
-                      (swap! !prompt-gen-state assoc :active nil :error (:error generate-result)))
-                    (let [generated-cards (e/server (:cards generate-result))
-                          save-result (e/server (save-cards-for-topic cur-topic-id cur-root-topic-id kind generated-cards cur-source-ref))]
-                      (if (:success save-result)
-                        (do (token)
-                          (swap! !prompt-gen-state assoc :active nil)
-                          (e/server (swap! !refresh inc)))
-                        (do (token (:error save-result))
-                          (swap! !prompt-gen-state assoc :active nil)))))))))) ;; end when llm-enabled? (queue processors)
+        ;; Process generate button clicks via e/Token
+        (let [[?token _] (e/Token gen-click)]
+          (when-some [token ?token]
+            (let [enqueued (e/server
+                             (let [sel-text (:selection-text gen-click)
+                                   context (when use-context
+                                             (case context-mode
+                                               :extract (if sel-text content-text parent-content)
+                                               :page (let [prev (get-context-pages* root-topic-id page-number context-window)]
+                                                       (if sel-text
+                                                         (if prev (str prev "\n\n---\n\n" content-text) content-text)
+                                                         prev))))]
+                               (enqueue-card-gen!
+                                 {:id (:id gen-click)
+                                  :content (or sel-text content-text)
+                                  :context context
+                                  :card-type card-type
+                                  :card-count card-count-val
+                                  :user-id user-id
+                                  :enc-key enc-key
+                                  :topic-id topic-id
+                                  :root-topic-id root-topic-id
+                                  :source-ref source-ref
+                                  :pre-prompt nil
+                                  :!refresh !refresh})))]
+              (when enqueued (token)))))
         
         ;; Add new card button — uses AddCardModal with topic-id and root-topic-id
         (let [!show-add (atom false)
@@ -508,9 +477,39 @@
       ;; Pre-prompt modal dialog (LLM only)
       (when (and llm-enabled? show-prompt-dialog)
         (PromptDialog {:!show !show-prompt-dialog
-                       :!prompt-gen-state !prompt-gen-state
+                       :!prompt-submit !prompt-submit
                        :!pre-prompt !pre-prompt
                        :!prompt-history !prompt-history
                        :!history-save-trigger !history-save-trigger
                        :captured-selection captured-selection
-                       :prompt-dialog-kind prompt-dialog-kind})))))
+                       :prompt-dialog-kind prompt-dialog-kind}))
+
+      ;; Process prompt dialog submissions via e/Token
+      (let [submit prompt-submit
+            [?token _] (e/Token submit)]
+        (when-some [token ?token]
+          (let [enqueued (e/server
+                           (let [{:keys [selection pre-prompt kind]} submit
+                                 ct (or kind card-type)
+                                 sel-text selection
+                                 context (when use-context
+                                           (case context-mode
+                                             :extract (if sel-text content-text parent-content)
+                                             :page (let [prev (get-context-pages* root-topic-id page-number context-window)]
+                                                     (if sel-text
+                                                       (if prev (str prev "\n\n---\n\n" content-text) content-text)
+                                                       prev))))]
+                             (enqueue-card-gen!
+                               {:id (str (random-uuid))
+                                :content (or sel-text content-text)
+                                :context context
+                                :card-type ct
+                                :card-count card-count-val
+                                :user-id user-id
+                                :enc-key enc-key
+                                :topic-id topic-id
+                                :root-topic-id root-topic-id
+                                :source-ref source-ref
+                                :pre-prompt pre-prompt
+                                :!refresh !refresh})))]
+            (when enqueued (token))))))))

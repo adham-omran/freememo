@@ -127,11 +127,11 @@
                           (token (:error export-result)))))))))))))))
 
 ;; Pre-prompt dialog
-;; state map keys: :!show :!prompt-gen-state :!pre-prompt :!prompt-history
+;; state map keys: :!show :!prompt-submit :!pre-prompt :!prompt-history
 ;;                 :!history-save-trigger :captured-selection :prompt-dialog-kind
 (e/defn PromptDialog [state]
   (e/client
-    (let [{:keys [!show !prompt-gen-state !pre-prompt !prompt-history
+    (let [{:keys [!show !prompt-submit !pre-prompt !prompt-history
                   !history-save-trigger captured-selection prompt-dialog-kind]} state
           pre-prompt-value (e/watch !pre-prompt)
           !local-prompt (atom pre-prompt-value)
@@ -177,11 +177,9 @@
                                         (vec))]
                       (reset! !prompt-history new-history)
                       (reset! !history-save-trigger new-history)))
-                  (swap! !prompt-gen-state update :queue conj
-                    {:id (str (random-uuid))
-                     :selection captured-selection
-                     :pre-prompt local-prompt
-                     :kind prompt-dialog-kind})
+                  (reset! !prompt-submit {:selection captured-selection
+                                          :pre-prompt local-prompt
+                                          :kind prompt-dialog-kind})
                   (reset! !show false))
                 nil))))))))
 
