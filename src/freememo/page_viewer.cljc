@@ -15,13 +15,49 @@
    #?(:clj [freememo.page-ocr :as page])
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.settings :as settings])
+   #?(:clj [missionary.core :as m])
    [freememo.keyboard :as keyboard]
    [freememo.util :as util]
-   #?(:clj [freememo.db :as db])))
+   #?(:clj [freememo.db :as db]))
+  #?(:clj (:import [missionary Cancelled]
+                   [java.util.concurrent Executors])))
 
 #?(:clj (defonce !refresh (atom 0))) ; Server-side refresh trigger
 #?(:clj (defonce !scanning-pages (atom #{}))) ; #{[root-topic-id page-num]} currently scanning via OCR
 #?(:clj (defonce !ocr-errors (atom {}))) ; {[root-topic-id page-num] "error message"}
+#?(:clj (defonce !scan-cancellers (atom {}))) ; {[doc page] cancel-fn} — for cancellability
+#?(:clj (defonce ocr-executor (Executors/newFixedThreadPool 3))) ; bounded queue — 3 concurrent, rest wait
+
+(defn start-ocr-scan!
+  "Submit an OCR scan as a Missionary task on the bounded executor.
+   Timeout after 30s. Cancel function stored in !scan-cancellers."
+  [uid doc page ek dpi]
+  #?(:clj
+     (do
+       (swap! !scanning-pages conj [doc page])
+       (swap! !ocr-errors dissoc [doc page])
+       (log/log-info (str "OCR scan started topic-id=" doc " page=" page))
+       (let [cancel-fn
+             ((m/timeout
+                (m/via ocr-executor (page/extract-page-text uid doc page ek dpi))
+                30000
+                {:success false :error "Scan timed out after 30 seconds"})
+              (fn [result]
+                (swap! !scan-cancellers dissoc [doc page])
+                (if (:success result)
+                  (do (log/log-info (str "OCR scan complete topic-id=" doc " page=" page))
+                    (swap! !refresh inc))
+                  (do (log/log-info (str "OCR scan failed topic-id=" doc " page=" page " error=" (:error result)))
+                    (swap! !ocr-errors assoc [doc page] (:error result))))
+                (swap! !scanning-pages disj [doc page]))
+              (fn [e]
+                (swap! !scan-cancellers dissoc [doc page])
+                (when-not (instance? Cancelled e)
+                  (log/log-info (str "OCR scan error topic-id=" doc " page=" page " ex=" (.getMessage e)))
+                  (swap! !ocr-errors assoc [doc page] (.getMessage e)))
+                (swap! !scanning-pages disj [doc page])))]
+         (swap! !scan-cancellers assoc [doc page] cancel-fn)))
+     :cljs nil))
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 #?(:clj (defn get-page-text* [_refresh parent-id page-number]
@@ -255,25 +291,7 @@
                                   (if (contains? @!scanning-pages [doc page])
                                     (log/log-info (str "OCR scan already in progress topic-id=" doc " page=" page))
                                     (do
-                                      (swap! !scanning-pages conj [doc page])
-                                      (swap! !ocr-errors dissoc [doc page])
-                                      (log/log-info (str "OCR scan started topic-id=" doc " page=" page " scanning-pages=" (pr-str @!scanning-pages)))
-                                      (future
-                                        (try
-                                          (log/log-info (str "OCR future executing topic-id=" doc " page=" page))
-                                          (let [result (page/extract-page-text uid doc page ek scan-dpi)]
-                                            (if (:success result)
-                                              (do (log/log-info (str "OCR scan complete topic-id=" doc " page=" page))
-                                                (log/log-debug (str "OCR incrementing !refresh, current=" @!refresh))
-                                                (swap! !refresh inc))
-                                              (do (log/log-info (str "OCR scan failed topic-id=" doc " page=" page " error=" (:error result)))
-                                                (swap! !ocr-errors assoc [doc page] (:error result)))))
-                                          (catch Exception e
-                                            (log/log-info (str "OCR scan exception topic-id=" doc " page=" page " ex=" (.getMessage e)))
-                                            (swap! !ocr-errors assoc [doc page] (.getMessage e)))
-                                          (finally
-                                            (log/log-info (str "OCR scan cleanup topic-id=" doc " page=" page " removing from scanning-pages"))
-                                            (swap! !scanning-pages disj [doc page]))))
+                                      (start-ocr-scan! uid doc page ek scan-dpi)
                                       :started))))
                               (token)))))) ;; end when llm-enabled?
                     
