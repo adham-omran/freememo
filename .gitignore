@@ -23,3 +23,5 @@ logs/
 /.playwright-mcp/
 /db-backup/
 /CLAUDE.md
+/plans/
+/repl.sh
