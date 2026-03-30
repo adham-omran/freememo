@@ -218,15 +218,11 @@
                                   :align-items "center" :justify-content "center"
                                   :padding "0"}})
               (dom/text "\u2212")
-              ;; Prevent focus change — preserves Quill selection
-              (dom/On "mousedown" (fn [e] (.preventDefault e)) nil)
-              (let [click (dom/On "click" (fn [_] (js/Date.now)) nil)
-                    [?token _] (e/Token click)]
-                (when (some? click)
-                  (swap! !card-count (fn [v] (max 1 (dec v)))))
-                (when-some [token ?token]
-                  (e/server (settings/save-card-count user-id card-count-val))
-                  (token))))
+              (e/for [[t e] (dom/On-all "click")]
+                (when e
+                  (swap! !card-count (fn [v] (max 1 (dec v))))
+                  (e/server (settings/save-card-count user-id (max 1 (dec @!card-count)))))
+                (t)))
 
             ;; Number input (keyboard suppressed on touch via inputmode)
             (dom/input
@@ -256,15 +252,11 @@
                                   :align-items "center" :justify-content "center"
                                   :padding "0"}})
               (dom/text "+")
-              ;; Prevent focus change — preserves Quill selection
-              (dom/On "mousedown" (fn [e] (.preventDefault e)) nil)
-              (let [click (dom/On "click" (fn [_] (js/Date.now)) nil)
-                    [?token _] (e/Token click)]
-                (when (some? click)
-                  (swap! !card-count (fn [v] (min 50 (inc v)))))
-                (when-some [token ?token]
-                  (e/server (settings/save-card-count user-id card-count-val))
-                  (token)))))
+              (e/for [[t e] (dom/On-all "click")]
+                (when e
+                  (swap! !card-count (fn [v] (min 50 (inc v))))
+                  (e/server (settings/save-card-count user-id (min 50 (inc @!card-count)))))
+                (t))))
 
         ;; Generate buttons group
           (dom/div
