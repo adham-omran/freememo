@@ -177,7 +177,7 @@
                                         :text-decoration "underline"}
                                 :title "View source"})
                     (dom/text label)
-                    (dom/On "click" (fn [_] (view-source! (if parent-is-intermediate parent-id root-topic-id) page-number root-kind)) nil))
+                    (dom/On "click" (fn [_] (view-source! (if (and parent-is-intermediate (not= root-kind "pdf")) parent-id root-topic-id) page-number root-kind)) nil))
                   (dom/span
                     (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px"}})
                     (dom/text label))))))
