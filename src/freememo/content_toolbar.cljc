@@ -1,6 +1,6 @@
 (ns freememo.content-toolbar
   "Unified card generation toolbar for both page-level and extract-level content.
-   Orchestrator — delegates to ToolbarSettings and ToolbarActions sub-components."
+   Orchestrator — delegates to ToolbarSettings, ToolbarGenerate, and ToolbarActions."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -40,9 +40,8 @@
           server-context-pages (e/server (user-settings/get-context-pages user-id))
           server-card-type (e/server (user-settings/get-card-type user-id))
           server-card-count (e/server (user-settings/get-card-count user-id))
-          server-prompt-history (e/server (user-settings/get-pre-prompt-history user-id))
 
-          ;; Initialize atoms with server values
+          ;; Shared settings atoms (used by both ToolbarSettings and ToolbarGenerate/Actions)
           !use-context (atom server-context-enabled)
           use-context (e/watch !use-context)
           !context-window (atom server-context-pages)
@@ -51,22 +50,6 @@
           card-type (e/watch !card-type)
           !card-count (atom server-card-count)
           card-count-val (e/watch !card-count)
-          !prompt-history (atom server-prompt-history)
-          !history-save-trigger (atom nil)
-          history-save-trigger (e/watch !history-save-trigger)
-
-          ;; Pre-prompt state
-          !pre-prompt (atom "")
-          !show-prompt-dialog (atom false)
-          show-prompt-dialog (e/watch !show-prompt-dialog)
-          !prompt-dialog-kind (atom nil)
-          prompt-dialog-kind (e/watch !prompt-dialog-kind)
-          !captured-selection (atom nil)
-          captured-selection (e/watch !captured-selection)
-          !prompt-submit (atom nil)
-          prompt-submit (e/watch !prompt-submit)
-          !gen-click (atom nil)
-          gen-click (e/watch !gen-click)
 
           ;; Generation status (global processor, keyed by topic-id)
           card-gen-status (e/server (get (e/watch helpers/!card-gen-status) topic-id))
@@ -74,12 +57,8 @@
           gen-active? (or (some? (:active-id card-gen-status)) (pos? gen-pending))
           gen-error (:error card-gen-status)
 
-          ;; Unique radio group name to avoid collision when both page and extract toolbars exist
+          ;; Unique radio group name
           radio-name (if (= context-mode :extract) "extract-card-type" "card-type")]
-
-      ;; Persist prompt history to server when Generate is clicked
-      (when (some? history-save-trigger)
-        (e/server (user-settings/save-pre-prompt-history user-id history-save-trigger)))
 
       (dom/div
         (dom/props {:class "toolbar"})
@@ -94,24 +73,14 @@
            :!card-count !card-count :card-count-val card-count-val})
 
         ;; Generate buttons + processors + prompt dialog
+        ;; All generate/prompt atoms are LOCAL to ToolbarGenerate (not in this map)
+        ;; to avoid reactive loops from map reconstruction.
         (generate/ToolbarGenerate
           (assoc state
             :mod-key mod-key :source-ref source-ref
             :card-type card-type :card-count-val card-count-val
             :use-context use-context :context-window context-window
-            :gen-active? gen-active? :gen-pending gen-pending :gen-error gen-error
-            :gen-click gen-click :prompt-submit prompt-submit
-            :captured-selection captured-selection
-            :show-prompt-dialog show-prompt-dialog
-            :prompt-dialog-kind prompt-dialog-kind
-            :!gen-click !gen-click
-            :!captured-selection !captured-selection
-            :!show-prompt-dialog !show-prompt-dialog
-            :!prompt-dialog-kind !prompt-dialog-kind
-            :!prompt-submit !prompt-submit
-            :!pre-prompt !pre-prompt
-            :!prompt-history !prompt-history
-            :!history-save-trigger !history-save-trigger)
+            :gen-active? gen-active? :gen-pending gen-pending :gen-error gen-error)
           !refresh)
 
         ;; Extract, Add, Export, Anki Sync
