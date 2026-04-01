@@ -6,6 +6,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.content-toolbar-helpers :as helpers]
    [freememo.content-toolbar-settings :as settings]
+   [freememo.content-toolbar-generate :as generate]
    [freememo.content-toolbar-actions :as actions]
    #?(:clj [freememo.settings :as user-settings])
    #?(:clj [freememo.db :as db])
@@ -92,27 +93,30 @@
            :!card-type !card-type :card-type card-type
            :!card-count !card-count :card-count-val card-count-val})
 
-        ;; Actions (generate, extract, add, export, anki sync, prompt dialog, processors)
+        ;; Generate buttons + processors + prompt dialog
+        (generate/ToolbarGenerate
+          (assoc state
+            :mod-key mod-key :source-ref source-ref
+            :card-type card-type :card-count-val card-count-val
+            :use-context use-context :context-window context-window
+            :gen-active? gen-active? :gen-pending gen-pending :gen-error gen-error
+            :gen-click gen-click :prompt-submit prompt-submit
+            :captured-selection captured-selection
+            :show-prompt-dialog show-prompt-dialog
+            :prompt-dialog-kind prompt-dialog-kind
+            :!gen-click !gen-click
+            :!captured-selection !captured-selection
+            :!show-prompt-dialog !show-prompt-dialog
+            :!prompt-dialog-kind !prompt-dialog-kind
+            :!prompt-submit !prompt-submit
+            :!pre-prompt !pre-prompt
+            :!prompt-history !prompt-history
+            :!history-save-trigger !history-save-trigger)
+          !refresh)
+
+        ;; Extract, Add, Export, Anki Sync
         (actions/ToolbarActions
-          {:user-id user-id :enc-key enc-key :topic-id topic-id
-           :root-topic-id root-topic-id :page-number page-number
-           :content-text content-text :parent-content parent-content
-           :context-mode context-mode :mod-key mod-key
-           :source-ref source-ref :unsynced-count unsynced-count
-           :llm-enabled? llm-enabled?
-           :card-type card-type :card-count-val card-count-val
-           :use-context use-context :context-window context-window
-           :gen-active? gen-active? :gen-pending gen-pending :gen-error gen-error
-           :gen-click gen-click :prompt-submit prompt-submit
-           :captured-selection captured-selection
-           :show-prompt-dialog show-prompt-dialog
-           :prompt-dialog-kind prompt-dialog-kind
-           :!gen-click !gen-click
-           :!captured-selection !captured-selection
-           :!show-prompt-dialog !show-prompt-dialog
-           :!prompt-dialog-kind !prompt-dialog-kind
-           :!prompt-submit !prompt-submit
-           :!pre-prompt !pre-prompt
-           :!prompt-history !prompt-history
-           :!history-save-trigger !history-save-trigger}
+          {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
+           :page-number page-number :context-mode context-mode :mod-key mod-key
+           :source-ref source-ref :unsynced-count unsynced-count :card-type card-type}
           !refresh)))))
