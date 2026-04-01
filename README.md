@@ -50,7 +50,7 @@ Navigate to **Settings** in the UI and enter your OpenAI API key. All settings a
 | PDF rendering | PDF.js 3.11.174 (CDN) |
 | Rich text | Quill 1.3.7 (CDN) |
 | Logging | Telemere (structured, CLJ + CLJS) |
-| AI | OpenAI GPT-4o (card generation) + Vision (OCR) |
+| AI | OpenAI GPT-5.1 (card generation) + Vision (OCR) |
 
 ## Project Structure
 

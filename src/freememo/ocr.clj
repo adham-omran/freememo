@@ -63,7 +63,7 @@
 Preserve the reading order and document structure. Return only the HTML body content (no <html> or <body> tags).
 IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return raw HTML only."
            response (api/create-chat-completion
-                      {:model "gpt-4o"
+                      {:model "gpt-5.1"
                        :messages [{:role "user"
                                    :content [{:type "text" :text prompt}
                                              {:type "image_url"
@@ -74,7 +74,7 @@ IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return
                (throw (ex-info "Empty response from OpenAI"
                         {:status (get response :status)
                          :error (get-in response [:error :message])})))
-           ;; Strip markdown code fences if GPT-4o adds them anyway
+           ;; Strip markdown code fences if the model adds them anyway
            text (-> raw-text
                   (clojure.string/replace #"^```html\s*\n?" "")
                   (clojure.string/replace #"^```\s*\n?" "")

@@ -164,7 +164,7 @@
             (dom/text (or root-title title))
             (when (and view-source! parent-id)
               (dom/On "click"
-                (fn [_] (view-source! parent-id nil root-kind))
+                (fn [_] (view-source! (or (:topics/id root-topic) parent-id) nil root-kind))
                 nil))))
 
         ;; Type badge
