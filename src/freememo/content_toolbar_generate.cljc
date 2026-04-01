@@ -8,7 +8,8 @@
    [freememo.rich-text-editor :as editor]
    [freememo.card-modals :refer [PromptDialog]]
    [freememo.content-toolbar-helpers :as helpers]
-   [freememo.keyboard :as keyboard]))
+   [freememo.keyboard :as keyboard]
+   #?(:clj [freememo.settings :as settings])))
 
 (e/defn ToolbarGenerate [cfg !refresh]
   (e/client
@@ -16,10 +17,30 @@
                   content-text parent-content context-mode mod-key
                   source-ref llm-enabled?
                   card-type card-count-val use-context context-window
-                  gen-active? gen-pending gen-error gen-click prompt-submit
-                  captured-selection show-prompt-dialog prompt-dialog-kind
-                  !gen-click !captured-selection !show-prompt-dialog !prompt-dialog-kind
-                  !prompt-submit !pre-prompt !prompt-history !history-save-trigger]} cfg]
+                  gen-active? gen-pending gen-error]} cfg
+
+          ;; All generate/prompt atoms are LOCAL — never passed through a map.
+          ;; Passing watched values through a cfg map causes reactive loops:
+          ;; any map key change re-derives all destructured values, making
+          ;; e/Token re-fire on unchanged values.
+          server-prompt-history (e/server (settings/get-pre-prompt-history user-id))
+          !gen-click (atom nil)
+          gen-click (e/watch !gen-click)
+          !prompt-history (atom server-prompt-history)
+          !history-save-trigger (atom nil)
+          history-save-trigger (e/watch !history-save-trigger)
+          !pre-prompt (atom "")
+          !show-prompt-dialog (atom false)
+          show-prompt-dialog (e/watch !show-prompt-dialog)
+          !prompt-dialog-kind (atom nil)
+          !captured-selection (atom nil)
+          captured-selection (e/watch !captured-selection)
+          !prompt-submit (atom nil)
+          prompt-submit (e/watch !prompt-submit)]
+
+      ;; Persist prompt history to server
+      (when (some? history-save-trigger)
+        (e/server (settings/save-pre-prompt-history user-id history-save-trigger)))
 
       (when llm-enabled?
         ;; Generate buttons group
@@ -103,7 +124,7 @@
                        :!prompt-history !prompt-history
                        :!history-save-trigger !history-save-trigger
                        :captured-selection captured-selection
-                       :prompt-dialog-kind prompt-dialog-kind}))
+                       :prompt-dialog-kind (e/watch !prompt-dialog-kind)}))
 
       ;; Process prompt dialog submissions via e/Token
       (let [submit prompt-submit
