@@ -7,6 +7,8 @@
    [freememo.rich-text-editor :as editor]
    [freememo.rich-text-editor-component :refer [RichTextEditorComponent]]
    [freememo.content-toolbar :refer [ContentToolbar]]
+   [freememo.content-toolbar-helpers :as ct-helpers]
+   [freememo.anki-sync-panels :as sync-panels]
    [freememo.content-card-table :refer [ContentCardTable]]
    [freememo.util :refer [start-drag!]]
    #?(:clj [freememo.db :as db])
@@ -42,6 +44,9 @@
       (if (some? topic-id)
         (let [card-font-size (e/server (settings/get-card-font-size user-id))
               refresh (e/server (e/watch !refresh))
+              card-gen-status (e/server (e/watch ct-helpers/!card-gen-status))
+              sync-mutations (e/server (e/watch sync-panels/!sync-mutations))
+              refresh (+ refresh (hash card-gen-status) sync-mutations)
               topic (e/server (get-topic-by-id* refresh topic-id))
               content (e/server (or (:topics/content topic) ""))
               extract-status (e/server (or (:topics/status topic) "active"))
@@ -170,8 +175,8 @@
                               (or filename "Untitled")
                               (str (or filename "Unknown") " \u2014 p. " page-number)))]
                 (if (and view-source!
-                         (or (= root-kind "pdf")  ;; PDFs always have page context
-                             parent-is-intermediate))  ;; extracts under chapters can navigate to parent
+                      (or (= root-kind "pdf") ;; PDFs always have page context
+                        parent-is-intermediate)) ;; extracts under chapters can navigate to parent
                   (dom/span
                     (dom/props {:style {:color "var(--color-primary)" :font-size "13px" :cursor "pointer"
                                         :text-decoration "underline"}
@@ -221,12 +226,16 @@
                                  :context-mode :extract
                                  :context-tooltip "Include context for better cards. With a selection: extract text. Without: original page text."
                                  :llm-enabled? llm-enabled?}
-                  !refresh))
+                  refresh))
 
               ;; Shared card table
-              (ContentCardTable {:topic-id topic-id
-                                 :card-font-size card-font-size}
-                !refresh))))
+              (let [card-table-signal
+                    (ContentCardTable {:topic-id topic-id
+                                       :card-font-size card-font-size}
+                      refresh)
+                    bumped (when (and card-table-signal (pos? card-table-signal))
+                             (swap! !refresh inc))]
+                bumped))))
 
         ;; No topic-id
         (dom/div

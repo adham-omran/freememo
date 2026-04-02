@@ -21,8 +21,8 @@
         (fn [_] nil)))
      :clj nil))
 
-;; Delete button — parameterized with !refresh atom
-(e/defn DeleteCardButton [id !refresh]
+;; Delete button — bumps local refresh on success
+(e/defn DeleteCardButton [id !card-refresh]
   (e/client
     (dom/button
       (dom/props {:class "btn-delete-x"})
@@ -40,7 +40,7 @@
         (when-some [token ?token]
           (let [result (e/server (cards/delete-card click-event))]
             (if (:success result)
-              (do (e/server (swap! !refresh inc))
+              (do (swap! !card-refresh inc)
                 (when-some [note-id (:anki-note-id result)]
                   (e/client (try-delete-anki-notes! [note-id])))
                 (token))
@@ -55,7 +55,7 @@
     (and updated-at (pos? (compare (str updated-at) (str synced-at)))) :modified
     :else :synced))
 
-(e/defn CardRow [card !editing-card !refresh order]
+(e/defn CardRow [card !editing-card !card-refresh order]
   (e/client
     (let [id (e/server (:flashcards/id card))
           kind (e/server (:flashcards/kind card))
@@ -119,4 +119,4 @@
         (dom/td
           (dom/props {:style {:padding "6px 4px" :width "40px" :text-align "center"
                               :border-bottom "1px solid var(--color-border)"}})
-          (DeleteCardButton id !refresh))))))
+          (DeleteCardButton id !card-refresh))))))

@@ -5,7 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.knowledge-tree :refer [DocumentTreeView]]))
 
-(e/defn LibraryPage [user-id !nav-target navigate! !refresh]
+(e/defn LibraryPage [user-id !nav-target navigate! refresh]
   (e/client
     (let [!filter-text (atom "")
           filter-text (e/watch !filter-text)
@@ -33,4 +33,4 @@
             (dom/On "change" (fn [e] (reset! !sort-key (-> e .-target .-value))) nil)))
 
         ;; Tree view
-        (DocumentTreeView user-id !nav-target navigate! !refresh filter-text sort-key)))))
+        (DocumentTreeView user-id !nav-target navigate! refresh filter-text sort-key)))))

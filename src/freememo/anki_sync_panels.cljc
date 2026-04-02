@@ -10,12 +10,15 @@
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.db :as db])))
 
+;; Global mutation counter — watched by page_viewer/extract_page to refresh after sync
+#?(:clj (defonce !sync-mutations (atom 0)))
+
 (e/defn AnkiSyncExecutor
   "Handles push/pull execution and server recording.
    conn = {:!status :!decks :!models :!selected-deck :!basic-model :!cloze-model ...}
    form = {:!scope :!allow-dupes :!use-header :!header-text :!use-tags :!tags :!basic-fields :!cloze-fields}
    sync = {:!phase :!result :!error :!push-pairs :!pull-updates}"
-  [user-id selected-doc current-pdf-page !refresh conn form sync]
+  [user-id selected-doc current-pdf-page conn form sync]
   (let [{:keys [!phase !error !push-pairs !pull-updates]} sync
         sync-phase (e/watch (:!phase sync))
         scope (e/watch (:!scope form))
@@ -50,7 +53,7 @@
         (when-some [token ?token]
           (let [result (e/server (sync/record-pushed-notes pairs))]
             (if (:success result)
-              (do (e/server (swap! !refresh inc))
+              (do (e/server (swap! !sync-mutations inc))
                 (e/server (settings/save-anki-sync-settings user-id
                             {:scope scope :deck selected-deck
                              :basic-model basic-model :cloze-model cloze-model
@@ -72,7 +75,7 @@
         (when-some [token ?token]
           (let [result (e/server (sync/apply-pull-updates updates deleted))]
             (if (:success result)
-              (do (e/server (swap! !refresh inc))
+              (do (e/server (swap! !sync-mutations inc))
                 (e/server (settings/save-anki-sync-settings user-id
                             {:scope scope :deck selected-deck
                              :basic-model basic-model :cloze-model cloze-model
@@ -92,8 +95,8 @@
               page-topic-id (when page-num
                               (e/server
                                 (:topics/id
-                                  (first (filter #(= (:topics/page_number %) page-num)
-                                           (db/list-pages selected-doc))))))
+                                 (first (filter #(= (:topics/page_number %) page-num)
+                                          (db/list-pages selected-doc))))))
               cards-result (e/server (sync/get-cards-for-sync
                                        {:topic-id page-topic-id
                                         :root-topic-id selected-doc}))]
@@ -110,8 +113,8 @@
               page-topic-id (when page-num
                               (e/server
                                 (:topics/id
-                                  (first (filter #(= (:topics/page_number %) page-num)
-                                           (db/list-pages selected-doc))))))
+                                 (first (filter #(= (:topics/page_number %) page-num)
+                                          (db/list-pages selected-doc))))))
               cards-result (e/server (sync/get-cards-for-sync
                                        {:topic-id page-topic-id
                                         :root-topic-id selected-doc}))]
@@ -229,7 +232,7 @@
   "Sync state, field-fetch tokens, executor, and modal DOM.
    conn = {:!status :!basic-model :!cloze-model ...}
    form = {:!basic-fields :!cloze-fields ...}"
-  [user-id selected-doc current-pdf-page !refresh !show-modal conn form]
+  [user-id selected-doc current-pdf-page !show-modal conn form]
   (e/client
     (let [!sync-phase (atom nil)
           !sync-result (atom nil)
@@ -254,5 +257,5 @@
           (when-some [token ?token]
             (helpers/run-fetch-fields! cloze-model (:!cloze-fields form))
             (token))))
-      (AnkiSyncExecutor user-id selected-doc current-pdf-page !refresh conn form sync)
+      (AnkiSyncExecutor user-id selected-doc current-pdf-page conn form sync)
       (AnkiSyncModalDom user-id !show-modal conn form sync))))

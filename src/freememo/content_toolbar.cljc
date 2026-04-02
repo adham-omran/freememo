@@ -25,16 +25,15 @@
 ;;  :llm-enabled?  — whether LLM features are enabled
 ;; }
 
-(e/defn ContentToolbar [state !refresh]
+(e/defn ContentToolbar [state refresh]
   (e/client
     (let [mod-key (if (mac-platform?) "Cmd" "Ctrl")
           {:keys [user-id enc-key topic-id root-topic-id page-number content-text
                   parent-content context-mode context-tooltip llm-enabled?]} state
           ;; Fetch source reference from root topic for card propagation
           source-ref (e/server (db/get-topic-source root-topic-id))
-          ;; Unsynced card count — uses refresh wrapper for reactivity
-          toolbar-refresh (e/server (e/watch !refresh))
-          unsynced-count (e/server (helpers/get-unsynced-count* toolbar-refresh topic-id))
+          ;; Unsynced card count — uses refresh value for reactivity
+          unsynced-count (e/server (helpers/get-unsynced-count* refresh topic-id))
           ;; Load settings from server
           server-context-enabled (e/server (user-settings/get-context-enabled user-id))
           server-context-pages (e/server (user-settings/get-context-pages user-id))
@@ -80,12 +79,10 @@
             :mod-key mod-key :source-ref source-ref
             :card-type card-type :card-count-val card-count-val
             :use-context use-context :context-window context-window
-            :gen-active? gen-active? :gen-pending gen-pending :gen-error gen-error)
-          !refresh)
+            :gen-active? gen-active? :gen-pending gen-pending :gen-error gen-error))
 
         ;; Extract, Add, Export, Anki Sync
         (actions/ToolbarActions
           {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
            :page-number page-number :context-mode context-mode :mod-key mod-key
-           :source-ref source-ref :unsynced-count unsynced-count :card-type card-type}
-          !refresh)))))
+           :source-ref source-ref :unsynced-count unsynced-count :card-type card-type})))))

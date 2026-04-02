@@ -11,7 +11,7 @@
    [freememo.content-toolbar-helpers :as helpers]
    [freememo.keyboard :as keyboard]))
 
-(e/defn ToolbarActions [cfg !refresh]
+(e/defn ToolbarActions [cfg]
   (e/client
     (let [{:keys [user-id topic-id root-topic-id page-number
                   context-mode mod-key source-ref unsynced-count
@@ -61,7 +61,7 @@
           (dom/text "Add new")
           (dom/On "click" (fn [_] (reset! !show-add true)) nil))
         (when show-add
-          (AddCardModal !show-add card-type topic-id root-topic-id !refresh source-ref)))
+          (AddCardModal !show-add card-type topic-id root-topic-id source-ref)))
 
       ;; Separator
       (dom/span (dom/props {:style {:color "var(--color-border)"}}) (dom/text "|"))
@@ -82,4 +82,4 @@
       (dom/span (dom/props {:style {:color "var(--color-border)"}}) (dom/text "|"))
 
       ;; Anki Sync button
-      (AnkiSyncButton user-id root-topic-id page-number card-type !refresh unsynced-count))))
+      (AnkiSyncButton user-id root-topic-id page-number card-type unsynced-count))))
