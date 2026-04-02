@@ -837,24 +837,30 @@
                    :do-nothing true}))))
 
 (defn get-flashcards
-  "Get all flashcards for a specific topic (page or extract)."
+  "Get all flashcards for a specific topic (page or extract).
+   Includes page_number from the topic hierarchy (direct or via parent)."
   [topic-id]
   (if topic-id
     (jdbc/execute! ds
-      (sql/format {:select [:*]
-                   :from [:flashcards]
-                   :where [:= :topic_id topic-id]
-                   :order-by [[:created_at :asc]]}))
+      (sql/format {:select [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]]
+                   :from [[:flashcards :f]]
+                   :join [[:topics :t] [:= :f.topic_id :t.id]]
+                   :left-join [[:topics :parent] [:= :t.parent_id :parent.id]]
+                   :where [:= :f.topic_id topic-id]
+                   :order-by [[:f.created_at :asc]]}))
     []))
 
 (defn get-all-flashcards
-  "Get all flashcards under a root topic."
+  "Get all flashcards under a root topic.
+   Includes page_number from the topic hierarchy (direct or via parent)."
   [root-topic-id]
   (jdbc/execute! ds
-    (sql/format {:select [:*]
-                 :from [:flashcards]
-                 :where [:= :root_topic_id root-topic-id]
-                 :order-by [[:created_at :asc]]})))
+    (sql/format {:select [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]]
+                 :from [[:flashcards :f]]
+                 :join [[:topics :t] [:= :f.topic_id :t.id]]
+                 :left-join [[:topics :parent] [:= :t.parent_id :parent.id]]
+                 :where [:= :f.root_topic_id root-topic-id]
+                 :order-by [[:f.created_at :asc]]})))
 
 (defn delete-flashcard!
   "Delete a single flashcard by ID. Returns the deleted row."

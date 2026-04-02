@@ -106,6 +106,13 @@
        (anki-call! "modelNames" nil)
        (anki-call! "getTags" nil))))
 
+(defn source-ref-with-page
+  "Compose source reference with page number when available."
+  [card]
+  (let [base (:flashcards/source_reference card)
+        pg (:page_number card)]
+    (if pg (str base " - " pg) base)))
+
 #?(:cljs
    (defn build-note
      "Build an AnkiConnect note map for addNote.
@@ -118,7 +125,7 @@
            basic? (= kind "basic")
            model (if basic? basic-model cloze-model)
            fields (if basic? basic-fields cloze-fields)
-           source-ref (:flashcards/source_reference card)
+           source-ref (source-ref-with-page card)
            append-source? (and (= source-display-mode "append") (not (str/blank? source-ref)))
            field-source? (and (= source-display-mode "field") (not (str/blank? source-ref)))
            field-map (if basic?
@@ -147,7 +154,7 @@
            kind (:flashcards/kind card)
            basic? (= kind "basic")
            fields (if basic? basic-fields cloze-fields)
-           source-ref (:flashcards/source_reference card)
+           source-ref (source-ref-with-page card)
            append-src? (and (= source-display-mode "append") (not (str/blank? source-ref)))
            field-src? (and (= source-display-mode "field") (not (str/blank? source-ref)))]
        (if basic?
