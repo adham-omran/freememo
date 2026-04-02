@@ -2,6 +2,7 @@
   (:require [hyperfiddle.electric3 :as e]
             [hyperfiddle.electric-dom3 :as dom]
             [freememo.logging :as log]
+            [freememo.navigation :as nav]
             [freememo.home-page :refer [HomePage]]
             [freememo.settings-page :refer [SettingsPage]]
             [freememo.library-page :refer [LibraryPage]]
@@ -41,6 +42,8 @@
                   saved-tab (e/server (get-active-tab* settings-refresh user-id))
                   !active-tab (atom saved-tab)
                   active-tab (e/watch !active-tab)
+                  !nav-state (atom (nav/nav-overview))
+                  nav-state (e/watch !nav-state)
                   !tab-to-save (atom nil)
                   tab-to-save (e/watch !tab-to-save)
                   [?token _error] (e/Token tab-to-save)
@@ -50,16 +53,15 @@
                                :color (if (= active-tab key) "var(--color-primary)" "var(--color-text-secondary)")
                                :border-bottom (if (= active-tab key) "2px solid var(--color-primary)" "2px solid transparent")
                                :margin-bottom "-2px"})
-                  !nav-target (atom nil)
                   navigate! (fn
                               ([tab]
                                (when (= @!active-tab tab)
-                                 (reset! !nav-target :go-home))
+                                 (reset! !nav-state (nav/nav-overview)))
                                (reset! !active-tab tab)
                                (reset! !tab-to-save tab))
                               ([tab nav]
                                (log/log-debug (str "Navigation tab=" tab " nav=" (pr-str nav)))
-                               (reset! !nav-target nav)
+                               (reset! !nav-state nav)
                                (reset! !active-tab tab)
                                (reset! !tab-to-save tab)))]
 
@@ -113,24 +115,24 @@
               ;; Tab content
               (dom/div
                 (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:extract :learn :library :queue} active-tab) "hidden" "auto")}})
-                (when (= active-tab :home) (HomePage navigate! user-id enc-key !nav-target))
+                (when (= active-tab :home) (HomePage navigate! user-id enc-key !nav-state))
                 (when (= active-tab :library)
                   (let [lib-refresh (e/server (e/watch !library-refresh))
-                        tree-signal (LibraryPage user-id !nav-target navigate! lib-refresh)
+                        tree-signal (LibraryPage user-id navigate! lib-refresh)
                         bumped (when (and tree-signal (pos? tree-signal))
                                  (e/server (swap! !library-refresh inc)))]
                     bumped))
-                (when (= active-tab :import) (ImportPage user-id !nav-target navigate! enc-key llm-enabled?))
-                (when (= active-tab :queue) (QueuePage user-id !nav-target navigate!))
+                (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
+                (when (= active-tab :queue) (QueuePage user-id navigate!))
                 (when (= active-tab :settings) (SettingsPage user-id username enc-key !settings-refresh))
-                (when (= active-tab :learn) (LearnPage user-id enc-key !nav-target #(navigate! :extract) navigate! llm-enabled?))
+                (when (= active-tab :learn) (LearnPage user-id enc-key !nav-state navigate! llm-enabled?))
                 (when (= active-tab :extract)
-                  (let [nav (e/watch !nav-target)]
-                    (ExtractPage user-id enc-key (:topic-id nav) navigate!
-                      (fn [topic-id page & [kind]]
-                        (reset! !nav-target {:topic-id topic-id :kind (or kind "pdf") :page page})
-                        (navigate! :learn))
-                      llm-enabled? (:origin nav)))))))
+                  (ExtractPage user-id enc-key (:topic-id nav-state) navigate!
+                    (fn [topic-id page kind]
+                      (if (= kind "pdf")
+                        (navigate! :learn (nav/nav-browse-pdf topic-id page :extract))
+                        (navigate! :learn (nav/nav-browse-topic topic-id :extract))))
+                    llm-enabled? (:origin nav-state))))))
 
           ;; Not authenticated: render login page
           (LoginPage auth-error))))))

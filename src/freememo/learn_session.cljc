@@ -4,6 +4,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.logging :as log]
+   [freememo.navigation :as nav]
    [freememo.page-viewer :refer [OcrPage]]
    [freememo.extract-page :refer [ExtractPage]]
    [freememo.keyboard :as keyboard]
@@ -124,7 +125,7 @@
     ["Topic" "var(--color-badge-epub)"]))
 
 ;; Session header bar
-(e/defn SessionHeader [item !queue-idx !mode idx total view-source!]
+(e/defn SessionHeader [item !queue-idx !nav-state idx total view-source!]
   (e/client
     (let [topic-id (:topics/id item)
           kind (:topics/kind item)
@@ -147,7 +148,7 @@
         (dom/button
           (dom/props {:class "btn btn-sm btn-secondary"})
           (dom/text "\u2190 Back to Learn")
-          (dom/On "click" (fn [_] (reset! !queue-idx 0) (reset! !mode :overview)) nil))
+          (dom/On "click" (fn [_] (reset! !queue-idx 0) (reset! !nav-state (nav/nav-overview))) nil))
 
         ;; Done
         (DoneButton topic-id !queue-idx)
@@ -194,7 +195,7 @@
           (dom/props {:style {:margin-left "auto" :color "var(--color-text-secondary)" :font-size "13px"}})
           (dom/text (str (inc idx) " / " total)))))))
 
-(e/defn LearnSession [user-id enc-key queue-vec !queue-idx !mode !nav-target navigate-to-extract! view-source! llm-enabled?]
+(e/defn LearnSession [user-id enc-key queue-vec !queue-idx !nav-state navigate! llm-enabled?]
   (e/client
     (let [idx (e/watch !queue-idx)
           total (count queue-vec)]
@@ -222,18 +223,22 @@
                     [?token _error] (e/Token event)]
                 (when-some [token ?token]
                   (reset! !queue-idx 0)
-                  (reset! !mode :overview)
+                  (reset! !nav-state (nav/nav-overview))
                   (token)))))
 
           ;; Active topic
           (let [item (nth queue-vec idx nil)
                 kind (:topics/kind item)
                 topic-id (:topics/id item)
-                show-pdf? (= kind "pdf")]
+                show-pdf? (= kind "pdf")
+                view-source! (fn [root-id page root-kind]
+                               (if (= root-kind "pdf")
+                                 (reset! !nav-state (nav/nav-browse-pdf root-id page nil))
+                                 (reset! !nav-state (nav/nav-browse-topic root-id nil))))]
 
             (when item
               ;; Header
-              (SessionHeader item !queue-idx !mode idx total view-source!)
+              (SessionHeader item !queue-idx !nav-state idx total view-source!)
 
               ;; Content
               (if show-pdf?

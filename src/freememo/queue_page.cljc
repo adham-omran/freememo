@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
+   [freememo.navigation :as nav]
    [freememo.util :as util]
    #?(:clj [freememo.db :as db])))
 
@@ -107,7 +108,7 @@
             (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)" :margin-top "4px"}})
             (dom/text (first item))))))))
 
-(e/defn QueueTable [items-vec item-count !nav-target navigate!]
+(e/defn QueueTable [items-vec item-count navigate!]
   (e/client
     (if (pos? item-count)
       (dom/div
@@ -179,11 +180,9 @@
                               (dom/On "click"
                                 (fn [_]
                                   (case kind
-                                    ("pdf" "epub")
-                                    (do (reset! !nav-target {:topic-id id :kind kind :title display-title :origin :queue})
-                                      (navigate! :learn))
-                                    (do (reset! !nav-target {:topic-id id :origin :queue})
-                                      (navigate! :extract))))
+                                    "pdf"
+                                    (navigate! :learn (nav/nav-browse-pdf id nil :queue))
+                                    (navigate! :extract (nav/nav-browse-topic id :queue))))
                                 nil))))))))
                 (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))))
 
@@ -191,7 +190,7 @@
         (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px" :margin-top "24px"}})
         (dom/text "No topics in your queue yet. Import a document from the Import tab \u2014 it will appear here automatically.")))))
 
-(e/defn QueuePage [user-id !nav-target navigate!]
+(e/defn QueuePage [user-id navigate!]
   (e/client
     (dom/div
       (dom/props {:class "page-container"
@@ -201,4 +200,4 @@
             item-count (e/server (count items-vec))
             summary (e/server (compute-summary items-vec))]
         (QueueSummary summary)
-        (QueueTable items-vec item-count !nav-target navigate!)))))
+        (QueueTable items-vec item-count navigate!)))))

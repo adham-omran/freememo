@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
+   [freememo.navigation :as nav]
    [freememo.util :as util]
    [freememo.card-components :as card-components]
    #?(:clj [freememo.db :as db])
@@ -75,7 +76,7 @@
 
 ;; Document tree view — used by LibraryPage
 ;; Flatten + virtual scroll for performance
-(e/defn DocumentTreeView [user-id !nav-target navigate! refresh filter-text sort-key]
+(e/defn DocumentTreeView [user-id navigate! refresh filter-text sort-key]
   (e/client
     (let [!mutations (atom 0)]
       (e/server
@@ -163,10 +164,10 @@
                                     (dom/On "click"
                                       (fn [_]
                                         (if is-root
-                                          (do (reset! !nav-target {:topic-id id :kind kind :title title :origin :library})
-                                            (navigate! :learn))
-                                          (do (reset! !nav-target {:topic-id id :origin :library})
-                                            (navigate! :extract))))
+                                          (if (= kind "pdf")
+                                            (navigate! :learn (nav/nav-browse-pdf id nil :library))
+                                            (navigate! :learn (nav/nav-browse-topic id :library)))
+                                          (navigate! :extract (nav/nav-browse-topic id :library))))
                                       nil)
                                     (dom/On "keydown"
                                       (fn [e]
@@ -196,9 +197,7 @@
                                       (dom/On "click"
                                         (fn [e]
                                           (.stopPropagation e)
-                                          (reset! !nav-target {:subset-review {:root-id id
-                                                                               :root-name title}})
-                                          (navigate! :learn))
+                                          (navigate! :learn (nav/nav-subset-review id title)))
                                         nil)))
                                 ;; Delete button (root only)
                                   (when is-root
