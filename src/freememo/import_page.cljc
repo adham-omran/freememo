@@ -57,9 +57,10 @@
      :cljs nil))
 
 ;; Paste Import Modal
-(e/defn PasteImportModal [!show user-id !refresh !nav-target navigate!]
+(e/defn PasteImportModal [!show user-id !nav-target navigate!]
   (e/client
-    (let [!title (atom "")
+    (let [!mutations (atom 0)
+          !title (atom "")
           !url (atom "")
           !html (atom nil)
           !auto-extract (atom true)]
@@ -169,18 +170,20 @@
                                              (clean-html* html-val)))
                                          tid))]
                         (if topic-id
-                          (do (e/server (swap! !refresh inc))
+                          (do (swap! !mutations inc)
                             (token)
                             (reset! !show false)
                             (reset! !nav-target {:topic-id topic-id})
                             (navigate! :learn))
                           (token "Failed to save article")))
-                      (token "Title and content are required"))))))))))))
+                      (token "Title and content are required")))))))))
+      (e/watch !mutations))))
 
 ;; URL Import Modal — accepts any URL, auto-detects Wikipedia
-(e/defn URLImportModal [!show user-id !refresh !nav-target navigate!]
+(e/defn URLImportModal [!show user-id !nav-target navigate!]
   (e/client
-    (let [!url (atom "")
+    (let [!mutations (atom 0)
+          !url (atom "")
           !auto-extract (atom true)]
       (dom/div
         (dom/props {:class "modal-backdrop"})
@@ -249,14 +252,15 @@
                                          {:success false :error (:error fetch-result)})))]
                         (if (:success result)
                           (if (:topic-id result)
-                            (do (e/server (swap! !refresh inc))
+                            (do (swap! !mutations inc)
                               (token)
                               (reset! !show false)
                               (reset! !nav-target {:topic-id (:topic-id result)})
                               (navigate! :learn))
                             (token "Failed to save article"))
                           (token (:error result))))
-                      (token "Please enter a URL"))))))))))))
+                      (token "Please enter a URL")))))))))
+      (e/watch !mutations))))
 
 (e/defn UploadPDFModal [!show !nav-target navigate!]
   (e/client
@@ -451,9 +455,10 @@
                 (dom/text (if uploading "Processing..." "Upload"))
                 (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil)))))))))
 
-(e/defn NewTopicModal [!show user-id !refresh !nav-target navigate!]
+(e/defn NewTopicModal [!show user-id !nav-target navigate!]
   (e/client
-    (let [!title (atom "")]
+    (let [!mutations (atom 0)
+          !title (atom "")]
       (dom/div
         (dom/props {:class "modal-backdrop"})
         (dom/On "click" (fn [e]
@@ -493,15 +498,16 @@
                   (let [title-val (if (seq event) event "New Topic")
                         result (e/server (db/create-standalone-topic! user-id title-val))]
                     (if (:topic-id result)
-                      (do (e/server (swap! !refresh inc))
+                      (do (swap! !mutations inc)
                         (token)
                         (reset! !show false)
                         (reset! !nav-target {:topic-id (:topic-id result)})
                         (navigate! :learn))
-                      (token "Failed to create topic"))))))))))))
+                      (token "Failed to create topic")))))))))
+      (e/watch !mutations))))
 
 ;; Main Import page component
-(e/defn ImportPage [user-id !refresh !nav-target navigate! enc-key llm-enabled?]
+(e/defn ImportPage [user-id !nav-target navigate! enc-key llm-enabled?]
   (e/client
     (dom/div
       (dom/props {:class "page-container"})
@@ -557,7 +563,7 @@
               (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
               (dom/text "Paste HTML content from your clipboard")))
           (when show-paste
-            (PasteImportModal !show-paste user-id !refresh !nav-target navigate!)))
+            (PasteImportModal !show-paste user-id !nav-target navigate!)))
 
         ;; Import URL card
         (let [!show-url (atom false)
@@ -581,7 +587,7 @@
               (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
               (dom/text "Fetch from any web page or Wikipedia")))
           (when show-url
-            (URLImportModal !show-url user-id !refresh !nav-target navigate!)))
+            (URLImportModal !show-url user-id !nav-target navigate!)))
 
         ;; Upload EPUB card
         (let [!show-epub (atom false)
@@ -629,46 +635,5 @@
               (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
               (dom/text "Create a blank topic to write in")))
           (when show-topic
-            (NewTopicModal !show-topic user-id !refresh !nav-target navigate!))))
+            (NewTopicModal !show-topic user-id !nav-target navigate!)))))))
 
-      ;; Recent imports
-      (let [refresh (e/server (e/watch !refresh))
-            recent-topics (e/server
-                            (vec (take 5 (db/get-root-topics user-id))))]
-        (when (seq recent-topics)
-          (dom/div
-            (dom/props {:style {:margin-top "32px"}})
-            (dom/h3
-              (dom/props {:style {:font-size "14px" :font-weight "600" :color "var(--color-text-secondary)"
-                                  :margin "0 0 12px 0"}})
-              (dom/text "Recent imports"))
-            (e/for-by :topics/id [topic recent-topics]
-              (let [topic-id (:topics/id topic)
-                    title (or (:topics/title topic) "")
-                    kind (or (:topics/kind topic) "basic")
-                    created (e/server (format-timestamp* (:topics/created_at topic)))]
-                (dom/div
-                  (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
-                                      :padding "8px 0" :border-bottom "1px solid var(--color-border)"}})
-                  (dom/span
-                    (dom/props {:class "type-badge"
-                                :style {:padding "2px 8px" :font-size "10px"
-                                        :background (case kind
-                                                      "pdf" "var(--color-badge-pdf)"
-                                                      ("web" "wikipedia") "var(--color-badge-web)"
-                                                      "epub" "var(--color-badge-epub)"
-                                                      "basic" "var(--color-badge-epub)"
-                                                      "var(--color-badge-epub)")}})
-                    (dom/text (case kind "pdf" "PDF" ("web" "wikipedia") "Web" "epub" "EPUB" "basic" "Topic" "Topic")))
-                  (dom/a
-                    (dom/props {:style {:flex "1" :font-size "14px" :color "var(--color-primary)" :cursor "pointer"
-                                        :text-decoration "none" :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
-                    (dom/text (util/display-name title))
-                    (dom/On "click"
-                      (fn [_]
-                        (reset! !nav-target {:topic-id topic-id})
-                        (navigate! :learn))
-                      nil))
-                  (dom/span
-                    (dom/props {:style {:font-size "12px" :color "var(--color-text-hint)" :white-space "nowrap" :flex-shrink "0"}})
-                    (dom/text (or created ""))))))))))))

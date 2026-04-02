@@ -194,7 +194,7 @@
           (dom/props {:style {:margin-left "auto" :color "var(--color-text-secondary)" :font-size "13px"}})
           (dom/text (str (inc idx) " / " total)))))))
 
-(e/defn LearnSession [user-id enc-key queue-vec !queue-idx !mode !refresh !nav-target navigate-to-extract! view-source! llm-enabled?]
+(e/defn LearnSession [user-id enc-key queue-vec !queue-idx !mode !nav-target navigate-to-extract! view-source! llm-enabled?]
   (e/client
     (let [idx (e/watch !queue-idx)
           total (count queue-vec)]
@@ -221,7 +221,6 @@
               (let [event (dom/On "click" (fn [_] :back) nil)
                     [?token _error] (e/Token event)]
                 (when-some [token ?token]
-                  (e/server (swap! !refresh inc))
                   (reset! !queue-idx 0)
                   (reset! !mode :overview)
                   (token)))))

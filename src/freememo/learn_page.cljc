@@ -84,7 +84,7 @@
                             (str "Remaining: " (clojure.string/join ", " remaining))
                             :else
                             (str "Remaining: " (clojure.string/join ", " (take 20 remaining))
-                                 " ... and " (- (count remaining) 20) " more"))]
+                              " ... and " (- (count remaining) 20) " more"))]
               (dom/span
                 (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px" :margin-left "auto" :cursor "default"}
                             :data-tooltip tooltip})
@@ -320,7 +320,7 @@
         :session
         (let [refresh (e/server (e/watch !refresh))
               queue-vec (e/server (get-learning-queue* refresh user-id))]
-          (LearnSession user-id enc-key queue-vec !queue-idx !mode !refresh !nav-target navigate-to-extract!
+          (LearnSession user-id enc-key queue-vec !queue-idx !mode !nav-target navigate-to-extract!
             (fn [topic-id page & [kind]]
               (reset! !browse-nav {:topic-id topic-id :kind (or kind "pdf") :title nil :page page})
               (reset! !mode :browse))

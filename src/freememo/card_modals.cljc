@@ -184,9 +184,10 @@
                 nil))))))))
 
 ;; Edit card modal
-(e/defn EditCardModal [!editing-card !refresh]
+(e/defn EditCardModal [!editing-card]
   (e/client
-    (let [editing-card (e/watch !editing-card)
+    (let [!mutations (atom 0)
+          editing-card (e/watch !editing-card)
           card-id (:id editing-card)
           kind (:kind editing-card)
           init-q (or (:question editing-card) "")
@@ -288,10 +289,11 @@
                         result (e/server (cards/update-card card-id fields))]
                     (if (:success result)
                       (do
-                        (e/server (swap! !refresh inc))
+                        (swap! !mutations inc)
                         (reset! !editing-card nil)
                         (token))
-                      (token (:error result)))))))))))))
+                      (token (:error result))))))))))
+      (e/watch !mutations))))
 
 (defn insert-flashcards-safe! [rows]
   #?(:clj (try
@@ -302,9 +304,10 @@
      :cljs nil))
 
 ;; Add card modal — uses topic-id and root-topic-id instead of doc-id + page-number
-(e/defn AddCardModal [!show-add card-type topic-id root-topic-id !refresh source-reference]
+(e/defn AddCardModal [!show-add card-type topic-id root-topic-id source-reference]
   (e/client
-    (let [!kind (atom card-type)
+    (let [!mutations (atom 0)
+          !kind (atom card-type)
           kind (e/watch !kind)
           !question (atom "")
           !answer (atom "")
@@ -430,7 +433,8 @@
                         result (e/server (insert-flashcards-safe! rows))]
                     (if (:success result)
                       (do
-                        (e/server (swap! !refresh inc))
+                        (swap! !mutations inc)
                         (reset! !show-add false)
                         (token))
-                      (token (:error result)))))))))))))
+                      (token (:error result))))))))))
+      (e/watch !mutations))))

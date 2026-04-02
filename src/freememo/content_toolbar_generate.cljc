@@ -11,7 +11,7 @@
    [freememo.keyboard :as keyboard]
    #?(:clj [freememo.settings :as settings])))
 
-(e/defn ToolbarGenerate [cfg !refresh]
+(e/defn ToolbarGenerate [cfg]
   (e/client
     (let [{:keys [user-id enc-key topic-id root-topic-id page-number
                   content-text parent-content context-mode mod-key
@@ -112,8 +112,7 @@
                                 :topic-id topic-id
                                 :root-topic-id root-topic-id
                                 :source-ref source-ref
-                                :pre-prompt nil
-                                :!refresh !refresh})))]
+                                :pre-prompt nil})))]
             (when enqueued (token)))))
 
       ;; Pre-prompt modal dialog (LLM only)
@@ -152,6 +151,5 @@
                                 :topic-id topic-id
                                 :root-topic-id root-topic-id
                                 :source-ref source-ref
-                                :pre-prompt pre-prompt
-                                :!refresh !refresh})))]
+                                :pre-prompt pre-prompt})))]
             (when enqueued (token))))))))
