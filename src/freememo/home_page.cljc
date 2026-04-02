@@ -2,6 +2,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.navigation :as nav]
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.db :as db])))
 
@@ -34,7 +35,7 @@
              :else (str "in " days " days")))))
      :cljs nil))
 
-(e/defn HomePage [navigate! user-id enc-key !nav-target]
+(e/defn HomePage [navigate! user-id enc-key !nav-state]
   (e/client
     (let [api-status (e/server (get-api-key-status* user-id enc-key))
           configured? (:configured? api-status)
@@ -95,8 +96,7 @@
               (cond
                 (and new-user? (not configured?)) (navigate! :settings)
                 new-user? (navigate! :import)
-                has-due? (do (reset! !nav-target :start-session)
-                           (navigate! :learn))
+                has-due? (navigate! :learn (nav/nav-session))
                 :else (navigate! :library)))
             nil))
 

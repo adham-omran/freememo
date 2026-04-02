@@ -4,6 +4,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.logging :as log]
+   [freememo.navigation :as nav]
    [freememo.util :as util]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.wikipedia :as wiki])
@@ -57,7 +58,7 @@
      :cljs nil))
 
 ;; Paste Import Modal
-(e/defn PasteImportModal [!show user-id !nav-target navigate!]
+(e/defn PasteImportModal [!show user-id navigate!]
   (e/client
     (let [!mutations (atom 0)
           !title (atom "")
@@ -173,14 +174,13 @@
                           (do (swap! !mutations inc)
                             (token)
                             (reset! !show false)
-                            (reset! !nav-target {:topic-id topic-id})
-                            (navigate! :learn))
+                            (navigate! :learn (nav/nav-browse-topic topic-id nil)))
                           (token "Failed to save article")))
                       (token "Title and content are required")))))))))
       (e/watch !mutations))))
 
 ;; URL Import Modal — accepts any URL, auto-detects Wikipedia
-(e/defn URLImportModal [!show user-id !nav-target navigate!]
+(e/defn URLImportModal [!show user-id navigate!]
   (e/client
     (let [!mutations (atom 0)
           !url (atom "")
@@ -255,14 +255,13 @@
                             (do (swap! !mutations inc)
                               (token)
                               (reset! !show false)
-                              (reset! !nav-target {:topic-id (:topic-id result)})
-                              (navigate! :learn))
+                              (navigate! :learn (nav/nav-browse-topic (:topic-id result) nil)))
                             (token "Failed to save article"))
                           (token (:error result))))
                       (token "Please enter a URL")))))))))
       (e/watch !mutations))))
 
-(e/defn UploadPDFModal [!show !nav-target navigate!]
+(e/defn UploadPDFModal [!show navigate!]
   (e/client
     (let [!file-input (atom nil)
           !uploading (atom false)
@@ -295,8 +294,7 @@
                                  (reset! !uploading false)
                                  (if (.-success data)
                                    (do (reset! !show false)
-                                     (reset! !nav-target {:topic-id (or (.-topic_id data) (.-doc_id data)) :kind "pdf"})
-                                     (navigate! :learn))
+                                     (navigate! :learn (nav/nav-browse-pdf (or (.-topic_id data) (.-doc_id data)) nil nil)))
                                    (js/alert (or (.-error data) "PDF upload failed")))))
                         (.catch (fn [err]
                                   (reset! !uploading false)
@@ -343,7 +341,7 @@
                 (dom/text (if uploading "Uploading..." "Upload"))
                 (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil)))))))))
 
-(e/defn UploadEPUBModal [!show !nav-target navigate!]
+(e/defn UploadEPUBModal [!show navigate!]
   (e/client
     (let [!file-input (atom nil)
           !auto-extract (atom false)
@@ -455,7 +453,7 @@
                 (dom/text (if uploading "Processing..." "Upload"))
                 (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil)))))))))
 
-(e/defn NewTopicModal [!show user-id !nav-target navigate!]
+(e/defn NewTopicModal [!show user-id navigate!]
   (e/client
     (let [!mutations (atom 0)
           !title (atom "")]
@@ -501,13 +499,12 @@
                       (do (swap! !mutations inc)
                         (token)
                         (reset! !show false)
-                        (reset! !nav-target {:topic-id (:topic-id result)})
-                        (navigate! :learn))
+                        (navigate! :learn (nav/nav-browse-topic (:topic-id result) nil)))
                       (token "Failed to create topic")))))))))
       (e/watch !mutations))))
 
 ;; Main Import page component
-(e/defn ImportPage [user-id !nav-target navigate! enc-key llm-enabled?]
+(e/defn ImportPage [user-id navigate! enc-key llm-enabled?]
   (e/client
     (dom/div
       (dom/props {:class "page-container"})
@@ -539,7 +536,7 @@
               (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
               (dom/text "Select a PDF file from your device")))
           (when show-pdf
-            (UploadPDFModal !show-pdf !nav-target navigate!)))
+            (UploadPDFModal !show-pdf navigate!)))
 
         ;; Paste Article card
         (let [!show-paste (atom false)
@@ -563,7 +560,7 @@
               (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
               (dom/text "Paste HTML content from your clipboard")))
           (when show-paste
-            (PasteImportModal !show-paste user-id !nav-target navigate!)))
+            (PasteImportModal !show-paste user-id navigate!)))
 
         ;; Import URL card
         (let [!show-url (atom false)
@@ -587,7 +584,7 @@
               (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
               (dom/text "Fetch from any web page or Wikipedia")))
           (when show-url
-            (URLImportModal !show-url user-id !nav-target navigate!)))
+            (URLImportModal !show-url user-id navigate!)))
 
         ;; Upload EPUB card
         (let [!show-epub (atom false)
@@ -611,7 +608,7 @@
               (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
               (dom/text "Import an EPUB ebook file")))
           (when show-epub
-            (UploadEPUBModal !show-epub !nav-target navigate!)))
+            (UploadEPUBModal !show-epub navigate!)))
 
         ;; New Topic card
         (let [!show-topic (atom false)
@@ -635,5 +632,5 @@
               (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
               (dom/text "Create a blank topic to write in")))
           (when show-topic
-            (NewTopicModal !show-topic user-id !nav-target navigate!)))))))
+            (NewTopicModal !show-topic user-id navigate!)))))))
 

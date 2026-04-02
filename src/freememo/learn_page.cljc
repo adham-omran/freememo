@@ -4,6 +4,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.logging :as log]
+   [freememo.navigation :as nav]
    [freememo.learn-session :refer [LearnSession]]
    [freememo.subset-review :refer [SubsetReviewSession]]
    [freememo.page-viewer :as page-viewer :refer [OcrPage]]
@@ -47,7 +48,7 @@
     ("web" "wikipedia") ["Web" "var(--color-badge-web)"]
     ["Topic" "var(--color-badge-epub)"]))
 
-(e/defn LearnBrowseTopic [user-id enc-key topic-id title !mode llm-enabled? origin navigate!]
+(e/defn LearnBrowseTopic [user-id enc-key topic-id title !nav-state llm-enabled? origin navigate!]
   (e/client
     (let [exists? (e/server (some? (db/get-topic topic-id)))]
       (if exists?
@@ -55,12 +56,12 @@
           (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
           (ExtractPage user-id enc-key topic-id
             (fn
-              ([_tab] (if origin (navigate! origin) (reset! !mode :overview)))
-              ([_tab _nav] (if origin (navigate! origin) (reset! !mode :overview))))
+              ([_tab] (if origin (navigate! origin) (reset! !nav-state (nav/nav-overview))))
+              ([_tab _nav] (if origin (navigate! origin) (reset! !nav-state (nav/nav-overview)))))
             nil llm-enabled? origin))
-        (do (reset! !mode :overview) nil)))))
+        (do (reset! !nav-state (nav/nav-overview)) nil)))))
 
-(e/defn LearnBrowseDoc [user-id enc-key nav title !mode llm-enabled? origin navigate!]
+(e/defn LearnBrowseDoc [user-id enc-key nav title !nav-state llm-enabled? origin navigate!]
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
@@ -72,7 +73,7 @@
           (dom/button
             (dom/props {:class "btn btn-sm btn-secondary"})
             (dom/text (case origin :queue "Back to Queue" :library "Back to Library" "Back to Overview"))
-            (dom/On "click" (fn [_] (if origin (navigate! origin) (reset! !mode :overview))) nil))
+            (dom/On "click" (fn [_] (if origin (navigate! origin) (reset! !nav-state (nav/nav-overview)))) nil))
           (dom/span
             (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
             (dom/text (str "Browsing: " (or title "document"))))
@@ -94,7 +95,7 @@
         (let [!nav (atom nav)]
           (OcrPage user-id enc-key !nav llm-enabled?))))))
 
-(e/defn LearnOverview [user-id !mode navigate!]
+(e/defn LearnOverview [user-id !nav-state navigate!]
   (e/client
     (dom/div
       (dom/props {:class "page-container"
@@ -111,7 +112,7 @@
             (dom/button
               (dom/props {:class "btn btn-primary" :style {:padding "8px 24px" :font-size "15px" :font-weight "600"}})
               (dom/text "Start Learning")
-              (dom/On "click" (fn [_] (reset! !mode :session)) nil)))
+              (dom/On "click" (fn [_] (reset! !nav-state (nav/nav-session))) nil)))
           (dom/span
             (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}
                         :title "Topics scheduled for review"})
@@ -271,63 +272,34 @@
                                       (reset! !show-confirm-delete false)
                                       (token))))))))))))))))))))
 
-(e/defn LearnPage [user-id enc-key !nav-target navigate-to-extract! navigate! llm-enabled?]
+(e/defn LearnPage [user-id enc-key !nav-state navigate! llm-enabled?]
   (e/client
-    (let [!mode (atom :overview)
-          mode (e/watch !mode)
-          !browse-nav (atom nil)
-          browse-nav (e/watch !browse-nav)
-          !queue-idx (atom 0)
-          !subset-state (atom nil)
-          ;; Reactive watch — fires when "Open" or "View Source" sets nav-target
-          nav-val (e/watch !nav-target)]
+    (let [nav-state (e/watch !nav-state)
+          nav-type (:type nav-state)
+          !queue-idx (atom 0)]
 
-      ;; Consume nav-target reactively
-      (when (= nav-val :go-home)
-        (reset! !mode :overview)
-        (reset! !browse-nav nil)
-        (reset! !nav-target nil))
-      (when (= nav-val :start-session)
-        (reset! !mode :session)
-        (reset! !nav-target nil))
-      (when (and (map? nav-val) (:topic-id nav-val))
-        (log/log-debug (str "Browse nav set nav=" (pr-str nav-val)))
-        (reset! !browse-nav nav-val)
-        (reset! !mode :browse)
-        (reset! !nav-target nil))
-      (when (and (map? nav-val) (:subset-review nav-val))
-        (reset! !subset-state (:subset-review nav-val))
-        (reset! !mode :subset-review)
-        (reset! !nav-target nil))
-
-      (case mode
+      (case nav-type
         :overview
-        (LearnOverview user-id !mode navigate!)
+        (LearnOverview user-id !nav-state navigate!)
 
-        :browse
-        (when browse-nav
-          (let [topic-id (:topic-id browse-nav)
-                kind (:kind browse-nav)
-                title (:title browse-nav)
-                origin (:origin browse-nav)]
-            (case kind
-              "pdf" (LearnBrowseDoc user-id enc-key
-                      {:topic-id topic-id :page (:page browse-nav)}
-                      title !mode llm-enabled? origin navigate!)
-              (LearnBrowseTopic user-id enc-key topic-id title !mode llm-enabled? origin navigate!))))
+        :browse-pdf
+        (LearnBrowseDoc user-id enc-key
+          {:topic-id (:topic-id nav-state) :page (:page nav-state)}
+          nil !nav-state llm-enabled? (:origin nav-state) navigate!)
 
+        :browse-topic
+        (LearnBrowseTopic user-id enc-key (:topic-id nav-state)
+          nil !nav-state llm-enabled? (:origin nav-state) navigate!)
 
         :session
         (let [refresh (e/server (e/watch !refresh))
               queue-vec (e/server (get-learning-queue* refresh user-id))]
-          (LearnSession user-id enc-key queue-vec !queue-idx !mode !nav-target navigate-to-extract!
-            (fn [topic-id page & [kind]]
-              (reset! !browse-nav {:topic-id topic-id :kind (or kind "pdf") :title nil :page page})
-              (reset! !mode :browse))
-            llm-enabled?))
+          (LearnSession user-id enc-key queue-vec !queue-idx !nav-state navigate! llm-enabled?))
 
         :subset-review
-        (when-let [{:keys [root-id root-name]} (e/watch !subset-state)]
-          (SubsetReviewSession user-id enc-key root-id root-name
-            (fn [] (navigate! :library))
-            llm-enabled?))))))
+        (SubsetReviewSession user-id enc-key (:root-id nav-state) (:root-name nav-state)
+          (fn [] (navigate! :library))
+          llm-enabled?)
+
+        ;; Default — show overview
+        (LearnOverview user-id !nav-state navigate!)))))
