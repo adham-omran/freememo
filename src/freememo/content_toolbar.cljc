@@ -32,6 +32,8 @@
                   parent-content context-mode context-tooltip llm-enabled?]} state
           ;; Fetch source reference from root topic for card propagation
           source-ref (e/server (db/get-topic-source root-topic-id))
+          ;; Append page number for PDF sources (page-number is nil for non-PDF)
+          source-ref (if page-number (str source-ref " - " page-number) source-ref)
           ;; Unsynced card count — uses refresh wrapper for reactivity
           toolbar-refresh (e/server (e/watch !refresh))
           unsynced-count (e/server (helpers/get-unsynced-count* toolbar-refresh topic-id))
