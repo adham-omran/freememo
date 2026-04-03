@@ -957,6 +957,40 @@
     (or (:cnt result) 0)))
 
 ;; ---------------------------------------------------------------------------
+;; Status overview (denormalized per-document stats)
+;; ---------------------------------------------------------------------------
+
+(defn get-document-status
+  "Get progress stats for all root documents owned by user-id.
+   Returns a vector of maps with :id, :title, :kind, :created_at,
+   :total_pages, :ocrd_pages, :done_pages, :total_cards, :synced_cards."
+  [user-id]
+  (jdbc/execute! ds
+    ["SELECT t.id, t.title, t.kind, t.created_at,
+             COALESCE(ps.total_pages, 0)  AS total_pages,
+             COALESCE(ps.ocrd_pages, 0)   AS ocrd_pages,
+             COALESCE(ps.done_pages, 0)   AS done_pages,
+             COALESCE(cs.total_cards, 0)  AS total_cards,
+             COALESCE(cs.synced_cards, 0) AS synced_cards
+      FROM topics t
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)                                    AS total_pages,
+               COUNT(*) FILTER (WHERE p.content IS NOT NULL AND p.content <> '') AS ocrd_pages,
+               COUNT(*) FILTER (WHERE p.status = 'done')   AS done_pages
+        FROM topics p
+        WHERE p.parent_id = t.id AND p.kind = 'page'
+      ) ps ON true
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)                                            AS total_cards,
+               COUNT(*) FILTER (WHERE f.anki_synced_at IS NOT NULL) AS synced_cards
+        FROM flashcards f
+        WHERE f.root_topic_id = t.id
+      ) cs ON true
+      WHERE t.user_id = ? AND t.parent_id IS NULL
+      ORDER BY t.created_at DESC"
+     user-id]))
+
+;; ---------------------------------------------------------------------------
 ;; Scheduling (unified — no topic-type dispatch)
 ;; ---------------------------------------------------------------------------
 
