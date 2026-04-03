@@ -12,6 +12,7 @@
             [freememo.extract-page :refer [ExtractPage]]
             [freememo.page-viewer :refer [OcrPage]]
             [freememo.subset-review :refer [SubsetReviewSession]]
+            [freememo.status-page :refer [StatusPage]]
             [freememo.login-page :refer [LoginPage]]
             [freememo.keyboard :as keyboard]
             #?(:clj [freememo.settings :as settings])
@@ -118,6 +119,11 @@
                   (dom/On "click" (fn [_] (navigate! :library)) nil))
 
                 (dom/button
+                  (dom/props {:style (tab-style :status)})
+                  (dom/text "Status")
+                  (dom/On "click" (fn [_] (navigate! :status)) nil))
+
+                (dom/button
                   (dom/props {:style (tab-style :import)})
                   (dom/text "Import")
                   (dom/On "click" (fn [_] (navigate! :import)) nil))
@@ -129,7 +135,7 @@
 
               ;; Tab content
               (dom/div
-                (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library} active-tab) "hidden" "auto")}})
+                (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :status} active-tab) "hidden" "auto")}})
                 (when (= active-tab :home) (HomePage navigate! user-id enc-key))
                 (when (= active-tab :library)
                   (let [lib-refresh (e/server (e/watch (us/get-atom user-id :library-refresh)))
@@ -137,6 +143,7 @@
                         bumped (when (and tree-signal (pos? tree-signal))
                                  (e/server (swap! (us/get-atom user-id :library-refresh) inc)))]
                     bumped))
+                (when (= active-tab :status) (StatusPage user-id navigate!))
                 (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
                 (when (= active-tab :settings) (SettingsPage user-id username enc-key))
                 (when (= active-tab :learn) (LearnPage user-id navigate! viewer-nav))

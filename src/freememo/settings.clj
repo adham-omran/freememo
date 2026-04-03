@@ -96,7 +96,7 @@
 (defn get-active-tab [user-id]
   (try
     (let [raw (db/get-setting user-id ACTIVE_TAB)
-          valid #{"home" "settings" "library" "import" "learn" "queue"}]
+          valid #{"home" "settings" "library" "import" "learn" "queue" "status"}]
       (if (valid raw)
         (keyword raw)
         (case raw
