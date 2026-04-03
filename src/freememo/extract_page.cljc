@@ -37,10 +37,9 @@
       (if (some? topic-id)
         (let [card-font-size (e/server (settings/get-card-font-size user-id))
               refresh (e/server (e/watch (us/get-atom user-id :refresh)))
-              card-gen-status (e/server (e/watch (us/get-atom user-id :card-gen-status)))
               sync-mutations (e/server (e/watch (us/get-atom user-id :sync-mutations)))
               card-mutations (e/server (e/watch (us/get-atom user-id :card-mutations)))
-              refresh (+ refresh (hash card-gen-status) sync-mutations card-mutations)
+              card-refresh (+ refresh sync-mutations card-mutations)
               topic (e/server (get-topic-by-id* refresh topic-id))
               content (e/server (or (:topics/content topic) ""))
               extract-status (e/server (or (:topics/status topic) "active"))
@@ -218,13 +217,13 @@
                                  :context-mode :extract
                                  :context-tooltip "Include context for better cards. With a selection: extract text. Without: original page text."
                                  :llm-enabled? llm-enabled?}
-                  refresh))
+                  card-refresh))
 
               ;; Shared card table
               (ContentCardTable {:topic-id topic-id
                                  :card-font-size card-font-size
                                  :user-id user-id}
-                refresh))))
+                card-refresh))))
 
         ;; No topic-id
         (dom/div

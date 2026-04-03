@@ -32,6 +32,7 @@
         tags (e/watch (:!tags form))
         source-display-mode (e/server (settings/get-source-display-mode user-id))
         source-field (e/watch (:!source-field form))
+        topic-source (e/server (db/get-topic-source selected-doc))
         settings {:deck selected-deck
                   :basic-model basic-model
                   :cloze-model cloze-model
@@ -42,7 +43,8 @@
                   :header-text header-text
                   :tags tags
                   :source-display-mode source-display-mode
-                  :source-field source-field}]
+                  :source-field source-field
+                  :topic-source topic-source}]
 
     ;; Record push pairs on server
     (when (and (= sync-phase :recording) (some? (e/watch !push-pairs)))

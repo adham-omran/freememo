@@ -32,11 +32,11 @@
   (if (str/blank? text)
     text
     (-> text
-        (str/replace #"<p[^>]*class=\"fm-header\"[^>]*>.*?</p>" "")  ;; strip tagged header
-        (str/replace #"\n?<hr[^>]*class=\"fm-source\"[^>]*>[\s\S]*$" "")  ;; strip tagged source
-        (str/replace #"<br\s*/?>" "\n")        ;; preserve line breaks
-        (str/replace #"<[^>]*>" "")            ;; strip all remaining tags
-        str/trim)))
+      (str/replace #"<p[^>]*class=\"fm-header\"[^>]*>.*?</p>" "") ;; strip tagged header
+      (str/replace #"\n?<hr[^>]*class=\"fm-source\"[^>]*>[\s\S]*$" "") ;; strip tagged source
+      (str/replace #"<br\s*/?>" "\n") ;; preserve line breaks
+      (str/replace #"<[^>]*>" "") ;; strip all remaining tags
+      str/trim)))
 
 (defn append-source
   "Append source reference HTML to card content when source-display-mode is 'append'."
@@ -107,9 +107,11 @@
        (anki-call! "getTags" nil))))
 
 (defn source-ref-with-page
-  "Compose source reference with page number when available."
-  [card]
-  (let [base (:flashcards/source_reference card)
+  "Compose source reference with page number when available.
+   Prefers :topic-source from settings (current topic source) over
+   :flashcards/source_reference (snapshot from card creation)."
+  [card settings]
+  (let [base (or (:topic-source settings) (:flashcards/source_reference card))
         pg (:page_number card)]
     (if pg (str base " - " pg) base)))
 
@@ -125,7 +127,7 @@
            basic? (= kind "basic")
            model (if basic? basic-model cloze-model)
            fields (if basic? basic-fields cloze-fields)
-           source-ref (source-ref-with-page card)
+           source-ref (source-ref-with-page card settings)
            append-source? (and (= source-display-mode "append") (not (str/blank? source-ref)))
            field-source? (and (= source-display-mode "field") (not (str/blank? source-ref)))
            field-map (if basic?
@@ -154,7 +156,7 @@
            kind (:flashcards/kind card)
            basic? (= kind "basic")
            fields (if basic? basic-fields cloze-fields)
-           source-ref (source-ref-with-page card)
+           source-ref (source-ref-with-page card settings)
            append-src? (and (= source-display-mode "append") (not (str/blank? source-ref)))
            field-src? (and (= source-display-mode "field") (not (str/blank? source-ref)))]
        (if basic?
@@ -175,7 +177,14 @@
                   :allow-dupes :use-header :header-text :tags}"
      [cards settings]
      (let [new-cards (vec (filter #(nil? (:flashcards/anki_note_id %)) cards))
-           existing-cards (vec (filter #(some? (:flashcards/anki_note_id %)) cards))]
+           ;; Only update existing cards whose content changed since last push
+           changed-cards (vec (filter (fn [c]
+                                        (and (some? (:flashcards/anki_note_id c))
+                                          (or (nil? (:flashcards/anki_synced_at c))
+                                            (and (some? (:flashcards/updated_at c))
+                                              (pos? (compare (str (:flashcards/updated_at c))
+                                                      (str (:flashcards/anki_synced_at c))))))))
+                                cards))]
        (m/sp
          (let [;; Phase 1: add new cards (sequential, concurrency 1)
                add-result
@@ -192,13 +201,13 @@
                                 {:skipped [{:card-id (:flashcards/id card) :reason "No note ID returned"}]}))
                             (catch :default err
                               {:errors [{:card-id (:flashcards/id card) :error (.-message err)}]}))))))
-               ;; Phase 2: update existing cards (sequential, concurrency 1)
+               ;; Phase 2: update changed cards (concurrency 10)
                update-result
                (m/? (m/reduce
                       (fn [acc item] (merge-with into acc item))
                       {:pairs [] :updated [] :errors []}
                       (m/ap
-                        (let [card (m/?> 1 (m/seed existing-cards))]
+                        (let [card (m/?> 10 (m/seed changed-cards))]
                           (try
                             (let [field-map (build-update-fields card settings)]
                               (m/? (anki-call! "updateNote"

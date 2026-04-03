@@ -558,12 +558,16 @@
                  :where [:= :id id]})))
 
 (defn update-topic-source!
-  "Update source_reference on a topic."
+  "Update source_reference on a topic.
+   Also bumps updated_at on all flashcards under this root topic
+   so Anki push detects the source change."
   [id source-reference]
   (jdbc/execute-one! ds
     (sql/format {:update :topics
                  :set {:source_reference source-reference}
-                 :where [:= :id id]})))
+                 :where [:= :id id]}))
+  (jdbc/execute-one! ds
+    ["UPDATE flashcards SET updated_at = CURRENT_TIMESTAMP WHERE root_topic_id = ?" id]))
 
 (defn get-topic-source
   "Get the source_reference for a topic."
@@ -1195,18 +1199,18 @@
         now (java.sql.Timestamp. (System/currentTimeMillis))
         today (java.time.LocalDate/now)]
     (let [active (->> raw
-                      (remove #(= "page" (:topics/kind %)))
-                      (filter #(let [s (:topics/status %)] (or (= s "active") (nil? s)))))
+                   (remove #(= "page" (:topics/kind %)))
+                   (filter #(let [s (:topics/status %)] (or (= s "active") (nil? s)))))
           filtered (if include-reviewed-today?
                      active
                      (remove (fn [item]
                                (when-let [la (:topics/last_review_at item)]
                                  (= today (.. la toInstant (atZone (java.time.ZoneId/systemDefault)) toLocalDate))))
-                             active))
+                       active))
           ordered (tree-order-items filtered)]
       (mapv (fn [item]
               (let [nra (:topics/next_review_at item)]
                 (assoc item :outstanding?
                   (or (nil? nra)
-                      (.before nra now)))))
-            ordered))))
+                    (.before nra now)))))
+        ordered))))
