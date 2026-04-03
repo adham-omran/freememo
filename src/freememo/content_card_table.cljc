@@ -29,17 +29,12 @@
 
 (e/defn ContentCardTable [{:keys [topic-id card-font-size]} refresh]
   (e/client
-    (let [!card-refresh (atom 0)
-          card-refresh (e/watch !card-refresh)
-          combined (+ refresh card-refresh)
-          cards-result (e/server (get-cards-for-topic* combined topic-id))
+    (let [cards-result (e/server (get-cards-for-topic* refresh topic-id))
           !editing-card (atom nil)
           editing-card (e/watch !editing-card)]
 
-      (let [edit-signal (when editing-card (EditCardModal !editing-card))
-            bumped (when (and edit-signal (pos? edit-signal))
-                     (swap! !card-refresh inc))]
-        bumped)
+      (when editing-card
+        (EditCardModal !editing-card))
 
       (if (:success cards-result)
         (let [cards-vec (e/server (vec (:cards cards-result)))
@@ -79,12 +74,11 @@
                   (e/for [i (Tape offset limit)]
                     (let [card (e/server (nth cards-vec i nil))]
                       (when card
-                        (CardRow card !editing-card !card-refresh (inc i))))))
+                        (CardRow card !editing-card (inc i))))))
                 (dom/div (dom/props {:style {:height (str occluded-height "px")}})))
               (dom/p
                 (dom/props {:style {:color "var(--color-text-hint)" :font-size "13px" :padding "8px 12px"}})
                 (dom/text "No cards yet. Use the Generate button above to create flashcards from this content.")))))
         (dom/div
           (dom/props {:style {:color "var(--color-danger)" :font-size "13px" :padding "8px 12px"}})
-          (dom/text "Error loading cards: " (:error cards-result))))
-      card-refresh)))
+          (dom/text "Error loading cards: " (:error cards-result)))))))

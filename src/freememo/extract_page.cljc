@@ -46,7 +46,8 @@
               refresh (e/server (e/watch !refresh))
               card-gen-status (e/server (e/watch ct-helpers/!card-gen-status))
               sync-mutations (e/server (e/watch sync-panels/!sync-mutations))
-              refresh (+ refresh (hash card-gen-status) sync-mutations)
+              card-mutations (e/server (e/watch card-components/!card-mutations))
+              refresh (+ refresh (hash card-gen-status) sync-mutations card-mutations)
               topic (e/server (get-topic-by-id* refresh topic-id))
               content (e/server (or (:topics/content topic) ""))
               extract-status (e/server (or (:topics/status topic) "active"))
@@ -230,13 +231,9 @@
                   refresh))
 
               ;; Shared card table
-              (let [card-table-signal
-                    (ContentCardTable {:topic-id topic-id
-                                       :card-font-size card-font-size}
-                      refresh)
-                    bumped (when (and card-table-signal (pos? card-table-signal))
-                             (e/server (swap! !refresh inc)))]
-                bumped))))
+              (ContentCardTable {:topic-id topic-id
+                                 :card-font-size card-font-size}
+                refresh))))
 
         ;; No topic-id
         (dom/div
