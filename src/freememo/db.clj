@@ -684,6 +684,18 @@
                              :returning [:id]}))]
     (:topics/id topic)))
 
+(defn create-markdown-topic!
+  "Create a Markdown-imported topic. Returns topic-id."
+  [user-id title html-content]
+  (let [topic (jdbc/execute-one! ds
+                (sql/format {:insert-into :topics
+                             :values [{:user_id user-id
+                                       :kind "markdown"
+                                       :title (or title "Untitled Markdown")
+                                       :content (sanitize-utf8 html-content)}]
+                             :returning [:id]}))]
+    (:topics/id topic)))
+
 (defn create-epub-topic!
   "Create an EPUB root topic with file and chapter children.
    chapters is a vec of {:html :title} maps.

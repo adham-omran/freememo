@@ -9,7 +9,8 @@
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.wikipedia :as wiki])
    #?(:clj [freememo.html-cleaner :as cleaner])
-   #?(:clj [freememo.extractor :as extractor])))
+   #?(:clj [freememo.extractor :as extractor])
+   #?(:clj [freememo.markdown :as md])))
 
 ;; Server-side wrappers
 (defn format-timestamp* [ts]
@@ -55,6 +56,24 @@
             (catch Exception e
               (log/log-warn (str "Auto-extract failed: " (.getMessage e)))
               nil))
+     :cljs nil))
+
+(defn parse-markdown* [markdown-string]
+  #?(:clj (md/parse-markdown markdown-string)
+     :cljs nil))
+
+(defn extract-frontmatter-title* [markdown-string]
+  #?(:clj (md/extract-frontmatter-title markdown-string)
+     :cljs nil))
+
+(defn create-markdown-topic* [user-id title html-content]
+  #?(:clj (db/create-markdown-topic! user-id title html-content)
+     :cljs nil))
+
+(defn markdown-default-title []
+  #?(:clj (let [now (java.time.LocalDateTime/now)
+                fmt (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm")]
+            (str "Markdown " (.format now fmt)))
      :cljs nil))
 
 ;; Paste Import Modal
@@ -453,6 +472,239 @@
                 (dom/text (if uploading "Processing..." "Upload"))
                 (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil)))))))))
 
+;; Markdown File Upload Modal
+(e/defn UploadMarkdownModal [!show user-id navigate!]
+  (e/client
+    (let [!mutations (atom 0)
+          !file-input (atom nil)
+          !title (atom "")
+          !md-text (atom nil)
+          !auto-extract (atom true)
+          !uploading (atom false)
+          uploading (e/watch !uploading)]
+      (dom/div
+        (dom/props {:class "modal-backdrop"})
+        (dom/On "click" (fn [e]
+                          (when (= (.-target e) (.-currentTarget e))
+                            (reset! !show false)))
+          nil)
+        (dom/div
+          (dom/props {:class "modal-content" :style {:width "500px" :max-width "90%"}})
+          (dom/h3
+            (dom/props {:style {:margin "0 0 16px 0" :font-size "16px"}})
+            (dom/text "Upload Markdown"))
+          (dom/p
+            (dom/props {:style {:margin "0 0 12px 0" :font-size "13px" :color "var(--color-text-secondary)"}})
+            (dom/text "Select a .md file. Tables, strikethrough, and task lists are supported."))
+
+          ;; File drop zone
+          (let [handle-file!
+                (fn [file]
+                  (when file
+                    (let [reader (js/FileReader.)]
+                      (set! (.-onload reader)
+                        (fn [e]
+                          (let [text (-> e .-target .-result)]
+                            (reset! !md-text text)
+                            ;; Pre-fill title: frontmatter > filename
+                            (when (empty? @!title)
+                              (let [fname (.-name file)
+                                    base (subs fname 0 (max 0 (- (count fname) 3)))]
+                                (reset! !title base))))))
+                      (.readAsText reader file))))]
+
+            (dom/div
+              (dom/props {:style {:border "2px dashed var(--color-border)" :border-radius "var(--radius-md)"
+                                  :padding "32px" :text-align "center" :cursor "pointer"
+                                  :margin-bottom "var(--sp-3)" :transition "border-color 0.15s, background 0.15s"}})
+              (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil)
+              (dom/On "mouseenter" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-primary)")) nil)
+              (dom/On "mouseleave" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-border)")
+                                     (set! (.-background (.-style (.-currentTarget e))) "")) nil)
+              (dom/On "dragover" (fn [e] (.preventDefault e)
+                                   (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-primary)")
+                                   (set! (.-background (.-style (.-currentTarget e))) "var(--color-bg-subtle)")) nil)
+              (dom/On "dragleave" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-border)")
+                                    (set! (.-background (.-style (.-currentTarget e))) "")) nil)
+              (dom/On "drop" (fn [e] (.preventDefault e)
+                               (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-border)")
+                               (set! (.-background (.-style (.-currentTarget e))) "")
+                               (handle-file! (-> e .-dataTransfer .-files (aget 0)))) nil)
+              (dom/div
+                (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
+                (if (some? (e/watch !md-text))
+                  (dom/text "File loaded. Ready to import.")
+                  (dom/text "Drop a .md file here or click to browse"))))
+
+            ;; Hidden file input
+            (dom/input
+              (dom/props {:type "file" :accept ".md,text/markdown" :style {:display "none"}})
+              (reset! !file-input dom/node)
+              (dom/On "change" (fn [e] (handle-file! (-> e .-target .-files (aget 0)))) nil)))
+
+          ;; Title
+          (dom/label
+            (dom/props {:class "label" :style {:color "var(--color-text-secondary)"}})
+            (dom/text "Title"))
+          (dom/input
+            (dom/props {:type "text" :placeholder "Document title"
+                        :value (e/watch !title)
+                        :class "input input-full" :style {:margin-bottom "var(--sp-3)"}})
+            (dom/On "input" (fn [e] (reset! !title (-> e .-target .-value))) nil))
+
+          ;; Options
+          (dom/div
+            (dom/props {:style {:margin-bottom "var(--sp-3)" :display "flex" :flex-direction "column" :gap "8px"}})
+            (dom/label
+              (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "13px" :cursor "pointer"}})
+              (dom/input (dom/props {:type "checkbox"})
+                (set! (.-checked dom/node) (e/watch !auto-extract))
+                (dom/On "change" (fn [e] (reset! !auto-extract (-> e .-target .-checked))) nil))
+              (dom/text "Auto-extract into topics")))
+
+          ;; Buttons
+          (dom/div
+            (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
+            (dom/button
+              (dom/props {:class "btn btn-secondary"})
+              (dom/text "Cancel")
+              (dom/On "click" (fn [_] (reset! !show false)) nil))
+            (dom/button
+              (dom/props {:class "btn btn-primary" :style {:font-weight "600"}})
+              (let [event (dom/On "click"
+                            (fn [_] {:title @!title :md-text @!md-text
+                                     :auto-extract @!auto-extract})
+                            nil)
+                    [?token ?error] (e/Token event)
+                    importing? (some? ?token)]
+                (dom/props {:disabled (or importing? (nil? (e/watch !md-text)))
+                            :style {:cursor (if importing? "not-allowed" "pointer")}})
+                (dom/text (if importing? "Processing..." "Import"))
+                (when ?error
+                  (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-1)"}})
+                    (dom/text ?error)))
+                (when-some [token ?token]
+                  (let [md-val (:md-text event)
+                        title-val (:title event)
+                        ae? (:auto-extract event)]
+                    (if (seq md-val)
+                      (let [topic-id (e/server
+                                       (let [html (parse-markdown* md-val)
+                                             fm-title (extract-frontmatter-title* md-val)
+                                             final-title (cond
+                                                           (seq title-val) title-val
+                                                           (seq fm-title) fm-title
+                                                           :else (markdown-default-title))
+                                             tid (create-markdown-topic* user-id final-title html)]
+                                         (when (and ae? tid)
+                                           (try-auto-extract* tid html))
+                                         tid))]
+                        (if topic-id
+                          (do (swap! !mutations inc)
+                            (token)
+                            (reset! !show false)
+                            (navigate! :learn (nav/nav-browse-topic topic-id nil)))
+                          (token "Failed to import")))
+                      (token "No file loaded")))))))))
+      (e/watch !mutations))))
+
+;; Paste Markdown Modal
+(e/defn PasteMarkdownModal [!show user-id navigate!]
+  (e/client
+    (let [!mutations (atom 0)
+          !title (atom "")
+          !md-text (atom "")
+          !auto-extract (atom true)]
+      (dom/div
+        (dom/props {:class "modal-backdrop"})
+        (dom/On "click" (fn [e]
+                          (when (= (.-target e) (.-currentTarget e))
+                            (reset! !show false)))
+          nil)
+        (dom/div
+          (dom/props {:class "modal-content modal-lg" :style {:max-height "80vh" :display "flex" :flex-direction "column"}})
+          (dom/h3
+            (dom/props {:style {:margin "0 0 16px 0" :font-size "16px"}})
+            (dom/text "Import Markdown"))
+
+          ;; Title
+          (dom/label
+            (dom/props {:class "label" :style {:color "var(--color-text-secondary)"}})
+            (dom/text "Title"))
+          (dom/input
+            (dom/props {:type "text" :placeholder "Document title"
+                        :value (e/watch !title)
+                        :class "input input-full" :style {:margin-bottom "var(--sp-3)"}})
+            (dom/On "input" (fn [e] (reset! !title (-> e .-target .-value))) nil))
+
+          ;; Markdown textarea
+          (dom/label
+            (dom/props {:class "label" :style {:color "var(--color-text-secondary)"}})
+            (dom/text "Markdown content"))
+          (dom/textarea
+            (dom/props {:placeholder "Paste your Markdown here..."
+                        :style {:flex "1" :min-height "200px" :max-height "400px" :overflow-y "auto"
+                                :padding "var(--sp-3)" :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"
+                                :font-size "13px" :font-family "monospace" :line-height "1.5" :margin-bottom "var(--sp-4)"
+                                :background "var(--color-bg-subtle)" :resize "vertical"}})
+            (dom/On "input" (fn [e] (reset! !md-text (-> e .-target .-value))) nil))
+
+          ;; Options
+          (dom/div
+            (dom/props {:style {:margin-bottom "var(--sp-3)" :display "flex" :flex-direction "column" :gap "8px"}})
+            (dom/label
+              (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "13px" :cursor "pointer"}})
+              (dom/input (dom/props {:type "checkbox"})
+                (set! (.-checked dom/node) (e/watch !auto-extract))
+                (dom/On "change" (fn [e] (reset! !auto-extract (-> e .-target .-checked))) nil))
+              (dom/text "Auto-extract into topics")))
+
+          ;; Buttons
+          (dom/div
+            (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
+            (dom/button
+              (dom/props {:class "btn btn-secondary"})
+              (dom/text "Cancel")
+              (dom/On "click" (fn [_] (reset! !show false)) nil))
+            (dom/button
+              (dom/props {:class "btn btn-primary" :style {:font-weight "600"}})
+              (let [event (dom/On "click"
+                            (fn [_] {:title @!title :md-text @!md-text
+                                     :auto-extract @!auto-extract})
+                            nil)
+                    [?token ?error] (e/Token event)
+                    importing? (some? ?token)]
+                (dom/props {:disabled importing?
+                            :style {:cursor (if importing? "not-allowed" "pointer")}})
+                (dom/text (if importing? "Processing..." "Import"))
+                (when ?error
+                  (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-1)"}})
+                    (dom/text ?error)))
+                (when-some [token ?token]
+                  (let [md-val (:md-text event)
+                        title-val (:title event)
+                        ae? (:auto-extract event)]
+                    (if (seq md-val)
+                      (let [topic-id (e/server
+                                       (let [html (parse-markdown* md-val)
+                                             fm-title (extract-frontmatter-title* md-val)
+                                             final-title (cond
+                                                           (seq title-val) title-val
+                                                           (seq fm-title) fm-title
+                                                           :else (markdown-default-title))
+                                             tid (create-markdown-topic* user-id final-title html)]
+                                         (when (and ae? tid)
+                                           (try-auto-extract* tid html))
+                                         tid))]
+                        (if topic-id
+                          (do (swap! !mutations inc)
+                            (token)
+                            (reset! !show false)
+                            (navigate! :learn (nav/nav-browse-topic topic-id nil)))
+                          (token "Failed to import")))
+                      (token "Please enter some Markdown content")))))))))
+      (e/watch !mutations))))
+
 (e/defn NewTopicModal [!show user-id navigate!]
   (e/client
     (let [!mutations (atom 0)
@@ -609,6 +861,54 @@
               (dom/text "Import an EPUB ebook file")))
           (when show-epub
             (UploadEPUBModal !show-epub navigate!)))
+
+        ;; Upload Markdown card
+        (let [!show-md-upload (atom false)
+              show-md-upload (e/watch !show-md-upload)]
+          (dom/div
+            (dom/props {:style {:border "1px solid var(--color-border)" :border-radius "var(--radius-md)"
+                                :padding "20px" :cursor "pointer" :transition "border-color 0.15s, box-shadow 0.15s"
+                                :background "var(--color-bg-surface)"}})
+            (dom/On "mouseenter" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-primary)")
+                                   (set! (.-boxShadow (.-style (.-currentTarget e))) "0 0 0 1px var(--color-primary)")) nil)
+            (dom/On "mouseleave" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-border)")
+                                   (set! (.-boxShadow (.-style (.-currentTarget e))) "none")) nil)
+            (dom/On "click" (fn [_] (reset! !show-md-upload true)) nil)
+            (dom/div
+              (dom/props {:style {:font-size "24px" :margin-bottom "8px"}})
+              (dom/text "\u2B07\uFE0F"))
+            (dom/div
+              (dom/props {:style {:font-size "14px" :font-weight "600" :margin-bottom "4px"}})
+              (dom/text "Upload Markdown"))
+            (dom/div
+              (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
+              (dom/text "Import a .md file with GFM support")))
+          (when show-md-upload
+            (UploadMarkdownModal !show-md-upload user-id navigate!)))
+
+        ;; Paste Markdown card
+        (let [!show-md-paste (atom false)
+              show-md-paste (e/watch !show-md-paste)]
+          (dom/div
+            (dom/props {:style {:border "1px solid var(--color-border)" :border-radius "var(--radius-md)"
+                                :padding "20px" :cursor "pointer" :transition "border-color 0.15s, box-shadow 0.15s"
+                                :background "var(--color-bg-surface)"}})
+            (dom/On "mouseenter" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-primary)")
+                                   (set! (.-boxShadow (.-style (.-currentTarget e))) "0 0 0 1px var(--color-primary)")) nil)
+            (dom/On "mouseleave" (fn [e] (set! (.-borderColor (.-style (.-currentTarget e))) "var(--color-border)")
+                                   (set! (.-boxShadow (.-style (.-currentTarget e))) "none")) nil)
+            (dom/On "click" (fn [_] (reset! !show-md-paste true)) nil)
+            (dom/div
+              (dom/props {:style {:font-size "24px" :margin-bottom "8px"}})
+              (dom/text "\uD83D\uDCDD"))
+            (dom/div
+              (dom/props {:style {:font-size "14px" :font-weight "600" :margin-bottom "4px"}})
+              (dom/text "Paste Markdown"))
+            (dom/div
+              (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
+              (dom/text "Paste raw Markdown text")))
+          (when show-md-paste
+            (PasteMarkdownModal !show-md-paste user-id navigate!)))
 
         ;; New Topic card
         (let [!show-topic (atom false)
