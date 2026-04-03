@@ -1,13 +1,13 @@
 (ns freememo.cards
   "Flashcard generation using OpenAI API with prompt templates."
   (:require
-    [freememo.db :as db]
-    [freememo.settings :as settings]
-    [wkok.openai-clojure.api :as api]
-    [taoensso.telemere :as tel]
-    [clojure.java.io :as io]
-    [clojure.edn :as edn]
-    [clojure.string :as str]))
+   [freememo.db :as db]
+   [freememo.settings :as settings]
+   [wkok.openai-clojure.api :as api]
+   [taoensso.telemere :as tel]
+   [clojure.java.io :as io]
+   [clojure.edn :as edn]
+   [clojure.string :as str]))
 
 (defn- humanize-error [msg]
   (cond
@@ -35,8 +35,8 @@
   [filename]
   (try
     (-> (str "prompts/" filename)
-        io/resource
-        slurp)
+      io/resource
+      slurp)
     (catch Exception e
       (tel/error! {:id ::load-prompt-template} e)
       nil)))
@@ -44,45 +44,45 @@
 ;; Prompt building
 (defn build-basic-prompt
   "Build prompt for basic Q&A cards.
-   Concatenates system.md + optional pre-prompt + basic.md + optional context.md."
-  [card-count has-context? pre-prompt]
-  (let [system (load-prompt-template "system.md")
+   Concatenates system prompt + optional pre-prompt + basic.md + optional context.md."
+  [card-count has-context? pre-prompt user-id]
+  (let [system (settings/get-system-prompt user-id)
         basic (load-prompt-template "basic.md")
         context (when has-context? (load-prompt-template "context.md"))]
     (when (and system basic)
       (str system
-           (when (and pre-prompt (not (str/blank? pre-prompt)))
-             (str "\n\n## Custom Question Format\n\n"
-                  "Use the following pattern for your questions:\n\n"
-                  pre-prompt
-                  "\n\n"))
-           basic
-           (when context (str "\n\n" context))
-           "\n\n# Instructions\n\n"
-           "Generate EXACTLY " card-count " flashcards from the provided text. "
-           "Return EXACTLY " card-count " items in the EDN vector — no more, no fewer. "
-           "Do not exceed this count even if the content seems to warrant more cards."))))
+        (when (and pre-prompt (not (str/blank? pre-prompt)))
+          (str "\n\n## Custom Question Format\n\n"
+            "Use the following pattern for your questions:\n\n"
+            pre-prompt
+            "\n\n"))
+        basic
+        (when context (str "\n\n" context))
+        "\n\n# Instructions\n\n"
+        "Generate EXACTLY " card-count " flashcards from the provided text. "
+        "Return EXACTLY " card-count " items in the EDN vector — no more, no fewer. "
+        "Do not exceed this count even if the content seems to warrant more cards."))))
 
 (defn build-cloze-prompt
   "Build prompt for cloze deletion cards.
-   Concatenates system.md + optional pre-prompt + cloze.md + optional context-cloze.md."
-  [card-count has-context? pre-prompt]
-  (let [system (load-prompt-template "system.md")
+   Concatenates system prompt + optional pre-prompt + cloze.md + optional context-cloze.md."
+  [card-count has-context? pre-prompt user-id]
+  (let [system (settings/get-system-prompt user-id)
         cloze (load-prompt-template "cloze.md")
         context (when has-context? (load-prompt-template "context-cloze.md"))]
     (when (and system cloze)
       (str system
-           (when (and pre-prompt (not (str/blank? pre-prompt)))
-             (str "\n\n## Custom Question Format\n\n"
-                  "Use the following pattern for your questions:\n\n"
-                  pre-prompt
-                  "\n\n"))
-           cloze
-           (when context (str "\n\n" context))
-           "\n\n# Instructions\n\n"
-           "Generate EXACTLY " card-count " flashcards from the provided text. "
-           "Return EXACTLY " card-count " items in the EDN vector — no more, no fewer. "
-           "Do not exceed this count even if the content seems to warrant more cards."))))
+        (when (and pre-prompt (not (str/blank? pre-prompt)))
+          (str "\n\n## Custom Question Format\n\n"
+            "Use the following pattern for your questions:\n\n"
+            pre-prompt
+            "\n\n"))
+        cloze
+        (when context (str "\n\n" context))
+        "\n\n# Instructions\n\n"
+        "Generate EXACTLY " card-count " flashcards from the provided text. "
+        "Return EXACTLY " card-count " items in the EDN vector — no more, no fewer. "
+        "Do not exceed this count even if the content seems to warrant more cards."))))
 
 ;; Context retrieval
 (defn get-context-pages
@@ -95,8 +95,8 @@
       (let [pages (db/get-context-pages parent-id start-page end-page)]
         (when (seq pages)
           (->> pages
-               (map :topics/content)
-               (str/join "\n\n---\n\n")))))))
+            (map :topics/content)
+            (str/join "\n\n---\n\n")))))))
 
 (defn get-extract-page-context
   "Get the original PDF page text for use as context when generating cards from an extract."
@@ -110,10 +110,10 @@
    Returns parsed EDN or throws exception."
   [raw-text]
   (let [cleaned (-> raw-text
-                    str/trim
-                    (str/replace #"^```(?:clojure|edn)?\s*\n?" "")
-                    (str/replace #"\n?```\s*$" "")
-                    str/trim)]
+                  str/trim
+                  (str/replace #"^```(?:clojure|edn)?\s*\n?" "")
+                  (str/replace #"\n?```\s*$" "")
+                  str/trim)]
     (try
       (edn/read-string cleaned)
       (catch Exception e
@@ -121,35 +121,35 @@
                      :data {:raw raw-text :cleaned cleaned}}
           "Failed to parse EDN response from OpenAI")
         (throw (ex-info "Failed to parse EDN response from OpenAI"
-                        {:raw raw-text :cleaned cleaned}))))))
+                 {:raw raw-text :cleaned cleaned}))))))
 
 (defn- generate-cards*
   "Shared implementation for card generation with up to 3 retry attempts.
    Validates that the returned card count matches the requested count."
   [{:keys [content context card-count model user-id pre-prompt enc-key]} prompt-builder-fn]
-  (let [api-key      (settings/get-openai-api-key user-id enc-key)
-        _            (when (empty? api-key) (throw (ex-info "OpenAI API key not configured" {})))
-        _            (when (empty? content) (throw (ex-info "No content provided" {})))
-        card-count   (or card-count (settings/get-card-count user-id))
-        model        (or model (settings/get-model user-id))
-        reasoning    (settings/get-reasoning user-id)
-        verbosity    (settings/get-verbosity user-id)
+  (let [api-key (settings/get-openai-api-key user-id enc-key)
+        _ (when (empty? api-key) (throw (ex-info "OpenAI API key not configured" {})))
+        _ (when (empty? content) (throw (ex-info "No content provided" {})))
+        card-count (or card-count (settings/get-card-count user-id))
+        model (or model (settings/get-model user-id))
+        reasoning (settings/get-reasoning user-id)
+        verbosity (settings/get-verbosity user-id)
         has-context? (not (empty? context))
-        prompt       (prompt-builder-fn card-count has-context? pre-prompt)
-        _            (when-not prompt (throw (ex-info "Failed to load prompt templates" {})))
+        prompt (prompt-builder-fn card-count has-context? pre-prompt user-id)
+        _ (when-not prompt (throw (ex-info "Failed to load prompt templates" {})))
         content-text (if has-context? (pr-str {:content content :context context}) content)]
     (loop [attempt 1]
-      (let [response     (api/create-chat-completion
-                           {:model    model
-                            :messages [{:role "system" :content prompt}
-                                       {:role "user"   :content content-text}]
-                            :reasoning {:effort reasoning}
-                            :text      {:verbosity verbosity}}
-                           {:api-key   api-key
-                            :reasoning {:effort reasoning}
-                            :verbosity verbosity})
-            raw-text     (-> response :choices first :message :content)
-            cards        (parse-edn-response raw-text)
+      (let [response (api/create-chat-completion
+                       {:model model
+                        :messages [{:role "system" :content prompt}
+                                   {:role "user" :content content-text}]
+                        :reasoning {:effort reasoning}
+                        :text {:verbosity verbosity}}
+                       {:api-key api-key
+                        :reasoning {:effort reasoning}
+                        :verbosity verbosity})
+            raw-text (-> response :choices first :message :content)
+            cards (parse-edn-response raw-text)
             actual-count (count cards)]
         (cond
           (= actual-count card-count)
@@ -157,17 +157,17 @@
 
           (>= attempt 3)
           (do (tel/log! {:level :error :id ::generate-cards-count-mismatch
-                                :data {:expected card-count :got actual-count}}
+                         :data {:expected card-count :got actual-count}}
                 "Count mismatch after 3 attempts")
-              {:success false
-               :error (str "LLM returned " actual-count " cards instead of "
-                           card-count " after 3 attempts")})
+            {:success false
+             :error (str "LLM returned " actual-count " cards instead of "
+                      card-count " after 3 attempts")})
 
           :else
           (do (tel/log! {:level :warn :id ::generate-cards-retry
-                               :data {:attempt attempt :expected card-count :got actual-count}}
+                         :data {:attempt attempt :expected card-count :got actual-count}}
                 "Card count mismatch, retrying")
-              (recur (inc attempt))))))))
+            (recur (inc attempt))))))))
 
 (defn generate-basic-cards
   "Generate basic Q&A flashcards using OpenAI API.
@@ -227,7 +227,7 @@
                                   :cloze (:c card)})
                          source-reference
                          (assoc :source_reference source-reference)))
-                     cards)]
+                  cards)]
        (db/insert-flashcards! rows)
        {:success true})
      (catch Exception e
@@ -277,13 +277,13 @@
   [card-id updated-fields]
   (try
     (when (and (contains? updated-fields :question)
-               (str/blank? (:question updated-fields)))
+            (str/blank? (:question updated-fields)))
       (throw (ex-info "Question cannot be empty" {})))
     (when (and (contains? updated-fields :answer)
-               (str/blank? (:answer updated-fields)))
+            (str/blank? (:answer updated-fields)))
       (throw (ex-info "Answer cannot be empty" {})))
     (when (and (contains? updated-fields :cloze)
-               (str/blank? (:cloze updated-fields)))
+            (str/blank? (:cloze updated-fields)))
       (throw (ex-info "Cloze text cannot be empty" {})))
 
     (db/update-flashcard! card-id updated-fields)
@@ -309,22 +309,22 @@
           _ (when-not root
               (throw (ex-info "Topic not found" {:root-topic-id root-topic-id})))
           doc-filename (-> (:topics/title root)
-                           (str/replace #"\.pdf$" "")
-                           (str/replace #"[^a-zA-Z0-9_-]" "_"))
+                         (str/replace #"\.pdf$" "")
+                         (str/replace #"[^a-zA-Z0-9_-]" "_"))
           ;; Query cards
           all-cards (if topic-id
-                     (db/get-flashcards topic-id)
-                     (db/get-all-flashcards root-topic-id))
+                      (db/get-flashcards topic-id)
+                      (db/get-all-flashcards root-topic-id))
           _ (tel/log! {:level :debug :id ::export-pre-filter
-                             :data {:count (count all-cards)
-                                    :kinds (set (map :flashcards/kind all-cards))}}
+                       :data {:count (count all-cards)
+                              :kinds (set (map :flashcards/kind all-cards))}}
               "Cards loaded before filtering")
           ;; Filter by kind if specified
           cards (if kind
                   (filter #(= (:flashcards/kind %) kind) all-cards)
                   all-cards)
           _ (tel/log! {:level :debug :id ::export-post-filter
-                              :data {:count (count cards) :kind kind}}
+                       :data {:count (count cards) :kind kind}}
               "Cards after kind filter")
           _ (when-not (seq cards)
               (throw (ex-info "No cards to export" {:count (count all-cards) :kind kind})))
@@ -333,27 +333,27 @@
                         (str "<p>" header-text "</p>"))
           ;; Format as CSV (comma-separated, with quoted fields)
           csv-lines (map (fn [card]
-                          (let [card-kind (:flashcards/kind card)
-                                tag doc-filename
-                                front (if (= card-kind "basic")
-                                       (str (when header-html header-html)
-                                            "<p>" (:flashcards/question card) "</p>")
-                                       (str "<p>" (:flashcards/cloze card) "</p>"))
-                                back (if (= card-kind "basic")
-                                      (str "<p>" (:flashcards/answer card) "</p>")
-                                      "")
-                                escape-csv (fn [s]
-                                            (str "\"" (str/replace (or s "") "\"" "\"\"") "\""))]
-                            (str (escape-csv front) ","
-                                 (escape-csv back) ","
-                                 (escape-csv tag))))
-                        cards)
+                           (let [card-kind (:flashcards/kind card)
+                                 tag doc-filename
+                                 front (if (= card-kind "basic")
+                                         (str (when header-html header-html)
+                                           "<p>" (:flashcards/question card) "</p>")
+                                         (str "<p>" (:flashcards/cloze card) "</p>"))
+                                 back (if (= card-kind "basic")
+                                        (str "<p>" (:flashcards/answer card) "</p>")
+                                        "")
+                                 escape-csv (fn [s]
+                                              (str "\"" (str/replace (or s "") "\"" "\"\"") "\""))]
+                             (str (escape-csv front) ","
+                               (escape-csv back) ","
+                               (escape-csv tag))))
+                      cards)
           csv-string (str/join "\n" csv-lines)
           kind-suffix (if kind (str "_" kind) "")
           topic-suffix (if topic-id (str "_topic" topic-id) "_all")
           filename (str doc-filename topic-suffix kind-suffix ".csv")]
       (tel/log! {:level :info :id ::export-success
-                       :data {:filename filename :count (count cards)}}
+                 :data {:filename filename :count (count cards)}}
         "CSV export complete")
       (let [card-ids (mapv :flashcards/id cards)]
         (db/mark-cards-exported card-ids))
