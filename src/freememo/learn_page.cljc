@@ -48,7 +48,7 @@
     ("web" "wikipedia") ["Web" "var(--color-badge-web)"]
     ["Topic" "var(--color-badge-epub)"]))
 
-(e/defn LearnBrowseTopic [user-id enc-key topic-id title !nav-state llm-enabled? origin navigate!]
+(e/defn LearnBrowseTopic [user-id enc-key topic-id !nav-state llm-enabled? origin navigate!]
   (e/client
     (let [exists? (e/server (some? (db/get-topic topic-id)))]
       (if exists?
@@ -65,11 +65,12 @@
             llm-enabled? origin))
         (do (reset! !nav-state (nav/nav-overview)) nil)))))
 
-(e/defn LearnBrowseDoc [user-id enc-key nav title !nav-state llm-enabled? origin navigate!]
+(e/defn LearnBrowseDoc [user-id enc-key nav !nav-state llm-enabled? origin navigate!]
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
       (let [topic-id (:topic-id nav)
+            doc-title (e/server (:topics/title (db/get-topic topic-id)))
             pv-refresh (e/server (e/watch page-viewer/!refresh))
             page-stats (e/server (get-browse-page-stats* pv-refresh topic-id))]
         (dom/div
@@ -80,7 +81,7 @@
             (dom/On "click" (fn [_] (if origin (navigate! origin) (reset! !nav-state (nav/nav-overview)))) nil))
           (dom/span
             (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
-            (dom/text (str "Browsing: " (or title "document"))))
+            (dom/text (str "Browsing: " (or doc-title "document"))))
           (when (and page-stats (pos? (:total page-stats)))
             (let [remaining (:remaining page-stats)
                   tooltip (cond
@@ -289,11 +290,11 @@
         :browse-pdf
         (LearnBrowseDoc user-id enc-key
           {:topic-id (:topic-id nav-state) :page (:page nav-state)}
-          nil !nav-state llm-enabled? (:origin nav-state) navigate!)
+          !nav-state llm-enabled? (:origin nav-state) navigate!)
 
         :browse-topic
         (LearnBrowseTopic user-id enc-key (:topic-id nav-state)
-          nil !nav-state llm-enabled? (:origin nav-state) navigate!)
+          !nav-state llm-enabled? (:origin nav-state) navigate!)
 
         :session
         (let [refresh (e/server (e/watch !refresh))
