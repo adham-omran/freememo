@@ -286,27 +286,10 @@
           !queue-idx (atom 0)]
 
       (case nav-type
-        :overview
-        (LearnOverview user-id !nav-state navigate!)
-
-        :browse-pdf
-        (LearnBrowseDoc user-id enc-key
-          {:topic-id (:topic-id nav-state) :page (:page nav-state)}
-          !nav-state llm-enabled? (:origin nav-state) navigate!)
-
-        :browse-topic
-        (LearnBrowseTopic user-id enc-key (:topic-id nav-state)
-          !nav-state llm-enabled? (:origin nav-state) navigate!)
-
         :session
         (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
               queue-vec (e/server (get-learning-queue* refresh user-id))]
           (LearnSession user-id enc-key queue-vec !queue-idx !nav-state navigate! llm-enabled?))
 
-        :subset-review
-        (SubsetReviewSession user-id enc-key (:root-id nav-state) (:root-name nav-state)
-          (fn [] (navigate! :library))
-          llm-enabled?)
-
-        ;; Default — show overview
+        ;; Default — show overview (handles :overview and any stale nav-state)
         (LearnOverview user-id !nav-state navigate!)))))

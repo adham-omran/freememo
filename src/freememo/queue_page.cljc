@@ -182,8 +182,8 @@
                                 (fn [_]
                                   (case kind
                                     "pdf"
-                                    (navigate! :learn (nav/nav-browse-pdf id nil :queue))
-                                    (navigate! :extract (nav/nav-browse-topic id :queue))))
+                                    (navigate! :viewer (nav/nav-browse-pdf id nil :queue))
+                                    (navigate! :viewer (nav/nav-browse-topic id :queue))))
                                 nil))))))))
                 (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))))
 

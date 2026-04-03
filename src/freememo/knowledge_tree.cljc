@@ -164,11 +164,9 @@
                                     (dom/text display-title)
                                     (dom/On "click"
                                       (fn [_]
-                                        (if is-root
-                                          (if (= kind "pdf")
-                                            (navigate! :learn (nav/nav-browse-pdf id nil :library))
-                                            (navigate! :learn (nav/nav-browse-topic id :library)))
-                                          (navigate! :extract (nav/nav-browse-topic id :library))))
+                                        (if (and is-root (= kind "pdf"))
+                                          (navigate! :viewer (nav/nav-browse-pdf id nil :library))
+                                          (navigate! :viewer (nav/nav-browse-topic id :library))))
                                       nil)
                                     (dom/On "keydown"
                                       (fn [e]
@@ -198,7 +196,7 @@
                                       (dom/On "click"
                                         (fn [e]
                                           (.stopPropagation e)
-                                          (navigate! :learn (nav/nav-subset-review id title)))
+                                          (navigate! :viewer (nav/nav-subset-review id title)))
                                         nil)))
                                 ;; Delete button (root only)
                                   (when is-root

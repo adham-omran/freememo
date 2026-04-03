@@ -9,13 +9,25 @@
             [freememo.import-page :refer [ImportPage]]
             [freememo.learn-page :refer [LearnPage]]
             [freememo.extract-page :refer [ExtractPage]]
+            [freememo.page-viewer :refer [OcrPage]]
+            [freememo.subset-review :refer [SubsetReviewSession]]
             [freememo.queue-page :refer [QueuePage]]
             [freememo.login-page :refer [LoginPage]]
             [freememo.keyboard :as keyboard]
             #?(:clj [freememo.settings :as settings])
-            #?(:clj [freememo.user-state :as us])))
+            #?(:clj [freememo.user-state :as us])
+            #?(:clj [freememo.db :as db])))
 
 ;; Per-user refresh via user-state registry
+
+(defn get-browse-page-stats* [_refresh parent-id]
+  #?(:clj (let [pages (db/list-pages parent-id)
+                remaining (sort (map :topics/page_number
+                                  (remove #(= "done" (:topics/status %)) pages)))]
+            {:done (- (count pages) (count remaining))
+             :total (count pages)
+             :remaining remaining})
+     :cljs nil))
 
 (defn get-llm-enabled* [_refresh user-id]
   #?(:clj (settings/get-llm-enabled user-id)
@@ -44,6 +56,8 @@
                   active-tab (e/watch !active-tab)
                   !nav-state (atom (nav/nav-overview))
                   nav-state (e/watch !nav-state)
+                  !viewer-nav (atom nil)
+                  viewer-nav (e/watch !viewer-nav)
                   !tab-to-save (atom nil)
                   tab-to-save (e/watch !tab-to-save)
                   [?token _error] (e/Token tab-to-save)
@@ -55,13 +69,15 @@
                                :margin-bottom "-2px"})
                   navigate! (fn
                               ([tab]
-                               (when (= @!active-tab tab)
+                               (when (and (= @!active-tab tab) (= tab :learn))
                                  (reset! !nav-state (nav/nav-overview)))
                                (reset! !active-tab tab)
                                (reset! !tab-to-save tab))
                               ([tab nav]
                                (log/log-debug (str "Navigation tab=" tab " nav=" (pr-str nav)))
-                               (reset! !nav-state nav)
+                               (if (= tab :viewer)
+                                 (reset! !viewer-nav nav)
+                                 (reset! !nav-state nav))
                                (reset! !active-tab tab)
                                (reset! !tab-to-save tab)))]
 
@@ -93,6 +109,11 @@
                   (dom/On "click" (fn [_] (navigate! :learn)) nil))
 
                 (dom/button
+                  (dom/props {:style (tab-style :viewer)})
+                  (dom/text "Viewer")
+                  (dom/On "click" (fn [_] (navigate! :viewer)) nil))
+
+                (dom/button
                   (dom/props {:style (tab-style :library)})
                   (dom/text "Library")
                   (dom/On "click" (fn [_] (navigate! :library)) nil))
@@ -114,7 +135,7 @@
 
               ;; Tab content
               (dom/div
-                (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:extract :learn :library :queue} active-tab) "hidden" "auto")}})
+                (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :queue} active-tab) "hidden" "auto")}})
                 (when (= active-tab :home) (HomePage navigate! user-id enc-key !nav-state))
                 (when (= active-tab :library)
                   (let [lib-refresh (e/server (e/watch (us/get-atom user-id :library-refresh)))
@@ -126,13 +147,77 @@
                 (when (= active-tab :queue) (QueuePage user-id navigate!))
                 (when (= active-tab :settings) (SettingsPage user-id username enc-key))
                 (when (= active-tab :learn) (LearnPage user-id enc-key !nav-state navigate! llm-enabled?))
-                (when (= active-tab :extract)
-                  (ExtractPage user-id enc-key (:topic-id nav-state) navigate!
-                    (fn [topic-id page kind]
-                      (if (= kind "pdf")
-                        (navigate! :learn (nav/nav-browse-pdf topic-id page :extract))
-                        (navigate! :learn (nav/nav-browse-topic topic-id :extract))))
-                    llm-enabled? (:origin nav-state))))))
+                (when (= active-tab :viewer)
+                  (if (nil? viewer-nav)
+                    ;; Empty state
+                    (dom/div
+                      (dom/props {:style {:display "flex" :align-items "center" :justify-content "center"
+                                          :height "100%" :color "var(--color-text-secondary)" :font-size "15px"}})
+                      (dom/text "Open something from the Library"))
+                    ;; Content
+                    (let [vtype (:type viewer-nav)]
+                      (case vtype
+                        :browse-topic
+                        (let [topic-id (:topic-id viewer-nav)
+                              exists? (e/server (some? (db/get-topic topic-id)))]
+                          (if exists?
+                            (dom/div
+                              (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
+                              (ExtractPage user-id enc-key topic-id
+                                (fn
+                                  ([_tab] (navigate! (or (:origin viewer-nav) :library)))
+                                  ([_tab _nav] (navigate! (or (:origin viewer-nav) :library))))
+                                (fn [root-id page kind]
+                                  (if (= kind "pdf")
+                                    (navigate! :viewer (nav/nav-browse-pdf root-id page (:origin viewer-nav)))
+                                    (navigate! :viewer (nav/nav-browse-topic root-id (:origin viewer-nav)))))
+                                llm-enabled? (:origin viewer-nav)))
+                            (do (reset! !viewer-nav nil) nil)))
+
+                        :browse-pdf
+                        (dom/div
+                          (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
+                          (let [topic-id (:topic-id viewer-nav)
+                                origin (:origin viewer-nav)
+                                doc-title (e/server (:topics/title (db/get-topic topic-id)))
+                                pv-refresh (e/server (e/watch (us/get-atom user-id :refresh)))
+                                page-stats (e/server (get-browse-page-stats* pv-refresh topic-id))]
+                            (dom/div
+                              (dom/props {:class "header-bar" :style {:gap "12px"}})
+                              (dom/button
+                                (dom/props {:class "btn btn-sm btn-secondary"})
+                                (dom/text (case origin :queue "Back to Queue" :library "Back to Library" "Back"))
+                                (dom/On "click" (fn [_] (navigate! (or origin :library))) nil))
+                              (dom/span
+                                (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
+                                (dom/text (str "Browsing: " (or doc-title "document"))))
+                              (when (and page-stats (pos? (:total page-stats)))
+                                (let [remaining (:remaining page-stats)]
+                                  (dom/span
+                                    (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px" :margin-left "auto" :cursor "default"}
+                                                :data-tooltip (cond
+                                                                (empty? remaining) "All pages done!"
+                                                                (<= (count remaining) 20)
+                                                                (str "Remaining: " (clojure.string/join ", " remaining))
+                                                                :else
+                                                                (str "Remaining: " (clojure.string/join ", " (take 20 remaining))
+                                                                  " ... and " (- (count remaining) 20) " more"))})
+                                    (dom/text (:done page-stats) " / " (:total page-stats) " pages done"))))))
+                          (dom/div
+                            (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
+                            (let [!vnav (atom viewer-nav)]
+                              (OcrPage user-id enc-key !vnav llm-enabled?))))
+
+                        :subset-review
+                        (SubsetReviewSession user-id enc-key (:root-id viewer-nav) (:root-name viewer-nav)
+                          (fn [] (navigate! :library))
+                          llm-enabled?)
+
+                        ;; Unknown type — show empty state
+                        (dom/div
+                          (dom/props {:style {:display "flex" :align-items "center" :justify-content "center"
+                                              :height "100%" :color "var(--color-text-secondary)" :font-size "15px"}})
+                          (dom/text "Open something from the Library")))))))))
 
           ;; Not authenticated: render login page
           (LoginPage auth-error))))))

@@ -234,8 +234,8 @@
                 show-pdf? (= kind "pdf")
                 view-source! (fn [root-id page root-kind]
                                (if (= root-kind "pdf")
-                                 (reset! !nav-state (nav/nav-browse-pdf root-id page nil))
-                                 (reset! !nav-state (nav/nav-browse-topic root-id nil))))]
+                                 (navigate! :viewer (nav/nav-browse-pdf root-id page nil))
+                                 (navigate! :viewer (nav/nav-browse-topic root-id nil))))]
 
             (when item
               ;; Header
