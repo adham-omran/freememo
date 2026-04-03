@@ -23,14 +23,6 @@
 #?(:clj (defn get-topic-by-id* [_refresh topic-id]
           (when topic-id (db/get-topic topic-id))))
 
-;; Walk up parent chain to find the root topic (parent_id IS NULL)
-#?(:clj (defn get-root-topic-id [topic-id]
-          (when topic-id
-            (loop [id topic-id]
-              (let [t (db/get-topic id)]
-                (if (or (nil? t) (nil? (:topics/parent_id t)))
-                  id
-                  (recur (:topics/parent_id t))))))))
 
 ;; Responsive split pane default — plain defn avoids #? inside e/defn (frame mismatch)
 (defn default-split-pct []
@@ -59,7 +51,7 @@
               parent-title (e/server (:topics/title parent-topic))
               parent-content (e/server (or (:topics/content parent-topic) ""))
               ;; Root topic — for filename, kind, source scoping
-              root-topic-id (e/server (get-root-topic-id topic-id))
+              root-topic-id (e/server (db/get-root-topic-id topic-id))
               root-topic (e/server (when (not= root-topic-id topic-id) (db/get-topic root-topic-id)))
               filename (e/server (:topics/title (or root-topic topic)))
               root-kind (e/server (:topics/kind (or root-topic topic)))]
