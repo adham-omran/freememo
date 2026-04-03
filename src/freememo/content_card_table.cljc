@@ -27,14 +27,14 @@
               {:success false :error (.getMessage e)}))
      :cljs nil))
 
-(e/defn ContentCardTable [{:keys [topic-id card-font-size]} refresh]
+(e/defn ContentCardTable [{:keys [topic-id card-font-size user-id]} refresh]
   (e/client
     (let [cards-result (e/server (get-cards-for-topic* refresh topic-id))
           !editing-card (atom nil)
           editing-card (e/watch !editing-card)]
 
       (when editing-card
-        (EditCardModal !editing-card))
+        (EditCardModal !editing-card user-id))
 
       (if (:success cards-result)
         (let [cards-vec (e/server (vec (:cards cards-result)))
@@ -74,7 +74,7 @@
                   (e/for [i (Tape offset limit)]
                     (let [card (e/server (nth cards-vec i nil))]
                       (when card
-                        (CardRow card !editing-card (inc i))))))
+                        (CardRow card !editing-card user-id (inc i))))))
                 (dom/div (dom/props {:style {:height (str occluded-height "px")}})))
               (dom/p
                 (dom/props {:style {:color "var(--color-text-hint)" :font-size "13px" :padding "8px 12px"}})

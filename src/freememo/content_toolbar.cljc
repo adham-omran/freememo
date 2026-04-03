@@ -9,6 +9,7 @@
    [freememo.content-toolbar-generate :as generate]
    [freememo.content-toolbar-actions :as actions]
    #?(:clj [freememo.settings :as user-settings])
+   #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
    [freememo.util :refer [mac-platform?]]))
 
@@ -50,8 +51,8 @@
           !card-count (atom server-card-count)
           card-count-val (e/watch !card-count)
 
-          ;; Generation status (global processor, keyed by topic-id)
-          card-gen-status (e/server (get (e/watch helpers/!card-gen-status) topic-id))
+          ;; Generation status (per-user, keyed by topic-id)
+          card-gen-status (e/server (get (e/watch (us/get-atom user-id :card-gen-status)) topic-id))
           gen-pending (or (:pending card-gen-status) 0)
           gen-active? (or (some? (:active-id card-gen-status)) (pos? gen-pending))
           gen-error (:error card-gen-status)

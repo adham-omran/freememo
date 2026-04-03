@@ -6,6 +6,7 @@
    [freememo.logging :as log]
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.user-state :as us])
    #?(:clj [missionary.core :as m]))
   #?(:clj (:import [missionary Cancelled])))
 
@@ -63,8 +64,8 @@
 ;; ---------------------------------------------------------------------------
 
 #?(:clj (defonce card-gen-mbx (m/mbx)))
-#?(:clj (defonce !card-gen-status (atom {})))
-;; ^^ {topic-id {:active-id nil, :error nil, :pending 0}}
+;; card-gen-status is per-user via (us/get-atom user-id :card-gen-status)
+;; Shape: {topic-id {:active-id nil, :error nil, :pending 0}}
 
 (defn generate-and-save! [item]
   #?(:clj
@@ -89,9 +90,10 @@
 
 (defn enqueue-card-gen! [item]
   #?(:clj
-     (let [tid (:topic-id item)]
+     (let [tid (:topic-id item)
+           uid (:user-id item)]
        (log/log-info (str "Card gen enqueued topic=" tid))
-       (swap! !card-gen-status update tid
+       (swap! (us/get-atom uid :card-gen-status) update tid
          (fn [s] (update (or s {:active-id nil :error nil :pending 0}) :pending inc)))
        (card-gen-mbx item)
        :enqueued)
@@ -110,19 +112,21 @@
         (fn [_ _] nil) nil
         (m/ap
           (let [item (m/?> 3 (mbx-flow))
-                tid (:topic-id item)]
-            (swap! !card-gen-status update tid assoc :active-id (:id item) :error nil)
+                tid (:topic-id item)
+                uid (:user-id item)
+                !status (us/get-atom uid :card-gen-status)]
+            (swap! !status update tid assoc :active-id (:id item) :error nil)
             (let [result (m/? (m/timeout
                                 (m/via m/blk (generate-and-save! item))
                                 60000
                                 {:success false :error "Card generation timed out"}))]
-              (swap! !card-gen-status update tid
+              (swap! !status update tid
                 (fn [s] (-> s
                           (assoc :active-id nil)
                           (update :pending #(max 0 (dec (or % 0)))))))
               (if (:success result)
                 (log/log-info (str "Card gen complete topic=" tid))
                 (do (log/log-info (str "Card gen failed topic=" tid " error=" (:error result)))
-                  (swap! !card-gen-status update tid assoc :error (:error result))))))))
+                  (swap! !status update tid assoc :error (:error result))))))))
       (fn [_] nil)
       (fn [e] (log/log-error (str "Card gen processor crashed: " e))))))

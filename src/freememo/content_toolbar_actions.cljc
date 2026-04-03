@@ -61,7 +61,7 @@
           (dom/text "Add new")
           (dom/On "click" (fn [_] (reset! !show-add true)) nil))
         (when show-add
-          (AddCardModal !show-add card-type topic-id root-topic-id source-ref)))
+          (AddCardModal !show-add card-type topic-id root-topic-id source-ref user-id)))
 
       ;; Separator
       (dom/span (dom/props {:style {:color "var(--color-border)"}}) (dom/text "|"))

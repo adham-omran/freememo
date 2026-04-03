@@ -5,10 +5,8 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.logging :as log]
    #?(:clj [freememo.cards :as cards])
-   #?(:cljs [freememo.anki-sync-helpers :refer [anki-call!]])))
-
-;; Global mutation counter — watched by page_viewer/extract_page to refresh after card changes
-#?(:clj (defonce !card-mutations (atom 0)))
+   #?(:cljs [freememo.anki-sync-helpers :refer [anki-call!]])
+   #?(:clj [freememo.user-state :as us])))
 
 ;; RTL detection — checks if text starts with Arabic/Hebrew characters
 (defn rtl-text? [text]
@@ -24,8 +22,8 @@
         (fn [_] nil)))
      :clj nil))
 
-;; Delete button — bumps global !card-mutations on success
-(e/defn DeleteCardButton [id]
+;; Delete button — bumps per-user :card-mutations on success
+(e/defn DeleteCardButton [id user-id]
   (e/client
     (dom/button
       (dom/props {:class "btn-delete-x"})
@@ -43,7 +41,7 @@
         (when-some [token ?token]
           (let [result (e/server (cards/delete-card click-event))]
             (if (:success result)
-              (do (e/server (swap! !card-mutations inc))
+              (do (e/server (swap! (us/get-atom user-id :card-mutations) inc))
                 (when-some [note-id (:anki-note-id result)]
                   (e/client (try-delete-anki-notes! [note-id])))
                 (token))
@@ -58,7 +56,7 @@
     (and updated-at (pos? (compare (str updated-at) (str synced-at)))) :modified
     :else :synced))
 
-(e/defn CardRow [card !editing-card order]
+(e/defn CardRow [card !editing-card user-id order]
   (e/client
     (let [id (e/server (:flashcards/id card))
           kind (e/server (:flashcards/kind card))
@@ -122,4 +120,4 @@
         (dom/td
           (dom/props {:style {:padding "6px 4px" :width "40px" :text-align "center"
                               :border-bottom "1px solid var(--color-border)"}})
-          (DeleteCardButton id))))))
+          (DeleteCardButton id user-id))))))

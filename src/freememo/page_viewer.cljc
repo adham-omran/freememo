@@ -12,7 +12,6 @@
    [freememo.card-modals :refer [ExportModal PromptDialog EditCardModal AddCardModal]]
    [freememo.content-toolbar :refer [ContentToolbar]]
    [freememo.content-toolbar-helpers :as ct-helpers]
-   [freememo.card-components :as card-components]
    [freememo.anki-sync-panels :as sync-panels]
    [freememo.content-card-table :refer [ContentCardTable]]
    #?(:clj [freememo.page-ocr :as page])
@@ -21,24 +20,21 @@
    #?(:clj [missionary.core :as m])
    [freememo.keyboard :as keyboard]
    [freememo.util :as util]
+   #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db]))
   #?(:clj (:import [missionary Cancelled]
                    [java.util.concurrent Executors])))
 
-#?(:clj (defonce !refresh (atom 0))) ; Server-side refresh trigger
-#?(:clj (defonce !scanning-pages (atom #{}))) ; #{[root-topic-id page-num]} currently scanning via OCR
-#?(:clj (defonce !ocr-errors (atom {}))) ; {[root-topic-id page-num] "error message"}
-#?(:clj (defonce !scan-cancellers (atom {}))) ; {[doc page] cancel-fn} — for cancellability
 #?(:clj (defonce ocr-executor (Executors/newFixedThreadPool 3))) ; bounded queue — 3 concurrent, rest wait
 
 (defn start-ocr-scan!
   "Submit an OCR scan as a Missionary task on the bounded executor.
-   Timeout after 30s. Cancel function stored in !scan-cancellers."
+   Timeout after 30s. Cancel function stored in per-user :scan-cancellers."
   [uid doc page ek dpi]
   #?(:clj
      (do
-       (swap! !scanning-pages conj [doc page])
-       (swap! !ocr-errors dissoc [doc page])
+       (swap! (us/get-atom uid :scanning-pages) conj [doc page])
+       (swap! (us/get-atom uid :ocr-errors) dissoc [doc page])
        (log/log-info (str "OCR scan started topic-id=" doc " page=" page))
        (let [cancel-fn
              ((m/timeout
@@ -46,20 +42,20 @@
                 30000
                 {:success false :error "Scan timed out after 30 seconds"})
               (fn [result]
-                (swap! !scan-cancellers dissoc [doc page])
+                (swap! (us/get-atom uid :scan-cancellers) dissoc [doc page])
                 (if (:success result)
                   (do (log/log-info (str "OCR scan complete topic-id=" doc " page=" page))
-                    (swap! !refresh inc))
+                    (swap! (us/get-atom uid :refresh) inc))
                   (do (log/log-info (str "OCR scan failed topic-id=" doc " page=" page " error=" (:error result)))
-                    (swap! !ocr-errors assoc [doc page] (:error result))))
-                (swap! !scanning-pages disj [doc page]))
+                    (swap! (us/get-atom uid :ocr-errors) assoc [doc page] (:error result))))
+                (swap! (us/get-atom uid :scanning-pages) disj [doc page]))
               (fn [e]
-                (swap! !scan-cancellers dissoc [doc page])
+                (swap! (us/get-atom uid :scan-cancellers) dissoc [doc page])
                 (when-not (instance? Cancelled e)
                   (log/log-info (str "OCR scan error topic-id=" doc " page=" page " ex=" (.getMessage e)))
-                  (swap! !ocr-errors assoc [doc page] (.getMessage e)))
-                (swap! !scanning-pages disj [doc page])))]
-         (swap! !scan-cancellers assoc [doc page] cancel-fn)))
+                  (swap! (us/get-atom uid :ocr-errors) assoc [doc page] (.getMessage e)))
+                (swap! (us/get-atom uid :scanning-pages) disj [doc page])))]
+         (swap! (us/get-atom uid :scan-cancellers) assoc [doc page] cancel-fn)))
      :cljs nil))
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
@@ -99,11 +95,10 @@
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
       (let [root-topics (e/server (db/get-root-topics user-id))
             last-doc-id (e/server (settings/get-last-document user-id))
-            refresh (e/server (e/watch !refresh))
-            ;; Watch card-gen status — re-query when any generation completes
-            card-gen-status (e/server (e/watch ct-helpers/!card-gen-status))
-            sync-mutations (e/server (e/watch sync-panels/!sync-mutations))
-            card-mutations (e/server (e/watch card-components/!card-mutations))
+            refresh (e/server (e/watch (us/get-atom user-id :refresh)))
+            card-gen-status (e/server (e/watch (us/get-atom user-id :card-gen-status)))
+            sync-mutations (e/server (e/watch (us/get-atom user-id :sync-mutations)))
+            card-mutations (e/server (e/watch (us/get-atom user-id :card-mutations)))
             refresh (+ refresh (hash card-gen-status) sync-mutations card-mutations)
             ;; Find valid last doc among root topics
             valid-last-doc (when (some #(= (:topics/id %) last-doc-id) root-topics)
@@ -187,8 +182,8 @@
                 scan-dpi (e/server (settings/get-scan-dpi user-id))
                 card-font-size (e/server (settings/get-card-font-size user-id))
                 ;; Extraction tracking — server-side for true parallelism
-                scanning-pages (e/server (e/watch !scanning-pages))
-                ocr-errors (e/server (e/watch !ocr-errors))
+                scanning-pages (e/server (e/watch (us/get-atom user-id :scanning-pages)))
+                ocr-errors (e/server (e/watch (us/get-atom user-id :ocr-errors)))
                 ;; Auto-save: one-way editor → DB. Don't clear !dirty-html, don't bump !refresh.
                 dirty-data (e/watch editor/!dirty-html)
                 !last-saved-ocr (atom nil)
@@ -270,7 +265,7 @@
                                 [?token ?error] (e/Token change-event)]
                             (when-some [token ?token]
                               (e/server (db/toggle-page-done! selected-doc (:page change-event)))
-                              (e/server (swap! !refresh inc))
+                              (e/server (swap! (us/get-atom user-id :refresh) inc))
                               (token)))))
                       (dom/text "Done"))
 
@@ -296,7 +291,7 @@
                                       doc selected-doc
                                       uid user-id
                                       ek enc-key]
-                                  (if (contains? @!scanning-pages [doc page])
+                                  (if (contains? @(us/get-atom uid :scanning-pages) [doc page])
                                     (log/log-info (str "OCR scan already in progress topic-id=" doc " page=" page))
                                     (do
                                       (start-ocr-scan! uid doc page ek scan-dpi)
@@ -361,7 +356,7 @@
                                   [?token _] (e/Token event)]
                               (when-some [token ?token]
                                 (e/server (db/update-topic-source! selected-doc event))
-                                (e/server (swap! !refresh inc))
+                                (e/server (swap! (us/get-atom user-id :refresh) inc))
                                 (token)
                                 (reset! !editing-source false)))))
                         (dom/button
@@ -414,5 +409,6 @@
                   refresh)
 
                 (ContentCardTable {:topic-id page-topic-id
-                                   :card-font-size card-font-size}
+                                   :card-font-size card-font-size
+                                   :user-id user-id}
                   refresh)))))))))

@@ -9,6 +9,7 @@
    [freememo.content-toolbar :refer [ContentToolbar]]
    [freememo.content-toolbar-helpers :as ct-helpers]
    [freememo.anki-sync-panels :as sync-panels]
+   #?(:clj [freememo.user-state :as us])
    [freememo.content-card-table :refer [ContentCardTable]]
    [freememo.util :refer [start-drag!]]
    #?(:clj [freememo.db :as db])
@@ -16,7 +17,7 @@
    [freememo.keyboard :as keyboard]
    [freememo.card-components :as card-components]))
 
-#?(:clj (defonce !refresh (atom 0)))
+;; Per-user refresh via user-state registry
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 #?(:clj (defn get-topic-by-id* [_refresh topic-id]
@@ -43,10 +44,10 @@
 
       (if (some? topic-id)
         (let [card-font-size (e/server (settings/get-card-font-size user-id))
-              refresh (e/server (e/watch !refresh))
-              card-gen-status (e/server (e/watch ct-helpers/!card-gen-status))
-              sync-mutations (e/server (e/watch sync-panels/!sync-mutations))
-              card-mutations (e/server (e/watch card-components/!card-mutations))
+              refresh (e/server (e/watch (us/get-atom user-id :refresh)))
+              card-gen-status (e/server (e/watch (us/get-atom user-id :card-gen-status)))
+              sync-mutations (e/server (e/watch (us/get-atom user-id :sync-mutations)))
+              card-mutations (e/server (e/watch (us/get-atom user-id :card-mutations)))
               refresh (+ refresh (hash card-gen-status) sync-mutations card-mutations)
               topic (e/server (get-topic-by-id* refresh topic-id))
               content (e/server (or (:topics/content topic) ""))
@@ -232,7 +233,8 @@
 
               ;; Shared card table
               (ContentCardTable {:topic-id topic-id
-                                 :card-font-size card-font-size}
+                                 :card-font-size card-font-size
+                                 :user-id user-id}
                 refresh))))
 
         ;; No topic-id
