@@ -72,6 +72,7 @@
     "pdf" ["PDF" "var(--color-badge-pdf)"]
     "epub" ["EPUB" "var(--color-badge-epub)"]
     ("web" "wikipedia") ["Web" "var(--color-badge-web)"]
+    "markdown" ["MD" "var(--color-badge-web)"]
     ["Topic" "var(--color-badge-epub)"]))
 
 ;; Document tree view — used by LibraryPage
