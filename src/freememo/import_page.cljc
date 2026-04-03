@@ -158,11 +158,7 @@
           (dom/div
             (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
             (dom/button
-              (dom/props {:class "btn btn-secondary"})
-              (dom/text "Cancel")
-              (dom/On "click" (fn [_] (reset! !show false)) nil))
-            (dom/button
-              (dom/props {:class "btn btn-primary" :style {:font-weight "600"}})
+              (dom/props {:class "btn btn-primary" :style {:font-weight "600" :order "1"}})
               (let [event (dom/On "click"
                             (fn [_] {:title @!title :html @!html :url @!url
                                      :auto-extract @!auto-extract})
@@ -195,7 +191,11 @@
                             (reset! !show false)
                             (navigate! :viewer (nav/nav-browse-topic topic-id nil)))
                           (token "Failed to save article")))
-                      (token "Title and content are required")))))))))
+                      (token "Title and content are required"))))))
+            (dom/button
+              (dom/props {:class "btn btn-secondary"})
+              (dom/text "Cancel")
+              (dom/On "click" (fn [_] (reset! !show false)) nil)))))
       (e/watch !mutations))))
 
 ;; URL Import Modal — accepts any URL, auto-detects Wikipedia
@@ -237,17 +237,13 @@
           (dom/div
             (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
             (dom/button
-              (dom/props {:class "btn btn-secondary"})
-              (dom/text "Cancel")
-              (dom/On "click" (fn [_] (reset! !show false)) nil))
-            (dom/button
               (let [event (dom/On "click"
                             (fn [_] {:url @!url :auto-extract @!auto-extract})
                             nil)
                     [?token ?error] (e/Token event)
                     importing? (some? ?token)]
                 (dom/props {:class "btn btn-primary"
-                            :style {:font-weight "600"
+                            :style {:font-weight "600" :order "1"
                                     :cursor (if importing? "not-allowed" "pointer")}
                             :disabled importing?})
                 (dom/text (if importing? "Processing..." "Import"))
@@ -277,7 +273,11 @@
                               (navigate! :viewer (nav/nav-browse-topic (:topic-id result) nil)))
                             (token "Failed to save article"))
                           (token (:error result))))
-                      (token "Please enter a URL")))))))))
+                      (token "Please enter a URL"))))))
+            (dom/button
+              (dom/props {:class "btn btn-secondary"})
+              (dom/text "Cancel")
+              (dom/On "click" (fn [_] (reset! !show false)) nil)))))
       (e/watch !mutations))))
 
 (e/defn UploadPDFModal [!show navigate!]
@@ -351,14 +351,14 @@
             (dom/div
               (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
               (dom/button
-                (dom/props {:class "btn btn-secondary"})
-                (dom/text "Cancel")
-                (dom/On "click" (fn [_] (reset! !show false)) nil))
-              (dom/button
-                (dom/props {:class "btn btn-primary" :style {:font-weight "600"}
+                (dom/props {:class "btn btn-primary" :style {:font-weight "600" :order "1"}
                             :disabled uploading})
                 (dom/text (if uploading "Uploading..." "Upload"))
-                (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil)))))))))
+                (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil))
+              (dom/button
+                (dom/props {:class "btn btn-secondary"})
+                (dom/text "Cancel")
+                (dom/On "click" (fn [_] (reset! !show false)) nil)))))))))
 
 (e/defn UploadEPUBModal [!show navigate!]
   (e/client
@@ -463,14 +463,14 @@
             (dom/div
               (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
               (dom/button
-                (dom/props {:class "btn btn-secondary"})
-                (dom/text "Cancel")
-                (dom/On "click" (fn [_] (reset! !show false)) nil))
-              (dom/button
-                (dom/props {:class "btn btn-primary" :style {:font-weight "600"}
+                (dom/props {:class "btn btn-primary" :style {:font-weight "600" :order "1"}
                             :disabled uploading})
                 (dom/text (if uploading "Processing..." "Upload"))
-                (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil)))))))))
+                (dom/On "click" (fn [_] (when-some [inp @!file-input] (.click inp))) nil))
+              (dom/button
+                (dom/props {:class "btn btn-secondary"})
+                (dom/text "Cancel")
+                (dom/On "click" (fn [_] (reset! !show false)) nil)))))))))
 
 ;; Markdown File Upload Modal
 (e/defn UploadMarkdownModal [!show user-id navigate!]
@@ -566,11 +566,7 @@
           (dom/div
             (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
             (dom/button
-              (dom/props {:class "btn btn-secondary"})
-              (dom/text "Cancel")
-              (dom/On "click" (fn [_] (reset! !show false)) nil))
-            (dom/button
-              (dom/props {:class "btn btn-primary" :style {:font-weight "600"}})
+              (dom/props {:class "btn btn-primary" :style {:font-weight "600" :order "1"}})
               (let [event (dom/On "click"
                             (fn [_] {:title @!title :md-text @!md-text
                                      :auto-extract @!auto-extract})
@@ -605,7 +601,11 @@
                             (reset! !show false)
                             (navigate! :viewer (nav/nav-browse-topic topic-id nil)))
                           (token "Failed to import")))
-                      (token "No file loaded")))))))))
+                      (token "No file loaded"))))))
+            (dom/button
+              (dom/props {:class "btn btn-secondary"})
+              (dom/text "Cancel")
+              (dom/On "click" (fn [_] (reset! !show false)) nil)))))
       (e/watch !mutations))))
 
 ;; Paste Markdown Modal
@@ -663,11 +663,7 @@
           (dom/div
             (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
             (dom/button
-              (dom/props {:class "btn btn-secondary"})
-              (dom/text "Cancel")
-              (dom/On "click" (fn [_] (reset! !show false)) nil))
-            (dom/button
-              (dom/props {:class "btn btn-primary" :style {:font-weight "600"}})
+              (dom/props {:class "btn btn-primary" :style {:font-weight "600" :order "1"}})
               (let [event (dom/On "click"
                             (fn [_] {:title @!title :md-text @!md-text
                                      :auto-extract @!auto-extract})
@@ -702,7 +698,11 @@
                             (reset! !show false)
                             (navigate! :viewer (nav/nav-browse-topic topic-id nil)))
                           (token "Failed to import")))
-                      (token "Please enter some Markdown content")))))))))
+                      (token "Please enter some Markdown content"))))))
+            (dom/button
+              (dom/props {:class "btn btn-secondary"})
+              (dom/text "Cancel")
+              (dom/On "click" (fn [_] (reset! !show false)) nil)))))
       (e/watch !mutations))))
 
 (e/defn NewTopicModal [!show user-id navigate!]
@@ -730,11 +730,7 @@
           (dom/div
             (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
             (dom/button
-              (dom/props {:class "btn btn-secondary"})
-              (dom/text "Cancel")
-              (dom/On "click" (fn [_] (reset! !show false)) nil))
-            (dom/button
-              (dom/props {:class "btn btn-primary" :style {:font-weight "600"}})
+              (dom/props {:class "btn btn-primary" :style {:font-weight "600" :order "1"}})
               (let [event (dom/On "click" (fn [_] @!title) nil)
                     [?token ?error] (e/Token event)
                     creating? (some? ?token)]
@@ -752,7 +748,11 @@
                         (token)
                         (reset! !show false)
                         (navigate! :viewer (nav/nav-browse-topic (:topic-id result) nil)))
-                      (token "Failed to create topic")))))))))
+                      (token "Failed to create topic"))))))
+            (dom/button
+              (dom/props {:class "btn btn-secondary"})
+              (dom/text "Cancel")
+              (dom/On "click" (fn [_] (reset! !show false)) nil)))))
       (e/watch !mutations))))
 
 ;; Main Import page component

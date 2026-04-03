@@ -171,16 +171,12 @@
                     (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "10px"
                                         :margin-top "20px"}})
                     (dom/button
-                      (dom/props {:type "button"
-                                  :class "btn btn-secondary"})
-                      (dom/text "Cancel")
-                      (dom/On "click" (fn [_] (reset! !show-key-modal false)) nil))
-                    (dom/button
                       (let [click-event (dom/On "click" identity nil)
                             [?token _] (e/Token click-event)]
                         (dom/props {:type "button"
                                     :disabled (some? ?token)
-                                    :class "btn btn-primary"})
+                                    :class "btn btn-primary"
+                                    :style {:order "1"}})
                         (dom/text (if (some? ?token) "Saving..." "Save"))
                         (when-some [token ?token]
                           (let [result (e/server (settings/save-openai-api-key user-id draft-key enc-key))]
@@ -193,7 +189,12 @@
                                 (token))
                               (let [err-msg (or (:error result) "Failed to save API key")]
                                 (reset! !key-save-error err-msg)
-                                (token err-msg)))))))))))
+                                (token err-msg)))))))
+                    (dom/button
+                      (dom/props {:type "button"
+                                  :class "btn btn-secondary"})
+                      (dom/text "Cancel")
+                      (dom/On "click" (fn [_] (reset! !show-key-modal false)) nil))))))
 
             ;; Reasoning
             (dom/div
@@ -269,7 +270,7 @@
               (dom/label
                 (dom/props {:style {:display "flex" :align-items "center" :gap "10px"}})
                 (dom/span (dom/props {:class "label" :style {:margin-bottom "0"}})
-                  (dom/text "Card Table Font Size"))
+                  (dom/text "Card Text Size"))
                 (e/for-by identity [_k [:font-size-input]]
                   (dom/input
                     (dom/props {:type "number" :min "10" :max "20"
@@ -286,7 +287,7 @@
                 (dom/span (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
                   (dom/text "px")))
               (dom/div (dom/props {:class "hint"})
-                (dom/text "Adjusts text size in the flashcard table (10-20px)")))))
+                (dom/text "Adjusts text size for cards (10-20px)")))))
 
       ;; ── Anki Sync section ──
         (let [server-source-mode (e/server (settings/get-source-display-mode user-id))
@@ -351,8 +352,8 @@
                            (shortcut-row "G" "Generate cards")
                            (shortcut-row "S" "Scan Page (OCR)")
                            (shortcut-row "X" "Anki Sync")
-                           (shortcut-row "D" "Mark Done")
-                           ]]
+                           (shortcut-row "D" "Mark Done")]]
+            
             (dom/table
               (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px"}})
               (e/for-by :key [s shortcuts]

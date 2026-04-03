@@ -7,7 +7,8 @@
    [freememo.typeahead :refer [Typeahead]]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
-   #?(:clj [freememo.cards :as cards])))
+   #?(:clj [freememo.cards :as cards])
+   #?(:clj [freememo.settings :as settings])))
 
 ;; Browser download helper
 (defn trigger-download! [filename content]
@@ -88,11 +89,7 @@
           (dom/div
             (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-3)"}})
             (dom/button
-              (dom/props {:class "btn btn-secondary"})
-              (dom/text "Cancel")
-              (dom/On "click" (fn [_] (reset! !show-export false)) nil))
-            (dom/button
-              (dom/props {:class "btn btn-primary"})
+              (dom/props {:class "btn btn-primary" :style {:order "1"}})
               (dom/text "Export")
               (let [click-event (dom/On "click" identity nil)
                     [?token ?error] (e/Token click-event)]
@@ -125,7 +122,11 @@
                             (trigger-download! (:filename export-result) (:csv export-result))
                             (reset! !show-export false)
                             (token))
-                          (token (:error export-result)))))))))))))))
+                          (token (:error export-result)))))))))
+            (dom/button
+              (dom/props {:class "btn btn-secondary"})
+              (dom/text "Cancel")
+              (dom/On "click" (fn [_] (reset! !show-export false)) nil))))))))
 
 ;; Pre-prompt dialog
 ;; state map keys: :!show :!prompt-submit :!pre-prompt :!prompt-history
@@ -162,11 +163,7 @@
           (dom/div
             (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-3)"}})
             (dom/button
-              (dom/props {:class "btn btn-secondary"})
-              (dom/text "Cancel")
-              (dom/On "click" (fn [_] (reset! !show false)) nil))
-            (dom/button
-              (dom/props {:class "btn btn-primary"})
+              (dom/props {:class "btn btn-primary" :style {:order "1"}})
               (dom/text "Generate")
               (dom/On "click"
                 (fn [_]
@@ -182,7 +179,11 @@
                                           :pre-prompt local-prompt
                                           :kind prompt-dialog-kind})
                   (reset! !show false))
-                nil))))))))
+                nil))
+            (dom/button
+              (dom/props {:class "btn btn-secondary"})
+              (dom/text "Cancel")
+              (dom/On "click" (fn [_] (reset! !show false)) nil))))))))
 
 ;; Edit card modal
 (e/defn EditCardModal [!editing-card user-id]
@@ -198,7 +199,9 @@
           !cloze (atom init-c)
           question (e/watch !question)
           answer (e/watch !answer)
-          cloze (e/watch !cloze)]
+          cloze (e/watch !cloze)
+          card-font-sz (e/server (settings/get-card-font-size user-id))
+          modal-font (str (or card-font-sz 14) "px")]
       (dom/div
         (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
                             :background "transparent" :display "flex" :align-items "center"
@@ -253,14 +256,14 @@
               (dom/textarea
                 (dom/props {:dir "auto" :value question :rows 3
                             :style {:width "100%" :padding "var(--sp-2)" :margin-bottom "var(--sp-3)"
-                                    :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
+                                    :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !question ev))))
               (dom/label (dom/text "Answer:"))
               (dom/textarea
                 (dom/props {:dir "auto" :value answer :rows 3
                             :style {:width "100%" :padding "var(--sp-2)"
-                                    :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
+                                    :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !answer ev)))))
             (dom/div
@@ -268,17 +271,13 @@
               (dom/textarea
                 (dom/props {:dir "auto" :value cloze :rows 4
                             :style {:width "100%" :padding "var(--sp-2)"
-                                    :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
+                                    :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !cloze ev))))))
           (dom/div
             (dom/props {:style {:display "flex" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
             (dom/button
-              (dom/props {:class "btn btn-secondary"})
-              (dom/text "Cancel")
-              (dom/On "click" (fn [_] (reset! !editing-card nil)) nil))
-            (dom/button
-              (dom/props {:class "btn btn-primary"})
+              (dom/props {:class "btn btn-primary" :style {:order "1"}})
               (dom/text "Save")
               (let [click-event (dom/On "click" identity nil)
                     [?token ?error] (e/Token click-event)]
@@ -292,7 +291,11 @@
                         (e/server (swap! (us/get-atom user-id :card-mutations) inc))
                         (reset! !editing-card nil)
                         (token))
-                      (token (:error result)))))))))))))
+                      (token (:error result)))))))
+            (dom/button
+              (dom/props {:class "btn btn-secondary"})
+              (dom/text "Cancel")
+              (dom/On "click" (fn [_] (reset! !editing-card nil)) nil))))))))
 
 
 (defn insert-flashcards-safe! [rows]
@@ -313,7 +316,9 @@
           !cloze (atom "")
           question (e/watch !question)
           answer (e/watch !answer)
-          cloze (e/watch !cloze)]
+          cloze (e/watch !cloze)
+          card-font-sz (e/server (settings/get-card-font-size user-id))
+          modal-font (str (or card-font-sz 14) "px")]
       (dom/div
         (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
                             :background "transparent" :display "flex" :align-items "center"
@@ -384,14 +389,14 @@
               (dom/textarea
                 (dom/props {:dir "auto" :value question :rows 3
                             :style {:width "100%" :padding "var(--sp-2)" :margin-bottom "var(--sp-3)"
-                                    :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
+                                    :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !question ev))))
               (dom/label (dom/text "Answer:"))
               (dom/textarea
                 (dom/props {:dir "auto" :value answer :rows 3
                             :style {:width "100%" :padding "var(--sp-2)"
-                                    :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
+                                    :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !answer ev)))))
             (dom/div
@@ -399,17 +404,13 @@
               (dom/textarea
                 (dom/props {:dir "auto" :value cloze :rows 4
                             :style {:width "100%" :padding "var(--sp-2)"
-                                    :font-family "system-ui, -apple-system, sans-serif" :font-size "14px"}})
+                                    :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !cloze ev))))))
           (dom/div
             (dom/props {:style {:display "flex" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
             (dom/button
-              (dom/props {:class "btn btn-secondary"})
-              (dom/text "Cancel")
-              (dom/On "click" (fn [_] (reset! !show-add false)) nil))
-            (dom/button
-              (dom/props {:class "btn btn-primary" :style {:border-radius "var(--radius-sm)"}})
+              (dom/props {:class "btn btn-primary" :style {:border-radius "var(--radius-sm)" :order "1"}})
               (dom/text "Save")
               (let [click-event (dom/On "click" identity nil)
                     [?token ?error] (e/Token click-event)]
@@ -435,5 +436,9 @@
                         (e/server (swap! (us/get-atom user-id :card-mutations) inc))
                         (reset! !show-add false)
                         (token))
-                      (token (:error result)))))))))))))
+                      (token (:error result)))))))
+            (dom/button
+              (dom/props {:class "btn btn-secondary"})
+              (dom/text "Cancel")
+              (dom/On "click" (fn [_] (reset! !show-add false)) nil))))))))
 
