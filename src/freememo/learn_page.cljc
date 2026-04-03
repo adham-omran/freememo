@@ -7,17 +7,8 @@
    [contrib.data :refer [clamp-left]]
    [freememo.navigation :as nav]
    #?(:clj [freememo.user-state :as us])
-   [freememo.learn-session :refer [LearnSession]]
    [freememo.util :as util]
    #?(:clj [freememo.db :as db])))
-
-;; Per-user refresh via user-state registry
-
-;; Server-side helpers
-
-(defn get-learning-queue* [_refresh user-id]
-  #?(:clj (vec (db/get-learning-queue user-id))
-     :cljs nil))
 
 ;; Badge display for topic kinds
 (defn kind-badge [kind]
@@ -75,7 +66,7 @@
   #?(:clj (db/get-queue-summary user-id)
      :cljs {:total 0 :inactive 0 :due-today 0 :due-week 0}))
 
-(e/defn LearnOverview [user-id !nav-state navigate!]
+(e/defn LearnOverview [user-id navigate! viewer-nav]
   (e/client
     (dom/div
       (dom/props {:class "page-container"
@@ -91,10 +82,16 @@
         (dom/div
           (dom/props {:style {:display "flex" :align-items "center" :gap "16px" :margin-bottom "16px" :flex-shrink "0"}})
           (when (pos? due-today)
-            (dom/button
-              (dom/props {:class "btn btn-primary" :style {:padding "8px 24px" :font-size "15px" :font-weight "600"}})
-              (dom/text "Start Learning")
-              (dom/On "click" (fn [_] (reset! !nav-state (nav/nav-session))) nil)))
+            (let [session-active? (= :learn-session (:type viewer-nav))]
+              (dom/button
+                (dom/props {:class "btn btn-primary" :style {:padding "8px 24px" :font-size "15px" :font-weight "600"}})
+                (dom/text (if session-active? "Resume Learning" "Start Learning"))
+                (dom/On "click"
+                  (fn [_]
+                    (if session-active?
+                      (navigate! :viewer)
+                      (navigate! :viewer (nav/nav-learn-session))))
+                  nil))))
           (dom/span
             (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
             (dom/text (str (:due-today summary) " due today, "
@@ -177,17 +174,5 @@
             (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px" :margin-top "24px"}})
             (dom/text "No topics yet. Import a document from the Import tab to start learning.")))))))
 
-(e/defn LearnPage [user-id enc-key !nav-state navigate! llm-enabled?]
-  (e/client
-    (let [nav-state (e/watch !nav-state)
-          nav-type (:type nav-state)
-          !queue-idx (atom 0)]
-
-      (case nav-type
-        :session
-        (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
-              queue-vec (e/server (get-learning-queue* refresh user-id))]
-          (LearnSession user-id enc-key queue-vec !queue-idx !nav-state navigate! llm-enabled?))
-
-        ;; Default — show overview (handles :overview and any stale nav-state)
-        (LearnOverview user-id !nav-state navigate!)))))
+(e/defn LearnPage [user-id navigate! viewer-nav]
+  (LearnOverview user-id navigate! viewer-nav))

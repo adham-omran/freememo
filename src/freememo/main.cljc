@@ -8,6 +8,7 @@
             [freememo.library-page :refer [LibraryPage]]
             [freememo.import-page :refer [ImportPage]]
             [freememo.learn-page :refer [LearnPage]]
+            [freememo.learn-session :refer [LearnSession]]
             [freememo.extract-page :refer [ExtractPage]]
             [freememo.page-viewer :refer [OcrPage]]
             [freememo.subset-review :refer [SubsetReviewSession]]
@@ -26,6 +27,10 @@
             {:done (- (count pages) (count remaining))
              :total (count pages)
              :remaining remaining})
+     :cljs nil))
+
+(defn get-learning-queue* [_refresh user-id]
+  #?(:clj (vec (db/get-learning-queue user-id))
      :cljs nil))
 
 (defn get-llm-enabled* [_refresh user-id]
@@ -53,8 +58,6 @@
                   saved-tab (e/server (get-active-tab* settings-refresh user-id))
                   !active-tab (atom saved-tab)
                   active-tab (e/watch !active-tab)
-                  !nav-state (atom (nav/nav-overview))
-                  nav-state (e/watch !nav-state)
                   !viewer-nav (atom nil)
                   viewer-nav (e/watch !viewer-nav)
                   !tab-to-save (atom nil)
@@ -68,15 +71,12 @@
                                :margin-bottom "-2px"})
                   navigate! (fn
                               ([tab]
-                               (when (and (= @!active-tab tab) (= tab :learn))
-                                 (reset! !nav-state (nav/nav-overview)))
                                (reset! !active-tab tab)
                                (reset! !tab-to-save tab))
                               ([tab nav]
                                (log/log-debug (str "Navigation tab=" tab " nav=" (pr-str nav)))
-                               (if (= tab :viewer)
-                                 (reset! !viewer-nav nav)
-                                 (reset! !nav-state nav))
+                               (when (= tab :viewer)
+                                 (reset! !viewer-nav nav))
                                (reset! !active-tab tab)
                                (reset! !tab-to-save tab)))]
 
@@ -130,7 +130,7 @@
               ;; Tab content
               (dom/div
                 (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library} active-tab) "hidden" "auto")}})
-                (when (= active-tab :home) (HomePage navigate! user-id enc-key !nav-state))
+                (when (= active-tab :home) (HomePage navigate! user-id enc-key))
                 (when (= active-tab :library)
                   (let [lib-refresh (e/server (e/watch (us/get-atom user-id :library-refresh)))
                         tree-signal (LibraryPage user-id navigate! lib-refresh)
@@ -139,7 +139,7 @@
                     bumped))
                 (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
                 (when (= active-tab :settings) (SettingsPage user-id username enc-key))
-                (when (= active-tab :learn) (LearnPage user-id enc-key !nav-state navigate! llm-enabled?))
+                (when (= active-tab :learn) (LearnPage user-id navigate! viewer-nav))
                 (when (= active-tab :viewer)
                   (if (nil? viewer-nav)
                     ;; Empty state
@@ -200,6 +200,12 @@
                             (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
                             (let [!vnav (atom viewer-nav)]
                               (OcrPage user-id enc-key !vnav llm-enabled?))))
+
+                        :learn-session
+                        (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
+                              queue-vec (e/server (get-learning-queue* refresh user-id))
+                              !queue-idx (atom 0)]
+                          (LearnSession user-id enc-key queue-vec !queue-idx navigate! llm-enabled?))
 
                         :subset-review
                         (SubsetReviewSession user-id enc-key (:root-id viewer-nav) (:root-name viewer-nav)

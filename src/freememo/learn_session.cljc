@@ -126,7 +126,7 @@
     ["Topic" "var(--color-badge-epub)"]))
 
 ;; Session header bar
-(e/defn SessionHeader [item !queue-idx !nav-state idx total view-source!]
+(e/defn SessionHeader [item !queue-idx navigate! idx total view-source!]
   (e/client
     (let [topic-id (:topics/id item)
           kind (:topics/kind item)
@@ -149,7 +149,7 @@
         (dom/button
           (dom/props {:class "btn btn-sm btn-secondary"})
           (dom/text "\u2190 Back to Learn")
-          (dom/On "click" (fn [_] (reset! !queue-idx 0) (reset! !nav-state (nav/nav-overview))) nil))
+          (dom/On "click" (fn [_] (navigate! :learn)) nil))
 
         ;; Done
         (DoneButton topic-id !queue-idx)
@@ -196,7 +196,7 @@
           (dom/props {:style {:margin-left "auto" :color "var(--color-text-secondary)" :font-size "13px"}})
           (dom/text (str (inc idx) " / " total)))))))
 
-(e/defn LearnSession [user-id enc-key queue-vec !queue-idx !nav-state navigate! llm-enabled?]
+(e/defn LearnSession [user-id enc-key queue-vec !queue-idx navigate! llm-enabled?]
   (e/client
     (let [idx (e/watch !queue-idx)
           total (count queue-vec)]
@@ -223,9 +223,8 @@
               (let [event (dom/On "click" (fn [_] :back) nil)
                     [?token _error] (e/Token event)]
                 (when-some [token ?token]
-                  (reset! !queue-idx 0)
-                  (reset! !nav-state (nav/nav-overview))
-                  (token)))))
+                  (token)
+                  (navigate! :learn)))))
 
           ;; Active topic
           (let [item (nth queue-vec idx nil)
@@ -239,7 +238,7 @@
 
             (when item
               ;; Header
-              (SessionHeader item !queue-idx !nav-state idx total view-source!)
+              (SessionHeader item !queue-idx navigate! idx total view-source!)
 
               ;; Content
               (if show-pdf?

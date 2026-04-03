@@ -35,7 +35,7 @@
              :else (str "in " days " days")))))
      :cljs nil))
 
-(e/defn HomePage [navigate! user-id enc-key !nav-state]
+(e/defn HomePage [navigate! user-id enc-key]
   (e/client
     (let [api-status (e/server (get-api-key-status* user-id enc-key))
           configured? (:configured? api-status)
@@ -96,7 +96,7 @@
               (cond
                 (and new-user? (not configured?)) (navigate! :settings)
                 new-user? (navigate! :import)
-                has-due? (navigate! :learn (nav/nav-session))
+                has-due? (navigate! :viewer (nav/nav-learn-session))
                 :else (navigate! :library)))
             nil))
 
