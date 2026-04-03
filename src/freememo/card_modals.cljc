@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
    [freememo.typeahead :refer [Typeahead]]
+   [freememo.card-components :as card-components]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.cards :as cards])))
 
@@ -186,8 +187,7 @@
 ;; Edit card modal
 (e/defn EditCardModal [!editing-card]
   (e/client
-    (let [!mutations (atom 0)
-          editing-card (e/watch !editing-card)
+    (let [editing-card (e/watch !editing-card)
           card-id (:id editing-card)
           kind (:kind editing-card)
           init-q (or (:question editing-card) "")
@@ -289,11 +289,11 @@
                         result (e/server (cards/update-card card-id fields))]
                     (if (:success result)
                       (do
-                        (swap! !mutations inc)
+                        (e/server (swap! card-components/!card-mutations inc))
                         (reset! !editing-card nil)
                         (token))
-                      (token (:error result))))))))))
-      (e/watch !mutations))))
+                      (token (:error result)))))))))))))
+
 
 (defn insert-flashcards-safe! [rows]
   #?(:clj (try
@@ -306,8 +306,7 @@
 ;; Add card modal — uses topic-id and root-topic-id instead of doc-id + page-number
 (e/defn AddCardModal [!show-add card-type topic-id root-topic-id source-reference]
   (e/client
-    (let [!mutations (atom 0)
-          !kind (atom card-type)
+    (let [!kind (atom card-type)
           kind (e/watch !kind)
           !question (atom "")
           !answer (atom "")
@@ -433,8 +432,8 @@
                         result (e/server (insert-flashcards-safe! rows))]
                     (if (:success result)
                       (do
-                        (swap! !mutations inc)
+                        (e/server (swap! card-components/!card-mutations inc))
                         (reset! !show-add false)
                         (token))
-                      (token (:error result))))))))))
-      (e/watch !mutations))))
+                      (token (:error result)))))))))))))
+

@@ -12,6 +12,7 @@
    [freememo.card-modals :refer [ExportModal PromptDialog EditCardModal AddCardModal]]
    [freememo.content-toolbar :refer [ContentToolbar]]
    [freememo.content-toolbar-helpers :as ct-helpers]
+   [freememo.card-components :as card-components]
    [freememo.anki-sync-panels :as sync-panels]
    [freememo.content-card-table :refer [ContentCardTable]]
    #?(:clj [freememo.page-ocr :as page])
@@ -102,7 +103,8 @@
             ;; Watch card-gen status — re-query when any generation completes
             card-gen-status (e/server (e/watch ct-helpers/!card-gen-status))
             sync-mutations (e/server (e/watch sync-panels/!sync-mutations))
-            refresh (+ refresh (hash card-gen-status) sync-mutations)
+            card-mutations (e/server (e/watch card-components/!card-mutations))
+            refresh (+ refresh (hash card-gen-status) sync-mutations card-mutations)
             ;; Find valid last doc among root topics
             valid-last-doc (when (some #(= (:topics/id %) last-doc-id) root-topics)
                              last-doc-id)
@@ -411,10 +413,6 @@
                                  :llm-enabled? llm-enabled?}
                   refresh)
 
-                (let [card-table-signal
-                      (ContentCardTable {:topic-id page-topic-id
-                                         :card-font-size card-font-size}
-                        refresh)
-                      bumped (when (and card-table-signal (pos? card-table-signal))
-                               (e/server (swap! !refresh inc)))]
-                  bumped)))))))))
+                (ContentCardTable {:topic-id page-topic-id
+                                   :card-font-size card-font-size}
+                  refresh)))))))))
