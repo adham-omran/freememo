@@ -344,7 +344,7 @@ html, body {
     content: '';
     position: absolute;
     left: 0; right: 0;
-    top: -38px; bottom: 0;
+    top: -2px; bottom: -2px;
 }
 .split-divider-v:hover,
 .split-divider-v:active { background: #90caf9; }
