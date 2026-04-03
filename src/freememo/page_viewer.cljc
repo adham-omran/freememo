@@ -96,10 +96,9 @@
       (let [root-topics (e/server (db/get-root-topics user-id))
             last-doc-id (e/server (settings/get-last-document user-id))
             refresh (e/server (e/watch (us/get-atom user-id :refresh)))
-            card-gen-status (e/server (e/watch (us/get-atom user-id :card-gen-status)))
             sync-mutations (e/server (e/watch (us/get-atom user-id :sync-mutations)))
             card-mutations (e/server (e/watch (us/get-atom user-id :card-mutations)))
-            refresh (+ refresh (hash card-gen-status) sync-mutations card-mutations)
+            card-refresh (+ refresh sync-mutations card-mutations)
             ;; Find valid last doc among root topics
             valid-last-doc (when (some #(= (:topics/id %) last-doc-id) root-topics)
                              last-doc-id)
@@ -406,9 +405,9 @@
                                  :context-mode :page
                                  :context-tooltip "Include context for better cards. With a selection: current page + N previous pages. Without: N previous pages."
                                  :llm-enabled? llm-enabled?}
-                  refresh)
+                  card-refresh)
 
                 (ContentCardTable {:topic-id page-topic-id
                                    :card-font-size card-font-size
                                    :user-id user-id}
-                  refresh)))))))))
+                  card-refresh)))))))))
