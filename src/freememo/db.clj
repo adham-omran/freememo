@@ -1065,6 +1065,29 @@
       (tel/error! {:id ::get-full-queue} e)
       [])))
 
+(defn get-queue-summary
+  "Aggregate queue stats in a single SQL query."
+  [user-id]
+  (try
+    (let [result (jdbc/execute-one! ds
+                   ["SELECT COUNT(*) AS total,
+                           COUNT(*) FILTER (WHERE status = 'done') AS inactive,
+                           COUNT(*) FILTER (WHERE (status = 'active' OR status IS NULL)
+                                             AND (next_review_at IS NULL
+                                                  OR next_review_at <= CURRENT_TIMESTAMP)) AS due_today,
+                           COUNT(*) FILTER (WHERE (status = 'active' OR status IS NULL)
+                                             AND (next_review_at IS NULL
+                                                  OR next_review_at <= CURRENT_TIMESTAMP + INTERVAL '7 days')) AS due_week
+                    FROM topics
+                    WHERE user_id = ? AND kind != 'page'" user-id])]
+      {:total (or (:total result) 0)
+       :inactive (or (:inactive result) 0)
+       :due-today (or (:due_today result) 0)
+       :due-week (or (:due_week result) 0)})
+    (catch Exception e
+      (tel/error! {:id ::get-queue-summary} e)
+      {:total 0 :inactive 0 :due-today 0 :due-week 0})))
+
 (defn get-review-calendar
   "Topic counts per day for the next N days."
   [user-id days]

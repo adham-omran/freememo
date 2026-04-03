@@ -113,7 +113,7 @@
         ;; Section 3: Quick links (compact)
         (dom/div
           (dom/props {:style {:display "flex" :gap "12px" :margin-bottom "40px"}})
-          (e/for-by first [row [["Import" :import] ["Library" :library] ["Queue" :queue]]]
+          (e/for-by first [row [["Import" :import] ["Library" :library] ["Learn" :learn]]]
             (let [[label target] row]
               (dom/button
                 (dom/props {:class "btn btn-secondary"
