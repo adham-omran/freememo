@@ -58,7 +58,11 @@
             (fn
               ([_tab] (if origin (navigate! origin) (reset! !nav-state (nav/nav-overview))))
               ([_tab _nav] (if origin (navigate! origin) (reset! !nav-state (nav/nav-overview)))))
-            nil llm-enabled? origin))
+            (fn [root-id page kind]
+              (if (= kind "pdf")
+                (reset! !nav-state (nav/nav-browse-pdf root-id page origin))
+                (reset! !nav-state (nav/nav-browse-topic root-id origin))))
+            llm-enabled? origin))
         (do (reset! !nav-state (nav/nav-overview)) nil)))))
 
 (e/defn LearnBrowseDoc [user-id enc-key nav title !nav-state llm-enabled? origin navigate!]
