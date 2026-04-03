@@ -416,5 +416,5 @@
                                          :card-font-size card-font-size}
                         refresh)
                       bumped (when (and card-table-signal (pos? card-table-signal))
-                               (swap! !refresh inc))]
+                               (e/server (swap! !refresh inc)))]
                   bumped)))))))))
