@@ -12,10 +12,10 @@
             [freememo.queue-page :refer [QueuePage]]
             [freememo.login-page :refer [LoginPage]]
             [freememo.keyboard :as keyboard]
-            #?(:clj [freememo.settings :as settings])))
+            #?(:clj [freememo.settings :as settings])
+            #?(:clj [freememo.user-state :as us])))
 
-#?(:clj (defonce !settings-refresh (atom 0)))
-#?(:clj (defonce !library-refresh (atom 0)))
+;; Per-user refresh via user-state registry
 
 (defn get-llm-enabled* [_refresh user-id]
   #?(:clj (settings/get-llm-enabled user-id)
@@ -37,7 +37,7 @@
           (dom/div
             (dom/props {:style {:height "100vh" :display "flex" :flex-direction "column" :overflow "hidden"}})
 
-            (let [settings-refresh (e/server (e/watch !settings-refresh))
+            (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
                   llm-enabled? (e/server (get-llm-enabled* settings-refresh user-id))
                   saved-tab (e/server (get-active-tab* settings-refresh user-id))
                   !active-tab (atom saved-tab)
@@ -117,14 +117,14 @@
                 (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:extract :learn :library :queue} active-tab) "hidden" "auto")}})
                 (when (= active-tab :home) (HomePage navigate! user-id enc-key !nav-state))
                 (when (= active-tab :library)
-                  (let [lib-refresh (e/server (e/watch !library-refresh))
+                  (let [lib-refresh (e/server (e/watch (us/get-atom user-id :library-refresh)))
                         tree-signal (LibraryPage user-id navigate! lib-refresh)
                         bumped (when (and tree-signal (pos? tree-signal))
-                                 (e/server (swap! !library-refresh inc)))]
+                                 (e/server (swap! (us/get-atom user-id :library-refresh) inc)))]
                     bumped))
                 (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
                 (when (= active-tab :queue) (QueuePage user-id navigate!))
-                (when (= active-tab :settings) (SettingsPage user-id username enc-key !settings-refresh))
+                (when (= active-tab :settings) (SettingsPage user-id username enc-key))
                 (when (= active-tab :learn) (LearnPage user-id enc-key !nav-state navigate! llm-enabled?))
                 (when (= active-tab :extract)
                   (ExtractPage user-id enc-key (:topic-id nav-state) navigate!

@@ -6,9 +6,8 @@
    [freememo.page-viewer :refer [OcrPage]]
    [freememo.extract-page :refer [ExtractPage]]
    [freememo.util :as util]
-   #?(:clj [freememo.db :as db])))
-
-#?(:clj (defonce !refresh (atom 0)))
+   #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.user-state :as us])))
 
 ;; Server wrappers — _refresh creates reactive dependency
 (defn get-subset-queue* [_refresh user-id root-id]
@@ -104,7 +103,7 @@
   (e/client
     (let [!queue-idx (atom 0)
           idx (e/watch !queue-idx)
-          refresh (e/server (e/watch !refresh))
+          refresh (e/server (e/watch (us/get-atom user-id :refresh)))
           queue-vec (e/server (get-subset-queue* refresh user-id root-id))
           total (count queue-vec)]
       (dom/div

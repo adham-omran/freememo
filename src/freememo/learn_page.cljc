@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.logging :as log]
    [freememo.navigation :as nav]
+   #?(:clj [freememo.user-state :as us])
    [freememo.learn-session :refer [LearnSession]]
    [freememo.subset-review :refer [SubsetReviewSession]]
    [freememo.page-viewer :as page-viewer :refer [OcrPage]]
@@ -13,7 +14,7 @@
    #?(:clj [freememo.db :as db])
    [freememo.card-components :as card-components]))
 
-#?(:clj (defonce !refresh (atom 0)))
+;; Per-user refresh via user-state registry
 
 (defn get-browse-page-stats* [_refresh parent-id]
   #?(:clj (let [pages (db/list-pages parent-id)
@@ -71,7 +72,7 @@
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
       (let [topic-id (:topic-id nav)
             doc-title (e/server (:topics/title (db/get-topic topic-id)))
-            pv-refresh (e/server (e/watch page-viewer/!refresh))
+            pv-refresh (e/server (e/watch (us/get-atom user-id :refresh)))
             page-stats (e/server (get-browse-page-stats* pv-refresh topic-id))]
         (dom/div
           (dom/props {:class "header-bar" :style {:gap "12px"}})
@@ -106,7 +107,7 @@
       (dom/props {:class "page-container"
                   :style {:height "100%" :display "flex" :flex-direction "column"}})
 
-      (let [refresh (e/server (e/watch !refresh))
+      (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
             due-count (e/server (get-learning-queue-count* refresh user-id))
             total-count (e/server (get-total-topic-count* refresh user-id))]
 
@@ -234,7 +235,7 @@
                               [?token _] (e/Token event)]
                           (when-some [token ?token]
                             (e/server (db/restore-topic! item-id))
-                            (e/server (swap! !refresh inc))
+                            (e/server (swap! (us/get-atom user-id :refresh) inc))
                             (token))))
                       ;; Delete button
                       (let [!show-confirm-delete (atom false)
@@ -272,7 +273,7 @@
                                                        (db/get-all-anki-note-ids item-id)
                                                        (db/get-anki-note-ids item-id)))]
                                       (e/server (db/delete-topic! item-id))
-                                      (e/server (swap! !refresh inc))
+                                      (e/server (swap! (us/get-atom user-id :refresh) inc))
                                       (e/client (card-components/try-delete-anki-notes! note-ids))
                                       (reset! !show-confirm-delete false)
                                       (token))))))))))))))))))))
@@ -297,7 +298,7 @@
           !nav-state llm-enabled? (:origin nav-state) navigate!)
 
         :session
-        (let [refresh (e/server (e/watch !refresh))
+        (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
               queue-vec (e/server (get-learning-queue* refresh user-id))]
           (LearnSession user-id enc-key queue-vec !queue-idx !nav-state navigate! llm-enabled?))
 

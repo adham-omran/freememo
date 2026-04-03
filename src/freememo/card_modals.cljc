@@ -5,7 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
    [freememo.typeahead :refer [Typeahead]]
-   [freememo.card-components :as card-components]
+   #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.cards :as cards])))
 
@@ -185,7 +185,7 @@
                 nil))))))))
 
 ;; Edit card modal
-(e/defn EditCardModal [!editing-card]
+(e/defn EditCardModal [!editing-card user-id]
   (e/client
     (let [editing-card (e/watch !editing-card)
           card-id (:id editing-card)
@@ -289,7 +289,7 @@
                         result (e/server (cards/update-card card-id fields))]
                     (if (:success result)
                       (do
-                        (e/server (swap! card-components/!card-mutations inc))
+                        (e/server (swap! (us/get-atom user-id :card-mutations) inc))
                         (reset! !editing-card nil)
                         (token))
                       (token (:error result)))))))))))))
@@ -304,7 +304,7 @@
      :cljs nil))
 
 ;; Add card modal — uses topic-id and root-topic-id instead of doc-id + page-number
-(e/defn AddCardModal [!show-add card-type topic-id root-topic-id source-reference]
+(e/defn AddCardModal [!show-add card-type topic-id root-topic-id source-reference user-id]
   (e/client
     (let [!kind (atom card-type)
           kind (e/watch !kind)
@@ -432,7 +432,7 @@
                         result (e/server (insert-flashcards-safe! rows))]
                     (if (:success result)
                       (do
-                        (e/server (swap! card-components/!card-mutations inc))
+                        (e/server (swap! (us/get-atom user-id :card-mutations) inc))
                         (reset! !show-add false)
                         (token))
                       (token (:error result)))))))))))))

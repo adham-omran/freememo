@@ -8,10 +8,8 @@
    [freememo.anki-sync-form :as form]
    #?(:clj [freememo.anki-sync-server :as sync])
    #?(:clj [freememo.settings :as settings])
+   #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])))
-
-;; Global mutation counter — watched by page_viewer/extract_page to refresh after sync
-#?(:clj (defonce !sync-mutations (atom 0)))
 
 (e/defn AnkiSyncExecutor
   "Handles push/pull execution and server recording.
@@ -53,7 +51,7 @@
         (when-some [token ?token]
           (let [result (e/server (sync/record-pushed-notes pairs))]
             (if (:success result)
-              (do (e/server (swap! !sync-mutations inc))
+              (do (e/server (swap! (us/get-atom user-id :sync-mutations) inc))
                 (e/server (settings/save-anki-sync-settings user-id
                             {:scope scope :deck selected-deck
                              :basic-model basic-model :cloze-model cloze-model
@@ -75,7 +73,7 @@
         (when-some [token ?token]
           (let [result (e/server (sync/apply-pull-updates updates deleted))]
             (if (:success result)
-              (do (e/server (swap! !sync-mutations inc))
+              (do (e/server (swap! (us/get-atom user-id :sync-mutations) inc))
                 (e/server (settings/save-anki-sync-settings user-id
                             {:scope scope :deck selected-deck
                              :basic-model basic-model :cloze-model cloze-model

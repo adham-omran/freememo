@@ -4,9 +4,10 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.util :refer [mac-platform?]]
-   #?(:clj [freememo.settings :as settings])))
+   #?(:clj [freememo.settings :as settings])
+   #?(:clj [freememo.user-state :as us])))
 
-(e/defn SettingsPage [user-id username enc-key !settings-refresh]
+(e/defn SettingsPage [user-id username enc-key]
   (e/client
     (dom/div
       (dom/props {:class "page-container"})
@@ -77,7 +78,7 @@
                     (reset! !llm-enabled change-event))
                   (when-some [token ?token]
                     (e/server (settings/save-llm-enabled user-id change-event))
-                    (e/server (swap! !settings-refresh inc))
+                    (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
                     (token))))
               (dom/div
                 (dom/span
@@ -311,7 +312,7 @@
                         (reset! !source-mode change-event))
                       (when-some [token ?token]
                         (e/server (settings/save-source-display-mode user-id change-event))
-                        (e/server (swap! !settings-refresh inc))
+                        (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
                         (token))))
                   (dom/div
                     (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
@@ -330,7 +331,7 @@
                         (reset! !source-mode change-event))
                       (when-some [token ?token]
                         (e/server (settings/save-source-display-mode user-id change-event))
-                        (e/server (swap! !settings-refresh inc))
+                        (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
                         (token))))
                   (dom/div
                     (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
