@@ -53,15 +53,7 @@
                (throw (ex-info "OpenAI API key not configured" {})))
            image (pdf-page->image pdf-bytes page-number dpi)
            base64-image (image->base64 image)
-           prompt "Extract all text from this image and return it as clean, semantic HTML. Use:
-- <h1>, <h2>, <h3> for headings
-- <p> for paragraphs
-- <ul><li> and <ol><li> for lists
-- <strong> for bold/important text
-- <em> for italic/emphasized text
-- <br> for line breaks within paragraphs
-Preserve the reading order and document structure. Return only the HTML body content (no <html> or <body> tags).
-IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return raw HTML only."
+           prompt (settings/get-ocr-prompt user-id)
            response (api/create-chat-completion
                       {:model "gpt-5.1"
                        :messages [{:role "user"

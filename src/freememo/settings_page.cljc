@@ -256,7 +256,81 @@
                       (e/server (settings/save-scan-dpi user-id change-event))
                       (token))))
                 (dom/div (dom/props {:class "hint"})
-                  (dom/text "Higher quality improves text recognition but increases processing time and API cost"))))))
+                  (dom/text "Higher quality improves text recognition but increases processing time and API cost"))))
+
+            ;; ── Prompts (inside when llm-enabled) ──
+            (let [default-sys (e/server (settings/get-default-system-prompt))
+                  server-sys (e/server (settings/get-system-prompt user-id))
+                  !sys-prompt (atom server-sys)
+                  sys-prompt (e/watch !sys-prompt)
+                  default-ocr (e/server (settings/get-default-ocr-prompt))
+                  server-ocr (e/server (settings/get-ocr-prompt user-id))
+                  !ocr-prompt (atom server-ocr)
+                  ocr-prompt (e/watch !ocr-prompt)]
+
+              ;; Card Generation System Prompt
+              (dom/div
+                (dom/props {:class "field"})
+                (dom/label (dom/props {:class "label"}) (dom/text "Card Generation System Prompt"))
+                (dom/div (dom/props {:class "hint" :style {:margin-bottom "8px"}})
+                  (dom/text "Controls the persona, rules, and style for flashcard generation. Format-specific instructions (basic/cloze/context) are appended automatically."))
+                (dom/textarea
+                  (dom/props {:rows "20"
+                              :style {:width "100%" :font-family "monospace" :font-size "12px" :line-height "1.5"
+                                      :padding "10px" :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"
+                                      :background "var(--color-bg-subtle)" :resize "vertical"
+                                      :color "var(--color-text-primary)"}})
+                  (set! (.-value dom/node) sys-prompt)
+                  (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                        [?token _] (e/Token change-event)]
+                    (when (some? change-event)
+                      (reset! !sys-prompt change-event))
+                    (when-some [token ?token]
+                      (e/server (settings/save-system-prompt user-id change-event))
+                      (token))))
+                (dom/button
+                  (dom/props {:type "button" :class "btn btn-secondary"
+                              :disabled (= sys-prompt default-sys)
+                              :style {:margin-top "8px" :padding "4px 12px" :font-size "12px"}})
+                  (dom/text "Reset to Default")
+                  (let [click-event (dom/On "click" identity nil)
+                        [?token _] (e/Token click-event)]
+                    (when-some [token ?token]
+                      (e/server (settings/reset-system-prompt user-id))
+                      (reset! !sys-prompt default-sys)
+                      (token)))))
+
+              ;; OCR Extraction Prompt
+              (dom/div
+                (dom/props {:class "field" :style {:margin-top "20px"}})
+                (dom/label (dom/props {:class "label"}) (dom/text "OCR Extraction Prompt"))
+                (dom/div (dom/props {:class "hint" :style {:margin-bottom "8px"}})
+                  (dom/text "Instructions for extracting text from PDF page images. Controls how tables, headings, and structure are handled."))
+                (dom/textarea
+                  (dom/props {:rows "10"
+                              :style {:width "100%" :font-family "monospace" :font-size "12px" :line-height "1.5"
+                                      :padding "10px" :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"
+                                      :background "var(--color-bg-subtle)" :resize "vertical"
+                                      :color "var(--color-text-primary)"}})
+                  (set! (.-value dom/node) ocr-prompt)
+                  (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                        [?token _] (e/Token change-event)]
+                    (when (some? change-event)
+                      (reset! !ocr-prompt change-event))
+                    (when-some [token ?token]
+                      (e/server (settings/save-ocr-prompt user-id change-event))
+                      (token))))
+                (dom/button
+                  (dom/props {:type "button" :class "btn btn-secondary"
+                              :disabled (= ocr-prompt default-ocr)
+                              :style {:margin-top "8px" :padding "4px 12px" :font-size "12px"}})
+                  (dom/text "Reset to Default")
+                  (let [click-event (dom/On "click" identity nil)
+                        [?token _] (e/Token click-event)]
+                    (when-some [token ?token]
+                      (e/server (settings/reset-ocr-prompt user-id))
+                      (reset! !ocr-prompt default-ocr)
+                      (token))))))))
 
       ;; ── Appearance section ──
         (let [server-font-size (e/server (settings/get-card-font-size user-id))

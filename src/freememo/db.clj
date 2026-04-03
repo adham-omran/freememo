@@ -450,6 +450,13 @@
                  :do-update-set {:value value
                                  :updated_at [:now]}})))
 
+(defn delete-setting [user-id key]
+  (jdbc/execute! ds
+    (sql/format {:delete-from :settings
+                 :where [:and
+                         [:= :user_id user-id]
+                         [:= :key key]]})))
+
 ;; ---------------------------------------------------------------------------
 ;; Google OAuth user queries (unchanged)
 ;; ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@
    [freememo.db :as db]
    [freememo.crypto :as crypto]
    [taoensso.telemere :as tel]
+   [clojure.java.io :as io]
    [clojure.string :as str]))
 
 ;; Toggle: set to false from REPL to disable shared key fallback
@@ -39,6 +40,8 @@
 (def PRE_PROMPT_HISTORY "pre_prompt_history")
 (def CARD_FONT_SIZE "card_font_size")
 (def SCAN_DPI "scan_dpi")
+(def PROMPT_SYSTEM "prompt_system")
+(def PROMPT_OCR "prompt_ocr")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
 
 ;; OpenAI key helpers
@@ -100,8 +103,8 @@
       (if (valid raw)
         (keyword raw)
         (case raw
-          "pdf"       :library
-          "contents"  :library
+          "pdf" :library
+          "contents" :library
           "workspace" :learn
           :home)))
     (catch Exception e
@@ -337,3 +340,64 @@
     (catch Exception e
       (tel/error! {:id ::save-anki-sync-settings} e)
       {:success false :error "Failed to save Anki sync settings"})))
+
+;; ── Prompt overrides ──
+
+(def default-system-prompt
+  (delay
+    (try (slurp (io/resource "prompts/system.md"))
+      (catch Exception _ nil))))
+
+(def default-ocr-prompt
+  "Extract all text from this image and return it as clean, semantic HTML. Use:
+- <h1>, <h2>, <h3> for headings
+- <p> for paragraphs
+- <ul><li> and <ol><li> for lists
+- <strong> for bold/important text
+- <em> for italic/emphasized text
+- <br> for line breaks within paragraphs
+Preserve the reading order and document structure. Return only the HTML body content (no <html> or <body> tags).
+IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return raw HTML only.")
+
+(defn get-default-system-prompt [] @default-system-prompt)
+(defn get-default-ocr-prompt [] default-ocr-prompt)
+
+(defn get-system-prompt [user-id]
+  (or (db/get-setting user-id PROMPT_SYSTEM)
+    @default-system-prompt))
+
+(defn get-ocr-prompt [user-id]
+  (or (db/get-setting user-id PROMPT_OCR)
+    default-ocr-prompt))
+
+(defn save-system-prompt [user-id value]
+  (try
+    (db/set-setting user-id PROMPT_SYSTEM value)
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-system-prompt} e)
+      {:success false :error "Failed to save system prompt"})))
+
+(defn save-ocr-prompt [user-id value]
+  (try
+    (db/set-setting user-id PROMPT_OCR value)
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-ocr-prompt} e)
+      {:success false :error "Failed to save OCR prompt"})))
+
+(defn reset-system-prompt [user-id]
+  (try
+    (db/delete-setting user-id PROMPT_SYSTEM)
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::reset-system-prompt} e)
+      {:success false :error "Failed to reset system prompt"})))
+
+(defn reset-ocr-prompt [user-id]
+  (try
+    (db/delete-setting user-id PROMPT_OCR)
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::reset-ocr-prompt} e)
+      {:success false :error "Failed to reset OCR prompt"})))
