@@ -11,7 +11,6 @@
             [freememo.extract-page :refer [ExtractPage]]
             [freememo.page-viewer :refer [OcrPage]]
             [freememo.subset-review :refer [SubsetReviewSession]]
-            [freememo.queue-page :refer [QueuePage]]
             [freememo.login-page :refer [LoginPage]]
             [freememo.keyboard :as keyboard]
             #?(:clj [freememo.settings :as settings])
@@ -124,18 +123,13 @@
                   (dom/On "click" (fn [_] (navigate! :import)) nil))
 
                 (dom/button
-                  (dom/props {:style (tab-style :queue)})
-                  (dom/text "Queue")
-                  (dom/On "click" (fn [_] (navigate! :queue)) nil))
-
-                (dom/button
                   (dom/props {:style (tab-style :settings)})
                   (dom/text "Settings")
                   (dom/On "click" (fn [_] (navigate! :settings)) nil)))
 
               ;; Tab content
               (dom/div
-                (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :queue} active-tab) "hidden" "auto")}})
+                (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library} active-tab) "hidden" "auto")}})
                 (when (= active-tab :home) (HomePage navigate! user-id enc-key !nav-state))
                 (when (= active-tab :library)
                   (let [lib-refresh (e/server (e/watch (us/get-atom user-id :library-refresh)))
@@ -144,7 +138,6 @@
                                  (e/server (swap! (us/get-atom user-id :library-refresh) inc)))]
                     bumped))
                 (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
-                (when (= active-tab :queue) (QueuePage user-id navigate!))
                 (when (= active-tab :settings) (SettingsPage user-id username enc-key))
                 (when (= active-tab :learn) (LearnPage user-id enc-key !nav-state navigate! llm-enabled?))
                 (when (= active-tab :viewer)
@@ -186,7 +179,7 @@
                               (dom/props {:class "header-bar" :style {:gap "12px"}})
                               (dom/button
                                 (dom/props {:class "btn btn-sm btn-secondary"})
-                                (dom/text (case origin :queue "Back to Queue" :library "Back to Library" "Back"))
+                                (dom/text (case origin :library "Back to Library" :learn "Back to Learn" "Back"))
                                 (dom/On "click" (fn [_] (navigate! (or origin :library))) nil))
                               (dom/span
                                 (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})

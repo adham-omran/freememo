@@ -86,7 +86,7 @@
                                   :border-bottom "1px solid var(--color-border)"}})
               (dom/button
                 (dom/props {:class "btn btn-sm btn-secondary" :style {:background "var(--color-bg-subtle)"}})
-                (dom/text (case origin :queue "Back to Queue" :library "Back to Library" "Back to Learn"))
+                (dom/text (case origin :library "Back to Library" :learn "Back to Learn" "Back"))
                 (dom/On "click" (fn [_] (navigate! (or origin :learn))) nil))
               (if (= extract-status "active")
                 ;; Active: show Done
