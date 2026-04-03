@@ -168,10 +168,7 @@
                             (if (nil? page-number)
                               (or filename "Untitled")
                               (str (or filename "Unknown") " \u2014 p. " page-number)))]
-                (if (and view-source!
-                      (or (= root-kind "pdf")
-                        (#{"web" "wikipedia"} root-kind)
-                        parent-is-intermediate))
+                (if (and view-source! parent-id)
                   (dom/span
                     (dom/props {:style {:color "var(--color-primary)" :font-size "13px" :cursor "pointer"
                                         :text-decoration "underline"}
