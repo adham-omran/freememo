@@ -22,20 +22,14 @@
    :title (or (:topics/title row) "Untitled")
    :kind (or (:topics/kind row) "basic")
    :created-at (:topics/created_at row)
-   :total-pages (or (:total_pages row) 0)
-   :ocrd-pages (or (:ocrd_pages row) 0)
-   :done-pages (or (:done_pages row) 0)
+   :total-items (or (:total_items row) 0)
+   :done-items (or (:done_items row) 0)
    :total-cards (or (:total_cards row) 0)
    :synced-cards (or (:synced_cards row) 0)})
 
-(defn done-pct [{:keys [done-pages total-pages]}]
-  (if (pos? total-pages)
-    (/ (double done-pages) total-pages)
-    0.0))
-
-(defn ocr-pct [{:keys [ocrd-pages total-pages]}]
-  (if (pos? total-pages)
-    (/ (double ocrd-pages) total-pages)
+(defn done-pct [{:keys [done-items total-items]}]
+  (if (pos? total-items)
+    (/ (double done-items) total-items)
     0.0))
 
 (defn synced-pct [{:keys [synced-cards total-cards]}]
@@ -43,11 +37,11 @@
     (/ (double synced-cards) total-cards)
     0.0))
 
-(defn completion-status [{:keys [done-pages total-pages]}]
+(defn completion-status [{:keys [done-items total-items]}]
   (cond
-    (zero? total-pages) :not-started
-    (= done-pages total-pages) :complete
-    (zero? done-pages) :not-started
+    (zero? total-items) :not-started
+    (= done-items total-items) :complete
+    (zero? done-items) :not-started
     :else :in-progress))
 
 (defn apply-filters [rows kind-filter status-filter]
@@ -60,14 +54,12 @@
 (defn sort-rows [rows sort-col sort-dir]
   (let [key-fn (case sort-col
                  :document :title
-                 :ocrd ocr-pct
                  :cards :total-cards
                  :done done-pct
                  :synced synced-pct
                  done-pct)
         ;; For pct columns, items where the denominator is 0 (N/A) sort to bottom
         na? (case sort-col
-              :ocrd   #(zero? (:total-pages %))
               :synced #(zero? (:total-cards %))
               nil)
         cmp (if (= sort-dir :asc) compare (fn [a b] (compare b a)))]
@@ -99,7 +91,7 @@
             sorted (vec (sort-rows filtered sort-col sort-dir))
             item-count (count sorted)
             row-height 36
-            grid-cols "1fr 90px 70px 90px 90px"]
+            grid-cols "1fr 70px 90px 90px"]
 
         ;; Header row: title + filters
         (dom/div
@@ -164,10 +156,6 @@
                       (dom/On "click" (fn [_] (toggle-sort! :document)) nil))
                     (dom/th
                       (dom/props {:style (merge th-base {:text-align "center"})})
-                      (dom/text (str "OCR'd" (arrow :ocrd)))
-                      (dom/On "click" (fn [_] (toggle-sort! :ocrd)) nil))
-                    (dom/th
-                      (dom/props {:style (merge th-base {:text-align "center"})})
                       (dom/text (str "Cards" (arrow :cards)))
                       (dom/On "click" (fn [_] (toggle-sort! :cards)) nil))
                     (dom/th
@@ -191,7 +179,7 @@
                     (e/for [i (Tape offset limit)]
                       (let [item (nth sorted i nil)]
                         (when item
-                          (let [{:keys [id title kind total-pages ocrd-pages done-pages total-cards synced-cards]} item
+                          (let [{:keys [id title kind total-items done-items total-cards synced-cards]} item
                                 [badge-text badge-color] (kind-badge kind)
                                 is-pdf? (= kind "pdf")]
                             (dom/tr
@@ -214,12 +202,6 @@
                                   (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}
                                               :data-tooltip title})
                                   (dom/text title)))
-                              ;; OCR'd
-                              (dom/td
-                                (dom/props {:style {:padding "4px 6px" :text-align "center" :color "var(--color-text-secondary)"}})
-                                (dom/text (if is-pdf?
-                                            (str ocrd-pages " / " total-pages)
-                                            "\u2013")))
                               ;; Cards
                               (dom/td
                                 (dom/props {:style {:padding "4px 6px" :text-align "center" :color "var(--color-text-secondary)"}})
@@ -228,10 +210,10 @@
                               (dom/td
                                 (dom/props {:style {:padding "4px 6px" :text-align "center"
                                                     :color (cond
-                                                             (and (pos? total-pages) (= done-pages total-pages)) "var(--color-success-dark)"
-                                                             (pos? done-pages) "var(--color-text-primary)"
+                                                             (and (pos? total-items) (= done-items total-items)) "var(--color-success-dark)"
+                                                             (pos? done-items) "var(--color-text-primary)"
                                                              :else "var(--color-text-secondary)")}})
-                                (dom/text (str done-pages " / " total-pages)))
+                                (dom/text (str done-items " / " total-items)))
                               ;; Synced
                               (dom/td
                                 (dom/props {:style {:padding "4px 6px" :text-align "center" :color "var(--color-text-secondary)"}})
