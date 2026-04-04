@@ -64,13 +64,13 @@
         (dom/props {:class "toolbar"})
 
         ;; Settings controls (context, card type, card count)
+        ;; Atoms passed as positional args — Electric can't serialize atoms inside maps
         (settings/ToolbarSettings
           {:user-id user-id :context-tooltip context-tooltip :radio-name radio-name
            :llm-enabled? llm-enabled?
-           :!use-context !use-context :use-context use-context
-           :!context-window !context-window :context-window context-window
-           :!card-type !card-type :card-type card-type
-           :!card-count !card-count :card-count-val card-count-val})
+           :use-context use-context :context-window context-window
+           :card-type card-type :card-count-val card-count-val}
+          !use-context !context-window !card-type !card-count)
 
         ;; Generate buttons + processors + prompt dialog
         ;; All generate/prompt atoms are LOCAL to ToolbarGenerate (not in this map)
