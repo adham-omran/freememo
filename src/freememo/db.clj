@@ -969,24 +969,42 @@
 
 (defn get-document-status
   "Get progress stats for all root documents owned by user-id.
+   For PDFs: counts kind='page' direct children.
+   For non-PDFs: counts root itself + all descendants (recursive).
    Returns a vector of maps with :id, :title, :kind, :created_at,
-   :total_pages, :ocrd_pages, :done_pages, :total_cards, :synced_cards."
+   :total_items, :done_items, :total_cards, :synced_cards."
   [user-id]
   (jdbc/execute! ds
     ["SELECT t.id, t.title, t.kind, t.created_at,
-             COALESCE(ps.total_pages, 0)  AS total_pages,
-             COALESCE(ps.ocrd_pages, 0)   AS ocrd_pages,
-             COALESCE(ps.done_pages, 0)   AS done_pages,
+             CASE WHEN t.kind = 'pdf' THEN COALESCE(ps.total_pages, 0)
+                  ELSE COALESCE(ds.total_items, 0)
+             END AS total_items,
+             CASE WHEN t.kind = 'pdf' THEN COALESCE(ps.done_pages, 0)
+                  ELSE COALESCE(ds.done_items, 0)
+             END AS done_items,
              COALESCE(cs.total_cards, 0)  AS total_cards,
              COALESCE(cs.synced_cards, 0) AS synced_cards
       FROM topics t
       LEFT JOIN LATERAL (
-        SELECT COUNT(*)                                    AS total_pages,
-               COUNT(*) FILTER (WHERE p.content IS NOT NULL AND p.content <> '') AS ocrd_pages,
-               COUNT(*) FILTER (WHERE p.status = 'done')   AS done_pages
+        SELECT COUNT(*)                                  AS total_pages,
+               COUNT(*) FILTER (WHERE p.status = 'done') AS done_pages
         FROM topics p
         WHERE p.parent_id = t.id AND p.kind = 'page'
       ) ps ON true
+      LEFT JOIN LATERAL (
+        SELECT COUNT(*)                                  AS total_items,
+               COUNT(*) FILTER (WHERE d.status = 'done') AS done_items
+        FROM (
+          WITH RECURSIVE descendants AS (
+            SELECT t.id, t.status
+            UNION ALL
+            SELECT c.id, c.status
+            FROM topics c
+            JOIN descendants d ON c.parent_id = d.id
+          )
+          SELECT id, status FROM descendants
+        ) d
+      ) ds ON true
       LEFT JOIN LATERAL (
         SELECT COUNT(*)                                            AS total_cards,
                COUNT(*) FILTER (WHERE f.anki_synced_at IS NOT NULL) AS synced_cards
