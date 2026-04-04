@@ -54,7 +54,6 @@
 (defn sort-rows [rows sort-col sort-dir]
   (let [key-fn (case sort-col
                  :document :title
-                 :cards :total-cards
                  :done done-pct
                  :synced synced-pct
                  done-pct)
@@ -91,7 +90,7 @@
             sorted (vec (sort-rows filtered sort-col sort-dir))
             item-count (count sorted)
             row-height 36
-            grid-cols "1fr 70px 90px 90px"]
+            grid-cols "1fr 90px 90px"]
 
         ;; Header row: title + filters
         (dom/div
@@ -154,10 +153,6 @@
                       (dom/On "click" (fn [_] (toggle-sort! :document)) nil))
                     (dom/th
                       (dom/props {:style (merge th-base {:text-align "center"})})
-                      (dom/text (str "Cards" (arrow :cards)))
-                      (dom/On "click" (fn [_] (toggle-sort! :cards)) nil))
-                    (dom/th
-                      (dom/props {:style (merge th-base {:text-align "center"})})
                       (dom/text (str "Done" (arrow :done)))
                       (dom/On "click" (fn [_] (toggle-sort! :done)) nil))
                     (dom/th
@@ -200,10 +195,6 @@
                                   (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}
                                               :data-tooltip title})
                                   (dom/text title)))
-                              ;; Cards
-                              (dom/td
-                                (dom/props {:style {:padding "4px 6px" :text-align "center" :color "var(--color-text-secondary)"}})
-                                (dom/text (str total-cards)))
                               ;; Done
                               (dom/td
                                 (dom/props {:style {:padding "4px 6px" :text-align "center"
