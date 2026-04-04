@@ -37,18 +37,22 @@
     (/ (double synced-cards) total-cards)
     0.0))
 
-(defn completion-status [{:keys [done-items total-items]}]
+(defn completion-status [{:keys [done-items total-items total-cards]}]
   (cond
-    (zero? total-items) :not-started
     (= done-items total-items) :complete
-    (zero? done-items) :not-started
-    :else :in-progress))
+    (or (pos? done-items) (pos? total-cards)) :in-progress
+    :else :not-started))
+
+(defn unsynced? [{:keys [total-cards synced-cards]}]
+  (and (pos? total-cards) (< synced-cards total-cards)))
 
 (defn apply-filters [rows kind-filter status-filter]
   (cond->> rows
     (not= kind-filter "all")
     (filter #(= (:kind %) kind-filter))
-    (not= status-filter "all")
+    (= status-filter "unsynced")
+    (filter unsynced?)
+    (and (not= status-filter "all") (not= status-filter "unsynced"))
     (filter #(= (completion-status %) (keyword status-filter)))))
 
 (defn sort-rows [rows sort-col sort-dir]
@@ -124,6 +128,7 @@
             (dom/option (dom/props {:value "not-started"}) (dom/text "Not Started"))
             (dom/option (dom/props {:value "in-progress"}) (dom/text "In Progress"))
             (dom/option (dom/props {:value "complete"}) (dom/text "Complete"))
+            (dom/option (dom/props {:value "unsynced"}) (dom/text "Unsynced"))
             (e/for [[t ev] (dom/On-all "change")]
               (when ev (reset! !status-filter (-> ev .-target .-value)))
               (t))))
