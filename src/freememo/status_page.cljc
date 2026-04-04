@@ -78,7 +78,8 @@
 (e/defn StatusPage [user-id navigate!]
   (e/client
     (dom/div
-      (dom/props {:style {:padding "16px 24px" :display "flex" :flex-direction "column" :height "100%" :min-height "0"}})
+      (dom/props {:class "page-container"
+                  :style {:display "flex" :flex-direction "column" :height "100%"}})
 
       (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
             all-rows (e/server (get-document-status* refresh user-id))
