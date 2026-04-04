@@ -101,7 +101,7 @@
 
         (if (pos? item-count)
           ;; Virtual scrolled table
-          (let [grid-cols "60px 80px 1fr"
+          (let [grid-cols "1fr 80px"
                 row-height 36
                 visible-rows 10]
             (dom/div
@@ -109,15 +109,14 @@
 
               ;; Fixed header
               (dom/table
-                (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "14px" :flex-shrink "0"}})
+                (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px" :flex-shrink "0"}})
                 (dom/thead
                   (dom/props {:style {:display "contents"}})
                   (let [th-base {:padding "8px 6px" :border-bottom "2px solid var(--color-border)" :font-weight "600" :color "var(--color-text-primary)"}]
                     (dom/tr
                       (dom/props {:style {:display "contents"}})
-                      (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Type"))
-                      (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Due"))
-                      (dom/th (dom/props {:style (merge th-base {:text-align "left" :padding "8px 10px"})}) (dom/text "Title"))))))
+                      (dom/th (dom/props {:style (merge th-base {:text-align "left" :padding "8px 10px"})}) (dom/text "Document"))
+                      (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Due"))))))
 
               ;; Scrollable body
               (dom/div
@@ -127,7 +126,7 @@
                   (dom/props {:class "tape-scroll"
                               :style {:--offset offset :--row-height (str row-height "px")}})
                   (dom/table
-                    (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "14px"}})
+                    (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
                     (e/for [i (Tape offset limit)]
                       (let [item (e/server (nth items-vec i nil))]
                         (when item
@@ -141,32 +140,29 @@
                             (dom/tr
                               (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)" :height (str row-height "px")
                                                   :opacity (if inactive? "0.6" "1")
-                                                  :--order (inc i)}})
-                              ;; Type badge
+                                                  :cursor "pointer" :--order (inc i)}})
+                              (dom/On "click"
+                                (fn [_]
+                                  (if (= kind "pdf")
+                                    (navigate! :viewer (nav/nav-browse-pdf id nil :learn))
+                                    (navigate! :viewer (nav/nav-browse-topic id :learn))))
+                                nil)
+                              ;; Document (badge + title)
                               (dom/td
-                                (dom/props {:style {:padding "4px 6px" :text-align "center"}})
+                                (dom/props {:style {:padding "4px 10px" :overflow "hidden" :text-overflow "ellipsis"
+                                                    :white-space "nowrap" :display "flex" :align-items "center" :gap "8px"}})
                                 (dom/span
-                                  (dom/props {:class "type-badge" :style {:background badge-color}})
-                                  (dom/text badge-text)))
+                                  (dom/props {:class "type-badge" :style {:background badge-color :flex-shrink "0"}})
+                                  (dom/text badge-text))
+                                (dom/span
+                                  (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}
+                                              :data-tooltip display-title})
+                                  (dom/text display-title)))
                               ;; Due
                               (dom/td
                                 (dom/props {:style {:padding "4px 6px" :text-align "center" :font-size "12px"
                                                     :color (case due-label "done" "var(--color-success-dark)" "var(--color-text-secondary)")}})
-                                (dom/text due-label))
-                              ;; Title (clickable)
-                              (dom/td
-                                (dom/props {:style {:padding "4px 10px" :overflow "hidden" :text-overflow "ellipsis"
-                                                    :white-space "nowrap" :cursor "pointer"}
-                                            :title display-title})
-                                (dom/On "mouseenter" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "underline")) nil)
-                                (dom/On "mouseleave" (fn [e] (set! (.-textDecoration (.-style (.-target e))) "none")) nil)
-                                (dom/text display-title)
-                                (dom/On "click"
-                                  (fn [_]
-                                    (if (= kind "pdf")
-                                      (navigate! :viewer (nav/nav-browse-pdf id nil :learn))
-                                      (navigate! :viewer (nav/nav-browse-topic id :learn))))
-                                  nil))))))))
+                                (dom/text due-label))))))))
                   (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))
 
           ;; Empty state
