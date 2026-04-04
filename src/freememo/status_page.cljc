@@ -108,8 +108,7 @@
 
           ;; Kind filter
           (dom/select
-            (dom/props {:style {:padding "4px 8px" :font-size "13px" :border "1px solid var(--color-border)"
-                                :border-radius "4px" :background "var(--color-bg-primary)" :color "var(--color-text-primary)"}})
+            (dom/props {:class "input"})
             (dom/option (dom/props {:value "all"}) (dom/text "All kinds"))
             (dom/option (dom/props {:value "pdf"}) (dom/text "PDF"))
             (dom/option (dom/props {:value "epub"}) (dom/text "EPUB"))
@@ -121,8 +120,7 @@
 
           ;; Status filter
           (dom/select
-            (dom/props {:style {:padding "4px 8px" :font-size "13px" :border "1px solid var(--color-border)"
-                                :border-radius "4px" :background "var(--color-bg-primary)" :color "var(--color-text-primary)"}})
+            (dom/props {:class "input"})
             (dom/option (dom/props {:value "all"}) (dom/text "All statuses"))
             (dom/option (dom/props {:value "not-started"}) (dom/text "Not Started"))
             (dom/option (dom/props {:value "in-progress"}) (dom/text "In Progress"))
