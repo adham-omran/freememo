@@ -154,6 +154,10 @@
           (dom/text "Cancel")
           (dom/On "click" (fn [_] (reset! !show-modal false)) nil))))))
 
+(defn schedule-reset! [!atom delay-ms]
+  #?(:cljs (js/setTimeout #(reset! !atom :idle) delay-ms)
+     :clj nil))
+
 (defn apply-prefs!
   "Apply a preferences map to form/conn atoms, validating deck/model against available lists."
   [prefs conn form decks models]
@@ -218,38 +222,51 @@
         (when preset-loaded
           (dom/div
             (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
-                                :margin-bottom "var(--sp-2)" :font-style "italic"}})
+                                :margin-bottom "var(--sp-2)" :font-style "italic"
+                                :animation "fade-in 0.3s ease-in"}})
             (dom/text "Using saved settings for this document")))
 
         ;; Button row
-        (dom/div
-          (dom/props {:style {:display "flex" :gap "8px" :margin-bottom "var(--sp-4)"}})
+        (let [!save-state (atom :idle)
+              save-state (e/watch !save-state)]
+          (dom/div
+            (dom/props {:style {:display "flex" :gap "8px" :margin-bottom "var(--sp-4)"}})
 
-          ;; "Use Last Settings" button (global)
-          (dom/button
-            (dom/props {:class "btn btn-secondary" :style {:padding "6px 14px" :font-size "14px"}})
-            (dom/text "Use Last Settings")
-            (let [click (dom/On "click" identity nil)
-                  [?token _] (e/Token click)]
-              (when-some [token ?token]
-                (let [result (e/server (sync/load-anki-preferences user-id))]
-                  (if (:success result)
-                    (do (apply-prefs! (:prefs result) conn form decks models)
-                      (token))
-                    (token))))))
+            ;; "Use Last Settings" button (global)
+            (dom/button
+              (dom/props {:class "btn btn-secondary" :style {:padding "6px 14px" :font-size "14px"}})
+              (dom/text "Use Last Settings")
+              (let [click (dom/On "click" identity nil)
+                    [?token _] (e/Token click)]
+                (when-some [token ?token]
+                  (let [result (e/server (sync/load-anki-preferences user-id))]
+                    (if (:success result)
+                      (do (apply-prefs! (:prefs result) conn form decks models)
+                        (token))
+                      (token))))))
 
-          ;; "Save Current Settings for Item" button
-          (dom/button
-            (dom/props {:class "btn btn-secondary" :style {:padding "6px 14px" :font-size "14px"}})
-            (dom/text "Save Settings for Item")
-            (let [click (dom/On "click" identity nil)
-                  [?token _] (e/Token click)]
-              (when-some [token ?token]
-                (let [preset (collect-current-settings conn form)
-                      result (e/server (sync/save-item-preset user-id root-id preset))]
-                  (when (:success result)
-                    (reset! !preset-loaded true))
-                  (token))))))
+            ;; "Save Current Settings for Item" button
+            (dom/button
+              (dom/props {:class "btn btn-secondary"
+                          :style {:padding "6px 14px" :font-size "14px"}
+                          :disabled (not= save-state :idle)})
+              (dom/text (case save-state
+                          :saving "Saving..."
+                          :saved "Saved!"
+                          "Save Settings for Item"))
+              (let [click (dom/On "click" identity nil)
+                    [?token _] (e/Token click)]
+                (when-some [token ?token]
+                  (reset! !save-state :saving)
+                  (let [preset (collect-current-settings conn form)
+                        result (e/server (sync/save-item-preset user-id root-id preset))]
+                    (if (:success result)
+                      (do (reset! !preset-loaded true)
+                        (reset! !save-state :saved)
+                        (schedule-reset! !save-state 1500)
+                        (token))
+                      (do (reset! !save-state :idle)
+                        (token)))))))))
 
         (form/AnkiSyncForm conn form)
         (form/AnkiSyncStatus sync !show-modal)))))
