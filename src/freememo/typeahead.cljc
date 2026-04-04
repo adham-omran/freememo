@@ -30,7 +30,7 @@
                       :value (if (some? search) search (or value ""))
                       :placeholder placeholder
                       :class "input"
-                      :style {:font-size "15px" :width "100%"}})
+                      :style {:width "100%"}})
           (dom/On "focus" (fn [_] (reset! !atom nil)
                                   (reset! !search "")
                                   (reset! !active-idx -1)) nil)
@@ -71,7 +71,7 @@
                                 :box-shadow "0 2px 4px rgba(0,0,0,0.15)"}})
             (e/for [[i item] (e/diff-by {} (map-indexed vector filtered))]
               (dom/div
-                (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "15px"
+                (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "14px"
                                     :background (cond
                                                   (= i active-idx) "var(--color-highlight)"
                                                   (odd? i)         "var(--color-bg-subtle)"
