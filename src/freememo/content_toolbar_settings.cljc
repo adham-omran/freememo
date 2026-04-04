@@ -6,11 +6,10 @@
    [hyperfiddle.electric-dom3 :as dom]
    #?(:clj [freememo.settings :as settings])))
 
-(e/defn ToolbarSettings [cfg]
+(e/defn ToolbarSettings [cfg !use-context !context-window !card-type !card-count]
   (e/client
     (let [{:keys [user-id context-tooltip radio-name llm-enabled?
-                  !use-context use-context !context-window context-window
-                  !card-type card-type !card-count card-count-val]} cfg]
+                  use-context context-window card-type card-count-val]} cfg]
       (when llm-enabled?
         ;; Context checkbox + pages
         (dom/label
@@ -98,8 +97,8 @@
             (dom/text "\u2212")
             (e/for [[t e] (dom/On-all "click")]
               (when e
-                (swap! !card-count (fn [v] (max 1 (dec v))))
-                (e/server (settings/save-card-count user-id (max 1 (dec @!card-count)))))
+                (let [new-val (swap! !card-count (fn [v] (max 1 (dec v))))]
+                  (e/server (settings/save-card-count user-id new-val))))
               (t)))
 
           ;; Number input (keyboard suppressed on touch via inputmode)
@@ -132,6 +131,6 @@
             (dom/text "+")
             (e/for [[t e] (dom/On-all "click")]
               (when e
-                (swap! !card-count (fn [v] (min 50 (inc v))))
-                (e/server (settings/save-card-count user-id (min 50 (inc @!card-count)))))
+                (let [new-val (swap! !card-count (fn [v] (min 50 (inc v))))]
+                  (e/server (settings/save-card-count user-id new-val))))
               (t))))))))
