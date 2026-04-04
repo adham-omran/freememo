@@ -59,7 +59,8 @@
                              :basic-model basic-model :cloze-model cloze-model
                              :allow-dupes allow-dupes
                              :use-header use-header :header-text header-text
-                             :use-tags use-tags :tags tags}))
+                             :use-tags use-tags :tags tags
+                             :source-field source-field}))
                 (reset! !phase :done)
                 (token))
               (do (reset! !error (:error result))
@@ -81,7 +82,8 @@
                              :basic-model basic-model :cloze-model cloze-model
                              :allow-dupes allow-dupes
                              :use-header use-header :header-text header-text
-                             :use-tags use-tags :tags tags}))
+                             :use-tags use-tags :tags tags
+                             :source-field source-field}))
                 (reset! !phase :done)
                 (token))
               (do (reset! !error (:error result))
@@ -152,55 +154,110 @@
           (dom/text "Cancel")
           (dom/On "click" (fn [_] (reset! !show-modal false)) nil))))))
 
+(defn apply-prefs!
+  "Apply a preferences map to form/conn atoms, validating deck/model against available lists."
+  [prefs conn form decks models]
+  (when (:scope prefs) (reset! (:!scope form) (:scope prefs)))
+  (when (:deck prefs)
+    (when (some #{(:deck prefs)} decks)
+      (reset! (:!selected-deck conn) (:deck prefs))))
+  (when (:basic-model prefs)
+    (when (some #{(:basic-model prefs)} models)
+      (reset! (:!basic-model conn) (:basic-model prefs))))
+  (when (:cloze-model prefs)
+    (when (some #{(:cloze-model prefs)} models)
+      (reset! (:!cloze-model conn) (:cloze-model prefs))))
+  (when (some? (:allow-dupes prefs))
+    (reset! (:!allow-dupes form) (:allow-dupes prefs)))
+  (when (some? (:use-header prefs))
+    (reset! (:!use-header form) (:use-header prefs)))
+  (when (:header-text prefs)
+    (reset! (:!header-text form) (:header-text prefs)))
+  (when (some? (:use-tags prefs))
+    (reset! (:!use-tags form) (:use-tags prefs)))
+  (when (:tags prefs)
+    (reset! (:!tags form) (:tags prefs)))
+  (when (:source-field prefs)
+    (reset! (:!source-field form) (:source-field prefs))))
+
+(defn collect-current-settings
+  "Collect current form/conn state into a preset map."
+  [conn form]
+  {:scope (deref (:!scope form))
+   :deck (deref (:!selected-deck conn))
+   :basic-model (deref (:!basic-model conn))
+   :cloze-model (deref (:!cloze-model conn))
+   :allow-dupes (deref (:!allow-dupes form))
+   :use-header (deref (:!use-header form))
+   :header-text (deref (:!header-text form))
+   :use-tags (deref (:!use-tags form))
+   :tags (deref (:!tags form))
+   :source-field (deref (:!source-field form))})
+
 (e/defn AnkiSyncConnectedPanel
-  "Connected state: last-settings button, form, and status.
+  "Connected state: preset auto-load, last-settings button, save-preset button, form, and status.
    conn = {:!decks :!models :!selected-deck :!basic-model :!cloze-model ...}
    form = {:!scope :!allow-dupes :!use-header :!header-text :!use-tags :!tags ...}
    sync = {:!phase :!result :!error :!push-pairs :!pull-updates}"
-  [user-id conn form sync !show-modal]
+  [user-id selected-doc conn form sync !show-modal]
   (e/client
     (let [decks (e/watch (:!decks conn))
-          models (e/watch (:!models conn))]
+          models (e/watch (:!models conn))
+          root-id (e/server (db/get-root-topic-id selected-doc))
+          item-preset (e/server (sync/load-item-preset user-id root-id))
+          !preset-loaded (atom false)
+          preset-loaded (e/watch !preset-loaded)]
+
+      ;; Auto-load per-item preset on first render
+      (when (and item-preset (not preset-loaded) (seq decks) (seq models))
+        (apply-prefs! item-preset conn form decks models)
+        (reset! !preset-loaded true))
+
       (dom/div
-        ;; "Use Last Settings" button
-        (dom/button
-          (dom/props {:class "btn btn-secondary" :style {:padding "6px 14px" :font-size "14px" :margin-bottom "var(--sp-4)"}})
-          (dom/text "Use Last Settings")
-          (let [click (dom/On "click" identity nil)
-                [?token _] (e/Token click)]
-            (when-some [token ?token]
-              (let [result (e/server (sync/load-anki-preferences user-id))]
-                (if (:success result)
-                  (let [prefs (:prefs result)]
-                    (when (:scope prefs) (reset! (:!scope form) (:scope prefs)))
-                    (when (:deck prefs)
-                      (when (some #{(:deck prefs)} decks)
-                        (reset! (:!selected-deck conn) (:deck prefs))))
-                    (when (:basic-model prefs)
-                      (when (some #{(:basic-model prefs)} models)
-                        (reset! (:!basic-model conn) (:basic-model prefs))))
-                    (when (:cloze-model prefs)
-                      (when (some #{(:cloze-model prefs)} models)
-                        (reset! (:!cloze-model conn) (:cloze-model prefs))))
-                    (when (some? (:allow-dupes prefs))
-                      (reset! (:!allow-dupes form) (:allow-dupes prefs)))
-                    (when (some? (:use-header prefs))
-                      (reset! (:!use-header form) (:use-header prefs)))
-                    (when (:header-text prefs)
-                      (reset! (:!header-text form) (:header-text prefs)))
-                    (when (some? (:use-tags prefs))
-                      (reset! (:!use-tags form) (:use-tags prefs)))
-                    (when (:tags prefs)
-                      (reset! (:!tags form) (:tags prefs)))
-                    (token))
+        ;; Indicator when preset was auto-loaded
+        (when preset-loaded
+          (dom/div
+            (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
+                                :margin-bottom "var(--sp-2)" :font-style "italic"}})
+            (dom/text "Using saved settings for this document")))
+
+        ;; Button row
+        (dom/div
+          (dom/props {:style {:display "flex" :gap "8px" :margin-bottom "var(--sp-4)"}})
+
+          ;; "Use Last Settings" button (global)
+          (dom/button
+            (dom/props {:class "btn btn-secondary" :style {:padding "6px 14px" :font-size "14px"}})
+            (dom/text "Use Last Settings")
+            (let [click (dom/On "click" identity nil)
+                  [?token _] (e/Token click)]
+              (when-some [token ?token]
+                (let [result (e/server (sync/load-anki-preferences user-id))]
+                  (if (:success result)
+                    (do (apply-prefs! (:prefs result) conn form decks models)
+                      (token))
+                    (token))))))
+
+          ;; "Save Current Settings for Item" button
+          (dom/button
+            (dom/props {:class "btn btn-secondary" :style {:padding "6px 14px" :font-size "14px"}})
+            (dom/text "Save Settings for Item")
+            (let [click (dom/On "click" identity nil)
+                  [?token _] (e/Token click)]
+              (when-some [token ?token]
+                (let [preset (collect-current-settings conn form)
+                      result (e/server (sync/save-item-preset user-id root-id preset))]
+                  (when (:success result)
+                    (reset! !preset-loaded true))
                   (token))))))
+
         (form/AnkiSyncForm conn form)
         (form/AnkiSyncStatus sync !show-modal)))))
 
 (e/defn AnkiSyncModalDom
   "Modal overlay + inner dialog; delegates to error/connected/connecting panels.
    conn = {:!status :!error ...}  sync = {:!phase ...}"
-  [user-id !show-modal conn form sync]
+  [user-id selected-doc !show-modal conn form sync]
   (e/client
     (let [conn-status (e/watch (:!status conn))
           sync-phase (e/watch (:!phase sync))]
@@ -226,7 +283,7 @@
             (= conn-status :error)
             (AnkiSyncErrorPanel conn !show-modal)
             (= conn-status :connected)
-            (AnkiSyncConnectedPanel user-id conn form sync !show-modal)))))))
+            (AnkiSyncConnectedPanel user-id selected-doc conn form sync !show-modal)))))))
 
 (e/defn AnkiSyncSyncBody
   "Sync state, field-fetch tokens, executor, and modal DOM.
@@ -258,4 +315,4 @@
             (helpers/run-fetch-fields! cloze-model (:!cloze-fields form))
             (token))))
       (AnkiSyncExecutor user-id selected-doc current-pdf-page conn form sync)
-      (AnkiSyncModalDom user-id !show-modal conn form sync))))
+      (AnkiSyncModalDom user-id selected-doc !show-modal conn form sync))))

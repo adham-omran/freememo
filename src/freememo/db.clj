@@ -585,6 +585,22 @@
                   :from [:topics]
                   :where [:= :id id]}))))
 
+(defn get-root-topic-id
+  "Traverse parent_id upward to find the root topic (parent_id IS NULL).
+   Returns the root topic's id, or the input id if it is already a root."
+  [topic-id]
+  (when topic-id
+    (:id
+     (jdbc/execute-one! ds
+       ["WITH RECURSIVE ancestors AS (
+           SELECT id, parent_id FROM topics WHERE id = ?
+           UNION ALL
+           SELECT t.id, t.parent_id FROM topics t
+           JOIN ancestors a ON t.id = a.parent_id
+         )
+         SELECT id FROM ancestors WHERE parent_id IS NULL"
+        topic-id]))))
+
 (defn delete-topic!
   "Delete a topic by ID. CASCADE handles children + flashcards."
   [id]

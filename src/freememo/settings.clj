@@ -34,6 +34,9 @@
 (def ANKI_ALLOW_DUPES "anki_allow_dupes")
 (def ANKI_USE_HEADER "anki_use_header")
 (def ANKI_HEADER_TEXT "anki_header_text")
+(def ANKI_USE_TAGS "anki_use_tags")
+(def ANKI_TAGS "anki_tags")
+(def ANKI_SOURCE_FIELD "anki_source_field")
 (def SOURCE_DISPLAY_MODE "source_display_mode")
 (def LLM_ENABLED "llm_enabled")
 (def LAST_DOCUMENT "last_document")
@@ -163,6 +166,18 @@
 
 (defn get-anki-header-text [user-id]
   (or (db/get-setting user-id ANKI_HEADER_TEXT) ""))
+
+(defn get-anki-use-tags [user-id]
+  (= "true" (or (db/get-setting user-id ANKI_USE_TAGS) "false")))
+
+(defn get-anki-tags [user-id]
+  (try
+    (let [raw (db/get-setting user-id ANKI_TAGS)]
+      (if (seq raw) (clojure.edn/read-string raw) []))
+    (catch Exception _ [])))
+
+(defn get-anki-source-field [user-id]
+  (or (db/get-setting user-id ANKI_SOURCE_FIELD) "Source"))
 
 ;; Save functions with validation
 (defn save-openai-api-key [user-id api-key enc-key]
@@ -327,7 +342,7 @@
       (tel/error! {:id ::save-scan-dpi} e)
       {:success false :error "Failed to save scan DPI"})))
 
-(defn save-anki-sync-settings [user-id {:keys [scope deck basic-model cloze-model allow-dupes use-header header-text]}]
+(defn save-anki-sync-settings [user-id {:keys [scope deck basic-model cloze-model allow-dupes use-header header-text use-tags tags source-field]}]
   (try
     (when scope (db/set-setting user-id ANKI_SCOPE scope))
     (when deck (db/set-setting user-id ANKI_DECK deck))
@@ -336,10 +351,34 @@
     (db/set-setting user-id ANKI_ALLOW_DUPES (str (boolean allow-dupes)))
     (db/set-setting user-id ANKI_USE_HEADER (str (boolean use-header)))
     (when (some? header-text) (db/set-setting user-id ANKI_HEADER_TEXT header-text))
+    (db/set-setting user-id ANKI_USE_TAGS (str (boolean use-tags)))
+    (db/set-setting user-id ANKI_TAGS (pr-str (or tags [])))
+    (when (some? source-field) (db/set-setting user-id ANKI_SOURCE_FIELD source-field))
     {:success true}
     (catch Exception e
       (tel/error! {:id ::save-anki-sync-settings} e)
       {:success false :error "Failed to save Anki sync settings"})))
+
+;; ── Per-item Anki sync presets ──
+
+(defn anki-preset-key [root-topic-id]
+  (str "anki_preset_" root-topic-id))
+
+(defn get-anki-preset [user-id root-topic-id]
+  (try
+    (when-let [raw (db/get-setting user-id (anki-preset-key root-topic-id))]
+      (clojure.edn/read-string raw))
+    (catch Exception e
+      (tel/error! {:id ::get-anki-preset} e)
+      nil)))
+
+(defn save-anki-preset [user-id root-topic-id preset-map]
+  (try
+    (db/set-setting user-id (anki-preset-key root-topic-id) (pr-str preset-map))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-anki-preset} e)
+      {:success false :error "Failed to save item preset"})))
 
 ;; ── Prompt overrides ──
 
