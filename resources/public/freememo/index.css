@@ -691,17 +691,13 @@ textarea:hover {
     }
     .login-hero,
     .login-left {
-        padding: 32px 24px 24px;
-        flex: none;
-        min-height: auto;
-        order: 2;
+        display: none;
     }
     .login-form-panel,
     .login-right {
         padding: 24px;
-        flex: none;
+        flex: 1;
         min-height: auto;
-        order: 1;
     }
 }
 
