@@ -163,15 +163,14 @@
                           (if exists?
                             (dom/div
                               (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-                              (ExtractPage user-id enc-key topic-id
-                                (fn
-                                  ([_tab] (navigate! (or (:origin viewer-nav) :library)))
-                                  ([_tab _nav] (navigate! (or (:origin viewer-nav) :library))))
-                                (fn [root-id page kind]
-                                  (if (= kind "pdf")
-                                    (navigate! :viewer (nav/nav-browse-pdf root-id page (:origin viewer-nav)))
-                                    (navigate! :viewer (nav/nav-browse-topic root-id (:origin viewer-nav)))))
-                                llm-enabled? (:origin viewer-nav)))
+                              (ExtractPage {:user-id user-id :enc-key enc-key :topic-id topic-id
+                                            :navigate! (fn [& _] (navigate! (or (:origin viewer-nav) :library)))
+                                            :view-source! (fn [root-id page kind]
+                                                            (if (= kind "pdf")
+                                                              (navigate! :viewer (nav/nav-browse-pdf root-id page (:origin viewer-nav)))
+                                                              (navigate! :viewer (nav/nav-browse-topic root-id (:origin viewer-nav)))))
+                                            :llm-enabled? llm-enabled?
+                                            :origin (:origin viewer-nav)}))
                             (do (reset! !viewer-nav nil) nil)))
 
                         :browse-pdf

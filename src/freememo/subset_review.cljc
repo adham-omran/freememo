@@ -156,5 +156,6 @@
                   (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
                   (dom/div
                     (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                    (ExtractPage user-id enc-key topic-id nil nil llm-enabled? nil))
+                    (ExtractPage {:user-id user-id :enc-key enc-key :topic-id topic-id
+                                  :llm-enabled? llm-enabled?}))
                   (SubsetBottomBar topic-id outstanding? !queue-idx))))))))))
