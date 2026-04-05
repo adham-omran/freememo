@@ -151,9 +151,6 @@
           (dom/text "\u2190 Back to Learn")
           (dom/On "click" (fn [_] (navigate! :learn)) nil))
 
-        ;; Done
-        (DoneButton topic-id !queue-idx)
-
         ;; Title / source link
         (if is-root
           (dom/span
@@ -254,5 +251,7 @@
                   (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
                   (dom/div
                     (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                    (ExtractPage user-id enc-key topic-id nil nil llm-enabled? nil))
+                    (ExtractPage user-id enc-key topic-id
+                      (fn [& _] (swap! !queue-idx inc))
+                      nil llm-enabled? :learn))
                   (BottomBar topic-id !queue-idx))))))))))
