@@ -144,12 +144,7 @@
           [type-label type-color] (kind-badge kind)]
 
       (dom/div
-        (dom/props {:class "header-bar" :style {:gap "8px"}})
-        ;; Back to Learn
-        (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary"})
-          (dom/text "\u2190 Back to Learn")
-          (dom/On "click" (fn [_] (navigate! :learn)) nil))
+        (dom/props {:class "header-bar" :style {:gap "6px" :padding "2px var(--sp-3)"}})
 
         ;; Title / source link
         (if is-root
