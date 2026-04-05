@@ -288,6 +288,19 @@
       (tel/error! {:id ::save-last-page} e)
       {:success false})))
 
+(defn get-pdf-layout [user-id doc-id]
+  (try
+    (or (db/get-setting user-id (str "pdf_layout_" doc-id)) "left-right")
+    (catch Exception _ "left-right")))
+
+(defn save-pdf-layout [user-id doc-id layout]
+  (try
+    (db/set-setting user-id (str "pdf_layout_" doc-id) layout)
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-pdf-layout} e)
+      {:success false})))
+
 (defn add-to-history [history new-prompt]
   (->> (cons new-prompt history)
     (distinct)

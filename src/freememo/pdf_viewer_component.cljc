@@ -9,9 +9,11 @@
 (e/defn PdfViewerComponent
   "Renders a PDF viewer for the given document ID and exposes current page number.
    Props: {:document-id <int>, :initial-page <int>, :on-navigate! <fn>,
-           :doc-title <str>, :page-stats {:done :total :remaining}}
+           :doc-title <str>, :page-stats {:done :total :remaining},
+           :layout <str>, :on-layout-toggle! <fn>}
    Returns: The current page number (for OCR integration)."
-  [{:keys [document-id initial-page on-navigate! doc-title page-stats]}]
+  [{:keys [document-id initial-page on-navigate! doc-title page-stats
+           layout on-layout-toggle!]}]
   (e/client
     (let [!page (atom (or initial-page 1))
           !total (atom 0)
@@ -175,6 +177,19 @@
                         (when-not (js/isNaN scale)
                           (viewer/set-zoom! scale))))))
                 (t))))
+
+          ;; Layout toggle button
+          (when on-layout-toggle!
+            (dom/button
+              (dom/props {:style {:padding "6px 10px" :cursor "pointer"
+                                  :background "var(--color-bg-card)"
+                                  :border "1px solid var(--color-border)"
+                                  :border-radius "3px" :font-size "14px"}
+                          :data-tooltip (if (= layout "top-bottom")
+                                          "Switch to side-by-side layout"
+                                          "Switch to stacked layout")})
+              (dom/text (if (= layout "top-bottom") "\u21C5" "\u21C4"))
+              (dom/On "click" (fn [_] (on-layout-toggle!)) nil)))
 
           ;; Document title + progress (right-aligned)
           (when doc-title
