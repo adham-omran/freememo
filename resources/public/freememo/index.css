@@ -834,3 +834,8 @@ textarea:hover {
     opacity: 1;
     visibility: visible;
 }
+[data-tooltip].tooltip-right::after {
+    left: auto;
+    right: 0;
+    transform: translateY(4px);
+}

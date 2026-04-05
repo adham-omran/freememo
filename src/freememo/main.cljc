@@ -177,36 +177,8 @@
                         :browse-pdf
                         (dom/div
                           (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-                          (let [topic-id (:topic-id viewer-nav)
-                                origin (:origin viewer-nav)
-                                doc-title (e/server (:topics/title (db/get-topic topic-id)))
-                                pv-refresh (e/server (e/watch (us/get-atom user-id :refresh)))
-                                page-stats (e/server (get-browse-page-stats* pv-refresh topic-id))]
-                            (dom/div
-                              (dom/props {:class "header-bar" :style {:gap "12px"}})
-                              (dom/button
-                                (dom/props {:class "btn btn-sm btn-secondary"})
-                                (dom/text (case origin :library "Back to Library" :learn "Back to Learn" "Back"))
-                                (dom/On "click" (fn [_] (navigate! (or origin :library))) nil))
-                              (dom/span
-                                (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
-                                (dom/text (str "Browsing: " (or doc-title "document"))))
-                              (when (and page-stats (pos? (:total page-stats)))
-                                (let [remaining (:remaining page-stats)]
-                                  (dom/span
-                                    (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px" :margin-left "auto" :cursor "default"}
-                                                :data-tooltip (cond
-                                                                (empty? remaining) "All pages done!"
-                                                                (<= (count remaining) 20)
-                                                                (str "Remaining: " (clojure.string/join ", " remaining))
-                                                                :else
-                                                                (str "Remaining: " (clojure.string/join ", " (take 20 remaining))
-                                                                  " ... and " (- (count remaining) 20) " more"))})
-                                    (dom/text (:done page-stats) " / " (:total page-stats) " pages done"))))))
-                          (dom/div
-                            (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                            (let [!vnav (atom viewer-nav)]
-                              (OcrPage user-id enc-key !vnav llm-enabled?))))
+                          (let [!vnav (atom viewer-nav)]
+                            (OcrPage user-id enc-key !vnav llm-enabled?)))
 
                         :learn-session
                         (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))

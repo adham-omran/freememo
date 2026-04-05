@@ -68,9 +68,12 @@
 
 ;; Page completion stats for a document
 #?(:clj (defn get-page-stats* [_refresh parent-id]
-          (let [pages (db/list-pages parent-id)]
-            {:done (count (filter #(= "done" (:topics/status %)) pages))
-             :total (count pages)})))
+          (let [pages (db/list-pages parent-id)
+                remaining (sort (map :topics/page_number
+                                  (remove #(= "done" (:topics/status %)) pages)))]
+            {:done (- (count pages) (count remaining))
+             :total (count pages)
+             :remaining remaining})))
 
 ;; Query wrapper for topic source reference
 #?(:clj (defn get-topic-source* [_refresh topic-id]
@@ -228,7 +231,9 @@
                       (reset! !current-page
                         (PdfViewerComponent {:document-id selected-doc
                                              :initial-page initial-page
-                                             :on-navigate! (fn [p] (reset! !page-to-save p))}))))
+                                             :on-navigate! (fn [p] (reset! !page-to-save p))
+                                             :doc-title (get id-to-name selected-doc)
+                                             :page-stats page-stats}))))
 
                   ;; Horizontal drag handle
                   (dom/div
