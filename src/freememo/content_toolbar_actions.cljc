@@ -57,29 +57,33 @@
       (let [!show-add (atom false)
             show-add (e/watch !show-add)]
         (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary" :style {:font-weight "500"}})
+          (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-item" :style {:font-weight "500"}})
           (dom/text "Add new")
+          (reset! keyboard/!add-new-btn-ref dom/node)
+          (e/on-unmount (fn [] (reset! keyboard/!add-new-btn-ref nil)))
           (dom/On "click" (fn [_] (reset! !show-add true)) nil))
         (when show-add
           (AddCardModal !show-add card-type topic-id root-topic-id source-ref user-id)))
 
       ;; Separator
-      (dom/span (dom/props {:style {:color "var(--color-border)"}}) (dom/text "|"))
+      (dom/span (dom/props {:class "toolbar-overflow-item" :style {:color "var(--color-border)"}}) (dom/text "|"))
 
       ;; Export button + modal
       (let [!show-export (atom false)
             show-export (e/watch !show-export)]
         (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary" :style {:font-weight "500"}})
+          (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-item" :style {:font-weight "500"}})
           (dom/text (if (pos? unsynced-count)
                       (str "Export (" unsynced-count ")...")
                       "Export..."))
+          (reset! keyboard/!export-btn-ref dom/node)
+          (e/on-unmount (fn [] (reset! keyboard/!export-btn-ref nil)))
           (dom/On "click" (fn [_] (reset! !show-export true)) nil))
         (when show-export
           (ExportModal !show-export topic-id root-topic-id user-id)))
 
       ;; Separator
-      (dom/span (dom/props {:style {:color "var(--color-border)"}}) (dom/text "|"))
+      (dom/span (dom/props {:class "toolbar-overflow-item" :style {:color "var(--color-border)"}}) (dom/text "|"))
 
       ;; Anki Sync button
       (AnkiSyncButton user-id root-topic-id page-number card-type unsynced-count))))
