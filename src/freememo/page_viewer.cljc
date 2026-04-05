@@ -257,7 +257,8 @@
                                                :on-layout-toggle! (fn []
                                                                     (let [new-l (if (= @!layout "left-right") "top-bottom" "left-right")]
                                                                       (reset! !layout new-l)
-                                                                      (reset! !layout-save new-l)))}))))
+                                                                      (reset! !layout-save new-l)
+                                                                      (reset! !top-pct (if (= new-l "top-bottom") 80 (default-split-pct)))))}))))
 
                     ;; Drag handle — orientation matches layout
                     (dom/div
@@ -267,157 +268,157 @@
                         (fn [e] (if (= @!layout "top-bottom")
                                   (util/start-drag! e :y !top-split-pct)
                                   (util/start-drag! e :x !left-pct)))
-                        nil))))
+                        nil)))
 
-                ;; RIGHT: Editor (full width for web articles)
-                (dom/div
-                  (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-width "0" :min-height "0" :overflow "hidden"}})
-
-                  ;; Compact page header
+                  ;; Editor panel (full width for web articles, below PDF in top-bottom mode)
                   (dom/div
-                    (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-2)" :padding "var(--sp-1) var(--sp-2)" :flex-shrink "0"}})
-                    (dom/span
-                      (dom/props {:style {:font-weight "600" :font-size "13px" :color "var(--color-text-primary)"}})
-                      (dom/text "p." current-pdf-page))
+                    (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-width "0" :min-height "0" :overflow "hidden"}})
+
+                    ;; Compact page header
+                    (dom/div
+                      (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-2)" :padding "var(--sp-1) var(--sp-2)" :flex-shrink "0"}})
+                      (dom/span
+                        (dom/props {:style {:font-weight "600" :font-size "13px" :color "var(--color-text-primary)"}})
+                        (dom/text "p." current-pdf-page))
 
                     ;; Mark as done checkbox
-                    (dom/label
-                      (dom/props {:style {:display "flex" :align-items "center" :gap "3px" :font-size "12px" :cursor "pointer"}
-                                  :title "Mark this page as completed to track your extraction progress"})
-                      (e/for-by identity [_page [current-pdf-page]]
-                        (dom/input
-                          (dom/props {:type "checkbox"})
-                          (set! (.-checked dom/node) is-done)
-                          (reset! keyboard/!done-btn-ref dom/node)
-                          (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
-                          (let [change-event (dom/On "change"
-                                               (fn [e] {:checked (-> e .-target .-checked)
-                                                        :page current-pdf-page})
-                                               nil)
-                                [?token ?error] (e/Token change-event)]
-                            (when-some [token ?token]
-                              (e/server (db/toggle-page-done! selected-doc (:page change-event)))
-                              (e/server (swap! (us/get-atom user-id :refresh) inc))
-                              (token)))))
-                      (dom/text "Done"))
+                      (dom/label
+                        (dom/props {:style {:display "flex" :align-items "center" :gap "3px" :font-size "12px" :cursor "pointer"}
+                                    :title "Mark this page as completed to track your extraction progress"})
+                        (e/for-by identity [_page [current-pdf-page]]
+                          (dom/input
+                            (dom/props {:type "checkbox"})
+                            (set! (.-checked dom/node) is-done)
+                            (reset! keyboard/!done-btn-ref dom/node)
+                            (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
+                            (let [change-event (dom/On "change"
+                                                 (fn [e] {:checked (-> e .-target .-checked)
+                                                          :page current-pdf-page})
+                                                 nil)
+                                  [?token ?error] (e/Token change-event)]
+                              (when-some [token ?token]
+                                (e/server (db/toggle-page-done! selected-doc (:page change-event)))
+                                (e/server (swap! (us/get-atom user-id :refresh) inc))
+                                (token)))))
+                        (dom/text "Done"))
 
-                    (when (and is-pdf llm-enabled?)
-                      (let [scanning? (contains? scanning-pages [selected-doc current-pdf-page])
-                            disabled? scanning?]
-                        (dom/button
-                          (dom/props {:class "btn btn-sm btn-primary"
-                                      :style {:padding "4px 12px" :font-size "14px"
-                                              :background (if disabled? "var(--color-border)" "var(--color-primary)")
-                                              :cursor (if disabled? "not-allowed" "pointer")}
-                                      :disabled disabled?})
-                          (dom/text (if disabled? "Scanning..." "Scan Page"))
-                          (reset! keyboard/!scan-btn-ref dom/node)
-                          (e/on-unmount (fn [] (reset! keyboard/!scan-btn-ref nil)))
-                          (let [click-event (dom/On "click"
-                                              (fn [_] {:id (str (random-uuid)) :page current-pdf-page})
-                                              nil)
-                                [?token ?error] (e/Token click-event)]
-                            (when-some [token ?token]
-                              (e/server
-                                (let [page (:page click-event)
-                                      doc selected-doc
-                                      uid user-id
-                                      ek enc-key]
-                                  (if (contains? @(us/get-atom uid :scanning-pages) [doc page])
-                                    (log/log-info (str "OCR scan already in progress topic-id=" doc " page=" page))
-                                    (do
-                                      (start-ocr-scan! uid doc page ek scan-dpi)
-                                      :started))))
-                              (token)))))) ;; end when llm-enabled?
-                    
+                      (when (and is-pdf llm-enabled?)
+                        (let [scanning? (contains? scanning-pages [selected-doc current-pdf-page])
+                              disabled? scanning?]
+                          (dom/button
+                            (dom/props {:class "btn btn-sm btn-primary"
+                                        :style {:padding "4px 12px" :font-size "14px"
+                                                :background (if disabled? "var(--color-border)" "var(--color-primary)")
+                                                :cursor (if disabled? "not-allowed" "pointer")}
+                                        :disabled disabled?})
+                            (dom/text (if disabled? "Scanning..." "Scan Page"))
+                            (reset! keyboard/!scan-btn-ref dom/node)
+                            (e/on-unmount (fn [] (reset! keyboard/!scan-btn-ref nil)))
+                            (let [click-event (dom/On "click"
+                                                (fn [_] {:id (str (random-uuid)) :page current-pdf-page})
+                                                nil)
+                                  [?token ?error] (e/Token click-event)]
+                              (when-some [token ?token]
+                                (e/server
+                                  (let [page (:page click-event)
+                                        doc selected-doc
+                                        uid user-id
+                                        ek enc-key]
+                                    (if (contains? @(us/get-atom uid :scanning-pages) [doc page])
+                                      (log/log-info (str "OCR scan already in progress topic-id=" doc " page=" page))
+                                      (do
+                                        (start-ocr-scan! uid doc page ek scan-dpi)
+                                        :started))))
+                                (token)))))) ;; end when llm-enabled?
+                      
                     ;; OCR error display — auto-dismiss after 3 seconds
-                    (when-let [ocr-err (get ocr-errors [selected-doc current-pdf-page])]
-                      (let [!show (atom true)
-                            show (e/watch !show)]
-                        (dom/div
-                          (dom/props {:style {:padding "6px 10px" :background "var(--color-danger-bg)" :border "1px solid var(--color-danger-light)"
-                                              :border-radius "var(--radius-sm)" :font-size "13px" :color "var(--color-danger-dark)"
-                                              :margin-top "var(--sp-1)"
-                                              :opacity (if show "1" "0")
-                                              :transition "opacity 0.5s ease-out"}})
-                          (dom/text ocr-err)
-                          (e/client
-                            (js/setTimeout (fn [] (reset! !show false)) 3000)))))
+                      (when-let [ocr-err (get ocr-errors [selected-doc current-pdf-page])]
+                        (let [!show (atom true)
+                              show (e/watch !show)]
+                          (dom/div
+                            (dom/props {:style {:padding "6px 10px" :background "var(--color-danger-bg)" :border "1px solid var(--color-danger-light)"
+                                                :border-radius "var(--radius-sm)" :font-size "13px" :color "var(--color-danger-dark)"
+                                                :margin-top "var(--sp-1)"
+                                                :opacity (if show "1" "0")
+                                                :transition "opacity 0.5s ease-out"}})
+                            (dom/text ocr-err)
+                            (e/client
+                              (js/setTimeout (fn [] (reset! !show false)) 3000)))))
 
                     ;; Save status indicator with fade-out
-                    (when (some? dirty-data)
-                      (let [is-success (:success save-result)
-                            message (if is-success "Saved" (str "Save error: " (:error save-result)))
-                            !show (atom true)
-                            show (e/watch !show)]
-                        (dom/span
-                          (dom/props {:style {:margin-left "12px"
-                                              :font-size "12px"
-                                              :color (if is-success "var(--color-text-secondary)" "var(--color-danger)")
-                                              :opacity (if show "1" "0")
-                                              :transition "opacity 0.5s ease-out"}})
-                          (dom/text message)
+                      (when (some? dirty-data)
+                        (let [is-success (:success save-result)
+                              message (if is-success "Saved" (str "Save error: " (:error save-result)))
+                              !show (atom true)
+                              show (e/watch !show)]
+                          (dom/span
+                            (dom/props {:style {:margin-left "12px"
+                                                :font-size "12px"
+                                                :color (if is-success "var(--color-text-secondary)" "var(--color-danger)")
+                                                :opacity (if show "1" "0")
+                                                :transition "opacity 0.5s ease-out"}})
+                            (dom/text message)
                           ;; Fade out after 2 seconds (only for successful saves)
-                          (when is-success
-                            (js/setTimeout
-                              (fn [] (reset! !show false))
-                              2000))))))
+                            (when is-success
+                              (js/setTimeout
+                                (fn [] (reset! !show false))
+                                2000))))))
 
-                  ;; Source reference — collapsed to compact editable field in page header
-                  (let [current-source (e/server (get-topic-source* refresh selected-doc))
-                        !editing-source (atom false)
-                        editing-source (e/watch !editing-source)]
-                    (if editing-source
-                      ;; Expanded source editor (shown on click)
-                      (dom/div
-                        (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
-                                            :padding "3px 8px" :flex-shrink "0"
-                                            :background "var(--color-bg-subtle)" :border-bottom "1px solid var(--color-border)"}})
-                        (dom/span
-                          (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)" :flex-shrink "0"}})
-                          (dom/text "Source:"))
-                        (e/for-by identity [_k [selected-doc]]
-                          (dom/input
-                            (dom/props {:type "text"
-                                        :placeholder "Source reference"
-                                        :style {:flex "1" :padding "2px 6px" :font-size "12px" :color "var(--color-text-secondary)"
-                                                :border "1px solid var(--color-border)" :border-radius "3px"
-                                                :background "var(--color-bg-card)"}})
-                            (set! (.-value dom/node) (or current-source ""))
-                            (let [event (dom/On "change" #(-> % .-target .-value) nil)
-                                  [?token _] (e/Token event)]
-                              (when-some [token ?token]
-                                (e/server (db/update-topic-source! selected-doc event))
-                                (e/server (swap! (us/get-atom user-id :refresh) inc))
-                                (token)
-                                (reset! !editing-source false)))))
-                        (dom/button
-                          (dom/props {:style {:padding "2px 8px" :font-size "11px" :background "var(--color-bg-subtle)"
-                                              :border "1px solid var(--color-border)" :border-radius "3px" :cursor "pointer"}})
-                          (dom/text "Close")
-                          (dom/On "click" (fn [_] (reset! !editing-source false)) nil)))
-                      ;; Collapsed: just a small clickable source indicator
-                      (when (seq current-source)
-                        (dom/span
-                          (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)" :cursor "pointer"
-                                              :padding "0 8px" :flex-shrink "0"
-                                              :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
-                                              :max-width "200px"}
-                                      :title (str "Source: " current-source " (click to edit)")})
-                          (dom/text current-source)
-                          (dom/On "click" (fn [_] (reset! !editing-source true)) nil)))))
+                    ;; Source reference — collapsed to compact editable field
+                    (let [current-source (e/server (get-topic-source* refresh selected-doc))
+                          !editing-source (atom false)
+                          editing-source (e/watch !editing-source)]
+                      (if editing-source
+                        ;; Expanded source editor (shown on click)
+                        (dom/div
+                          (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
+                                              :padding "3px 8px" :flex-shrink "0"
+                                              :background "var(--color-bg-subtle)" :border-bottom "1px solid var(--color-border)"}})
+                          (dom/span
+                            (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)" :flex-shrink "0"}})
+                            (dom/text "Source:"))
+                          (e/for-by identity [_k [selected-doc]]
+                            (dom/input
+                              (dom/props {:type "text"
+                                          :placeholder "Source reference"
+                                          :style {:flex "1" :padding "2px 6px" :font-size "12px" :color "var(--color-text-secondary)"
+                                                  :border "1px solid var(--color-border)" :border-radius "3px"
+                                                  :background "var(--color-bg-card)"}})
+                              (set! (.-value dom/node) (or current-source ""))
+                              (let [event (dom/On "change" #(-> % .-target .-value) nil)
+                                    [?token _] (e/Token event)]
+                                (when-some [token ?token]
+                                  (e/server (db/update-topic-source! selected-doc event))
+                                  (e/server (swap! (us/get-atom user-id :refresh) inc))
+                                  (token)
+                                  (reset! !editing-source false)))))
+                          (dom/button
+                            (dom/props {:style {:padding "2px 8px" :font-size "11px" :background "var(--color-bg-subtle)"
+                                                :border "1px solid var(--color-border)" :border-radius "3px" :cursor "pointer"}})
+                            (dom/text "Close")
+                            (dom/On "click" (fn [_] (reset! !editing-source false)) nil)))
+                        ;; Collapsed: just a small clickable source indicator
+                        (when (seq current-source)
+                          (dom/span
+                            (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)" :cursor "pointer"
+                                                :padding "0 8px" :flex-shrink "0"
+                                                :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
+                                                :max-width "200px"}
+                                        :title (str "Source: " current-source " (click to edit)")})
+                            (dom/text current-source)
+                            (dom/On "click" (fn [_] (reset! !editing-source true)) nil)))))
 
-                  ;; Editor area
-                  (dom/div
-                    (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                    (if (:success text-result)
-                      (dom/div
-                        (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-                        (RichTextEditorComponent {:initial-html (:text text-result)
-                                                  :topic-id page-topic-id}))
-                      (dom/p
-                        (dom/props {:style {:color "var(--color-text-hint)"}})
-                        (dom/text "No text scanned yet. Click 'Scan Page' to process this page."))))))
+                    ;; Editor area
+                    (dom/div
+                      (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
+                      (if (:success text-result)
+                        (dom/div
+                          (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
+                          (RichTextEditorComponent {:initial-html (:text text-result)
+                                                    :topic-id page-topic-id}))
+                        (dom/p
+                          (dom/props {:style {:color "var(--color-text-hint)"}})
+                          (dom/text "No text scanned yet. Click 'Scan Page' to process this page.")))))))
 
               ;; Vertical drag handle (full width)
               (dom/div

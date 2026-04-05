@@ -22,7 +22,9 @@
                           :border-radius "4px"
                           :background "var(--color-bg-card)"
                           :flex "1"
-                          :min-height "200px"}
+                          :display "flex"
+                          :flex-direction "column"
+                          :min-height "0"}
                   :data-role "widget"})
 
       (let [node dom/node
