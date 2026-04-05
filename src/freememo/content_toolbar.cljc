@@ -31,7 +31,8 @@
   (e/client
     (let [mod-key (if (mac-platform?) "Cmd" "Ctrl")
           {:keys [user-id enc-key topic-id root-topic-id page-number content-text
-                  parent-content context-mode context-tooltip llm-enabled?]} state
+                  parent-content context-mode context-tooltip llm-enabled?
+                  extract-status navigate! origin]} state
           ;; Fetch source reference from root topic for card propagation
           source-ref (e/server (db/get-topic-source root-topic-id))
           ;; Unsynced card count — uses refresh value for reactivity
@@ -114,7 +115,15 @@
               (dom/On "click" (fn [_]
                                 (when-let [btn (deref keyboard/!export-btn-ref)]
                                   (.click btn))
-                                (reset! !overflow-open false)) nil)))
+                                (reset! !overflow-open false)) nil))
+            (when extract-status
+              (dom/button
+                (dom/props {:class "btn btn-sm btn-danger toolbar-overflow-panel-action"})
+                (dom/text "Delete...")
+                (dom/On "click" (fn [_]
+                                  (when-let [btn (deref keyboard/!delete-btn-ref)]
+                                    (.click btn))
+                                  (reset! !overflow-open false)) nil))))
 
           ;; Generate buttons + processors + prompt dialog
           ;; All generate/prompt atoms are LOCAL to ToolbarGenerate (not in this map)
@@ -126,11 +135,12 @@
               :use-context use-context :context-window context-window
               :gen-active? gen-active? :gen-pending gen-pending :gen-error gen-error))
 
-          ;; Extract, Add, Export, Anki Sync
+          ;; Extract, Add, Export, Anki Sync, Done/Delete (extracts only)
           (actions/ToolbarActions
             {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
              :page-number page-number :context-mode context-mode :mod-key mod-key
-             :source-ref source-ref :unsynced-count unsynced-count :card-type card-type})
+             :source-ref source-ref :unsynced-count unsynced-count :card-type card-type
+             :extract-status extract-status :navigate! navigate! :origin origin})
 
           ;; Overflow trigger — visible only on mobile/tablet via CSS
           (dom/div

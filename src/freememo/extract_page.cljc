@@ -13,9 +13,7 @@
    [freememo.content-card-table :refer [ContentCardTable]]
    [freememo.util :refer [start-drag!]]
    #?(:clj [freememo.db :as db])
-   #?(:clj [freememo.settings :as settings])
-   [freememo.keyboard :as keyboard]
-   [freememo.card-components :as card-components]))
+   #?(:clj [freememo.settings :as settings])))
 
 ;; Per-user refresh via user-state registry
 
@@ -77,90 +75,11 @@
                   (reset! !last-saved html-to-save)))))
 
 
-          ;; Header: breadcrumb + back button (hidden when embedded in learn session)
+          ;; Title breadcrumb (no header bar — actions moved to content toolbar)
           (when navigate!
             (dom/div
               (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-3)"
-                                  :padding "var(--sp-2) var(--sp-4)" :flex-shrink "0"
-                                  :border-bottom "1px solid var(--color-border)"}})
-              (dom/button
-                (dom/props {:class "btn btn-sm btn-secondary" :style {:background "var(--color-bg-subtle)"}})
-                (dom/text (case origin :library "Back to Library" :learn "Back to Learn" "Back"))
-                (dom/On "click" (fn [_] (navigate! (or origin :learn))) nil))
-              (if (= extract-status "active")
-                ;; Active: show Done
-                (dom/span
-                  (dom/props {:style {:display "contents"}})
-                  (dom/button
-                    (dom/props {:class "btn btn-sm btn-secondary"
-                                :style {:color "var(--color-success-dark)" :border "1px solid var(--color-success-dark)"}
-                                :title "Mark as fully processed (extracted/carded everything useful)"})
-                    (dom/text "Done")
-                    (reset! keyboard/!done-btn-ref dom/node)
-                    (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
-                    (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
-                          [?token _] (e/Token event)]
-                      (when-some [token ?token]
-                        (e/server (db/done-topic! topic-id))
-                        (token)
-                        (navigate! (or origin :learn))))))
-
-                ;; Done: show Restore
-                (dom/span
-                  (dom/props {:style {:display "contents"}})
-                  (dom/span
-                    (dom/props {:style {:font-size "12px" :color "var(--color-success-dark)" :font-weight "600"}})
-                    (dom/text extract-status))
-                  (dom/button
-                    (dom/props {:class "btn btn-sm btn-secondary"
-                                :style {:color "var(--color-primary)" :border "1px solid var(--color-primary)"}
-                                :title "Restore to active review queue"})
-                    (dom/text "Restore")
-                    (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
-                          [?token _] (e/Token event)]
-                      (when-some [token ?token]
-                        (e/server (db/restore-topic! topic-id))
-                        (token)
-                        (navigate! (or origin :learn)))))))
-              (let [!delete-state (atom nil)
-                    delete-state (e/watch !delete-state)]
-                ;; Reactive navigation — fires when delete completes
-                (when (= delete-state :deleted)
-                  (navigate! (or origin :learn)))
-                (dom/button
-                  (dom/props {:class "btn btn-sm btn-danger-fill" :style {:padding "4px 10px" :font-size "12px"}
-                              :title "Delete this extract and its cards"})
-                  (dom/text "Delete")
-                  (dom/On "click" (fn [_] (reset! !delete-state :confirming)) nil))
-                (when (= delete-state :confirming)
-                  (dom/div
-                    (dom/props {:class "modal-backdrop"})
-                    (dom/On "click" (fn [_] (reset! !delete-state nil)) nil)
-                    (dom/On "keydown" (fn [e] (when (= (.-key e) "Escape") (reset! !delete-state nil))) nil)
-                    (dom/div
-                      (dom/props {:class "modal-content modal-sm"})
-                      (dom/On "click" (fn [e] (.stopPropagation e)) nil)
-                      (dom/div
-                        (dom/props {:class "confirm-modal-body"})
-                        (dom/p (dom/text "Delete this extract and all its cards?")))
-                      (dom/div
-                        (dom/props {:class "confirm-modal-actions"})
-                        (dom/button
-                          (dom/props {:class "btn btn-secondary"})
-                          (dom/text "Cancel")
-                          (dom/On "click" (fn [_] (reset! !delete-state nil)) nil))
-                        (dom/button
-                          (dom/props {:class "btn btn-danger-fill"})
-                          (dom/text "Delete")
-                          (let [event (dom/On "click" (fn [_] :confirmed) nil)
-                                [?token _] (e/Token event)]
-                            (when-some [token ?token]
-                              (let [note-ids (e/server (db/get-anki-note-ids topic-id))]
-                                (e/server (db/delete-topic! topic-id))
-                                (e/client (card-components/try-delete-anki-notes! note-ids))
-                                (log/log-info (str "Topic deleted topic-id=" topic-id))
-                                (token)
-                                (reset! !delete-state :deleted))))))))))
+                                  :padding "var(--sp-1) var(--sp-4)" :flex-shrink "0"}})
               (let [parent-is-intermediate (and parent-id root-topic-id (not= parent-id root-topic-id))
                     label (if parent-is-intermediate
                             (or parent-title "Untitled")
@@ -216,7 +135,10 @@
                                  :parent-content parent-content
                                  :context-mode :extract
                                  :context-tooltip "Include context for better cards. With a selection: extract text. Without: original page text."
-                                 :llm-enabled? llm-enabled?}
+                                 :llm-enabled? llm-enabled?
+                                 :extract-status extract-status
+                                 :navigate! navigate!
+                                 :origin origin}
                   card-refresh))
 
               ;; Shared card table
