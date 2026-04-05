@@ -309,7 +309,7 @@
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !cloze ev))))))
           (dom/div
-            (dom/props {:style {:display "flex" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
+            (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
             (dom/button
               (dom/props {:class "btn btn-primary" :style {:order "1"}})
               (dom/text "Save")
@@ -442,7 +442,7 @@
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !cloze ev))))))
           (dom/div
-            (dom/props {:style {:display "flex" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
+            (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
             (dom/button
               (dom/props {:class "btn btn-primary" :style {:border-radius "var(--radius-sm)" :order "1"}})
               (dom/text "Save")
