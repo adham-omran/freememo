@@ -254,10 +254,20 @@ html, body {
     background: var(--color-bg-subtle);
 }
 
-/* Overflow menu — hidden on desktop */
+/* Overflow menu — on desktop, panel is invisible wrapper (contents flow inline) */
 .toolbar-overflow-trigger { display: none; }
 .toolbar-overflow-backdrop { display: none; }
-.toolbar-overflow-panel { display: none; }
+.toolbar-overflow-panel { display: contents; }
+.toolbar-overflow-panel-action { display: none; }
+.toolbar-overflow-panel-separator { display: none; }
+.toolbar-settings-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 13px;
+}
+.toolbar-sep { color: var(--color-border); }
+.toolbar-generate-group { margin-left: auto; }
 
 .header-bar {
     display: flex;
@@ -502,8 +512,9 @@ textarea:hover {
         z-index: 99;
     }
 
-    /* Dropdown panel — opens downward from toolbar */
-    .toolbar-overflow-panel {
+    /* Panel: hidden by default on mobile, shown as dropdown when .overflow-open */
+    .toolbar-overflow-panel { display: none; }
+    .toolbar-container.overflow-open .toolbar-overflow-panel {
         display: flex;
         flex-direction: column;
         position: absolute;
@@ -514,15 +525,24 @@ textarea:hover {
         border: 1px solid var(--color-border);
         border-radius: var(--radius-md);
         box-shadow: var(--shadow-modal);
-        padding: var(--sp-1);
-        gap: 2px;
-        min-width: 200px;
+        padding: var(--sp-2);
+        gap: 6px;
+        min-width: 220px;
     }
-    .toolbar-overflow-panel .btn {
+    .toolbar-container.overflow-open .toolbar-overflow-panel .btn {
         width: 100%;
         text-align: left;
         justify-content: flex-start;
     }
+    .toolbar-container.overflow-open .toolbar-overflow-panel-action { display: flex; }
+    .toolbar-container.overflow-open .toolbar-overflow-panel-separator {
+        border-top: 1px solid var(--color-border);
+        margin: 2px 0;
+    }
+    /* Hide inline separators between settings groups inside dropdown */
+    .toolbar-overflow-panel .toolbar-sep { display: none; }
+    /* Remove auto-margin push in dropdown context */
+    .toolbar-generate-group { margin-left: 0; }
 
     /* Card table: ensure min width so columns aren't clipped */
     .card-table {

@@ -45,7 +45,8 @@
       (when llm-enabled?
         ;; Generate buttons group
         (dom/div
-          (dom/props {:style {:display "flex" :gap "8px" :margin-left "auto"}})
+          (dom/props {:class "toolbar-generate-group"
+                      :style {:display "flex" :gap "8px"}})
 
           ;; Generate button
           (let [no-content? (empty? content-text)]
