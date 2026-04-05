@@ -66,19 +66,55 @@
           overflow-open (e/watch !overflow-open)]
 
       (dom/div
-        (dom/props {:class "toolbar-container"})
+        (dom/props {:class (if overflow-open "toolbar-container overflow-open" "toolbar-container")})
 
         (dom/div
           (dom/props {:class "toolbar"})
 
-          ;; Settings controls (context, card type, card count)
-          ;; Atoms passed as positional args — Electric can't serialize atoms inside maps
-          (settings/ToolbarSettings
-            {:user-id user-id :context-tooltip context-tooltip :radio-name radio-name
-             :llm-enabled? llm-enabled?
-             :use-context use-context :context-window context-window
-             :card-type card-type :card-count-val card-count-val}
-            !use-context !context-window !card-type !card-count)
+          ;; Overflow panel — display:contents on desktop (items flow inline),
+          ;; dropdown on mobile (toggled via .overflow-open on container).
+          ;; Always mounted so settings e/Token handlers stay active.
+          (dom/div
+            (dom/props {:class "toolbar-overflow-panel"})
+
+            ;; Settings controls (context, card type, card count)
+            ;; Atoms passed as positional args — Electric can't serialize atoms inside maps
+            (settings/ToolbarSettings
+              {:user-id user-id :context-tooltip context-tooltip :radio-name radio-name
+               :llm-enabled? llm-enabled?
+               :use-context use-context :context-window context-window
+               :card-type card-type :card-count-val card-count-val}
+              !use-context !context-window !card-type !card-count)
+
+            ;; Separator between settings and action buttons (mobile only)
+            (dom/div (dom/props {:class "toolbar-overflow-panel-separator"}))
+
+            ;; Proxy action buttons — hidden on desktop, visible in dropdown on mobile.
+            ;; Each .click()s the hidden real button via ref (same pattern as keyboard shortcuts).
+            (when llm-enabled?
+              (dom/button
+                (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action"})
+                (dom/text "Generate with Prompt...")
+                (dom/On "click" (fn [_]
+                                  (when-let [btn (deref keyboard/!gen-prompt-btn-ref)]
+                                    (.click btn))
+                                  (reset! !overflow-open false)) nil)))
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action"})
+              (dom/text "Add new")
+              (dom/On "click" (fn [_]
+                                (when-let [btn (deref keyboard/!add-new-btn-ref)]
+                                  (.click btn))
+                                (reset! !overflow-open false)) nil))
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action"})
+              (dom/text (if (and unsynced-count (pos? unsynced-count))
+                          (str "Export (" unsynced-count ")...")
+                          "Export..."))
+              (dom/On "click" (fn [_]
+                                (when-let [btn (deref keyboard/!export-btn-ref)]
+                                  (.click btn))
+                                (reset! !overflow-open false)) nil)))
 
           ;; Generate buttons + processors + prompt dialog
           ;; All generate/prompt atoms are LOCAL to ToolbarGenerate (not in this map)
@@ -105,42 +141,8 @@
               (dom/text "\u22EE")
               (dom/On "click" (fn [_] (swap! !overflow-open not)) nil))))
 
-        ;; Overflow backdrop + panel — outside .toolbar to avoid scroll clipping
+        ;; Backdrop — outside .toolbar to avoid scroll clipping
         (when overflow-open
           (dom/div
             (dom/props {:class "toolbar-overflow-backdrop"})
-            (dom/On "click" (fn [_] (reset! !overflow-open false)) nil))
-          (dom/div
-            (dom/props {:class "toolbar-overflow-panel"})
-            (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary"})
-              (dom/text "Generate with Prompt...")
-              (dom/On "click" (fn [_]
-                                (when-let [btn (deref keyboard/!gen-prompt-btn-ref)]
-                                  (.click btn))
-                                (reset! !overflow-open false)) nil))
-            (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary"})
-              (dom/text "Add new")
-              (dom/On "click" (fn [_]
-                                (when-let [btn (deref keyboard/!add-new-btn-ref)]
-                                  (.click btn))
-                                (reset! !overflow-open false)) nil))
-            (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary"})
-              (dom/text (if (and unsynced-count (pos? unsynced-count))
-                          (str "Export (" unsynced-count ")...")
-                          "Export..."))
-              (dom/On "click" (fn [_]
-                                (when-let [btn (deref keyboard/!export-btn-ref)]
-                                  (.click btn))
-                                (reset! !overflow-open false)) nil))
-            (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary"})
-              (dom/text (if (and unsynced-count (pos? unsynced-count))
-                          (str "Anki Sync (" unsynced-count ")...")
-                          "Anki Sync..."))
-              (dom/On "click" (fn [_]
-                                (when-let [btn (deref keyboard/!anki-sync-btn-ref)]
-                                  (.click btn))
-                                (reset! !overflow-open false)) nil))))))))
+            (dom/On "click" (fn [_] (reset! !overflow-open false)) nil)))))))

@@ -11,73 +11,77 @@
     (let [{:keys [user-id context-tooltip radio-name llm-enabled?
                   use-context context-window card-type card-count-val]} cfg]
       (when llm-enabled?
-        ;; Context checkbox + pages
-        (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}
-                      :title (or context-tooltip "Include context for better cards")})
+        ;; Context group
+        (dom/div
+          (dom/props {:class "toolbar-settings-row"})
+          (dom/label
+            (dom/props {:style {:display "flex" :align-items "center" :gap "4px"}
+                        :title (or context-tooltip "Include context for better cards")})
+            (dom/input
+              (dom/props {:type "checkbox" :checked use-context})
+              (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
+                    [?token ?error] (e/Token change-event)]
+                (when (some? change-event)
+                  (reset! !use-context change-event))
+                (when-some [token ?token]
+                  (e/server (settings/save-context-enabled user-id change-event))
+                  (token))))
+            (dom/text "Context"))
           (dom/input
-            (dom/props {:type "checkbox" :checked use-context})
-            (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
-                  [?token ?error] (e/Token change-event)]
-              (when (some? change-event)
-                (reset! !use-context change-event))
+            (dom/props {:type "number" :min "1" :max "10" :value (str context-window)
+                        :disabled (not use-context)
+                        :title "Number of previous pages to include (1-10)"
+                        :style {:padding "2px 4px" :font-size "13px" :width "40px"
+                                :opacity (if use-context "1" "0.5")}})
+            (let [input-event (dom/On "change"
+                                (fn [e] (let [v (-> e .-target .-value)]
+                                          (if (seq v) (js/parseInt v) nil)))
+                                nil)
+                  [?token ?error] (e/Token input-event)]
+              (when (some? input-event)
+                (reset! !context-window input-event))
               (when-some [token ?token]
-                (e/server (settings/save-context-enabled user-id change-event))
+                (e/server (settings/save-context-pages user-id input-event))
                 (token))))
-          (dom/text "Context"))
-        (dom/input
-          (dom/props {:type "number" :min "1" :max "10" :value (str context-window)
-                      :disabled (not use-context)
-                      :title "Number of previous pages to include (1-10)"
-                      :style {:padding "2px 4px" :font-size "13px" :width "40px"
-                              :opacity (if use-context "1" "0.5")}})
-          (let [input-event (dom/On "change"
-                              (fn [e] (let [v (-> e .-target .-value)]
-                                        (if (seq v) (js/parseInt v) nil)))
-                              nil)
-                [?token ?error] (e/Token input-event)]
-            (when (some? input-event)
-              (reset! !context-window input-event))
-            (when-some [token ?token]
-              (e/server (settings/save-context-pages user-id input-event))
-              (token))))
-        (dom/span (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)"}}) (dom/text "pages"))
+          (dom/span (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)"}}) (dom/text "pages")))
 
         ;; Separator
-        (dom/span (dom/props {:style {:color "var(--color-border)"}}) (dom/text "|"))
+        (dom/span (dom/props {:class "toolbar-sep"}) (dom/text "|"))
 
-        ;; Card type radios
-        (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}
-                      :title "Traditional question-answer flashcards"})
-          (dom/input
-            (dom/props {:type "radio" :name radio-name :value "basic"
-                        :checked (= card-type "basic")})
-            (let [change-event (dom/On "change" (fn [_] "basic") nil)
-                  [?token ?error] (e/Token change-event)]
-              (when (some? change-event)
-                (reset! !card-type change-event))
-              (when-some [token ?token]
-                (e/server (settings/save-card-type user-id "basic"))
-                (token))))
-          (dom/text "Basic"))
-        (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "13px"}
-                      :title "Fill-in-the-blank deletion cards (e.g., 'Paris is the capital of [...]')"})
-          (dom/input
-            (dom/props {:type "radio" :name radio-name :value "cloze"
-                        :checked (= card-type "cloze")})
-            (let [change-event (dom/On "change" (fn [_] "cloze") nil)
-                  [?token ?error] (e/Token change-event)]
-              (when (some? change-event)
-                (reset! !card-type change-event))
-              (when-some [token ?token]
-                (e/server (settings/save-card-type user-id "cloze"))
-                (token))))
-          (dom/text "Cloze"))
+        ;; Card type group
+        (dom/div
+          (dom/props {:class "toolbar-settings-row"})
+          (dom/label
+            (dom/props {:style {:display "flex" :align-items "center" :gap "4px"}
+                        :title "Traditional question-answer flashcards"})
+            (dom/input
+              (dom/props {:type "radio" :name radio-name :value "basic"
+                          :checked (= card-type "basic")})
+              (let [change-event (dom/On "change" (fn [_] "basic") nil)
+                    [?token ?error] (e/Token change-event)]
+                (when (some? change-event)
+                  (reset! !card-type change-event))
+                (when-some [token ?token]
+                  (e/server (settings/save-card-type user-id "basic"))
+                  (token))))
+            (dom/text "Basic"))
+          (dom/label
+            (dom/props {:style {:display "flex" :align-items "center" :gap "4px"}
+                        :title "Fill-in-the-blank deletion cards (e.g., 'Paris is the capital of [...]')"})
+            (dom/input
+              (dom/props {:type "radio" :name radio-name :value "cloze"
+                          :checked (= card-type "cloze")})
+              (let [change-event (dom/On "change" (fn [_] "cloze") nil)
+                    [?token ?error] (e/Token change-event)]
+                (when (some? change-event)
+                  (reset! !card-type change-event))
+                (when-some [token ?token]
+                  (e/server (settings/save-card-type user-id "cloze"))
+                  (token))))
+            (dom/text "Cloze")))
 
         ;; Separator
-        (dom/span (dom/props {:style {:color "var(--color-border)"}}) (dom/text "|"))
+        (dom/span (dom/props {:class "toolbar-sep"}) (dom/text "|"))
 
         ;; Card count with +/- stepper for touch devices
         (dom/span
