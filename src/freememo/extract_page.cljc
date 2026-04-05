@@ -119,7 +119,7 @@
 
             ;; Bottom: toolbar + cards
             (dom/div
-              (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0" :overflow "hidden"}})
+              (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0"}})
 
               ;; Shared toolbar — content-text from !dirty-html (live) or server content (initial)
               (let [dirty (e/watch editor/!dirty-html)
