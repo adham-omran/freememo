@@ -9,14 +9,13 @@
    [freememo.anki-sync :refer [AnkiSyncButton]]
    [freememo.card-modals :refer [ExportModal AddCardModal]]
    [freememo.content-toolbar-helpers :as helpers]
-   [freememo.content-toolbar-extract :refer [ExtractActions]]
    [freememo.keyboard :as keyboard]))
 
 (e/defn ToolbarActions [cfg]
   (e/client
     (let [{:keys [user-id topic-id root-topic-id page-number
                   context-mode mod-key source-ref unsynced-count
-                  card-type extract-status navigate! origin]} cfg]
+                  card-type]} cfg]
 
       ;; Extract button — create child topic from selected text
       (let [!extract-state (atom {:pending nil :error nil})
@@ -53,10 +52,6 @@
                   (token))
                 (do (reset! !extract-state {:pending nil :error (or (:error result) "Failed to save extract")})
                   (token (or (:error result) "Failed to save extract"))))))))
-
-      ;; Done/Restore + Delete — delegated to separate e/defn (bytecode limit)
-      (ExtractActions {:topic-id topic-id :extract-status extract-status
-                       :navigate! navigate! :origin origin})
 
       ;; Add new card button
       (let [!show-add (atom false)
