@@ -27,7 +27,7 @@
       (dom/div
         (dom/props {:style {:position "relative"}})
         (dom/input
-          (dom/props {:type "text"
+          (dom/props {:type "text" :dir "auto"
                       :value (if (some? search) search (or value ""))
                       :placeholder placeholder
                       :class "input"
