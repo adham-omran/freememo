@@ -428,7 +428,7 @@
 
               ;; BOTTOM PANEL: Shared toolbar + card table
               (dom/div
-                (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0" :overflow "hidden"}})
+                (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0"}})
 
                 (ContentToolbar {:user-id user-id
                                  :enc-key enc-key
