@@ -15,7 +15,7 @@
       (dom/props {:style {:margin-bottom "var(--sp-3)"}})
       (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
         (dom/text label))
-      (Typeahead !model models "Start typing..." nil)
+      (Typeahead !model models "Start typing..." nil nil)
       (when (seq field-hint)
         (dom/div
           (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)" :margin-top "var(--sp-1)"}})
@@ -220,7 +220,7 @@
         (dom/props {:style {:margin-bottom "var(--sp-3)"}})
         (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
           (dom/text "Deck"))
-        (Typeahead (:!selected-deck conn) decks "Start typing deck name..." nil))
+        (Typeahead (:!selected-deck conn) decks "Start typing deck name..." nil nil))
 
       ;; Note Type selectors
       (AnkiSyncModelSelect "Note Type (Basic)" (:!basic-model conn) models

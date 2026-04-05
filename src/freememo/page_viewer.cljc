@@ -152,7 +152,7 @@
                                   :display "flex" :align-items "center" :gap "12px"}})
               (dom/div
                 (dom/props {:style {:flex "1" :position "relative"}})
-                (Typeahead !selected-name filenames "Search documents..." !doc-commit))
+                (Typeahead !selected-name filenames "Search documents..." !doc-commit nil))
               (when (and selected-doc page-stats)
                 (dom/span
                   (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)" :white-space "nowrap" :margin-right "var(--sp-2)"}})
