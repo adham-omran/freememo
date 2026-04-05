@@ -174,6 +174,15 @@
                 top-pct (e/watch !top-pct)
                 !left-pct (atom 50)
                 left-pct (e/watch !left-pct)
+                ;; PDF layout mode (per-document)
+                server-layout (e/server (when is-pdf (settings/get-pdf-layout user-id selected-doc)))
+                !layout (atom (or server-layout "left-right"))
+                layout (e/watch !layout)
+                !layout-save (atom nil)
+                layout-save (e/watch !layout-save)
+                [?layout-token _] (e/Token layout-save)
+                !top-split-pct (atom 50)
+                top-split-pct (e/watch !top-split-pct)
                 ;; Bridge current-pdf-page via atom so it's available at outer scope
                 !current-page (atom 1)
                 current-pdf-page (e/watch !current-page)
@@ -215,31 +224,50 @@
               (e/server (settings/save-last-page user-id selected-doc page-to-save))
               (token))
 
+            ;; Save layout when user toggles
+            (when-some [token ?layout-token]
+              (e/server (settings/save-pdf-layout user-id selected-doc layout-save))
+              (token))
+
             ;; Outer: vertical flex (top row / bottom panel)
             (dom/div
               (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0" :overflow "hidden"}})
 
-              ;; TOP ROW: PDF | Editor (horizontal flex)
-              (dom/div
-                (dom/props {:style {:height (str top-pct "%") :display "flex" :min-height "0" :overflow "hidden"}})
+              ;; TOP ROW: PDF | Editor — flex direction depends on layout mode
+              (let [top-bottom? (= layout "top-bottom")]
+                (dom/div
+                  (dom/props {:style {:height (str top-pct "%") :display "flex"
+                                      :flex-direction (if top-bottom? "column" "row")
+                                      :min-height "0" :overflow "hidden"}})
 
-                ;; LEFT: PDF viewer + divider (hidden for web articles)
-                (when is-pdf
-                  (dom/div
-                    (dom/props {:style {:width (str left-pct "%") :min-width "0" :overflow "hidden"}})
-                    (e/for-by identity [_k [selected-doc]]
-                      (reset! !current-page
-                        (PdfViewerComponent {:document-id selected-doc
-                                             :initial-page initial-page
-                                             :on-navigate! (fn [p] (reset! !page-to-save p))
-                                             :doc-title (get id-to-name selected-doc)
-                                             :page-stats page-stats}))))
+                  ;; PDF viewer + divider (hidden for web articles)
+                  (when is-pdf
+                    (dom/div
+                      (dom/props {:style (if top-bottom?
+                                           {:height (str top-split-pct "%") :min-height "0" :overflow "hidden"}
+                                           {:width (str left-pct "%") :min-width "0" :overflow "hidden"})})
+                      (e/for-by identity [_k [selected-doc]]
+                        (reset! !current-page
+                          (PdfViewerComponent {:document-id selected-doc
+                                               :initial-page initial-page
+                                               :on-navigate! (fn [p] (reset! !page-to-save p))
+                                               :doc-title (get id-to-name selected-doc)
+                                               :page-stats page-stats
+                                               :layout layout
+                                               :on-layout-toggle! (fn []
+                                                                    (let [new-l (if (= @!layout "left-right") "top-bottom" "left-right")]
+                                                                      (reset! !layout new-l)
+                                                                      (reset! !layout-save new-l)))}))))
 
-                  ;; Horizontal drag handle
-                  (dom/div
-                    (dom/props {:class "split-divider-h"
-                                :title "Drag to resize panels"})
-                    (dom/On "pointerdown" (fn [e] (util/start-drag! e :x !left-pct)) nil)))
+                    ;; Drag handle — orientation matches layout
+                    (dom/div
+                      (dom/props {:class (if top-bottom? "split-divider-v" "split-divider-h")
+                                  :title "Drag to resize panels"})
+                      (dom/On "pointerdown"
+                        (fn [e] (if (= @!layout "top-bottom")
+                                  (util/start-drag! e :y !top-split-pct)
+                                  (util/start-drag! e :x !left-pct)))
+                        nil))))
 
                 ;; RIGHT: Editor (full width for web articles)
                 (dom/div
