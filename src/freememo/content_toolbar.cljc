@@ -8,6 +8,7 @@
    [freememo.content-toolbar-settings :as settings]
    [freememo.content-toolbar-generate :as generate]
    [freememo.content-toolbar-actions :as actions]
+   [freememo.content-toolbar-extract :refer [ExtractActions]]
    #?(:clj [freememo.settings :as user-settings])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
@@ -135,12 +136,15 @@
               :use-context use-context :context-window context-window
               :gen-active? gen-active? :gen-pending gen-pending :gen-error gen-error))
 
-          ;; Extract, Add, Export, Anki Sync, Done/Delete (extracts only)
+          ;; Extract, Add, Export, Anki Sync
           (actions/ToolbarActions
             {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
              :page-number page-number :context-mode context-mode :mod-key mod-key
-             :source-ref source-ref :unsynced-count unsynced-count :card-type card-type
-             :extract-status extract-status :navigate! navigate! :origin origin})
+             :source-ref source-ref :unsynced-count unsynced-count :card-type card-type})
+
+          ;; Done/Restore + Delete — extract topics only (separate e/defn for bytecode limit)
+          (ExtractActions {:topic-id topic-id :extract-status extract-status
+                           :navigate! navigate! :origin origin})
 
           ;; Overflow trigger — visible only on mobile/tablet via CSS
           (dom/div
