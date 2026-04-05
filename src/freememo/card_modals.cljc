@@ -139,8 +139,11 @@
           !local-prompt (atom pre-prompt-value)
           local-prompt (e/watch !local-prompt)]
       (dom/div
-        (dom/props {:class "modal-backdrop" :tabindex "-1"})
-        (dom/On "click" (fn [_] (reset! !show false)) nil)
+        (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
+                            :background "transparent" :display "flex" :align-items "center"
+                            :justify-content "center" :z-index "1000"
+                            :pointer-events "none"}
+                    :tabindex "-1"})
         (dom/On "keydown"
           (fn [e]
             #?(:cljs
@@ -148,10 +151,41 @@
                  (reset! !show false))))
           nil)
         (dom/div
-          (dom/props {:class "modal-content modal-lg"})
-          (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+          (dom/props {:style {:background "var(--color-bg-card)" :border-radius "var(--radius-lg)" :padding "var(--sp-6)"
+                              :width "500px" :max-width "90%" :box-shadow "0 4px 20px rgba(0,0,0,0.25)"
+                              :pointer-events "auto"}})
+          (dom/On "pointerdown"
+            (fn [e]
+              #?(:cljs
+                 (let [inner (.-currentTarget e)
+                       h3 (.querySelector inner "h3")]
+                   (when (and h3 (or (= (.-target e) h3)
+                                   (.contains h3 (.-target e))))
+                     (.preventDefault e)
+                     (let [rect (.getBoundingClientRect inner)
+                           sx (.-clientX e)
+                           sy (.-clientY e)
+                           px (.-left rect)
+                           py (.-top rect)
+                           move-fn (fn [me]
+                                     (set! (.-position (.-style inner)) "fixed")
+                                     (set! (.-left (.-style inner))
+                                       (str (+ px (- (.-clientX me) sx)) "px"))
+                                     (set! (.-top (.-style inner))
+                                       (str (+ py (- (.-clientY me) sy)) "px"))
+                                     (set! (.-margin (.-style inner)) "0"))
+                           up-fn (fn self [ue]
+                                   (.releasePointerCapture inner (.-pointerId ue))
+                                   (.removeEventListener inner "pointermove" move-fn)
+                                   (.removeEventListener inner "pointerup" self))]
+                       (.setPointerCapture inner (.-pointerId e))
+                       (.addEventListener inner "pointermove" move-fn)
+                       (.addEventListener inner "pointerup" up-fn))))))
+            nil)
           (dom/h3
-            (dom/props {:style {:margin-top "0" :margin-bottom "20px" :font-size "18px"}})
+            (dom/props {:style {:margin-top "0" :cursor "move" :user-select "none"
+                                :padding-bottom "var(--sp-2)" :margin-bottom "var(--sp-3)"
+                                :border-bottom "1px solid var(--color-border)" :font-size "18px"}})
             (dom/text "Generate " (if (= prompt-dialog-kind "basic") "Basic" "Cloze") " Cards"))
           (dom/div
             (dom/props {:style {:margin-bottom "20px"}})
