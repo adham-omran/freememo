@@ -570,7 +570,9 @@ textarea:hover {
 
 /* ── Quill Editor Overrides ───────────────────────────────────── */
 .ql-container {
-    min-height: 100px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
     background: var(--color-bg-card);
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
@@ -580,6 +582,7 @@ textarea:hover {
     line-height: 1.6;
 }
 .ql-toolbar {
+    flex-shrink: 0;
     background: var(--color-bg-subtle);
     border-bottom: 2px solid var(--color-border);
 }
