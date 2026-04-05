@@ -78,8 +78,8 @@
           ;; Title breadcrumb (no header bar — actions moved to content toolbar)
           (when navigate!
             (dom/div
-              (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-3)"
-                                  :padding "var(--sp-1) var(--sp-4)" :flex-shrink "0"}})
+              (dom/props {:style {:display "flex" :align-items "center" :justify-content "center"
+                                  :padding "2px var(--sp-3)" :flex-shrink "0"}})
               (let [parent-is-intermediate (and parent-id root-topic-id (not= parent-id root-topic-id))
                     label (if parent-is-intermediate
                             (or parent-title "Untitled")
@@ -88,13 +88,13 @@
                               (str (or filename "Unknown") " \u2014 p. " page-number)))]
                 (if (and view-source! parent-id)
                   (dom/span
-                    (dom/props {:style {:color "var(--color-primary)" :font-size "13px" :cursor "pointer"
+                    (dom/props {:style {:color "var(--color-primary)" :font-size "14px" :cursor "pointer"
                                         :text-decoration "underline"}
                                 :title "View source"})
                     (dom/text label)
                     (dom/On "click" (fn [_] (view-source! (if (and parent-is-intermediate (not= root-kind "pdf")) parent-id root-topic-id) page-number root-kind)) nil))
                   (dom/span
-                    (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px"}})
+                    (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
                     (dom/text label))))))
 
           ;; Split pane: editor top / toolbar+cards bottom

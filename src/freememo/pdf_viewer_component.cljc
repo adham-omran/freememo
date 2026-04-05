@@ -102,7 +102,8 @@
                 (when (some? v) (reset! !input-val v))))
 
             (dom/span
-              (dom/props {:style {:color "var(--color-text-primary)" :padding "0 4px"}})
+              (dom/props {:class "pdf-collapse-md"
+                          :style {:color "var(--color-text-primary)" :padding "0 4px"}})
               (dom/text "of " total))
 
             ;; Next button
@@ -125,7 +126,7 @@
                         (when on-navigate! (on-navigate! new-page))))))
                 nil)))
 
-          ;; Zoom controls section
+          ;; Zoom controls + layout toggle (merged into one group to reduce wrapping)
           (dom/div
             (dom/props {:style {:display "flex"
                                 :align-items "center"
@@ -135,7 +136,8 @@
                                 :border-left "1px solid var(--color-border)"}})
 
             (dom/button
-              (dom/props {:title "Zoom Out"
+              (dom/props {:class "pdf-collapse-md"
+                          :title "Zoom Out"
                           :style {:padding "6px 12px"
                                   :cursor "pointer"
                                   :background "var(--color-bg-card)"
@@ -145,7 +147,8 @@
               (e/for [_ (dom/On-all "click")] (viewer/zoom! 0.9)))
 
             (dom/button
-              (dom/props {:title "Zoom In"
+              (dom/props {:class "pdf-collapse-md"
+                          :title "Zoom In"
                           :style {:padding "6px 12px"
                                   :cursor "pointer"
                                   :background "var(--color-bg-card)"
@@ -176,26 +179,25 @@
                       (let [scale (js/parseFloat v)]
                         (when-not (js/isNaN scale)
                           (viewer/set-zoom! scale))))))
-                (t))))
+                (t)))
+            (when on-layout-toggle!
+              (dom/button
+                (dom/props {:style {:padding "6px 10px" :cursor "pointer"
+                                    :background "var(--color-bg-card)"
+                                    :border "1px solid var(--color-border)"
+                                    :border-radius "3px" :font-size "14px"}
+                            :data-tooltip (if (= layout "top-bottom")
+                                            "Switch to side-by-side layout"
+                                            "Switch to stacked layout")})
+                (dom/text (if (= layout "top-bottom") "\u21C5" "\u21C4"))
+                (dom/On "click" (fn [_] (on-layout-toggle!)) nil))))
 
-          ;; Layout toggle button
-          (when on-layout-toggle!
-            (dom/button
-              (dom/props {:style {:padding "6px 10px" :cursor "pointer"
-                                  :background "var(--color-bg-card)"
-                                  :border "1px solid var(--color-border)"
-                                  :border-radius "3px" :font-size "14px"}
-                          :data-tooltip (if (= layout "top-bottom")
-                                          "Switch to side-by-side layout"
-                                          "Switch to stacked layout")})
-              (dom/text (if (= layout "top-bottom") "\u21C5" "\u21C4"))
-              (dom/On "click" (fn [_] (on-layout-toggle!)) nil)))
-
-          ;; Document title + progress (right-aligned)
+          ;; Document title + progress — hidden at narrow widths
           (when doc-title
             (dom/div
-              (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
-                                  :margin-left "auto" :min-width "0"}})
+              (dom/props {:class "pdf-collapse-sm"
+                          :style {:display "flex" :align-items "center" :gap "8px"
+                                  :min-width "0"}})
               (dom/span
                 (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px"
                                     :white-space "nowrap" :overflow "hidden" :text-overflow "ellipsis"}})

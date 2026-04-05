@@ -476,6 +476,10 @@ textarea:hover {
         flex-wrap: wrap;
     }
 
+    /* PDF toolbar: progressive collapse at tablet width */
+    .pdf-collapse-md { display: none !important; }
+    .pdf-collapse-sm { display: none !important; }
+
     /* Content toolbar: horizontal scroll instead of multi-row wrap */
     .toolbar {
         flex-wrap: nowrap;
