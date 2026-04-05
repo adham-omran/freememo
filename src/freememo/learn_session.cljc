@@ -229,24 +229,27 @@
                                  (navigate! :viewer (nav/nav-browse-topic root-id nil))))]
 
             (when item
-              ;; Header
-              (SessionHeader item !queue-idx navigate! idx total view-source!)
-
               ;; Content
-              (if show-pdf?
-                (dom/div
-                  (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
+              (let [queue-pos (str (inc idx) " / " total)
+                    item-priority (or (:topics/priority item) 50)]
+                (if show-pdf?
                   (dom/div
-                    (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                    (let [!nav (atom {:topic-id topic-id})]
-                      (OcrPage user-id enc-key !nav llm-enabled?)))
-                  (BottomBar topic-id !queue-idx))
+                    (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
+                    (dom/div
+                      (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
+                      (let [!nav (atom {:topic-id topic-id})]
+                        (OcrPage user-id enc-key !nav llm-enabled?)))
+                    (BottomBar topic-id !queue-idx))
 
-                (dom/div
-                  (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
                   (dom/div
-                    (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                    (ExtractPage user-id enc-key topic-id
-                      (fn [& _] (swap! !queue-idx inc))
-                      nil llm-enabled? :learn))
-                  (BottomBar topic-id !queue-idx))))))))))
+                    (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
+                    (dom/div
+                      (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
+                      (ExtractPage {:user-id user-id :enc-key enc-key :topic-id topic-id
+                                    :navigate! (fn [& _] (swap! !queue-idx inc))
+                                    :view-source! view-source!
+                                    :llm-enabled? llm-enabled? :origin :learn
+                                    :queue-position queue-pos
+                                    :priority item-priority
+                                    :on-priority-change! (fn [new-val] (update-topic-priority* topic-id new-val))}))
+                    (BottomBar topic-id !queue-idx)))))))))))

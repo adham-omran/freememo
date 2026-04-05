@@ -27,7 +27,8 @@
   #?(:cljs (if (< (.-innerHeight js/window) 900) 50 75)
      :clj 75))
 
-(e/defn ExtractPage [user-id enc-key topic-id navigate! view-source! llm-enabled? origin]
+(e/defn ExtractPage [{:keys [user-id enc-key topic-id navigate! view-source! llm-enabled? origin
+                             queue-position priority on-priority-change!]}]
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
@@ -75,27 +76,52 @@
                   (reset! !last-saved html-to-save)))))
 
 
-          ;; Title breadcrumb (no header bar — actions moved to content toolbar)
-          (when navigate!
-            (dom/div
-              (dom/props {:style {:display "flex" :align-items "center" :justify-content "center"
-                                  :padding "2px var(--sp-3)" :flex-shrink "0"}})
-              (let [parent-is-intermediate (and parent-id root-topic-id (not= parent-id root-topic-id))
-                    label (if parent-is-intermediate
-                            (or parent-title "Untitled")
-                            (if (nil? page-number)
-                              (or filename "Untitled")
-                              (str (or filename "Unknown") " \u2014 p. " page-number)))]
-                (if (and view-source! parent-id)
-                  (dom/span
-                    (dom/props {:style {:color "var(--color-primary)" :font-size "14px" :cursor "pointer"
-                                        :text-decoration "underline"}
-                                :title "View source"})
-                    (dom/text label)
-                    (dom/On "click" (fn [_] (view-source! (if (and parent-is-intermediate (not= root-kind "pdf")) parent-id root-topic-id) page-number root-kind)) nil))
-                  (dom/span
-                    (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
-                    (dom/text label))))))
+          ;; Title breadcrumb bar
+          (dom/div
+            (dom/props {:style {:display "flex" :align-items "center" :position "relative"
+                                :padding "4px var(--sp-3)" :flex-shrink "0"
+                                :justify-content "center"}})
+            (let [parent-is-intermediate (and parent-id root-topic-id (not= parent-id root-topic-id))
+                  label (if parent-is-intermediate
+                          (or parent-title "Untitled")
+                          (if (nil? page-number)
+                            (or filename "Untitled")
+                            (str (or filename "Unknown") " \u2014 p. " page-number)))]
+              ;; Title (absolutely centered, independent of right-side items)
+              (dom/span
+                (dom/props {:style {:font-size "14px"
+                                    :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
+                                    :color (if (and view-source! parent-id) "var(--color-primary)" "var(--color-text-secondary)")
+                                    :cursor (when (and view-source! parent-id) "pointer")
+                                    :text-decoration (when (and view-source! parent-id) "underline")}
+                            :title (when (and view-source! parent-id) "View source")})
+                (dom/text label)
+                (when (and view-source! parent-id)
+                  (dom/On "click" (fn [_] (view-source! (if (and parent-is-intermediate (not= root-kind "pdf")) parent-id root-topic-id) page-number root-kind)) nil))))
+
+            ;; Learn session: priority + queue counter (absolute right)
+            (when queue-position
+              (dom/label
+                (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "12px"
+                                    :color "var(--color-text-secondary)"
+                                    :position "absolute" :right "var(--sp-3)" :top "50%"
+                                    :transform "translateY(-50%)"}
+                            :title "Priority (0=highest, 100=lowest)"})
+                (dom/text "Priority")
+                (e/for-by identity [_k [topic-id]]
+                  (dom/input
+                    (dom/props {:type "number" :min "0" :max "100"
+                                :style {:width "48px" :font-size "12px" :padding "2px 4px"
+                                        :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)" :text-align "center"}})
+                    (set! (.-value dom/node) (str (or priority 50)))
+                    (let [change-event (dom/On "change" (fn [e] (-> e .-target .-value js/parseInt)) nil)
+                          [?token _] (e/Token change-event)]
+                      (when-some [token ?token]
+                        (when on-priority-change! (on-priority-change! change-event))
+                        (token))))))
+              (dom/span
+                (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px" :margin-left "8px" :flex-shrink "0"}})
+                (dom/text queue-position))))
 
           ;; Split pane: editor top / toolbar+cards bottom
           (let [!top-pct (atom (default-split-pct))
@@ -105,7 +131,7 @@
             (dom/div
               (dom/props {:style {:height (str top-pct "%") :min-height "0" :overflow "auto"
                                   :display "flex" :justify-content "center"
-                                  :padding "24px 16px"}})
+                                  :padding "8px 16px"}})
               (dom/div
                 (dom/props {:style {:width "100%"
                                     :display "flex" :flex-direction "column"}})
