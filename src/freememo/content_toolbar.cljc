@@ -11,6 +11,7 @@
    #?(:clj [freememo.settings :as user-settings])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
+   [freememo.keyboard :as keyboard]
    [freememo.util :refer [mac-platform?]]))
 
 ;; State map keys:
@@ -58,32 +59,88 @@
           gen-error (:error card-gen-status)
 
           ;; Unique radio group name
-          radio-name (if (= context-mode :extract) "extract-card-type" "card-type")]
+          radio-name (if (= context-mode :extract) "extract-card-type" "card-type")
+
+          ;; Overflow menu state (mobile)
+          !overflow-open (atom false)
+          overflow-open (e/watch !overflow-open)]
 
       (dom/div
-        (dom/props {:class "toolbar"})
+        (dom/props {:class "toolbar-container"})
 
-        ;; Settings controls (context, card type, card count)
-        ;; Atoms passed as positional args — Electric can't serialize atoms inside maps
-        (settings/ToolbarSettings
-          {:user-id user-id :context-tooltip context-tooltip :radio-name radio-name
-           :llm-enabled? llm-enabled?
-           :use-context use-context :context-window context-window
-           :card-type card-type :card-count-val card-count-val}
-          !use-context !context-window !card-type !card-count)
+        (dom/div
+          (dom/props {:class "toolbar"})
 
-        ;; Generate buttons + processors + prompt dialog
-        ;; All generate/prompt atoms are LOCAL to ToolbarGenerate (not in this map)
-        ;; to avoid reactive loops from map reconstruction.
-        (generate/ToolbarGenerate
-          (assoc state
-            :mod-key mod-key :source-ref source-ref
-            :card-type card-type :card-count-val card-count-val
-            :use-context use-context :context-window context-window
-            :gen-active? gen-active? :gen-pending gen-pending :gen-error gen-error))
+          ;; Settings controls (context, card type, card count)
+          ;; Atoms passed as positional args — Electric can't serialize atoms inside maps
+          (settings/ToolbarSettings
+            {:user-id user-id :context-tooltip context-tooltip :radio-name radio-name
+             :llm-enabled? llm-enabled?
+             :use-context use-context :context-window context-window
+             :card-type card-type :card-count-val card-count-val}
+            !use-context !context-window !card-type !card-count)
 
-        ;; Extract, Add, Export, Anki Sync
-        (actions/ToolbarActions
-          {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
-           :page-number page-number :context-mode context-mode :mod-key mod-key
-           :source-ref source-ref :unsynced-count unsynced-count :card-type card-type})))))
+          ;; Generate buttons + processors + prompt dialog
+          ;; All generate/prompt atoms are LOCAL to ToolbarGenerate (not in this map)
+          ;; to avoid reactive loops from map reconstruction.
+          (generate/ToolbarGenerate
+            (assoc state
+              :mod-key mod-key :source-ref source-ref
+              :card-type card-type :card-count-val card-count-val
+              :use-context use-context :context-window context-window
+              :gen-active? gen-active? :gen-pending gen-pending :gen-error gen-error))
+
+          ;; Extract, Add, Export, Anki Sync
+          (actions/ToolbarActions
+            {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
+             :page-number page-number :context-mode context-mode :mod-key mod-key
+             :source-ref source-ref :unsynced-count unsynced-count :card-type card-type})
+
+          ;; Overflow trigger — visible only on mobile/tablet via CSS
+          (dom/div
+            (dom/props {:class "toolbar-overflow-trigger"})
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-secondary"
+                          :style {:font-weight "bold" :padding "4px 10px" :font-size "16px" :line-height "1"}})
+              (dom/text "\u22EE")
+              (dom/On "click" (fn [_] (swap! !overflow-open not)) nil))))
+
+        ;; Overflow backdrop + panel — outside .toolbar to avoid scroll clipping
+        (when overflow-open
+          (dom/div
+            (dom/props {:class "toolbar-overflow-backdrop"})
+            (dom/On "click" (fn [_] (reset! !overflow-open false)) nil))
+          (dom/div
+            (dom/props {:class "toolbar-overflow-panel"})
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-secondary"})
+              (dom/text "Generate with Prompt...")
+              (dom/On "click" (fn [_]
+                                (when-let [btn (deref keyboard/!gen-prompt-btn-ref)]
+                                  (.click btn))
+                                (reset! !overflow-open false)) nil))
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-secondary"})
+              (dom/text "Add new")
+              (dom/On "click" (fn [_]
+                                (when-let [btn (deref keyboard/!add-new-btn-ref)]
+                                  (.click btn))
+                                (reset! !overflow-open false)) nil))
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-secondary"})
+              (dom/text (if (and unsynced-count (pos? unsynced-count))
+                          (str "Export (" unsynced-count ")...")
+                          "Export..."))
+              (dom/On "click" (fn [_]
+                                (when-let [btn (deref keyboard/!export-btn-ref)]
+                                  (.click btn))
+                                (reset! !overflow-open false)) nil))
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-secondary"})
+              (dom/text (if (and unsynced-count (pos? unsynced-count))
+                          (str "Anki Sync (" unsynced-count ")...")
+                          "Anki Sync..."))
+              (dom/On "click" (fn [_]
+                                (when-let [btn (deref keyboard/!anki-sync-btn-ref)]
+                                  (.click btn))
+                                (reset! !overflow-open false)) nil))))))))

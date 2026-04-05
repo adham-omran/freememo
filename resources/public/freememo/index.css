@@ -240,16 +240,24 @@ html, body {
 .modal-lg { width: 600px; max-width: 90%; }
 
 /* ── Toolbar / Header bar ──────────────────────────────────────── */
+.toolbar-container {
+    position: relative;
+    flex-shrink: 0;
+}
 .toolbar {
     display: flex;
     align-items: center;
     flex-wrap: wrap;
     gap: var(--sp-2);
     padding: var(--sp-1) var(--sp-2);
-    flex-shrink: 0;
     border-bottom: 1px solid var(--color-border);
     background: var(--color-bg-subtle);
 }
+
+/* Overflow menu — hidden on desktop */
+.toolbar-overflow-trigger { display: none; }
+.toolbar-overflow-backdrop { display: none; }
+.toolbar-overflow-panel { display: none; }
 
 .header-bar {
     display: flex;
@@ -465,6 +473,57 @@ textarea:hover {
         -webkit-overflow-scrolling: touch;
     }
 
+    /* Normalize button heights in toolbar (btn matches btn-sm) */
+    .toolbar .btn {
+        padding: 4px 12px;
+        font-size: 13px;
+        white-space: nowrap;
+    }
+
+    /* Hide overflow items — accessed via ⋮ menu instead */
+    .toolbar-overflow-item { display: none !important; }
+
+    /* Show overflow trigger — sticky at right edge of scrollable toolbar */
+    .toolbar-overflow-trigger {
+        display: flex;
+        position: sticky;
+        right: 0;
+        flex-shrink: 0;
+        z-index: 2;
+        background: var(--color-bg-subtle);
+        padding-left: 4px;
+    }
+
+    /* Backdrop covers screen to catch outside taps */
+    .toolbar-overflow-backdrop {
+        display: block;
+        position: fixed;
+        inset: 0;
+        z-index: 99;
+    }
+
+    /* Dropdown panel — opens downward from toolbar */
+    .toolbar-overflow-panel {
+        display: flex;
+        flex-direction: column;
+        position: absolute;
+        top: 100%;
+        right: 0;
+        z-index: 100;
+        background: var(--color-bg-card);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        box-shadow: var(--shadow-modal);
+        padding: var(--sp-1);
+        gap: 2px;
+        min-width: 200px;
+    }
+    .toolbar-overflow-panel .btn {
+        width: 100%;
+        text-align: left;
+        justify-content: flex-start;
+    }
+
     /* Card table: ensure min width so columns aren't clipped */
     .card-table {
         min-width: 500px;
@@ -478,6 +537,10 @@ textarea:hover {
         gap: 6px;
     }
     .btn-sm {
+        padding: 4px 8px;
+        font-size: 12px;
+    }
+    .toolbar .btn {
         padding: 4px 8px;
         font-size: 12px;
     }

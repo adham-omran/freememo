@@ -76,10 +76,12 @@
 
           ;; Generate with Prompt button
           (dom/button
-            (dom/props {:class "btn btn-sm btn-secondary"
+            (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-item"
                         :style {:font-weight "500"}
                         :title "Add custom instructions to guide card generation"})
             (dom/text "Generate with Prompt...")
+            (reset! keyboard/!gen-prompt-btn-ref dom/node)
+            (e/on-unmount (fn [] (reset! keyboard/!gen-prompt-btn-ref nil)))
             (dom/On "click" (fn [_]
                               (let [sel (editor/get-selection!)]
                                 (when sel

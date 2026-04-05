@@ -11,13 +11,18 @@
 (defonce !done-btn-ref (atom nil))
 (defonce !postpone-btn-ref (atom nil))
 
+;; Overflow menu proxy refs (toolbar buttons hidden on mobile, clicked via ⋮ menu)
+(defonce !gen-prompt-btn-ref (atom nil))
+(defonce !add-new-btn-ref (atom nil))
+(defonce !export-btn-ref (atom nil))
+
 #?(:cljs
    (def ^:private shortcut->ref
-     {"extract"   !extract-btn-ref
-      "generate"  !generate-btn-ref
-      "scan"      !scan-btn-ref
+     {"extract" !extract-btn-ref
+      "generate" !generate-btn-ref
+      "scan" !scan-btn-ref
       "anki-sync" !anki-sync-btn-ref
-      "done"      !done-btn-ref}))
+      "done" !done-btn-ref}))
 
 #?(:cljs
    (defn- on-shortcut [e]
@@ -34,10 +39,10 @@
        ;; contentEditable — modifierShortcutsAreGlobal_ only applies to
        ;; form elements (input/textarea/select), not contentEditable.
        (.setAllShortcutsAreGlobal h true)
-       (.registerShortcut h "extract"   "meta+shift+e")
-       (.registerShortcut h "generate"  "meta+shift+g")
-       (.registerShortcut h "scan"      "meta+shift+s")
+       (.registerShortcut h "extract" "meta+shift+e")
+       (.registerShortcut h "generate" "meta+shift+g")
+       (.registerShortcut h "scan" "meta+shift+s")
        (.registerShortcut h "anki-sync" "meta+shift+x")
-       (.registerShortcut h "done"      "meta+shift+d")
+       (.registerShortcut h "done" "meta+shift+d")
        (gevents/listen h "shortcut" on-shortcut)
        h)))
