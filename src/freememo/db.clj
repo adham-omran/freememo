@@ -696,6 +696,19 @@
              user-id topic-id (str "Page " n) n])))
       topic)))
 
+(defn find-web-topic-by-title
+  "Find an existing root-level web topic by title (case-insensitive).
+   Returns {:topics/id ...} or nil."
+  [user-id title]
+  (jdbc/execute-one! ds
+    (sql/format {:select [:id :title]
+                 :from [:topics]
+                 :where [:and
+                         [:= :user_id user-id]
+                         [:= :kind "web"]
+                         [:is :parent_id nil]
+                         [:= [:lower :title] (str/lower-case title)]]})))
+
 (defn create-web-topic!
   "Create a web article topic. Returns topic-id."
   [user-id title html-content source-url]
