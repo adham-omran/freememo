@@ -1,8 +1,50 @@
 (ns freememo.wikipedia
   "Web article fetching — Wikipedia and generic URLs."
   (:require [clj-http.client :as http]
+            [clojure.string :as str]
             [freememo.html-cleaner :as cleaner])
   (:import [org.jsoup Jsoup]))
+
+(defn- simplify-latex
+  "Strip \\displaystyle wrapper and common LaTeX noise from alt text.
+   '{\\displaystyle F(g\\circ f)=F(g)\\circ F(f)}' → 'F(g ∘ f) = F(g) ∘ F(f)'"
+  [alt]
+  (-> alt
+      (str/replace #"^\{\\displaystyle\s*" "")
+      (str/replace #"\s*\\?\}$" "")
+      (str/replace #"\\displaystyle\s*" "")
+      (str/replace "\\circ" "∘")
+      (str/replace "\\colon" ":")
+      (str/replace "\\to" "→")
+      (str/replace #"\\mathrm\s*\{([^}]*)\}" "$1")
+      (str/replace #"\\operatorname\s*\{([^}]*)\}" "$1")
+      (str/replace #"\\(?:left|right)([()\\[\\]|])" "$1")
+      (str/replace "\\," "")
+      (str/replace "\\!" "")
+      (str/replace "\\;" " ")
+      (str/replace "\\quad" " ")
+      (str/replace #"\\_\{([^}]*)\}" "_{$1}")
+      (str/replace #"\\\^\{([^}]*)\}" "^{$1}")
+      str/trim))
+
+(defn- preprocess-wikipedia-html
+  "Pre-process Wikipedia REST API HTML before sanitization:
+   1. Remove <math> elements (prevents Jsoup text promotion of MathML nodes)
+   2. Simplify alt text on math <img> fallbacks
+   3. Rewrite protocol-relative URLs to https://"
+  [html]
+  (let [doc (Jsoup/parse html)]
+    ;; Phase 1: Math — remove <math> elements, clean alt on fallback <img>
+    (doseq [math-el (.select doc "math")]
+      (.remove math-el))
+    (doseq [img (.select doc "img.mwe-math-fallback-image-inline, img.mwe-math-fallback-image-display")]
+      (let [alt (.attr img "alt")]
+        (when (seq alt)
+          (.attr img "alt" (simplify-latex alt)))))
+    ;; Phase 2: Images — rewrite protocol-relative URLs
+    (doseq [img (.select doc "img[src^=//]")]
+      (.attr img "src" (str "https:" (.attr img "src"))))
+    (.html (.body doc))))
 
 (defn- wikipedia-url? [url]
   (and (string? url)
@@ -20,7 +62,7 @@
                           "Accept" "text/html"}
                 :cookie-policy :none})]
     {:title title
-     :html (cleaner/clean-html (:body resp))
+     :html (-> (:body resp) preprocess-wikipedia-html cleaner/clean-html)
      :url (str "https://en.wikipedia.org/wiki/" (java.net.URLEncoder/encode title "UTF-8"))
      :source-type "wikipedia"}))
 
