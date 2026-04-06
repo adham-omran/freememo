@@ -9,6 +9,14 @@
 ;; Global singleton — mirrors pdf_viewer.cljc pattern
 (defonce !editor-state (atom nil))
 
+;; Set by Import button click in Quill tooltip — picked up by e/Token in extract_page
+;; Shape: {:url "https://en.wikipedia.org/wiki/..." :ts <timestamp>} or nil
+(defonce !import-url (atom nil))
+
+;; Import status feedback — set by Electric wiring, read by tooltip JS
+;; :idle | :importing | :done | :already-exists | :error
+(defonce !import-status (atom :idle))
+
 ;; Set to the current HTML on every user edit (immediate, no debounce).
 ;; nil means "no pending user edits" — the auto-save guard checks for non-nil.
 ;; Reset to nil on init/page-switch so navigating doesn't trigger a save.
@@ -26,6 +34,8 @@
          (let [^js ed editor
                ^js ct container]
            (.off ed "text-change")
+           (.off ed "selection-change")
+           (remove-watch !import-status ::tooltip-btn)
            (when ct
              ;; Remove Quill's toolbar (sibling before container, created by snow theme)
              (when-let [toolbar (.querySelector (.-parentNode ct) ".ql-toolbar")]
@@ -38,7 +48,7 @@
   [editor]
   #?(:cljs
      (when-let [^js toolbar-el (some-> ^js editor .-container .-parentNode
-                                  (.querySelector ".ql-toolbar"))]
+                                 (.querySelector ".ql-toolbar"))]
        (doseq [[selector title] [[".ql-bold" "Bold"]
                                   [".ql-italic" "Italic"]
                                   [".ql-underline" "Underline"]
@@ -58,6 +68,79 @@
            (.setAttribute el "title" title))))
      :clj nil))
 
+(defn- wikipedia-url? [href]
+  #?(:cljs (and (string? href)
+             (or (.includes href "wikipedia.org/wiki/")
+               (.includes href "wikipedia.org/w/")))
+     :clj false))
+
+(defn- setup-link-import-button!
+  "Inject an 'Import' button into Quill Snow tooltip for Wikipedia links.
+   On selection-change, show/hide the button based on whether the link is Wikipedia.
+   Watches !import-status to update button text during import."
+  [editor]
+  #?(:cljs
+     (when-let [^js tooltip (some-> ^js editor .-theme .-tooltip)]
+       (let [^js root (.-root tooltip)
+             import-btn (js/document.createElement "a")
+             _ (set! (.-className import-btn) "ql-import")
+             _ (set! (.-textContent import-btn) "Import")
+             _ (set! (.-style.display import-btn) "none")
+             _ (.appendChild root import-btn)]
+         ;; Click handler: extract URL from tooltip preview, fire import
+         (.addEventListener import-btn "click"
+           (fn [e]
+             (.preventDefault e)
+             (js/console.log "[wiki-import] click! status=" (pr-str @!import-status))
+             (if (= @!import-status :importing)
+               (js/console.log "[wiki-import] blocked — still importing")
+               (let [^js preview (.querySelector root ".ql-preview")
+                     href (when preview (.getAttribute preview "href"))]
+                 (js/console.log "[wiki-import] href=" href " wiki?=" (wikipedia-url? href))
+                 (when (wikipedia-url? href)
+                   (reset! !import-status :importing)
+                   (set! (.-textContent import-btn) "Importing...")
+                   (.add (.-classList import-btn) "importing")
+                   (reset! !import-url {:url href :ts (js/Date.now)})
+                   (js/console.log "[wiki-import] !import-url set"))))))
+         ;; Watch import status to update button text
+         (add-watch !import-status ::tooltip-btn
+           (fn [_ _ _ new-status]
+             (case new-status
+               :importing (do (set! (.-textContent import-btn) "Importing...")
+                            (.add (.-classList import-btn) "importing"))
+               :done (do (set! (.-textContent import-btn) "Imported!")
+                       (.remove (.-classList import-btn) "importing")
+                       (js/setTimeout #(do (set! (.-textContent import-btn) "Import")
+                                         (reset! !import-status :idle)) 2000))
+               :already-exists (do (set! (.-textContent import-btn) "Already imported")
+                                 (.remove (.-classList import-btn) "importing")
+                                 (js/setTimeout #(do (set! (.-textContent import-btn) "Import")
+                                                   (reset! !import-status :idle)) 2000))
+               :error (do (set! (.-textContent import-btn) "Error")
+                        (.remove (.-classList import-btn) "importing")
+                        (js/setTimeout #(do (set! (.-textContent import-btn) "Import")
+                                          (reset! !import-status :idle)) 2000))
+               ;; :idle — reset
+               (do (set! (.-textContent import-btn) "Import")
+                 (.remove (.-classList import-btn) "importing")))))
+         ;; Show/hide import button when tooltip appears on a link
+         (let [^js ed editor]
+           (.on ed "selection-change"
+             (fn [range _old-range _source]
+               (when range
+                 (let [idx (.-index range)
+                       ^js leaf-arr (.getLeaf ed idx)
+                       ^js leaf (when leaf-arr (aget leaf-arr 0))
+                       ^js parent (when leaf (.-parent leaf))
+                       tag (when parent (some-> (.-domNode parent) .-tagName))
+                       href (when (= "A" tag)
+                              (.getAttribute (.-domNode parent) "href"))]
+                   (if (wikipedia-url? href)
+                     (set! (.-style.display import-btn) "")
+                     (set! (.-style.display import-btn) "none")))))))))
+     :clj nil))
+
 (defn- setup-mobile-keyboard-suppression!
   "On touch devices, suppress virtual keyboard until double-tap.
    Sets inputmode=\"none\" on .ql-editor; double-tap removes it and
@@ -66,23 +149,23 @@
   #?(:cljs
      (let [mq (.matchMedia js/window "(pointer: coarse)")]
        (when (.-matches mq)
-         (let [^js root        (.-root editor)
-               !last-tap       (atom 0)
-               !refocusing     (atom false)
-               suppress!       (fn [] (.setAttribute root "inputmode" "none"))
-               enter-edit!     (fn []
-                                 (.removeAttribute root "inputmode")
-                                 (reset! !refocusing true)
-                                 (.blur root)
-                                 (js/requestAnimationFrame
-                                   (fn []
-                                     (.focus root)
-                                     (reset! !refocusing false))))]
+         (let [^js root (.-root editor)
+               !last-tap (atom 0)
+               !refocusing (atom false)
+               suppress! (fn [] (.setAttribute root "inputmode" "none"))
+               enter-edit! (fn []
+                             (.removeAttribute root "inputmode")
+                             (reset! !refocusing true)
+                             (.blur root)
+                             (js/requestAnimationFrame
+                               (fn []
+                                 (.focus root)
+                                 (reset! !refocusing false))))]
            ;; Double-tap detection via touchend timing
            (.addEventListener root "touchend"
              (fn [^js e]
                (when (zero? (.-length (.-touches e)))
-                 (let [now     (js/Date.now)
+                 (let [now (js/Date.now)
                        elapsed (- now @!last-tap)]
                    (reset! !last-tap now)
                    (when (< elapsed 300)
@@ -147,6 +230,7 @@
          (reset! !editor-state {:editor editor :container container
                                 :topic-id topic-id})
          (add-toolbar-tooltips! editor)
+         (setup-link-import-button! editor)
          (setup-mobile-keyboard-suppression! editor)
          editor))))
 

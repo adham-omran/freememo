@@ -594,6 +594,22 @@ textarea:hover {
     text-align: right;
 }
 
+/* Quill Snow tooltip — Import button for Wikipedia links */
+.ql-snow .ql-tooltip .ql-import {
+    margin-left: 8px;
+    padding-left: 8px;
+    border-left: 1px solid #ccc;
+    cursor: pointer;
+    color: var(--color-primary, #3b82f6);
+}
+.ql-snow .ql-tooltip .ql-import:hover {
+    text-decoration: underline;
+}
+.ql-snow .ql-tooltip .ql-import.importing {
+    pointer-events: none;
+    opacity: 0.6;
+}
+
 /* ── Dark Mode (system preference) ───────────────────────────── */
 @media (prefers-color-scheme: dark) {
     :root {

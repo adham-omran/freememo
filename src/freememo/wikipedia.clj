@@ -34,6 +34,9 @@
    3. Rewrite protocol-relative URLs to https://"
   [html]
   (let [doc (Jsoup/parse html)]
+    ;; Phase 0: Strip navigation chrome (navboxes, portalboxes)
+    (doseq [nav (.select doc "[role=navigation], nav")]
+      (.remove nav))
     ;; Phase 1: Math — remove <math> elements, clean alt on fallback <img>
     (doseq [math-el (.select doc "math")]
       (.remove math-el))
@@ -44,13 +47,20 @@
     ;; Phase 2: Images — rewrite protocol-relative URLs
     (doseq [img (.select doc "img[src^=//]")]
       (.attr img "src" (str "https:" (.attr img "src"))))
+    ;; Phase 3: Links — rewrite relative hrefs to absolute Wikipedia URLs
+    (doseq [a (.select doc "a[href^=./]")]
+      (let [href (.attr a "href")
+            slug (subs href 2)] ;; strip "./"
+        (.attr a "href" (str "https://en.wikipedia.org/wiki/" slug))))
     (.html (.body doc))))
 
 (defn- wikipedia-url? [url]
   (and (string? url)
        (re-find #"(?i)wikipedia\.org/wiki/" url)))
 
-(defn- extract-wiki-title [url]
+(defn extract-wiki-title
+  "Extract the article title from a Wikipedia URL. Returns nil for non-Wikipedia URLs."
+  [url]
   (when-let [m (re-find #"wikipedia\.org/wiki/(.+?)(?:#.*)?$" url)]
     (java.net.URLDecoder/decode (second m) "UTF-8")))
 

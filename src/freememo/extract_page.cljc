@@ -13,13 +13,33 @@
    [freememo.content-card-table :refer [ContentCardTable]]
    [freememo.util :refer [start-drag!]]
    #?(:clj [freememo.db :as db])
-   #?(:clj [freememo.settings :as settings])))
+   #?(:clj [freememo.settings :as settings])
+   #?(:clj [freememo.wikipedia :as wiki])))
 
 ;; Per-user refresh via user-state registry
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 #?(:clj (defn get-topic-by-id* [_refresh topic-id]
           (when topic-id (db/get-topic topic-id))))
+
+(defn import-wikipedia-url*
+  "Import a Wikipedia article by URL. Returns {:already-exists true :title ...} or {:imported true :title ...} or {:error ...}."
+  [user-id url]
+  #?(:clj
+     (try
+       (let [title (wiki/extract-wiki-title url)]
+         (if-not title
+           {:error "Not a valid Wikipedia URL"}
+           (if-let [existing (db/find-web-topic-by-title user-id title)]
+             {:already-exists true :title title :topic-id (:topics/id existing)}
+             (let [result (wiki/fetch-url url)]
+               (if-not (:success result)
+                 {:error (:error result)}
+                 (let [topic-id (db/create-web-topic! user-id (:title result) (:html result) (:url result))]
+                   {:imported true :title (:title result) :topic-id topic-id}))))))
+       (catch Exception e
+         {:error (.getMessage e)}))
+     :cljs nil))
 
 
 ;; Responsive split pane default — plain defn avoids #? inside e/defn (frame mismatch)
@@ -75,6 +95,26 @@
                 (when (:success result)
                   (reset! !last-saved html-to-save)))))
 
+
+          ;; Wikipedia link import — watches !import-url atom from Quill tooltip
+          (let [import-data (e/watch editor/!import-url)
+                [?token _] (e/Token import-data)]
+            (when-some [token ?token]
+              (let [url (:url import-data)
+                    result (e/server
+                             (e/Offload
+                               #(import-wikipedia-url* user-id url)))]
+                ;; Guard: e/Offload is async — result is nil while pending.
+                ;; Only close token when the real result arrives.
+                (when (some? result)
+                  (let [status (cond
+                                 (:imported result) :done
+                                 (:already-exists result) :already-exists
+                                 :else :error)]
+                    (reset! editor/!import-status status)
+                    (token)
+                    (when (= status :done)
+                      (e/server (swap! (us/get-atom user-id :refresh) inc))))))))
 
           ;; Title breadcrumb bar
           (dom/div
