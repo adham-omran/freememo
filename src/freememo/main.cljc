@@ -1,6 +1,7 @@
 (ns freememo.main
   (:require [hyperfiddle.electric3 :as e]
             [hyperfiddle.electric-dom3 :as dom]
+            [hyperfiddle.router5 :as r]
             [freememo.logging :as log]
             [freememo.navigation :as nav]
             [freememo.home-page :refer [HomePage]]
@@ -38,9 +39,93 @@
   #?(:clj (settings/get-llm-enabled user-id)
      :cljs nil))
 
-(defn get-active-tab* [_refresh user-id]
-  #?(:clj (settings/get-active-tab user-id)
-     :cljs nil))
+;; Convert old navigate! API calls to route lists for router5
+;; Old: (navigate! :library) or (navigate! :viewer (nav/nav-browse-pdf 42 nil :library))
+;; New: route list like (library) or (viewer browse-pdf 42)
+
+(defn- nav->route
+  ([tab] (nav->route tab nil))
+  ([tab nav-map]
+   (if (nil? nav-map)
+     (case tab
+       :home nil
+       :viewer (list 'viewer) ; empty viewer
+       (list (symbol (name tab))))
+     (case (:type nav-map)
+       :browse-pdf    (list 'viewer 'browse-pdf (:topic-id nav-map))
+       :browse-topic  (list 'viewer 'browse-topic (:topic-id nav-map))
+       :learn-session (list 'viewer 'learn-session)
+       :subset-review (list 'viewer 'subset-review (:root-id nav-map))
+       (list (symbol (name tab)))))))
+
+(e/defn NotFoundView []
+  (e/client
+    (dom/div
+      (dom/props {:style {:display "flex" :align-items "center" :justify-content "center"
+                          :height "100%" :color "var(--color-text-secondary)" :font-size "15px"}})
+      (dom/text "Not found"))))
+
+(e/defn EmptyViewerView []
+  (e/client
+    (dom/div
+      (dom/props {:style {:display "flex" :align-items "center" :justify-content "center"
+                          :height "100%" :color "var(--color-text-secondary)" :font-size "15px"}})
+      (dom/text "Open something from the Library"))))
+
+(e/defn ViewerContent [user-id enc-key navigate! llm-enabled?]
+  (e/client
+    (r/pop ; consume 'viewer from route
+      (let [[vtype] r/route]
+        (if (nil? vtype)
+          (EmptyViewerView)
+          (case vtype
+            browse-pdf
+            (r/pop
+              (let [[topic-id] r/route
+                    authorized? (e/server (some? (db/get-topic-for-user user-id topic-id)))]
+                (if (not authorized?)
+                  (NotFoundView)
+                  (dom/div
+                    (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
+                    (let [!vnav (atom {:type :browse-pdf :topic-id topic-id :page nil :origin nil})]
+                      (OcrPage user-id enc-key !vnav llm-enabled?))))))
+
+            browse-topic
+            (r/pop
+              (let [[topic-id] r/route
+                    authorized? (e/server (some? (db/get-topic-for-user user-id topic-id)))]
+                (if (not authorized?)
+                  (NotFoundView)
+                  (dom/div
+                    (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
+                    (ExtractPage {:user-id user-id :enc-key enc-key :topic-id topic-id
+                                  :navigate! (fn [& _] (navigate! :library))
+                                  :view-source! (fn [root-id page kind]
+                                                  (if (= kind "pdf")
+                                                    (navigate! :viewer (nav/nav-browse-pdf root-id page nil))
+                                                    (navigate! :viewer (nav/nav-browse-topic root-id nil))))
+                                  :llm-enabled? llm-enabled?
+                                  :origin nil})))))
+
+            learn-session
+            (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
+                  queue-vec (e/server (get-learning-queue* refresh user-id))
+                  !queue-idx (atom 0)]
+              (LearnSession user-id enc-key queue-vec !queue-idx navigate! llm-enabled?))
+
+            subset-review
+            (r/pop
+              (let [[root-id] r/route
+                    authorized? (e/server (some? (db/get-topic-for-user user-id root-id)))]
+                (if (not authorized?)
+                  (NotFoundView)
+                  (let [root-name (e/server (:topics/title (db/get-topic-for-user user-id root-id)))]
+                    (SubsetReviewSession user-id enc-key root-id root-name
+                      (fn [] (navigate! :library))
+                      llm-enabled?)))))
+
+            ;; Unknown viewer sub-type
+            (EmptyViewerView)))))))
 
 (e/defn Main [ring-request]
   (e/client
@@ -50,148 +135,100 @@
             enc-key (e/server (get-in ring-request [:session :enc-key]))
             auth-error (e/server (get-in ring-request [:session :auth-error]))]
         (if (e/server (some? user-id))
-          ;; Authenticated: render app
+          ;; Authenticated: render app with URL router
           (dom/div
             (dom/props {:style {:height "100vh" :display "flex" :flex-direction "column" :overflow "hidden"}})
 
-            (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
-                  llm-enabled? (e/server (get-llm-enabled* settings-refresh user-id))
-                  saved-tab (e/server (get-active-tab* settings-refresh user-id))
-                  !active-tab (atom saved-tab)
-                  active-tab (e/watch !active-tab)
-                  !viewer-nav (atom nil)
-                  viewer-nav (e/watch !viewer-nav)
-                  !tab-to-save (atom nil)
-                  tab-to-save (e/watch !tab-to-save)
-                  [?token _error] (e/Token tab-to-save)
-                  tab-style (fn [key]
-                              {:padding "6px 16px" :border "none" :background "none" :cursor "pointer"
-                               :font-size "14px" :font-weight (if (= active-tab key) "600" "400")
-                               :color (if (= active-tab key) "var(--color-primary)" "var(--color-text-secondary)")
-                               :border-bottom (if (= active-tab key) "2px solid var(--color-primary)" "2px solid transparent")
-                               :margin-bottom "-2px"})
-                  navigate! (fn
-                              ([tab]
-                               (reset! !active-tab tab)
-                               (reset! !tab-to-save tab))
-                              ([tab nav]
-                               (log/log-debug (str "Navigation tab=" tab " nav=" (pr-str nav)))
-                               (when (= tab :viewer)
-                                 (reset! !viewer-nav nav))
-                               (reset! !active-tab tab)
-                               (reset! !tab-to-save tab)))]
+            (r/router (r/HTML5-History)
+              (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
+                    llm-enabled? (e/server (get-llm-enabled* settings-refresh user-id))
 
-              ;; Persist active tab on change
-              (when-some [token ?token]
-                (e/server (settings/save-active-tab user-id tab-to-save))
-                (token))
+                    ;; Navigation bridge: children call navigate!, reactive graph calls Navigate!
+                    !nav-cmd (atom nil)
+                    nav-cmd (e/watch !nav-cmd)
+                    [?nav-token _nav-err] (e/Token nav-cmd)
 
-              ;; Combined title + tab bar (single row)
-              (dom/div
-                (dom/props {:class "tab-bar"
-                            :style {:display "flex" :align-items "center" :border-bottom "2px solid var(--color-border)" :flex-shrink "0"}})
+                    ;; Derive active tab from URL route
+                    [page] r/route
+                    active-tab (if page (keyword (str page)) :home)
 
-                ;; Inline title
-                (dom/span
-                  (dom/props {:style {:font-size "16px" :font-weight "700" :padding "6px 16px"
-                                      :color "var(--color-text-primary)" :cursor "pointer" :white-space "nowrap"}})
-                  (dom/text "FreeMemo")
-                  (dom/On "click" (fn [_] (navigate! :home)) nil))
+                    tab-style (fn [key]
+                                {:padding "6px 16px" :border "none" :background "none" :cursor "pointer"
+                                 :font-size "14px" :font-weight (if (= active-tab key) "600" "400")
+                                 :color (if (= active-tab key) "var(--color-primary)" "var(--color-text-secondary)")
+                                 :border-bottom (if (= active-tab key) "2px solid var(--color-primary)" "2px solid transparent")
+                                 :margin-bottom "-2px"})
+                    navigate! (fn
+                                ([tab]
+                                 (reset! !nav-cmd {:route (nav->route tab) :id (random-uuid)}))
+                                ([tab nav]
+                                 (log/log-debug (str "Navigation tab=" tab " nav=" (pr-str nav)))
+                                 (reset! !nav-cmd {:route (nav->route tab nav) :id (random-uuid)})))]
 
-                (dom/button
-                  (dom/props {:style (tab-style :home)})
-                  (dom/text "Home")
-                  (dom/On "click" (fn [_] (navigate! :home)) nil))
+                ;; Execute pending navigation via router
+                (when-some [token ?nav-token]
+                  (r/Navigate! ['/ (:route nav-cmd)])
+                  (token))
 
-                (dom/button
-                  (dom/props {:style (tab-style :learn)})
-                  (dom/text "Learn")
-                  (dom/On "click" (fn [_] (navigate! :learn)) nil))
+                ;; Combined title + tab bar
+                (dom/div
+                  (dom/props {:class "tab-bar"
+                              :style {:display "flex" :align-items "center" :border-bottom "2px solid var(--color-border)" :flex-shrink "0"}})
 
-                (dom/button
-                  (dom/props {:style (tab-style :viewer)})
-                  (dom/text "Viewer")
-                  (dom/On "click" (fn [_] (navigate! :viewer)) nil))
+                  (dom/span
+                    (dom/props {:style {:font-size "16px" :font-weight "700" :padding "6px 16px"
+                                        :color "var(--color-text-primary)" :cursor "pointer" :white-space "nowrap"}})
+                    (dom/text "FreeMemo")
+                    (dom/On "click" (fn [_] (navigate! :home)) nil))
 
-                (dom/button
-                  (dom/props {:style (tab-style :library)})
-                  (dom/text "Library")
-                  (dom/On "click" (fn [_] (navigate! :library)) nil))
+                  (dom/button
+                    (dom/props {:style (tab-style :home)})
+                    (dom/text "Home")
+                    (dom/On "click" (fn [_] (navigate! :home)) nil))
 
-                (dom/button
-                  (dom/props {:style (tab-style :status)})
-                  (dom/text "Status")
-                  (dom/On "click" (fn [_] (navigate! :status)) nil))
+                  (dom/button
+                    (dom/props {:style (tab-style :learn)})
+                    (dom/text "Learn")
+                    (dom/On "click" (fn [_] (navigate! :learn)) nil))
 
-                (dom/button
-                  (dom/props {:style (tab-style :import)})
-                  (dom/text "Import")
-                  (dom/On "click" (fn [_] (navigate! :import)) nil))
+                  (dom/button
+                    (dom/props {:style (tab-style :viewer)})
+                    (dom/text "Viewer")
+                    (dom/On "click" (fn [_] (navigate! :viewer)) nil))
 
-                (dom/button
-                  (dom/props {:style (tab-style :settings)})
-                  (dom/text "Settings")
-                  (dom/On "click" (fn [_] (navigate! :settings)) nil)))
+                  (dom/button
+                    (dom/props {:style (tab-style :library)})
+                    (dom/text "Library")
+                    (dom/On "click" (fn [_] (navigate! :library)) nil))
 
-              ;; Tab content
-              (dom/div
-                (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :status} active-tab) "hidden" "auto")}})
-                (when (= active-tab :home) (HomePage navigate! user-id enc-key))
-                (when (= active-tab :library)
-                  (let [lib-refresh (e/server (e/watch (us/get-atom user-id :library-refresh)))]
-                    (LibraryPage user-id navigate! lib-refresh)))
-                (when (= active-tab :status) (StatusPage user-id navigate!))
-                (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
-                (when (= active-tab :settings) (SettingsPage user-id username enc-key))
-                (when (= active-tab :learn) (LearnPage user-id navigate! viewer-nav))
-                (when (= active-tab :viewer)
-                  (if (nil? viewer-nav)
-                    ;; Empty state
-                    (dom/div
-                      (dom/props {:style {:display "flex" :align-items "center" :justify-content "center"
-                                          :height "100%" :color "var(--color-text-secondary)" :font-size "15px"}})
-                      (dom/text "Open something from the Library"))
-                    ;; Content
-                    (let [vtype (:type viewer-nav)]
-                      (case vtype
-                        :browse-topic
-                        (let [topic-id (:topic-id viewer-nav)
-                              exists? (e/server (some? (db/get-topic topic-id)))]
-                          (if exists?
-                            (dom/div
-                              (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-                              (ExtractPage {:user-id user-id :enc-key enc-key :topic-id topic-id
-                                            :navigate! (fn [& _] (navigate! (or (:origin viewer-nav) :library)))
-                                            :view-source! (fn [root-id page kind]
-                                                            (if (= kind "pdf")
-                                                              (navigate! :viewer (nav/nav-browse-pdf root-id page (:origin viewer-nav)))
-                                                              (navigate! :viewer (nav/nav-browse-topic root-id (:origin viewer-nav)))))
-                                            :llm-enabled? llm-enabled?
-                                            :origin (:origin viewer-nav)}))
-                            (do (reset! !viewer-nav nil) nil)))
+                  (dom/button
+                    (dom/props {:style (tab-style :status)})
+                    (dom/text "Status")
+                    (dom/On "click" (fn [_] (navigate! :status)) nil))
 
-                        :browse-pdf
-                        (dom/div
-                          (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-                          (let [!vnav (atom viewer-nav)]
-                            (OcrPage user-id enc-key !vnav llm-enabled?)))
+                  (dom/button
+                    (dom/props {:style (tab-style :import)})
+                    (dom/text "Import")
+                    (dom/On "click" (fn [_] (navigate! :import)) nil))
 
-                        :learn-session
-                        (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
-                              queue-vec (e/server (get-learning-queue* refresh user-id))
-                              !queue-idx (atom 0)]
-                          (LearnSession user-id enc-key queue-vec !queue-idx navigate! llm-enabled?))
+                  (dom/button
+                    (dom/props {:style (tab-style :settings)})
+                    (dom/text "Settings")
+                    (dom/On "click" (fn [_] (navigate! :settings)) nil)))
 
-                        :subset-review
-                        (SubsetReviewSession user-id enc-key (:root-id viewer-nav) (:root-name viewer-nav)
-                          (fn [] (navigate! :library))
-                          llm-enabled?)
-
-                        ;; Unknown type — show empty state
-                        (dom/div
-                          (dom/props {:style {:display "flex" :align-items "center" :justify-content "center"
-                                              :height "100%" :color "var(--color-text-secondary)" :font-size "15px"}})
-                          (dom/text "Open something from the Library")))))))))
+                ;; Tab content
+                (dom/div
+                  (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :status} active-tab) "hidden" "auto")}})
+                  (when (= active-tab :home) (HomePage navigate! user-id enc-key))
+                  (when (= active-tab :library)
+                    (let [lib-refresh (e/server (e/watch (us/get-atom user-id :library-refresh)))]
+                      (LibraryPage user-id navigate! lib-refresh)))
+                  (when (= active-tab :status) (StatusPage user-id navigate!))
+                  (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
+                  (when (= active-tab :settings) (SettingsPage user-id username enc-key))
+                  (when (= active-tab :learn) (LearnPage user-id navigate! nil))
+                  (when (= active-tab :viewer)
+                    (ViewerContent user-id enc-key navigate! llm-enabled?))))))
 
           ;; Not authenticated: render login page
           (LoginPage auth-error))))))
