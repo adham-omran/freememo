@@ -9,6 +9,7 @@
    [freememo.util :as util]
    [freememo.card-components :as card-components]
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.user-state :as us])
    #?(:clj [clojure.string :as str])))
 
 ;; Server wrapper — _refresh param creates Electric reactive dependency
@@ -79,168 +80,167 @@
 ;; Flatten + virtual scroll for performance
 (e/defn DocumentTreeView [user-id navigate! refresh filter-text sort-key]
   (e/client
-    (let [!mutations (atom 0)]
-      (e/server
-        (let [all-items (get-tree-items* refresh user-id)
-              all-roots (extract-roots all-items)
-              roots (sort-root-topics (filter-root-topics all-roots filter-text) sort-key)]
-          (e/client
-            (let [children-map (group-by :topics/parent_id all-items)
-                  !expanded-set (atom #{})
-                  expanded-set (e/watch !expanded-set)
-                  !show-confirm (atom nil)
-                  show-confirm (e/watch !show-confirm)
-                  flat-rows (flatten-tree roots children-map expanded-set)
-                  row-count (count flat-rows)
-                  row-height 36
+    (e/server
+      (let [all-items (get-tree-items* refresh user-id)
+            all-roots (extract-roots all-items)
+            roots (sort-root-topics (filter-root-topics all-roots filter-text) sort-key)]
+        (e/client
+          (let [children-map (group-by :topics/parent_id all-items)
+                !expanded-set (atom #{})
+                expanded-set (e/watch !expanded-set)
+                !show-confirm (atom nil)
+                show-confirm (e/watch !show-confirm)
+                flat-rows (flatten-tree roots children-map expanded-set)
+                row-count (count flat-rows)
+                row-height 36
                 ;; Ref to scroll container — used to preserve scrollTop across expand/collapse
-                  !scroll-node (atom nil)]
-              (if (pos? row-count)
-                (dom/div
-                  (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
-                  (reset! !scroll-node dom/node)
-                  (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 1})
-                        occluded-height (clamp-left (* row-height (- row-count limit)) 0)]
-                    (dom/props {:class "tape-scroll"
-                                :style {:--offset offset :--row-height (str row-height "px")}})
-                    (dom/table
-                      (dom/props {:style {:width "100%" :font-size "14px"}})
-                      (e/for [i (Tape offset limit)]
-                        (let [row (nth flat-rows i nil)]
-                          (when row
-                            (let [{:keys [depth topic has-children is-root]} row
-                                  id (:topics/id topic)
-                                  title (or (:topics/title topic) "(empty)")
-                                  kind (or (:topics/kind topic) "basic")
-                                  topic-status (or (:topics/status topic) "active")
-                                  expanded? (contains? expanded-set id)
-                                  file-size (:topics/file_size topic)
-                                  created-at (:topics/created_at topic)
-                                  [badge-text badge-color] (kind-badge kind)
-                                  display-title (if is-root (util/display-name title) title)]
-                              (dom/tr
-                                (dom/props {:style {:height (str row-height "px")
-                                                    :opacity (case topic-status "done" "0.6" "1")
-                                                    :--order (inc i)}})
+                !scroll-node (atom nil)]
+            (if (pos? row-count)
+              (dom/div
+                (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
+                (reset! !scroll-node dom/node)
+                (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 1})
+                      occluded-height (clamp-left (* row-height (- row-count limit)) 0)]
+                  (dom/props {:class "tape-scroll"
+                              :style {:--offset offset :--row-height (str row-height "px")}})
+                  (dom/table
+                    (dom/props {:style {:width "100%" :font-size "14px"}})
+                    (e/for [i (Tape offset limit)]
+                      (let [row (nth flat-rows i nil)]
+                        (when row
+                          (let [{:keys [depth topic has-children is-root]} row
+                                id (:topics/id topic)
+                                title (or (:topics/title topic) "(empty)")
+                                kind (or (:topics/kind topic) "basic")
+                                topic-status (or (:topics/status topic) "active")
+                                expanded? (contains? expanded-set id)
+                                file-size (:topics/file_size topic)
+                                created-at (:topics/created_at topic)
+                                [badge-text badge-color] (kind-badge kind)
+                                display-title (if is-root (util/display-name title) title)]
+                            (dom/tr
+                              (dom/props {:style {:height (str row-height "px")
+                                                  :opacity (case topic-status "done" "0.6" "1")
+                                                  :--order (inc i)}})
                               ;; Single cell with indentation
-                                (dom/td
-                                  (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
-                                                      :padding-left (str (* depth 20) "px")
-                                                      :height (str row-height "px")
-                                                      :border-bottom "1px solid var(--color-bg-subtle)"
-                                                      :border-left (when (= topic-status "done") "2px solid var(--color-success-lighter)")}})
+                              (dom/td
+                                (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
+                                                    :padding-left (str (* depth 20) "px")
+                                                    :height (str row-height "px")
+                                                    :border-bottom "1px solid var(--color-bg-subtle)"
+                                                    :border-left (when (= topic-status "done") "2px solid var(--color-success-lighter)")}})
                                 ;; Arrow
-                                  (if has-children
-                                    (dom/span
-                                      (dom/props {:style {:width "16px" :font-size "10px" :cursor "pointer"
-                                                          :user-select "none" :text-align "center" :flex-shrink "0"}})
-                                      (dom/text (if expanded? "\u25BC" "\u25B6"))
-                                      (dom/On "click"
-                                        (fn [e]
-                                          (.stopPropagation e)
-                                          (let [sn @!scroll-node
-                                                st (when sn (.-scrollTop sn))]
-                                            (swap! !expanded-set (fn [s] (if (contains? s id) (disj s id) (conj s id))))
-                                            (when st
-                                              (js/requestAnimationFrame (fn [] (set! (.-scrollTop sn) st))))))
-                                        nil))
-                                    (dom/span (dom/props {:style {:width "16px" :flex-shrink "0"}})))
-                                ;; Badge
+                                (if has-children
                                   (dom/span
-                                    (dom/props {:class "type-badge" :style {:background badge-color}})
-                                    (dom/text badge-text))
-                                ;; Title
-                                  (dom/span
-                                    (dom/props {:class "tree-title"
-                                                :tabindex 0
-                                                :role "link"
-                                                :style {:flex "1" :min-width "0"
-                                                        :font-size (if is-root "14px" "13px")
-                                                        :font-weight (if is-root "500" "400")
-                                                        :color (if is-root "var(--color-text-primary)" "var(--color-text-primary)")
-                                                        :cursor "pointer"
-                                                        :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}
-                                                :title display-title})
-                                    (dom/text display-title)
+                                    (dom/props {:style {:width "16px" :font-size "10px" :cursor "pointer"
+                                                        :user-select "none" :text-align "center" :flex-shrink "0"}})
+                                    (dom/text (if expanded? "\u25BC" "\u25B6"))
                                     (dom/On "click"
-                                      (fn [_]
-                                        (if (and is-root (= kind "pdf"))
-                                          (navigate! :viewer (nav/nav-browse-pdf id nil :library))
-                                          (navigate! :viewer (nav/nav-browse-topic id :library))))
-                                      nil)
-                                    (dom/On "keydown"
                                       (fn [e]
-                                        (when (or (= (.-key e) "Enter") (= (.-key e) " "))
-                                          (.preventDefault e)
-                                          (.click (.-currentTarget e))))
+                                        (.stopPropagation e)
+                                        (let [sn @!scroll-node
+                                              st (when sn (.-scrollTop sn))]
+                                          (swap! !expanded-set (fn [s] (if (contains? s id) (disj s id) (conj s id))))
+                                          (when st
+                                            (js/requestAnimationFrame (fn [] (set! (.-scrollTop sn) st))))))
                                       nil))
+                                  (dom/span (dom/props {:style {:width "16px" :flex-shrink "0"}})))
+                                ;; Badge
+                                (dom/span
+                                  (dom/props {:class "type-badge" :style {:background badge-color}})
+                                  (dom/text badge-text))
+                                ;; Title
+                                (dom/span
+                                  (dom/props {:class "tree-title"
+                                              :tabindex 0
+                                              :role "link"
+                                              :style {:flex "1" :min-width "0"
+                                                      :font-size (if is-root "14px" "13px")
+                                                      :font-weight (if is-root "500" "400")
+                                                      :color (if is-root "var(--color-text-primary)" "var(--color-text-primary)")
+                                                      :cursor "pointer"
+                                                      :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}
+                                              :title display-title})
+                                  (dom/text display-title)
+                                  (dom/On "click"
+                                    (fn [_]
+                                      (if (and is-root (= kind "pdf"))
+                                        (navigate! :viewer (nav/nav-browse-pdf id nil :library))
+                                        (navigate! :viewer (nav/nav-browse-topic id :library))))
+                                    nil)
+                                  (dom/On "keydown"
+                                    (fn [e]
+                                      (when (or (= (.-key e) "Enter") (= (.-key e) " "))
+                                        (.preventDefault e)
+                                        (.click (.-currentTarget e))))
+                                    nil))
                                 ;; File size (root only)
-                                  (when (and is-root (some? file-size) (pos? file-size))
-                                    (dom/span
-                                      (dom/props {:style {:font-size "11px" :color "var(--color-text-secondary)"
-                                                          :flex-shrink "0" :white-space "nowrap"}})
-                                      (dom/text (e/server (util/format-bytes file-size)))))
+                                (when (and is-root (some? file-size) (pos? file-size))
+                                  (dom/span
+                                    (dom/props {:style {:font-size "11px" :color "var(--color-text-secondary)"
+                                                        :flex-shrink "0" :white-space "nowrap"}})
+                                    (dom/text (e/server (util/format-bytes file-size)))))
                                 ;; Created date (root only)
-                                  (when (and is-root (some? created-at))
-                                    (dom/span
-                                      (dom/props {:style {:font-size "11px" :color "var(--color-text-secondary)"
-                                                          :flex-shrink "0" :white-space "nowrap"}})
-                                      (dom/text (e/server (util/format-timestamp created-at)))))
+                                (when (and is-root (some? created-at))
+                                  (dom/span
+                                    (dom/props {:style {:font-size "11px" :color "var(--color-text-secondary)"
+                                                        :flex-shrink "0" :white-space "nowrap"}})
+                                    (dom/text (e/server (util/format-timestamp created-at)))))
                                 ;; Review button (only for nodes with children)
-                                  (when has-children
-                                    (dom/button
-                                      (dom/props {:class "btn btn-sm btn-secondary"
-                                                  :style {:padding "2px 6px" :font-size "10px" :flex-shrink "0"}
-                                                  :title "Review this topic and its children"})
-                                      (dom/text "Review")
-                                      (dom/On "click"
-                                        (fn [e]
-                                          (.stopPropagation e)
-                                          (navigate! :viewer (nav/nav-subset-review id title)))
-                                        nil)))
+                                (when has-children
+                                  (dom/button
+                                    (dom/props {:class "btn btn-sm btn-secondary"
+                                                :style {:padding "2px 6px" :font-size "10px" :flex-shrink "0"}
+                                                :title "Review this topic and its children"})
+                                    (dom/text "Review")
+                                    (dom/On "click"
+                                      (fn [e]
+                                        (.stopPropagation e)
+                                        (navigate! :viewer (nav/nav-subset-review id title)))
+                                      nil)))
                                 ;; Delete button (root only)
-                                  (when is-root
-                                    (dom/button
-                                      (dom/props {:class "btn btn-sm btn-danger-fill"
-                                                  :style {:padding "2px 6px" :font-size "10px" :flex-shrink "0"}})
-                                      (dom/text "Delete")
-                                      (dom/On "click" (fn [e] (.stopPropagation e) (reset! !show-confirm id)) nil))))))))))
-                    (dom/div (dom/props {:style {:height (str occluded-height "px")}}))
+                                (when is-root
+                                  (dom/button
+                                    (dom/props {:class "btn btn-sm btn-danger-fill"
+                                                :style {:padding "2px 6px" :font-size "10px" :flex-shrink "0"}})
+                                    (dom/text "Delete")
+                                    (dom/On "click" (fn [e] (.stopPropagation e) (reset! !show-confirm id)) nil))))))))))
+                  (dom/div (dom/props {:style {:height (str occluded-height "px")}}))
                   ;; Delete confirm dialog
-                    (when (some? show-confirm)
+                  (when (some? show-confirm)
+                    (dom/div
+                      (dom/props {:class "modal-backdrop"})
+                      (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil)
+                      (dom/On "keydown" (fn [e] (when (= (.-key e) "Escape") (reset! !show-confirm nil))) nil)
                       (dom/div
-                        (dom/props {:class "modal-backdrop"})
-                        (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil)
-                        (dom/On "keydown" (fn [e] (when (= (.-key e) "Escape") (reset! !show-confirm nil))) nil)
+                        (dom/props {:class "modal-content modal-sm"})
+                        (dom/On "click" (fn [e] (.stopPropagation e)) nil)
                         (dom/div
-                          (dom/props {:class "modal-content modal-sm"})
-                          (dom/On "click" (fn [e] (.stopPropagation e)) nil)
-                          (dom/div
-                            (dom/props {:class "confirm-modal-body"})
-                            (dom/p (dom/text "Delete this topic? All children, extracts, and cards will be permanently removed.")))
-                          (dom/div
-                            (dom/props {:class "confirm-modal-actions"})
-                            (dom/button
-                              (dom/props {:class "btn btn-secondary"})
-                              (dom/text "Cancel")
-                              (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil))
-                            (dom/button
-                              (dom/props {:class "btn btn-danger-fill"})
-                              (dom/text "Delete")
-                              (let [event (dom/On "click" (fn [_] show-confirm) nil)
-                                    [?token ?error] (e/Token event)]
-                                (when-some [token ?token]
-                                  (let [topic-to-delete event
-                                        note-ids (e/server (vec (db/get-all-anki-note-ids topic-to-delete)))]
-                                    (e/server (db/delete-topic-for-user! user-id topic-to-delete))
-                                    (swap! !mutations inc)
-                                    (e/client (card-components/try-delete-anki-notes! note-ids))
-                                    (token)
-                                    (reset! !show-confirm nil)))))))))))
-                (dom/p
-                  (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
-                  (dom/text "No content yet. Import content from the Import tab.")))))))
-      (e/watch !mutations))))
+                          (dom/props {:class "confirm-modal-body"})
+                          (dom/p (dom/text "Delete this topic? All children, extracts, and cards will be permanently removed.")))
+                        (dom/div
+                          (dom/props {:class "confirm-modal-actions"})
+                          (dom/button
+                            (dom/props {:class "btn btn-secondary"})
+                            (dom/text "Cancel")
+                            (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil))
+                          (dom/button
+                            (dom/props {:class "btn btn-danger-fill"})
+                            (dom/text "Delete")
+                            (let [event (dom/On "click" (fn [_] show-confirm) nil)
+                                  [?token ?error] (e/Token event)]
+                              (when-some [token ?token]
+                                (let [topic-to-delete event
+                                      note-ids (e/server (vec (db/get-all-anki-note-ids topic-to-delete)))]
+                                  (e/server (db/delete-topic-for-user! user-id topic-to-delete))
+                                  (e/server (swap! (us/get-atom user-id :library-refresh) inc))
+                                  (e/client (card-components/try-delete-anki-notes! note-ids))
+                                  (token)
+                                  (reset! !show-confirm nil)))))))))))
+              (dom/p
+                (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
+                (dom/text "No content yet. Import content from the Import tab.")))))))))
+
 
 ;; Legacy ContentsPage — no longer routed, kept for reference
 (e/defn ContentsPage [user-id !nav-target navigate!]
