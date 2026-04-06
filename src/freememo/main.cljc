@@ -138,11 +138,8 @@
                 (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :status} active-tab) "hidden" "auto")}})
                 (when (= active-tab :home) (HomePage navigate! user-id enc-key))
                 (when (= active-tab :library)
-                  (let [lib-refresh (e/server (e/watch (us/get-atom user-id :library-refresh)))
-                        tree-signal (LibraryPage user-id navigate! lib-refresh)
-                        bumped (when (and tree-signal (pos? tree-signal))
-                                 (e/server (swap! (us/get-atom user-id :library-refresh) inc)))]
-                    bumped))
+                  (let [lib-refresh (e/server (e/watch (us/get-atom user-id :library-refresh)))]
+                    (LibraryPage user-id navigate! lib-refresh)))
                 (when (= active-tab :status) (StatusPage user-id navigate!))
                 (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
                 (when (= active-tab :settings) (SettingsPage user-id username enc-key))
