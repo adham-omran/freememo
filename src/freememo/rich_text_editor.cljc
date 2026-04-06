@@ -80,65 +80,63 @@
    Watches !import-status to update button text during import."
   [editor]
   #?(:cljs
-     (when-let [^js tooltip (some-> ^js editor .-theme .-tooltip)]
-       (let [^js root (.-root tooltip)
-             import-btn (js/document.createElement "a")
-             _ (set! (.-className import-btn) "ql-import")
-             _ (set! (.-textContent import-btn) "Import")
-             _ (set! (.-style.display import-btn) "none")
-             _ (.appendChild root import-btn)]
-         ;; Click handler: extract URL from tooltip preview, fire import
-         (.addEventListener import-btn "click"
-           (fn [e]
-             (.preventDefault e)
-             (js/console.log "[wiki-import] click! status=" (pr-str @!import-status))
-             (if (= @!import-status :importing)
-               (js/console.log "[wiki-import] blocked — still importing")
-               (let [^js preview (.querySelector root ".ql-preview")
-                     href (when preview (.getAttribute preview "href"))]
-                 (js/console.log "[wiki-import] href=" href " wiki?=" (wikipedia-url? href))
-                 (when (wikipedia-url? href)
-                   (reset! !import-status :importing)
-                   (set! (.-textContent import-btn) "Importing...")
-                   (.add (.-classList import-btn) "importing")
-                   (reset! !import-url {:url href :ts (js/Date.now)})
-                   (js/console.log "[wiki-import] !import-url set"))))))
-         ;; Watch import status to update button text
-         (add-watch !import-status ::tooltip-btn
-           (fn [_ _ _ new-status]
-             (case new-status
-               :importing (do (set! (.-textContent import-btn) "Importing...")
-                            (.add (.-classList import-btn) "importing"))
-               :done (do (set! (.-textContent import-btn) "Imported!")
-                       (.remove (.-classList import-btn) "importing")
-                       (js/setTimeout #(do (set! (.-textContent import-btn) "Import")
-                                         (reset! !import-status :idle)) 2000))
-               :already-exists (do (set! (.-textContent import-btn) "Already imported")
-                                 (.remove (.-classList import-btn) "importing")
-                                 (js/setTimeout #(do (set! (.-textContent import-btn) "Import")
-                                                   (reset! !import-status :idle)) 2000))
-               :error (do (set! (.-textContent import-btn) "Error")
-                        (.remove (.-classList import-btn) "importing")
-                        (js/setTimeout #(do (set! (.-textContent import-btn) "Import")
-                                          (reset! !import-status :idle)) 2000))
-               ;; :idle — reset
-               (do (set! (.-textContent import-btn) "Import")
-                 (.remove (.-classList import-btn) "importing")))))
-         ;; Show/hide import button when tooltip appears on a link
-         (let [^js ed editor]
+     (let [^js ed editor
+           ^js theme (.-theme ed)]
+       (when-let [^js tooltip (.-tooltip theme)]
+         (let [^js root (.-root tooltip)
+               ^js import-btn (js/document.createElement "a")]
+           (set! (.-className import-btn) "ql-import")
+           (set! (.-textContent import-btn) "Import")
+           (.setAttribute import-btn "style" "display:none")
+           (.appendChild root import-btn)
+           ;; Click handler: extract URL from tooltip preview, fire import
+           (.addEventListener import-btn "click"
+             (fn [e]
+               (.preventDefault e)
+               (if (= @!import-status :importing)
+                 nil
+                 (let [^js preview (.querySelector root ".ql-preview")
+                       href (when preview (.getAttribute preview "href"))]
+                   (when (wikipedia-url? href)
+                     (reset! !import-status :importing)
+                     (set! (.-textContent import-btn) "Importing...")
+                     (.add (.-classList import-btn) "importing")
+                     (reset! !import-url {:url href :ts (js/Date.now)}))))))
+           ;; Watch import status to update button text
+           (add-watch !import-status ::tooltip-btn
+             (fn [_ _ _ new-status]
+               (case new-status
+                 :importing (do (set! (.-textContent import-btn) "Importing...")
+                              (.add (.-classList import-btn) "importing"))
+                 :done (do (set! (.-textContent import-btn) "Imported!")
+                         (.remove (.-classList import-btn) "importing")
+                         (js/setTimeout #(do (set! (.-textContent import-btn) "Import")
+                                           (reset! !import-status :idle)) 2000))
+                 :already-exists (do (set! (.-textContent import-btn) "Already imported")
+                                   (.remove (.-classList import-btn) "importing")
+                                   (js/setTimeout #(do (set! (.-textContent import-btn) "Import")
+                                                     (reset! !import-status :idle)) 2000))
+                 :error (do (set! (.-textContent import-btn) "Error")
+                          (.remove (.-classList import-btn) "importing")
+                          (js/setTimeout #(do (set! (.-textContent import-btn) "Import")
+                                            (reset! !import-status :idle)) 2000))
+                 ;; :idle — reset
+                 (do (set! (.-textContent import-btn) "Import")
+                   (.remove (.-classList import-btn) "importing")))))
+           ;; Show/hide import button when tooltip appears on a link
            (.on ed "selection-change"
-             (fn [range _old-range _source]
+             (fn [^js range _old-range _source]
                (when range
                  (let [idx (.-index range)
                        ^js leaf-arr (.getLeaf ed idx)
                        ^js leaf (when leaf-arr (aget leaf-arr 0))
                        ^js parent (when leaf (.-parent leaf))
-                       tag (when parent (some-> (.-domNode parent) .-tagName))
+                       ^js dom-node (when parent (.-domNode parent))
+                       tag (when dom-node (.-tagName dom-node))
                        href (when (= "A" tag)
-                              (.getAttribute (.-domNode parent) "href"))]
-                   (if (wikipedia-url? href)
-                     (set! (.-style.display import-btn) "")
-                     (set! (.-style.display import-btn) "none")))))))))
+                              (.getAttribute dom-node "href"))]
+                   (.setAttribute import-btn "style"
+                     (if (wikipedia-url? href) "" "display:none")))))))))
      :clj nil))
 
 (defn- setup-mobile-keyboard-suppression!
