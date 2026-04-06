@@ -226,24 +226,32 @@
            :session {:auth-error "Google sign-in failed — please try again"}})))))
 
 (defn save-page-text-handler [request]
-  (try
-    (let [params (:params request)
-          parent-id (some-> (get params "document_id") parse-long)
-          page-number (some-> (get params "page_number") parse-long)
-          html (get params "html")]
-      (if (and parent-id page-number html)
-        (let [result (page/save-page-html-impl parent-id page-number html)]
-          {:status (if (:success result) 200 500)
+  (if-let [user-id (require-auth request)]
+    (try
+      (let [params (:params request)
+            parent-id (some-> (get params "document_id") parse-long)
+            page-number (some-> (get params "page_number") parse-long)
+            html (get params "html")]
+        (if (and parent-id page-number html)
+          (if (db/get-topic-for-user user-id parent-id)
+            (let [result (page/save-page-html-impl parent-id page-number html)]
+              {:status (if (:success result) 200 500)
+               :headers {"Content-Type" "text/plain"}
+               :body (if (:success result) "ok" (str "error: " (:error result)))})
+            {:status 404
+             :headers {"Content-Type" "text/plain"}
+             :body "Not found"})
+          {:status 400
            :headers {"Content-Type" "text/plain"}
-           :body (if (:success result) "ok" (str "error: " (:error result)))})
-        {:status 400
+           :body "Missing required parameters: document_id, page_number, html"}))
+      (catch Exception e
+        (tel/error! {:id ::save-page-text-handler} e)
+        {:status 500
          :headers {"Content-Type" "text/plain"}
-         :body "Missing required parameters: document_id, page_number, html"}))
-    (catch Exception e
-      (tel/error! {:id ::save-page-text-handler} e)
-      {:status 500
-       :headers {"Content-Type" "text/plain"}
-       :body "error: Failed to save page text. Please try again."})))
+         :body "error: Failed to save page text. Please try again."}))
+    {:status 302
+     :headers {"Location" "/"}
+     :body ""}))
 
 (defn api-routes [request]
   (let [uri (:uri request)
