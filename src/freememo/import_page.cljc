@@ -573,35 +573,31 @@
                             nil)
                     [?token ?error] (e/Token event)
                     importing? (some? ?token)]
-                (dom/props {:disabled (or importing? (nil? (e/watch !md-text)))
-                            :style {:cursor (if importing? "not-allowed" "pointer")}})
-                (dom/text (if importing? "Processing..." "Import"))
-                (when ?error
-                  (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-1)"}})
-                    (dom/text ?error)))
-                (when-some [token ?token]
-                  (let [md-val (:md-text event)
-                        title-val (:title event)
-                        ae? (:auto-extract event)]
-                    (if (seq md-val)
-                      (let [topic-id (e/server
-                                       (let [html (parse-markdown* md-val)
-                                             fm-title (extract-frontmatter-title* md-val)
-                                             final-title (cond
-                                                           (seq title-val) title-val
-                                                           (seq fm-title) fm-title
-                                                           :else (markdown-default-title))
-                                             tid (create-markdown-topic* user-id final-title html)]
-                                         (when (and ae? tid)
-                                           (try-auto-extract* tid html))
-                                         tid))]
-                        (if topic-id
-                          (do (swap! !mutations inc)
-                            (token)
-                            (reset! !show false)
-                            (navigate! :viewer (nav/nav-browse-topic topic-id nil)))
-                          (token "Failed to import")))
-                      (token "No file loaded"))))))
+                (let [no-title? (empty? (e/watch !title))]
+                  (dom/props {:disabled (or importing? (nil? (e/watch !md-text)) no-title?)
+                              :style {:cursor (if (or importing? no-title?) "not-allowed" "pointer")}})
+                  (dom/text (if importing? "Processing..." "Import"))
+                  (when ?error
+                    (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-1)"}})
+                      (dom/text ?error)))
+                  (when-some [token ?token]
+                    (let [md-val (:md-text event)
+                          title-val (:title event)
+                          ae? (:auto-extract event)]
+                      (if (seq md-val)
+                        (let [topic-id (e/server
+                                         (let [html (parse-markdown* md-val)
+                                               tid (create-markdown-topic* user-id title-val html)]
+                                           (when (and ae? tid)
+                                             (try-auto-extract* tid html))
+                                           tid))]
+                          (if topic-id
+                            (do (swap! !mutations inc)
+                              (token)
+                              (reset! !show false)
+                              (navigate! :viewer (nav/nav-browse-topic topic-id nil)))
+                            (token "Failed to import")))
+                        (token "No file loaded")))))))
             (dom/button
               (dom/props {:class "btn btn-secondary"})
               (dom/text "Cancel")
@@ -612,7 +608,8 @@
 (e/defn PasteMarkdownModal [!show user-id navigate!]
   (e/client
     (let [!mutations (atom 0)
-          !title (atom "")
+          default-title (e/server (markdown-default-title))
+          !title (atom (or default-title ""))
           !md-text (atom "")
           !auto-extract (atom true)]
       (dom/div
@@ -670,35 +667,31 @@
                             nil)
                     [?token ?error] (e/Token event)
                     importing? (some? ?token)]
-                (dom/props {:disabled importing?
-                            :style {:cursor (if importing? "not-allowed" "pointer")}})
-                (dom/text (if importing? "Processing..." "Import"))
-                (when ?error
-                  (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-1)"}})
-                    (dom/text ?error)))
-                (when-some [token ?token]
-                  (let [md-val (:md-text event)
-                        title-val (:title event)
-                        ae? (:auto-extract event)]
-                    (if (seq md-val)
-                      (let [topic-id (e/server
-                                       (let [html (parse-markdown* md-val)
-                                             fm-title (extract-frontmatter-title* md-val)
-                                             final-title (cond
-                                                           (seq title-val) title-val
-                                                           (seq fm-title) fm-title
-                                                           :else (markdown-default-title))
-                                             tid (create-markdown-topic* user-id final-title html)]
-                                         (when (and ae? tid)
-                                           (try-auto-extract* tid html))
-                                         tid))]
-                        (if topic-id
-                          (do (swap! !mutations inc)
-                            (token)
-                            (reset! !show false)
-                            (navigate! :viewer (nav/nav-browse-topic topic-id nil)))
-                          (token "Failed to import")))
-                      (token "Please enter some Markdown content"))))))
+                (let [no-title? (empty? (e/watch !title))]
+                  (dom/props {:disabled (or importing? no-title?)
+                              :style {:cursor (if (or importing? no-title?) "not-allowed" "pointer")}})
+                  (dom/text (if importing? "Processing..." "Import"))
+                  (when ?error
+                    (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-1)"}})
+                      (dom/text ?error)))
+                  (when-some [token ?token]
+                    (let [md-val (:md-text event)
+                          title-val (:title event)
+                          ae? (:auto-extract event)]
+                      (if (seq md-val)
+                        (let [topic-id (e/server
+                                         (let [html (parse-markdown* md-val)
+                                               tid (create-markdown-topic* user-id title-val html)]
+                                           (when (and ae? tid)
+                                             (try-auto-extract* tid html))
+                                           tid))]
+                          (if topic-id
+                            (do (swap! !mutations inc)
+                              (token)
+                              (reset! !show false)
+                              (navigate! :viewer (nav/nav-browse-topic topic-id nil)))
+                            (token "Failed to import")))
+                        (token "Please enter some Markdown content")))))))
             (dom/button
               (dom/props {:class "btn btn-secondary"})
               (dom/text "Cancel")

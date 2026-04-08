@@ -95,16 +95,16 @@
                 row-height 36
                 ;; Ref to scroll container — used to preserve scrollTop across expand/collapse
                 !scroll-node (atom nil)]
-            (if (pos? row-count)
-              (dom/div
-                (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
-                (reset! !scroll-node dom/node)
-                (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 1})
-                      occluded-height (clamp-left (* row-height (- row-count limit)) 0)]
-                  (dom/props {:class "tape-scroll"
-                              :style {:--offset offset :--row-height (str row-height "px")}})
-                  (dom/table
-                    (dom/props {:style {:width "100%" :font-size "14px"}})
+            (dom/div
+              (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
+              (reset! !scroll-node dom/node)
+              (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 1})
+                    occluded-height (clamp-left (* row-height (- row-count limit)) 0)]
+                (dom/props {:class "tape-scroll"
+                            :style {:--offset offset :--row-height (str row-height "px")}})
+                (dom/table
+                  (dom/props {:style {:width "100%" :font-size "14px"}})
+                  (if (pos? row-count)
                     (e/for [i (Tape offset limit)]
                       (let [row (nth flat-rows i nil)]
                         (when row
@@ -204,42 +204,44 @@
                                     (dom/props {:class "btn btn-sm btn-danger-fill"
                                                 :style {:padding "2px 6px" :font-size "10px" :flex-shrink "0"}})
                                     (dom/text "Delete")
-                                    (dom/On "click" (fn [e] (.stopPropagation e) (reset! !show-confirm id)) nil))))))))))
-                  (dom/div (dom/props {:style {:height (str occluded-height "px")}}))
-                  ;; Delete confirm dialog
-                  (when (some? show-confirm)
+                                    (dom/On "click" (fn [e] (.stopPropagation e) (reset! !show-confirm id)) nil)))))))))
+                    (dom/tr
+                      (dom/td
+                        (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
+                                            :color "var(--color-text-secondary)" :font-size "14px"}})
+                        (dom/text "No content yet. Import content from the Import tab.")))))
+                (dom/div (dom/props {:style {:height (str occluded-height "px")}}))
+                ;; Delete confirm dialog
+                (when (some? show-confirm)
+                  (dom/div
+                    (dom/props {:class "modal-backdrop"})
+                    (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil)
+                    (dom/On "keydown" (fn [e] (when (= (.-key e) "Escape") (reset! !show-confirm nil))) nil)
                     (dom/div
-                      (dom/props {:class "modal-backdrop"})
-                      (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil)
-                      (dom/On "keydown" (fn [e] (when (= (.-key e) "Escape") (reset! !show-confirm nil))) nil)
+                      (dom/props {:class "modal-content modal-sm"})
+                      (dom/On "click" (fn [e] (.stopPropagation e)) nil)
                       (dom/div
-                        (dom/props {:class "modal-content modal-sm"})
-                        (dom/On "click" (fn [e] (.stopPropagation e)) nil)
-                        (dom/div
-                          (dom/props {:class "confirm-modal-body"})
-                          (dom/p (dom/text "Delete this topic? All children, extracts, and cards will be permanently removed.")))
-                        (dom/div
-                          (dom/props {:class "confirm-modal-actions"})
-                          (dom/button
-                            (dom/props {:class "btn btn-secondary"})
-                            (dom/text "Cancel")
-                            (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil))
-                          (dom/button
-                            (dom/props {:class "btn btn-danger-fill"})
-                            (dom/text "Delete")
-                            (let [event (dom/On "click" (fn [_] show-confirm) nil)
-                                  [?token ?error] (e/Token event)]
-                              (when-some [token ?token]
-                                (let [topic-to-delete event
-                                      note-ids (e/server (vec (db/get-all-anki-note-ids topic-to-delete)))]
-                                  (e/server (db/delete-topic-for-user! user-id topic-to-delete))
-                                  (e/server (swap! (us/get-atom user-id :library-refresh) inc))
-                                  (e/client (card-components/try-delete-anki-notes! note-ids))
-                                  (token)
-                                  (reset! !show-confirm nil)))))))))))
-              (dom/p
-                (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
-                (dom/text "No content yet. Import content from the Import tab.")))))))))
+                        (dom/props {:class "confirm-modal-body"})
+                        (dom/p (dom/text "Delete this topic? All children, extracts, and cards will be permanently removed.")))
+                      (dom/div
+                        (dom/props {:class "confirm-modal-actions"})
+                        (dom/button
+                          (dom/props {:class "btn btn-secondary"})
+                          (dom/text "Cancel")
+                          (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil))
+                        (dom/button
+                          (dom/props {:class "btn btn-danger-fill"})
+                          (dom/text "Delete")
+                          (let [event (dom/On "click" (fn [_] show-confirm) nil)
+                                [?token ?error] (e/Token event)]
+                            (when-some [token ?token]
+                              (let [topic-to-delete event
+                                    note-ids (e/server (vec (db/get-all-anki-note-ids topic-to-delete)))]
+                                (e/server (db/delete-topic-for-user! user-id topic-to-delete))
+                                (e/server (swap! (us/get-atom user-id :library-refresh) inc))
+                                (e/client (card-components/try-delete-anki-notes! note-ids))
+                                (token)
+                                (reset! !show-confirm nil)))))))))))))))))
 
 
 ;; Legacy ContentsPage — no longer routed, kept for reference

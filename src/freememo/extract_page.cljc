@@ -14,7 +14,8 @@
    [freememo.util :refer [start-drag!]]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])
-   #?(:clj [freememo.wikipedia :as wiki])))
+   #?(:clj [freememo.wikipedia :as wiki])
+   [freememo.navigation :as nav]))
 
 ;; Per-user refresh via user-state registry
 
@@ -114,7 +115,9 @@
                     (reset! editor/!import-status status)
                     (token)
                     (when (= status :done)
-                      (e/server (swap! (us/get-atom user-id :refresh) inc))))))))
+                      (e/server (swap! (us/get-atom user-id :refresh) inc)))
+                    (when (:topic-id result)
+                      (navigate! :viewer (nav/nav-browse-topic (:topic-id result) nil))))))))
 
           ;; Title breadcrumb bar
           (dom/div

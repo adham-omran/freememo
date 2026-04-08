@@ -134,47 +134,47 @@
               (when ev (reset! !status-filter (-> ev .-target .-value)))
               (t))))
 
-        (if (pos? item-count)
-          (let [th-base {:padding "8px 6px" :border-bottom "2px solid var(--color-border)"
-                         :font-weight "600" :font-size "13px" :color "var(--color-text-primary)" :cursor "pointer" :user-select "none"}
-                arrow (fn [col] (when (= sort-col col) (if (= sort-dir :asc) " \u25B2" " \u25BC")))
-                toggle-sort! (fn [col]
-                               (if (= col @!sort-col)
-                                 (swap! !sort-dir #(if (= % :asc) :desc :asc))
-                                 (do (reset! !sort-col col)
-                                   (reset! !sort-dir :asc))))]
-            (dom/div
-              (dom/props {:style {:display "flex" :flex-direction "column" :min-height "0" :flex "1"}})
+        (let [th-base {:padding "8px 6px" :border-bottom "2px solid var(--color-border)"
+                       :font-weight "600" :font-size "13px" :color "var(--color-text-primary)" :cursor "pointer" :user-select "none"}
+              arrow (fn [col] (when (= sort-col col) (if (= sort-dir :asc) " \u25B2" " \u25BC")))
+              toggle-sort! (fn [col]
+                             (if (= col @!sort-col)
+                               (swap! !sort-dir #(if (= % :asc) :desc :asc))
+                               (do (reset! !sort-col col)
+                                 (reset! !sort-dir :asc))))]
+          (dom/div
+            (dom/props {:style {:display "flex" :flex-direction "column" :min-height "0" :flex "1"}})
 
-              ;; Fixed header
-              (dom/table
-                (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :flex-shrink "0"}})
-                (dom/thead
+            ;; Fixed header
+            (dom/table
+              (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :flex-shrink "0"}})
+              (dom/thead
+                (dom/props {:style {:display "contents"}})
+                (dom/tr
                   (dom/props {:style {:display "contents"}})
-                  (dom/tr
-                    (dom/props {:style {:display "contents"}})
-                    (dom/th
-                      (dom/props {:style (merge th-base {:text-align "left" :padding "8px 10px"})})
-                      (dom/text (str "Document" (arrow :document)))
-                      (dom/On "click" (fn [_] (toggle-sort! :document)) nil))
-                    (dom/th
-                      (dom/props {:style (merge th-base {:text-align "center"})})
-                      (dom/text (str "Done" (arrow :done)))
-                      (dom/On "click" (fn [_] (toggle-sort! :done)) nil))
-                    (dom/th
-                      (dom/props {:style (merge th-base {:text-align "center"})})
-                      (dom/text (str "Synced" (arrow :synced)))
-                      (dom/On "click" (fn [_] (toggle-sort! :synced)) nil)))))
+                  (dom/th
+                    (dom/props {:style (merge th-base {:text-align "left" :padding "8px 10px"})})
+                    (dom/text (str "Document" (arrow :document)))
+                    (dom/On "click" (fn [_] (toggle-sort! :document)) nil))
+                  (dom/th
+                    (dom/props {:style (merge th-base {:text-align "center"})})
+                    (dom/text (str "Done" (arrow :done)))
+                    (dom/On "click" (fn [_] (toggle-sort! :done)) nil))
+                  (dom/th
+                    (dom/props {:style (merge th-base {:text-align "center"})})
+                    (dom/text (str "Synced" (arrow :synced)))
+                    (dom/On "click" (fn [_] (toggle-sort! :synced)) nil)))))
 
-              ;; Scrollable body
-              (dom/div
-                (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"}})
-                (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 1})
-                      occluded-height (clamp-left (* row-height (- item-count limit)) 0)]
-                  (dom/props {:class "tape-scroll"
-                              :style {:--offset offset :--row-height (str row-height "px")}})
-                  (dom/table
-                    (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
+            ;; Scrollable body
+            (dom/div
+              (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
+              (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 1})
+                    occluded-height (clamp-left (* row-height (- item-count limit)) 0)]
+                (dom/props {:class "tape-scroll"
+                            :style {:--offset offset :--row-height (str row-height "px")}})
+                (dom/table
+                  (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
+                  (if (pos? item-count)
                     (e/for [i (Tape offset limit)]
                       (let [item (nth sorted i nil)]
                         (when item
@@ -214,11 +214,10 @@
                                 (dom/props {:style {:padding "4px 6px" :text-align "center" :color "var(--color-text-secondary)"}})
                                 (dom/text (if (pos? total-cards)
                                             (str synced-cards " / " total-cards)
-                                            "\u2013")))))))))
-                  (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))
-
-          ;; Empty state
-          (dom/div
-            (dom/props {:style {:display "flex" :align-items "center" :justify-content "center"
-                                :height "100%" :color "var(--color-text-secondary)" :font-size "15px"}})
-            (dom/text "No documents yet")))))))
+                                            "\u2013"))))))))
+                    (dom/tr
+                      (dom/td
+                        (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
+                                            :color "var(--color-text-secondary)" :font-size "13px"}})
+                        (dom/text "No documents yet")))))
+                (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))))))
