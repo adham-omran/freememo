@@ -99,7 +99,7 @@
                   (dom/div
                     (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
                     (ExtractPage {:user-id user-id :enc-key enc-key :topic-id topic-id
-                                  :navigate! (fn [& _] (navigate! :library))
+                                  :navigate! navigate!
                                   :view-source! (fn [root-id page kind]
                                                   (if (= kind "pdf")
                                                     (navigate! :viewer (nav/nav-browse-pdf root-id page nil))

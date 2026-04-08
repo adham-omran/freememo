@@ -99,34 +99,33 @@
                         (:total summary) " total, "
                         (:inactive summary) " inactive"))))
 
-        (if (pos? item-count)
-          ;; Virtual scrolled table
-          (let [grid-cols "1fr 80px"
-                row-height 36
-                visible-rows 10]
+        (let [grid-cols "1fr 80px"
+              row-height 36
+              visible-rows 10]
+          (dom/div
+            (dom/props {:style {:display "flex" :flex-direction "column" :min-height "0"}})
+
+            ;; Fixed header
+            (dom/table
+              (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px" :flex-shrink "0"}})
+              (dom/thead
+                (dom/props {:style {:display "contents"}})
+                (let [th-base {:padding "8px 6px" :border-bottom "2px solid var(--color-border)" :font-weight "600" :color "var(--color-text-primary)"}]
+                  (dom/tr
+                    (dom/props {:style {:display "contents"}})
+                    (dom/th (dom/props {:style (merge th-base {:text-align "left" :padding "8px 10px"})}) (dom/text "Document"))
+                    (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Due"))))))
+
+            ;; Scrollable body
             (dom/div
-              (dom/props {:style {:display "flex" :flex-direction "column" :min-height "0"}})
-
-              ;; Fixed header
-              (dom/table
-                (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px" :flex-shrink "0"}})
-                (dom/thead
-                  (dom/props {:style {:display "contents"}})
-                  (let [th-base {:padding "8px 6px" :border-bottom "2px solid var(--color-border)" :font-weight "600" :color "var(--color-text-primary)"}]
-                    (dom/tr
-                      (dom/props {:style {:display "contents"}})
-                      (dom/th (dom/props {:style (merge th-base {:text-align "left" :padding "8px 10px"})}) (dom/text "Document"))
-                      (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Due"))))))
-
-              ;; Scrollable body
-              (dom/div
-                (dom/props {:style {:max-height (str (* row-height visible-rows) "px") :overflow-y "auto" :min-height "0"}})
-                (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 1})
-                      occluded-height (clamp-left (* row-height (- item-count limit)) 0)]
-                  (dom/props {:class "tape-scroll"
-                              :style {:--offset offset :--row-height (str row-height "px")}})
-                  (dom/table
-                    (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
+              (dom/props {:style {:max-height (str (* row-height visible-rows) "px") :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
+              (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 1})
+                    occluded-height (clamp-left (* row-height (- item-count limit)) 0)]
+                (dom/props {:class "tape-scroll"
+                            :style {:--offset offset :--row-height (str row-height "px")}})
+                (dom/table
+                  (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
+                  (if (pos? item-count)
                     (e/for [i (Tape offset limit)]
                       (let [item (e/server (nth items-vec i nil))]
                         (when item
@@ -162,13 +161,13 @@
                               (dom/td
                                 (dom/props {:style {:padding "4px 6px" :text-align "center" :font-size "12px"
                                                     :color (case due-label "done" "var(--color-success-dark)" "var(--color-text-secondary)")}})
-                                (dom/text due-label))))))))
-                  (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))
-
-          ;; Empty state
-          (dom/p
-            (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px" :margin-top "24px"}})
-            (dom/text "No topics yet. Import a document from the Import tab to start learning.")))))))
+                                (dom/text due-label)))))))
+                    (dom/tr
+                      (dom/td
+                        (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
+                                            :color "var(--color-text-secondary)" :font-size "13px"}})
+                        (dom/text "No topics yet. Import a document from the Import tab to start learning.")))))
+                (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))))))
 
 (e/defn LearnPage [user-id navigate! viewer-nav]
   (LearnOverview user-id navigate! viewer-nav))

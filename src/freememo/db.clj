@@ -167,6 +167,10 @@
                           ON flashcards(topic_id, kind, cloze) WHERE question IS NULL"])
       (catch Exception _ nil)))
 
+  ;; Backfill source_reference for markdown topics that lack it
+  (jdbc/execute! ds ["UPDATE topics SET source_reference = title
+                      WHERE kind = 'markdown' AND source_reference IS NULL"])
+
   (tel/log! :info "Database ready"))
 
 ;; ---------------------------------------------------------------------------
@@ -732,7 +736,8 @@
                              :values [{:user_id user-id
                                        :kind "markdown"
                                        :title (or title "Untitled Markdown")
-                                       :content (sanitize-utf8 html-content)}]
+                                       :content (sanitize-utf8 html-content)
+                                       :source_reference (or title "Untitled Markdown")}]
                              :returning [:id]}))]
     (:topics/id topic)))
 
@@ -899,7 +904,7 @@
                    :join [[:topics :t] [:= :f.topic_id :t.id]]
                    :left-join [[:topics :parent] [:= :t.parent_id :parent.id]]
                    :where [:= :f.topic_id topic-id]
-                   :order-by [[:f.created_at :asc]]}))
+                   :order-by [[:f.created_at :desc]]}))
     []))
 
 (defn get-all-flashcards
@@ -912,7 +917,7 @@
                  :join [[:topics :t] [:= :f.topic_id :t.id]]
                  :left-join [[:topics :parent] [:= :t.parent_id :parent.id]]
                  :where [:= :f.root_topic_id root-topic-id]
-                 :order-by [[:f.created_at :asc]]})))
+                 :order-by [[:f.created_at :desc]]})))
 
 (defn delete-flashcard!
   "Delete a single flashcard by ID. Returns the deleted row."
