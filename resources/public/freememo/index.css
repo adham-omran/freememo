@@ -56,6 +56,9 @@
     --color-info-bg: #f0f4ff;
     --color-info-bg-light: #eff6ff;
 
+    /* Login hero */
+    --color-login-hero-bg: linear-gradient(135deg, #f0f4ff 0%, #e8eeff 100%);
+
     /* PDF viewer */
     --color-pdf-bg: #525659;
 
@@ -669,6 +672,9 @@ textarea:hover {
         --shadow-card: 0 1px 3px rgba(0,0,0,0.3);
         --shadow-modal: 0 8px 30px rgba(0,0,0,0.5);
         --backdrop-color: rgba(0,0,0,0.6);
+
+        /* Login hero */
+        --color-login-hero-bg: #1a2744;
     }
 
     .modal-content { background: var(--color-bg-card); }
@@ -697,10 +703,6 @@ textarea:hover {
     .badge-success { background: #166534; color: #bbf7d0; }
     .badge-warning { background: #854d0e; color: #fef08a; }
     .badge-error   { background: #991b1b; color: #fecaca; }
-
-    /* Login page hero panel */
-    .login-hero,
-    .login-left { background: #1a2744; }
 
     /* Secondary button hover */
     .btn-secondary:not(:disabled):hover { background: #374151; }
@@ -778,7 +780,7 @@ textarea:hover {
     flex-direction: column;
     justify-content: center;
     padding: 60px 48px;
-    background: linear-gradient(135deg, #f0f4ff 0%, #e8eeff 100%);
+    background: var(--color-login-hero-bg);
     box-sizing: border-box;
 }
 .login-form-panel,
