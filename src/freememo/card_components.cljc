@@ -28,7 +28,7 @@
     (dom/button
       (dom/props {:class "btn-delete-x"})
       (dom/text "\u00D7")
-      (let [click-event (dom/On "click" (fn [_] id) nil)
+      (let [click-event (dom/On "click" (fn [e] (.stopPropagation e) id) nil)
             [?token ?error] (e/Token click-event)]
         (dom/props {:disabled (some? ?token)
                     :class "btn-delete-x"
@@ -67,7 +67,11 @@
           updated-at (e/server (:flashcards/updated_at card))
           sync-st (sync-state synced-at updated-at)]
       (dom/tr
-        (dom/props {:style {:--order order}})
+        (dom/props {:style {:--order order :cursor "pointer"}})
+        (dom/On "click" (fn [_]
+                          (let [data {:id id :kind kind :question question :answer answer :cloze cloze}]
+                            (log/log-debug (str "Edit card clicked id=" id " kind=" kind))
+                            (reset! !editing-card data))) nil)
         ;; Sync indicator
         (dom/td
           (dom/props {:style {:padding "6px 4px" :width "24px" :text-align "center"
@@ -98,24 +102,6 @@
                         :style {:padding-block "6px" :padding-inline "8px"
                                 :border-bottom "1px solid var(--color-border)"}})
             (dom/text back-text)))
-        ;; Kind column
-        (dom/td
-          (dom/props {:style {:padding "6px 8px" :width "60px" :font-size "12px"
-                              :border-bottom "1px solid var(--color-border)"}})
-          (dom/text kind))
-        ;; Edit column
-        (dom/td
-          (dom/props {:style {:padding "6px 4px" :width "40px" :text-align "center"
-                              :border-bottom "1px solid var(--color-border)"}})
-          (dom/button
-            (dom/props {:style {:padding "2px 6px" :background "var(--color-primary)" :color "var(--color-bg-card)"
-                                :border "none" :border-radius "var(--radius-sm)" :cursor "pointer"
-                                :font-size "12px"}})
-            (dom/text "\u270E")
-            (dom/On "click" (fn [_]
-                              (let [data {:id id :kind kind :question question :answer answer :cloze cloze}]
-                                (log/log-debug (str "Edit card clicked id=" id " kind=" kind))
-                                (reset! !editing-card data))) nil)))
         ;; Delete column
         (dom/td
           (dom/props {:style {:padding "6px 4px" :width "40px" :text-align "center"

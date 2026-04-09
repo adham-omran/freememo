@@ -69,7 +69,7 @@
                                     :table-layout "fixed"
                                     :font-size (str font-sz "px")
                                     :direction (if rtl? "rtl" "ltr")
-                                    :grid-template-columns "24px 1fr 1fr 60px 40px 40px"}})
+                                    :grid-template-columns "24px 1fr 1fr 40px"}})
                 (if (pos? card-count)
                   (e/for [i (Tape offset limit)]
                     (let [card (e/server (nth cards-vec i nil))]
