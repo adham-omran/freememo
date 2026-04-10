@@ -451,6 +451,8 @@
                 (dom/props {:dir "auto" :value question :rows 3
                             :style {:width "100%" :padding "var(--sp-2)" :margin-bottom "var(--sp-3)"
                                     :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
+                (let [focus-node dom/node]
+                  (js/setTimeout (fn [] (.focus focus-node)) 50))
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !question ev))))
               (dom/label (dom/text "Answer:"))
@@ -466,6 +468,8 @@
                 (dom/props {:dir "auto" :value cloze :rows 4
                             :style {:width "100%" :padding "var(--sp-2)"
                                     :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
+                (let [focus-node dom/node]
+                  (js/setTimeout (fn [] (.focus focus-node)) 50))
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !cloze ev))))))
           (dom/div
