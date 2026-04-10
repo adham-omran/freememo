@@ -167,6 +167,18 @@
                           ON flashcards(topic_id, kind, cloze) WHERE question IS NULL"])
       (catch Exception _ nil)))
 
+  ;; User events (activity tracking)
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS user_events (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      event_type TEXT NOT NULL,
+      metadata JSONB,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_user_events_user_type
+                      ON user_events (user_id, event_type, created_at DESC)"])
+
   ;; Backfill source_reference for markdown topics that lack it
   (jdbc/execute! ds ["UPDATE topics SET source_reference = title
                       WHERE kind = 'markdown' AND source_reference IS NULL"])
@@ -484,6 +496,11 @@
                  :on-conflict [:google_id]
                  :do-update-set {:email email}
                  :returning [:id :username]})))
+
+(defn insert-user-event! [user-id event-type]
+  (jdbc/execute! ds
+    (sql/format {:insert-into :user_events
+                 :values [{:user_id user-id :event_type event-type}]})))
 
 ;; ---------------------------------------------------------------------------
 ;; Utility

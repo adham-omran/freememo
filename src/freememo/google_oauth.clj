@@ -94,6 +94,7 @@
                    (db/upsert-google-user google-sub email username))
         user-id  (:users/id row)
         enc-key  (crypto/derive-key-for-oauth-user google-sub)]
+    (db/insert-user-event! user-id "login_google")
     {:user-id  user-id
      :username (or (:users/username row) username)
      :enc-key  enc-key}))
