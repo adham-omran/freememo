@@ -13,7 +13,6 @@
             [freememo.extract-page :refer [ExtractPage]]
             [freememo.page-viewer :refer [OcrPage]]
             [freememo.subset-review :refer [SubsetReviewSession]]
-            [freememo.status-page :refer [StatusPage]]
             [freememo.login-page :refer [LoginPage]]
             [freememo.keyboard :as keyboard]
             #?(:clj [freememo.settings :as settings])
@@ -52,8 +51,8 @@
        :viewer (list 'viewer) ; empty viewer
        (list (symbol (name tab))))
      (case (:type nav-map)
-       :browse-pdf    (list 'viewer 'browse-pdf (:topic-id nav-map))
-       :browse-topic  (list 'viewer 'browse-topic (:topic-id nav-map))
+       :browse-pdf (list 'viewer 'browse-pdf (:topic-id nav-map))
+       :browse-topic (list 'viewer 'browse-topic (:topic-id nav-map))
        :learn-session (list 'viewer 'learn-session)
        :subset-review (list 'viewer 'subset-review (:root-id nav-map))
        (list (symbol (name tab)))))))
@@ -202,11 +201,6 @@
                     (dom/On "click" (fn [_] (navigate! :library)) nil))
 
                   (dom/button
-                    (dom/props {:style (tab-style :status)})
-                    (dom/text "Status")
-                    (dom/On "click" (fn [_] (navigate! :status)) nil))
-
-                  (dom/button
                     (dom/props {:style (tab-style :import)})
                     (dom/text "Import")
                     (dom/On "click" (fn [_] (navigate! :import)) nil))
@@ -218,12 +212,11 @@
 
                 ;; Tab content
                 (dom/div
-                  (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :status} active-tab) "hidden" "auto")}})
+                  (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library} active-tab) "hidden" "auto")}})
                   (when (= active-tab :home) (HomePage navigate! user-id enc-key))
                   (when (= active-tab :library)
-                    (let [lib-refresh (e/server (e/watch (us/get-atom user-id :library-refresh)))]
-                      (LibraryPage user-id navigate! lib-refresh)))
-                  (when (= active-tab :status) (StatusPage user-id navigate!))
+                    (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))]
+                      (LibraryPage user-id navigate! refresh)))
                   (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
                   (when (= active-tab :settings) (SettingsPage user-id username enc-key))
                   (when (= active-tab :learn) (LearnPage user-id navigate! nil))

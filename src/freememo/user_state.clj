@@ -16,7 +16,6 @@
         (case k
           :refresh          (atom 0)
           :settings-refresh (atom 0)
-          :library-refresh  (atom 0)
           :card-mutations   (atom 0)
           :sync-mutations   (atom 0)
           :card-gen-status  (atom {})

@@ -34,7 +34,54 @@
        "recent" (vec (sort-by :topics/created_at #(compare %2 %1) topics))
        "oldest" (vec (sort-by :topics/created_at #(compare %1 %2) topics))
        "alpha" (vec (sort-by #(str/lower-case (or (:topics/title %) "")) topics))
+       "done" (vec (sort-by #(if (pos? (:total-items %))
+                               (/ (double (:done-items %)) (:total-items %))
+                               2.0)
+                     topics))
+       "synced" (vec (sort-by #(if (pos? (:total-cards %))
+                                 (/ (double (:synced-cards %)) (:total-cards %))
+                                 2.0)
+                       topics))
        topics)))
+
+;; Root progress stats — reuses db/get-document-status for card counts
+(defn get-root-stats* [_refresh user-id]
+  #?(:clj (into {}
+            (map (fn [row]
+                   [(:topics/id row)
+                    {:total-items (or (:total_items row) 0)
+                     :done-items (or (:done_items row) 0)
+                     :total-cards (or (:total_cards row) 0)
+                     :synced-cards (or (:synced_cards row) 0)}]))
+            (db/get-document-status user-id))
+     :cljs {}))
+
+#?(:clj
+   (defn attach-stats [roots stats-map]
+     (mapv (fn [root]
+             (merge root (get stats-map (:topics/id root)
+                           {:total-items 0 :done-items 0 :total-cards 0 :synced-cards 0})))
+       roots)))
+
+#?(:clj
+   (defn completion-status [{:keys [done-items total-items total-cards]}]
+     (cond
+       (and (pos? total-items) (= done-items total-items)) :complete
+       (or (pos? done-items) (pos? total-cards)) :in-progress
+       :else :not-started)))
+
+#?(:clj
+   (defn filter-by-kind [roots kind-filter]
+     (if (= kind-filter "all")
+       roots
+       (filterv #(= (:topics/kind %) kind-filter) roots))))
+
+#?(:clj
+   (defn filter-by-status [roots status-filter]
+     (case status-filter
+       "all" roots
+       "unsynced" (filterv #(and (pos? (:total-cards %)) (< (:synced-cards %) (:total-cards %))) roots)
+       (filterv #(= (completion-status %) (keyword status-filter)) roots))))
 
 ;; Flatten tree into a linear list respecting expand state.
 ;; Returns [{:depth N :topic <map> :has-children bool :is-root bool}]
@@ -78,12 +125,18 @@
 
 ;; Document tree view — used by LibraryPage
 ;; Flatten + virtual scroll for performance
-(e/defn DocumentTreeView [user-id navigate! refresh filter-text sort-key]
+(e/defn DocumentTreeView [user-id navigate! refresh filter-text sort-key kind-filter status-filter]
   (e/client
     (e/server
       (let [all-items (get-tree-items* refresh user-id)
+            stats-map (get-root-stats* refresh user-id)
             all-roots (extract-roots all-items)
-            roots (sort-root-topics (filter-root-topics all-roots filter-text) sort-key)]
+            roots (-> all-roots
+                    (attach-stats stats-map)
+                    (filter-root-topics filter-text)
+                    (filter-by-kind kind-filter)
+                    (filter-by-status status-filter)
+                    (sort-root-topics sort-key))]
         (e/client
           (let [children-map (group-by :topics/parent_id all-items)
                 !expanded-set (atom #{})
@@ -114,8 +167,6 @@
                                 kind (or (:topics/kind topic) "basic")
                                 topic-status (or (:topics/status topic) "active")
                                 expanded? (contains? expanded-set id)
-                                file-size (:topics/file_size topic)
-                                created-at (:topics/created_at topic)
                                 [badge-text badge-color] (kind-badge kind)
                                 display-title (if is-root (util/display-name title) title)]
                             (dom/tr
@@ -174,18 +225,29 @@
                                         (.preventDefault e)
                                         (.click (.-currentTarget e))))
                                     nil))
-                                ;; File size (root only)
-                                (when (and is-root (some? file-size) (pos? file-size))
-                                  (dom/span
-                                    (dom/props {:style {:font-size "11px" :color "var(--color-text-secondary)"
-                                                        :flex-shrink "0" :white-space "nowrap"}})
-                                    (dom/text (e/server (util/format-bytes file-size)))))
-                                ;; Created date (root only)
-                                (when (and is-root (some? created-at))
-                                  (dom/span
-                                    (dom/props {:style {:font-size "11px" :color "var(--color-text-secondary)"
-                                                        :flex-shrink "0" :white-space "nowrap"}})
-                                    (dom/text (e/server (util/format-timestamp created-at)))))
+                                ;; Done progress (root only)
+                                (when is-root
+                                  (let [total (:total-items topic)
+                                        done (:done-items topic)]
+                                    (dom/span
+                                      (dom/props {:style {:font-size "11px" :flex-shrink "0" :white-space "nowrap"
+                                                          :color (cond
+                                                                   (and (pos? total) (= done total)) "var(--color-success-dark)"
+                                                                   (pos? done) "var(--color-text-primary)"
+                                                                   :else "var(--color-text-secondary)")}
+                                                  :data-tooltip "Done"})
+                                      (dom/text (str done " / " total)))))
+                                ;; Synced progress (root only)
+                                (when is-root
+                                  (let [total-cards (:total-cards topic)
+                                        synced (:synced-cards topic)]
+                                    (dom/span
+                                      (dom/props {:style {:font-size "11px" :flex-shrink "0" :white-space "nowrap"
+                                                          :color "var(--color-text-secondary)"}
+                                                  :data-tooltip "Synced"})
+                                      (dom/text (if (pos? total-cards)
+                                                  (str synced " / " total-cards)
+                                                  "\u2013")))))
                                 ;; Review button (only for nodes with children)
                                 (when has-children
                                   (dom/button
@@ -238,7 +300,7 @@
                               (let [topic-to-delete event
                                     note-ids (e/server (vec (db/get-all-anki-note-ids topic-to-delete)))]
                                 (e/server (db/delete-topic-for-user! user-id topic-to-delete))
-                                (e/server (swap! (us/get-atom user-id :library-refresh) inc))
+                                (e/server (swap! (us/get-atom user-id :refresh) inc))
                                 (e/client (card-components/try-delete-anki-notes! note-ids))
                                 (token)
                                 (reset! !show-confirm nil)))))))))))))))))
