@@ -42,6 +42,7 @@
 (defn reconstruct-session* [user-id]
   #?(:clj (when user-id
             (when-let [user (db/get-user-by-id user-id)]
+              (db/insert-user-event! user-id "session_resume")
               (let [google-id (:users/google_id user)
                     enc-key (when google-id (crypto/derive-key-for-oauth-user google-id))]
                 {:username (:users/username user)
