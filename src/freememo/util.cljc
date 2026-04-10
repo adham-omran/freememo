@@ -90,3 +90,10 @@
                   ldt (LocalDateTime/ofInstant inst (ZoneId/systemDefault))]
               (.format ldt (DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm"))))
      :cljs nil))
+
+(defn format-date-short [ts]
+  #?(:clj (when ts
+            (let [inst (.toInstant ts)
+                  ldt (LocalDateTime/ofInstant inst (ZoneId/systemDefault))]
+              (.format ldt (DateTimeFormatter/ofPattern "MMM d"))))
+     :cljs nil))

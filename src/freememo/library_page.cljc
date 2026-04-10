@@ -9,19 +9,36 @@
   (e/client
     (let [!filter-text (atom "")
           filter-text (e/watch !filter-text)
-          !sort-key (atom "recent")
-          sort-key (e/watch !sort-key)
           !kind-filter (atom "all")
           kind-filter (e/watch !kind-filter)
           !status-filter (atom "all")
           status-filter (e/watch !status-filter)
+          !sort-col (atom :added)
+          sort-col (e/watch !sort-col)
+          !sort-dir (atom :desc)
+          sort-dir (e/watch !sort-dir)
           !tree-expanded (atom false)
-          tree-expanded (e/watch !tree-expanded)]
+          tree-expanded (e/watch !tree-expanded)
+          ;; Sort command from column header clicks — [col default-dir]
+          !sort-cmd (atom nil)
+          sort-cmd (e/watch !sort-cmd)
+          ;; React to header sort clicks — must be referenced to avoid Electric optimizing it away
+          sort-applied (when (some? sort-cmd)
+                         (let [[col default-dir] sort-cmd]
+                           (if (= col sort-col)
+                             (reset! !sort-dir (if (= sort-dir :asc) :desc :asc))
+                             (do (reset! !sort-col col)
+                               (reset! !sort-dir default-dir)))
+                           (reset! !sort-cmd nil)
+                           true))]
       (dom/div
         (dom/props {:class "page-container"
                     :style {:height "100%" :display "flex" :flex-direction "column"}})
 
-        ;; Header row: search + filters + sort
+        ;; Reference sort-applied so Electric evaluates the binding
+        (when sort-applied nil)
+
+        ;; Header row: search + filters + expand toggle
         (dom/div
           (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
                               :margin-bottom "12px" :flex-wrap "wrap"}})
@@ -49,20 +66,12 @@
             (dom/option (dom/props {:value "unsynced"}) (dom/text "Unsynced"))
             (dom/On "change" (fn [e] (reset! !status-filter (-> e .-target .-value))) nil))
 
-          (dom/select
-            (dom/props {:class "input" :style {:width "160px" :flex-shrink "0"}})
-            (dom/option (dom/props {:value "recent"}) (dom/text "Recently added"))
-            (dom/option (dom/props {:value "oldest"}) (dom/text "Oldest first"))
-            (dom/option (dom/props {:value "alpha"}) (dom/text "Alphabetical"))
-            (dom/option (dom/props {:value "done"}) (dom/text "Least done"))
-            (dom/option (dom/props {:value "synced"}) (dom/text "Least synced"))
-            (dom/On "change" (fn [e] (reset! !sort-key (-> e .-target .-value))) nil))
-
           (dom/button
-            (dom/props {:class "btn btn-sm btn-secondary"
-                        :style {:flex-shrink "0" :padding "4px 10px" :font-size "12px"}})
+            (dom/props {:class "input"
+                        :style {:flex-shrink "0" :cursor "pointer"}})
             (dom/text (if tree-expanded "Collapse All" "Expand All"))
             (dom/On "click" (fn [_] (swap! !tree-expanded not)) nil)))
 
         ;; Tree view
-        (DocumentTreeView user-id navigate! refresh filter-text sort-key kind-filter status-filter tree-expanded)))))
+        (DocumentTreeView user-id navigate! refresh filter-text
+          sort-col sort-dir kind-filter status-filter tree-expanded !sort-cmd)))))

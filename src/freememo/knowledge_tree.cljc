@@ -29,20 +29,19 @@
          (filterv #(str/includes? (str/lower-case (or (:topics/title %) "")) q) topics)))))
 
 #?(:clj
-   (defn sort-root-topics [topics sort-key]
-     (case sort-key
-       "recent" (vec (sort-by :topics/created_at #(compare %2 %1) topics))
-       "oldest" (vec (sort-by :topics/created_at #(compare %1 %2) topics))
-       "alpha" (vec (sort-by #(str/lower-case (or (:topics/title %) "")) topics))
-       "done" (vec (sort-by #(if (pos? (:total-items %))
-                               (/ (double (:done-items %)) (:total-items %))
+   (defn sort-root-topics [topics sort-col sort-dir]
+     (let [key-fn (case sort-col
+                    :document #(str/lower-case (or (:topics/title %) ""))
+                    :done #(if (pos? (:total-items %))
+                             (/ (double (:done-items %)) (:total-items %))
+                             2.0)
+                    :synced #(if (pos? (:total-cards %))
+                               (/ (double (:synced-cards %)) (:total-cards %))
                                2.0)
-                     topics))
-       "synced" (vec (sort-by #(if (pos? (:total-cards %))
-                                 (/ (double (:synced-cards %)) (:total-cards %))
-                                 2.0)
-                       topics))
-       topics)))
+                    :added :topics/created_at
+                    :topics/created_at)
+           cmp (if (= sort-dir :asc) compare (fn [a b] (compare b a)))]
+       (vec (sort-by key-fn cmp topics)))))
 
 ;; Root progress stats — reuses db/get-document-status for card counts
 (defn get-root-stats* [_refresh user-id]
@@ -125,7 +124,7 @@
 
 ;; Document tree view — used by LibraryPage
 ;; Flatten + virtual scroll for performance
-(e/defn DocumentTreeView [user-id navigate! refresh filter-text sort-key kind-filter status-filter tree-expanded]
+(e/defn DocumentTreeView [user-id navigate! refresh filter-text sort-col sort-dir kind-filter status-filter tree-expanded !sort-cmd]
   (e/client
     (e/server
       (let [all-items (get-tree-items* refresh user-id)
@@ -136,7 +135,7 @@
                     (filter-root-topics filter-text)
                     (filter-by-kind kind-filter)
                     (filter-by-status status-filter)
-                    (sort-root-topics sort-key))]
+                    (sort-root-topics sort-col sort-dir))]
         (e/client
           (let [children-map (group-by :topics/parent_id all-items)
                 !expanded-set (atom #{})
@@ -149,164 +148,197 @@
                 flat-rows (flatten-tree roots children-map expanded-set)
                 row-count (count flat-rows)
                 row-height 36
-                ;; Ref to scroll container — used to preserve scrollTop across expand/collapse
+                grid-cols "1fr 70px 80px 80px 110px"
                 !scroll-node (atom nil)]
             (dom/div
-              (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
-              (reset! !scroll-node dom/node)
-              (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 1})
-                    occluded-height (clamp-left (* row-height (- row-count limit)) 0)]
-                (dom/props {:class "tape-scroll"
-                            :style {:--offset offset :--row-height (str row-height "px")}})
-                (dom/table
-                  (dom/props {:style {:width "100%" :font-size "14px"}})
-                  (if (pos? row-count)
-                    (e/for [i (Tape offset limit)]
-                      (let [row (nth flat-rows i nil)]
-                        (when row
-                          (let [{:keys [depth topic has-children is-root]} row
-                                id (:topics/id topic)
-                                title (or (:topics/title topic) "(empty)")
-                                kind (or (:topics/kind topic) "basic")
-                                topic-status (or (:topics/status topic) "active")
-                                expanded? (contains? expanded-set id)
-                                [badge-text badge-color] (kind-badge kind)
-                                display-title (if is-root (util/display-name title) title)]
-                            (dom/tr
-                              (dom/props {:style {:height (str row-height "px")
-                                                  :opacity (case topic-status "done" "0.6" "1")
-                                                  :--order (inc i)}})
-                              ;; Single cell with indentation
-                              (dom/td
-                                (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
-                                                    :padding-left (str (* depth 20) "px")
+              (dom/props {:style {:display "flex" :flex-direction "column" :min-height "0" :flex "1"}})
+
+              ;; Fixed header
+              (dom/table
+                (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :flex-shrink "0"}})
+                (dom/thead
+                  (dom/props {:style {:display "contents"}})
+                  (dom/tr
+                    (dom/props {:style {:display "contents"}})
+                    (let [th-style {:padding "8px 10px" :border-bottom "2px solid var(--color-border)"
+                                    :font-weight "600" :font-size "13px" :color "var(--color-text-primary)"
+                                    :cursor "pointer" :user-select "none"}
+                          arrow (fn [col] (when (= sort-col col) (if (= sort-dir :asc) " \u25B2" " \u25BC")))]
+                      (dom/th
+                        (dom/props {:style (merge th-style {:text-align "left"})})
+                        (dom/text (str "Document" (arrow :document)))
+                        (dom/On "click" (fn [_] (reset! !sort-cmd [:document :asc])) nil))
+                      (dom/th
+                        (dom/props {:style (merge th-style {:text-align "center" :padding "8px 6px"})})
+                        (dom/text (str "Done" (arrow :done)))
+                        (dom/On "click" (fn [_] (reset! !sort-cmd [:done :asc])) nil))
+                      (dom/th
+                        (dom/props {:style (merge th-style {:text-align "center" :padding "8px 6px"})})
+                        (dom/text (str "Synced" (arrow :synced)))
+                        (dom/On "click" (fn [_] (reset! !sort-cmd [:synced :asc])) nil))
+                      (dom/th
+                        (dom/props {:style (merge th-style {:text-align "right" :padding "8px 6px"})})
+                        (dom/text (str "Added" (arrow :added)))
+                        (dom/On "click" (fn [_] (reset! !sort-cmd [:added :desc])) nil))
+                      (dom/th
+                        (dom/props {:style {:padding "8px 6px" :border-bottom "2px solid var(--color-border)"}})
+                        (dom/text ""))))))
+
+              ;; Scrollable body
+              (dom/div
+                (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
+                (reset! !scroll-node dom/node)
+                (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 1})
+                      occluded-height (clamp-left (* row-height (- row-count limit)) 0)]
+                  (dom/props {:class "tape-scroll"
+                              :style {:--offset offset :--row-height (str row-height "px")}})
+                  (dom/table
+                    (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
+                    (if (pos? row-count)
+                      (e/for [i (Tape offset limit)]
+                        (let [row (nth flat-rows i nil)]
+                          (when row
+                            (let [{:keys [depth topic has-children is-root]} row
+                                  id (:topics/id topic)
+                                  title (or (:topics/title topic) "(empty)")
+                                  kind (or (:topics/kind topic) "basic")
+                                  topic-status (or (:topics/status topic) "active")
+                                  expanded? (contains? expanded-set id)
+                                  [badge-text badge-color] (kind-badge kind)
+                                  display-title (if is-root (util/display-name title) title)]
+                              (dom/tr
+                                (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)"
                                                     :height (str row-height "px")
-                                                    :border-bottom "1px solid var(--color-bg-subtle)"
-                                                    :border-left (when (= topic-status "done") "2px solid var(--color-success-lighter)")}})
-                                ;; Arrow
-                                (if has-children
+                                                    :opacity (case topic-status "done" "0.6" "1")
+                                                    :cursor "pointer"
+                                                    :--order (inc i)}})
+                                (dom/On "click"
+                                  (fn [_]
+                                    (if (and is-root (= kind "pdf"))
+                                      (navigate! :viewer (nav/nav-browse-pdf id nil :library))
+                                      (navigate! :viewer (nav/nav-browse-topic id :library))))
+                                  nil)
+                                ;; Column 1: Document (arrow + badge + title)
+                                (dom/td
+                                  (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
+                                                      :padding-left (str (+ 10 (* depth 20)) "px")
+                                                      :overflow "hidden"
+                                                      :border-left (when (= topic-status "done") "2px solid var(--color-success-lighter)")}})
+                                  (if has-children
+                                    (dom/span
+                                      (dom/props {:style {:width "16px" :font-size "10px" :cursor "pointer"
+                                                          :user-select "none" :text-align "center" :flex-shrink "0"}})
+                                      (dom/text (if expanded? "\u25BC" "\u25B6"))
+                                      (dom/On "click"
+                                        (fn [e]
+                                          (.stopPropagation e)
+                                          (let [sn @!scroll-node
+                                                st (when sn (.-scrollTop sn))]
+                                            (swap! !expanded-set (fn [s] (if (contains? s id) (disj s id) (conj s id))))
+                                            (when st
+                                              (js/requestAnimationFrame (fn [] (set! (.-scrollTop sn) st))))))
+                                        nil))
+                                    (dom/span (dom/props {:style {:width "16px" :flex-shrink "0"}})))
                                   (dom/span
-                                    (dom/props {:style {:width "16px" :font-size "10px" :cursor "pointer"
-                                                        :user-select "none" :text-align "center" :flex-shrink "0"}})
-                                    (dom/text (if expanded? "\u25BC" "\u25B6"))
-                                    (dom/On "click"
-                                      (fn [e]
-                                        (.stopPropagation e)
-                                        (let [sn @!scroll-node
-                                              st (when sn (.-scrollTop sn))]
-                                          (swap! !expanded-set (fn [s] (if (contains? s id) (disj s id) (conj s id))))
-                                          (when st
-                                            (js/requestAnimationFrame (fn [] (set! (.-scrollTop sn) st))))))
-                                      nil))
-                                  (dom/span (dom/props {:style {:width "16px" :flex-shrink "0"}})))
-                                ;; Badge
-                                (dom/span
-                                  (dom/props {:class "type-badge" :style {:background badge-color}})
-                                  (dom/text badge-text))
-                                ;; Title
-                                (dom/span
-                                  (dom/props {:class "tree-title"
-                                              :tabindex 0
-                                              :role "link"
-                                              :style {:flex "1" :min-width "0"
-                                                      :font-size (if is-root "14px" "13px")
-                                                      :font-weight (if is-root "500" "400")
-                                                      :color (if is-root "var(--color-text-primary)" "var(--color-text-primary)")
-                                                      :cursor "pointer"
-                                                      :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}
-                                              :title display-title})
-                                  (dom/text display-title)
-                                  (dom/On "click"
-                                    (fn [_]
-                                      (if (and is-root (= kind "pdf"))
-                                        (navigate! :viewer (nav/nav-browse-pdf id nil :library))
-                                        (navigate! :viewer (nav/nav-browse-topic id :library))))
-                                    nil)
-                                  (dom/On "keydown"
-                                    (fn [e]
-                                      (when (or (= (.-key e) "Enter") (= (.-key e) " "))
-                                        (.preventDefault e)
-                                        (.click (.-currentTarget e))))
-                                    nil))
-                                ;; Done progress (root only)
-                                (when is-root
-                                  (let [total (:total-items topic)
-                                        done (:done-items topic)]
+                                    (dom/props {:class "type-badge" :style {:background badge-color}})
+                                    (dom/text badge-text))
+                                  (dom/span
+                                    (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
+                                                        :font-size (if is-root "13px" "12px")
+                                                        :font-weight (if is-root "500" "400")}
+                                                :data-tooltip display-title})
+                                    (dom/text display-title)))
+                                ;; Column 2: Done
+                                (dom/td
+                                  (dom/props {:style {:padding "4px 6px" :text-align "center"
+                                                      :display "flex" :align-items "center" :justify-content "center"}})
+                                  (when is-root
+                                    (let [total (:total-items topic)
+                                          done (:done-items topic)]
+                                      (dom/span
+                                        (dom/props {:style {:color (cond
+                                                                     (and (pos? total) (= done total)) "var(--color-success-dark)"
+                                                                     (pos? done) "var(--color-text-primary)"
+                                                                     :else "var(--color-text-secondary)")}})
+                                        (dom/text (str done " / " total))))))
+                                ;; Column 3: Synced
+                                (dom/td
+                                  (dom/props {:style {:padding "4px 6px" :text-align "center"
+                                                      :display "flex" :align-items "center" :justify-content "center"
+                                                      :color "var(--color-text-secondary)"}})
+                                  (when is-root
+                                    (let [total-cards (:total-cards topic)
+                                          synced (:synced-cards topic)]
+                                      (dom/span
+                                        (dom/text (if (pos? total-cards)
+                                                    (str synced " / " total-cards)
+                                                    "\u2013"))))))
+                                ;; Column 4: Added
+                                (dom/td
+                                  (dom/props {:style {:padding "4px 6px" :text-align "right"
+                                                      :display "flex" :align-items "center" :justify-content "flex-end"
+                                                      :color "var(--color-text-secondary)"}})
+                                  (when is-root
                                     (dom/span
-                                      (dom/props {:style {:font-size "11px" :flex-shrink "0" :white-space "nowrap"
-                                                          :color (cond
-                                                                   (and (pos? total) (= done total)) "var(--color-success-dark)"
-                                                                   (pos? done) "var(--color-text-primary)"
-                                                                   :else "var(--color-text-secondary)")}
-                                                  :data-tooltip "Done"})
-                                      (dom/text (str done " / " total)))))
-                                ;; Synced progress (root only)
-                                (when is-root
-                                  (let [total-cards (:total-cards topic)
-                                        synced (:synced-cards topic)]
-                                    (dom/span
-                                      (dom/props {:style {:font-size "11px" :flex-shrink "0" :white-space "nowrap"
-                                                          :color "var(--color-text-secondary)"}
-                                                  :data-tooltip "Synced"})
-                                      (dom/text (if (pos? total-cards)
-                                                  (str synced " / " total-cards)
-                                                  "\u2013")))))
-                                ;; Review button (only for nodes with children)
-                                (when has-children
-                                  (dom/button
-                                    (dom/props {:class "btn btn-sm btn-secondary"
-                                                :style {:padding "2px 6px" :font-size "10px" :flex-shrink "0"}
-                                                :title "Review this topic and its children"})
-                                    (dom/text "Review")
-                                    (dom/On "click"
-                                      (fn [e]
-                                        (.stopPropagation e)
-                                        (navigate! :viewer (nav/nav-subset-review id title)))
-                                      nil)))
-                                ;; Delete button (root only)
-                                (when is-root
-                                  (dom/button
-                                    (dom/props {:class "btn btn-sm btn-danger-fill"
-                                                :style {:padding "2px 6px" :font-size "10px" :flex-shrink "0"}})
-                                    (dom/text "Delete")
-                                    (dom/On "click" (fn [e] (.stopPropagation e) (reset! !show-confirm id)) nil)))))))))
-                    (dom/tr
-                      (dom/td
-                        (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
-                                            :color "var(--color-text-secondary)" :font-size "14px"}})
-                        (dom/text "No content yet. Import content from the Import tab.")))))
-                (dom/div (dom/props {:style {:height (str occluded-height "px")}}))
-                ;; Delete confirm dialog
-                (when (some? show-confirm)
+                                      (dom/text (e/server (or (util/format-date-short (:topics/created_at topic)) ""))))))
+                                ;; Column 5: Actions
+                                (dom/td
+                                  (dom/props {:style {:padding "4px 6px" :display "flex" :align-items "center"
+                                                      :justify-content "flex-end" :gap "4px"}})
+                                  (when has-children
+                                    (dom/button
+                                      (dom/props {:class "btn btn-sm btn-secondary"
+                                                  :style {:padding "2px 6px" :font-size "10px"}})
+                                      (dom/text "Review")
+                                      (dom/On "click"
+                                        (fn [e]
+                                          (.stopPropagation e)
+                                          (navigate! :viewer (nav/nav-subset-review id title)))
+                                        nil)))
+                                  (when is-root
+                                    (dom/button
+                                      (dom/props {:class "btn btn-sm btn-danger-fill"
+                                                  :style {:padding "2px 6px" :font-size "10px"}})
+                                      (dom/text "Delete")
+                                      (dom/On "click" (fn [e] (.stopPropagation e) (reset! !show-confirm id)) nil)))))))))
+                      (dom/tr
+                        (dom/td
+                          (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
+                                              :color "var(--color-text-secondary)" :font-size "13px"}})
+                          (dom/text "No content yet. Import content from the Import tab.")))))
+                  (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))
+
+              ;; Delete confirm dialog
+              (when (some? show-confirm)
+                (dom/div
+                  (dom/props {:class "modal-backdrop"})
+                  (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil)
+                  (dom/On "keydown" (fn [e] (when (= (.-key e) "Escape") (reset! !show-confirm nil))) nil)
                   (dom/div
-                    (dom/props {:class "modal-backdrop"})
-                    (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil)
-                    (dom/On "keydown" (fn [e] (when (= (.-key e) "Escape") (reset! !show-confirm nil))) nil)
+                    (dom/props {:class "modal-content modal-sm"})
+                    (dom/On "click" (fn [e] (.stopPropagation e)) nil)
                     (dom/div
-                      (dom/props {:class "modal-content modal-sm"})
-                      (dom/On "click" (fn [e] (.stopPropagation e)) nil)
-                      (dom/div
-                        (dom/props {:class "confirm-modal-body"})
-                        (dom/p (dom/text "Delete this topic? All children, extracts, and cards will be permanently removed.")))
-                      (dom/div
-                        (dom/props {:class "confirm-modal-actions"})
-                        (dom/button
-                          (dom/props {:class "btn btn-secondary"})
-                          (dom/text "Cancel")
-                          (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil))
-                        (dom/button
-                          (dom/props {:class "btn btn-danger-fill"})
-                          (dom/text "Delete")
-                          (let [event (dom/On "click" (fn [_] show-confirm) nil)
-                                [?token ?error] (e/Token event)]
-                            (when-some [token ?token]
-                              (let [topic-to-delete event
-                                    note-ids (e/server (vec (db/get-all-anki-note-ids topic-to-delete)))]
-                                (e/server (db/delete-topic-for-user! user-id topic-to-delete))
-                                (e/server (swap! (us/get-atom user-id :refresh) inc))
-                                (e/client (card-components/try-delete-anki-notes! note-ids))
-                                (token)
-                                (reset! !show-confirm nil)))))))))))))))))
+                      (dom/props {:class "confirm-modal-body"})
+                      (dom/p (dom/text "Delete this topic? All children, extracts, and cards will be permanently removed.")))
+                    (dom/div
+                      (dom/props {:class "confirm-modal-actions"})
+                      (dom/button
+                        (dom/props {:class "btn btn-secondary"})
+                        (dom/text "Cancel")
+                        (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil))
+                      (dom/button
+                        (dom/props {:class "btn btn-danger-fill"})
+                        (dom/text "Delete")
+                        (let [event (dom/On "click" (fn [_] show-confirm) nil)
+                              [?token ?error] (e/Token event)]
+                          (when-some [token ?token]
+                            (let [topic-to-delete event
+                                  note-ids (e/server (vec (db/get-all-anki-note-ids topic-to-delete)))]
+                              (e/server (db/delete-topic-for-user! user-id topic-to-delete))
+                              (e/server (swap! (us/get-atom user-id :refresh) inc))
+                              (e/client (card-components/try-delete-anki-notes! note-ids))
+                              (token)
+                              (reset! !show-confirm nil))))))))))))))))
 
 
 ;; Legacy ContentsPage — no longer routed, kept for reference
