@@ -125,7 +125,7 @@
 
 ;; Document tree view — used by LibraryPage
 ;; Flatten + virtual scroll for performance
-(e/defn DocumentTreeView [user-id navigate! refresh filter-text sort-key kind-filter status-filter]
+(e/defn DocumentTreeView [user-id navigate! refresh filter-text sort-key kind-filter status-filter tree-expanded]
   (e/client
     (e/server
       (let [all-items (get-tree-items* refresh user-id)
@@ -140,7 +140,10 @@
         (e/client
           (let [children-map (group-by :topics/parent_id all-items)
                 !expanded-set (atom #{})
-                expanded-set (e/watch !expanded-set)
+                expand-cmd (if tree-expanded
+                             (reset! !expanded-set (disj (set (keys children-map)) nil))
+                             (reset! !expanded-set #{}))
+                expanded-set (do expand-cmd (e/watch !expanded-set))
                 !show-confirm (atom nil)
                 show-confirm (e/watch !show-confirm)
                 flat-rows (flatten-tree roots children-map expanded-set)
