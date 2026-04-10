@@ -382,6 +382,9 @@ html, body {
     height: var(--row-height);
     overflow: hidden;
 }
+.tape-scroll table td:has([data-tooltip]:hover) {
+    overflow: visible;
+}
 .tape-scroll table tr:hover td { background: #f5f7fa; }
 
 /* ── Tree View ───────────────────────────────────────────────── */
