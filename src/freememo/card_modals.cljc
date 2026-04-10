@@ -32,15 +32,21 @@
           !use-header (atom false)
           use-header (e/watch !use-header)
           !header-text (atom "")
-          header-text (e/watch !header-text)]
+          header-text (e/watch !header-text)
+          !primary-btn (atom nil)]
       (dom/div
         (dom/props {:class "modal-backdrop" :tabindex "-1"})
         (dom/On "click" (fn [_] (reset! !show-export false)) nil)
         (dom/On "keydown"
           (fn [e]
             #?(:cljs
-               (when (= (.-key e) "Escape")
-                 (reset! !show-export false))))
+               (cond
+                 (= (.-key e) "Escape")
+                 (reset! !show-export false)
+                 (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
+                 (when-let [btn @!primary-btn]
+                   (.preventDefault e)
+                   (.click btn)))))
           nil)
         (dom/div
           (dom/props {:class "modal-content modal-sm"})
@@ -90,6 +96,7 @@
             (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-3)"}})
             (dom/button
               (dom/props {:class "btn btn-primary" :style {:order "1"}})
+              (reset! !primary-btn dom/node)
               (dom/text "Export")
               (let [click-event (dom/On "click" identity nil)
                     [?token ?error] (e/Token click-event)]
@@ -137,7 +144,8 @@
                   !history-save-trigger captured-selection prompt-dialog-kind]} state
           pre-prompt-value (e/watch !pre-prompt)
           !local-prompt (atom pre-prompt-value)
-          local-prompt (e/watch !local-prompt)]
+          local-prompt (e/watch !local-prompt)
+          !primary-btn (atom nil)]
       (dom/div
         (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
                             :background "transparent" :display "flex" :align-items "center"
@@ -147,8 +155,13 @@
         (dom/On "keydown"
           (fn [e]
             #?(:cljs
-               (when (= (.-key e) "Escape")
-                 (reset! !show false))))
+               (cond
+                 (= (.-key e) "Escape")
+                 (reset! !show false)
+                 (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
+                 (when-let [btn @!primary-btn]
+                   (.preventDefault e)
+                   (.click btn)))))
           nil)
         (dom/div
           (dom/props {:style {:background "var(--color-bg-card)" :border-radius "var(--radius-lg)" :padding "var(--sp-6)"
@@ -198,6 +211,7 @@
             (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-3)"}})
             (dom/button
               (dom/props {:class "btn btn-primary" :style {:order "1"}})
+              (reset! !primary-btn dom/node)
               (dom/text "Generate")
               (dom/On "click"
                 (fn [_]
@@ -235,7 +249,8 @@
           answer (e/watch !answer)
           cloze (e/watch !cloze)
           card-font-sz (e/server (settings/get-card-font-size user-id))
-          modal-font (str (or card-font-sz 14) "px")]
+          modal-font (str (or card-font-sz 14) "px")
+          !primary-btn (atom nil)]
       (dom/div
         (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
                             :background "transparent" :display "flex" :align-items "center"
@@ -245,8 +260,13 @@
         (dom/On "keydown"
           (fn [e]
             #?(:cljs
-               (when (= (.-key e) "Escape")
-                 (reset! !editing-card nil))))
+               (cond
+                 (= (.-key e) "Escape")
+                 (reset! !editing-card nil)
+                 (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
+                 (when-let [btn @!primary-btn]
+                   (.preventDefault e)
+                   (.click btn)))))
           nil)
         (dom/div
           (dom/props {:style {:background "var(--color-bg-card)" :border-radius "var(--radius-lg)" :padding "var(--sp-6)"
@@ -312,6 +332,7 @@
             (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
             (dom/button
               (dom/props {:class "btn btn-primary" :style {:order "1"}})
+              (reset! !primary-btn dom/node)
               (dom/text "Save")
               (let [click-event (dom/On "click" identity nil)
                     [?token ?error] (e/Token click-event)]
@@ -352,7 +373,8 @@
           answer (e/watch !answer)
           cloze (e/watch !cloze)
           card-font-sz (e/server (settings/get-card-font-size user-id))
-          modal-font (str (or card-font-sz 14) "px")]
+          modal-font (str (or card-font-sz 14) "px")
+          !primary-btn (atom nil)]
       (dom/div
         (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
                             :background "transparent" :display "flex" :align-items "center"
@@ -362,8 +384,13 @@
         (dom/On "keydown"
           (fn [e]
             #?(:cljs
-               (when (= (.-key e) "Escape")
-                 (reset! !show-add false))))
+               (cond
+                 (= (.-key e) "Escape")
+                 (reset! !show-add false)
+                 (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
+                 (when-let [btn @!primary-btn]
+                   (.preventDefault e)
+                   (.click btn)))))
           nil)
         (dom/div
           (dom/props {:style {:background "var(--color-bg-card)" :border-radius "var(--radius-lg)" :padding "var(--sp-6)"
@@ -445,6 +472,7 @@
             (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
             (dom/button
               (dom/props {:class "btn btn-primary" :style {:border-radius "var(--radius-sm)" :order "1"}})
+              (reset! !primary-btn dom/node)
               (dom/text "Save")
               (let [click-event (dom/On "click" identity nil)
                     [?token ?error] (e/Token click-event)]
