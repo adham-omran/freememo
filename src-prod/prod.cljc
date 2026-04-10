@@ -11,6 +11,7 @@
    #?(:clj [ring.middleware.resource :refer [wrap-resource]])
    #?(:clj [ring.middleware.content-type :refer [wrap-content-type]])
    #?(:clj [ring.middleware.session :refer [wrap-session]])
+   #?(:clj [ring.middleware.session.cookie :refer [cookie-store]])
    #?(:clj [hyperfiddle.electric-ring-adapter3 :as electric-ring])
    #?(:cljs [hyperfiddle.electric-client3 :as electric-client])
 
@@ -64,7 +65,11 @@
            (wrap-api-routes)
            (wrap-multipart-params)
            (wrap-params)
-           (wrap-session {:cookie-attrs {:same-site :lax :secure true :http-only true}}))
+           (wrap-session {:store (cookie-store {:key (let [secret (or (System/getenv "ENC_KEY_SECRET") "dev-enc-key-secret-change-in-prod")
+                                                                      hash (-> (java.security.MessageDigest/getInstance "SHA-256")
+                                                                             (.digest (.getBytes secret "UTF-8")))]
+                                                                  (java.util.Arrays/copyOf hash 16))})
+                          :cookie-attrs {:max-age 2592000 :same-site :lax :secure true :http-only true}}))
          {:host (:host config), :port (:port config), :join? false
           :ws-idle-timeout (* 60 1000)          ; 60 seconds in milliseconds
           :ws-max-binary-size (* 100 1024 1024) ; 100MB - for demo

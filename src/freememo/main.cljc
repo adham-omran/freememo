@@ -17,7 +17,8 @@
             [freememo.keyboard :as keyboard]
             #?(:clj [freememo.settings :as settings])
             #?(:clj [freememo.user-state :as us])
-            #?(:clj [freememo.db :as db])))
+            #?(:clj [freememo.db :as db])
+            #?(:clj [freememo.crypto :as crypto])))
 
 ;; Per-user refresh via user-state registry
 
@@ -36,6 +37,15 @@
 
 (defn get-llm-enabled* [_refresh user-id]
   #?(:clj (settings/get-llm-enabled user-id)
+     :cljs nil))
+
+(defn reconstruct-session* [user-id]
+  #?(:clj (when user-id
+            (when-let [user (db/get-user-by-id user-id)]
+              (let [google-id (:users/google_id user)
+                    enc-key (when google-id (crypto/derive-key-for-oauth-user google-id))]
+                {:username (:users/username user)
+                 :enc-key enc-key})))
      :cljs nil))
 
 ;; Convert old navigate! API calls to route lists for router5
@@ -130,8 +140,9 @@
   (e/client
     (binding [dom/node js/document.body]
       (let [user-id (e/server (get-in ring-request [:session :user-id]))
-            username (e/server (get-in ring-request [:session :username]))
-            enc-key (e/server (get-in ring-request [:session :enc-key]))
+            session-data (e/server (reconstruct-session* user-id))
+            username (e/server (:username session-data))
+            enc-key (e/server (:enc-key session-data))
             auth-error (e/server (get-in ring-request [:session :auth-error]))]
         (if (e/server (some? user-id))
           ;; Authenticated: render app with URL router

@@ -1,58 +1,20 @@
 (ns freememo.api
   "REST API handlers for file upload, page text save, and authentication."
   (:require
-    [freememo.pdf :as pdf]
-    [freememo.epub :as epub]
-    [freememo.page-ocr :as page]
-    [freememo.db :as db]
-    [freememo.auth :as auth]
-    [freememo.crypto :as crypto]
-    [freememo.google-oauth :as google-oauth]
-    [freememo.extractor :as extractor]
-    [freememo.html-cleaner :as cleaner]
-    [taoensso.telemere :as tel]
-    [clojure.java.io :as io]
-    [clojure.string]
-    [cheshire.core :as json]))
+   [freememo.pdf :as pdf]
+   [freememo.epub :as epub]
+   [freememo.page-ocr :as page]
+   [freememo.db :as db]
+   [freememo.google-oauth :as google-oauth]
+   [freememo.extractor :as extractor]
+   [freememo.html-cleaner :as cleaner]
+   [taoensso.telemere :as tel]
+   [clojure.java.io :as io]
+   [clojure.string]
+   [cheshire.core :as json]))
 
 (defn- require-auth [request]
   (get-in request [:session :user-id]))
-
-(defn signup-handler [request]
-  (let [username (get-in request [:params "username"])
-        password (get-in request [:params "password"])]
-    (if (or (clojure.string/blank? username) (clojure.string/blank? password))
-      {:status 302
-       :headers {"Location" "/"}
-       :session {:auth-error "Username and password are required"}}
-      (let [result (auth/create-user username password)]
-        (if (:success result)
-          (let [user-id (:user-id result)
-                enc-key (crypto/derive-key password user-id)]
-            {:status 302
-             :headers {"Location" "/"}
-             :session {:user-id user-id :username username :enc-key enc-key}})
-          {:status 302
-           :headers {"Location" "/"}
-           :session {:auth-error (:error result)}})))))
-
-(defn login-handler [request]
-  (let [username (get-in request [:params "username"])
-        password (get-in request [:params "password"])]
-    (if (or (clojure.string/blank? username) (clojure.string/blank? password))
-      {:status 302
-       :headers {"Location" "/"}
-       :session {:auth-error "Username and password are required"}}
-      (let [result (auth/authenticate username password)]
-        (if (:success result)
-          (let [user-id (:user-id result)
-                enc-key (crypto/derive-key password user-id)]
-            {:status 302
-             :headers {"Location" "/"}
-             :session {:user-id user-id :username (:username result) :enc-key enc-key}})
-          {:status 302
-           :headers {"Location" "/"}
-           :session {:auth-error (:error result)}})))))
 
 (defn logout-handler [_request]
   {:status 302
@@ -215,10 +177,10 @@
               google-sub (str (:sub claims))
               email (str (:email claims))
               display-name (str (:name claims))
-              {:keys [user-id username enc-key]} (google-oauth/find-or-create-user google-sub email display-name)]
+              {:keys [user-id]} (google-oauth/find-or-create-user google-sub email display-name)]
           {:status 302
            :headers {"Location" "/"}
-           :session {:user-id user-id :username username :enc-key enc-key}})
+           :session {:user-id user-id}})
         (catch Exception e
           (tel/error! {:id ::google-callback-handler} e)
           {:status 302
@@ -257,12 +219,6 @@
   (let [uri (:uri request)
         method (:request-method request)]
     (cond
-      (and (= uri "/api/signup") (= method :post))
-      (signup-handler request)
-
-      (and (= uri "/api/login") (= method :post))
-      (login-handler request)
-
       (and (= uri "/api/logout") (= method :post))
       (logout-handler request)
 
