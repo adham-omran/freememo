@@ -14,7 +14,9 @@
           !kind-filter (atom "all")
           kind-filter (e/watch !kind-filter)
           !status-filter (atom "all")
-          status-filter (e/watch !status-filter)]
+          status-filter (e/watch !status-filter)
+          !tree-expanded (atom false)
+          tree-expanded (e/watch !tree-expanded)]
       (dom/div
         (dom/props {:class "page-container"
                     :style {:height "100%" :display "flex" :flex-direction "column"}})
@@ -54,7 +56,13 @@
             (dom/option (dom/props {:value "alpha"}) (dom/text "Alphabetical"))
             (dom/option (dom/props {:value "done"}) (dom/text "Least done"))
             (dom/option (dom/props {:value "synced"}) (dom/text "Least synced"))
-            (dom/On "change" (fn [e] (reset! !sort-key (-> e .-target .-value))) nil)))
+            (dom/On "change" (fn [e] (reset! !sort-key (-> e .-target .-value))) nil))
+
+          (dom/button
+            (dom/props {:class "btn btn-sm btn-secondary"
+                        :style {:flex-shrink "0" :padding "4px 10px" :font-size "12px"}})
+            (dom/text (if tree-expanded "Collapse All" "Expand All"))
+            (dom/On "click" (fn [_] (swap! !tree-expanded not)) nil)))
 
         ;; Tree view
-        (DocumentTreeView user-id navigate! refresh filter-text sort-key kind-filter status-filter)))))
+        (DocumentTreeView user-id navigate! refresh filter-text sort-key kind-filter status-filter tree-expanded)))))
