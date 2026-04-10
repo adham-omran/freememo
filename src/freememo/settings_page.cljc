@@ -131,8 +131,13 @@
                 (dom/On "keydown"
                   (fn [e]
                     #?(:cljs
-                       (when (= (.-key e) "Escape")
-                         (reset! !show-key-modal false))))
+                       (cond
+                         (= (.-key e) "Escape")
+                         (reset! !show-key-modal false)
+                         (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
+                         (when-let [btn (.querySelector (.-currentTarget e) ".btn-primary")]
+                           (.preventDefault e)
+                           (.click btn)))))
                   nil)
                 (dom/div
                   (dom/props {:class "modal-content modal-md"})
