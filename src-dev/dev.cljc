@@ -17,6 +17,7 @@
    #?(:clj [ring.middleware.resource :refer [wrap-resource]])
    #?(:clj [ring.middleware.content-type :refer [wrap-content-type]])
    #?(:clj [ring.middleware.session :refer [wrap-session]])
+   #?(:clj [ring.middleware.session.cookie :refer [cookie-store]])
    #?(:clj [hyperfiddle.electric-ring-adapter3 :as electric-ring])))
 
 (comment (-main)) ; repl entrypoint
@@ -53,7 +54,11 @@
                      (wrap-api-routes) ; 2. API routes
                      (wrap-multipart-params) ; 1b. parse multipart form data (file uploads)
                      (wrap-params) ; 1a. boilerplate – parse request URL parameters.
-                     (wrap-session {:cookie-attrs {:same-site :lax :http-only true}})) ; 0. session middleware (outermost – runs first)
+                     (wrap-session {:store (cookie-store {:key (let [secret (or (System/getenv "ENC_KEY_SECRET") "dev-enc-key-secret-change-in-prod")
+                                                                              hash (-> (java.security.MessageDigest/getInstance "SHA-256")
+                                                                                     (.digest (.getBytes secret "UTF-8")))]
+                                                                          (java.util.Arrays/copyOf hash 16))})
+                                    :cookie-attrs {:max-age 2592000 :same-site :lax :http-only true}})) ; 0. session middleware (outermost – runs first)
                    {:host "0.0.0.0", :port 8080, :join? false
                     :ws-idle-timeout (* 60 1000)          ; 60 seconds in milliseconds
                     :ws-max-binary-size (* 100 1024 1024) ; 100MB - for demo

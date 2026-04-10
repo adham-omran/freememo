@@ -465,6 +465,12 @@
 ;; Google OAuth user queries (unchanged)
 ;; ---------------------------------------------------------------------------
 
+(defn get-user-by-id [user-id]
+  (jdbc/execute-one! ds
+    (sql/format {:select [:id :username :google_id]
+                 :from [:users]
+                 :where [:= :id user-id]})))
+
 (defn get-user-by-google-id [google-id]
   (jdbc/execute-one! ds
     (sql/format {:select [:id :username :email]

@@ -77,74 +77,12 @@
                                 :margin-bottom "var(--sp-4)" :font-size "14px"}})
             (dom/text auth-error)))
 
-        ;; Google sign-in -- primary action
+        ;; Google sign-in
         (dom/a
           (dom/props {:href "/auth/google"
                       :class "btn btn-primary" :style {:display "block" :text-align "center" :padding "12px 16px"
                                                        :text-decoration "none" :font-size "16px"}})
-          (dom/text "Sign in with Google"))
-
-        ;; Divider
-        (dom/div
-          (dom/props {:style {:text-align "center" :margin "20px 0 16px" :color "var(--color-text-hint)" :font-size "13px"}})
-          (dom/text "\u2014 or sign in with username \u2014"))
-
-        ;; Collapsible username/password section
-        (let [!expanded (atom false)
-              expanded (e/watch !expanded)]
-
-          (dom/div
-            (dom/props {:style {:cursor "pointer" :font-size "14px" :color "var(--color-text-secondary)"
-                                :font-weight "500" :user-select "none" :padding "4px 0"}})
-            (dom/text (if expanded "\u25BE Email & password" "\u25B8 Email & password"))
-            (dom/On "click" (fn [e] (.preventDefault e) (swap! !expanded not)) nil))
-
-          (when expanded
-            (let [!mode (atom :login)
-                  mode (e/watch !mode)]
-
-              ;; Form
-              (dom/form
-                (dom/props {:action (if (= mode :login) "/api/login" "/api/signup")
-                            :method "post"
-                            :style {:margin-top "12px"}})
-
-                (dom/div
-                  (dom/props {:style {:margin-bottom "var(--sp-4)"}})
-                  (dom/label
-                    (dom/props {:class "label"})
-                    (dom/text "Username"))
-                  (dom/input
-                    (dom/props {:type "text" :name "username" :required true
-                                :class "input input-full" :style {:padding "10px"}})))
-
-                (dom/div
-                  (dom/props {:style {:margin-bottom "var(--sp-6)"}})
-                  (dom/label
-                    (dom/props {:class "label"})
-                    (dom/text "Password"))
-                  (dom/input
-                    (dom/props {:type "password" :name "password" :required true
-                                :class "input input-full" :style {:padding "10px"}})))
-
-                (dom/button
-                  (dom/props {:type "submit"
-                              :class "btn btn-secondary" :style {:width "100%" :padding "10px"
-                                                                 :font-size "16px"}})
-                  (dom/text (if (= mode :login) "Log In" "Sign Up"))))
-
-              ;; Toggle link
-              (dom/div
-                (dom/props {:style {:text-align "center" :margin-top "var(--sp-3)" :font-size "14px" :color "var(--color-text-secondary)"}})
-                (dom/text (if (= mode :login) "Don't have an account? " "Already have an account? "))
-                (dom/a
-                  (dom/props {:href "#"
-                              :style {:color "var(--color-primary)" :text-decoration "none" :font-weight "500"}})
-                  (dom/text (if (= mode :login) "Sign up" "Log in"))
-                  (dom/On "click" (fn [e]
-                                    (.preventDefault e)
-                                    (reset! !mode (if (= mode :login) :signup :login)))
-                    nil))))))))))
+          (dom/text "Sign in with Google"))))))
 
 (e/defn LoginPage [auth-error]
   (e/client
