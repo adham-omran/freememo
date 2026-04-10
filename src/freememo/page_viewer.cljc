@@ -99,6 +99,7 @@
       (let [root-topics (e/server (db/get-root-topics user-id))
             last-doc-id (e/server (settings/get-last-document user-id))
             refresh (e/server (e/watch (us/get-atom user-id :refresh)))
+            meta-refresh (e/server (e/watch (us/get-atom user-id :meta-refresh)))
             sync-mutations (e/server (e/watch (us/get-atom user-id :sync-mutations)))
             card-mutations (e/server (e/watch (us/get-atom user-id :card-mutations)))
             card-refresh (+ refresh sync-mutations card-mutations)
@@ -125,7 +126,7 @@
             !nav-specified (atom false)
             page-stats (e/server
                          (when selected-doc
-                           (get-page-stats* refresh selected-doc)))]
+                           (get-page-stats* meta-refresh selected-doc)))]
 
         ;; Handle navigation from Queue tab — only consume after doc-name resolves
         (when-some [{:keys [topic-id page]} nav-target]
@@ -217,7 +218,7 @@
                 text-result (e/server (get-page-text* refresh selected-doc current-pdf-page))
                 _ (log/log-debug (str "text-result success=" (:success text-result) " page=" current-pdf-page " html-len=" (count (:text text-result))))
                 page-text (e/server (when (:success text-result) (:text text-result)))
-                is-done (e/server (get-page-done-status* refresh selected-doc current-pdf-page))]
+                is-done (e/server (get-page-done-status* meta-refresh selected-doc current-pdf-page))]
 
             ;; Save last page when user navigates
             (when-some [token ?page-token]
@@ -298,7 +299,7 @@
                                   [?token ?error] (e/Token change-event)]
                               (when-some [token ?token]
                                 (e/server (db/toggle-page-done! selected-doc (:page change-event)))
-                                (e/server (swap! (us/get-atom user-id :refresh) inc))
+                                (e/server (swap! (us/get-atom user-id :meta-refresh) inc))
                                 (token)))))
                         (dom/text "Done"))
 
@@ -365,7 +366,7 @@
                                 2000))))))
 
                     ;; Source reference — collapsed to compact editable field
-                    (let [current-source (e/server (get-topic-source* refresh selected-doc))
+                    (let [current-source (e/server (get-topic-source* meta-refresh selected-doc))
                           !editing-source (atom false)
                           editing-source (e/watch !editing-source)]
                       (if editing-source
@@ -389,7 +390,7 @@
                                     [?token _] (e/Token event)]
                                 (when-some [token ?token]
                                   (e/server (db/update-topic-source! selected-doc event))
-                                  (e/server (swap! (us/get-atom user-id :refresh) inc))
+                                  (e/server (swap! (us/get-atom user-id :meta-refresh) inc))
                                   (token)
                                   (reset! !editing-source false)))))
                           (dom/button
