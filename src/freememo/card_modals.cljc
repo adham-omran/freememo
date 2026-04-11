@@ -21,6 +21,51 @@
        (.click a)
        (.revokeObjectURL js/URL url))))
 
+(defn cloze-max-n [text]
+  #?(:cljs
+     (let [matches (re-seq #"\{\{c(\d+)::" (or text ""))]
+       (if (seq matches)
+         (apply max (map #(js/parseInt (second %) 10) matches))
+         0))
+     :clj 0))
+
+(defn validate-cloze [text]
+  #?(:cljs
+     (let [text (or text "")
+           open-count (count (re-seq #"\{\{" text))
+           close-count (count (re-seq #"\}\}" text))
+           nums (set (map #(js/parseInt (second %) 10) (re-seq #"\{\{c(\d+)::" text)))
+           max-n (if (seq nums) (apply max nums) 0)
+           expected (set (range 1 (inc max-n)))]
+       (cond
+         (not= open-count close-count)
+         "Unbalanced braces: {{ and }} counts don't match"
+         (and (pos? max-n) (not= nums expected))
+         (str "Non-sequential cloze numbers: found " (sort nums) ", expected 1 to " max-n)
+         :else nil))
+     :clj nil))
+
+(defn wrap-cloze! [!cloze !ta-ref n]
+  #?(:cljs
+     (when-let [ta @!ta-ref]
+       (let [start (.-selectionStart ta)
+             end (.-selectionEnd ta)
+             text (.-value ta)
+             selected (subs text start end)
+             prefix (str "{{c" n "::")
+             suffix "}}"
+             new-text (str (subs text 0 start) prefix selected suffix (subs text end))
+             cursor-pos (if (= start end)
+                          (+ start (count prefix))
+                          (+ start (count prefix) (count selected) (count suffix)))]
+         (reset! !cloze new-text)
+         (js/setTimeout
+           (fn []
+             (.focus ta)
+             (.setSelectionRange ta cursor-pos cursor-pos))
+           20)))
+     :clj nil))
+
 ;; Export modal
 ;; !show-export: atom bool  topic-id: current topic  root-topic-id: root topic  user-id: int
 (e/defn ExportModal [!show-export topic-id root-topic-id user-id]
@@ -245,6 +290,7 @@
           !question (atom init-q)
           !answer (atom init-a)
           !cloze (atom init-c)
+          !ta-ref (atom nil)
           question (e/watch !question)
           answer (e/watch !answer)
           cloze (e/watch !cloze)
@@ -323,11 +369,28 @@
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !answer ev)))))
             (dom/div
-              (dom/label (dom/text "Cloze:"))
+              (dom/div
+                (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-2)" :margin-bottom "var(--sp-2)"}})
+                (dom/label (dom/text "Cloze:"))
+                (dom/button
+                  (dom/props {:class "btn btn-secondary"
+                              :style {:padding "2px 8px" :font-size "12px" :line-height "1.4"}})
+                  (dom/text "c+")
+                  (dom/On "click"
+                    (fn [_] (wrap-cloze! !cloze !ta-ref (inc (cloze-max-n @!cloze))))
+                    nil))
+                (dom/button
+                  (dom/props {:class "btn btn-secondary"
+                              :style {:padding "2px 8px" :font-size "12px" :line-height "1.4"}})
+                  (dom/text "c=")
+                  (dom/On "click"
+                    (fn [_] (wrap-cloze! !cloze !ta-ref (max 1 (cloze-max-n @!cloze))))
+                    nil)))
               (dom/textarea
                 (dom/props {:dir "auto" :value cloze :rows 4
                             :style {:width "100%" :padding "var(--sp-2)"
                                     :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
+                (reset! !ta-ref dom/node)
                 (let [focus-node dom/node]
                   (js/setTimeout (fn [] (.focus focus-node)) 50))
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
@@ -340,17 +403,23 @@
               (dom/text "Save")
               (let [click-event (dom/On "click" identity nil)
                     [?token ?error] (e/Token click-event)]
+                (when ?error
+                  (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-2)"}})
+                    (dom/text "Error: " ?error)))
                 (when-some [token ?token]
-                  (let [fields (if (= kind "basic")
-                                 {:question question :answer answer}
-                                 {:cloze cloze})
-                        result (e/server (cards/update-card card-id fields))]
-                    (if (:success result)
-                      (do
-                        (e/server (swap! (us/get-atom user-id :card-mutations) inc))
-                        (reset! !editing-card nil)
-                        (token))
-                      (token (:error result)))))))
+                  (let [validation-error (when (= kind "cloze") (validate-cloze cloze))]
+                    (if validation-error
+                      (token validation-error)
+                      (let [fields (if (= kind "basic")
+                                     {:question question :answer answer}
+                                     {:cloze cloze})
+                            result (e/server (cards/update-card card-id fields))]
+                        (if (:success result)
+                          (do
+                            (e/server (swap! (us/get-atom user-id :card-mutations) inc))
+                            (reset! !editing-card nil)
+                            (token))
+                          (token (:error result)))))))))
             (dom/button
               (dom/props {:class "btn btn-secondary"})
               (dom/text "Cancel")
@@ -373,6 +442,7 @@
           !question (atom "")
           !answer (atom "")
           !cloze (atom "")
+          !ta-ref (atom nil)
           question (e/watch !question)
           answer (e/watch !answer)
           cloze (e/watch !cloze)
@@ -467,11 +537,28 @@
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !answer ev)))))
             (dom/div
-              (dom/label (dom/text "Cloze:"))
+              (dom/div
+                (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-2)" :margin-bottom "var(--sp-2)"}})
+                (dom/label (dom/text "Cloze:"))
+                (dom/button
+                  (dom/props {:class "btn btn-secondary"
+                              :style {:padding "2px 8px" :font-size "12px" :line-height "1.4"}})
+                  (dom/text "c+")
+                  (dom/On "click"
+                    (fn [_] (wrap-cloze! !cloze !ta-ref (inc (cloze-max-n @!cloze))))
+                    nil))
+                (dom/button
+                  (dom/props {:class "btn btn-secondary"
+                              :style {:padding "2px 8px" :font-size "12px" :line-height "1.4"}})
+                  (dom/text "c=")
+                  (dom/On "click"
+                    (fn [_] (wrap-cloze! !cloze !ta-ref (max 1 (cloze-max-n @!cloze))))
+                    nil)))
               (dom/textarea
                 (dom/props {:dir "auto" :value cloze :rows 4
                             :style {:width "100%" :padding "var(--sp-2)"
                                     :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
+                (reset! !ta-ref dom/node)
                 (let [focus-node dom/node]
                   (js/setTimeout (fn [] (.focus focus-node)) 50))
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
@@ -488,25 +575,28 @@
                   (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-2)"}})
                     (dom/text "Error: " ?error)))
                 (when-some [token ?token]
-                  (let [card-data (if (= kind "basic")
-                                    [{:q question :a answer}]
-                                    [{:c cloze}])
-                        rows (e/server
-                               (mapv (fn [card]
-                                       (cond-> {:topic_id topic-id
-                                                :root_topic_id root-topic-id
-                                                :kind kind}
-                                         (= kind "basic") (assoc :question (:q card) :answer (:a card))
-                                         (= kind "cloze") (assoc :cloze (:c card))
-                                         source-reference (assoc :source_reference source-reference)))
-                                 card-data))
-                        result (e/server (insert-flashcards-safe! rows))]
-                    (if (:success result)
-                      (do
-                        (e/server (swap! (us/get-atom user-id :card-mutations) inc))
-                        (reset! !show-add false)
-                        (token))
-                      (token (:error result)))))))
+                  (let [validation-error (when (= kind "cloze") (validate-cloze cloze))]
+                    (if validation-error
+                      (token validation-error)
+                      (let [card-data (if (= kind "basic")
+                                        [{:q question :a answer}]
+                                        [{:c cloze}])
+                            rows (e/server
+                                   (mapv (fn [card]
+                                           (cond-> {:topic_id topic-id
+                                                    :root_topic_id root-topic-id
+                                                    :kind kind}
+                                             (= kind "basic") (assoc :question (:q card) :answer (:a card))
+                                             (= kind "cloze") (assoc :cloze (:c card))
+                                             source-reference (assoc :source_reference source-reference)))
+                                     card-data))
+                            result (e/server (insert-flashcards-safe! rows))]
+                        (if (:success result)
+                          (do
+                            (e/server (swap! (us/get-atom user-id :card-mutations) inc))
+                            (reset! !show-add false)
+                            (token))
+                          (token (:error result)))))))))
             (dom/button
               (dom/props {:class "btn btn-secondary"})
               (dom/text "Cancel")
