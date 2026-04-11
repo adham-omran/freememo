@@ -326,26 +326,19 @@ html, body {
     .split-divider-v::before { top: -8px; bottom: -8px; }
 }
 
-/* Card count stepper — hide +/- on desktop, show on touch */
+/* Card count stepper — +/- buttons always visible, native spinner hidden */
 .card-count-btn {
-    display: none !important;
+    display: flex !important;
 }
-@media (pointer: coarse) {
-    .card-count-btn {
-        display: flex !important;
-    }
-    .card-count-input {
-        width: 36px !important;
-        text-align: center;
-        border: none;
-        background: transparent;
-        -moz-appearance: textfield;
-    }
-    .card-count-input::-webkit-inner-spin-button,
-    .card-count-input::-webkit-outer-spin-button {
-        -webkit-appearance: none;
-        margin: 0;
-    }
+.card-count-input {
+    width: 36px;
+    text-align: center;
+    -moz-appearance: textfield;
+}
+.card-count-input::-webkit-inner-spin-button,
+.card-count-input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
 }
 .split-divider-h:hover,
 .split-divider-h:active { background: #90caf9; }
