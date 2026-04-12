@@ -8,6 +8,7 @@
    [freememo.navigation :as nav]
    [freememo.util :as util]
    [freememo.card-components :as card-components]
+   [freememo.pdf-cache :as pdf-cache]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [clojure.string :as str])))
@@ -337,6 +338,7 @@
                               (e/server (db/delete-topic-for-user! user-id topic-to-delete))
                               (e/server (swap! (us/get-atom user-id :refresh) inc))
                               (e/client (card-components/try-delete-anki-notes! note-ids))
+                              (e/client (pdf-cache/cache-delete topic-to-delete))
                               (token)
                               (reset! !show-confirm nil))))))))))))))))
 

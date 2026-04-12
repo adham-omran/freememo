@@ -1,8 +1,9 @@
 (ns freememo.pdf-viewer
   "PDF.js viewer integration utilities."
   (:require
-    [hyperfiddle.electric3 :as e]
-    [hyperfiddle.electric-dom3 :as dom]))
+   [hyperfiddle.electric3 :as e]
+   [hyperfiddle.electric-dom3 :as dom]
+   [freememo.pdf-cache :as pdf-cache]))
 
 ;; Global viewer state (similar to electric-fiddle reference)
 (defonce !viewer-state (atom nil))
@@ -38,19 +39,19 @@
                    anchor (.-anchorNode sel)
                    in-pdf? (when anchor
                              (some? (.closest (if (= 1 (.-nodeType anchor))
-                                               anchor
-                                               (.-parentElement anchor))
-                                     ".pdfViewer")))]
+                                                anchor
+                                                (.-parentElement anchor))
+                                      ".pdfViewer")))]
                (when (and in-pdf? (seq text))
                  (-> (js/navigator.clipboard.writeText text)
-                     (.catch (fn [err] (js/console.warn "Clipboard write failed:" err))))
+                   (.catch (fn [err] (js/console.warn "Clipboard write failed:" err))))
                  true)))]
        ;; Cmd+C / Ctrl+C
        (.addEventListener js/document "keydown"
          (fn [^js e]
            (when (and (or (.-metaKey e) (.-ctrlKey e))
-                      (= "c" (.-key e))
-                      (not (.-defaultPrevented e)))
+                   (= "c" (.-key e))
+                   (not (.-defaultPrevented e)))
              (when (copy-pdf-selection!)
                (.preventDefault e))))
          true)
@@ -79,48 +80,60 @@
          (set! (.-innerHTML viewer-div) "")
          (set! (.-scrollTop container) 0)
 
-         (let [^js pdfjs        (.-pdfjsLib js/window)
-               ^js viewer-ns    (.-pdfjsViewer js/window)
-               ^js event-bus    (new (.-EventBus viewer-ns))
+         (let [^js pdfjs (.-pdfjsLib js/window)
+               ^js viewer-ns (.-pdfjsViewer js/window)
+               ^js event-bus (new (.-EventBus viewer-ns))
                ^js link-service (new (.-PDFLinkService viewer-ns) (clj->js {:eventBus event-bus}))
-               ^js viewer       (new (.-PDFViewer viewer-ns)
-                                     (clj->js {:container container
-                                               :viewer viewer-div
-                                               :eventBus event-bus
-                                               :linkService link-service
-                                               :textLayerMode 2
-                                               :annotationMode 2}))]
+               ^js viewer (new (.-PDFViewer viewer-ns)
+                            (clj->js {:container container
+                                      :viewer viewer-div
+                                      :eventBus event-bus
+                                      :linkService link-service
+                                      :textLayerMode 2
+                                      :annotationMode 2}))]
            (.setViewer link-service viewer)
            (reset! !viewer-state {:viewer viewer
                                   :event-bus event-bus
                                   :link-service link-service})
 
-           ;; Load PDF document
-           (-> (.getDocument pdfjs pdf-url)
-               (.-promise)
-               (.then (fn [^js pdf]
-                        ;; Guard: only proceed if this is still the latest init.
-                        ;; If another init-viewer! ran while we were loading,
-                        ;; our viewer was already destroyed — skip silently.
-                        (if (= my-gen @!init-gen)
-                          (do
-                            (js/console.log "[PDF] document loaded, gen=" my-gen "numPages=" (.-numPages pdf))
-                            (reset! !pdf-doc pdf)
-                            (.setDocument viewer pdf)
-                            (.setDocument link-service pdf nil)
-                            ;; Set page-width zoom after pages are initialized
-                            (.on event-bus "pagesloaded"
+           ;; Load PDF document — cache-first via IndexedDB
+           (let [doc-id (-> pdf-url (.split "/") (.pop) js/parseInt)
+                 use-pdf (fn [^js pdf]
+                           (if (= my-gen @!init-gen)
+                             (do
+                               (js/console.log "[PDF] document loaded, gen=" my-gen "numPages=" (.-numPages pdf))
+                               (reset! !pdf-doc pdf)
+                               (.setDocument viewer pdf)
+                               (.setDocument link-service pdf nil)
+                               (.on event-bus "pagesloaded"
                                  (fn []
                                    (js/console.log "[PDF] pagesloaded: scale=" (.-currentScale viewer)
-                                                   "scrollH=" (.-scrollHeight container)
-                                                   "pages=" (.-pagesCount viewer))
+                                     "scrollH=" (.-scrollHeight container)
+                                     "pages=" (.-pagesCount viewer))
                                    (set! (.-currentScaleValue viewer) "page-width")
                                    (js/console.log "[PDF] after page-width: scale=" (.-currentScale viewer)
-                                                   "scrollH=" (.-scrollHeight container)))
+                                     "scrollH=" (.-scrollHeight container)))
                                  (clj->js {:once true}))
-                            (when on-ready (on-ready pdf viewer)))
-                          (js/console.log "[PDF] SKIPPING stale init, gen=" my-gen "current=" @!init-gen))))
-               (.catch (fn [err] (js/console.error "PDF load error:" err)))))))))
+                               (when on-ready (on-ready pdf viewer)))
+                             (js/console.log "[PDF] SKIPPING stale init, gen=" my-gen "current=" @!init-gen)))]
+             (-> (pdf-cache/cache-get doc-id)
+               (.then (fn [cached]
+                        (if cached
+                          (do (js/console.log "[PDF] cache HIT, doc-id=" doc-id "bytes=" (.-byteLength cached))
+                            (-> (.getDocument pdfjs (clj->js {:data (.slice cached)}))
+                              (.-promise)))
+                          (do (js/console.log "[PDF] cache MISS, fetching doc-id=" doc-id)
+                            (-> (js/fetch pdf-url)
+                              (.then (fn [^js resp]
+                                       (when-not (.-ok resp)
+                                         (throw (js/Error. (str "PDF fetch failed: " (.-status resp)))))
+                                       (.arrayBuffer resp)))
+                              (.then (fn [^js buf]
+                                       (pdf-cache/cache-put doc-id buf)
+                                       (-> (.getDocument pdfjs (clj->js {:data (.slice buf)}))
+                                         (.-promise)))))))))
+               (.then use-pdf)
+               (.catch (fn [err] (js/console.error "PDF load error:" err))))))))))
 
 (defn go-to-page!
   "Navigate to specific page number (1-indexed)."
@@ -167,8 +180,8 @@
      :cljs (when-let [{:keys [event-bus]} @!viewer-state]
              (let [^js eb event-bus]
                (.on eb "pagesloaded"
-                    (fn [] (go-to-page! page-num))
-                    (clj->js {:once true}))))))
+                 (fn [] (go-to-page! page-num))
+                 (clj->js {:once true}))))))
 
 (defn on-page-change!
   "Register a callback for PDF.js page change events."
@@ -177,7 +190,7 @@
      :cljs (when-let [{:keys [event-bus]} @!viewer-state]
              (let [^js eb event-bus]
                (.on eb "pagechanging"
-                    (fn [^js e] (callback (.-pageNumber e))))))))
+                 (fn [^js e] (callback (.-pageNumber e))))))))
 
 (defn setup-pinch-zoom!
   "Enable pinch-to-zoom on the PDF viewer container for touch devices."
