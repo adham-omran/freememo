@@ -48,36 +48,35 @@
         ;; Separator
         (dom/span (dom/props {:class "toolbar-sep"}) (dom/text "|"))
 
-        ;; Card type group
+        ;; Card type group — uses non-focusable spans to avoid stealing
+        ;; focus from Quill editor (preserves text selection)
         (dom/div
           (dom/props {:class "toolbar-settings-row"})
-          (dom/label
-            (dom/props {:style {:display "flex" :align-items "center" :gap "4px"}
-                        :title "Traditional question-answer flashcards"})
-            (dom/input
-              (dom/props {:type "radio" :name radio-name :value "basic"
-                          :checked (= card-type "basic")})
-              (let [change-event (dom/On "change" (fn [_] "basic") nil)
-                    [?token ?error] (e/Token change-event)]
-                (when (some? change-event)
-                  (reset! !card-type change-event))
-                (when-some [token ?token]
-                  (e/server (settings/save-card-type user-id "basic"))
-                  (token))))
+          (dom/span
+            (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :cursor "pointer"}
+                        :data-tooltip "Traditional question-answer flashcards"})
+            (dom/On "mousedown" (fn [e] (.preventDefault e)) nil)
+            (dom/span
+              (dom/props {:class (str "radio-dot" (when (= card-type "basic") " radio-dot--checked"))})
+              (dom/text (if (= card-type "basic") "\u25C9" "\u25CB")))
+            (e/for [[t e] (dom/On-all "click")]
+              (when e
+                (reset! !card-type "basic")
+                (e/server (settings/save-card-type user-id "basic")))
+              (t))
             (dom/text "Basic"))
-          (dom/label
-            (dom/props {:style {:display "flex" :align-items "center" :gap "4px"}
-                        :title "Fill-in-the-blank deletion cards (e.g., 'Paris is the capital of [...]')"})
-            (dom/input
-              (dom/props {:type "radio" :name radio-name :value "cloze"
-                          :checked (= card-type "cloze")})
-              (let [change-event (dom/On "change" (fn [_] "cloze") nil)
-                    [?token ?error] (e/Token change-event)]
-                (when (some? change-event)
-                  (reset! !card-type change-event))
-                (when-some [token ?token]
-                  (e/server (settings/save-card-type user-id "cloze"))
-                  (token))))
+          (dom/span
+            (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :cursor "pointer"}
+                        :data-tooltip "Fill-in-the-blank deletion cards (e.g., 'Paris is the capital of [...]')"})
+            (dom/On "mousedown" (fn [e] (.preventDefault e)) nil)
+            (dom/span
+              (dom/props {:class (str "radio-dot" (when (= card-type "cloze") " radio-dot--checked"))})
+              (dom/text (if (= card-type "cloze") "\u25C9" "\u25CB")))
+            (e/for [[t e] (dom/On-all "click")]
+              (when e
+                (reset! !card-type "cloze")
+                (e/server (settings/save-card-type user-id "cloze")))
+              (t))
             (dom/text "Cloze")))
 
         ;; Separator
