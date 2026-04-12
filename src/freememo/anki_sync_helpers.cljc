@@ -178,13 +178,9 @@
      [cards settings]
      (let [new-cards (vec (filter #(nil? (:flashcards/anki_note_id %)) cards))
            ;; Only update existing cards whose content changed since last push
-           changed-cards (vec (filter (fn [c]
-                                        (and (some? (:flashcards/anki_note_id c))
-                                          (or (nil? (:flashcards/anki_synced_at c))
-                                            (and (some? (:flashcards/updated_at c))
-                                              (pos? (compare (str (:flashcards/updated_at c))
-                                                      (str (:flashcards/anki_synced_at c))))))))
-                                cards))]
+           ;; :needs-update? is pre-computed on the server (JVM) where timestamp
+           ;; comparison is reliable — JS Date toString is not chronologically sortable
+           changed-cards (vec (filter :needs-update? cards))]
        (m/sp
          (let [;; Phase 1: add new cards (sequential, concurrency 1)
                add-result

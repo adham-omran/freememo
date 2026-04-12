@@ -63,9 +63,8 @@
           question (e/server (:flashcards/question card))
           answer (e/server (:flashcards/answer card))
           cloze (e/server (:flashcards/cloze card))
-          synced-at (e/server (:flashcards/anki_synced_at card))
-          updated-at (e/server (:flashcards/updated_at card))
-          sync-st (sync-state synced-at updated-at)]
+          sync-st (e/server (sync-state (:flashcards/anki_synced_at card)
+                              (:flashcards/updated_at card)))]
       (dom/tr
         (dom/props {:style {:--order order :cursor "pointer"}})
         (dom/On "click" (fn [_]
