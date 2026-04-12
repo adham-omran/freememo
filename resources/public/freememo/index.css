@@ -270,6 +270,8 @@ html, body {
     font-size: 13px;
 }
 .toolbar-sep { color: var(--color-border); }
+.radio-dot { font-size: 14px; color: var(--color-text-hint); user-select: none; line-height: 1; }
+.radio-dot--checked { color: var(--color-primary); }
 .toolbar-generate-group { margin-left: auto; }
 
 .header-bar {
