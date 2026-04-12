@@ -65,44 +65,47 @@
           cloze (e/server (:flashcards/cloze card))
           sync-st (e/server (sync-state (:flashcards/anki_synced_at card)
                               (:flashcards/updated_at card)))]
-      (dom/tr
-        (dom/props {:style {:--order order :cursor "pointer"}})
-        (dom/On "click" (fn [_]
-                          (let [data {:id id :kind kind :question question :answer answer :cloze cloze}]
-                            (log/log-debug (str "Edit card clicked id=" id " kind=" kind))
-                            (reset! !editing-card data))) nil)
-        ;; Sync indicator
-        (dom/td
-          (dom/props {:style {:padding "6px 4px" :width "24px" :text-align "center"
-                              :border-bottom "1px solid var(--color-border)" :font-size "10px"}
-                      :title (case sync-st
-                               :unsynced "Not synced to Anki"
-                               :synced (str "Synced to Anki")
-                               :modified "Modified since last sync")})
-          (dom/text (case sync-st
-                      :unsynced "\u25CB"
-                      :synced "\u25CF"
-                      :modified "\u25CF"))
-          (dom/props {:style {:color (case sync-st
-                                       :unsynced "var(--color-warning)"
-                                       :synced "var(--color-success)"
-                                       :modified "var(--color-warning)")}}))
-        ;; Front column
-        (let [front-text (if (= kind "basic") question cloze)]
+      (let [cloze? (= kind "cloze")]
+        (dom/tr
+          (dom/props {:style {:--order order :cursor "pointer"}})
+          (dom/On "click" (fn [_]
+                            (let [data {:id id :kind kind :question question :answer answer :cloze cloze}]
+                              (log/log-debug (str "Edit card clicked id=" id " kind=" kind))
+                              (reset! !editing-card data))) nil)
+          ;; Sync indicator
           (dom/td
-            (dom/props {:dir "auto"
-                        :style {:padding-block "6px" :padding-inline "8px"
-                                :border-bottom "1px solid var(--color-border)"}})
-            (dom/text front-text)))
-        ;; Back column
-        (let [back-text (if (= kind "basic") (or answer "") "")]
+            (dom/props {:style {:padding "6px 4px" :text-align "center"
+                                :border-bottom "1px solid var(--color-border)" :font-size "10px"}
+                        :title (case sync-st
+                                 :unsynced "Not synced to Anki"
+                                 :synced (str "Synced to Anki")
+                                 :modified "Modified since last sync")})
+            (dom/text (case sync-st
+                        :unsynced "\u25CB"
+                        :synced "\u25CF"
+                        :modified "\u25CF"))
+            (dom/props {:style {:color (case sync-st
+                                         :unsynced "var(--color-warning)"
+                                         :synced "var(--color-success)"
+                                         :modified "var(--color-warning)")}}))
+          ;; Front column — cloze spans both content columns via CSS Grid
+          (let [front-text (if cloze? cloze question)]
+            (dom/td
+              (dom/props {:dir "auto"
+                          :style (merge {:padding-block "6px" :padding-inline "8px"
+                                         :border-bottom "1px solid var(--color-border)"}
+                                   (when cloze? {:grid-column "span 2"}))})
+              (dom/text front-text)))
+          ;; Back column — hidden for cloze (front cell spans both)
+          (let [back-text (if cloze? "" (or answer ""))]
+            (dom/td
+              (dom/props {:dir "auto"
+                          :style (merge {:padding-block "6px" :padding-inline "8px"
+                                         :border-bottom "1px solid var(--color-border)"}
+                                   (when cloze? {:display "none"}))})
+              (dom/text back-text)))
+          ;; Delete column
           (dom/td
-            (dom/props {:dir "auto"
-                        :style {:padding-block "6px" :padding-inline "8px"
+            (dom/props {:style {:padding "6px 4px" :text-align "center"
                                 :border-bottom "1px solid var(--color-border)"}})
-            (dom/text back-text)))
-        ;; Delete column
-        (dom/td
-          (dom/props {:style {:padding "6px 4px" :width "40px" :text-align "center"
-                              :border-bottom "1px solid var(--color-border)"}})
-          (DeleteCardButton id user-id))))))
+            (DeleteCardButton id user-id)))))))
