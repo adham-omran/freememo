@@ -74,10 +74,10 @@
 
 (defn get-card-count [user-id]
   (try
-    (Integer/parseInt (or (db/get-setting user-id CARD_COUNT) "5"))
+    (Integer/parseInt (or (db/get-setting user-id CARD_COUNT) "2"))
     (catch Exception e
       (tel/error! {:id ::get-card-count} e)
-      5)))
+      2)))
 
 (defn get-reasoning [user-id]
   (or (db/get-setting user-id REASONING) "low"))
@@ -87,17 +87,17 @@
 
 (defn get-context-enabled [user-id]
   (try
-    (= "true" (db/get-setting user-id CONTEXT_ENABLED))
+    (= "true" (or (db/get-setting user-id CONTEXT_ENABLED) "true"))
     (catch Exception e
       (tel/error! {:id ::get-context-enabled} e)
-      false)))
+      true)))
 
 (defn get-context-pages [user-id]
   (try
-    (Integer/parseInt (or (db/get-setting user-id CONTEXT_PAGES) "3"))
+    (Integer/parseInt (or (db/get-setting user-id CONTEXT_PAGES) "1"))
     (catch Exception e
       (tel/error! {:id ::get-context-pages} e)
-      3)))
+      1)))
 
 (defn get-active-tab [user-id]
   (try
