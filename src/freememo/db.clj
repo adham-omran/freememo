@@ -1064,7 +1064,8 @@
       ) ds ON true
       LEFT JOIN LATERAL (
         SELECT COUNT(*)                                            AS total_cards,
-               COUNT(*) FILTER (WHERE f.anki_synced_at IS NOT NULL) AS synced_cards
+               COUNT(*) FILTER (WHERE f.anki_synced_at IS NOT NULL
+                                      AND (f.updated_at IS NULL OR f.updated_at <= f.anki_synced_at)) AS synced_cards
         FROM flashcards f
         WHERE f.root_topic_id = t.id
       ) cs ON true

@@ -43,7 +43,17 @@
   (try
     (let [cards (if topic-id
                   (db/get-flashcards topic-id)
-                  (db/get-all-flashcards root-topic-id))]
+                  (db/get-all-flashcards root-topic-id))
+          cards (mapv (fn [c]
+                        (let [synced (:flashcards/anki_synced_at c)
+                              updated (:flashcards/updated_at c)]
+                          (assoc c :needs-update?
+                            (and (some? (:flashcards/anki_note_id c))
+                              (or (nil? synced)
+                                (and (some? updated)
+                                  (pos? (compare (str updated)
+                                          (str synced)))))))))
+                  cards)]
       {:success true :cards cards})
     (catch Exception e
       (tel/error! {:id ::get-cards-for-sync} e)
