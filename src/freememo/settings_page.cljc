@@ -28,7 +28,29 @@
               (dom/props {:type "submit"
                           :class "btn btn-danger"
                           :style {:padding "6px 14px" :font-size "13px"}})
-              (dom/text "Logout")))))
+              (dom/text "Logout"))))
+
+        ;; Email updates toggle
+        (let [server-email-updates (e/server (settings/get-email-updates user-id))
+              !email-updates (atom server-email-updates)
+              email-updates (e/watch !email-updates)]
+          (dom/div
+            (dom/props {:class "field" :style {:margin-top "12px"}})
+            (dom/label
+              (dom/props {:style {:display "flex" :align-items "center" :gap "10px" :cursor "pointer"}})
+              (dom/input
+                (dom/props {:type "checkbox" :checked email-updates
+                            :style {:width "18px" :height "18px" :accent-color "var(--color-primary)"}})
+                (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
+                      [?token ?error] (e/Token change-event)]
+                  (when (some? change-event)
+                    (reset! !email-updates change-event))
+                  (when-some [token ?token]
+                    (e/server (settings/save-email-updates user-id change-event))
+                    (token))))
+              (dom/span
+                (dom/props {:style {:font-size "14px" :font-weight "500" :color "var(--color-text-primary)"}})
+                (dom/text "Subscribe to email updates"))))))
 
       ;; ── AI Features section ──
       (let [server-llm-enabled (e/server (settings/get-llm-enabled user-id))

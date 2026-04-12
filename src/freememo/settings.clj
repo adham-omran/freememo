@@ -45,7 +45,19 @@
 (def SCAN_DPI "scan_dpi")
 (def PROMPT_SYSTEM "prompt_system")
 (def PROMPT_OCR "prompt_ocr")
+(def EMAIL_UPDATES "email_updates")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
+
+(defn get-email-updates [user-id]
+  (= "true" (db/get-setting user-id EMAIL_UPDATES)))
+
+(defn save-email-updates [user-id value]
+  (try
+    (db/set-setting user-id EMAIL_UPDATES (str (boolean value)))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-email-updates} e)
+      {:success false :error "Failed to save email updates preference"})))
 
 ;; OpenAI key helpers
 (defn- get-user-openai-api-key [user-id enc-key]
