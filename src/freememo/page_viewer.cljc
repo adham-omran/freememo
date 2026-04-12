@@ -66,24 +66,21 @@
 #?(:clj (defn get-page-done-status* [_refresh parent-id page-number]
           (db/get-page-done-status parent-id page-number)))
 
-;; Page completion stats for a document
-#?(:clj (defn get-page-stats* [_refresh parent-id]
-          (let [pages (db/list-pages parent-id)
-                remaining (sort (map :topics/page_number
-                                  (remove #(= "done" (:topics/status %)) pages)))]
-            {:done (- (count pages) (count remaining))
-             :total (count pages)
-             :remaining remaining})))
+;; Combined page info: stats + current page topic ID from a single list-pages query
+#?(:clj (defn get-page-info* [_refresh _meta-refresh parent-id page-number]
+          (when (and parent-id page-number)
+            (let [pages (db/list-pages parent-id)
+                  remaining (sort (map :topics/page_number
+                                    (remove #(= "done" (:topics/status %)) pages)))
+                  current-page (first (filter #(= (:topics/page_number %) page-number) pages))]
+              {:topic-id (:topics/id current-page)
+               :done (- (count pages) (count remaining))
+               :total (count pages)
+               :remaining remaining}))))
 
 ;; Query wrapper for topic source reference
 #?(:clj (defn get-topic-source* [_refresh topic-id]
           (db/get-topic-source topic-id)))
-
-;; Resolve page topic ID from (parent-id, page-number) — needed for card operations
-#?(:clj (defn get-page-topic-id* [_refresh parent-id page-number]
-          (when (and parent-id page-number)
-            (let [pages (db/list-pages parent-id)]
-              (:topics/id (first (filter #(= (:topics/page_number %) page-number) pages)))))))
 
 
 
@@ -124,9 +121,10 @@
             ;; Holds page override for when we jump from Queue; set once, used as initial-page
             !nav-page (atom nil)
             !nav-specified (atom false)
-            page-stats (e/server
-                         (when selected-doc
-                           (get-page-stats* meta-refresh selected-doc)))]
+            ;; page-info fetched later (needs current-pdf-page), but stats shown in header
+            ;; use a forward reference via atom bridged from inner let
+            !page-info (atom nil)
+            page-info (e/watch !page-info)]
 
         ;; Handle navigation from Queue tab — only consume after doc-name resolves
         (when-some [{:keys [topic-id page]} nav-target]
@@ -154,10 +152,10 @@
               (dom/div
                 (dom/props {:style {:flex "1" :position "relative"}})
                 (Typeahead !selected-name filenames "Search documents..." !doc-commit nil))
-              (when (and selected-doc page-stats)
+              (when (and selected-doc page-info)
                 (dom/span
                   (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)" :white-space "nowrap" :margin-right "var(--sp-2)"}})
-                  (dom/text (:done page-stats) " / " (:total page-stats) " pages done")))))
+                  (dom/text (:done page-info) " / " (:total page-info) " pages done")))))
 
           ;; No documents
           :else
@@ -187,8 +185,11 @@
                 ;; Bridge current-pdf-page via atom so it's available at outer scope
                 !current-page (atom 1)
                 current-pdf-page (e/watch !current-page)
-                ;; Resolve page topic ID for card operations
-                page-topic-id (e/server (get-page-topic-id* refresh selected-doc current-pdf-page))
+                ;; Combined page info: topic-id + stats from one list-pages query
+                server-page-info (e/server (get-page-info* refresh meta-refresh selected-doc current-pdf-page))
+                ;; Bridge to outer scope for header stats display
+                page-info-bridged (do (reset! !page-info server-page-info) server-page-info)
+                page-topic-id (:topic-id page-info-bridged)
                 _ (log/log-debug (str "page-topic-id=" page-topic-id " for page=" current-pdf-page))
                 ;; User settings
                 scan-dpi (e/server (settings/get-scan-dpi user-id))
@@ -215,9 +216,9 @@
                                        {:success false :error (.getMessage e)})))))
                 _ (when (:success save-result)
                     (reset! !last-saved-ocr (:html dirty-data)))
-                text-result (e/server (get-page-text* refresh selected-doc current-pdf-page))
+                text-result (e/server (e/Offload #(get-page-text* refresh selected-doc current-pdf-page)))
                 _ (log/log-debug (str "text-result success=" (:success text-result) " page=" current-pdf-page " html-len=" (count (:text text-result))))
-                page-text (e/server (when (:success text-result) (:text text-result)))
+                page-text (when (:success text-result) (:text text-result))
                 is-done (e/server (get-page-done-status* meta-refresh selected-doc current-pdf-page))]
 
             ;; Save last page when user navigates
@@ -253,7 +254,7 @@
                                                :initial-page initial-page
                                                :on-navigate! (fn [p] (reset! !page-to-save p))
                                                :doc-title (get id-to-name selected-doc)
-                                               :page-stats page-stats
+                                               :page-stats server-page-info
                                                :layout layout
                                                :on-layout-toggle! (fn []
                                                                     (let [new-l (if (= @!layout "left-right") "top-bottom" "left-right")]
@@ -409,17 +410,18 @@
                             (dom/text current-source)
                             (dom/On "click" (fn [_] (reset! !editing-source true)) nil)))))
 
-                    ;; Editor area
+                    ;; Editor area — text-result is nil while e/Offload is in flight
                     (dom/div
                       (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                      (if (:success text-result)
-                        (dom/div
-                          (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-                          (RichTextEditorComponent {:initial-html (:text text-result)
-                                                    :topic-id page-topic-id}))
-                        (dom/p
-                          (dom/props {:style {:color "var(--color-text-hint)"}})
-                          (dom/text "No text scanned yet. Click 'Scan Page' to process this page.")))))))
+                      (when (some? text-result)
+                        (if (:success text-result)
+                          (dom/div
+                            (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
+                            (RichTextEditorComponent {:initial-html (:text text-result)
+                                                      :topic-id page-topic-id}))
+                          (dom/p
+                            (dom/props {:style {:color "var(--color-text-hint)"}})
+                            (dom/text "No text scanned yet. Click 'Scan Page' to process this page."))))))))
 
               ;; Vertical drag handle (full width)
               (dom/div
