@@ -138,13 +138,13 @@ html, body {
 
 /* Delete X button */
 .btn-delete-x {
-    padding: 2px 6px;
+    padding: 6px 10px;
     background: var(--color-danger);
     color: white;
     border: none;
     border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: 12px;
+    font-size: 15px;
     line-height: 1;
     transition: background 150ms ease;
 }
