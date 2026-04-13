@@ -88,6 +88,7 @@ Focus on the most important knowledge first. Not everything needs to be learned.
 - If the source text is in English, create cards in English
 - If the source text is in another language, create cards in that language
 - Basic cards MUST be questions ending with ?
+- Basic cards: Use What/How/When/Where/Who/Why questions
+- Cloze cards MUST be statements, never questions. Do not use question marks in cloze cards.
 - Cloze cards MUST have {{cN::text}} syntax
-- Clozec cards: The value for N restarts at 1 for each question
-- Use What/How/When/Where/Who/Why questions
+- Cloze cards: The value for N restarts at 1 for each card
