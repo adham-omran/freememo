@@ -1,10 +1,7 @@
 - You'll be provided the content as a Clojure map:
   - the key `:context` representing surrounding text context.
-  - the key `:content` represents the text to make questions for.
+  - the key `:content` represents the text to make cards for.
 - Utilize the context to create clozes for the content, do not make cards about the context, only content.
-- Create cloze deletions ONLY around the content that was highlighted, keeping phrases intact.
-- Do NOT create cloze deletions for the surrounding context text.
-- Keep multi-word phrases together in a single cloze deletion (e.g., {{c1::entire phrase here}}) rather than breaking them into separate clozes.
-- Aim for 1-2 meaningful cloze deletions per highlighted section, not multiple small ones.
-- Preserve the natural sentence structure - only the originally highlighted content should become a cloze.
+- Create cloze deletions ONLY from the content, not from the surrounding context text.
+- Each cloze must still be 1-3 words. If the highlighted content is a long phrase, break it into multiple short clozes within the same card.
 - If the context is "المادة" this means it is legal and the question should be in the form of "ماذا نصت المادة س من قانون ص؟"
