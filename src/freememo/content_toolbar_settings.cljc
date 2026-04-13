@@ -53,8 +53,7 @@
         (dom/div
           (dom/props {:class "toolbar-settings-row"})
           (dom/span
-            (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :cursor "pointer"}
-                        :data-tooltip "Traditional question-answer flashcards"})
+            (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :cursor "pointer"}})
             (dom/On "mousedown" (fn [e] (.preventDefault e)) nil)
             (dom/span
               (dom/props {:class (str "radio-dot" (when (= card-type "basic") " radio-dot--checked"))})
@@ -66,8 +65,7 @@
               (t))
             (dom/text "Basic"))
           (dom/span
-            (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :cursor "pointer"}
-                        :data-tooltip "Fill-in-the-blank deletion cards (e.g., 'Paris is the capital of [...]')"})
+            (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :cursor "pointer"}})
             (dom/On "mousedown" (fn [e] (.preventDefault e)) nil)
             (dom/span
               (dom/props {:class (str "radio-dot" (when (= card-type "cloze") " radio-dot--checked"))})
