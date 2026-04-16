@@ -381,6 +381,7 @@ html, body {
     overflow: visible;
 }
 .tape-scroll table tr:hover td { background: #f5f7fa; }
+table.card-table tr:hover td { background: #f3f4f6; }
 
 /* ── Tree View ───────────────────────────────────────────────── */
 .tree-title:hover { text-decoration: underline; }
@@ -696,6 +697,7 @@ textarea:hover {
 
     /* Virtual scroll table hover */
     .tape-scroll table tr:hover td { background: #263040; }
+    table.card-table tr:hover td { background: #2a3548; }
 
     /* Badges — keep readable */
     .badge-success { background: #166534; color: #bbf7d0; }
