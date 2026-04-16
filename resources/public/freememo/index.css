@@ -2,69 +2,73 @@
 
 /* ── Design Tokens ─────────────────────────────────────────────── */
 :root {
-    --color-primary: #2563eb;
-    --color-primary-hover: #1d4ed8;
-    --color-primary-light: #93c5fd;
-    --color-danger: #dc3545;
-    --color-danger-hover: #c82333;
+    color-scheme: light dark;
+
+    --color-primary: light-dark(#2563eb, #3b82f6);
+    --color-primary-hover: light-dark(#1d4ed8, #2563eb);
+    --color-primary-light: light-dark(#93c5fd, #1e40af);
+    --color-danger: light-dark(#dc3545, #ef4444);
+    --color-danger-hover: light-dark(#c82333, #dc2626);
     --color-success: #22c55e;
     --color-warning: #f59e0b;
 
-    --color-text-primary: #111;
-    --color-text-secondary: #666;
-    --color-text-hint: #9ca3af;
-    --color-text-label: #374151;
+    --color-text-primary: light-dark(#111, #e5e7eb);
+    --color-text-secondary: light-dark(#666, #9ca3af);
+    --color-text-hint: light-dark(#9ca3af, #6b7280);
+    --color-text-label: light-dark(#374151, #d1d5db);
 
-    --color-border: #e0e0e0;
-    --color-border-light: #ddd;
-    --color-bg-page: #f8fafc;
-    --color-bg-card: #fff;
-    --color-bg-subtle: #f9fafb;
-    --color-bg-input: #fff;
-    --color-bg-hover: #f3f4f6;
-    --color-bg-toolbar: #f5f5f5;
-    --color-text-disabled: #999;
+    --color-border: light-dark(#e0e0e0, #374151);
+    --color-border-light: light-dark(#ddd, #374151);
+    --color-bg-page: light-dark(#f8fafc, #111827);
+    --color-bg-card: light-dark(#fff, #1f2937);
+    --color-bg-subtle: light-dark(#f9fafb, #1a2332);
+    --color-bg-input: light-dark(#fff, #1f2937);
+    --color-bg-hover: light-dark(#f3f4f6, #263040);
+    --color-bg-toolbar: light-dark(#f5f5f5, #1f2937);
+    --color-text-disabled: light-dark(#999, #6b7280);
 
     /* Status: success */
-    --color-success-dark: #16a34a;
-    --color-success-light: #dcfce7;
-    --color-success-lighter: #86efac;
+    --color-success-dark: light-dark(#16a34a, #4ade80);
+    --color-success-light: light-dark(#dcfce7, #14532d);
+    --color-success-lighter: light-dark(#86efac, #22c55e);
 
     /* Status: danger */
-    --color-danger-light: #fecaca;
-    --color-danger-dark: #991b1b;
-    --color-danger-bg: #fef2f2;
+    --color-danger-light: light-dark(#fecaca, #7f1d1d);
+    --color-danger-dark: light-dark(#991b1b, #fca5a5);
+    --color-danger-bg: light-dark(#fef2f2, #451a1a);
 
     /* Status: warning */
-    --color-warning-light: #fde68a;
-    --color-warning-dark: #92400e;
-    --color-warning-bg: #fffbeb;
+    --color-warning-light: light-dark(#fde68a, #78350f);
+    --color-warning-dark: light-dark(#92400e, #fbbf24);
+    --color-warning-bg: light-dark(#fffbeb, #451a03);
 
     /* Badges */
-    --color-badge-pdf: #dcfce7;
-    --color-badge-web: #e0f2fe;
-    --color-badge-epub: #f3e8ff;
+    --color-badge-pdf: light-dark(#dcfce7, #14532d);
+    --color-badge-web: light-dark(#e0f2fe, #0c4a6e);
+    --color-badge-epub: light-dark(#f3e8ff, #3b0764);
 
     /* Interactive */
-    --color-highlight: #d0e8ff;
-    --color-highlight-gold: #FBBF24;
-    --color-highlight-extract: #44C2FF;
-    --color-divider-active: #90caf9;
-    --color-disabled-bg: #94a3b8;
+    --color-highlight: light-dark(#d0e8ff, #1e3a5f);
+    --color-highlight-gold: light-dark(#FBBF24, #f59e0b);
+    --color-highlight-extract: light-dark(#44C2FF, #0891b2);
+    --color-divider-active: light-dark(#90caf9, #2563eb);
+    --color-disabled-bg: light-dark(#94a3b8, #4b5563);
 
     /* Info */
-    --color-info-bg: #f0f4ff;
-    --color-info-bg-light: #eff6ff;
+    --color-info-bg: light-dark(#f0f4ff, #1e293b);
+    --color-info-bg-light: light-dark(#eff6ff, #172554);
 
-    /* Login hero */
-    --color-login-hero-bg: linear-gradient(135deg, #f0f4ff 0%, #e8eeff 100%);
+    /* Login hero — gradient in light, solid in dark via same-color stops */
+    --color-login-hero-stop-1: light-dark(#f0f4ff, #1a2744);
+    --color-login-hero-stop-2: light-dark(#e8eeff, #1a2744);
+    --color-login-hero-bg: linear-gradient(135deg, var(--color-login-hero-stop-1) 0%, var(--color-login-hero-stop-2) 100%);
 
     /* PDF viewer */
-    --color-pdf-bg: #525659;
+    --color-pdf-bg: light-dark(#525659, #1a1a1a);
 
     /* Tooltip */
-    --color-tooltip-bg: hsla(0, 0%, 20%, 0.85);
-    --color-tooltip-text: #fff;
+    --color-tooltip-bg: light-dark(hsla(0, 0%, 20%, 0.85), hsla(0, 0%, 80%, 0.9));
+    --color-tooltip-text: light-dark(#fff, #111);
 
     --radius-sm: 4px;
     --radius-md: 6px;
@@ -79,10 +83,14 @@
     --sp-6: 24px;
     --sp-8: 32px;
 
-    --shadow-card: 0 1px 3px rgba(0,0,0,0.08);
-    --shadow-modal: 0 8px 30px rgba(0,0,0,0.12);
-    --backdrop-color: rgba(0,0,0,0.4);
+    --shadow-card: 0 1px 3px light-dark(rgba(0,0,0,0.08), rgba(0,0,0,0.3));
+    --shadow-modal: 0 8px 30px light-dark(rgba(0,0,0,0.12), rgba(0,0,0,0.5));
+    --backdrop-color: light-dark(rgba(0,0,0,0.4), rgba(0,0,0,0.6));
 }
+
+/* Explicit user override — beats OS preference */
+[data-theme="light"] { color-scheme: light; }
+[data-theme="dark"]  { color-scheme: dark;  }
 
 /* ── Reset ─────────────────────────────────────────────────────── */
 * { box-sizing: border-box; }
@@ -121,14 +129,14 @@ html, body {
     color: var(--color-text-label);
     border: 1px solid var(--color-border);
 }
-.btn-secondary:not(:disabled):hover { background: #f5f5f5; }
+.btn-secondary:not(:disabled):hover { background: light-dark(#f5f5f5, #374151); }
 
 .btn-danger {
     background: var(--color-bg-card);
     color: var(--color-danger);
     border: 1px solid var(--color-danger);
 }
-.btn-danger:not(:disabled):hover { background: #fef2f2; }
+.btn-danger:not(:disabled):hover { background: light-dark(#fef2f2, #35181a); }
 
 .btn-danger-fill { background: var(--color-danger); color: white; }
 .btn-danger-fill:not(:disabled):hover { background: var(--color-danger-hover); }
@@ -188,7 +196,7 @@ html, body {
     box-sizing: border-box;
     transition: border-color 150ms ease;
 }
-.input:hover { border-color: #999; }
+.input:hover { border-color: light-dark(#999, #6b7280); }
 .input:focus { border-color: var(--color-primary); }
 
 .input-full { width: 100%; }
@@ -203,7 +211,7 @@ html, body {
     min-width: 160px;
     transition: border-color 150ms ease;
 }
-.select:hover { border-color: #999; }
+.select:hover { border-color: light-dark(#999, #6b7280); }
 
 /* ── Labels / Hints ────────────────────────────────────────────── */
 .label {
@@ -233,7 +241,7 @@ html, body {
 }
 
 .modal-content {
-    background: white;
+    background: var(--color-bg-card);
     border-radius: var(--radius-lg);
     padding: var(--sp-6);
     box-shadow: var(--shadow-modal);
@@ -291,9 +299,9 @@ html, body {
     font-size: 12px;
     font-weight: 500;
 }
-.badge-success { background: #dcfce7; color: #166534; }
-.badge-warning { background: #fef9c3; color: #854d0e; }
-.badge-error   { background: #fee2e2; color: #991b1b; }
+.badge-success { background: light-dark(#dcfce7, #166534); color: light-dark(#166534, #bbf7d0); }
+.badge-warning { background: light-dark(#fef9c3, #854d0e); color: light-dark(#854d0e, #fef08a); }
+.badge-error   { background: light-dark(#fee2e2, #991b1b); color: light-dark(#991b1b, #fecaca); }
 
 .type-badge {
     padding: 1px 6px;
@@ -343,7 +351,7 @@ html, body {
     margin: 0;
 }
 .split-divider-h:hover,
-.split-divider-h:active { background: #90caf9; }
+.split-divider-h:active { background: light-dark(#90caf9, #2563eb); }
 
 .split-divider-v {
     height: 6px;
@@ -363,7 +371,7 @@ html, body {
     top: -2px; bottom: -2px;
 }
 .split-divider-v:hover,
-.split-divider-v:active { background: #90caf9; }
+.split-divider-v:active { background: light-dark(#90caf9, #2563eb); }
 
 /* ── Virtual Scroll ────────────────────────────────────────────── */
 .tape-scroll table {
@@ -380,8 +388,8 @@ html, body {
 .tape-scroll table td:has([data-tooltip]:hover) {
     overflow: visible;
 }
-.tape-scroll table tr:hover td { background: #f5f7fa; }
-table.card-table tr:hover td { background: #f3f4f6; }
+.tape-scroll table tr:hover td { background: light-dark(#f5f7fa, #263040); }
+table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
 
 /* ── Tree View ───────────────────────────────────────────────── */
 .tree-title:hover { text-decoration: underline; }
@@ -422,7 +430,7 @@ table.card-table tr:hover td { background: #f3f4f6; }
     align-items: center;
     justify-content: center;
     width: 16px; height: 16px;
-    border: 1px solid #ccc;
+    border: 1px solid light-dark(#ccc, #4b5563);
     border-radius: 50%;
     font-size: 11px;
     color: var(--color-text-secondary);
@@ -432,8 +440,8 @@ table.card-table tr:hover td { background: #f3f4f6; }
     transition: all 0.2s;
 }
 .help-icon:hover {
-    background: #f0f0f0;
-    border-color: #999;
+    background: light-dark(#f0f0f0, #374151);
+    border-color: light-dark(#999, #6b7280);
     color: var(--color-text-primary);
 }
 
@@ -446,7 +454,7 @@ input[type="password"]:not(.input):hover,
 input[type="number"]:not(.input):hover,
 select:not(.select):hover,
 textarea:hover {
-    border-color: #999;
+    border-color: light-dark(#999, #6b7280);
 }
 
 /* ── Tablet (≤1024px) ────────────────────────────────────────── */
@@ -586,12 +594,21 @@ textarea:hover {
     min-height: 100px;
     font-size: 16px;
     line-height: 1.6;
+    background: var(--color-bg-card);
+    color: var(--color-text-primary);
 }
 .ql-toolbar {
     flex-shrink: 0;
     background: var(--color-bg-subtle);
     border-bottom: 2px solid var(--color-border);
+    border-color: var(--color-border) !important;
 }
+.ql-toolbar .ql-stroke { stroke: var(--color-text-secondary) !important; }
+.ql-toolbar .ql-fill { fill: var(--color-text-secondary) !important; }
+.ql-toolbar .ql-picker-label { color: var(--color-text-secondary) !important; }
+.ql-container.ql-snow { border-color: var(--color-border) !important; }
+.ql-toolbar.ql-snow { border-color: var(--color-border) !important; }
+.ql-editor.ql-blank::before { color: var(--color-text-hint) !important; }
 .ql-editor[dir="rtl"] {
     text-align: right;
 }
@@ -610,126 +627,6 @@ textarea:hover {
 .ql-snow .ql-tooltip .ql-import.importing {
     pointer-events: none;
     opacity: 0.6;
-}
-
-/* ── Dark Mode (system preference) ───────────────────────────── */
-@media (prefers-color-scheme: dark) {
-    :root {
-        --color-primary: #3b82f6;
-        --color-primary-hover: #2563eb;
-        --color-primary-light: #1e40af;
-        --color-danger: #ef4444;
-        --color-danger-hover: #dc2626;
-        --color-success: #22c55e;
-        --color-warning: #f59e0b;
-
-        --color-text-primary: #e5e7eb;
-        --color-text-secondary: #9ca3af;
-        --color-text-hint: #6b7280;
-        --color-text-label: #d1d5db;
-
-        --color-border: #374151;
-        --color-border-light: #374151;
-        --color-bg-page: #111827;
-        --color-bg-card: #1f2937;
-        --color-bg-subtle: #1a2332;
-        --color-bg-input: #1f2937;
-        --color-bg-hover: #263040;
-        --color-bg-toolbar: #1f2937;
-        --color-text-disabled: #6b7280;
-
-        --color-success-dark: #4ade80;
-        --color-success-light: #14532d;
-        --color-success-lighter: #22c55e;
-
-        --color-danger-light: #7f1d1d;
-        --color-danger-dark: #fca5a5;
-        --color-danger-bg: #451a1a;
-
-        --color-warning-light: #78350f;
-        --color-warning-dark: #fbbf24;
-        --color-warning-bg: #451a03;
-
-        --color-badge-pdf: #14532d;
-        --color-badge-web: #0c4a6e;
-        --color-badge-epub: #3b0764;
-
-        --color-highlight: #1e3a5f;
-        --color-highlight-gold: #f59e0b;
-        --color-highlight-extract: #0891b2;
-        --color-divider-active: #2563eb;
-        --color-disabled-bg: #4b5563;
-
-        --color-info-bg: #1e293b;
-        --color-info-bg-light: #172554;
-
-        --color-pdf-bg: #1a1a1a;
-
-        --color-tooltip-bg: hsla(0, 0%, 80%, 0.9);
-        --color-tooltip-text: #111;
-
-        --shadow-card: 0 1px 3px rgba(0,0,0,0.3);
-        --shadow-modal: 0 8px 30px rgba(0,0,0,0.5);
-        --backdrop-color: rgba(0,0,0,0.6);
-
-        /* Login hero */
-        --color-login-hero-bg: #1a2744;
-    }
-
-    .modal-content { background: var(--color-bg-card); }
-
-    /* Quill editor */
-    .ql-container,
-    .ql-editor {
-        background: var(--color-bg-card);
-        color: var(--color-text-primary);
-    }
-    .ql-toolbar {
-        background: var(--color-bg-subtle);
-        border-color: var(--color-border) !important;
-    }
-    .ql-toolbar .ql-stroke { stroke: var(--color-text-secondary) !important; }
-    .ql-toolbar .ql-fill { fill: var(--color-text-secondary) !important; }
-    .ql-toolbar .ql-picker-label { color: var(--color-text-secondary) !important; }
-    .ql-container.ql-snow { border-color: var(--color-border) !important; }
-    .ql-toolbar.ql-snow { border-color: var(--color-border) !important; }
-    .ql-editor.ql-blank::before { color: var(--color-text-hint) !important; }
-
-    /* Virtual scroll table hover */
-    .tape-scroll table tr:hover td { background: #263040; }
-    table.card-table tr:hover td { background: #2a3548; }
-
-    /* Badges — keep readable */
-    .badge-success { background: #166534; color: #bbf7d0; }
-    .badge-warning { background: #854d0e; color: #fef08a; }
-    .badge-error   { background: #991b1b; color: #fecaca; }
-
-    /* Secondary button hover */
-    .btn-secondary:not(:disabled):hover { background: #374151; }
-
-    /* Danger outline button hover */
-    .btn-danger:not(:disabled):hover { background: #35181a; }
-
-    /* Input hover */
-    .input:hover,
-    input[type="text"]:not(.input):hover,
-    input[type="password"]:not(.input):hover,
-    input[type="number"]:not(.input):hover,
-    select:not(.select):hover,
-    textarea:hover { border-color: #6b7280; }
-
-    /* Help icon */
-    .help-icon { border-color: #4b5563; }
-    .help-icon:hover {
-        background: #374151;
-        border-color: #6b7280;
-    }
-
-    /* Split divider active */
-    .split-divider-h:hover,
-    .split-divider-h:active,
-    .split-divider-v:hover,
-    .split-divider-v:active { background: #2563eb; }
 }
 
 /* ── Skeleton Loading Animation ──────────────────────────────── */

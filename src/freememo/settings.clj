@@ -46,6 +46,7 @@
 (def PROMPT_SYSTEM "prompt_system")
 (def PROMPT_OCR "prompt_ocr")
 (def EMAIL_UPDATES "email_updates")
+(def THEME "theme")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
 
 (defn get-email-updates [user-id]
@@ -366,6 +367,19 @@
     (catch Exception e
       (tel/error! {:id ::save-scan-dpi} e)
       {:success false :error "Failed to save scan DPI"})))
+
+(defn get-theme [user-id]
+  (or (db/get-setting user-id THEME) "auto"))
+
+(defn save-theme [user-id value]
+  (try
+    (when-not (#{"auto" "light" "dark"} value)
+      (throw (Exception. "Invalid theme")))
+    (db/set-setting user-id THEME value)
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-theme} e)
+      {:success false :error "Failed to save theme"})))
 
 (defn save-anki-sync-settings [user-id {:keys [scope deck basic-model cloze-model allow-dupes use-header header-text use-tags tags source-field]}]
   (try

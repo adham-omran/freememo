@@ -39,6 +39,10 @@
   #?(:clj (settings/get-llm-enabled user-id)
      :cljs nil))
 
+(defn get-theme* [_refresh user-id]
+  #?(:clj (settings/get-theme user-id)
+     :cljs nil))
+
 (defn reconstruct-session* [user-id]
   #?(:clj (when user-id
             (when-let [user (db/get-user-by-id user-id)]
@@ -146,7 +150,12 @@
             session-data (e/server (reconstruct-session* user-id))
             username (e/server (:username session-data))
             enc-key (e/server (:enc-key session-data))
-            auth-error (e/server (get-in ring-request [:session :auth-error]))]
+            auth-error (e/server (get-in ring-request [:session :auth-error]))
+            theme (e/server
+                    (when user-id
+                      (get-theme* (e/watch (us/get-atom user-id :settings-refresh))
+                                  user-id)))]
+        (dom/props {:data-theme (when (and theme (not= theme "auto")) theme)})
         (if (e/server (some? user-id))
           ;; Authenticated: render app with URL router
           (dom/div
