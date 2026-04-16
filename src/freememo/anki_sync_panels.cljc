@@ -33,6 +33,10 @@
         source-display-mode (e/server (settings/get-source-display-mode user-id))
         source-field (e/watch (:!source-field form))
         topic-source (e/server (db/get-topic-source selected-doc))
+        topic-info (e/server (when selected-doc
+                               (let [t (db/get-topic-for-user user-id selected-doc)]
+                                 {:kind (:topics/kind t)
+                                  :title (:topics/title t)})))
         settings {:deck selected-deck
                   :basic-model basic-model
                   :cloze-model cloze-model
@@ -44,7 +48,10 @@
                   :tags tags
                   :source-display-mode source-display-mode
                   :source-field source-field
-                  :topic-source topic-source}]
+                  :topic-source topic-source
+                  :topic-kind (:kind topic-info)
+                  :topic-title (:title topic-info)
+                  :root-topic-id selected-doc}]
 
     ;; Record push pairs on server
     (when (and (= sync-phase :recording) (some? (e/watch !push-pairs)))
