@@ -362,10 +362,33 @@
       ;; ── Appearance section ──
         (let [server-font-size (e/server (settings/get-card-font-size user-id))
               !font-size (atom server-font-size)
-              font-size (e/watch !font-size)]
+              font-size (e/watch !font-size)
+              server-theme (e/server (settings/get-theme user-id))
+              !theme (atom server-theme)
+              theme (e/watch !theme)]
           (dom/div
             (dom/props {:class "card"})
             (dom/h3 (dom/props {:class "section-title"}) (dom/text "Appearance"))
+
+            (dom/div
+              (dom/props {:class "field"})
+              (dom/label (dom/props {:class "label"}) (dom/text "Theme"))
+              (dom/select
+                (dom/props {:value theme :class "select"})
+                (dom/option (dom/props {:value "auto"}) (dom/text "Auto"))
+                (dom/option (dom/props {:value "light"}) (dom/text "Light"))
+                (dom/option (dom/props {:value "dark"}) (dom/text "Dark"))
+                (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                      [?token ?error] (e/Token change-event)]
+                  (when (some? change-event)
+                    (reset! !theme change-event))
+                  (when-some [token ?token]
+                    (e/server (settings/save-theme user-id change-event))
+                    (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                    (token))))
+              (dom/div (dom/props {:class "hint"})
+                (dom/text "Auto follows your system preference")))
+
             (dom/div
               (dom/props {:class "field"})
               (dom/label
