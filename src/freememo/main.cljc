@@ -62,7 +62,9 @@
        :viewer (list 'viewer) ; empty viewer
        (list (symbol (name tab))))
      (case (:type nav-map)
-       :browse-pdf (list 'viewer 'browse-pdf (:topic-id nav-map))
+       :browse-pdf (if-let [page (:page nav-map)]
+                     (list 'viewer 'browse-pdf (:topic-id nav-map) page)
+                     (list 'viewer 'browse-pdf (:topic-id nav-map)))
        :browse-topic (list 'viewer 'browse-topic (:topic-id nav-map))
        :learn-session (list 'viewer 'learn-session)
        :subset-review (list 'viewer 'subset-review (:root-id nav-map))
@@ -91,13 +93,13 @@
           (case vtype
             browse-pdf
             (r/pop
-              (let [[topic-id] r/route
+              (let [[topic-id page] r/route
                     authorized? (e/server (some? (db/get-topic-for-user user-id topic-id)))]
                 (if (not authorized?)
                   (NotFoundView)
                   (dom/div
                     (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-                    (let [!vnav (atom {:type :browse-pdf :topic-id topic-id :page nil :origin nil})]
+                    (let [!vnav (atom {:type :browse-pdf :topic-id topic-id :page page :origin nil})]
                       (OcrPage user-id enc-key !vnav llm-enabled?))))))
 
             browse-topic

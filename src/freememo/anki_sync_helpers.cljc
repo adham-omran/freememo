@@ -106,14 +106,38 @@
        (anki-call! "modelNames" nil)
        (anki-call! "getTags" nil))))
 
-(defn source-ref-with-page
-  "Compose source reference with page number when available.
-   Prefers :topic-source from settings (current topic source) over
-   :flashcards/source_reference (snapshot from card creation)."
+(def ^:private freememo-base-url "https://freememo.net")
+
+(defn html-escape
+  "Escape HTML-special characters so titles/URLs can be embedded safely."
+  [s]
+  (-> (str s)
+    (str/replace "&" "&amp;")
+    (str/replace "<" "&lt;")
+    (str/replace ">" "&gt;")
+    (str/replace "\"" "&quot;")
+    (str/replace "'" "&#39;")))
+
+(defn build-source-anchor
+  "Build an HTML anchor linking back to the source item in FreeMemo.
+   PDF cards link to /viewer/browse-pdf/<root-id>/<page> (or /<root-id> without page);
+   other kinds link to /viewer/browse-topic/<root-id>.
+   Anchor text is '<title> p.<n>' for PDF-with-page, else '<title>'.
+   Returns nil when no title is resolvable."
   [card settings]
-  (let [base (or (:topic-source settings) (:flashcards/source_reference card))
-        pg (:page_number card)]
-    (if pg (str base " - " pg) base)))
+  (let [{:keys [topic-kind root-topic-id topic-title topic-source]} settings
+        title (or topic-title topic-source (:flashcards/source_reference card))
+        pdf? (= topic-kind "pdf")
+        page (:page_number card)
+        url (cond
+              (and pdf? page) (str freememo-base-url "/viewer/browse-pdf/" root-topic-id "/" page)
+              pdf? (str freememo-base-url "/viewer/browse-pdf/" root-topic-id)
+              :else (str freememo-base-url "/viewer/browse-topic/" root-topic-id))
+        anchor-text (if (and pdf? page)
+                      (str title " p." page)
+                      title)]
+    (when-not (str/blank? title)
+      (str "<a href=\"" (html-escape url) "\">" (html-escape anchor-text) "</a>"))))
 
 #?(:cljs
    (defn build-note
@@ -127,7 +151,7 @@
            basic? (= kind "basic")
            model (if basic? basic-model cloze-model)
            fields (if basic? basic-fields cloze-fields)
-           source-ref (source-ref-with-page card settings)
+           source-ref (build-source-anchor card settings)
            append-source? (and (= source-display-mode "append") (not (str/blank? source-ref)))
            field-source? (and (= source-display-mode "field") (not (str/blank? source-ref)))
            field-map (if basic?
@@ -156,7 +180,7 @@
            kind (:flashcards/kind card)
            basic? (= kind "basic")
            fields (if basic? basic-fields cloze-fields)
-           source-ref (source-ref-with-page card settings)
+           source-ref (build-source-anchor card settings)
            append-src? (and (= source-display-mode "append") (not (str/blank? source-ref)))
            field-src? (and (= source-display-mode "field") (not (str/blank? source-ref)))]
        (if basic?
