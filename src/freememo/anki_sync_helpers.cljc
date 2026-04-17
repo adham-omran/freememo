@@ -122,7 +122,7 @@
   "Build an HTML anchor linking back to the source item in FreeMemo.
    PDF cards link to /viewer/browse-pdf/<root-id>/<page> (or /<root-id> without page);
    other kinds link to /viewer/browse-topic/<root-id>.
-   Anchor text is '<title> p.<n>' for PDF-with-page, else '<title>'.
+   Anchor text is '<title> - <page>' for PDF-with-page, else '<title>'.
    Returns nil when no title is resolvable."
   [card settings]
   (let [{:keys [topic-kind root-topic-id topic-title topic-source]} settings
@@ -134,7 +134,7 @@
               pdf? (str freememo-base-url "/viewer/browse-pdf/" root-topic-id)
               :else (str freememo-base-url "/viewer/browse-topic/" root-topic-id))
         anchor-text (if (and pdf? page)
-                      (str title " p." page)
+                      (str title " - " page)
                       title)]
     (when-not (str/blank? title)
       (str "<a href=\"" (html-escape url) "\">" (html-escape anchor-text) "</a>"))))
