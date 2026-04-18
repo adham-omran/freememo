@@ -100,6 +100,7 @@ html, body {
     margin: 0;
     font-family: 'Open Sans', Arial, Verdana, sans-serif;
     background-color: var(--color-bg-page);
+    color: var(--color-text-primary);
 }
 
 /* ── Focus ─────────────────────────────────────────────────────── */
