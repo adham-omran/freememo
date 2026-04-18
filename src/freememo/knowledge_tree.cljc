@@ -252,7 +252,8 @@
                                   (dom/span
                                     (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
                                                         :font-size (if is-root "13px" "12px")
-                                                        :font-weight (if is-root "500" "400")}
+                                                        :font-weight (if is-root "500" "400")
+                                                        :color "var(--color-text-primary)"}
                                                 :data-tooltip display-title})
                                     (dom/text display-title)))
                                 ;; Column 2: Done
