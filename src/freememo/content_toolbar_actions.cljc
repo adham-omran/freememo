@@ -55,15 +55,21 @@
 
       ;; Add new card button
       (let [!show-add (atom false)
-            show-add (e/watch !show-add)]
+            show-add (e/watch !show-add)
+            !card-kind (atom card-type)
+            !captured-selection (atom "")]
         (dom/button
           (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-item" :style {:font-weight "500"}})
           (dom/text "Add new")
           (reset! keyboard/!add-new-btn-ref dom/node)
           (e/on-unmount (fn [] (reset! keyboard/!add-new-btn-ref nil)))
-          (dom/On "click" (fn [_] (reset! !show-add true)) nil))
+          (dom/On "click"
+            (fn [_]
+              (reset! !captured-selection (or (editor/get-selected-text!) ""))
+              (reset! !show-add true))
+            nil))
         (when show-add
-          (AddCardModal !show-add card-type topic-id root-topic-id source-ref user-id)))
+          (AddCardModal !show-add !card-kind !captured-selection topic-id root-topic-id source-ref user-id)))
 
       ;; Separator
       (dom/span (dom/props {:class "toolbar-overflow-item" :style {:color "var(--color-border)"}}) (dom/text "|"))
