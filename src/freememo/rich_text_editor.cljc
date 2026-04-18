@@ -4,6 +4,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.logging :as log]
+   [freememo.quill-table-ui :as table-ui]
    [clojure.string :as str]))
 
 ;; Global singleton — mirrors pdf_viewer.cljc pattern
@@ -206,10 +207,12 @@
                                                         [{"list" "ordered"} {"list" "bullet"}]
                                                         [{"align" []}]
                                                         [{"direction" "rtl"}]
-                                                        ["clean"]]}
+                                                        ["clean"]
+                                                        ["table"]]
+                                              :table true}
                                     :placeholder "Enter text..."}))
              ^js clipboard (.-clipboard editor)
-             delta (.convert clipboard cleaned-html)]
+             delta (.convert clipboard #js {:html cleaned-html})]
          (when (seq cleaned-html)
            (.setContents editor delta))
          (when (and js/goog.DEBUG t0)
@@ -230,6 +233,7 @@
          (add-toolbar-tooltips! editor)
          (setup-link-import-button! editor)
          (setup-mobile-keyboard-suppression! editor)
+         (table-ui/init! editor)
          editor))))
 
 (defn set-content!
@@ -250,7 +254,7 @@
              current-html (.-innerHTML (.-root ed))]
          ;; Skip if content hasn't changed (preserves scroll + highlights)
          (when (not= (count cleaned) (count current-html))
-           (let [delta (.convert clipboard cleaned)]
+           (let [delta (.convert clipboard #js {:html cleaned})]
              (.setText ed "" "api")
              (.setContents ed delta "api")
              (.clear (.-history ed))))
