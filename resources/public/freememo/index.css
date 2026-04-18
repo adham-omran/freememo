@@ -629,6 +629,63 @@ textarea:hover {
     opacity: 0.6;
 }
 
+/* Quill v2 insert-table toolbar button.
+   v2 Snow inlines SVG icons for built-in formats only; "table" is a custom
+   format name so we render a unicode glyph (U+229E SQUARED PLUS) sized to
+   visually match the SVG-stroke icons on adjacent toolbar buttons. */
+.ql-toolbar .ql-table::before {
+    content: '\229E';
+    font-size: 16px;
+    line-height: 1;
+    color: var(--color-text-secondary);
+    display: inline-block;
+    vertical-align: middle;
+}
+.ql-toolbar button.ql-table:hover::before,
+.ql-toolbar button.ql-table.ql-active::before {
+    color: var(--color-primary);
+}
+
+/* Quill v2 contextual table action bar — floating button group anchored to
+   the top-right of the editor wrapper. quill_table_ui.cljc owns no
+   positioning; all layout is here. The wrapper is made a positioning
+   context so the absolute coordinates resolve against it. */
+.quill-editor-wrapper { position: relative; }
+
+.ql-table-actions {
+    display: none;
+    position: absolute;
+    top: var(--sp-2);
+    right: var(--sp-2);
+    z-index: 50;
+    flex-direction: row;
+    gap: var(--sp-1);
+    padding: var(--sp-1) var(--sp-2);
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-modal);
+}
+.ql-table-actions.visible { display: flex; }
+.ql-table-actions button {
+    padding: 4px 8px;
+    font-size: 12px;
+    line-height: 1.2;
+    border: none;
+    background: transparent;
+    color: var(--color-text-primary);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+}
+.ql-table-actions button:hover {
+    background: var(--color-bg-hover);
+}
+.ql-table-actions button:disabled {
+    color: var(--color-text-disabled);
+    cursor: not-allowed;
+}
+
 /* ── Skeleton Loading Animation ──────────────────────────────── */
 .skeleton {
     background: linear-gradient(90deg, var(--color-border) 25%, var(--color-bg-subtle) 50%, var(--color-border) 75%);
