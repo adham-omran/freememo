@@ -435,13 +435,17 @@
      :cljs nil))
 
 ;; Add card modal — uses topic-id and root-topic-id instead of doc-id + page-number
-(e/defn AddCardModal [!show-add card-type topic-id root-topic-id source-reference user-id]
+(e/defn AddCardModal [!show-add !card-kind !captured-selection topic-id root-topic-id source-reference user-id]
   (e/client
-    (let [!kind (atom card-type)
-          kind (e/watch !kind)
-          !question (atom "")
+    (let [initial-kind @!card-kind
+          initial-text (or @!captured-selection "")
+          prefill? (not (str/blank? initial-text))
+          init-q (if (and prefill? (= initial-kind "basic")) initial-text "")
+          init-c (if (and prefill? (= initial-kind "cloze")) initial-text "")
+          kind (e/watch !card-kind)
+          !question (atom init-q)
           !answer (atom "")
-          !cloze (atom "")
+          !cloze (atom init-c)
           !ta-ref (atom nil)
           question (e/watch !question)
           answer (e/watch !answer)
@@ -509,14 +513,14 @@
               (dom/input
                 (dom/props {:type "radio" :name "add-card-kind" :value "basic"
                             :checked (= kind "basic")})
-                (dom/On "change" (fn [_] (reset! !kind "basic")) nil))
+                (dom/On "change" (fn [_] (reset! !card-kind "basic")) nil))
               (dom/text "Basic"))
             (dom/label
               (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-1)" :font-size "14px" :cursor "pointer"}})
               (dom/input
                 (dom/props {:type "radio" :name "add-card-kind" :value "cloze"
                             :checked (= kind "cloze")})
-                (dom/On "change" (fn [_] (reset! !kind "cloze")) nil))
+                (dom/On "change" (fn [_] (reset! !card-kind "cloze")) nil))
               (dom/text "Cloze")))
           (if (= kind "basic")
             (dom/div
@@ -526,7 +530,12 @@
                             :style {:width "100%" :padding "var(--sp-2)" :margin-bottom "var(--sp-3)"
                                     :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
                 (let [focus-node dom/node]
-                  (js/setTimeout (fn [] (.focus focus-node)) 50))
+                  (js/setTimeout
+                    (fn []
+                      (.focus focus-node)
+                      (let [end (count (.-value focus-node))]
+                        (when (pos? end) (.setSelectionRange focus-node end end))))
+                    50))
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !question ev))))
               (dom/label (dom/text "Answer:"))
@@ -560,7 +569,12 @@
                                     :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
                 (reset! !ta-ref dom/node)
                 (let [focus-node dom/node]
-                  (js/setTimeout (fn [] (.focus focus-node)) 50))
+                  (js/setTimeout
+                    (fn []
+                      (.focus focus-node)
+                      (let [end (count (.-value focus-node))]
+                        (when (pos? end) (.setSelectionRange focus-node end end))))
+                    50))
                 (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
                   (when (some? ev) (reset! !cloze ev))))))
           (dom/div
