@@ -629,17 +629,23 @@ textarea:hover {
     opacity: 0.6;
 }
 
-/* Quill v2 insert-table toolbar button.
-   v2 Snow inlines SVG icons for built-in formats only; "table" is a custom
-   format name so we render a unicode glyph (U+229E SQUARED PLUS) sized to
-   visually match the SVG-stroke icons on adjacent toolbar buttons. */
-.ql-toolbar .ql-table::before {
+/* Quill v2 insert-table toolbar button. v2 Snow auto-injects an SVG grid
+   icon inside the button for the "table" format; we hide it and render our
+   own U+229E glyph via ::before so the icon stays visually consistent with
+   the stroke-style icons on adjacent toolbar buttons. Without the SVG hide
+   rule, both the SVG and the glyph render and stack vertically. */
+.ql-toolbar button.ql-table svg { display: none; }
+.ql-toolbar button.ql-table {
+    width: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.ql-toolbar button.ql-table::before {
     content: '\229E';
     font-size: 16px;
     line-height: 1;
     color: var(--color-text-secondary);
-    display: inline-block;
-    vertical-align: middle;
 }
 .ql-toolbar button.ql-table:hover::before,
 .ql-toolbar button.ql-table.ql-active::before {
