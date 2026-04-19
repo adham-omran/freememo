@@ -7,10 +7,12 @@
    [next.jdbc.result-set :as rs]
    [honey.sql :as sql]
    [taoensso.telemere :as tel]
-   [clojure.string :as str]))
+   [clojure.string :as str]
+   [freememo.text :as text]))
 
 (declare sanitize-utf8)
 (declare migrate-to-topics!)
+(declare backfill-content-text!)
 
 ;; ---------------------------------------------------------------------------
 ;; Connection configuration
@@ -49,6 +51,9 @@
 
   ;; Enable pgcrypto for password hashing
   (jdbc/execute! ds ["CREATE EXTENSION IF NOT EXISTS pgcrypto"])
+
+  ;; Enable pg_trgm for trigram-based substring and fuzzy search
+  (jdbc/execute! ds ["CREATE EXTENSION IF NOT EXISTS pg_trgm"])
 
   ;; Create users table
   (jdbc/execute! ds ["
@@ -107,6 +112,11 @@
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_next_review ON topics(next_review_at)"])
   (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_topics_page
                       ON topics(parent_id, page_number) WHERE page_number IS NOT NULL"])
+
+  ;; Search: plain-text column derived from HTML content, trigram GIN index
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS content_text text"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_content_text_trgm
+                      ON topics USING GIN (content_text gin_trgm_ops)"])
 
   ;; Topic files (binary storage, split from old documents.file_data)
   (jdbc/execute! ds ["
@@ -182,6 +192,9 @@
   ;; Backfill source_reference for markdown topics that lack it
   (jdbc/execute! ds ["UPDATE topics SET source_reference = title
                       WHERE kind = 'markdown' AND source_reference IS NULL"])
+
+  ;; Backfill content_text for existing rows (idempotent)
+  (backfill-content-text!)
 
   (tel/log! :info "Database ready"))
 
@@ -512,6 +525,28 @@
   (when s
     (String. (.getBytes (str s) "UTF-8") "UTF-8")))
 
+(defn backfill-content-text!
+  "Populate topics.content_text for rows where it is NULL but content exists.
+   Strips HTML via Jsoup. Batched to avoid loading all rows at once."
+  []
+  (let [batch-size 200]
+    (loop [total 0]
+      (let [rows (jdbc/execute! ds
+                   ["SELECT id, content FROM topics
+                      WHERE content IS NOT NULL AND content_text IS NULL
+                      LIMIT ?" batch-size]
+                   {:builder-fn rs/as-unqualified-maps})]
+        (if (empty? rows)
+          (when (pos? total)
+            (tel/log! {:level :info :id ::backfill-content-text :data {:count total}}
+              "Backfilled content_text"))
+          (do
+            (doseq [{:keys [id content]} rows]
+              (jdbc/execute! ds
+                ["UPDATE topics SET content_text = ? WHERE id = ?"
+                 (text/strip-html content) id]))
+            (recur (+ total (count rows)))))))))
+
 ;; ---------------------------------------------------------------------------
 ;; Topic CRUD
 ;; ---------------------------------------------------------------------------
@@ -522,13 +557,15 @@
    :source-url :source-reference :status :priority
    Returns the created row with :topics/id."
   [attrs]
-  (let [row (cond-> {:kind (or (:kind attrs) "basic")
+  (let [sanitized (when (:content attrs) (sanitize-utf8 (:content attrs)))
+        row (cond-> {:kind (or (:kind attrs) "basic")
                      :title (or (:title attrs) "Untitled")
                      :status (or (:status attrs) "active")
                      :priority (or (:priority attrs) 50)}
               (:user-id attrs) (assoc :user_id (:user-id attrs))
               (:parent-id attrs) (assoc :parent_id (:parent-id attrs))
-              (:content attrs) (assoc :content (sanitize-utf8 (:content attrs)))
+              sanitized (assoc :content sanitized
+                          :content_text (text/strip-html sanitized))
               (:page-number attrs) (assoc :page_number (:page-number attrs))
               (:source-url attrs) (assoc :source_url (:source-url attrs))
               (:source-reference attrs) (assoc :source_reference (:source-reference attrs)))]
@@ -586,10 +623,12 @@
 (defn update-topic-content!
   "Update the content of a topic."
   [id content]
-  (jdbc/execute-one! ds
-    (sql/format {:update :topics
-                 :set {:content (sanitize-utf8 content)}
-                 :where [:= :id id]})))
+  (let [sanitized (sanitize-utf8 content)]
+    (jdbc/execute-one! ds
+      (sql/format {:update :topics
+                   :set {:content sanitized
+                         :content_text (text/strip-html sanitized)}
+                   :where [:= :id id]}))))
 
 (defn update-topic-source!
   "Update source_reference on a topic.
@@ -650,18 +689,20 @@
     (let [parent (get-topic parent-id)
           user-id (:topics/user_id parent)
           rows (mapv (fn [item]
-                       {:user_id user-id
-                        :parent_id parent-id
-                        :kind "basic"
-                        :title (let [raw (or (:content item) "")]
-                                 (-> raw
-                                   (str/replace #"<[^>]+>" "")
-                                   (subs 0 (min 80 (count (str/replace raw #"<[^>]+>" ""))))
-                                   str/trim
-                                   (#(if (str/blank? %) "Extract" %))))
-                        :content (sanitize-utf8 (:content item))
-                        :status "active"
-                        :priority 50})
+                       (let [sanitized (sanitize-utf8 (:content item))]
+                         {:user_id user-id
+                          :parent_id parent-id
+                          :kind "basic"
+                          :title (let [raw (or (:content item) "")]
+                                   (-> raw
+                                     (str/replace #"<[^>]+>" "")
+                                     (subs 0 (min 80 (count (str/replace raw #"<[^>]+>" ""))))
+                                     str/trim
+                                     (#(if (str/blank? %) "Extract" %))))
+                          :content sanitized
+                          :content_text (text/strip-html sanitized)
+                          :status "active"
+                          :priority 50}))
                  items)]
       (jdbc/execute! ds
         (sql/format {:insert-into :topics
@@ -740,12 +781,14 @@
   "Create a web article topic. Returns topic-id."
   [user-id title html-content source-url]
   (let [source-ref (str title (when source-url (str " — " source-url)))
+        sanitized (sanitize-utf8 html-content)
         topic (jdbc/execute-one! ds
                 (sql/format {:insert-into :topics
                              :values [{:user_id user-id
                                        :kind "web"
                                        :title (or title "Web Article")
-                                       :content (sanitize-utf8 html-content)
+                                       :content sanitized
+                                       :content_text (text/strip-html sanitized)
                                        :source_url source-url
                                        :source_reference source-ref}]
                              :returning [:id]}))]
@@ -754,12 +797,14 @@
 (defn create-markdown-topic!
   "Create a Markdown-imported topic. Returns topic-id."
   [user-id title html-content]
-  (let [topic (jdbc/execute-one! ds
+  (let [sanitized (sanitize-utf8 html-content)
+        topic (jdbc/execute-one! ds
                 (sql/format {:insert-into :topics
                              :values [{:user_id user-id
                                        :kind "markdown"
                                        :title (or title "Untitled Markdown")
-                                       :content (sanitize-utf8 html-content)
+                                       :content sanitized
+                                       :content_text (text/strip-html sanitized)
                                        :source_reference (or title "Untitled Markdown")}]
                              :returning [:id]}))]
     (:topics/id topic)))
@@ -786,13 +831,15 @@
       ;; Create chapter children
       (let [chapter-ids (when (seq chapters)
                           (mapv (fn [i ch]
-                                  (let [result (jdbc/execute-one! tx
+                                  (let [sanitized (sanitize-utf8 (:html ch))
+                                        result (jdbc/execute-one! tx
                                                  (sql/format {:insert-into :topics
                                                               :values [{:user_id user-id
                                                                         :parent_id topic-id
                                                                         :kind "basic"
                                                                         :title (or (:title ch) (str "Chapter " (inc i)))
-                                                                        :content (sanitize-utf8 (:html ch))
+                                                                        :content sanitized
+                                                                        :content_text (text/strip-html sanitized)
                                                                         :page_number (inc i)
                                                                         :status "active"
                                                                         :priority 50}]
@@ -811,6 +858,7 @@
                                        :kind "basic"
                                        :title (or title "New Topic")
                                        :content ""
+                                       :content_text ""
                                        :source_reference (or title "New Topic")}]
                              :returning [:id]}))]
     {:topic-id (:topics/id topic)}))
@@ -834,21 +882,22 @@
 (defn save-page-text!
   "Save or update OCR text for a page topic (by parent + page_number).
    Upserts the page topic row."
-  [parent-id page-number text]
-  (jdbc/execute! ds
-    ["INSERT INTO topics (parent_id, kind, title, content, page_number,
-                          user_id)
-      SELECT ?, 'page', ?, ?, ?,
-             (SELECT user_id FROM topics WHERE id = ?)
-      WHERE NOT EXISTS (SELECT 1 FROM topics WHERE parent_id = ? AND page_number = ?)
-      ON CONFLICT DO NOTHING"
-     parent-id (str "Page " page-number) text page-number
-     parent-id parent-id page-number])
-  ;; Update existing
-  (jdbc/execute! ds
-    ["UPDATE topics SET content = ?
-      WHERE parent_id = ? AND page_number = ?"
-     text parent-id page-number]))
+  [parent-id page-number html]
+  (let [plain (text/strip-html html)]
+    (jdbc/execute! ds
+      ["INSERT INTO topics (parent_id, kind, title, content, content_text, page_number,
+                            user_id)
+        SELECT ?, 'page', ?, ?, ?, ?,
+               (SELECT user_id FROM topics WHERE id = ?)
+        WHERE NOT EXISTS (SELECT 1 FROM topics WHERE parent_id = ? AND page_number = ?)
+        ON CONFLICT DO NOTHING"
+       parent-id (str "Page " page-number) html plain page-number
+       parent-id parent-id page-number])
+    ;; Update existing
+    (jdbc/execute! ds
+      ["UPDATE topics SET content = ?, content_text = ?
+        WHERE parent_id = ? AND page_number = ?"
+       html plain parent-id page-number])))
 
 (defn get-page-text
   "Get the content (OCR text) for a page by parent + page_number."

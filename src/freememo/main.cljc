@@ -12,6 +12,7 @@
             [freememo.learn-session :refer [LearnSession]]
             [freememo.extract-page :refer [ExtractPage]]
             [freememo.page-viewer :refer [OcrPage]]
+            [freememo.search-page :refer [SearchPage]]
             [freememo.subset-review :refer [SubsetReviewSession]]
             [freememo.login-page :refer [LoginPage]]
             [freememo.keyboard :as keyboard]
@@ -154,7 +155,7 @@
             theme (e/server
                     (when user-id
                       (get-theme* (e/watch (us/get-atom user-id :settings-refresh))
-                                  user-id)))]
+                        user-id)))]
         (dom/props {:data-theme (when (and theme (not= theme "auto")) theme)})
         (if (e/server (some? user-id))
           ;; Authenticated: render app with URL router
@@ -224,6 +225,11 @@
                     (dom/On "click" (fn [_] (navigate! :library)) nil))
 
                   (dom/button
+                    (dom/props {:style (tab-style :search)})
+                    (dom/text "Search")
+                    (dom/On "click" (fn [_] (navigate! :search)) nil))
+
+                  (dom/button
                     (dom/props {:style (tab-style :import)})
                     (dom/text "Import")
                     (dom/On "click" (fn [_] (navigate! :import)) nil))
@@ -235,11 +241,14 @@
 
                 ;; Tab content
                 (dom/div
-                  (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library} active-tab) "hidden" "auto")}})
+                  (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :search} active-tab) "hidden" "auto")}})
                   (when (= active-tab :home) (HomePage navigate! user-id enc-key))
                   (when (= active-tab :library)
                     (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))]
                       (LibraryPage user-id navigate! refresh)))
+                  (when (= active-tab :search)
+                    (r/pop ; consume 'search from route; SearchPage reads remaining segments
+                      (SearchPage user-id navigate!)))
                   (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
                   (when (= active-tab :settings) (SettingsPage user-id username enc-key))
                   (when (= active-tab :learn) (LearnPage user-id navigate! nil))
