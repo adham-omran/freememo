@@ -11,7 +11,7 @@
 
 (def ^:private result-limit 10000)
 (def ^:private min-query-len 2)
-(def ^:private snippet-window 80)
+(def ^:private snippet-window 25)
 
 (defn- regex-escape
   "Escape POSIX regex metacharacters so the query is matched literally."
@@ -27,7 +27,9 @@
 (defn- build-snippet
   "Return an HTML snippet: up to snippet-window chars before and after the first
    case-insensitive occurrence of q in plain-text, with the match wrapped in
-   <mark>. Escapes HTML special chars. Returns nil when there is no match."
+   <mark>. Escapes HTML special chars. No ellipsis markers — the UI scroll-
+   centers the mark, so edges are visually handled by overflow clipping.
+   Returns nil when there is no match."
   [plain-text q]
   (when (and plain-text q (pos? (count plain-text)) (pos? (count q)))
     (let [lc-text (str/lower-case plain-text)
@@ -39,14 +41,10 @@
               end (min (count plain-text) (+ pos q-len snippet-window))
               before (subs plain-text start pos)
               matched (subs plain-text pos (+ pos q-len))
-              after (subs plain-text (+ pos q-len) end)
-              leading (if (pos? start) "…" "")
-              trailing (if (< end (count plain-text)) "…" "")]
-          (str leading
-            (escape-html before)
+              after (subs plain-text (+ pos q-len) end)]
+          (str (escape-html before)
             "<mark>" (escape-html matched) "</mark>"
-            (escape-html after)
-            trailing))))))
+            (escape-html after)))))))
 
 (defn- kind-clause
   "Return a SQL fragment for the kind filter. Friendly labels:
@@ -63,13 +61,26 @@
     ;; "all" or unknown
     ""))
 
+(def ^:private select-cols
+  "Shared SELECT list. Walks up to 2 levels to find a root ancestor for
+   the \"source\" (e.g., PDF filename for an extract-of-page-of-pdf)."
+  "t.id, t.title, t.kind, t.parent_id, t.page_number,
+   t.content_text, t.created_at,
+   COALESCE(p2.title, p1.title, t.title) AS source_title")
+
+(def ^:private source-joins
+  "LEFT JOIN parent and grandparent topics (handles extract → page → pdf)."
+  "LEFT JOIN topics p1 ON p1.id = t.parent_id
+   LEFT JOIN topics p2 ON p2.id = p1.parent_id")
+
 (defn search-content
   "Search topics.content_text for user-id. Returns at most result-limit rows.
    - query: string. Trimmed. If shorter than min-query-len returns [].
    - mode: :fuzzy (ILIKE substring, ordered by word_similarity DESC) or
            :exact (whole-word case-insensitive regex, ordered by created_at DESC).
    - kind-filter: friendly label string (see kind-clause).
-   Returns vec of {:id :title :kind :parent_id :page_number :snippet :created_at}."
+   Returns vec of {:id :title :kind :parent-id :page-number :snippet
+                    :source-title :created-at}."
   [user-id query mode kind-filter]
   (try
     (let [q (when query (str/trim query))]
@@ -79,9 +90,8 @@
               [sql params]
               (case mode
                 :exact
-                [(str "SELECT t.id, t.title, t.kind, t.parent_id, t.page_number,
-                              t.content_text, t.created_at
-                       FROM topics t
+                [(str "SELECT " select-cols "
+                       FROM topics t " source-joins "
                        WHERE t.user_id = ?
                          AND t.content_text IS NOT NULL
                          AND t.content_text ~* ?"
@@ -90,10 +100,9 @@
                  [user-id (str "\\m" (regex-escape q) "\\M") result-limit]]
 
                 ;; default :fuzzy
-                [(str "SELECT t.id, t.title, t.kind, t.parent_id, t.page_number,
-                              t.content_text, t.created_at,
+                [(str "SELECT " select-cols ",
                               word_similarity(?, t.content_text) AS rank
-                       FROM topics t
+                       FROM topics t " source-joins "
                        WHERE t.user_id = ?
                          AND t.content_text IS NOT NULL
                          AND t.content_text ILIKE '%' || ? || '%'"
@@ -109,6 +118,7 @@
                    :kind (:kind row)
                    :parent-id (:parent_id row)
                    :page-number (:page_number row)
+                   :source-title (:source_title row)
                    :snippet (build-snippet (:content_text row) q)
                    :created-at (:created_at row)})
             rows))))

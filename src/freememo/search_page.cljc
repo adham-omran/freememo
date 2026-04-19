@@ -52,6 +52,24 @@
        nil)
      :clj nil))
 
+(defn snippet-center!
+  "Scroll the snippet div so its first <mark> descendant is visually centered.
+   Direction-neutral (works for LTR and RTL content) via getBoundingClientRect.
+   Deferred via requestAnimationFrame so layout is settled. No-op when no
+   <mark> is present or the div hasn't been laid out."
+  [div]
+  #?(:cljs
+     (js/requestAnimationFrame
+       (fn []
+         (when-let [mark (.querySelector div "mark")]
+           (let [mr (.getBoundingClientRect mark)
+                 dr (.getBoundingClientRect div)
+                 mark-center (+ (.-left mr) (/ (.-width mr) 2))
+                 div-center (+ (.-left dr) (/ (.-width dr) 2))
+                 delta (- mark-center div-center)]
+             (.scrollBy div delta 0)))))
+     :clj nil))
+
 (defn click-nav! [navigate! row]
   (let [id (:id row)
         kind (:kind row)]
@@ -63,7 +81,7 @@
 
 (e/defn ResultRow [row i row-height navigate!]
   (e/client
-    (let [{:keys [id title kind snippet]} row
+    (let [{:keys [title kind snippet source-title]} row
           [badge-text badge-color] (kind-badge kind)]
       (dom/tr
         (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)"
@@ -84,22 +102,35 @@
                                 :color "var(--color-text-primary)"}
                         :data-tooltip (or title "(untitled)")})
             (dom/text (or title "(untitled)"))))
-        ;; Column 2: snippet (HTML with <mark>)
+        ;; Column 2: source (root topic's title)
         (dom/td
           (dom/props {:style {:padding "4px 10px" :overflow "hidden"
                               :display "flex" :align-items "center"
                               :font-size "12px" :color "var(--color-text-secondary)"
                               :white-space "nowrap" :text-overflow "ellipsis"}})
-          (dom/div
+          (dom/span
             (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
+                                :width "100%"}
+                        :data-tooltip (or source-title "")})
+            (dom/text (or source-title ""))))
+        ;; Column 3: snippet (HTML with <mark>; scroll-centered on mark)
+        (dom/td
+          (dom/props {:style {:padding "4px 10px" :overflow "hidden"
+                              :display "flex" :align-items "center"
+                              :font-size "12px" :color "var(--color-text-secondary)"
+                              :white-space "nowrap"}})
+          (dom/div
+            (dom/props {:dir "auto"
+                        :style {:overflow "hidden" :white-space "nowrap"
                                 :width "100%"}})
-            (set! (.-innerHTML dom/node) (or snippet ""))))))))
+            (set! (.-innerHTML dom/node) (or snippet ""))
+            (snippet-center! dom/node)))))))
 
 (e/defn SearchResultsTable [results navigate!]
   (e/client
     (let [row-count (count results)
           row-height 36
-          grid-cols "minmax(200px, 1fr) 2fr"]
+          grid-cols "minmax(160px, 1fr) minmax(120px, 0.7fr) 2.5fr"]
       (dom/div
         (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0"}})
 
@@ -114,6 +145,7 @@
                               :font-weight "600" :font-size "13px"
                               :color "var(--color-text-primary)" :text-align "left"}]
                 (dom/th (dom/props {:style th-style}) (dom/text "Document"))
+                (dom/th (dom/props {:style th-style}) (dom/text "Source"))
                 (dom/th (dom/props {:style th-style}) (dom/text "Snippet"))))))
 
         ;; Scrollable body
