@@ -14,7 +14,7 @@
             [freememo.page-viewer :refer [OcrPage]]
             [freememo.search-page :refer [SearchPage]]
             [freememo.subset-review :refer [SubsetReviewSession]]
-            [freememo.login-page :refer [LoginPage]]
+            [freememo.landing-page :refer [LandingPage]]
             [freememo.keyboard :as keyboard]
             #?(:clj [freememo.settings :as settings])
             #?(:clj [freememo.user-state :as us])
@@ -255,8 +255,8 @@
                   (when (= active-tab :viewer)
                     (ViewerContent user-id enc-key navigate! llm-enabled?))))))
 
-          ;; Not authenticated: render login page
-          (LoginPage auth-error))))))
+          ;; Not authenticated: render landing page
+          (LandingPage auth-error))))))
 
 (defn electric-boot [ring-request]
   #?(:clj (e/boot-server {} Main (e/server ring-request))

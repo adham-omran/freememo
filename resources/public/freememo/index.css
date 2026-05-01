@@ -58,11 +58,6 @@
     --color-info-bg: light-dark(#f0f4ff, #1e293b);
     --color-info-bg-light: light-dark(#eff6ff, #172554);
 
-    /* Login hero — gradient in light, solid in dark via same-color stops */
-    --color-login-hero-stop-1: light-dark(#f0f4ff, #1a2744);
-    --color-login-hero-stop-2: light-dark(#e8eeff, #1a2744);
-    --color-login-hero-bg: linear-gradient(135deg, var(--color-login-hero-stop-1) 0%, var(--color-login-hero-stop-2) 100%);
-
     /* PDF viewer */
     --color-pdf-bg: light-dark(#525659, #1a1a1a);
 
@@ -725,48 +720,113 @@ textarea:hover {
     gap: var(--sp-3);
 }
 
-/* ── Login Page Split Layout ─────────────────────────────────── */
-.login-layout {
-    display: flex;
-    min-height: 100vh;
-    overflow-x: hidden;
-}
-.login-layout {
-    background: var(--color-bg-page);
-}
-.login-hero,
-.login-left {
-    flex: 1 1 55%;
+/* ── Landing Page ────────────────────────────────────────────── */
+.landing-layout {
+    height: 100vh;
     display: flex;
     flex-direction: column;
-    justify-content: center;
-    padding: 60px 48px;
-    background: var(--color-login-hero-bg);
-    box-sizing: border-box;
+    background: var(--color-bg-page);
+    overflow: hidden;
 }
-.login-form-panel,
-.login-right {
-    flex: 1 1 40%;
+.landing-header {
+    height: 60px;
+    flex-shrink: 0;
     display: flex;
     align-items: center;
-    justify-content: center;
-    padding: 40px;
-    background: var(--color-bg-page);
-    box-sizing: border-box;
+    justify-content: space-between;
+    padding: 0 32px;
+    border-bottom: 1px solid var(--color-border);
 }
-@media (max-width: 900px) {
-    .login-layout {
-        flex-direction: column;
+.landing-wordmark {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.2px;
+    color: var(--color-text-primary);
+}
+.landing-signin {
+    text-decoration: none;
+    padding: 8px 18px;
+    font-size: 14px;
+}
+.landing-hero {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 32px 24px;
+    gap: 16px;
+    max-width: 960px;
+    width: 100%;
+    margin: 0 auto;
+    overflow: hidden;
+}
+.landing-error {
+    color: var(--color-danger);
+    background: var(--color-danger-bg);
+    border: 1px solid var(--color-danger-light);
+    padding: 8px 14px;
+    border-radius: var(--radius-md);
+    font-size: 14px;
+}
+.landing-headline {
+    margin: 0;
+    font-size: clamp(32px, 6vw, 56px);
+    font-weight: 800;
+    letter-spacing: -1px;
+    line-height: 1.1;
+    color: var(--color-text-primary);
+}
+.landing-sub {
+    margin: 0;
+    font-size: clamp(16px, 2.2vw, 20px);
+    line-height: 1.5;
+    color: var(--color-text-secondary);
+    max-width: 600px;
+}
+.landing-features {
+    margin: 0;
+    font-size: 13px;
+    letter-spacing: 0.4px;
+    color: var(--color-text-hint);
+    text-transform: uppercase;
+}
+.landing-screenshot {
+    max-width: 100%;
+    max-height: 50vh;
+    min-height: 0;
+    object-fit: contain;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+    border: 1px solid var(--color-border);
+    margin: 8px 0;
+}
+.landing-disclaimer {
+    margin: 0;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--color-text-hint);
+    max-width: 720px;
+}
+@media (max-width: 600px) {
+    .landing-layout {
+        height: auto;
+        min-height: 100vh;
+        overflow: visible;
     }
-    .login-hero,
-    .login-left {
+    .landing-header {
+        padding: 0 16px;
+    }
+    .landing-hero {
+        padding: 32px 16px 48px;
+        justify-content: flex-start;
+        gap: 14px;
+        overflow: visible;
+    }
+    .landing-screenshot {
         display: none;
-    }
-    .login-form-panel,
-    .login-right {
-        padding: 24px;
-        flex: 1;
-        min-height: auto;
     }
 }
 
