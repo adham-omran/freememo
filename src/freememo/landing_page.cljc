@@ -38,7 +38,9 @@
    ["What can I import?"
     "PDFs, EPUBs, and web articles via URL. Wikipedia is supported as a special case with cleaner extraction."]
    ["Can I run it offline or self-host?"
-    "Self-host, yes — the codebase is runnable locally (Postgres + JVM), so your reading and cards can live entirely on your own machine. Fully offline, no — OCR and card generation call the OpenAI API, so those steps need an internet connection regardless of where the server runs."]
+    [{:t "Self-host, yes — the "}
+     {:t "codebase" :href "https://github.com/adham-omran/freememo"}
+     {:t " is runnable locally (Postgres + JVM), so your reading and cards can live entirely on your own machine. Fully offline, no — OCR and card generation call the OpenAI API, so those steps need an internet connection regardless of where the server runs."}]]
    ["What does \"pre-production\" actually mean for me?"
     "You're an early user. That means direct access to the team and your feedback shapes the product. The flip side: no SLA, no uptime guarantee, no backup warranty. Export your cards regularly if they matter to you."]])
 
@@ -203,7 +205,14 @@
             (dom/div
               (dom/props {:class "landing-faq-item"})
               (dom/h3 (dom/props {:class "landing-faq-q"}) (dom/text q))
-              (dom/p (dom/props {:class "landing-faq-a"}) (dom/text a)))))))))
+              (dom/p (dom/props {:class "landing-faq-a"})
+                (if (string? a)
+                  (dom/text a)
+                  (e/for-by :t [frag a]
+                    (if (:href frag)
+                      (dom/a (dom/props {:href (:href frag) :target "_blank" :rel "noopener"})
+                        (dom/text (:t frag)))
+                      (dom/text (:t frag)))))))))))))
 
 (e/defn EarlyUserPact []
   (e/client
