@@ -7,10 +7,10 @@
    [hyperfiddle.electric-dom3 :as dom]))
 
 (def callouts
-  [["1" "PDF viewer with selectable text"        {:top "32%" :left "12%"}]
-   ["2" "Generated cards from the current page" {:top "28%" :left "78%"}]
-   ["3" "Cloze syntax with {{c1::deletions}}"   {:top "62%" :left "78%"}]
-   ["4" "One-click Anki sync"                   {:top "8%"  :left "60%"}]])
+  [["1" "PDF viewer with selectable text"        {:top "50%" :left "22%"}]
+   ["2" "Generated cards from the current page" {:top "77%" :left "61%"}]
+   ["3" "Cloze syntax with {{c1::deletions}}"   {:top "90%" :left "22%"}]
+   ["4" "One-click Anki sync"                   {:top "77%" :left "91%"}]])
 
 (def flow-steps
   [["1" "Import"  "Drop in a PDF, EPUB, or paste a URL."]
@@ -28,17 +28,17 @@
 
 (def faq-items
   [["What does it cost?"
-    "The app is free. Card generation uses OpenAI; you bring your own API key and pay OpenAI directly for the calls you make. Reading, reviewing, editing, and Anki sync never touch a paid API."]
+    "The app is free. Card generation and OCR uses the OpenAI API at the moment; you bring your own API key and pay OpenAI directly for the calls you make. Reading, reviewing, editing, and Anki sync never touch a paid API."]
    ["Where does my reading go?"
-    "PDFs, EPUBs, and extracted text live on the FreeMemo server, tied to your account. Cards stay in your browser until you push them to your own Anki collection. We don't share or sell your data."]
-   ["What if FreeMemo shuts down?"
+    "PDFs, EPUBs, and extracted text live on the FreeMemo server, tied to your account. Cards stay in your browser until you push them to your own Anki collection."]
+   #_["What if FreeMemo shuts down?"
     "You can export every card as Anki-compatible CSV at any time, and your Anki collection lives on your machine regardless. Worst case: you lose the reading view — your cards survive."]
    ["Will my cards work in regular Anki?"
     "Yes. Basic cards map to Anki's Basic note type. Cloze cards use Anki's standard {{c1::}} syntax. Sync runs over AnkiConnect, so any standard Anki setup with the AnkiConnect plugin works."]
    ["What can I import?"
     "PDFs, EPUBs, and web articles via URL. Wikipedia is supported as a special case with cleaner extraction."]
-   ["Does it work offline?"
-    "No. Reading, OCR, card generation, and sync all need a server connection. There's no local-first mode planned."]
+   ["Can I run it offline or self-host?"
+    "Self-host, yes — the codebase is runnable locally (Postgres + JVM), so your reading and cards can live entirely on your own machine. Fully offline, no — OCR and card generation call the OpenAI API, so those steps need an internet connection regardless of where the server runs."]
    ["What does \"pre-production\" actually mean for me?"
     "You're an early user. That means direct access to the team and your feedback shapes the product. The flip side: no SLA, no uptime guarantee, no backup warranty. Export your cards regularly if they matter to you."]])
 
@@ -67,7 +67,7 @@
         (dom/text "Read, Extract, Remember."))
       (dom/p
         (dom/props {:class "landing-sub"})
-        (dom/text "Turn any PDF or book into Anki cards you'll actually remember."))
+        (dom/text "Turn PDFs, electronic books, and articles into Anki cards you'll actually remember."))
       (dom/div
         (dom/props {:class "landing-cta-row"})
         (dom/a
@@ -230,10 +230,10 @@
               (dom/li (dom/text "No long-term price guarantee. Today's free won't be forever.")))))
         (dom/p
           (dom/props {:class "landing-pact-contact"})
-          (dom/text "Questions, bug reports, or hate mail: ")
+          (dom/text "Questions, bug reports, or feature ideas: ")
           (dom/a
-            (dom/props {:href "mailto:adham@hyperfiddle.net"})
-            (dom/text "adham@hyperfiddle.net")))))))
+            (dom/props {:href "mailto:contact@adham-omran.com"})
+            (dom/text "contact@adham-omran.com")))))))
 
 (e/defn Footer []
   (e/client
@@ -242,9 +242,10 @@
       (dom/span (dom/props {:class "landing-footer-brand"}) (dom/text "FreeMemo"))
       (dom/nav
         (dom/props {:class "landing-footer-nav"})
-        (dom/a (dom/props {:href "mailto:adham@hyperfiddle.net"}) (dom/text "Contact"))
-        (dom/a (dom/props {:href "/privacy"}) (dom/text "Privacy"))
-        (dom/a (dom/props {:href "/terms"}) (dom/text "Terms"))
+        (dom/a (dom/props {:href "mailto:contact@adham-omran.com"}) (dom/text "Contact"))
+        (dom/a (dom/props {:href "https://github.com/adham-omran/freememo"
+                           :target "_blank" :rel "noopener"})
+          (dom/text "Source"))
         (dom/a (dom/props {:href "/auth/google"}) (dom/text "Sign in"))))))
 
 (e/defn LandingPage [auth-error]
