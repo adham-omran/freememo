@@ -7,6 +7,7 @@
   (:import
    [org.apache.pdfbox Loader]
    [org.apache.pdfbox.rendering PDFRenderer]
+   [org.apache.pdfbox.text PDFTextStripper]
    [java.awt.image BufferedImage]
    [javax.imageio ImageIO]
    [java.io ByteArrayOutputStream]
@@ -39,6 +40,25 @@
     (let [bytes (.toByteArray baos)
           b64 (.encodeToString (Base64/getEncoder) bytes)]
       (str "data:image/png;base64," b64))))
+
+(defn extract-text-pdfbox
+  "Extract text from a single PDF page using PDFBox's native text layer.
+   page-number is 1-based. No network, no API key. Returns empty/short text
+   for scanned pages with no text layer."
+  [pdf-bytes page-number]
+  (try
+    (let [doc (Loader/loadPDF pdf-bytes)]
+      (try
+        (let [stripper (doto (PDFTextStripper.)
+                         (.setSortByPosition true)
+                         (.setStartPage page-number)
+                         (.setEndPage page-number))
+              text (.getText stripper doc)]
+          {:success true :text (or text "")})
+        (finally (.close doc))))
+    (catch Exception e
+      (tel/error! {:id ::extract-text-pdfbox} e)
+      {:success false :error (str "PDFBox extraction failed: " (.getMessage e))})))
 
 (defn extract-text
   "Extract text from a PDF page using OpenAI Vision API.

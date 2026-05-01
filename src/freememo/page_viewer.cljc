@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.logging :as log]
    [freememo.pdf-viewer-component :refer [PdfViewerComponent]]
+   [freememo.pdf-viewer :as pdf-viewer]
    [freememo.rich-text-editor-component :refer [RichTextEditorComponent]]
    [freememo.rich-text-editor :as editor]
    [freememo.typeahead :refer [Typeahead]]
@@ -194,6 +195,14 @@
                 ;; User settings
                 scan-dpi (e/server (settings/get-scan-dpi user-id))
                 card-font-size (e/server (settings/get-card-font-size user-id))
+                enable-ai-button? (e/server (settings/get-enable-ai-scan-button user-id))
+                enable-pdfbox-button? (e/server (settings/get-enable-pdfbox-button user-id))
+                enable-pdfjs-button? (e/server (settings/get-enable-pdfjs-button user-id))
+                ;; Client-side bridge for PDF.js extraction result.
+                ;; Click handler kicks off async getTextContent() and resets this
+                ;; atom on resolve; the e/Token below saves to server.
+                !pdfjs-result (atom nil)
+                pdfjs-result (e/watch !pdfjs-result)
                 ;; Extraction tracking — server-side for true parallelism
                 scanning-pages (e/server (e/watch (us/get-atom user-id :scanning-pages)))
                 ocr-errors (e/server (e/watch (us/get-atom user-id :ocr-errors)))
@@ -304,7 +313,7 @@
                                 (token)))))
                         (dom/text "Done"))
 
-                      (when (and is-pdf llm-enabled?)
+                      (when (and is-pdf llm-enabled? enable-ai-button?)
                         (let [scanning? (contains? scanning-pages [selected-doc current-pdf-page])
                               disabled? scanning?]
                           (dom/button
@@ -333,6 +342,104 @@
                                         :started))))
                                 (token)))))) ;; end when llm-enabled?
                       
+                      ;; PDFBox native text extraction — server-side, no LLM.
+                      (when (and is-pdf enable-pdfbox-button?)
+                        (let [scanning? (contains? scanning-pages [selected-doc current-pdf-page])
+                              disabled? scanning?]
+                          (dom/button
+                            (dom/props {:class "btn btn-sm"
+                                        :style {:padding "4px 12px" :font-size "14px"
+                                                :background (if disabled? "var(--color-border)" "var(--color-bg-card)")
+                                                :border "1px solid var(--color-border)"
+                                                :color "var(--color-text-primary)"
+                                                :cursor (if disabled? "not-allowed" "pointer")}
+                                        :disabled disabled?
+                                        :data-tooltip "Extract text directly from the PDF (no AI)"})
+                            (dom/text (if disabled? "Extracting..." "Extract (PDFBox)"))
+                            (let [click-event (dom/On "click"
+                                                (fn [_] {:id (str (random-uuid)) :page current-pdf-page})
+                                                nil)
+                                  [?token _] (e/Token click-event)]
+                              (when-some [token ?token]
+                                (let [page (:page click-event)
+                                      result (e/server
+                                               (let [doc selected-doc
+                                                     uid user-id
+                                                     p page]
+                                                 (e/Offload
+                                                   #(do
+                                                      (swap! (us/get-atom uid :scanning-pages) conj [doc p])
+                                                      (swap! (us/get-atom uid :ocr-errors) dissoc [doc p])
+                                                      (try
+                                                        (let [r (page/extract-page-text-pdfbox doc p)]
+                                                          (if (:success r)
+                                                            (swap! (us/get-atom uid :refresh) inc)
+                                                            (swap! (us/get-atom uid :ocr-errors) assoc [doc p] (:error r)))
+                                                          r)
+                                                        (finally
+                                                          (swap! (us/get-atom uid :scanning-pages) disj [doc p])))))))]
+                                  (when result
+                                    (token))))))))
+
+                      ;; PDF.js native text extraction — client-extract, server-save.
+                      (when (and is-pdf enable-pdfjs-button?)
+                        (let [scanning? (contains? scanning-pages [selected-doc current-pdf-page])
+                              disabled? scanning?]
+                          (dom/button
+                            (dom/props {:class "btn btn-sm"
+                                        :style {:padding "4px 12px" :font-size "14px"
+                                                :background (if disabled? "var(--color-border)" "var(--color-bg-card)")
+                                                :border "1px solid var(--color-border)"
+                                                :color "var(--color-text-primary)"
+                                                :cursor (if disabled? "not-allowed" "pointer")}
+                                        :disabled disabled?
+                                        :data-tooltip "Extract text using the PDF.js text layer (no AI)"})
+                            (dom/text (if disabled? "Extracting..." "Extract (PDF.js)"))
+                            (dom/On "click"
+                              (fn [_]
+                                #?(:cljs
+                                   (let [page current-pdf-page
+                                         doc selected-doc]
+                                     (-> (pdf-viewer/get-page-text-content! page)
+                                       (.then (fn [text]
+                                                (reset! !pdfjs-result {:id (str (random-uuid))
+                                                                       :page page
+                                                                       :doc doc
+                                                                       :text text})))
+                                       (.catch (fn [err]
+                                                 (reset! !pdfjs-result {:id (str (random-uuid))
+                                                                        :page page
+                                                                        :doc doc
+                                                                        :error (str err)})))))
+                                   :clj nil))
+                              nil))))
+
+                      ;; React to PDF.js extraction result: persist server-side.
+                      (let [[?pdfjs-token _] (e/Token pdfjs-result)]
+                        (when-some [token ?pdfjs-token]
+                          (let [{:keys [page doc text error]} pdfjs-result
+                                save-result (e/server
+                                              (e/Offload
+                                                #(do
+                                                   (swap! (us/get-atom user-id :scanning-pages) conj [doc page])
+                                                   (swap! (us/get-atom user-id :ocr-errors) dissoc [doc page])
+                                                   (try
+                                                     (cond
+                                                       error (do
+                                                               (swap! (us/get-atom user-id :ocr-errors) assoc [doc page] error)
+                                                               {:success false :error error})
+                                                       :else (let [r (page/save-pdfjs-text! doc page text)]
+                                                               (if (:success r)
+                                                                 (swap! (us/get-atom user-id :refresh) inc)
+                                                                 (swap! (us/get-atom user-id :ocr-errors) assoc [doc page] (:error r)))
+                                                               r))
+                                                     (finally
+                                                       (swap! (us/get-atom user-id :scanning-pages) disj [doc page]))))))]
+                            (when save-result
+                              (token)
+                              (reset! !pdfjs-result nil)))))
+
+
                     ;; OCR error display — auto-dismiss after 3 seconds
                       (when-let [ocr-err (get ocr-errors [selected-doc current-pdf-page])]
                         (let [!show (atom true)

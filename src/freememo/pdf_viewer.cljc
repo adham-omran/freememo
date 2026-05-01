@@ -192,6 +192,50 @@
                (.on eb "pagechanging"
                  (fn [^js e] (callback (.-pageNumber e))))))))
 
+(defn get-page-text-content!
+  "Extract plain text from a single page using PDF.js's text layer.
+   page-num is 1-based. Returns Promise<String>. Inserts paragraph breaks
+   at large Y-coordinate gaps and line breaks at smaller ones; CLJ-side
+   returns nil. Resolves with empty string when no PDF is loaded or the
+   text layer is missing (typical for scanned PDFs)."
+  [page-num]
+  #?(:clj nil
+     :cljs
+     (if-let [^js doc @!pdf-doc]
+       (-> (.getPage doc page-num)
+         (.then (fn [^js page] (.getTextContent page)))
+         (.then (fn [^js content]
+                  (let [items (.-items content)
+                        n (.-length items)
+                        parts #js []
+                        state #js {:prev_y nil :prev_h nil}]
+                    (loop [i 0]
+                      (when (< i n)
+                        (let [^js item (aget items i)
+                              txt (.-str item)
+                              tform (.-transform item)
+                              this-y (when tform (aget tform 5))
+                              this-h (.-height item)]
+                          (when (and txt (pos? (.-length txt)) (some? this-y))
+                            (let [prev-y (.-prev_y state)
+                                  prev-h (.-prev_h state)]
+                              (when (and (some? prev-y) (some? prev-h))
+                                (let [dy (- prev-y this-y)
+                                      line-h (js/Math.max prev-h (or this-h 0) 1)]
+                                  (cond
+                                    (> dy (* 1.5 line-h)) (.push parts "\n\n")
+                                    (> dy (* 0.3 line-h)) (.push parts "\n"))))
+                              (.push parts txt)
+                              (set! (.-prev_y state) this-y)
+                              (when (and this-h (pos? this-h))
+                                (set! (.-prev_h state) this-h))))
+                          (recur (inc i)))))
+                    (.join parts ""))))
+         (.catch (fn [err]
+                   (js/console.error "[PDF] getTextContent error:" err)
+                   "")))
+       (js/Promise.resolve ""))))
+
 (defn setup-pinch-zoom!
   "Enable pinch-to-zoom on the PDF viewer container for touch devices."
   [container]

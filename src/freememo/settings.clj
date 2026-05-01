@@ -47,6 +47,9 @@
 (def PROMPT_OCR "prompt_ocr")
 (def EMAIL_UPDATES "email_updates")
 (def THEME "theme")
+(def ENABLE_AI_SCAN_BUTTON "enable_ai_scan_button")
+(def ENABLE_PDFBOX_BUTTON "enable_pdfbox_button")
+(def ENABLE_PDFJS_BUTTON "enable_pdfjs_button")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
 
 (defn get-email-updates [user-id]
@@ -380,6 +383,42 @@
     (catch Exception e
       (tel/error! {:id ::save-theme} e)
       {:success false :error "Failed to save theme"})))
+
+;; Extraction button visibility toggles.
+;; AI defaults on (preserves existing behaviour); native extractors default off (additive).
+(defn get-enable-ai-scan-button [user-id]
+  (let [v (db/get-setting user-id ENABLE_AI_SCAN_BUTTON)]
+    (or (nil? v) (= "true" v))))
+
+(defn save-enable-ai-scan-button [user-id value]
+  (try
+    (db/set-setting user-id ENABLE_AI_SCAN_BUTTON (str (boolean value)))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-enable-ai-scan-button} e)
+      {:success false :error "Failed to save AI scan button setting"})))
+
+(defn get-enable-pdfbox-button [user-id]
+  (= "true" (db/get-setting user-id ENABLE_PDFBOX_BUTTON)))
+
+(defn save-enable-pdfbox-button [user-id value]
+  (try
+    (db/set-setting user-id ENABLE_PDFBOX_BUTTON (str (boolean value)))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-enable-pdfbox-button} e)
+      {:success false :error "Failed to save PDFBox button setting"})))
+
+(defn get-enable-pdfjs-button [user-id]
+  (= "true" (db/get-setting user-id ENABLE_PDFJS_BUTTON)))
+
+(defn save-enable-pdfjs-button [user-id value]
+  (try
+    (db/set-setting user-id ENABLE_PDFJS_BUTTON (str (boolean value)))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-enable-pdfjs-button} e)
+      {:success false :error "Failed to save PDF.js button setting"})))
 
 (defn save-anki-sync-settings [user-id {:keys [scope deck basic-model cloze-model allow-dupes use-header header-text use-tags tags source-field]}]
   (try

@@ -52,6 +52,94 @@
                 (dom/props {:style {:font-size "14px" :font-weight "500" :color "var(--color-text-primary)"}})
                 (dom/text "Subscribe to email updates"))))))
 
+      ;; ── Page Extraction Buttons section ──
+      (let [server-ai-btn (e/server (settings/get-enable-ai-scan-button user-id))
+            !ai-btn (atom server-ai-btn)
+            ai-btn (e/watch !ai-btn)
+            server-pdfbox-btn (e/server (settings/get-enable-pdfbox-button user-id))
+            !pdfbox-btn (atom server-pdfbox-btn)
+            pdfbox-btn (e/watch !pdfbox-btn)
+            server-pdfjs-btn (e/server (settings/get-enable-pdfjs-button user-id))
+            !pdfjs-btn (atom server-pdfjs-btn)
+            pdfjs-btn (e/watch !pdfjs-btn)]
+        (dom/div
+          (dom/props {:class "card"})
+          (dom/h3 (dom/props {:class "section-title"}) (dom/text "Page Extraction Buttons"))
+          (dom/div
+            (dom/props {:style {:padding "10px 12px" :background "var(--color-info-bg)" :border-radius "var(--radius-md)"
+                                :margin-bottom "var(--sp-3)" :font-size "13px" :line-height "1.5"
+                                :color "var(--color-text-secondary)"}})
+            (dom/text "Choose which extraction buttons appear on the page toolbar. Native extractors (PDFBox, PDF.js) read text directly from the PDF — fast and free, but produce no result on scanned pages."))
+
+          ;; AI Scan Page toggle
+          (dom/div
+            (dom/props {:class "field"})
+            (dom/label
+              (dom/props {:style {:display "flex" :align-items "center" :gap "10px" :cursor "pointer"}})
+              (dom/input
+                (dom/props {:type "checkbox" :checked ai-btn
+                            :style {:width "18px" :height "18px" :accent-color "var(--color-primary)"}})
+                (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
+                      [?token _] (e/Token change-event)]
+                  (when (some? change-event)
+                    (reset! !ai-btn change-event))
+                  (when-some [token ?token]
+                    (e/server (settings/save-enable-ai-scan-button user-id change-event))
+                    (token))))
+              (dom/div
+                (dom/span
+                  (dom/props {:style {:font-size "14px" :font-weight "500" :color "var(--color-text-primary)"}})
+                  (dom/text "Show \"Scan Page\" button (AI / OpenAI Vision)"))
+                (dom/div
+                  (dom/props {:class "hint"})
+                  (dom/text "Best for scanned PDFs and complex layouts. Requires LLM features and an API key.")))))
+
+          ;; PDFBox toggle
+          (dom/div
+            (dom/props {:class "field"})
+            (dom/label
+              (dom/props {:style {:display "flex" :align-items "center" :gap "10px" :cursor "pointer"}})
+              (dom/input
+                (dom/props {:type "checkbox" :checked pdfbox-btn
+                            :style {:width "18px" :height "18px" :accent-color "var(--color-primary)"}})
+                (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
+                      [?token _] (e/Token change-event)]
+                  (when (some? change-event)
+                    (reset! !pdfbox-btn change-event))
+                  (when-some [token ?token]
+                    (e/server (settings/save-enable-pdfbox-button user-id change-event))
+                    (token))))
+              (dom/div
+                (dom/span
+                  (dom/props {:style {:font-size "14px" :font-weight "500" :color "var(--color-text-primary)"}})
+                  (dom/text "Show \"Extract (PDFBox)\" button"))
+                (dom/div
+                  (dom/props {:class "hint"})
+                  (dom/text "Server-side native text extraction. No AI, no API key.")))))
+
+          ;; PDF.js toggle
+          (dom/div
+            (dom/props {:class "field"})
+            (dom/label
+              (dom/props {:style {:display "flex" :align-items "center" :gap "10px" :cursor "pointer"}})
+              (dom/input
+                (dom/props {:type "checkbox" :checked pdfjs-btn
+                            :style {:width "18px" :height "18px" :accent-color "var(--color-primary)"}})
+                (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
+                      [?token _] (e/Token change-event)]
+                  (when (some? change-event)
+                    (reset! !pdfjs-btn change-event))
+                  (when-some [token ?token]
+                    (e/server (settings/save-enable-pdfjs-button user-id change-event))
+                    (token))))
+              (dom/div
+                (dom/span
+                  (dom/props {:style {:font-size "14px" :font-weight "500" :color "var(--color-text-primary)"}})
+                  (dom/text "Show \"Extract (PDF.js)\" button"))
+                (dom/div
+                  (dom/props {:class "hint"})
+                  (dom/text "Client-side native text extraction using the loaded PDF.js viewer. No AI, no API key.")))))))
+
       ;; ── AI Features section ──
       (let [server-llm-enabled (e/server (settings/get-llm-enabled user-id))
             !llm-enabled (atom server-llm-enabled)
