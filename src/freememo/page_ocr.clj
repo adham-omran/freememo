@@ -44,7 +44,9 @@
               result (ocr/extract-text-pdfbox pdf-bytes page-number)]
           (if-not (:success result)
             result
-            (let [html (text/text->paragraph-html (:text result))]
+            (let [html (-> (:text result)
+                         text/normalize-extracted-text
+                         text/text->paragraph-html)]
               (if (clojure.string/blank? html)
                 {:success false :error empty-text-message}
                 (do
@@ -60,7 +62,9 @@
    normalization (e.g., scanned page with no text layer)."
   [topic-id page-number raw-text]
   (try
-    (let [html (text/text->paragraph-html raw-text)]
+    (let [html (-> raw-text
+                 text/normalize-extracted-text
+                 text/text->paragraph-html)]
       (if (clojure.string/blank? html)
         {:success false :error empty-text-message}
         (do
