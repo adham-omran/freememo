@@ -2,7 +2,8 @@
   "Plain helper functions for Anki sync — no e/defn, no reactive frame slots."
   (:require
    [missionary.core :as m]
-   [clojure.string :as str]))
+   [clojure.string :as str]
+   [freememo.logging :as log]))
 
 ;; ---------------------------------------------------------------------------
 ;; Client-side AnkiConnect wrapper
@@ -123,10 +124,15 @@
    PDF cards link to /viewer/browse-pdf/<root-id>/<page> (or /<root-id> without page);
    other kinds link to /viewer/browse-topic/<root-id>.
    Anchor text is '<title> - <page>' for PDF-with-page, else '<title>'.
+
+   Title precedence: user-edited :topic-source (the Source input on the viewer)
+   beats :topics/title (the upload filename), which beats the per-card snapshot.
    Returns nil when no title is resolvable."
   [card settings]
   (let [{:keys [topic-kind root-topic-id topic-title topic-source]} settings
-        title (or topic-title topic-source (:flashcards/source_reference card))
+        title (or (when-not (str/blank? topic-source) topic-source)
+                (when-not (str/blank? topic-title) topic-title)
+                (:flashcards/source_reference card))
         pdf? (= topic-kind "pdf")
         page (:page_number card)
         url (cond
@@ -201,10 +207,19 @@
                   :allow-dupes :use-header :header-text :tags}"
      [cards settings]
      (let [new-cards (vec (filter #(nil? (:flashcards/anki_note_id %)) cards))
-           ;; Only update existing cards whose content changed since last push
-           ;; :needs-update? is pre-computed on the server (JVM) where timestamp
-           ;; comparison is reliable — JS Date toString is not chronologically sortable
-           changed-cards (vec (filter :needs-update? cards))]
+           ;; Re-push every previously-synced card on every push so changes to
+           ;; header text / use-header / source mode / tags propagate even when
+           ;; card body content was not edited. Anki-side timestamp checks
+           ;; can't see these settings, so optimizing here would silently drop
+           ;; legitimate updates.
+           changed-cards (vec (filter #(some? (:flashcards/anki_note_id %)) cards))]
+       (log/log-debug (str "[anki-push] do-anki-push! starting"
+                        " new=" (count new-cards)
+                        " update=" (count changed-cards)
+                        " mode=" (:source-display-mode settings)
+                        " topic-source=" (pr-str (:topic-source settings))
+                        " topic-title=" (pr-str (:topic-title settings))
+                        " topic-kind=" (pr-str (:topic-kind settings))))
        (m/sp
          (let [;; Phase 1: add new cards (sequential, concurrency 1)
                add-result
@@ -230,6 +245,10 @@
                         (let [card (m/?> 10 (m/seed changed-cards))]
                           (try
                             (let [field-map (build-update-fields card settings)]
+                              (log/log-debug (str "[anki-push] updateNote card-id=" (:flashcards/id card)
+                                               " note-id=" (:flashcards/anki_note_id card)
+                                               " field-keys=" (vec (keys field-map))
+                                               " field-map=" (pr-str field-map)))
                               (m/? (anki-call! "updateNote"
                                      {:note {:id (:flashcards/anki_note_id card)
                                              :fields field-map
@@ -238,6 +257,8 @@
                                         :anki-note-id (:flashcards/anki_note_id card)}]
                                :updated [1]})
                             (catch :default err
+                              (log/log-error (str "[anki-push] updateNote FAILED card-id=" (:flashcards/id card)
+                                               " error=" (.-message err)))
                               {:errors [{:card-id (:flashcards/id card) :error (.-message err)}]}))))))]
            ;; Merge both phases
            (-> (merge-with into add-result update-result)
@@ -245,8 +266,13 @@
 
 #?(:cljs
    (defn do-anki-pull!
-     "Pull edits from Anki for previously-synced cards. Returns Missionary task of updates + deleted IDs."
-     [cards basic-fields cloze-fields]
+     "Pull edits from Anki for previously-synced cards. Returns Missionary task of updates + deleted IDs.
+
+      Field selection is derived from Anki's notesInfo :order — basic cards read
+      the first two fields by order (question, answer); cloze cards read the
+      first. This matches Anki's own field ordering and removes any modal-side
+      configuration dependency."
+     [cards]
      (let [synced (filter #(some? (:flashcards/anki_note_id %)) cards)
            note-ids (mapv :flashcards/anki_note_id synced)]
        (if (empty? note-ids)
@@ -281,18 +307,19 @@
                                  (let [kind (:flashcards/kind card)
                                        basic? (= kind "basic")
                                        fields-map (:fields anki-note)
-                                       get-field (fn [fname]
-                                                   (:value (get fields-map (keyword fname))))
+                                       ordered-vals (->> fields-map
+                                                      (sort-by (fn [[_ v]] (or (:order v) 0)))
+                                                      (mapv (fn [[_ v]] (:value v))))
                                        update-map
                                        (if basic?
-                                         (let [q (strip-html (get-field (first basic-fields)))
-                                               a (strip-html (get-field (second basic-fields)))
+                                         (let [q (strip-html (first ordered-vals))
+                                               a (strip-html (second ordered-vals))
                                                local-q (or (:flashcards/question card) "")
                                                local-a (or (:flashcards/answer card) "")]
                                            (when (or (not= q local-q) (not= a local-a))
                                              {:card-id (:flashcards/id card)
                                               :question q :answer a}))
-                                         (let [c (strip-html (get-field (first cloze-fields)))
+                                         (let [c (strip-html (first ordered-vals))
                                                local-c (or (:flashcards/cloze card) "")]
                                            (when (not= c local-c)
                                              {:card-id (:flashcards/id card)
@@ -341,19 +368,28 @@
 
 (defn run-push!
   "Execute push to Anki and update state atoms with results.
+   Always transitions to :recording — finalize-push! must run even when
+   there are no new pairs, so settings/per-item preset still persist.
    settings = {:deck :basic-model :cloze-model :basic-fields :cloze-fields
                :allow-dupes :use-header :header-text :tags}
-   sync     = {:!phase :!result :!error :!push-pairs :!pull-updates}"
+   sync     = {:!phase :!result :!error :!push-pairs}"
   [cards settings sync]
   (let [{:keys [!phase !result !error !push-pairs]} sync]
     #?(:cljs
        (do ((do-anki-push! cards settings)
             (fn [result]
+              (let [pairs (or (:pairs result) [])
+                    updated (or (:updated result) 0)
+                    added (max 0 (- (count pairs) updated))
+                    skipped (count (or (:skipped result) []))
+                    errors (count (or (:errors result) []))]
+                (log/log-debug (str "[anki-push] complete added=" added
+                                 " updated=" updated
+                                 " skipped=" skipped
+                                 " errors=" errors)))
               (reset! !result result)
-              (if (seq (:pairs result))
-                (do (reset! !push-pairs (:pairs result))
-                  (reset! !phase :recording))
-                (reset! !phase :done)))
+              (reset! !push-pairs (vec (:pairs result)))
+              (reset! !phase :recording))
             (fn [err]
               (reset! !error (.-message err))
               (reset! !phase :error)))
@@ -362,13 +398,11 @@
 
 (defn run-pull!
   "Execute pull from Anki and update state atoms with results.
-   settings = {:basic-fields :cloze-fields ...}
-   sync     = {:!phase :!result :!error :!push-pairs :!pull-updates}"
-  [cards settings sync]
-  (let [{:keys [basic-fields cloze-fields]} settings
-        {:keys [!phase !result !error !pull-updates]} sync]
+   sync = {:!phase :!result :!error :!pull-updates}"
+  [cards sync]
+  (let [{:keys [!phase !result !error !pull-updates]} sync]
     #?(:cljs
-       (do ((do-anki-pull! cards basic-fields cloze-fields)
+       (do ((do-anki-pull! cards)
             (fn [result]
               (if (and (empty? (:updates result)) (empty? (:deleted result)))
                 (do (reset! !result result)

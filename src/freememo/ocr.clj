@@ -74,6 +74,7 @@
            image (pdf-page->image pdf-bytes page-number dpi)
            base64-image (image->base64 image)
            prompt (settings/get-ocr-prompt user-id)
+           t-start (System/nanoTime)
            response (api/create-chat-completion
                       {:model "gpt-5.1"
                        :messages [{:role "user"
@@ -81,6 +82,19 @@
                                              {:type "image_url"
                                               :image_url {:url base64-image}}]}]}
                       {:api-key api-key})
+           duration-ms (long (/ (- (System/nanoTime) t-start) 1000000))
+           usage (:usage response)
+           _ (tel/log! {:level :info :id ::openai-completion
+                        :data {:user-id user-id
+                               :model "gpt-5.1"
+                               :endpoint :ocr.extract
+                               :prompt-tokens (:prompt_tokens usage)
+                               :completion-tokens (:completion_tokens usage)
+                               :cached-tokens (get-in usage [:prompt_tokens_details :cached_tokens])
+                               :reasoning-tokens (get-in usage [:completion_tokens_details :reasoning_tokens])
+                               :duration-ms duration-ms
+                               :attempt 1}}
+               "OpenAI completion")
            raw-text (-> response :choices first :message :content)
            _ (when-not raw-text
                (throw (ex-info "Empty response from OpenAI"

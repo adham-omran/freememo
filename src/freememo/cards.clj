@@ -125,8 +125,9 @@
 
 (defn- generate-cards*
   "Shared implementation for card generation with up to 3 retry attempts.
-   Validates that the returned card count matches the requested count."
-  [{:keys [content context card-count model user-id pre-prompt enc-key]} prompt-builder-fn]
+   Validates that the returned card count matches the requested count.
+   endpoint-tag is :cards.basic or :cards.cloze for usage logging."
+  [{:keys [content context card-count model user-id pre-prompt enc-key]} prompt-builder-fn endpoint-tag]
   (let [api-key (settings/get-openai-api-key user-id enc-key)
         _ (when (empty? api-key) (throw (ex-info "OpenAI API key not configured" {})))
         _ (when (empty? content) (throw (ex-info "No content provided" {})))
@@ -139,7 +140,8 @@
         _ (when-not prompt (throw (ex-info "Failed to load prompt templates" {})))
         content-text (if has-context? (pr-str {:content content :context context}) content)]
     (loop [attempt 1]
-      (let [response (api/create-chat-completion
+      (let [t-start (System/nanoTime)
+            response (api/create-chat-completion
                        {:model model
                         :messages [{:role "system" :content prompt}
                                    {:role "user" :content content-text}]
@@ -148,7 +150,20 @@
                        {:api-key api-key
                         :reasoning {:effort reasoning}
                         :verbosity verbosity})
+            duration-ms (long (/ (- (System/nanoTime) t-start) 1000000))
+            usage (:usage response)
             raw-text (-> response :choices first :message :content)
+            _ (tel/log! {:level :info :id ::openai-completion
+                         :data {:user-id user-id
+                                :model model
+                                :endpoint endpoint-tag
+                                :prompt-tokens (:prompt_tokens usage)
+                                :completion-tokens (:completion_tokens usage)
+                                :cached-tokens (get-in usage [:prompt_tokens_details :cached_tokens])
+                                :reasoning-tokens (get-in usage [:completion_tokens_details :reasoning_tokens])
+                                :duration-ms duration-ms
+                                :attempt attempt}}
+                "OpenAI completion")
             cards (parse-edn-response raw-text)
             actual-count (count cards)]
         (cond
@@ -182,7 +197,7 @@
   [opts]
   (try
     (tel/trace! {:id ::generate-basic}
-      (generate-cards* opts build-basic-prompt))
+      (generate-cards* opts build-basic-prompt :cards.basic))
     (catch Exception e
       (tel/error! {:id ::generate-basic-cards} e)
       {:success false :error (humanize-error (.getMessage e))})))
@@ -194,7 +209,7 @@
   [opts]
   (try
     (tel/trace! {:id ::generate-cloze}
-      (generate-cards* opts build-cloze-prompt))
+      (generate-cards* opts build-cloze-prompt :cards.cloze))
     (catch Exception e
       (tel/error! {:id ::generate-cloze-cards} e)
       {:success false :error (humanize-error (.getMessage e))})))
