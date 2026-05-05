@@ -21,8 +21,7 @@
                 :!use-tags (atom false)
                 :!tags (atom [])
                 :!basic-fields (atom [])
-                :!cloze-fields (atom [])
-                :!source-field (atom "Source")}]
+                :!cloze-fields (atom [])}]
       (panels/AnkiSyncSyncBody
         user-id selected-doc current-pdf-page !show-modal conn form))))
 

@@ -37,6 +37,7 @@
 (def ANKI_USE_TAGS "anki_use_tags")
 (def ANKI_TAGS "anki_tags")
 (def ANKI_SOURCE_FIELD "anki_source_field")
+(def ANKI_AUTO_LOAD_MODE "anki_auto_load_mode")
 (def SOURCE_DISPLAY_MODE "source_display_mode")
 (def LLM_ENABLED "llm_enabled")
 (def LAST_DOCUMENT "last_document")
@@ -194,6 +195,30 @@
 
 (defn get-anki-source-field [user-id]
   (or (db/get-setting user-id ANKI_SOURCE_FIELD) "Source"))
+
+(defn save-anki-source-field [user-id value]
+  (try
+    (db/set-setting user-id ANKI_SOURCE_FIELD (or value "Source"))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-anki-source-field} e)
+      {:success false :error "Failed to save Anki source field name"})))
+
+(defn get-anki-auto-load-mode
+  "Returns one of \"per-item\", \"global\", or \"none\". Defaults to \"per-item\"."
+  [user-id]
+  (let [v (db/get-setting user-id ANKI_AUTO_LOAD_MODE)]
+    (if (#{"per-item" "global" "none"} v) v "per-item")))
+
+(defn save-anki-auto-load-mode [user-id value]
+  (try
+    (when-not (#{"per-item" "global" "none"} value)
+      (throw (Exception. "Invalid auto-load mode")))
+    (db/set-setting user-id ANKI_AUTO_LOAD_MODE value)
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-anki-auto-load-mode} e)
+      {:success false :error "Failed to save auto-load mode"})))
 
 ;; Save functions with validation
 (defn save-openai-api-key [user-id api-key enc-key]
@@ -420,7 +445,7 @@
       (tel/error! {:id ::save-enable-pdfjs-button} e)
       {:success false :error "Failed to save PDF.js button setting"})))
 
-(defn save-anki-sync-settings [user-id {:keys [scope deck basic-model cloze-model allow-dupes use-header header-text use-tags tags source-field]}]
+(defn save-anki-sync-settings [user-id {:keys [scope deck basic-model cloze-model allow-dupes use-header header-text use-tags tags]}]
   (try
     (when scope (db/set-setting user-id ANKI_SCOPE scope))
     (when deck (db/set-setting user-id ANKI_DECK deck))
@@ -431,7 +456,6 @@
     (when (some? header-text) (db/set-setting user-id ANKI_HEADER_TEXT header-text))
     (db/set-setting user-id ANKI_USE_TAGS (str (boolean use-tags)))
     (db/set-setting user-id ANKI_TAGS (pr-str (or tags [])))
-    (when (some? source-field) (db/set-setting user-id ANKI_SOURCE_FIELD source-field))
     {:success true}
     (catch Exception e
       (tel/error! {:id ::save-anki-sync-settings} e)

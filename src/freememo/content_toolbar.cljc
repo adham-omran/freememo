@@ -117,6 +117,13 @@
                                 (when-let [btn (deref keyboard/!export-btn-ref)]
                                   (.click btn))
                                 (reset! !overflow-open false)) nil))
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action"})
+              (dom/text "Pull from Anki")
+              (dom/On "click" (fn [_]
+                                (when-let [btn (deref keyboard/!pull-anki-btn-ref)]
+                                  (.click btn))
+                                (reset! !overflow-open false)) nil))
             (when extract-status
               (dom/button
                 (dom/props {:class "btn btn-sm btn-danger toolbar-overflow-panel-action"})

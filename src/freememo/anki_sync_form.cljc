@@ -25,27 +25,27 @@
   "Multi-tag input with chip display and autocomplete from all-tags."
   [!tags all-tags]
   (e/client
-    (let [tags        (e/watch !tags)
-          !search     (atom "")
-          search      (e/watch !search)
-          !focused    (atom false)
-          focused     (e/watch !focused)
+    (let [tags (e/watch !tags)
+          !search (atom "")
+          search (e/watch !search)
+          !focused (atom false)
+          focused (e/watch !focused)
           !active-idx (atom -1)
-          active-idx  (e/watch !active-idx)
-          filtered    (when (and focused (seq search))
-                        (->> all-tags
-                          (filter (fn [t]
-                                    (and (string/includes?
-                                           (string/lower-case t)
-                                           (string/lower-case search))
-                                         (not (some #{t} tags)))))
-                          (take 5)
-                          vec))
-          add-tag!    (fn [t]
-                        (when-not (some #{t} @!tags)
-                          (swap! !tags conj t))
-                        (reset! !search "")
-                        (reset! !active-idx -1))]
+          active-idx (e/watch !active-idx)
+          filtered (when (and focused (seq search))
+                     (->> all-tags
+                       (filter (fn [t]
+                                 (and (string/includes?
+                                        (string/lower-case t)
+                                        (string/lower-case search))
+                                   (not (some #{t} tags)))))
+                       (take 5)
+                       vec))
+          add-tag! (fn [t]
+                     (when-not (some #{t} @!tags)
+                       (swap! !tags conj t))
+                     (reset! !search "")
+                     (reset! !active-idx -1))]
       (dom/div
         (dom/props {:style {:position "relative"}})
         ;; Input row with chips
@@ -76,7 +76,7 @@
                         :style {:border "none" :outline "none" :font-size "14px"
                                 :flex "1" :min-width "80px" :padding "2px"}})
             (dom/On "focus" (fn [_] (reset! !focused true)
-                                    (reset! !active-idx -1)) nil)
+                              (reset! !active-idx -1)) nil)
             (dom/On "blur"
               (fn [_]
                 (reset! !focused false)
@@ -95,27 +95,27 @@
               (fn [e]
                 (let [key (.-key e)
                       val (string/trim search)
-                      n   (count filtered)]
+                      n (count filtered)]
                   (cond
                     (= key "ArrowDown")
                     (do (.preventDefault e)
-                        (reset! !active-idx (mod (inc active-idx) n)))
+                      (reset! !active-idx (mod (inc active-idx) n)))
                     (= key "ArrowUp")
                     (do (.preventDefault e)
-                        (reset! !active-idx (mod (dec active-idx) n)))
+                      (reset! !active-idx (mod (dec active-idx) n)))
                     (and (= key "Enter") (>= active-idx 0))
                     (do (.preventDefault e)
-                        (add-tag! (nth filtered active-idx)))
+                      (add-tag! (nth filtered active-idx)))
                     (and (= key " ") (seq val))
                     (do (.preventDefault e)
-                        (add-tag! val))
+                      (add-tag! val))
                     (and (= key "Enter") (seq val))
                     (do (.preventDefault e)
-                        (add-tag! val))
+                      (add-tag! val))
                     (and (= key "Escape") (seq filtered))
                     (do (.preventDefault e)
-                        (reset! !active-idx -1)
-                        (reset! !focused false))
+                      (reset! !active-idx -1)
+                      (reset! !focused false))
                     (and (= key "Backspace") (empty? search) (seq tags))
                     (swap! !tags (fn [ts] (vec (butlast ts)))))))
               nil)))
@@ -131,8 +131,8 @@
                 (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "14px"
                                     :background (cond
                                                   (= i active-idx) "var(--color-highlight)"
-                                                  (odd? i)         "var(--color-bg-subtle)"
-                                                  :else            "var(--color-bg-card)")}})
+                                                  (odd? i) "var(--color-bg-subtle)"
+                                                  :else "var(--color-bg-card)")}})
                 (dom/text t)
                 (dom/On "mousemove" (fn [_] (reset! !active-idx i)) nil)
                 (dom/On "mousedown"
@@ -230,67 +230,34 @@
         (when (seq cloze-fields)
           (str "cloze \u2192 " (first cloze-fields))))
 
-      ;; Source field name (for "separate field" mode)
-      (dom/div
-        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-        (dom/label
-          (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
-          (dom/text "Source Field"))
-        (dom/input
-          (dom/props {:type "text"
-                      :value (e/watch (:!source-field form))
-                      :placeholder "Source"
-                      :title "Name of the Anki field for source info. Used when 'Separate field' mode is selected in Settings."
-                      :class "input" :style {:width "200px"}})
-          (dom/On "change" (fn [e] (reset! (:!source-field form) (-> e .-target .-value))) nil))
-        (dom/span
-          (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)" :margin-left "var(--sp-2)"}})
-          (dom/text "Anki field name for source reference")))
-
       ;; Options
       (AnkiSyncOptions conn form))))
 
 (e/defn AnkiSyncStatus
-  "Sync status display and action buttons.
-   sync = {:!phase :!result :!error :!push-pairs :!pull-updates}"
+  "Sync status display and Push/Cancel buttons. Pull lives in the toolbar.
+   sync = {:!phase :!result :!error :!push-pairs}"
   [sync !show-modal]
   (e/client
     (let [sync-phase (e/watch (:!phase sync))
           sync-result (e/watch (:!result sync))
           sync-error (e/watch (:!error sync))
-          {:keys [!phase !result !error !push-pairs !pull-updates]} sync]
+          {:keys [!phase !result !error !push-pairs]} sync]
       ;; Status display
       (when sync-phase
         (dom/div
           (dom/props {:style {:margin-bottom "var(--sp-4)" :padding "var(--sp-3)" :background "var(--color-bg-subtle)"
                               :border-radius "var(--radius-sm)" :font-size "14px"}})
           (cond
-            (= sync-phase :pushing)   (dom/text "Pushing cards to Anki...")
-            (= sync-phase :pulling)   (dom/text "Pulling edits from Anki...")
+            (= sync-phase :pushing) (dom/text "Pushing cards to Anki...")
             (= sync-phase :recording) (dom/text "Saving to database...")
             (= sync-phase :error)
             (dom/div
               (dom/props {:style {:color "var(--color-danger)"}})
               (dom/text (str "Error: " (or sync-error "Unknown error"))))
             (= sync-phase :done)
-            (let [r sync-result
-                  pairs (or (:pairs r) [])
-                  updated-count (or (:updated r) 0)
-                  added-count (max 0 (- (count pairs) updated-count))
-                  skipped (or (:skipped r) [])
-                  pull-upds (or (:updates r) [])]
-              (dom/div
-                (dom/props {:style {:color "var(--color-success)"}})
-                (dom/text
-                  (str "Done! "
-                    (cond
-                      (seq pull-upds) (str (count pull-upds) " cards updated from Anki")
-                      (or (pos? added-count) (pos? updated-count))
-                      (str (when (pos? added-count) (str added-count " added"))
-                           (when (and (pos? added-count) (pos? updated-count)) ", ")
-                           (when (pos? updated-count) (str updated-count " updated"))
-                           (when (seq skipped) (str ", " (count skipped) " skipped")))
-                      :else "No changes"))))))))
+            (dom/div
+              (dom/props {:style {:color "var(--color-success)"}})
+              (dom/text "Pushed to Anki")))))
 
       ;; Action buttons
       (dom/div
@@ -304,22 +271,9 @@
                             (reset! !phase nil)
                             (reset! !result nil)
                             (reset! !error nil)
-                            (reset! !push-pairs nil)
-                            (reset! !pull-updates nil))
+                            (reset! !push-pairs nil))
             nil))
-        (when-not (#{:pushing :pulling :recording} sync-phase)
-          (dom/button
-            (dom/props {:class "btn btn-secondary" :style {:font-size "15px"}})
-            (dom/text "Pull from Anki")
-            (dom/On "click"
-              (fn [_]
-                (reset! !phase :pulling)
-                (reset! !result nil)
-                (reset! !error nil)
-                (reset! !pull-updates nil)
-                (reset! !push-pairs nil))
-              nil)))
-        (when-not (#{:pushing :pulling :recording} sync-phase)
+        (when-not (#{:pushing :recording} sync-phase)
           (dom/button
             (dom/props {:class "btn btn-primary" :style {:font-size "15px"}})
             (dom/text "Push to Anki")
@@ -328,6 +282,5 @@
                 (reset! !phase :pushing)
                 (reset! !result nil)
                 (reset! !error nil)
-                (reset! !push-pairs nil)
-                (reset! !pull-updates nil))
+                (reset! !push-pairs nil))
               nil)))))))

@@ -504,10 +504,18 @@
       ;; ── Anki Sync section ──
         (let [server-source-mode (e/server (settings/get-source-display-mode user-id))
               !source-mode (atom server-source-mode)
-              source-mode (e/watch !source-mode)]
+              source-mode (e/watch !source-mode)
+              server-source-field (e/server (settings/get-anki-source-field user-id))
+              !source-field (atom server-source-field)
+              source-field (e/watch !source-field)
+              server-auto-mode (e/server (settings/get-anki-auto-load-mode user-id))
+              !auto-mode (atom server-auto-mode)
+              auto-mode (e/watch !auto-mode)]
           (dom/div
             (dom/props {:class "card"})
             (dom/h3 (dom/props {:class "section-title"}) (dom/text "Anki Sync"))
+
+            ;; Source Display Mode
             (dom/div
               (dom/props {:class "field"})
               (dom/label (dom/props {:class "label"}) (dom/text "Source Display Mode"))
@@ -550,7 +558,89 @@
                     (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
                       (dom/text "Separate field"))
                     (dom/div (dom/props {:class "hint"})
-                      (dom/text "Source sent as a separate \"Source\" Anki field")))))))))
+                      (dom/text "Source sent as a separate Anki field"))))))
+
+            ;; Source Field Name — only meaningful in "field" mode
+            (when (= source-mode "field")
+              (dom/div
+                (dom/props {:class "field"})
+                (dom/label (dom/props {:class "label"}) (dom/text "Source Field Name"))
+                (dom/input
+                  (dom/props {:type "text"
+                              :value source-field
+                              :placeholder "Source"
+                              :class "input"
+                              :style {:width "240px"}})
+                  (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                        [?token _] (e/Token change-event)]
+                    (when (some? change-event)
+                      (reset! !source-field change-event))
+                    (when-some [token ?token]
+                      (e/server (settings/save-anki-source-field user-id change-event))
+                      (token))))
+                (dom/div (dom/props {:class "hint"})
+                  (dom/text "Anki field name that receives the source reference. Defaults to \"Source\"."))))
+
+            ;; Auto-load Settings — controls what the Anki Sync modal restores on open
+            (dom/div
+              (dom/props {:class "field"})
+              (dom/label (dom/props {:class "label"}) (dom/text "Auto-load Settings"))
+              (dom/div
+                (dom/props {:style {:display "flex" :flex-direction "column" :gap "10px" :margin-top "4px"}})
+                (dom/label
+                  (dom/props {:style {:display "flex" :align-items "flex-start" :gap "8px" :cursor "pointer"}})
+                  (dom/input
+                    (dom/props {:type "radio" :name "anki-auto-load-mode" :value "per-item"
+                                :checked (= auto-mode "per-item")
+                                :style {:margin-top "3px"}})
+                    (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                          [?token _] (e/Token change-event)]
+                      (when (some? change-event)
+                        (reset! !auto-mode change-event))
+                      (when-some [token ?token]
+                        (e/server (settings/save-anki-auto-load-mode user-id change-event))
+                        (token))))
+                  (dom/div
+                    (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
+                      (dom/text "Use Last Settings Per Item"))
+                    (dom/div (dom/props {:class "hint"})
+                      (dom/text "Restore the saved settings for this specific document; auto-saves on every successful push."))))
+                (dom/label
+                  (dom/props {:style {:display "flex" :align-items "flex-start" :gap "8px" :cursor "pointer"}})
+                  (dom/input
+                    (dom/props {:type "radio" :name "anki-auto-load-mode" :value "global"
+                                :checked (= auto-mode "global")
+                                :style {:margin-top "3px"}})
+                    (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                          [?token _] (e/Token change-event)]
+                      (when (some? change-event)
+                        (reset! !auto-mode change-event))
+                      (when-some [token ?token]
+                        (e/server (settings/save-anki-auto-load-mode user-id change-event))
+                        (token))))
+                  (dom/div
+                    (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
+                      (dom/text "Use Last Settings Globally"))
+                    (dom/div (dom/props {:class "hint"})
+                      (dom/text "Restore the most-recent settings used anywhere; same defaults across documents."))))
+                (dom/label
+                  (dom/props {:style {:display "flex" :align-items "flex-start" :gap "8px" :cursor "pointer"}})
+                  (dom/input
+                    (dom/props {:type "radio" :name "anki-auto-load-mode" :value "none"
+                                :checked (= auto-mode "none")
+                                :style {:margin-top "3px"}})
+                    (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                          [?token _] (e/Token change-event)]
+                      (when (some? change-event)
+                        (reset! !auto-mode change-event))
+                      (when-some [token ?token]
+                        (e/server (settings/save-anki-auto-load-mode user-id change-event))
+                        (token))))
+                  (dom/div
+                    (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
+                      (dom/text "None (Manual)"))
+                    (dom/div (dom/props {:class "hint"})
+                      (dom/text "Open the modal with default values; you set everything fresh each time.")))))))))
 
       ;; ── Keyboard Shortcuts section (read-only) ──
       (let [mac? (e/client (mac-platform?))

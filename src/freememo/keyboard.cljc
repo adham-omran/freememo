@@ -16,6 +16,7 @@
 (defonce !add-new-btn-ref (atom nil))
 (defonce !export-btn-ref (atom nil))
 (defonce !delete-btn-ref (atom nil))
+(defonce !pull-anki-btn-ref (atom nil))
 
 #?(:cljs
    (def ^:private shortcut->ref

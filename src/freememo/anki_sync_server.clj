@@ -4,6 +4,7 @@
   (:require
    [freememo.db :as db]
    [freememo.settings :as settings]
+   [freememo.user-state :as us]
    [taoensso.telemere :as tel]))
 
 (defn load-anki-preferences
@@ -19,8 +20,7 @@
              :use-header (settings/get-anki-use-header user-id)
              :header-text (settings/get-anki-header-text user-id)
              :use-tags (settings/get-anki-use-tags user-id)
-             :tags (settings/get-anki-tags user-id)
-             :source-field (settings/get-anki-source-field user-id)}}
+             :tags (settings/get-anki-tags user-id)}}
     (catch Exception e
       (tel/error! {:id ::load-anki-preferences} e)
       {:success false :prefs {}})))
@@ -36,25 +36,36 @@
   (settings/save-anki-preset user-id root-topic-id preset-map))
 
 (defn get-cards-for-sync
-  "Get flashcards for Anki sync.
-   opts: {:topic-id N, :root-topic-id N}
+  "Get flashcards for Anki sync. Also returns the current root topic title/kind
+   so the Source field reflects rename edits made since the modal was opened.
+   opts: {:user-id N, :topic-id N, :root-topic-id N}
    When topic-id is nil, returns all cards for the root topic."
-  [{:keys [topic-id root-topic-id]}]
+  [{:keys [user-id topic-id root-topic-id]}]
+  (tel/log! {:level :info
+             :id ::get-cards-for-sync.entry
+             :data {:user-id user-id
+                    :topic-id topic-id
+                    :root-topic-id root-topic-id}}
+    "get-cards-for-sync invoked")
   (try
     (let [cards (if topic-id
                   (db/get-flashcards topic-id)
                   (db/get-all-flashcards root-topic-id))
-          cards (mapv (fn [c]
-                        (let [synced (:flashcards/anki_synced_at c)
-                              updated (:flashcards/updated_at c)]
-                          (assoc c :needs-update?
-                            (and (some? (:flashcards/anki_note_id c))
-                              (or (nil? synced)
-                                (and (some? updated)
-                                  (pos? (compare (str updated)
-                                          (str synced)))))))))
-                  cards)]
-      {:success true :cards cards})
+          root-topic (when (and user-id root-topic-id)
+                       (db/get-topic-for-user user-id root-topic-id))
+          topic-source (db/get-topic-source root-topic-id)]
+      (tel/log! {:level :info
+                 :id ::get-cards-for-sync.resolved
+                 :data {:topic-title (:topics/title root-topic)
+                        :topic-kind (:topics/kind root-topic)
+                        :topic-source topic-source
+                        :card-count (count cards)}}
+        "get-cards-for-sync resolved")
+      {:success true
+       :cards cards
+       :topic-title (:topics/title root-topic)
+       :topic-kind (:topics/kind root-topic)
+       :topic-source topic-source})
     (catch Exception e
       (tel/error! {:id ::get-cards-for-sync} e)
       {:success false :error (.getMessage e)})))
@@ -73,11 +84,51 @@
       (tel/error! {:id ::record-pushed-notes} e)
       {:success false :error (.getMessage e)})))
 
+(defn finalize-push!
+  "Atomically (per-server-call) record pushed notes, save global last-used,
+   save per-item preset (when mode=\"per-item\"), and bump :sync-mutations.
+   One e/server round-trip from the client so the reactive graph observes
+   one settled result — Electric drops unused intermediate side-effects
+   when multiple sibling e/server calls sit in a do-body."
+  [user-id root-topic-id pairs prefs-map auto-load-mode]
+  (tel/log! {:level :info
+             :id ::finalize-push!
+             :data {:user-id user-id
+                    :root-topic-id root-topic-id
+                    :pair-count (count pairs)
+                    :auto-load-mode auto-load-mode
+                    :prefs-keys (vec (keys prefs-map))
+                    :deck (:deck prefs-map)
+                    :basic-model (:basic-model prefs-map)
+                    :cloze-model (:cloze-model prefs-map)}}
+    "finalize-push! invoked")
+  (try
+    (db/set-anki-note-ids
+      (mapv (fn [{:keys [card-id anki-note-id]}]
+              [card-id anki-note-id])
+        pairs))
+    (tel/log! {:level :info :id ::finalize-push!.note-ids-saved} "anki note ids saved")
+    (settings/save-anki-sync-settings user-id prefs-map)
+    (tel/log! {:level :info :id ::finalize-push!.global-saved} "global last-used saved")
+    (when (= auto-load-mode "per-item")
+      (settings/save-anki-preset user-id root-topic-id prefs-map)
+      (tel/log! {:level :info
+                 :id ::finalize-push!.per-item-saved
+                 :data {:root-topic-id root-topic-id}}
+        "per-item preset saved"))
+    (swap! (us/get-atom user-id :sync-mutations) inc)
+    (tel/log! {:level :info :id ::finalize-push!.done} "finalize-push! complete")
+    {:success true :count (count pairs)}
+    (catch Exception e
+      (tel/error! {:id ::finalize-push!} e)
+      {:success false :error (.getMessage e)})))
+
 (defn apply-pull-updates
   "After pull, update card content from Anki edits and delete locally cards removed from Anki.
+   Bumps :sync-mutations so the client toolbar refreshes counts.
    updates: [{:card-id N :question Q :answer A :cloze C} ...]
    deleted-card-ids: [N ...] — cards whose Anki notes no longer exist"
-  [updates deleted-card-ids]
+  [user-id updates deleted-card-ids]
   (try
     (doseq [{:keys [card-id question answer cloze]} updates]
       (let [fields (cond-> {}
@@ -90,6 +141,7 @@
     (when (seq deleted-card-ids)
       (doseq [id deleted-card-ids]
         (db/delete-flashcard! id)))
+    (swap! (us/get-atom user-id :sync-mutations) inc)
     {:success true :count (count updates) :deleted (count (or deleted-card-ids []))}
     (catch Exception e
       (tel/error! {:id ::apply-pull-updates} e)
