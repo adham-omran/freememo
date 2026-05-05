@@ -99,7 +99,7 @@ clj -X:build:prod build-client
 clj -M:prod -m prod
 
 # Or build an uberjar
-clj -X:build:prod uberjar
+clj -J-Xss4m -X:build:prod uberjar :build/jar-name '"app.jar"'
 java -jar target/app.jar
 ```
 
