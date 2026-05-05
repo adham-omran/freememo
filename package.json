@@ -1,0 +1,14 @@
+{
+    "dependencies": {
+        "@codemirror/commands": "^6.2.2",
+        "@codemirror/language": "^6.6.0",
+        "@codemirror/lint": "6.5.0",
+        "@codemirror/view": "^6.9.3",
+        "@lezer/markdown": "^1.0.2",
+        "@nextjournal/lezer-clojure": "^1.0.0",
+        "lezer-clojure": "0.1.10"
+    },
+    "devDependencies": {
+        "shadow-cljs": "^2.20.1"
+    }
+}

@@ -1,6 +1,7 @@
 (ns dev ; jetty 10+ – the default
   (:require
    freememo.main
+   #?(:clj dev-metadata)
 
    #?(:clj [shadow.cljs.devtools.api :as shadow-cljs-compiler])
    #?(:clj [shadow.cljs.devtools.server :as shadow-cljs-compiler-server])
@@ -63,7 +64,9 @@
                     :ws-idle-timeout (* 60 1000)          ; 60 seconds in milliseconds
                     :ws-max-binary-size (* 100 1024 1024) ; 100MB - for demo
                     :ws-max-text-size (* 100 1024 1024)}))  ; 100M - for demo.
-     (log/info "👉 http://0.0.0.0:8080")))
+     (log/info "👉 http://0.0.0.0:8080")
+
+     (dev-metadata/start!)))
 
 (declare browser-process)
 #?(:cljs ; client entrypoint
@@ -80,4 +83,5 @@
   (shadow-cljs-compiler-server/stop!)
   (.stop server) ; stop jetty server
   (.close nrepl-server) ; stop nrepl server
+  (dev-metadata/stop!) ; stop metadata jetty server
   )
