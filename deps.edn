@@ -21,7 +21,10 @@
            com.vladsch.flexmark/flexmark-ext-gfm-tasklist {:mvn/version "0.64.8"}}
  :paths   ["src" "resources"]
  :aliases {:dev {:extra-paths ["src-dev"] :extra-deps  {thheller/shadow-cljs {:mvn/version "2.26.2"}
-                                                       nrepl/nrepl {:mvn/version "1.3.1"}}}
+                                                       nrepl/nrepl {:mvn/version "1.3.1"}
+                                                       com.hyperfiddle/hyperfiddle-agent  {:mvn/version "v0-alpha-SNAPSHOT"}
+                                                       org.clojure/tools.deps             {:mvn/version "0.26.1553"}
+                                                       io.github.nextjournal/clojure-mode {:git/sha "5d88847aecd253e047f36565e0455bfec7f4964d"}}}
            :prod {:extra-paths ["src-prod"] :jvm-opts ["-Xss4m"]}
            :build ; use `clj -X:prod:build build-client`, NOT -T!
            {:extra-paths ["src-build"]

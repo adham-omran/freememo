@@ -4,7 +4,13 @@
          :devtools {:loader-mode :default, :watch-dir "resources/public"}
          :output-dir "resources/public/freememo/js"
          :asset-path "/freememo/js"
-         :modules {:main {:entries [dev] :init-fn dev/-main}}
+         :modules {:shared   {:entries []}
+                   :main     {:entries [dev]
+                              :init-fn dev/-main
+                              :depends-on #{:shared}}
+                   :metadata {:entries [dev-metadata]
+                              :init-fn dev-metadata/-main
+                              :depends-on #{:shared}}}
          :build-hooks [(hyperfiddle.electric.shadow-cljs.hooks3/reload-clj)]}
   :dev-jetty9 {:target :browser
                :devtools {:loader-mode :default, :watch-dir "resources/public"}
