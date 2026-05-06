@@ -2,6 +2,7 @@
   "OCR text extraction using OpenAI Vision API."
   (:require
    [freememo.settings :as settings]
+   [freememo.html-cleaner :as cleaner]
    [wkok.openai-clojure.api :as api]
    [taoensso.telemere :as tel])
   (:import
@@ -105,8 +106,10 @@
                   (clojure.string/replace #"^```html\s*\n?" "")
                   (clojure.string/replace #"^```\s*\n?" "")
                   (clojure.string/replace #"\n?```\s*$" "")
-                  clojure.string/trim)]
-       {:success true :text text})
+                  clojure.string/trim)
+           ;; Vision output is untrusted — sanitize before persistence.
+           cleaned (cleaner/clean-html text)]
+       {:success true :text cleaned})
      (catch Exception e
        (tel/error! {:id ::extract-text} e)
        {:success false :error (let [msg (.getMessage e)]

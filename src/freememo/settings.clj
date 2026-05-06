@@ -3,6 +3,7 @@
   (:require
    [freememo.db :as db]
    [freememo.crypto :as crypto]
+   [freememo.input-check :as input]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
    [clojure.string :as str]))
@@ -513,16 +514,28 @@ IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return
 
 (defn save-system-prompt [user-id value]
   (try
+    (input/check-length! :system-prompt value input/prompt-max)
     (db/set-setting user-id PROMPT_SYSTEM value)
     {:success true}
+    (catch clojure.lang.ExceptionInfo e
+      (if (input/length-error? (ex-data e))
+        {:success false :error (.getMessage e)}
+        (do (tel/error! {:id ::save-system-prompt} e)
+            {:success false :error "Failed to save system prompt"})))
     (catch Exception e
       (tel/error! {:id ::save-system-prompt} e)
       {:success false :error "Failed to save system prompt"})))
 
 (defn save-ocr-prompt [user-id value]
   (try
+    (input/check-length! :ocr-prompt value input/prompt-max)
     (db/set-setting user-id PROMPT_OCR value)
     {:success true}
+    (catch clojure.lang.ExceptionInfo e
+      (if (input/length-error? (ex-data e))
+        {:success false :error (.getMessage e)}
+        (do (tel/error! {:id ::save-ocr-prompt} e)
+            {:success false :error "Failed to save OCR prompt"})))
     (catch Exception e
       (tel/error! {:id ::save-ocr-prompt} e)
       {:success false :error "Failed to save OCR prompt"})))

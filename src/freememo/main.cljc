@@ -17,6 +17,7 @@
             [freememo.landing-page :refer [LandingPage]]
             [freememo.keyboard :as keyboard]
             #?(:clj [freememo.settings :as settings])
+            #?(:clj [freememo.quota :as quota])
             #?(:clj [freememo.user-state :as us])
             #?(:clj [freememo.db :as db])
             #?(:clj [freememo.crypto :as crypto])))
@@ -43,6 +44,22 @@
 (defn get-theme* [_refresh user-id]
   #?(:clj (settings/get-theme user-id)
      :cljs nil))
+
+(defn get-usage-pct* [_refresh user-id]
+  #?(:clj (let [usage (quota/get-user-usage user-id)
+                cap (quota/get-user-quota user-id)]
+            (if (and cap (pos? cap))
+              (* 100.0 (/ (double usage) cap))
+              0.0))
+     :cljs 0.0))
+
+;; Server-only: `format` is CLJ-only; embedding it in an e/defn body captures
+;; the var and breaks WebSocket serialization. Format the banner text here
+;; and ship the result string instead.
+(defn format-banner-text* [_refresh pct]
+  #?(:clj (format "Storage %.0f%% full — delete documents from Library to free space."
+            (double (or pct 0)))
+     :cljs ""))
 
 (defn reconstruct-session* [user-id]
   #?(:clj (when user-id
@@ -238,6 +255,28 @@
                     (dom/props {:style (tab-style :settings)})
                     (dom/text "Settings")
                     (dom/On "click" (fn [_] (navigate! :settings)) nil)))
+
+                ;; Storage warning banner — appears when usage exceeds 80%.
+                (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
+                      usage-pct (e/server (get-usage-pct* refresh user-id))
+                      banner-text (e/server (format-banner-text* refresh usage-pct))]
+                  (when (and usage-pct (> usage-pct 80))
+                    (dom/div
+                      (dom/props {:style {:padding "8px 16px"
+                                          :background (if (>= usage-pct 100)
+                                                        "var(--color-danger-bg, #fee)"
+                                                        "var(--color-warning-bg, #fff3cd)")
+                                          :color "var(--color-text-primary)"
+                                          :border-bottom "1px solid var(--color-border)"
+                                          :font-size "13px" :flex-shrink "0"}})
+                      (dom/text banner-text)
+                      (dom/button
+                        (dom/props {:style {:margin-left "12px" :padding "2px 10px" :font-size "12px"
+                                            :background "transparent" :border "1px solid var(--color-border)"
+                                            :color "var(--color-text-primary)"
+                                            :border-radius "3px" :cursor "pointer"}})
+                        (dom/text "Library")
+                        (dom/On "click" (fn [_] (navigate! :library)) nil)))))
 
                 ;; Tab content
                 (dom/div

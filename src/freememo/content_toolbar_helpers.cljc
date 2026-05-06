@@ -6,6 +6,7 @@
    [freememo.logging :as log]
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.html-cleaner :as cleaner])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [missionary.core :as m]))
   #?(:clj (:import [missionary Cancelled])))
@@ -46,12 +47,14 @@
                (str/join "\n\n---\n\n"))))))
      :cljs nil))
 
-;; Create an extract child topic — wrapped in try/catch outside e/defn
+;; Create an extract child topic — wrapped in try/catch outside e/defn.
+;; Sanitize content: a manual extract creates a new topic from selected HTML;
+;; the selection comes from the editor but may include pasted external content.
 (defn create-extract-topic-safe! [parent-id user-id content title]
   #?(:clj (try
             (db/create-topic! {:parent-id parent-id
                                :user-id user-id
-                               :content content
+                               :content (cleaner/clean-html content)
                                :kind "basic"
                                :title title})
             {:success true}
