@@ -356,10 +356,12 @@
 
 
 (defn run-fetch-fields!
-  "Fetch model field names from Anki and store in atom."
+  "Fetch model field names from Anki and store in atom.
+   Atom values: :loading while in flight, vector of field names on success, [] on error."
   [model-name !fields-atom]
   #?(:cljs
      (when model-name
+       (reset! !fields-atom :loading)
        (do ((anki-call! "modelFieldNames" {:modelName model-name})
             (fn [fields] (reset! !fields-atom (vec (js->clj fields))))
             (fn [_] (reset! !fields-atom [])))
