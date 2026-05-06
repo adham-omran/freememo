@@ -8,18 +8,24 @@
    [freememo.typeahead :refer [Typeahead]]))
 
 (e/defn AnkiSyncModelSelect
-  "Reusable model typeahead with field mapping hint."
-  [label !model models field-hint]
+  "Reusable model typeahead with field mapping hint.
+   fields = :loading | [] | vector of field names. format-hint = fn from non-empty vector to string."
+  [label !model models fields format-hint]
   (e/client
     (dom/div
       (dom/props {:style {:margin-bottom "var(--sp-3)"}})
       (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
         (dom/text label))
       (Typeahead !model models "Start typing..." nil nil)
-      (when (seq field-hint)
+      (if (= fields :loading)
         (dom/div
           (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)" :margin-top "var(--sp-1)"}})
-          (dom/text field-hint))))))
+          (dom/span (dom/props {:class "spinner"}))
+          (dom/text "Loading fields..."))
+        (when (and (coll? fields) (seq fields))
+          (dom/div
+            (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)" :margin-top "var(--sp-1)"}})
+            (dom/text (format-hint fields))))))))
 
 (e/defn TagInput
   "Multi-tag input with chip display and autocomplete from all-tags."
@@ -223,12 +229,10 @@
         (Typeahead (:!selected-deck conn) decks "Start typing deck name..." nil nil))
 
       ;; Note Type selectors
-      (AnkiSyncModelSelect "Note Type (Basic)" (:!basic-model conn) models
-        (when (seq basic-fields)
-          (str "question \u2192 " (first basic-fields) ", answer \u2192 " (second basic-fields))))
-      (AnkiSyncModelSelect "Note Type (Cloze)" (:!cloze-model conn) models
-        (when (seq cloze-fields)
-          (str "cloze \u2192 " (first cloze-fields))))
+      (AnkiSyncModelSelect "Note Type (Basic)" (:!basic-model conn) models basic-fields
+        (fn [fs] (str "question \u2192 " (first fs) ", answer \u2192 " (second fs))))
+      (AnkiSyncModelSelect "Note Type (Cloze)" (:!cloze-model conn) models cloze-fields
+        (fn [fs] (str "cloze \u2192 " (first fs))))
 
       ;; Options
       (AnkiSyncOptions conn form))))

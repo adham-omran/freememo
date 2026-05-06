@@ -241,6 +241,7 @@
             (= conn-status :connecting)
             (dom/div
               (dom/props {:style {:text-align "center" :padding "var(--sp-5)" :color "var(--color-text-secondary)"}})
+              (dom/span (dom/props {:class "spinner"}))
               (dom/text "Connecting to Anki..."))
             (= conn-status :error)
             (AnkiSyncErrorPanel conn !show-modal)

@@ -520,7 +520,7 @@
                     ;; Editor area — text-result is nil while e/Offload is in flight
                     (dom/div
                       (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                      (when (some? text-result)
+                      (if (some? text-result)
                         (if (:success text-result)
                           (dom/div
                             (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
@@ -528,7 +528,11 @@
                                                       :topic-id page-topic-id}))
                           (dom/p
                             (dom/props {:style {:color "var(--color-text-hint)"}})
-                            (dom/text "No text scanned yet. Click 'Scan Page' to process this page."))))))))
+                            (dom/text "No text scanned yet. Click 'Scan Page' to process this page.")))
+                        (dom/p
+                          (dom/props {:style {:color "var(--color-text-hint)"}})
+                          (dom/span (dom/props {:class "spinner"}))
+                          (dom/text "Loading text...")))))))
 
               ;; Vertical drag handle (full width)
               (dom/div
