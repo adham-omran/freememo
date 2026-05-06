@@ -49,9 +49,11 @@
                   ;; Save child topics
                   (when (seq clean-sections)
                     (db/batch-create-topics! topic-id clean-sections))
-                  ;; Update topic content with highlighted HTML
+                  ;; Update topic content with highlighted HTML.
+                  ;; Sanitize: cleaner now permits style="background-color" so the
+                  ;; extract-highlight spans survive while scripts/handlers don't.
                   (when annotated-html
-                    (db/update-topic-content! topic-id annotated-html))))
+                    (db/update-topic-content! topic-id (cleaner/clean-html annotated-html)))))
               nil)
             (catch Exception e
               (log/log-warn (str "Auto-extract failed: " (.getMessage e)))
@@ -284,7 +286,11 @@
   (e/client
     (let [!file-input (atom nil)
           !uploading (atom false)
-          uploading (e/watch !uploading)]
+          !error-msg (atom nil)
+          !quota-error? (atom false)
+          uploading (e/watch !uploading)
+          error-msg (e/watch !error-msg)
+          quota-error? (e/watch !quota-error?)]
       (dom/div
         (dom/props {:class "modal-backdrop"})
         (dom/On "click" (fn [e]
@@ -305,6 +311,8 @@
                 (fn [file]
                   (when (and file (not @!uploading))
                     (reset! !uploading true)
+                    (reset! !error-msg nil)
+                    (reset! !quota-error? false)
                     (let [form-data (js/FormData.)]
                       (.append form-data "file" file)
                       (-> (js/fetch "/api/upload-pdf" (clj->js {:method "POST" :body form-data}))
@@ -314,9 +322,12 @@
                                  (if (.-success data)
                                    (do (reset! !show false)
                                      (navigate! :viewer (nav/nav-browse-pdf (or (.-topic_id data) (.-doc_id data)) nil nil)))
-                                   (js/alert (or (.-error data) "PDF upload failed")))))
+                                   (let [code (.-code data)]
+                                     (reset! !quota-error? (or (= code "over-quota") (= code "file-too-large")))
+                                     (reset! !error-msg (or (.-error data) "PDF upload failed"))))))
                         (.catch (fn [err]
                                   (reset! !uploading false)
+                                  (reset! !error-msg "Upload failed — please try again")
                                   (js/console.error "PDF upload failed:" err)))))))]
 
             ;; Drop zone / file picker
@@ -347,6 +358,24 @@
               (reset! !file-input dom/node)
               (dom/On "change" (fn [e] (do-upload! (-> e .-target .-files (aget 0)))) nil))
 
+            ;; Error display — quota errors get a Library link.
+            (when error-msg
+              (dom/div
+                (dom/props {:style {:padding "10px 12px" :margin-bottom "var(--sp-3)"
+                                    :background "var(--color-danger-bg, #fee)"
+                                    :border-radius "var(--radius-sm)"
+                                    :color "var(--color-danger)" :font-size "13px"}})
+                (dom/text error-msg)
+                (when quota-error?
+                  (dom/div
+                    (dom/props {:style {:margin-top "8px"}})
+                    (dom/button
+                      (dom/props {:style {:padding "4px 12px" :font-size "12px"
+                                          :background "transparent" :border "1px solid var(--color-danger)"
+                                          :color "var(--color-danger)" :border-radius "3px" :cursor "pointer"}})
+                      (dom/text "Manage Library")
+                      (dom/On "click" (fn [_] (reset! !show false) (navigate! :library)) nil))))))
+
             ;; Buttons
             (dom/div
               (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
@@ -366,7 +395,11 @@
           !auto-extract (atom false)
           !image-mode (atom "reduce")
           !uploading (atom false)
-          uploading (e/watch !uploading)]
+          !error-msg (atom nil)
+          !quota-error? (atom false)
+          uploading (e/watch !uploading)
+          error-msg (e/watch !error-msg)
+          quota-error? (e/watch !quota-error?)]
       (dom/div
         (dom/props {:class "modal-backdrop"})
         (dom/On "click" (fn [e]
@@ -387,6 +420,8 @@
                 (fn [file]
                   (when (and file (not @!uploading))
                     (reset! !uploading true)
+                    (reset! !error-msg nil)
+                    (reset! !quota-error? false)
                     (let [form-data (js/FormData.)]
                       (.append form-data "file" file)
                       (.append form-data "auto_extract" (str @!auto-extract))
@@ -398,9 +433,12 @@
                                  (if (.-success data)
                                    (do (reset! !show false)
                                      (navigate! :library))
-                                   (js/alert (or (.-error data) "EPUB import failed")))))
+                                   (let [code (.-code data)]
+                                     (reset! !quota-error? (or (= code "over-quota") (= code "file-too-large")))
+                                     (reset! !error-msg (or (.-error data) "EPUB import failed"))))))
                         (.catch (fn [err]
                                   (reset! !uploading false)
+                                  (reset! !error-msg "Upload failed — please try again")
                                   (js/console.error "EPUB upload failed:" err)))))))]
 
             ;; Drop zone / file picker
@@ -458,6 +496,24 @@
                 (dom/input (dom/props {:type "checkbox"})
                   (dom/On "change" (fn [e] (reset! !auto-extract (-> e .-target .-checked))) nil))
                 (dom/text "Auto-extract into topics")))
+
+            ;; Error display
+            (when error-msg
+              (dom/div
+                (dom/props {:style {:padding "10px 12px" :margin-bottom "var(--sp-3)"
+                                    :background "var(--color-danger-bg, #fee)"
+                                    :border-radius "var(--radius-sm)"
+                                    :color "var(--color-danger)" :font-size "13px"}})
+                (dom/text error-msg)
+                (when quota-error?
+                  (dom/div
+                    (dom/props {:style {:margin-top "8px"}})
+                    (dom/button
+                      (dom/props {:style {:padding "4px 12px" :font-size "12px"
+                                          :background "transparent" :border "1px solid var(--color-danger)"
+                                          :color "var(--color-danger)" :border-radius "3px" :cursor "pointer"}})
+                      (dom/text "Manage Library")
+                      (dom/On "click" (fn [_] (reset! !show false) (navigate! :library)) nil))))))
 
             ;; Buttons
             (dom/div

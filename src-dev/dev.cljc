@@ -29,6 +29,29 @@
        (or (api/api-routes request)
            (handler request)))))
 
+#?(:clj
+   (def upload-routes #{"/api/upload-pdf" "/api/upload-epub"}))
+
+#?(:clj
+   (defn wrap-route-body-size
+     "Reject requests whose Content-Length exceeds the per-route cap, before
+      any body parsing runs. 100 MB on file uploads, 10 MB on other /api/*."
+     [handler]
+     (fn [request]
+       (let [uri (:uri request)
+             method (:request-method request)
+             max-bytes (cond
+                         (and (= method :post) (upload-routes uri)) 104857600
+                         (and (= method :post) (.startsWith ^String uri "/api/")) 10485760
+                         :else nil)
+             content-length (some-> (get-in request [:headers "content-length"]) Long/parseLong)]
+         (if (and max-bytes content-length (> content-length max-bytes))
+           {:status 413
+            :headers {"Content-Type" "application/json"}
+            :body (str "{\"success\":false,\"error\":\"Request too large (limit "
+                    max-bytes " bytes)\",\"code\":\"request-too-large\"}")}
+           (handler request))))))
+
 #?(:clj ; server entrypoint
    (defn -main [& args]
      (logging/init!)
@@ -53,7 +76,8 @@
                      (electric-ring/wrap-electric-websocket ; 3. install Electric server.
                        (fn [ring-request] (freememo.main/electric-boot ring-request))) ; boot server-side Electric process
                      (wrap-api-routes) ; 2. API routes
-                     (wrap-multipart-params) ; 1b. parse multipart form data (file uploads)
+                     (wrap-multipart-params {:max-file-size 104857600}) ; 1c. parse multipart, capped at 100 MB
+                     (wrap-route-body-size) ; 1b. Content-Length cap (100 MB uploads, 10 MB other /api/*)
                      (wrap-params) ; 1a. boilerplate – parse request URL parameters.
                      (wrap-session {:store (cookie-store {:key (let [secret (or (System/getenv "ENC_KEY_SECRET") "dev-enc-key-secret-change-in-prod")
                                                                               hash (-> (java.security.MessageDigest/getInstance "SHA-256")

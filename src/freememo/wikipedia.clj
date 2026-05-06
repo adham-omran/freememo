@@ -2,8 +2,12 @@
   "Web article fetching — Wikipedia and generic URLs."
   (:require [clj-http.client :as http]
             [clojure.string :as str]
-            [freememo.html-cleaner :as cleaner])
+            [freememo.html-cleaner :as cleaner]
+            [freememo.url-validate :as url])
   (:import [org.jsoup Jsoup]))
+
+(def ^:private outbound-max-bytes 26214400)  ;; 25 MB
+(def ^:private outbound-timeout-ms 30000)    ;; 30 s
 
 (defn- simplify-latex
   "Strip \\displaystyle wrapper and common LaTeX noise from alt text.
@@ -70,7 +74,10 @@
         resp (http/get api-url
                {:headers {"User-Agent" "FreeMemo/1.0 (incremental reading app)"
                           "Accept" "text/html"}
-                :cookie-policy :none})]
+                :cookie-policy :none
+                :socket-timeout outbound-timeout-ms
+                :connection-timeout outbound-timeout-ms
+                :max-body outbound-max-bytes})]
     {:title title
      :html (-> (:body resp) preprocess-wikipedia-html cleaner/clean-html)
      :url (str "https://en.wikipedia.org/wiki/" (java.net.URLEncoder/encode title "UTF-8"))
@@ -80,8 +87,9 @@
   (let [resp (http/get url
                {:headers {"User-Agent" "Mozilla/5.0 (compatible; FreeMemo/1.0)"}
                 :cookie-policy :none
-                :socket-timeout 15000
-                :connection-timeout 10000})
+                :socket-timeout outbound-timeout-ms
+                :connection-timeout outbound-timeout-ms
+                :max-body outbound-max-bytes})
         doc (Jsoup/parse (:body resp))
         title (or (some-> (.select doc "title") (.first) (.text))
                   (some-> (.select doc "h1") (.first) (.text))
@@ -106,12 +114,21 @@
 
 (defn fetch-url
   "Fetch a URL and return cleaned HTML. Auto-detects Wikipedia URLs.
-   Returns {:success true :title :html :url :source-type} or {:success false :error}."
+   Returns {:success true :title :html :url :source-type} or {:success false :error}.
+   Rejects non-http(s), loopback, and private-network URLs to prevent SSRF."
   [url]
   (try
-    (let [result (if (wikipedia-url? url)
-                   (fetch-wikipedia-by-title (extract-wiki-title url))
-                   (fetch-generic-url url))]
-      (assoc result :success true))
+    (cond
+      (or (nil? url) (str/blank? url))
+      {:success false :error "URL is required"}
+
+      (not (url/safe-url? url))
+      {:success false :error "URL not allowed (only public http/https addresses)"}
+
+      :else
+      (let [result (if (wikipedia-url? url)
+                     (fetch-wikipedia-by-title (extract-wiki-title url))
+                     (fetch-generic-url url))]
+        (assoc result :success true)))
     (catch Exception e
       {:success false :error (.getMessage e)})))

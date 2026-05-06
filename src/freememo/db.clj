@@ -8,6 +8,7 @@
    [honey.sql :as sql]
    [taoensso.telemere :as tel]
    [clojure.string :as str]
+   [freememo.input-check :as input]
    [freememo.text :as text]))
 
 (declare sanitize-utf8)
@@ -68,6 +69,21 @@
   (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT UNIQUE"])
   (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT"])
   (jdbc/execute! ds ["ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL"])
+
+  ;; Storage quota: denormalized usage counter + optional per-user override.
+  ;; Backfill `usage_bytes` once, when the column is first added.
+  (let [had-usage? (some? (jdbc/execute-one! ds
+                            ["SELECT 1 FROM information_schema.columns
+                              WHERE table_name = 'users' AND column_name = 'usage_bytes'"]))]
+    (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS usage_bytes BIGINT NOT NULL DEFAULT 0"])
+    (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_bytes BIGINT"])
+    (when-not had-usage?
+      (tel/log! :info "Backfilling users.usage_bytes from topic_files.file_size")
+      (jdbc/execute! ds
+        ["UPDATE users SET usage_bytes = COALESCE(
+            (SELECT SUM(tf.file_size)
+             FROM topic_files tf JOIN topics t ON tf.topic_id = t.id
+             WHERE t.user_id = users.id), 0)"])))
 
   ;; Settings table (per-user key-value)
   (let [has-user-id (jdbc/execute-one! ds
@@ -557,6 +573,7 @@
    :source-url :source-reference :status :priority
    Returns the created row with :topics/id."
   [attrs]
+  (input/check-length! :title (:title attrs) input/title-max)
   (let [sanitized (when (:content attrs) (sanitize-utf8 (:content attrs)))
         row (cond-> {:kind (or (:kind attrs) "basic")
                      :title (or (:title attrs) "Untitled")
@@ -667,19 +684,59 @@
          SELECT id FROM ancestors WHERE parent_id IS NULL"
         topic-id]))))
 
+(defn- bump-user-usage!
+  "Adjust users.usage_bytes by delta (signed). Clamped at 0.
+   Pass tx for transactional callers, ds otherwise."
+  [connectable user-id delta]
+  (jdbc/execute! connectable
+    ["UPDATE users SET usage_bytes = GREATEST(0, usage_bytes + ?) WHERE id = ?"
+     (long delta) user-id]))
+
+(defn- subtree-file-bytes
+  "Sum of file_size across the topic subtree rooted at id (including id).
+   Returns 0 when nothing is found."
+  [connectable id]
+  (or (:sum (jdbc/execute-one! connectable
+              ["WITH RECURSIVE subtree AS (
+                  SELECT id FROM topics WHERE id = ?
+                  UNION ALL
+                  SELECT c.id FROM topics c
+                  JOIN subtree s ON c.parent_id = s.id
+                )
+                SELECT COALESCE(SUM(tf.file_size), 0) AS sum
+                FROM topic_files tf
+                JOIN subtree s ON tf.topic_id = s.id"
+               id]))
+    0))
+
 (defn delete-topic!
-  "Delete a topic by ID. CASCADE handles children + flashcards."
+  "Delete a topic by ID. CASCADE handles children + flashcards.
+   Decrements usage_bytes by the subtree's total file_size atomically.
+   Looks up owner from the row before delete (so the counter belongs to the right user)."
   [id]
-  (jdbc/execute! ds
-    (sql/format {:delete-from :topics
-                 :where [:= :id id]})))
+  (jdbc/with-transaction [tx ds]
+    (let [owner (:users_id (jdbc/execute-one! tx
+                             ["SELECT user_id AS users_id FROM topics WHERE id = ?" id]))
+          freed (subtree-file-bytes tx id)
+          result (jdbc/execute! tx
+                   (sql/format {:delete-from :topics
+                                :where [:= :id id]}))]
+      (when (and owner (pos? freed))
+        (bump-user-usage! tx owner (- freed)))
+      result)))
 
 (defn delete-topic-for-user!
-  "Delete a topic scoped to user."
+  "Delete a topic scoped to user. Decrements usage_bytes by the subtree's
+   total file_size atomically."
   [user-id id]
-  (jdbc/execute! ds
-    (sql/format {:delete-from :topics
-                 :where [:and [:= :id id] [:= :user_id user-id]]})))
+  (jdbc/with-transaction [tx ds]
+    (let [freed (subtree-file-bytes tx id)
+          result (jdbc/execute! tx
+                   (sql/format {:delete-from :topics
+                                :where [:and [:= :id id] [:= :user_id user-id]]}))]
+      (when (pos? freed)
+        (bump-user-usage! tx user-id (- freed)))
+      result)))
 
 (defn batch-create-topics!
   "Batch insert child topics under parent-id. items is a seq of maps with :content.
@@ -737,8 +794,10 @@
 
 (defn create-pdf-topic!
   "Create a PDF root topic with file data and page stubs.
+   Increments users.usage_bytes by file-size atomically.
    Returns the result with :topics/id."
   [user-id filename file-bytes file-size page-count]
+  (input/check-length! :title filename input/title-max)
   (jdbc/with-transaction [tx ds]
     (let [topic (jdbc/execute-one! tx
                   (sql/format {:insert-into :topics
@@ -753,6 +812,7 @@
         ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
           VALUES (?, ?, ?, ?)"
          topic-id file-bytes file-size "application/pdf"])
+      (bump-user-usage! tx user-id file-size)
       ;; Create page stubs
       (when (pos? page-count)
         (doseq [n (range 1 (inc page-count))]
@@ -780,6 +840,7 @@
 (defn create-web-topic!
   "Create a web article topic. Returns topic-id."
   [user-id title html-content source-url]
+  (input/check-length! :title title input/title-max)
   (let [source-ref (str title (when source-url (str " — " source-url)))
         sanitized (sanitize-utf8 html-content)
         topic (jdbc/execute-one! ds
@@ -797,6 +858,7 @@
 (defn create-markdown-topic!
   "Create a Markdown-imported topic. Returns topic-id."
   [user-id title html-content]
+  (input/check-length! :title title input/title-max)
   (let [sanitized (sanitize-utf8 html-content)
         topic (jdbc/execute-one! ds
                 (sql/format {:insert-into :topics
@@ -812,8 +874,10 @@
 (defn create-epub-topic!
   "Create an EPUB root topic with file and chapter children.
    chapters is a vec of {:html :title} maps.
+   Increments users.usage_bytes by file-size atomically.
    Returns {:topic-id N :chapter-ids [...]}"
   [user-id title file-bytes file-size chapters]
+  (input/check-length! :title title input/title-max)
   (jdbc/with-transaction [tx ds]
     (let [topic (jdbc/execute-one! tx
                   (sql/format {:insert-into :topics
@@ -828,6 +892,7 @@
         ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
           VALUES (?, ?, ?, ?)"
          topic-id file-bytes file-size "application/epub+zip"])
+      (bump-user-usage! tx user-id file-size)
       ;; Create chapter children
       (let [chapter-ids (when (seq chapters)
                           (mapv (fn [i ch]
@@ -852,6 +917,7 @@
 (defn create-standalone-topic!
   "Create a standalone empty topic. Returns {:topic-id N}."
   [user-id title]
+  (input/check-length! :title title input/title-max)
   (let [topic (jdbc/execute-one! ds
                 (sql/format {:insert-into :topics
                              :values [{:user_id user-id
@@ -959,6 +1025,10 @@
    Uses ON CONFLICT DO NOTHING to prevent duplicates."
   [rows]
   (when (seq rows)
+    (doseq [row rows]
+      (input/check-length! :question (:question row) input/card-max)
+      (input/check-length! :answer (:answer row) input/card-max)
+      (input/check-length! :cloze (:cloze row) input/card-max))
     (jdbc/execute! ds
       (sql/format {:insert-into :flashcards
                    :values rows

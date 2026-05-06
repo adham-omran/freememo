@@ -13,6 +13,31 @@
            [org.jsoup.nodes Document Element]
            [java.util Base64]))
 
+(defn epub-magic-bytes?
+  "True iff bytes look like an EPUB: ZIP local-file-header (PK\\x03\\x04) and
+   the first ZIP entry is an uncompressed `mimetype` whose body equals
+   `application/epub+zip` (per EPUB spec)."
+  [^bytes b]
+  (and (>= (alength b) 4)
+    (= (byte 0x50) (aget b 0))   ;; P
+    (= (byte 0x4B) (aget b 1))   ;; K
+    (= (byte 0x03) (aget b 2))
+    (= (byte 0x04) (aget b 3))
+    (try
+      (with-open [zis (ZipInputStream. (ByteArrayInputStream. b))]
+        (when-let [entry (.getNextEntry zis)]
+          (and (= "mimetype" (.getName entry))
+            (let [baos (ByteArrayOutputStream.)
+                  buf (byte-array 256)]
+              (loop []
+                (let [n (.read zis buf)]
+                  (when (pos? n)
+                    (.write baos buf 0 n)
+                    (recur))))
+              (= "application/epub+zip"
+                (str/trim (String. (.toByteArray baos) "UTF-8")))))))
+      (catch Exception _ false))))
+
 ;; ── ZIP reading ──────────────────────────────────────────────────
 
 (defn- read-zip-entries

@@ -32,6 +32,29 @@
        (or (api/api-routes request)
            (handler request)))))
 
+#?(:clj
+   (def upload-routes #{"/api/upload-pdf" "/api/upload-epub"}))
+
+#?(:clj
+   (defn wrap-route-body-size
+     "Reject requests whose Content-Length exceeds the per-route cap, before
+      any body parsing runs."
+     [handler]
+     (fn [request]
+       (let [uri (:uri request)
+             method (:request-method request)
+             max-bytes (cond
+                         (and (= method :post) (upload-routes uri)) 104857600
+                         (and (= method :post) (.startsWith ^String uri "/api/")) 10485760
+                         :else nil)
+             content-length (some-> (get-in request [:headers "content-length"]) Long/parseLong)]
+         (if (and max-bytes content-length (> content-length max-bytes))
+           {:status 413
+            :headers {"Content-Type" "application/json"}
+            :body (str "{\"success\":false,\"error\":\"Request too large (limit "
+                    max-bytes " bytes)\",\"code\":\"request-too-large\"}")}
+           (handler request))))))
+
 #?(:clj ; server entrypoint
    (defn -main [& {:strs [] :as args}] ; clojure.main entrypoint, args are strings
      (logging/init!)
@@ -63,7 +86,8 @@
            (electric-ring/wrap-electric-websocket (fn [ring-request] (freememo.main/electric-boot ring-request)))
            (electric-ring/wrap-reject-stale-client config) ; ensures electric client and servers stays in sync.
            (wrap-api-routes)
-           (wrap-multipart-params)
+           (wrap-multipart-params {:max-file-size 104857600}) ; 100 MB
+           (wrap-route-body-size)
            (wrap-params)
            (wrap-session {:store (cookie-store {:key (let [secret (or (System/getenv "ENC_KEY_SECRET") "dev-enc-key-secret-change-in-prod")
                                                                       hash (-> (java.security.MessageDigest/getInstance "SHA-256")
