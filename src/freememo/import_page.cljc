@@ -12,6 +12,21 @@
    #?(:clj [freememo.extractor :as extractor])
    #?(:clj [freememo.markdown :as md])))
 
+;; Client-visible upload cap. Must match `api/upload-byte-cap` (server-side).
+;; Client-side guard short-circuits oversized files before fetch — avoids the
+;; mid-upload connection drop that the server's 413 path triggers in the browser.
+(def upload-max-bytes 104857600) ;; 100 MB
+(def upload-max-label "100 MB")
+
+#?(:cljs
+   (defn- format-mb
+     "Render a byte count as e.g. \"137 MB\" for error messages."
+     [bytes]
+     (let [mb (/ (double (or bytes 0)) 1048576.0)]
+       (if (< mb 10)
+         (str (.toFixed mb 1) " MB")
+         (str (Math/round mb) " MB")))))
+
 ;; Server-side wrappers
 (defn format-timestamp* [ts]
   #?(:clj (when ts
@@ -304,31 +319,41 @@
             (dom/text "Upload PDF"))
           (dom/p
             (dom/props {:style {:margin "0 0 12px 0" :font-size "13px" :color "var(--color-text-secondary)"}})
-            (dom/text "Select a PDF file from your device."))
+            (dom/text (str "Select a PDF file from your device. Maximum " upload-max-label ".")))
 
           ;; Shared upload fn
           (let [do-upload!
                 (fn [file]
                   (when (and file (not @!uploading))
-                    (reset! !uploading true)
-                    (reset! !error-msg nil)
-                    (reset! !quota-error? false)
-                    (let [form-data (js/FormData.)]
-                      (.append form-data "file" file)
-                      (-> (js/fetch "/api/upload-pdf" (clj->js {:method "POST" :body form-data}))
-                        (.then (fn [resp] (.json resp)))
-                        (.then (fn [^js data]
-                                 (reset! !uploading false)
-                                 (if (.-success data)
-                                   (do (reset! !show false)
-                                     (navigate! :viewer (nav/nav-browse-pdf (or (.-topic_id data) (.-doc_id data)) nil nil)))
-                                   (let [code (.-code data)]
-                                     (reset! !quota-error? (or (= code "over-quota") (= code "file-too-large")))
-                                     (reset! !error-msg (or (.-error data) "PDF upload failed"))))))
-                        (.catch (fn [err]
-                                  (reset! !uploading false)
-                                  (reset! !error-msg "Upload failed — please try again")
-                                  (js/console.error "PDF upload failed:" err)))))))]
+                    (cond
+                      (> (.-size file) upload-max-bytes)
+                      (do (reset! !quota-error? false)
+                          (reset! !error-msg
+                            (str "File is " (format-mb (.-size file))
+                              " — limit is " upload-max-label
+                              ". Try a smaller file.")))
+
+                      :else
+                      (do
+                        (reset! !uploading true)
+                        (reset! !error-msg nil)
+                        (reset! !quota-error? false)
+                        (let [form-data (js/FormData.)]
+                          (.append form-data "file" file)
+                          (-> (js/fetch "/api/upload-pdf" (clj->js {:method "POST" :body form-data}))
+                            (.then (fn [resp] (.json resp)))
+                            (.then (fn [^js data]
+                                     (reset! !uploading false)
+                                     (if (.-success data)
+                                       (do (reset! !show false)
+                                         (navigate! :viewer (nav/nav-browse-pdf (or (.-topic_id data) (.-doc_id data)) nil nil)))
+                                       (let [code (.-code data)]
+                                         (reset! !quota-error? (or (= code "over-quota") (= code "file-too-large")))
+                                         (reset! !error-msg (or (.-error data) "PDF upload failed"))))))
+                            (.catch (fn [err]
+                                      (reset! !uploading false)
+                                      (reset! !error-msg "Upload failed — please try again")
+                                      (js/console.error "PDF upload failed:" err)))))))))]
 
             ;; Drop zone / file picker
             (dom/div
@@ -413,33 +438,43 @@
             (dom/text "Upload EPUB"))
           (dom/p
             (dom/props {:style {:margin "0 0 12px 0" :font-size "13px" :color "var(--color-text-secondary)"}})
-            (dom/text "Select an EPUB ebook file. Text and images will be extracted automatically."))
+            (dom/text (str "Select an EPUB ebook file. Text and images will be extracted automatically. Maximum " upload-max-label ".")))
 
           ;; Shared upload fn
           (let [do-upload!
                 (fn [file]
                   (when (and file (not @!uploading))
-                    (reset! !uploading true)
-                    (reset! !error-msg nil)
-                    (reset! !quota-error? false)
-                    (let [form-data (js/FormData.)]
-                      (.append form-data "file" file)
-                      (.append form-data "auto_extract" (str @!auto-extract))
-                      (.append form-data "image_mode" @!image-mode)
-                      (-> (js/fetch "/api/upload-epub" (clj->js {:method "POST" :body form-data}))
-                        (.then (fn [resp] (.json resp)))
-                        (.then (fn [^js data]
-                                 (reset! !uploading false)
-                                 (if (.-success data)
-                                   (do (reset! !show false)
-                                     (navigate! :library))
-                                   (let [code (.-code data)]
-                                     (reset! !quota-error? (or (= code "over-quota") (= code "file-too-large")))
-                                     (reset! !error-msg (or (.-error data) "EPUB import failed"))))))
-                        (.catch (fn [err]
-                                  (reset! !uploading false)
-                                  (reset! !error-msg "Upload failed — please try again")
-                                  (js/console.error "EPUB upload failed:" err)))))))]
+                    (cond
+                      (> (.-size file) upload-max-bytes)
+                      (do (reset! !quota-error? false)
+                          (reset! !error-msg
+                            (str "File is " (format-mb (.-size file))
+                              " — limit is " upload-max-label
+                              ". Try a smaller file.")))
+
+                      :else
+                      (do
+                        (reset! !uploading true)
+                        (reset! !error-msg nil)
+                        (reset! !quota-error? false)
+                        (let [form-data (js/FormData.)]
+                          (.append form-data "file" file)
+                          (.append form-data "auto_extract" (str @!auto-extract))
+                          (.append form-data "image_mode" @!image-mode)
+                          (-> (js/fetch "/api/upload-epub" (clj->js {:method "POST" :body form-data}))
+                            (.then (fn [resp] (.json resp)))
+                            (.then (fn [^js data]
+                                     (reset! !uploading false)
+                                     (if (.-success data)
+                                       (do (reset! !show false)
+                                         (navigate! :library))
+                                       (let [code (.-code data)]
+                                         (reset! !quota-error? (or (= code "over-quota") (= code "file-too-large")))
+                                         (reset! !error-msg (or (.-error data) "EPUB import failed"))))))
+                            (.catch (fn [err]
+                                      (reset! !uploading false)
+                                      (reset! !error-msg "Upload failed — please try again")
+                                      (js/console.error "EPUB upload failed:" err)))))))))]
 
             ;; Drop zone / file picker
             (dom/div

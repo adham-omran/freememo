@@ -150,7 +150,7 @@
              :source-ref source-ref :unsynced-count unsynced-count :card-type card-type})
 
           ;; Done/Restore + Delete — extract topics only (separate e/defn for bytecode limit)
-          (ExtractActions {:topic-id topic-id :extract-status extract-status
+          (ExtractActions {:user-id user-id :topic-id topic-id :extract-status extract-status
                            :navigate! navigate! :origin origin})
 
           ;; Overflow trigger — visible only on mobile/tablet via CSS

@@ -17,6 +17,7 @@
 
    #?(:clj clojure.edn)
    #?(:clj clojure.java.io)
+   #?(:clj [clojure.string])
    #?(:clj [clojure.tools.logging :as log])
    #?(:clj [freememo.logging :as logging])
    #?(:clj [freememo.db :as db])
@@ -36,9 +37,16 @@
    (def upload-routes #{"/api/upload-pdf" "/api/upload-epub"}))
 
 #?(:clj
+   (defn- parse-content-length
+     "Parse a Content-Length header. Returns Long for digit-only values, nil otherwise."
+     [header]
+     (when (and header (re-matches #"\d+" header))
+       (Long/parseLong header))))
+
+#?(:clj
    (defn wrap-route-body-size
-     "Reject requests whose Content-Length exceeds the per-route cap, before
-      any body parsing runs."
+     "Cap request body size on /api/*. 100 MB on uploads, 10 MB elsewhere.
+      Returns 411 for chunked uploads, 413 when Content-Length exceeds the cap."
      [handler]
      (fn [request]
        (let [uri (:uri request)
@@ -47,12 +55,22 @@
                          (and (= method :post) (upload-routes uri)) 104857600
                          (and (= method :post) (.startsWith ^String uri "/api/")) 10485760
                          :else nil)
-             content-length (some-> (get-in request [:headers "content-length"]) Long/parseLong)]
-         (if (and max-bytes content-length (> content-length max-bytes))
+             transfer-encoding (some-> (get-in request [:headers "transfer-encoding"])
+                                 clojure.string/lower-case)
+             content-length (parse-content-length (get-in request [:headers "content-length"]))]
+         (cond
+           (and max-bytes transfer-encoding (clojure.string/includes? transfer-encoding "chunked"))
+           {:status 411
+            :headers {"Content-Type" "application/json"}
+            :body "{\"success\":false,\"error\":\"Length Required (chunked uploads not accepted)\",\"code\":\"length-required\"}"}
+
+           (and max-bytes content-length (> content-length max-bytes))
            {:status 413
             :headers {"Content-Type" "application/json"}
             :body (str "{\"success\":false,\"error\":\"Request too large (limit "
                     max-bytes " bytes)\",\"code\":\"request-too-large\"}")}
+
+           :else
            (handler request))))))
 
 #?(:clj ; server entrypoint
@@ -86,8 +104,8 @@
            (electric-ring/wrap-electric-websocket (fn [ring-request] (freememo.main/electric-boot ring-request)))
            (electric-ring/wrap-reject-stale-client config) ; ensures electric client and servers stays in sync.
            (wrap-api-routes)
-           (wrap-multipart-params {:max-file-size 104857600}) ; 100 MB
-           (wrap-route-body-size)
+           (wrap-multipart-params)
+           (wrap-route-body-size) ; reject chunked + cap Content-Length
            (wrap-params)
            (wrap-session {:store (cookie-store {:key (let [secret (or (System/getenv "ENC_KEY_SECRET") "dev-enc-key-secret-change-in-prod")
                                                                       hash (-> (java.security.MessageDigest/getInstance "SHA-256")

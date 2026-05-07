@@ -46,8 +46,8 @@
      :cljs nil))
 
 (defn get-usage-pct* [_refresh user-id]
-  #?(:clj (let [usage (quota/get-user-usage user-id)
-                cap (quota/get-user-quota user-id)]
+  #?(:clj (let [usage (quota/get-user-usage db/ds user-id)
+                cap (quota/get-user-quota db/ds user-id)]
             (if (and cap (pos? cap))
               (* 100.0 (/ (double usage) cap))
               0.0))

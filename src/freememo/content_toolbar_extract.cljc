@@ -7,11 +7,12 @@
    [freememo.logging :as log]
    [freememo.card-components :as card-components]
    [freememo.keyboard :as keyboard]
-   #?(:clj [freememo.db :as db])))
+   #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.user-state :as us])))
 
 (e/defn ExtractActions [cfg]
   (e/client
-    (let [{:keys [topic-id extract-status navigate! origin]} cfg]
+    (let [{:keys [user-id topic-id extract-status navigate! origin]} cfg]
 
       ;; Done/Restore button — only for extract topics (not PDF pages)
       (when (some? extract-status)
@@ -92,6 +93,7 @@
                       (when-some [token ?token]
                         (let [note-ids (e/server (db/get-anki-note-ids topic-id))]
                           (e/server (db/delete-topic! topic-id))
+                          (e/server (swap! (us/get-atom user-id :refresh) inc))
                           (e/client (card-components/try-delete-anki-notes! note-ids))
                           (log/log-info (str "Topic deleted topic-id=" topic-id))
                           (token)

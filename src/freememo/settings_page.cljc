@@ -5,16 +5,17 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.util :refer [mac-platform?]]
    #?(:clj [freememo.settings :as settings])
+   #?(:clj [freememo.db :as db])
    #?(:clj [freememo.quota :as quota])
    #?(:clj [freememo.user-state :as us])))
 
 ;; Server-only wrappers — visible to both compilers, plain CLJ body.
 (defn get-usage* [_refresh user-id]
-  #?(:clj (quota/get-user-usage user-id)
+  #?(:clj (quota/get-user-usage db/ds user-id)
      :cljs 0))
 
 (defn get-quota* [_refresh user-id]
-  #?(:clj (quota/get-user-quota user-id)
+  #?(:clj (quota/get-user-quota db/ds user-id)
      :cljs 0))
 
 ;; Server-only formatters — `format` is CLJ-only; calling it from inside an

@@ -1,7 +1,13 @@
 (ns freememo.url-validate
   "Block SSRF vectors. Reject non-http(s), loopback, link-local, private,
    multicast, and any-local addresses. Resolves DNS and checks every
-   returned address — a host with one private and one public A record fails."
+   returned address — a host with one private and one public A record fails.
+
+   Known gap (DNS rebinding TOCTOU): `safe-url?` resolves the host once,
+   then the actual fetch (clj-http) resolves again. A malicious DNS server
+   can return a public address to the validator and a private address to
+   the fetcher. Closing this requires resolving once and pinning the IP at
+   the HTTP-client level; not implemented here."
   (:require [clojure.string :as str])
   (:import [java.net URI InetAddress UnknownHostException]))
 

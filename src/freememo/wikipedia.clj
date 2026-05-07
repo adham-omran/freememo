@@ -9,6 +9,17 @@
 (def ^:private outbound-max-bytes 26214400)  ;; 25 MB
 (def ^:private outbound-timeout-ms 30000)    ;; 30 s
 
+(defn- redirect-error
+  "Build an error result for a 3xx response. Surfaces the Location header so
+   the user can paste the final URL directly. The original `safe-url?` check
+   ran on `url`; the redirect target is unvalidated, so we never follow it."
+  [resp url]
+  (let [location (get-in resp [:headers "location"])]
+    {:success false
+     :error (str "URL " url " redirected"
+              (when location (str " to " location))
+              " — please provide the final URL directly")}))
+
 (defn- simplify-latex
   "Strip \\displaystyle wrapper and common LaTeX noise from alt text.
    '{\\displaystyle F(g\\circ f)=F(g)\\circ F(f)}' → 'F(g ∘ f) = F(g) ∘ F(f)'"
@@ -75,42 +86,62 @@
                {:headers {"User-Agent" "FreeMemo/1.0 (incremental reading app)"
                           "Accept" "text/html"}
                 :cookie-policy :none
+                :redirect-strategy :none
+                :throw-exceptions false
                 :socket-timeout outbound-timeout-ms
                 :connection-timeout outbound-timeout-ms
-                :max-body outbound-max-bytes})]
-    {:title title
-     :html (-> (:body resp) preprocess-wikipedia-html cleaner/clean-html)
-     :url (str "https://en.wikipedia.org/wiki/" (java.net.URLEncoder/encode title "UTF-8"))
-     :source-type "wikipedia"}))
+                :max-body outbound-max-bytes})
+        status (:status resp)]
+    (cond
+      (<= 300 status 399)
+      (redirect-error resp api-url)
+
+      (not= 200 status)
+      {:success false :error (str "Wikipedia fetch failed (HTTP " status ")")}
+
+      :else
+      {:title title
+       :html (-> (:body resp) preprocess-wikipedia-html cleaner/clean-html)
+       :url (str "https://en.wikipedia.org/wiki/" (java.net.URLEncoder/encode title "UTF-8"))
+       :source-type "wikipedia"})))
 
 (defn- fetch-generic-url [url]
   (let [resp (http/get url
                {:headers {"User-Agent" "Mozilla/5.0 (compatible; FreeMemo/1.0)"}
                 :cookie-policy :none
+                :redirect-strategy :none
+                :throw-exceptions false
                 :socket-timeout outbound-timeout-ms
                 :connection-timeout outbound-timeout-ms
                 :max-body outbound-max-bytes})
-        doc (Jsoup/parse (:body resp))
-        title (or (some-> (.select doc "title") (.first) (.text))
-                  (some-> (.select doc "h1") (.first) (.text))
-                  url)
-        ;; Remove nav, footer, sidebar, ads, scripts
-        _ (doseq [sel ["nav" "footer" "header" "aside" ".sidebar" ".nav"
-                       ".footer" ".header" ".advertisement" ".ad" "#comments"
-                       "script" "style" "noscript" "iframe"]]
-            (.remove (.select doc sel)))
-        ;; Try to get just the main content
-        main-content (or (some-> (.select doc "article") (.first) (.html))
-                         (some-> (.select doc "main") (.first) (.html))
-                         (some-> (.select doc "[role=main]") (.first) (.html))
-                         (some-> (.select doc ".content") (.first) (.html))
-                         (some-> (.select doc "#content") (.first) (.html))
-                         (.html (.body doc)))
-        html (cleaner/clean-html main-content)]
-    {:title title
-     :html html
-     :url url
-     :source-type "web"}))
+        status (:status resp)]
+    (cond
+      (<= 300 status 399)
+      (redirect-error resp url)
+
+      (not= 200 status)
+      {:success false :error (str "Fetch failed (HTTP " status ")")}
+
+      :else
+      (let [doc (Jsoup/parse (:body resp))
+            title (or (some-> (.select doc "title") (.first) (.text))
+                      (some-> (.select doc "h1") (.first) (.text))
+                      url)
+            _ (doseq [sel ["nav" "footer" "header" "aside" ".sidebar" ".nav"
+                           ".footer" ".header" ".advertisement" ".ad" "#comments"
+                           "script" "style" "noscript" "iframe"]]
+                (.remove (.select doc sel)))
+            main-content (or (some-> (.select doc "article") (.first) (.html))
+                             (some-> (.select doc "main") (.first) (.html))
+                             (some-> (.select doc "[role=main]") (.first) (.html))
+                             (some-> (.select doc ".content") (.first) (.html))
+                             (some-> (.select doc "#content") (.first) (.html))
+                             (.html (.body doc)))
+            html (cleaner/clean-html main-content)]
+        {:title title
+         :html html
+         :url url
+         :source-type "web"}))))
 
 (defn fetch-url
   "Fetch a URL and return cleaned HTML. Auto-detects Wikipedia URLs.
@@ -129,6 +160,10 @@
       (let [result (if (wikipedia-url? url)
                      (fetch-wikipedia-by-title (extract-wiki-title url))
                      (fetch-generic-url url))]
-        (assoc result :success true)))
+        ;; Helper may have returned {:success false :error ...} for redirects
+        ;; or non-200 statuses — pass through; otherwise mark success.
+        (if (false? (:success result))
+          result
+          (assoc result :success true))))
     (catch Exception e
       {:success false :error (.getMessage e)})))
