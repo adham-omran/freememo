@@ -6,9 +6,7 @@
 
    Override is absolute: a later raise of STORAGE_QUOTA_BYTES does not lift
    per-user overrides automatically."
-  (:require [freememo.db :as db]
-            [next.jdbc :as jdbc]
-            [taoensso.telemere :as tel]))
+  (:require [next.jdbc :as jdbc]))
 
 (def default-total-bytes
   (try
@@ -21,48 +19,22 @@
     (catch Exception _ 104857600)))
 
 (defn get-user-quota
-  "Effective per-user cap: override if set, else env default."
-  [user-id]
+  "Effective per-user cap: override if set, else env default.
+   `connectable` is a JDBC datasource or transaction."
+  [connectable user-id]
   (or (:users/quota_bytes
-        (jdbc/execute-one! db/ds
+        (jdbc/execute-one! connectable
           ["SELECT quota_bytes FROM users WHERE id = ?" user-id]))
     default-total-bytes))
 
 (defn get-user-usage
-  "Read the denormalized counter. Returns 0 for unknown users."
-  [user-id]
+  "Read the denormalized counter. Returns 0 for unknown users.
+   `connectable` is a JDBC datasource or transaction."
+  [connectable user-id]
   (or (:users/usage_bytes
-        (jdbc/execute-one! db/ds
+        (jdbc/execute-one! connectable
           ["SELECT usage_bytes FROM users WHERE id = ?" user-id]))
     0))
-
-(defn check-quota
-  "Returns {:ok true} when an upload of incoming-bytes by user-id would fit,
-   {:ok false :reason :file-too-large | :over-quota :used :limit :incoming} otherwise."
-  [user-id incoming-bytes]
-  (cond
-    (> incoming-bytes per-file-max-bytes)
-    {:ok false :reason :file-too-large
-     :limit per-file-max-bytes :incoming incoming-bytes}
-
-    :else
-    (let [used (get-user-usage user-id)
-          quota (get-user-quota user-id)]
-      (if (> (+ used incoming-bytes) quota)
-        {:ok false :reason :over-quota
-         :used used :limit quota :incoming incoming-bytes}
-        {:ok true}))))
-
-(defn record-usage!
-  "Adjust users.usage_bytes by delta-bytes (signed). Clamped at 0.
-   Pass a transaction `tx` when called inside `with-transaction`,
-   otherwise the default datasource is used."
-  ([user-id delta-bytes]
-   (record-usage! db/ds user-id delta-bytes))
-  ([connectable user-id delta-bytes]
-   (jdbc/execute! connectable
-     ["UPDATE users SET usage_bytes = GREATEST(0, usage_bytes + ?) WHERE id = ?"
-      (long delta-bytes) user-id])))
 
 (defn quota-error
   "Build an ex-info for ::quota-error with reason + data attached."
@@ -77,3 +49,37 @@
   "Predicate for catching ::quota-error ex-data."
   [data]
   (= ::quota-error (:type data)))
+
+(defn check-and-bump!
+  "Atomic quota gate. Must be called inside an active `with-transaction`.
+   Locks the users row, validates per-file and total caps, then increments
+   `usage_bytes` by `incoming-bytes`.
+
+   Pre: tx is a live connectable; user-id refers to an existing users row;
+        incoming-bytes is non-negative.
+   Post: on return, usage_bytes is incremented by incoming-bytes.
+   Throws: `quota-error :file-too-large` or `quota-error :over-quota`
+           on cap violation — caller's tx must abort to undo the lock.
+
+   Invariant: between SELECT FOR UPDATE and UPDATE, no other tx can read
+   or write this user's usage_bytes."
+  [tx user-id incoming-bytes]
+  (when (> incoming-bytes per-file-max-bytes)
+    (throw (quota-error :file-too-large
+             {:limit per-file-max-bytes :incoming incoming-bytes})))
+  (let [row (jdbc/execute-one! tx
+              ["SELECT usage_bytes, COALESCE(quota_bytes, ?) AS effective_quota
+                FROM users WHERE id = ? FOR UPDATE"
+               default-total-bytes user-id])
+        used (:users/usage_bytes row)
+        limit (:effective_quota row)]
+    (when (or (nil? used) (nil? limit))
+      (throw (ex-info "User not found for quota check"
+               {:type ::user-not-found :user-id user-id})))
+    (when (> (+ used incoming-bytes) limit)
+      (throw (quota-error :over-quota
+               {:used used :limit limit :incoming incoming-bytes})))
+    (jdbc/execute! tx
+      ["UPDATE users SET usage_bytes = usage_bytes + ? WHERE id = ?"
+       (long incoming-bytes) user-id])
+    {:ok true :used (+ used incoming-bytes) :limit limit}))

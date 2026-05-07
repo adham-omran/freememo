@@ -9,6 +9,7 @@
    [taoensso.telemere :as tel]
    [clojure.string :as str]
    [freememo.input-check :as input]
+   [freememo.quota :as quota]
    [freememo.text :as text]))
 
 (declare sanitize-utf8)
@@ -71,19 +72,21 @@
   (jdbc/execute! ds ["ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL"])
 
   ;; Storage quota: denormalized usage counter + optional per-user override.
-  ;; Backfill `usage_bytes` once, when the column is first added.
+  ;; ALTER + backfill run in one tx so partial failure rolls back; otherwise
+  ;; columns could exist with default 0 and `had-usage?` becomes true forever.
   (let [had-usage? (some? (jdbc/execute-one! ds
                             ["SELECT 1 FROM information_schema.columns
                               WHERE table_name = 'users' AND column_name = 'usage_bytes'"]))]
-    (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS usage_bytes BIGINT NOT NULL DEFAULT 0"])
-    (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_bytes BIGINT"])
-    (when-not had-usage?
-      (tel/log! :info "Backfilling users.usage_bytes from topic_files.file_size")
-      (jdbc/execute! ds
-        ["UPDATE users SET usage_bytes = COALESCE(
-            (SELECT SUM(tf.file_size)
-             FROM topic_files tf JOIN topics t ON tf.topic_id = t.id
-             WHERE t.user_id = users.id), 0)"])))
+    (jdbc/with-transaction [tx ds]
+      (jdbc/execute! tx ["ALTER TABLE users ADD COLUMN IF NOT EXISTS usage_bytes BIGINT NOT NULL DEFAULT 0"])
+      (jdbc/execute! tx ["ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_bytes BIGINT"])
+      (when-not had-usage?
+        (tel/log! :info "Backfilling users.usage_bytes from topic_files.file_size")
+        (jdbc/execute! tx
+          ["UPDATE users SET usage_bytes = COALESCE(
+              (SELECT SUM(tf.file_size)
+               FROM topic_files tf JOIN topics t ON tf.topic_id = t.id
+               WHERE t.user_id = users.id), 0)"]))))
 
   ;; Settings table (per-user key-value)
   (let [has-user-id (jdbc/execute-one! ds
@@ -573,10 +576,11 @@
    :source-url :source-reference :status :priority
    Returns the created row with :topics/id."
   [attrs]
-  (input/check-length! :title (:title attrs) input/title-max)
-  (let [sanitized (when (:content attrs) (sanitize-utf8 (:content attrs)))
+  (let [clean-title (input/sanitize-filename (:title attrs))
+        _ (input/check-length! :title clean-title input/title-max)
+        sanitized (when (:content attrs) (sanitize-utf8 (:content attrs)))
         row (cond-> {:kind (or (:kind attrs) "basic")
-                     :title (or (:title attrs) "Untitled")
+                     :title clean-title
                      :status (or (:status attrs) "active")
                      :priority (or (:priority attrs) 50)}
               (:user-id attrs) (assoc :user_id (:user-id attrs))
@@ -794,35 +798,35 @@
 
 (defn create-pdf-topic!
   "Create a PDF root topic with file data and page stubs.
-   Increments users.usage_bytes by file-size atomically.
+   Atomically checks quota and increments users.usage_bytes by file-size.
+   Throws `quota/quota-error` on cap violation — caller's tx aborts.
    Returns the result with :topics/id."
   [user-id filename file-bytes file-size page-count]
-  (input/check-length! :title filename input/title-max)
-  (jdbc/with-transaction [tx ds]
-    (let [topic (jdbc/execute-one! tx
-                  (sql/format {:insert-into :topics
-                               :values [{:user_id user-id
-                                         :kind "pdf"
-                                         :title filename
-                                         :source_reference filename}]
-                               :returning [:id]}))
-          topic-id (:topics/id topic)]
-      ;; Store file
-      (jdbc/execute! tx
-        ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
-          VALUES (?, ?, ?, ?)"
-         topic-id file-bytes file-size "application/pdf"])
-      (bump-user-usage! tx user-id file-size)
-      ;; Create page stubs
-      (when (pos? page-count)
-        (doseq [n (range 1 (inc page-count))]
-          (jdbc/execute! tx
-            ["INSERT INTO topics (user_id, parent_id, kind, title, page_number)
-              VALUES (?, ?, 'page', ?, ?)
-              ON CONFLICT (parent_id, page_number) WHERE page_number IS NOT NULL
-              DO NOTHING"
-             user-id topic-id (str "Page " n) n])))
-      topic)))
+  (let [clean-name (input/sanitize-filename filename)]
+    (input/check-length! :title clean-name input/title-max)
+    (jdbc/with-transaction [tx ds]
+      (quota/check-and-bump! tx user-id file-size)
+      (let [topic (jdbc/execute-one! tx
+                    (sql/format {:insert-into :topics
+                                 :values [{:user_id user-id
+                                           :kind "pdf"
+                                           :title clean-name
+                                           :source_reference clean-name}]
+                                 :returning [:id]}))
+            topic-id (:topics/id topic)]
+        (jdbc/execute! tx
+          ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
+            VALUES (?, ?, ?, ?)"
+           topic-id file-bytes file-size "application/pdf"])
+        (when (pos? page-count)
+          (doseq [n (range 1 (inc page-count))]
+            (jdbc/execute! tx
+              ["INSERT INTO topics (user_id, parent_id, kind, title, page_number)
+                VALUES (?, ?, 'page', ?, ?)
+                ON CONFLICT (parent_id, page_number) WHERE page_number IS NOT NULL
+                DO NOTHING"
+               user-id topic-id (str "Page " n) n])))
+        topic))))
 
 (defn find-web-topic-by-title
   "Find an existing root-level web topic by title (case-insensitive).
@@ -840,14 +844,15 @@
 (defn create-web-topic!
   "Create a web article topic. Returns topic-id."
   [user-id title html-content source-url]
-  (input/check-length! :title title input/title-max)
-  (let [source-ref (str title (when source-url (str " — " source-url)))
+  (let [clean-title (input/sanitize-filename title)
+        _ (input/check-length! :title clean-title input/title-max)
+        source-ref (str clean-title (when source-url (str " — " source-url)))
         sanitized (sanitize-utf8 html-content)
         topic (jdbc/execute-one! ds
                 (sql/format {:insert-into :topics
                              :values [{:user_id user-id
                                        :kind "web"
-                                       :title (or title "Web Article")
+                                       :title clean-title
                                        :content sanitized
                                        :content_text (text/strip-html sanitized)
                                        :source_url source-url
@@ -858,74 +863,77 @@
 (defn create-markdown-topic!
   "Create a Markdown-imported topic. Returns topic-id."
   [user-id title html-content]
-  (input/check-length! :title title input/title-max)
-  (let [sanitized (sanitize-utf8 html-content)
+  (let [clean-title (input/sanitize-filename title)
+        _ (input/check-length! :title clean-title input/title-max)
+        sanitized (sanitize-utf8 html-content)
         topic (jdbc/execute-one! ds
                 (sql/format {:insert-into :topics
                              :values [{:user_id user-id
                                        :kind "markdown"
-                                       :title (or title "Untitled Markdown")
+                                       :title clean-title
                                        :content sanitized
                                        :content_text (text/strip-html sanitized)
-                                       :source_reference (or title "Untitled Markdown")}]
+                                       :source_reference clean-title}]
                              :returning [:id]}))]
     (:topics/id topic)))
 
 (defn create-epub-topic!
   "Create an EPUB root topic with file and chapter children.
    chapters is a vec of {:html :title} maps.
-   Increments users.usage_bytes by file-size atomically.
+   Atomically checks quota and increments users.usage_bytes by file-size.
+   Throws `quota/quota-error` on cap violation — caller's tx aborts.
    Returns {:topic-id N :chapter-ids [...]}"
   [user-id title file-bytes file-size chapters]
-  (input/check-length! :title title input/title-max)
-  (jdbc/with-transaction [tx ds]
-    (let [topic (jdbc/execute-one! tx
-                  (sql/format {:insert-into :topics
-                               :values [{:user_id user-id
-                                         :kind "epub"
-                                         :title (or title "Untitled EPUB")
-                                         :source_reference (or title "Untitled EPUB")}]
-                               :returning [:id]}))
-          topic-id (:topics/id topic)]
-      ;; Store file
-      (jdbc/execute! tx
-        ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
-          VALUES (?, ?, ?, ?)"
-         topic-id file-bytes file-size "application/epub+zip"])
-      (bump-user-usage! tx user-id file-size)
-      ;; Create chapter children
-      (let [chapter-ids (when (seq chapters)
-                          (mapv (fn [i ch]
-                                  (let [sanitized (sanitize-utf8 (:html ch))
-                                        result (jdbc/execute-one! tx
-                                                 (sql/format {:insert-into :topics
-                                                              :values [{:user_id user-id
-                                                                        :parent_id topic-id
-                                                                        :kind "basic"
-                                                                        :title (or (:title ch) (str "Chapter " (inc i)))
-                                                                        :content sanitized
-                                                                        :content_text (text/strip-html sanitized)
-                                                                        :page_number (inc i)
-                                                                        :status "active"
-                                                                        :priority 50}]
-                                                              :returning [:id]}))]
-                                    (:topics/id result)))
-                            (range (count chapters))
-                            chapters))]
-        {:topic-id topic-id :chapter-ids (vec (remove nil? chapter-ids))}))))
+  (let [clean-title (input/sanitize-filename title)]
+    (input/check-length! :title clean-title input/title-max)
+    (jdbc/with-transaction [tx ds]
+      (quota/check-and-bump! tx user-id file-size)
+      (let [topic (jdbc/execute-one! tx
+                    (sql/format {:insert-into :topics
+                                 :values [{:user_id user-id
+                                           :kind "epub"
+                                           :title clean-title
+                                           :source_reference clean-title}]
+                                 :returning [:id]}))
+            topic-id (:topics/id topic)]
+        (jdbc/execute! tx
+          ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
+            VALUES (?, ?, ?, ?)"
+           topic-id file-bytes file-size "application/epub+zip"])
+        ;; Create chapter children
+        (let [chapter-ids (when (seq chapters)
+                            (mapv (fn [i ch]
+                                    (let [sanitized (sanitize-utf8 (:html ch))
+                                          result (jdbc/execute-one! tx
+                                                   (sql/format {:insert-into :topics
+                                                                :values [{:user_id user-id
+                                                                          :parent_id topic-id
+                                                                          :kind "basic"
+                                                                          :title (or (:title ch) (str "Chapter " (inc i)))
+                                                                          :content sanitized
+                                                                          :content_text (text/strip-html sanitized)
+                                                                          :page_number (inc i)
+                                                                          :status "active"
+                                                                          :priority 50}]
+                                                                :returning [:id]}))]
+                                      (:topics/id result)))
+                              (range (count chapters))
+                              chapters))]
+          {:topic-id topic-id :chapter-ids (vec (remove nil? chapter-ids))})))))
 
 (defn create-standalone-topic!
   "Create a standalone empty topic. Returns {:topic-id N}."
   [user-id title]
-  (input/check-length! :title title input/title-max)
-  (let [topic (jdbc/execute-one! ds
+  (let [clean-title (input/sanitize-filename title)
+        _ (input/check-length! :title clean-title input/title-max)
+        topic (jdbc/execute-one! ds
                 (sql/format {:insert-into :topics
                              :values [{:user_id user-id
                                        :kind "basic"
-                                       :title (or title "New Topic")
+                                       :title clean-title
                                        :content ""
                                        :content_text ""
-                                       :source_reference (or title "New Topic")}]
+                                       :source_reference clean-title}]
                              :returning [:id]}))]
     {:topic-id (:topics/id topic)}))
 
