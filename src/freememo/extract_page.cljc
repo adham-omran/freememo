@@ -15,6 +15,7 @@
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.wikipedia :as wiki])
+   #?(:clj [clojure.string :as str])
    [freememo.navigation :as nav]))
 
 ;; Per-user refresh via user-state registry
@@ -22,6 +23,28 @@
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 #?(:clj (defn get-topic-by-id* [_refresh topic-id]
           (when topic-id (db/get-topic topic-id))))
+
+;; Server-only: render EPUB chapters as HTML for display inside the editor on the root view
+(defn epub-chapters-html* [_refresh root-id]
+  #?(:clj
+     (when root-id
+       (let [chapters (db/get-children root-id)
+             escape #(str/escape (str %) {\< "&lt;" \> "&gt;" \& "&amp;" \" "&quot;"})]
+         (if (seq chapters)
+           (str "<p><strong>Chapters</strong></p><ol>"
+             (apply str
+               (map (fn [c]
+                      (let [pn (:topics/page_number c)
+                            title (or (:topics/title c) "(untitled)")
+                            id (:topics/id c)]
+                        (str "<li><a href=\"#topic-" id "\">"
+                          (when pn (str pn ". "))
+                          (escape title)
+                          "</a></li>")))
+                 chapters))
+             "</ol>")
+           "<p><em>No chapters in this EPUB.</em></p>")))
+     :cljs nil))
 
 (defn import-wikipedia-url*
   "Import a Wikipedia article by URL. Returns {:already-exists true :title ...} or {:imported true :title ...} or {:error ...}."
@@ -73,7 +96,12 @@
               root-topic-id (e/server (db/get-root-topic-id topic-id))
               root-topic (e/server (when (not= root-topic-id topic-id) (db/get-topic root-topic-id)))
               filename (e/server (:topics/title (or root-topic topic)))
-              root-kind (e/server (:topics/kind (or root-topic topic)))]
+              root-kind (e/server (:topics/kind (or root-topic topic)))
+              topic-kind (e/server (:topics/kind topic))
+              is-epub-root? (= topic-kind "epub")
+              display-content (if is-epub-root?
+                                (e/server (epub-chapters-html* refresh topic-id))
+                                content)]
 
           ;; Auto-save dirty edits to topic content
           ;; Auto-save: one-way editor → DB. Don't clear !dirty-html, don't bump !refresh.
@@ -81,6 +109,7 @@
           (let [dirty-data (e/watch editor/!dirty-html)
                 !last-saved (atom nil)]
             (when (and (some? dirty-data)
+                    (not is-epub-root?)
                     (= (:topic-id dirty-data) topic-id)
                     (not= (:html dirty-data) (e/watch !last-saved)))
               (log/log-debug (str "Extract auto-save topic-id=" topic-id))
@@ -170,15 +199,36 @@
           (let [!top-pct (atom (default-split-pct))
                 top-pct (e/watch !top-pct)]
 
-            ;; Editor area
+            ;; Editor area — content is chapter list HTML for EPUB root, normal content otherwise
             (dom/div
               (dom/props {:style {:height (str top-pct "%") :min-height "0" :overflow "auto"
                                   :display "flex" :justify-content "center"
                                   :padding "8px 16px"}})
+              ;; Intercept chapter-link clicks (href="#topic-N") and navigate via Electric.
+              ;; Quill's selection-change fires before this bubble handler and shows the link
+              ;; tooltip ("Visit URL: …"); hide it explicitly so it doesn't flash before nav.
+              (dom/On "click"
+                (fn [e]
+                  (when is-epub-root?
+                    (let [target (.-target e)
+                          anchor (when target
+                                   (if (= "A" (.-tagName target))
+                                     target
+                                     (.closest target "a")))
+                          href (when anchor (.getAttribute anchor "href"))]
+                      (when (and href (.startsWith href "#topic-"))
+                        (.preventDefault e)
+                        (.stopPropagation e)
+                        (let [tid (js/parseInt (subs href 7))
+                              ed (:editor @editor/!editor-state)
+                              tooltip (when ed (.-tooltip (.-theme ed)))]
+                          (when tooltip (.hide tooltip))
+                          (navigate! :viewer (nav/nav-browse-topic tid nil)))))))
+                nil)
               (dom/div
                 (dom/props {:style {:width "100%"
                                     :display "flex" :flex-direction "column"}})
-                (RichTextEditorComponent {:initial-html content
+                (RichTextEditorComponent {:initial-html display-content
                                           :topic-id topic-id})))
 
             ;; Draggable divider
