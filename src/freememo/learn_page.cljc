@@ -51,7 +51,7 @@
                          content (or (:topics/content row) "")
                          is-root (nil? parent-id)
                          display-title (if is-root
-                                         (util/display-name title)
+                                         title
                                          (let [preview (util/extract-preview content 80)]
                                            (if (seq preview) preview title)))]
                      {:id (:topics/id row)

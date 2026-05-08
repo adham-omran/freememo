@@ -7,7 +7,6 @@
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
    [freememo.navigation :as nav]
-   [freememo.util :as util]
    [freememo.card-components :as card-components]
    [freememo.pdf-cache :as pdf-cache]
    #?(:clj [freememo.db :as db])
@@ -221,8 +220,7 @@
                                   kind (or (:topics/kind topic) "basic")
                                   topic-status (or (:topics/status topic) "active")
                                   expanded? (contains? expanded-set id)
-                                  [badge-text badge-color] (kind-badge kind)
-                                  display-title (if is-root (util/display-name title) title)]
+                                  [badge-text badge-color] (kind-badge kind)]
                               (dom/tr
                                 (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)"
                                                     :height (str row-height "px")
@@ -270,7 +268,7 @@
                                                             :border "1px solid var(--color-border)"
                                                             :border-radius "3px"
                                                             :background "var(--color-bg-card)"}})
-                                        (set! (.-value dom/node) (or display-title ""))
+                                        (set! (.-value dom/node) (or title ""))
                                         (let [n dom/node]
                                           (js/setTimeout
                                             (fn []
@@ -282,7 +280,7 @@
                                           (fn [e]
                                             (when (= (.-key e) "Escape")
                                               (.preventDefault e)
-                                              (set! (.-value (.-target e)) (or display-title ""))
+                                              (set! (.-value (.-target e)) (or title ""))
                                               (.blur (.-target e))
                                               (reset! !editing-id nil)))
                                           nil)
@@ -302,8 +300,8 @@
                                                           :font-size (if is-root "13px" "12px")
                                                           :font-weight (if is-root "500" "400")
                                                           :color "var(--color-text-primary)"}
-                                                  :data-tooltip display-title})
-                                      (dom/text display-title))))
+                                                  :data-tooltip title})
+                                      (dom/text title))))
                                 ;; Column 2: Done
                                 (dom/td
                                   (dom/props {:style {:padding "4px 6px" :text-align "center"

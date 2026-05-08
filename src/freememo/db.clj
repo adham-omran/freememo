@@ -210,6 +210,23 @@
   (jdbc/execute! ds ["ALTER TABLE topics DROP COLUMN IF EXISTS source_reference"])
   (jdbc/execute! ds ["ALTER TABLE flashcards DROP COLUMN IF EXISTS source_reference"])
 
+  ;; Canonicalize legacy titles: replace _ with space, strip trailing .pdf,
+  ;; collapse whitespace, trim. Idempotent — clean rows are skipped by WHERE.
+  (let [pretty-sql "btrim(regexp_replace(
+                            regexp_replace(replace(title, '_', ' '), '\\.pdf$', '', 'i'),
+                            '\\s+', ' ', 'g'))"
+        result (jdbc/execute-one! ds
+                 [(str "WITH updated AS (
+                          UPDATE topics SET title = " pretty-sql "
+                          WHERE title <> " pretty-sql "
+                          RETURNING 1
+                        )
+                        SELECT COUNT(*) AS n FROM updated")])
+        n (or (:n result) 0)]
+    (when (pos? n)
+      (tel/log! {:level :info :id ::prettify-titles :data {:count n}}
+        (str "Prettified " n " legacy title(s)"))))
+
   ;; Backfill content_text for existing rows (idempotent)
   (backfill-content-text!)
 
@@ -574,7 +591,7 @@
    :source-url :status :priority
    Returns the created row with :topics/id."
   [attrs]
-  (let [clean-title (input/sanitize-filename (:title attrs))
+  (let [clean-title (input/prettify-title (input/sanitize-filename (:title attrs)))
         _ (input/check-length! :title clean-title input/title-max)
         sanitized (when (:content attrs) (sanitize-utf8 (:content attrs)))
         row (cond-> {:kind (or (:kind attrs) "basic")
@@ -796,7 +813,7 @@
    Throws `quota/quota-error` on cap violation — caller's tx aborts.
    Returns the result with :topics/id."
   [user-id filename file-bytes file-size page-count]
-  (let [clean-name (input/sanitize-filename filename)]
+  (let [clean-name (input/prettify-title (input/sanitize-filename filename))]
     (input/check-length! :title clean-name input/title-max)
     (jdbc/with-transaction [tx ds]
       (quota/check-and-bump! tx user-id file-size)
@@ -837,7 +854,7 @@
 (defn create-web-topic!
   "Create a web article topic. Returns topic-id."
   [user-id title html-content source-url]
-  (let [clean-title (input/sanitize-filename title)
+  (let [clean-title (input/prettify-title (input/sanitize-filename title))
         _ (input/check-length! :title clean-title input/title-max)
         sanitized (sanitize-utf8 html-content)
         topic (jdbc/execute-one! ds
@@ -854,7 +871,7 @@
 (defn create-markdown-topic!
   "Create a Markdown-imported topic. Returns topic-id."
   [user-id title html-content]
-  (let [clean-title (input/sanitize-filename title)
+  (let [clean-title (input/prettify-title (input/sanitize-filename title))
         _ (input/check-length! :title clean-title input/title-max)
         sanitized (sanitize-utf8 html-content)
         topic (jdbc/execute-one! ds
@@ -874,7 +891,7 @@
    Throws `quota/quota-error` on cap violation — caller's tx aborts.
    Returns {:topic-id N :chapter-ids [...]}"
   [user-id title file-bytes file-size chapters]
-  (let [clean-title (input/sanitize-filename title)]
+  (let [clean-title (input/prettify-title (input/sanitize-filename title))]
     (input/check-length! :title clean-title input/title-max)
     (jdbc/with-transaction [tx ds]
       (quota/check-and-bump! tx user-id file-size)
@@ -898,7 +915,8 @@
                                                                 :values [{:user_id user-id
                                                                           :parent_id topic-id
                                                                           :kind "basic"
-                                                                          :title (or (:title ch) (str "Chapter " (inc i)))
+                                                                          :title (input/prettify-title
+                                                                                   (or (:title ch) (str "Chapter " (inc i))))
                                                                           :content sanitized
                                                                           :content_text (text/strip-html sanitized)
                                                                           :page_number (inc i)
@@ -913,7 +931,7 @@
 (defn create-standalone-topic!
   "Create a standalone empty topic. Returns {:topic-id N}."
   [user-id title]
-  (let [clean-title (input/sanitize-filename title)
+  (let [clean-title (input/prettify-title (input/sanitize-filename title))
         _ (input/check-length! :title clean-title input/title-max)
         topic (jdbc/execute-one! ds
                 (sql/format {:insert-into :topics

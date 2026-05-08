@@ -254,6 +254,73 @@
             (dom/div
               (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0" :overflow "hidden"}})
 
+              ;; Document-level title row — full-width, click-to-rename, page-stats for PDFs
+              (let [current-title (e/server (get-topic-title* refresh selected-doc))
+                    !editing-title (atom false)
+                    editing-title (e/watch !editing-title)]
+                (dom/div
+                  (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
+                                      :padding "6px 12px" :flex-shrink "0"
+                                      :background "var(--color-bg-subtle)"
+                                      :border-bottom "1px solid var(--color-border)"}})
+                  (if editing-title
+                    (e/for-by identity [_k [selected-doc]]
+                      (dom/input
+                        (dom/props {:type "text"
+                                    :placeholder "Title"
+                                    :maxlength "500"
+                                    :style {:flex "1" :padding "4px 8px" :font-size "13px"
+                                            :color "var(--color-text-primary)"
+                                            :border "1px solid var(--color-border)" :border-radius "3px"
+                                            :background "var(--color-bg-card)"}})
+                        (set! (.-value dom/node) (or current-title ""))
+                        (let [n dom/node]
+                          (js/setTimeout
+                            (fn []
+                              (.focus n)
+                              (when (pos? (count (.-value n))) (.select n)))
+                            0))
+                        (dom/On "keydown"
+                          (fn [e]
+                            (when (= (.-key e) "Escape")
+                              (.preventDefault e)
+                              (set! (.-value (.-target e)) (or current-title ""))
+                              (.blur (.-target e))
+                              (reset! !editing-title false)))
+                          nil)
+                        (let [event (dom/On "change" #(-> % .-target .-value) nil)
+                              [?token _] (e/Token event)]
+                          (when-some [token ?token]
+                            (let [trimmed (str/trim event)]
+                              (if (str/blank? trimmed)
+                                (do (token)
+                                  (reset! !editing-title false))
+                                (let [ok (e/server (rename-and-refresh! user-id selected-doc trimmed))]
+                                  (when ok
+                                    (token)
+                                    (reset! !editing-title false)))))))))
+                    (dom/span
+                      (dom/props {:style {:flex "1" :font-size "13px"
+                                          :color "var(--color-text-primary)" :cursor "pointer"
+                                          :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}
+                                  :data-tooltip "Click to rename"})
+                      (dom/text (or current-title ""))
+                      (dom/On "click" (fn [_] (reset! !editing-title true)) nil)))
+                  (when (and is-pdf server-page-info (pos? (:total server-page-info)))
+                    (let [remaining (:remaining server-page-info)]
+                      (dom/span
+                        (dom/props {:class "tooltip-right"
+                                    :style {:color "var(--color-text-hint)" :font-size "12px"
+                                            :white-space "nowrap" :flex-shrink "0"}
+                                    :data-tooltip (cond
+                                                    (empty? remaining) "All pages done!"
+                                                    (<= (count remaining) 20)
+                                                    (str "Remaining: " (clojure.string/join ", " remaining))
+                                                    :else
+                                                    (str "Remaining: " (clojure.string/join ", " (take 20 remaining))
+                                                      " ... and " (- (count remaining) 20) " more"))})
+                        (dom/text (:done server-page-info) "/" (:total server-page-info)))))))
+
               ;; TOP ROW: PDF | Editor — flex direction depends on layout mode
               (let [top-bottom? (= layout "top-bottom")]
                 (dom/div
@@ -272,8 +339,6 @@
                           (PdfViewerComponent {:document-id selected-doc
                                                :initial-page initial-page
                                                :on-navigate! (fn [p] (reset! !page-to-save p))
-                                               :doc-title (get id-to-name selected-doc)
-                                               :page-stats server-page-info
                                                :layout layout
                                                :on-layout-toggle! (fn []
                                                                     (let [new-l (if (= @!layout "left-right") "top-bottom" "left-right")]
@@ -482,68 +547,6 @@
                               (js/setTimeout
                                 (fn [] (reset! !show false))
                                 2000))))))
-
-                    ;; Title — collapsed click-to-edit; renames the topic
-                    (let [current-title (e/server (get-topic-title* refresh selected-doc))
-                          !editing-title (atom false)
-                          editing-title (e/watch !editing-title)]
-                      (if editing-title
-                        (dom/div
-                          (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
-                                              :padding "3px 8px" :flex-shrink "0"
-                                              :background "var(--color-bg-subtle)" :border-bottom "1px solid var(--color-border)"}})
-                          (dom/span
-                            (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)" :flex-shrink "0"}})
-                            (dom/text "Title:"))
-                          (e/for-by identity [_k [selected-doc]]
-                            (dom/input
-                              (dom/props {:type "text"
-                                          :placeholder "Title"
-                                          :maxlength "500"
-                                          :style {:flex "1" :padding "2px 6px" :font-size "12px"
-                                                  :color "var(--color-text-secondary)"
-                                                  :border "1px solid var(--color-border)" :border-radius "3px"
-                                                  :background "var(--color-bg-card)"}})
-                              (set! (.-value dom/node) (or current-title ""))
-                              (let [n dom/node]
-                                (js/setTimeout
-                                  (fn []
-                                    (.focus n)
-                                    (when (pos? (count (.-value n))) (.select n)))
-                                  0))
-                              (dom/On "keydown"
-                                (fn [e]
-                                  (when (= (.-key e) "Escape")
-                                    (.preventDefault e)
-                                    (set! (.-value (.-target e)) (or current-title ""))
-                                    (.blur (.-target e))
-                                    (reset! !editing-title false)))
-                                nil)
-                              (let [event (dom/On "change" #(-> % .-target .-value) nil)
-                                    [?token _] (e/Token event)]
-                                (when-some [token ?token]
-                                  (let [trimmed (str/trim event)]
-                                    (if (str/blank? trimmed)
-                                      (do (token)
-                                        (reset! !editing-title false))
-                                      (let [ok (e/server (rename-and-refresh! user-id selected-doc trimmed))]
-                                        (when ok
-                                          (token)
-                                          (reset! !editing-title false)))))))))
-                          (dom/button
-                            (dom/props {:style {:padding "2px 8px" :font-size "11px" :background "var(--color-bg-subtle)"
-                                                :border "1px solid var(--color-border)" :border-radius "3px" :cursor "pointer"}})
-                            (dom/text "Close")
-                            (dom/On "click" (fn [_] (reset! !editing-title false)) nil)))
-                        (when (seq current-title)
-                          (dom/span
-                            (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)" :cursor "pointer"
-                                                :padding "0 8px" :flex-shrink "0"
-                                                :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
-                                                :max-width "200px"}
-                                        :data-tooltip "Click to rename"})
-                            (dom/text current-title)
-                            (dom/On "click" (fn [_] (reset! !editing-title true)) nil)))))
 
                     ;; Editor area — text-result is nil while e/Offload is in flight
                     (dom/div

@@ -17,19 +17,6 @@
         str/trim)
     ""))
 
-(defn display-name
-  "Clean a document filename for display:
-   - Replace underscores with spaces
-   - Strip .pdf extension
-   Returns empty string for nil input."
-  [filename]
-  (if (string? filename)
-    (-> filename
-        (str/replace #"_" " ")
-        (str/replace #"(?i)\.pdf$" "")
-        str/trim)
-    ""))
-
 (defn truncate
   "Truncate string to n chars, adding ellipsis if longer."
   [s n]

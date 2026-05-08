@@ -9,10 +9,9 @@
 (e/defn PdfViewerComponent
   "Renders a PDF viewer for the given document ID and exposes current page number.
    Props: {:document-id <int>, :initial-page <int>, :on-navigate! <fn>,
-           :doc-title <str>, :page-stats {:done :total :remaining},
            :layout <str>, :on-layout-toggle! <fn>}
    Returns: The current page number (for OCR integration)."
-  [{:keys [document-id initial-page on-navigate! doc-title page-stats
+  [{:keys [document-id initial-page on-navigate!
            layout on-layout-toggle!]}]
   (e/client
     (let [!page (atom (or initial-page 1))
@@ -190,31 +189,7 @@
                                             "Switch to side-by-side layout"
                                             "Switch to stacked layout")})
                 (dom/text (if (= layout "top-bottom") "\u21C5" "\u21C4"))
-                (dom/On "click" (fn [_] (on-layout-toggle!)) nil))))
-
-          ;; Document title + progress — hidden at narrow widths
-          (when doc-title
-            (dom/div
-              (dom/props {:class "pdf-collapse-sm"
-                          :style {:display "flex" :align-items "center" :gap "8px"
-                                  :min-width "0"}})
-              (dom/span
-                (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px"
-                                    :white-space "nowrap" :overflow "hidden" :text-overflow "ellipsis"}})
-                (dom/text doc-title))
-              (when (and page-stats (pos? (:total page-stats)))
-                (let [remaining (:remaining page-stats)]
-                  (dom/span
-                    (dom/props {:class "tooltip-right"
-                                :style {:color "var(--color-text-hint)" :font-size "12px" :white-space "nowrap"}
-                                :data-tooltip (cond
-                                                (empty? remaining) "All pages done!"
-                                                (<= (count remaining) 20)
-                                                (str "Remaining: " (clojure.string/join ", " remaining))
-                                                :else
-                                                (str "Remaining: " (clojure.string/join ", " (take 20 remaining))
-                                                  " ... and " (- (count remaining) 20) " more"))})
-                    (dom/text (:done page-stats) "/" (:total page-stats))))))))
+                (dom/On "click" (fn [_] (on-layout-toggle!)) nil)))))
 
         ;; Viewer wrapper (relative positioning for absolute container inside)
         (dom/div
