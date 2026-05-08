@@ -435,7 +435,7 @@
      :cljs nil))
 
 ;; Add card modal — uses topic-id and root-topic-id instead of doc-id + page-number
-(e/defn AddCardModal [!show-add !card-kind !captured-selection topic-id root-topic-id source-reference user-id]
+(e/defn AddCardModal [!show-add !card-kind !captured-selection topic-id root-topic-id user-id]
   (e/client
     (let [initial-kind @!card-kind
           initial-text (or @!captured-selection "")
@@ -601,8 +601,7 @@
                                                     :root_topic_id root-topic-id
                                                     :kind kind}
                                              (= kind "basic") (assoc :question (:q card) :answer (:a card))
-                                             (= kind "cloze") (assoc :cloze (:c card))
-                                             source-reference (assoc :source_reference source-reference)))
+                                             (= kind "cloze") (assoc :cloze (:c card))))
                                      card-data))
                             result (e/server (insert-flashcards-safe! rows))]
                         (if (:success result)

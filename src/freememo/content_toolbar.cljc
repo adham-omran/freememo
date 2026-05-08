@@ -11,7 +11,6 @@
    [freememo.content-toolbar-extract :refer [ExtractActions]]
    #?(:clj [freememo.settings :as user-settings])
    #?(:clj [freememo.user-state :as us])
-   #?(:clj [freememo.db :as db])
    [freememo.keyboard :as keyboard]
    [freememo.util :refer [mac-platform?]]))
 
@@ -34,8 +33,6 @@
           {:keys [user-id enc-key topic-id root-topic-id page-number content-text
                   parent-content context-mode context-tooltip llm-enabled?
                   extract-status navigate! origin]} state
-          ;; Fetch source reference from root topic for card propagation
-          source-ref (e/server (db/get-topic-source root-topic-id))
           ;; Unsynced card count — uses refresh value for reactivity
           unsynced-count (e/server (helpers/get-unsynced-count* refresh topic-id))
           ;; Load settings from server
@@ -138,7 +135,7 @@
           ;; to avoid reactive loops from map reconstruction.
           (generate/ToolbarGenerate
             (assoc state
-              :mod-key mod-key :source-ref source-ref
+              :mod-key mod-key
               :card-type card-type :card-count-val card-count-val
               :use-context use-context :context-window context-window
               :gen-active? gen-active? :gen-pending gen-pending :gen-error gen-error))
@@ -147,7 +144,7 @@
           (actions/ToolbarActions
             {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
              :page-number page-number :context-mode context-mode :mod-key mod-key
-             :source-ref source-ref :unsynced-count unsynced-count :card-type card-type})
+             :unsynced-count unsynced-count :card-type card-type})
 
           ;; Done/Restore + Delete — extract topics only (separate e/defn for bytecode limit)
           (ExtractActions {:user-id user-id :topic-id topic-id :extract-status extract-status

@@ -5,17 +5,25 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
+   [clojure.string :as str]
    [freememo.navigation :as nav]
    [freememo.util :as util]
    [freememo.card-components :as card-components]
    [freememo.pdf-cache :as pdf-cache]
    #?(:clj [freememo.db :as db])
-   #?(:clj [freememo.user-state :as us])
-   #?(:clj [clojure.string :as str])))
+   #?(:clj [freememo.user-state :as us])))
 
 ;; Server wrapper — _refresh param creates Electric reactive dependency
 (defn get-tree-items* [_refresh user-id]
   #?(:clj (vec (db/get-knowledge-tree user-id))
+     :cljs nil))
+
+;; Atomic rename + refresh — single e/server target so Electric can't drop
+;; the side effect when the binding is "unused" in the client body.
+(defn rename-and-refresh! [user-id id new-title]
+  #?(:clj (do (db/rename-topic! id new-title)
+            (swap! (us/get-atom user-id :refresh) inc)
+            :ok)
      :cljs nil))
 
 #?(:clj
@@ -152,6 +160,8 @@
                 expanded-set (do expand-cmd (e/watch !expanded-set))
                 !show-confirm (atom nil)
                 show-confirm (e/watch !show-confirm)
+                !editing-id (atom nil)
+                editing-id (e/watch !editing-id)
                 flat-rows (flatten-tree roots children-map expanded-set)
                 row-count (count flat-rows)
                 row-height 36
@@ -249,13 +259,51 @@
                                   (dom/span
                                     (dom/props {:class "type-badge" :style {:background badge-color}})
                                     (dom/text badge-text))
-                                  (dom/span
-                                    (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
-                                                        :font-size (if is-root "13px" "12px")
-                                                        :font-weight (if is-root "500" "400")
-                                                        :color "var(--color-text-primary)"}
-                                                :data-tooltip display-title})
-                                    (dom/text display-title)))
+                                  (if (= editing-id id)
+                                    (e/for-by identity [_k [id]]
+                                      (dom/input
+                                        (dom/props {:type "text"
+                                                    :placeholder "Title"
+                                                    :maxlength "500"
+                                                    :style {:flex "1" :min-width "0" :padding "2px 6px"
+                                                            :font-size (if is-root "13px" "12px")
+                                                            :border "1px solid var(--color-border)"
+                                                            :border-radius "3px"
+                                                            :background "var(--color-bg-card)"}})
+                                        (set! (.-value dom/node) (or display-title ""))
+                                        (let [n dom/node]
+                                          (js/setTimeout
+                                            (fn []
+                                              (.focus n)
+                                              (when (pos? (count (.-value n))) (.select n)))
+                                            0))
+                                        (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+                                        (dom/On "keydown"
+                                          (fn [e]
+                                            (when (= (.-key e) "Escape")
+                                              (.preventDefault e)
+                                              (set! (.-value (.-target e)) (or display-title ""))
+                                              (.blur (.-target e))
+                                              (reset! !editing-id nil)))
+                                          nil)
+                                        (let [event (dom/On "change" #(-> % .-target .-value) nil)
+                                              [?token _] (e/Token event)]
+                                          (when-some [token ?token]
+                                            (let [trimmed (str/trim event)]
+                                              (if (str/blank? trimmed)
+                                                (do (token)
+                                                  (reset! !editing-id nil))
+                                                (let [ok (e/server (rename-and-refresh! user-id id trimmed))]
+                                                  (when ok
+                                                    (token)
+                                                    (reset! !editing-id nil)))))))))
+                                    (dom/span
+                                      (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
+                                                          :font-size (if is-root "13px" "12px")
+                                                          :font-weight (if is-root "500" "400")
+                                                          :color "var(--color-text-primary)"}
+                                                  :data-tooltip display-title})
+                                      (dom/text display-title))))
                                 ;; Column 2: Done
                                 (dom/td
                                   (dom/props {:style {:padding "4px 6px" :text-align "center"
@@ -293,6 +341,16 @@
                                 (dom/td
                                   (dom/props {:style {:padding "4px 6px" :display "flex" :align-items "center"
                                                       :justify-content "flex-end" :gap "4px"}})
+                                  (dom/button
+                                    (dom/props {:class "btn btn-sm btn-secondary"
+                                                :style {:padding "2px 6px" :font-size "12px" :line-height "1"}
+                                                :data-tooltip "Rename"})
+                                    (dom/text "✎")
+                                    (dom/On "click"
+                                      (fn [e]
+                                        (.stopPropagation e)
+                                        (reset! !editing-id id))
+                                      nil))
                                   (when has-children
                                     (dom/button
                                       (dom/props {:class "btn btn-sm btn-secondary"
@@ -306,8 +364,9 @@
                                   (when is-root
                                     (dom/button
                                       (dom/props {:class "btn btn-sm btn-danger-fill"
-                                                  :style {:padding "2px 6px" :font-size "10px"}})
-                                      (dom/text "Delete")
+                                                  :style {:padding "2px 6px" :font-size "12px" :line-height "1"}
+                                                  :data-tooltip "Delete"})
+                                      (dom/text "✕")
                                       (dom/On "click" (fn [e] (.stopPropagation e) (reset! !show-confirm id)) nil)))))))))
                       (dom/tr
                         (dom/td

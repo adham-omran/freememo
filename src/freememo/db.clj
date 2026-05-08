@@ -115,7 +115,6 @@
       content TEXT,
       page_number INTEGER,
       source_url TEXT,
-      source_reference TEXT,
       status TEXT DEFAULT 'active',
       priority INTEGER DEFAULT 50,
       interval_days REAL DEFAULT 1.0,
@@ -162,7 +161,6 @@
 
   ;; Add all flashcard columns (idempotent)
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS content_item_id INTEGER"])
-  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS source_reference TEXT"])
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_note_id BIGINT DEFAULT NULL"])
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_synced_at TIMESTAMP DEFAULT NULL"])
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NULL"])
@@ -208,9 +206,9 @@
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_user_events_user_type
                       ON user_events (user_id, event_type, created_at DESC)"])
 
-  ;; Backfill source_reference for markdown topics that lack it
-  (jdbc/execute! ds ["UPDATE topics SET source_reference = title
-                      WHERE kind = 'markdown' AND source_reference IS NULL"])
+  ;; Drop deprecated source_reference columns — title is the single source of truth.
+  (jdbc/execute! ds ["ALTER TABLE topics DROP COLUMN IF EXISTS source_reference"])
+  (jdbc/execute! ds ["ALTER TABLE flashcards DROP COLUMN IF EXISTS source_reference"])
 
   ;; Backfill content_text for existing rows (idempotent)
   (backfill-content-text!)
@@ -231,14 +229,14 @@
     (let [doc-count (:count (jdbc/execute-one! tx ["SELECT COUNT(*) AS count FROM documents"]))]
       (tel/log! {:level :info :id ::migrate-documents :data {:count doc-count}} "Migrating documents")
       (jdbc/execute! tx
-        ["INSERT INTO topics (id, user_id, parent_id, kind, title, content, source_url, source_reference,
+        ["INSERT INTO topics (id, user_id, parent_id, kind, title, content, source_url,
                               status, priority, interval_days, a_factor, next_review_at, last_review_at,
                               review_count, created_at)
           SELECT id, user_id, NULL,
                  CASE source_type WHEN 'topic' THEN 'basic' WHEN 'pdf' THEN 'pdf'
                                   WHEN 'epub' THEN 'epub' WHEN 'web' THEN 'web'
                                   ELSE COALESCE(source_type, 'basic') END,
-                 COALESCE(filename, 'Untitled'), html_content, source_url, source_reference,
+                 COALESCE(filename, 'Untitled'), html_content, source_url,
                  COALESCE(status, 'active'), COALESCE(priority, 50),
                  COALESCE(interval_days, 1.0), COALESCE(a_factor, 2.0),
                  next_review_at, last_review_at, COALESCE(review_count, 0), uploaded_at
@@ -573,7 +571,7 @@
 (defn create-topic!
   "Create a topic. attrs is a map with keys:
    :user-id :kind :title :parent-id :content :page-number
-   :source-url :source-reference :status :priority
+   :source-url :status :priority
    Returns the created row with :topics/id."
   [attrs]
   (let [clean-title (input/sanitize-filename (:title attrs))
@@ -588,8 +586,7 @@
               sanitized (assoc :content sanitized
                           :content_text (text/strip-html sanitized))
               (:page-number attrs) (assoc :page_number (:page-number attrs))
-              (:source-url attrs) (assoc :source_url (:source-url attrs))
-              (:source-reference attrs) (assoc :source_reference (:source-reference attrs)))]
+              (:source-url attrs) (assoc :source_url (:source-url attrs)))]
     (jdbc/execute-one! ds
       (sql/format {:insert-into :topics
                    :values [row]
@@ -616,7 +613,7 @@
    Includes file_size from topic_files or content length."
   [user-id]
   (let [topics (jdbc/execute! ds
-                 (sql/format {:select [:t/id :t/title :t/kind :t/source_url :t/source_reference
+                 (sql/format {:select [:t/id :t/title :t/kind :t/source_url
                                        :t/status :t/priority :t/created_at :t/content
                                        :tf/file_size]
                               :from [[:topics :t]]
@@ -651,26 +648,23 @@
                          :content_text (text/strip-html sanitized)}
                    :where [:= :id id]}))))
 
-(defn update-topic-source!
-  "Update source_reference on a topic.
-   Also bumps updated_at on all flashcards under this root topic
-   so Anki push detects the source change."
-  [id source-reference]
-  (jdbc/execute-one! ds
-    (sql/format {:update :topics
-                 :set {:source_reference source-reference}
-                 :where [:= :id id]}))
-  (jdbc/execute-one! ds
-    ["UPDATE flashcards SET updated_at = CURRENT_TIMESTAMP WHERE root_topic_id = ?" id]))
-
-(defn get-topic-source
-  "Get the source_reference for a topic."
-  [id]
-  (:topics/source_reference
-   (jdbc/execute-one! ds
-     (sql/format {:select [:source_reference]
-                  :from [:topics]
-                  :where [:= :id id]}))))
+(defn rename-topic!
+  "Rename a topic. Sanitizes and length-checks the new title.
+   Throws ::blank-title when input is blank.
+   Bumps updated_at on flashcards whose root_topic_id matches so Anki push
+   detects the title change. For non-root ids the bump is a no-op."
+  [id new-title]
+  (when (or (nil? new-title) (str/blank? new-title))
+    (throw (ex-info "title must not be blank"
+             {:type ::blank-title :id id})))
+  (let [clean-title (input/sanitize-filename new-title)]
+    (input/check-length! :title clean-title input/title-max)
+    (jdbc/execute-one! ds
+      (sql/format {:update :topics
+                   :set {:title clean-title}
+                   :where [:= :id id]}))
+    (jdbc/execute-one! ds
+      ["UPDATE flashcards SET updated_at = CURRENT_TIMESTAMP WHERE root_topic_id = ?" id])))
 
 (defn get-root-topic-id
   "Traverse parent_id upward to find the root topic (parent_id IS NULL).
@@ -810,8 +804,7 @@
                     (sql/format {:insert-into :topics
                                  :values [{:user_id user-id
                                            :kind "pdf"
-                                           :title clean-name
-                                           :source_reference clean-name}]
+                                           :title clean-name}]
                                  :returning [:id]}))
             topic-id (:topics/id topic)]
         (jdbc/execute! tx
@@ -846,7 +839,6 @@
   [user-id title html-content source-url]
   (let [clean-title (input/sanitize-filename title)
         _ (input/check-length! :title clean-title input/title-max)
-        source-ref (str clean-title (when source-url (str " — " source-url)))
         sanitized (sanitize-utf8 html-content)
         topic (jdbc/execute-one! ds
                 (sql/format {:insert-into :topics
@@ -855,8 +847,7 @@
                                        :title clean-title
                                        :content sanitized
                                        :content_text (text/strip-html sanitized)
-                                       :source_url source-url
-                                       :source_reference source-ref}]
+                                       :source_url source-url}]
                              :returning [:id]}))]
     (:topics/id topic)))
 
@@ -872,8 +863,7 @@
                                        :kind "markdown"
                                        :title clean-title
                                        :content sanitized
-                                       :content_text (text/strip-html sanitized)
-                                       :source_reference clean-title}]
+                                       :content_text (text/strip-html sanitized)}]
                              :returning [:id]}))]
     (:topics/id topic)))
 
@@ -892,8 +882,7 @@
                     (sql/format {:insert-into :topics
                                  :values [{:user_id user-id
                                            :kind "epub"
-                                           :title clean-title
-                                           :source_reference clean-title}]
+                                           :title clean-title}]
                                  :returning [:id]}))
             topic-id (:topics/id topic)]
         (jdbc/execute! tx
@@ -932,8 +921,7 @@
                                        :kind "basic"
                                        :title clean-title
                                        :content ""
-                                       :content_text ""
-                                       :source_reference clean-title}]
+                                       :content_text ""}]
                              :returning [:id]}))]
     {:topic-id (:topics/id topic)}))
 
@@ -1263,7 +1251,7 @@
   (try
     (jdbc/execute! ds
       ["SELECT id, parent_id, kind, title, content, priority, next_review_at,
-              interval_days, a_factor, review_count, status, source_url, source_reference
+              interval_days, a_factor, review_count, status, source_url
        FROM topics
        WHERE user_id = ?
          AND kind != 'page'

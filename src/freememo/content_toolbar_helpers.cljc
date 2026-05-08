@@ -17,7 +17,7 @@
      :cljs 0))
 
 ;; Save generated cards to DB using topic-id and root-topic-id
-(defn save-cards-for-topic [topic-id root-topic-id kind generated-cards source-ref]
+(defn save-cards-for-topic [topic-id root-topic-id kind generated-cards]
   #?(:clj
      (try
        (let [rows (mapv (fn [card]
@@ -25,8 +25,7 @@
                                    :root_topic_id root-topic-id
                                    :kind kind}
                             (= kind "basic") (assoc :question (:q card) :answer (:a card))
-                            (= kind "cloze") (assoc :cloze (:c card))
-                            source-ref (assoc :source_reference source-ref)))
+                            (= kind "cloze") (assoc :cloze (:c card))))
                     generated-cards)]
          (db/insert-flashcards! rows)
          {:success true})
@@ -74,7 +73,7 @@
   #?(:clj
      (try
        (let [{:keys [content context card-type card-count user-id enc-key
-                     topic-id root-topic-id source-ref pre-prompt]} item
+                     topic-id root-topic-id pre-prompt]} item
              gen-result (if (= card-type "basic")
                           (cards/generate-basic-cards
                             (cond-> {:content content :context context
@@ -86,7 +85,7 @@
                               pre-prompt (assoc :pre-prompt pre-prompt))))]
          (if-not (:success gen-result)
            gen-result
-           (save-cards-for-topic topic-id root-topic-id card-type (:cards gen-result) source-ref)))
+           (save-cards-for-topic topic-id root-topic-id card-type (:cards gen-result))))
        (catch Exception e
          {:success false :error (.getMessage e)}))
      :cljs nil))

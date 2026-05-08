@@ -124,15 +124,10 @@
    PDF cards link to /viewer/browse-pdf/<root-id>/<page> (or /<root-id> without page);
    other kinds link to /viewer/browse-topic/<root-id>.
    Anchor text is '<title> - <page>' for PDF-with-page, else '<title>'.
-
-   Title precedence: user-edited :topic-source (the Source input on the viewer)
-   beats :topics/title (the upload filename), which beats the per-card snapshot.
-   Returns nil when no title is resolvable."
+   Returns nil when title is blank."
   [card settings]
-  (let [{:keys [topic-kind root-topic-id topic-title topic-source]} settings
-        title (or (when-not (str/blank? topic-source) topic-source)
-                (when-not (str/blank? topic-title) topic-title)
-                (:flashcards/source_reference card))
+  (let [{:keys [topic-kind root-topic-id topic-title]} settings
+        title topic-title
         pdf? (= topic-kind "pdf")
         page (:page_number card)
         url (cond
@@ -217,7 +212,6 @@
                         " new=" (count new-cards)
                         " update=" (count changed-cards)
                         " mode=" (:source-display-mode settings)
-                        " topic-source=" (pr-str (:topic-source settings))
                         " topic-title=" (pr-str (:topic-title settings))
                         " topic-kind=" (pr-str (:topic-kind settings))))
        (m/sp

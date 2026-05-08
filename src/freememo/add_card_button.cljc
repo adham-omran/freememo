@@ -8,7 +8,7 @@
    [freememo.card-modals :refer [AddCardModal]]
    [freememo.keyboard :as keyboard]))
 
-(e/defn AddCardButton [user-id topic-id root-topic-id source-ref card-type]
+(e/defn AddCardButton [user-id topic-id root-topic-id card-type]
   (e/client
     (let [!show-add (atom false)
           show-add (e/watch !show-add)
@@ -25,4 +25,4 @@
             (reset! !show-add true))
           nil))
       (when show-add
-        (AddCardModal !show-add !card-kind !captured-selection topic-id root-topic-id source-ref user-id)))))
+        (AddCardModal !show-add !card-kind !captured-selection topic-id root-topic-id user-id)))))

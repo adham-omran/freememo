@@ -15,7 +15,7 @@
   (e/client
     (let [{:keys [user-id enc-key topic-id root-topic-id page-number
                   content-text parent-content context-mode mod-key
-                  source-ref llm-enabled?
+                  llm-enabled?
                   card-type card-count-val use-context context-window
                   gen-active? gen-pending gen-error]} cfg
 
@@ -114,7 +114,6 @@
                                 :enc-key enc-key
                                 :topic-id topic-id
                                 :root-topic-id root-topic-id
-                                :source-ref source-ref
                                 :pre-prompt nil})))]
             (when enqueued (token)))))
 
@@ -153,6 +152,5 @@
                                 :enc-key enc-key
                                 :topic-id topic-id
                                 :root-topic-id root-topic-id
-                                :source-ref source-ref
                                 :pre-prompt pre-prompt})))]
             (when enqueued (token))))))))

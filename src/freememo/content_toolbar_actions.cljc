@@ -14,10 +14,10 @@
 (e/defn ToolbarActions [cfg]
   (e/client
     (let [{:keys [user-id topic-id root-topic-id page-number
-                  context-mode mod-key source-ref unsynced-count
+                  context-mode mod-key unsynced-count
                   card-type]} cfg]
       (ExtractTopicButton user-id topic-id context-mode mod-key)
-      (AddCardButton user-id topic-id root-topic-id source-ref card-type)
+      (AddCardButton user-id topic-id root-topic-id card-type)
       (dom/span (dom/props {:class "toolbar-overflow-item" :style {:color "var(--color-border)"}}) (dom/text "|"))
       (ExportButton user-id topic-id root-topic-id unsynced-count)
       (dom/span (dom/props {:class "toolbar-overflow-item" :style {:color "var(--color-border)"}}) (dom/text "|"))

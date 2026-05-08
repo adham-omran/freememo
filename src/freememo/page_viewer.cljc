@@ -19,6 +19,7 @@
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [missionary.core :as m])
+   [clojure.string :as str]
    [freememo.keyboard :as keyboard]
    [freememo.util :as util]
    #?(:clj [freememo.user-state :as us])
@@ -79,9 +80,18 @@
                :total (count pages)
                :remaining remaining}))))
 
-;; Query wrapper for topic source reference
-#?(:clj (defn get-topic-source* [_refresh topic-id]
-          (db/get-topic-source topic-id)))
+;; Query wrapper for topic title — refresh dep ensures re-fetch after rename
+#?(:clj (defn get-topic-title* [_refresh topic-id]
+          (when topic-id
+            (:topics/title (db/get-topic topic-id)))))
+
+;; Atomic rename + refresh — single e/server target so Electric can't drop
+;; the side effect when the binding is "unused" in the client body.
+(defn rename-and-refresh! [user-id id new-title]
+  #?(:clj (do (db/rename-topic! id new-title)
+            (swap! (us/get-atom user-id :refresh) inc)
+            :ok)
+     :cljs nil))
 
 
 
@@ -473,49 +483,67 @@
                                 (fn [] (reset! !show false))
                                 2000))))))
 
-                    ;; Source reference — collapsed to compact editable field
-                    (let [current-source (e/server (get-topic-source* meta-refresh selected-doc))
-                          !editing-source (atom false)
-                          editing-source (e/watch !editing-source)]
-                      (if editing-source
-                        ;; Expanded source editor (shown on click)
+                    ;; Title — collapsed click-to-edit; renames the topic
+                    (let [current-title (e/server (get-topic-title* refresh selected-doc))
+                          !editing-title (atom false)
+                          editing-title (e/watch !editing-title)]
+                      (if editing-title
                         (dom/div
                           (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
                                               :padding "3px 8px" :flex-shrink "0"
                                               :background "var(--color-bg-subtle)" :border-bottom "1px solid var(--color-border)"}})
                           (dom/span
                             (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)" :flex-shrink "0"}})
-                            (dom/text "Source:"))
+                            (dom/text "Title:"))
                           (e/for-by identity [_k [selected-doc]]
                             (dom/input
                               (dom/props {:type "text"
-                                          :placeholder "Source reference"
-                                          :style {:flex "1" :padding "2px 6px" :font-size "12px" :color "var(--color-text-secondary)"
+                                          :placeholder "Title"
+                                          :maxlength "500"
+                                          :style {:flex "1" :padding "2px 6px" :font-size "12px"
+                                                  :color "var(--color-text-secondary)"
                                                   :border "1px solid var(--color-border)" :border-radius "3px"
                                                   :background "var(--color-bg-card)"}})
-                              (set! (.-value dom/node) (or current-source ""))
+                              (set! (.-value dom/node) (or current-title ""))
+                              (let [n dom/node]
+                                (js/setTimeout
+                                  (fn []
+                                    (.focus n)
+                                    (when (pos? (count (.-value n))) (.select n)))
+                                  0))
+                              (dom/On "keydown"
+                                (fn [e]
+                                  (when (= (.-key e) "Escape")
+                                    (.preventDefault e)
+                                    (set! (.-value (.-target e)) (or current-title ""))
+                                    (.blur (.-target e))
+                                    (reset! !editing-title false)))
+                                nil)
                               (let [event (dom/On "change" #(-> % .-target .-value) nil)
                                     [?token _] (e/Token event)]
                                 (when-some [token ?token]
-                                  (e/server (db/update-topic-source! selected-doc event))
-                                  (e/server (swap! (us/get-atom user-id :meta-refresh) inc))
-                                  (token)
-                                  (reset! !editing-source false)))))
+                                  (let [trimmed (str/trim event)]
+                                    (if (str/blank? trimmed)
+                                      (do (token)
+                                        (reset! !editing-title false))
+                                      (let [ok (e/server (rename-and-refresh! user-id selected-doc trimmed))]
+                                        (when ok
+                                          (token)
+                                          (reset! !editing-title false)))))))))
                           (dom/button
                             (dom/props {:style {:padding "2px 8px" :font-size "11px" :background "var(--color-bg-subtle)"
                                                 :border "1px solid var(--color-border)" :border-radius "3px" :cursor "pointer"}})
                             (dom/text "Close")
-                            (dom/On "click" (fn [_] (reset! !editing-source false)) nil)))
-                        ;; Collapsed: just a small clickable source indicator
-                        (when (seq current-source)
+                            (dom/On "click" (fn [_] (reset! !editing-title false)) nil)))
+                        (when (seq current-title)
                           (dom/span
                             (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)" :cursor "pointer"
                                                 :padding "0 8px" :flex-shrink "0"
                                                 :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
                                                 :max-width "200px"}
-                                        :title (str "Source: " current-source " (click to edit)")})
-                            (dom/text current-source)
-                            (dom/On "click" (fn [_] (reset! !editing-source true)) nil)))))
+                                        :data-tooltip "Click to rename"})
+                            (dom/text current-title)
+                            (dom/On "click" (fn [_] (reset! !editing-title true)) nil)))))
 
                     ;; Editor area — text-result is nil while e/Offload is in flight
                     (dom/div
