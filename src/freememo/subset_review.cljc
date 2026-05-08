@@ -5,7 +5,6 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.page-viewer :refer [OcrPage]]
    [freememo.extract-page :refer [ExtractPage]]
-   [freememo.util :as util]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])))
 
@@ -78,7 +77,7 @@
         (dom/span
           (dom/props {:style {:font-size "13px" :font-weight "600" :color "var(--color-primary)"
                               :padding "2px 8px" :background "var(--color-info-bg-light)" :border-radius "var(--radius-sm)"}})
-          (dom/text (str "Subset Review: " (util/display-name root-name))))
+          (dom/text (str "Subset Review: " root-name)))
 
         ;; Type badge
         (dom/span

@@ -194,10 +194,14 @@
             topic (db/get-topic topic-id)]
         (if (and topic (= (:topics/user_id topic) user-id))
           (if-let [file-row (db/get-topic-file topic-id)]
-            {:status 200
-             :headers {"Content-Type" "application/pdf"
-                       "Content-Disposition" (str "inline; filename=\"" (:topics/title topic) "\"")}
-             :body (io/input-stream (:topic_files/file_data file-row))}
+            (let [title (:topics/title topic)
+                  download-name (if (re-find #"(?i)\.pdf$" title)
+                                  title
+                                  (str title ".pdf"))]
+              {:status 200
+               :headers {"Content-Type" "application/pdf"
+                         "Content-Disposition" (str "inline; filename=\"" download-name "\"")}
+               :body (io/input-stream (:topic_files/file_data file-row))})
             {:status 404
              :body "PDF not found"})
           {:status 404

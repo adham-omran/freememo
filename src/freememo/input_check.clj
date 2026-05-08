@@ -34,3 +34,18 @@
                      (str/replace #"[\x00-\x1F\x7F/\\]" "")
                      str/trim)]
       (if (str/blank? stripped) "Untitled" stripped))))
+
+(defn prettify-title
+  "Canonicalize an import-time title for display:
+   - Replace underscores with spaces.
+   - Strip trailing .pdf (case-insensitive).
+   - Collapse whitespace runs and trim.
+   Idempotent. nil/blank returns the input unchanged so callers can guard."
+  [s]
+  (if (or (nil? s) (str/blank? s))
+    s
+    (-> s
+      (str/replace #"_" " ")
+      (str/replace #"(?i)\.pdf$" "")
+      (str/replace #"\s+" " ")
+      str/trim)))
