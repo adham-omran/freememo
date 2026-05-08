@@ -220,51 +220,43 @@
    For basic cards: expects [{:q \"...\" :a \"...\"}]
    For cloze cards: expects [{:c \"...\"}]
    topic-id: the page or extract topic that owns these cards.
-   root-topic-id: the root PDF/EPUB/web/basic topic.
-   Optional source-reference propagates document source info to each card."
-  ([topic-id root-topic-id kind cards]
-   (save-cards topic-id root-topic-id kind cards nil))
-  ([topic-id root-topic-id kind cards source-reference]
-   (try
-     (let [rows (map (fn [card]
-                       (cond-> (if (= kind "basic")
-                                 {:topic_id topic-id
-                                  :root_topic_id root-topic-id
-                                  :kind kind
-                                  :question (:q card)
-                                  :answer (:a card)
-                                  :cloze nil}
-                                 {:topic_id topic-id
-                                  :root_topic_id root-topic-id
-                                  :kind kind
-                                  :question nil
-                                  :answer nil
-                                  :cloze (:c card)})
-                         source-reference
-                         (assoc :source_reference source-reference)))
-                  cards)]
-       (db/insert-flashcards! rows)
-       {:success true})
-     (catch Exception e
-       (tel/error! {:id ::save-cards} e)
-       {:success false :error (.getMessage e)}))))
+   root-topic-id: the root PDF/EPUB/web/basic topic."
+  [topic-id root-topic-id kind cards]
+  (try
+    (let [rows (map (fn [card]
+                      (if (= kind "basic")
+                        {:topic_id topic-id
+                         :root_topic_id root-topic-id
+                         :kind kind
+                         :question (:q card)
+                         :answer (:a card)
+                         :cloze nil}
+                        {:topic_id topic-id
+                         :root_topic_id root-topic-id
+                         :kind kind
+                         :question nil
+                         :answer nil
+                         :cloze (:c card)}))
+                 cards)]
+      (db/insert-flashcards! rows)
+      {:success true})
+    (catch Exception e
+      (tel/error! {:id ::save-cards} e)
+      {:success false :error (.getMessage e)})))
 
 (defn add-card
   "Manually add a single flashcard.
    topic-id: the page or extract topic.
-   root-topic-id: the root topic.
-   Optional source-reference propagates document source info to the card."
-  ([topic-id root-topic-id kind fields]
-   (add-card topic-id root-topic-id kind fields nil))
-  ([topic-id root-topic-id kind fields source-reference]
-   (try
-     (let [cards (if (= kind "basic")
-                   [{:q (:question fields) :a (:answer fields)}]
-                   [{:c (:cloze fields)}])]
-       (save-cards topic-id root-topic-id kind cards source-reference))
-     (catch Exception e
-       (tel/error! {:id ::add-card} e)
-       {:success false :error (.getMessage e)}))))
+   root-topic-id: the root topic."
+  [topic-id root-topic-id kind fields]
+  (try
+    (let [cards (if (= kind "basic")
+                  [{:q (:question fields) :a (:answer fields)}]
+                  [{:c (:cloze fields)}])]
+      (save-cards topic-id root-topic-id kind cards))
+    (catch Exception e
+      (tel/error! {:id ::add-card} e)
+      {:success false :error (.getMessage e)})))
 
 (defn get-cards
   "Get all flashcards for a specific topic (page or extract)."

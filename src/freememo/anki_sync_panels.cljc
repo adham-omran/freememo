@@ -35,7 +35,6 @@
         source-field (e/server (settings/get-anki-source-field user-id))
         auto-load-mode (e/server (settings/get-anki-auto-load-mode user-id))
         root-id (e/server (db/get-root-topic-id selected-doc))
-        topic-source (e/server (db/get-topic-source selected-doc))
         topic-info (e/server (when selected-doc
                                (let [t (db/get-topic-for-user user-id selected-doc)]
                                  {:kind (:topics/kind t)
@@ -51,7 +50,6 @@
                   :tags tags
                   :source-display-mode source-display-mode
                   :source-field source-field
-                  :topic-source topic-source
                   :topic-kind (:kind topic-info)
                   :topic-title (:title topic-info)
                   :root-topic-id selected-doc}
@@ -107,8 +105,7 @@
                   push-settings (assoc settings
                                   :tags (if use-tags tags [])
                                   :topic-title (:topic-title cards-result)
-                                  :topic-kind (:topic-kind cards-result)
-                                  :topic-source (:topic-source cards-result))]
+                                  :topic-kind (:topic-kind cards-result))]
               (helpers/run-push! cards push-settings sync))))))))
 
 (e/defn AnkiSyncErrorPanel

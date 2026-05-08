@@ -52,20 +52,17 @@
                   (db/get-flashcards topic-id)
                   (db/get-all-flashcards root-topic-id))
           root-topic (when (and user-id root-topic-id)
-                       (db/get-topic-for-user user-id root-topic-id))
-          topic-source (db/get-topic-source root-topic-id)]
+                       (db/get-topic-for-user user-id root-topic-id))]
       (tel/log! {:level :info
                  :id ::get-cards-for-sync.resolved
                  :data {:topic-title (:topics/title root-topic)
                         :topic-kind (:topics/kind root-topic)
-                        :topic-source topic-source
                         :card-count (count cards)}}
         "get-cards-for-sync resolved")
       {:success true
        :cards cards
        :topic-title (:topics/title root-topic)
-       :topic-kind (:topics/kind root-topic)
-       :topic-source topic-source})
+       :topic-kind (:topics/kind root-topic)})
     (catch Exception e
       (tel/error! {:id ::get-cards-for-sync} e)
       {:success false :error (.getMessage e)})))
