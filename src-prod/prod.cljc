@@ -60,15 +60,21 @@
              content-length (parse-content-length (get-in request [:headers "content-length"]))]
          (cond
            (and max-bytes transfer-encoding (clojure.string/includes? transfer-encoding "chunked"))
-           {:status 411
-            :headers {"Content-Type" "application/json"}
-            :body "{\"success\":false,\"error\":\"Length Required (chunked uploads not accepted)\",\"code\":\"length-required\"}"}
+           (do (api/log-upload-failure! :freememo.api/upload-chunked-rejected request
+                 {:user-id (or (get-in request [:session :user-id]) :anonymous)
+                  :uri uri :transfer-encoding transfer-encoding})
+               {:status 411
+                :headers {"Content-Type" "application/json"}
+                :body "{\"success\":false,\"error\":\"Length Required (chunked uploads not accepted)\",\"code\":\"length-required\"}"})
 
            (and max-bytes content-length (> content-length max-bytes))
-           {:status 413
-            :headers {"Content-Type" "application/json"}
-            :body (str "{\"success\":false,\"error\":\"Request too large (limit "
-                    max-bytes " bytes)\",\"code\":\"request-too-large\"}")}
+           (do (api/log-upload-failure! :freememo.api/upload-too-large request
+                 {:user-id (or (get-in request [:session :user-id]) :anonymous)
+                  :uri uri :content-length content-length :limit max-bytes})
+               {:status 413
+                :headers {"Content-Type" "application/json"}
+                :body (str "{\"success\":false,\"error\":\"Request too large (limit "
+                        max-bytes " bytes)\",\"code\":\"request-too-large\"}")})
 
            :else
            (handler request))))))

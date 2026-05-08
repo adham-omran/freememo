@@ -39,7 +39,7 @@
 
 (def ^:private upload-byte-cap 104857600) ;; 100 MB; backstop in case the Ring middleware is bypassed.
 
-(defn- log-upload-failure!
+(defn log-upload-failure!
   "Emit :warn so upload failures are diagnosable from app.log. Always
    includes :remote-ip + :user-agent; merges branch-specific data."
   [id request data]
