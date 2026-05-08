@@ -220,7 +220,7 @@
                         (.preventDefault e)
                         (.stopPropagation e)
                         (let [tid (js/parseInt (subs href 7))
-                              ed (:editor @editor/!editor-state)
+                              ^js ed (:editor @editor/!editor-state)
                               tooltip (when ed (.-tooltip (.-theme ed)))]
                           (when tooltip (.hide tooltip))
                           (navigate! :viewer (nav/nav-browse-topic tid nil)))))))
