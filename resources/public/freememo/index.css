@@ -593,6 +593,10 @@ textarea:hover {
     background: var(--color-bg-card);
     color: var(--color-text-primary);
 }
+.ql-editor img {
+    max-width: 100%;
+    height: auto;
+}
 .ql-toolbar {
     flex-shrink: 0;
     background: var(--color-bg-subtle);
