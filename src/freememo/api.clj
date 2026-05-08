@@ -39,6 +39,23 @@
 
 (def ^:private upload-byte-cap 104857600) ;; 100 MB; backstop in case the Ring middleware is bypassed.
 
+(defn- log-upload-failure!
+  "Emit :warn so upload failures are diagnosable from app.log. Always
+   includes :remote-ip + :user-agent; merges branch-specific data."
+  [id request data]
+  (tel/log! {:level :warn :id id}
+    (merge {:remote-ip (or (get-in request [:headers "cf-connecting-ip"])
+                           (:remote-addr request))
+            :user-agent (get-in request [:headers "user-agent"])}
+           data)))
+
+(defn- bytes->magic-hex
+  "First 4 bytes as space-separated uppercase hex, e.g. \"50 4B 03 04\"."
+  [^bytes b]
+  (when (and b (>= (alength b) 4))
+    (clojure.string/join " "
+      (map #(format "%02X" (aget b %)) (range 4)))))
+
 (defn upload-pdf-handler [request]
   (if-let [user-id (require-auth request)]
     (try
@@ -51,21 +68,27 @@
                         (.toByteArray baos)))
               size (alength bytes)]
           (if (> size upload-byte-cap)
-            (json-response 413 {:success false :error "File exceeds 100 MB limit"
-                                :code "file-too-large" :limit upload-byte-cap :incoming size})
+            (do (log-upload-failure! ::upload-pdf-too-large request
+                  {:user-id user-id :filename filename :file-size size :limit upload-byte-cap})
+                (json-response 413 {:success false :error "File exceeds 100 MB limit"
+                                    :code "file-too-large" :limit upload-byte-cap :incoming size}))
             (let [result (pdf/save-pdf user-id filename bytes)]
               (if (:success result)
                 (json-response 200 {:success true :doc_id (:id result)})
-                (json-response (error-status (:code result))
-                  (cond-> {:success false :error (:error result)}
-                    (:code result) (assoc :code (:code result))
-                    (:used result) (assoc :used (:used result))
-                    (:limit result) (assoc :limit (:limit result))))))))
+                (do (log-upload-failure! ::upload-pdf-process-error request
+                      {:user-id user-id :filename filename :file-size size
+                       :reason (:error result) :code (:code result)})
+                    (json-response (error-status (:code result))
+                      (cond-> {:success false :error (:error result)}
+                        (:code result) (assoc :code (:code result))
+                        (:used result) (assoc :used (:used result))
+                        (:limit result) (assoc :limit (:limit result)))))))))
         (json-response 400 {:success false :error "No file provided"}))
       (catch Exception e
         (tel/error! {:id ::upload-pdf-handler} e)
         (json-response 500 {:success false :error "Upload failed. Please try again with a different file."})))
-    (json-response 401 {:success false :error "Not authenticated"})))
+    (do (log-upload-failure! ::upload-pdf-not-authenticated request {})
+        (json-response 401 {:success false :error "Not authenticated"}))))
 
 (defn upload-epub-handler [request]
   (if-let [user-id (require-auth request)]
@@ -82,17 +105,25 @@
               file-size (alength bytes)]
           (cond
             (> file-size upload-byte-cap)
-            (json-response 413 {:success false :error "File exceeds 100 MB limit"
-                                :code "file-too-large" :limit upload-byte-cap :incoming file-size})
+            (do (log-upload-failure! ::upload-epub-too-large request
+                  {:user-id user-id :filename filename :file-size file-size :limit upload-byte-cap})
+                (json-response 413 {:success false :error "File exceeds 100 MB limit"
+                                    :code "file-too-large" :limit upload-byte-cap :incoming file-size}))
 
             (not (epub/epub-magic-bytes? bytes))
-            (json-response 400 {:success false :error "Not a valid EPUB file"
-                                :code "invalid-file-type"})
+            (do (log-upload-failure! ::upload-epub-bad-magic request
+                  {:user-id user-id :filename filename :file-size file-size
+                   :magic-hex (bytes->magic-hex bytes)})
+                (json-response 400 {:success false :error "Not a valid EPUB file"
+                                    :code "invalid-file-type"}))
 
             :else
             (let [result (epub/process-epub bytes image-mode)]
               (if (:error result)
-                (json-response 400 {:success false :error (:error result)})
+                (do (log-upload-failure! ::upload-epub-process-error request
+                      {:user-id user-id :filename filename :file-size file-size
+                       :reason (:error result)})
+                    (json-response 400 {:success false :error (:error result)}))
                 (let [{:keys [title chapters]} result
                       display-name (or title filename "Untitled EPUB")
                       {:keys [topic-id chapter-ids]} (db/create-epub-topic! user-id display-name bytes file-size chapters)]
@@ -130,7 +161,8 @@
       (catch Exception e
         (tel/error! {:id ::upload-epub-handler} e)
         (json-response 500 {:success false :error "Upload failed. Please try again with a different file."})))
-    (json-response 401 {:success false :error "Not authenticated"})))
+    (do (log-upload-failure! ::upload-epub-not-authenticated request {})
+        (json-response 401 {:success false :error "Not authenticated"}))))
 
 (defn create-topic-handler [request]
   (if-let [user-id (require-auth request)]
