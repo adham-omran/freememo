@@ -94,6 +94,7 @@
                         (let [note-ids (e/server (db/get-anki-note-ids topic-id))]
                           (e/server (db/delete-topic! topic-id))
                           (e/server (swap! (us/get-atom user-id :refresh) inc))
+                          (e/server (swap! (us/get-atom user-id :tree-mutations) inc))
                           (e/client (card-components/try-delete-anki-notes! note-ids))
                           (log/log-info (str "Topic deleted topic-id=" topic-id))
                           (token)

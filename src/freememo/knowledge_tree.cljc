@@ -22,6 +22,7 @@
 (defn rename-and-refresh! [user-id id new-title]
   #?(:clj (do (db/rename-topic! id new-title)
             (swap! (us/get-atom user-id :refresh) inc)
+            (swap! (us/get-atom user-id :tree-mutations) inc)
             :ok)
      :cljs nil))
 
@@ -132,11 +133,16 @@
 
 ;; Document tree view — used by LibraryPage
 ;; Flatten + virtual scroll for performance
+;; `refresh` (caller-provided) covers content-level mutations; combined with
+;; the per-user :tree-mutations atom (tree-shape mutations: extract create,
+;; rename, delete, document import) so the library tree refreshes on either.
 (e/defn DocumentTreeView [user-id navigate! refresh filter-text sort-col sort-dir kind-filter status-filter tree-expanded !sort-cmd]
   (e/client
     (e/server
-      (let [all-items (get-tree-items* refresh user-id)
-            stats-map (get-root-stats* refresh user-id)
+      (let [tree-mutations (e/watch (us/get-atom user-id :tree-mutations))
+            rev (+ refresh tree-mutations)
+            all-items (get-tree-items* rev user-id)
+            stats-map (get-root-stats* rev user-id)
             all-roots (extract-roots all-items)
             roots (-> all-roots
                     (attach-stats stats-map)
@@ -401,6 +407,7 @@
                                   note-ids (e/server (vec (db/get-all-anki-note-ids topic-to-delete)))]
                               (e/server (db/delete-topic-for-user! user-id topic-to-delete))
                               (e/server (swap! (us/get-atom user-id :refresh) inc))
+                              (e/server (swap! (us/get-atom user-id :tree-mutations) inc))
                               (e/client (card-components/try-delete-anki-notes! note-ids))
                               (e/client (pdf-cache/cache-delete topic-to-delete))
                               (token)

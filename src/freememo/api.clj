@@ -142,6 +142,7 @@
                       (catch Exception e
                         (tel/log! {:level :warn :id ::upload-epub-auto-extract} (.getMessage e)))))
                   (swap! (us/get-atom user-id :refresh) inc)
+                  (swap! (us/get-atom user-id :tree-mutations) inc)
                   (json-response 200 {:success true :doc_id topic-id}))))))
         (json-response 400 {:success false :error "No file provided"}))
       (catch clojure.lang.ExceptionInfo e

@@ -50,15 +50,23 @@
 ;; Sanitize content: a manual extract creates a new topic from selected HTML;
 ;; the selection comes from the editor but may include pasted external content.
 (defn create-extract-topic-safe! [parent-id user-id content title]
-  #?(:clj (try
-            (db/create-topic! {:parent-id parent-id
-                               :user-id user-id
-                               :content (cleaner/clean-html content)
-                               :kind "basic"
-                               :title title})
-            {:success true}
-            (catch Exception e
-              {:success false :error (.getMessage e)}))
+  #?(:clj (let [invocation-id (str (java.util.UUID/randomUUID))]
+            (log/log-info (str "[CREATE-EXTRACT " invocation-id "] ENTER parent=" parent-id
+                            " user=" user-id " title=" (pr-str title)
+                            " content-len=" (count content)
+                            " stack=" (->> (.getStackTrace (Thread/currentThread))
+                                        (drop 1) (take 8) (map #(.toString %)) vec)))
+            (try
+              (let [created (db/create-topic! {:parent-id parent-id
+                                               :user-id user-id
+                                               :content (cleaner/clean-html content)
+                                               :kind "basic"
+                                               :title title})]
+                (log/log-info (str "[CREATE-EXTRACT " invocation-id "] DB-INSERT-OK new-id=" (:topics/id created)))
+                {:success true})
+              (catch Exception e
+                (log/log-info (str "[CREATE-EXTRACT " invocation-id "] DB-INSERT-FAILED " (.getMessage e)))
+                {:success false :error (.getMessage e)})))
      :cljs nil))
 
 ;; ---------------------------------------------------------------------------

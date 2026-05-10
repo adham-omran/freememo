@@ -219,8 +219,7 @@
 (e/defn URLImportModal [!show user-id navigate!]
   (e/client
     (let [!mutations (atom 0)
-          !url (atom "")
-          !auto-extract (atom true)]
+          !url (atom "")]
       (dom/div
         (dom/props {:class "modal-backdrop"})
         (dom/On "click" (fn [e]
@@ -241,21 +240,11 @@
                         :class "input input-full" :style {:padding "10px 12px" :margin-bottom "var(--sp-3)"}})
             (dom/On "input" (fn [e] (reset! !url (-> e .-target .-value))) nil))
 
-          ;; Options
-          (dom/div
-            (dom/props {:style {:margin-bottom "var(--sp-3)" :display "flex" :flex-direction "column" :gap "8px"}})
-            (dom/label
-              (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "13px" :cursor "pointer"}})
-              (dom/input (dom/props {:type "checkbox"})
-                (set! (.-checked dom/node) (e/watch !auto-extract))
-                (dom/On "change" (fn [e] (reset! !auto-extract (-> e .-target .-checked))) nil))
-              (dom/text "Auto-extract into topics")))
-
           (dom/div
             (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
             (dom/button
               (let [event (dom/On "click"
-                            (fn [_] {:url @!url :auto-extract @!auto-extract})
+                            (fn [_] {:url @!url})
                             nil)
                     [?token ?error] (e/Token event)
                     importing? (some? ?token)]
@@ -268,28 +257,38 @@
                   (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-1)"}})
                     (dom/text ?error)))
                 (when-some [token ?token]
-                  (let [url-val (:url event)
-                        ae? (:auto-extract event)]
+                  (let [url-val (:url event)]
                     (if (seq url-val)
                       (let [result (e/server
-                                     (let [fetch-result (fetch-url* url-val)]
-                                       (if (:success fetch-result)
-                                         (let [raw-html (:html fetch-result)
-                                               title (:title fetch-result)
-                                               tid (create-web-topic* user-id title raw-html
-                                                     (:url fetch-result))]
-                                           (when (and ae? tid)
-                                             (try-auto-extract* tid raw-html))
-                                           {:success true :topic-id tid})
-                                         {:success false :error (:error fetch-result)})))]
-                        (if (:success result)
-                          (if (:topic-id result)
-                            (do (swap! !mutations inc)
-                              (token)
-                              (reset! !show false)
-                              (navigate! :viewer (nav/nav-browse-topic (:topic-id result) nil)))
-                            (token "Failed to save article"))
-                          (token (:error result))))
+                                     (e/Offload
+                                       #(do
+                                          (log/log-info (str "URL import attempt url=" url-val))
+                                          (let [fetch-result (fetch-url* url-val)]
+                                            (if (false? (:success fetch-result))
+                                              (do
+                                                (log/log-warn (str "URL import fetch failed url=" url-val " error=" (:error fetch-result)))
+                                                (throw (ex-info (:error fetch-result) {:type :url-import-failed})))
+                                              (do
+                                                (log/log-info (str "URL import fetch ok url=" url-val " title=" (:title fetch-result) " source-type=" (:source-type fetch-result)))
+                                                (let [topic-id (create-web-topic* user-id
+                                                                 (:title fetch-result)
+                                                                 (:html fetch-result)
+                                                                 (:url fetch-result))]
+                                                  (if topic-id
+                                                    (do (log/log-info (str "URL import topic created topic-id=" topic-id " url=" url-val))
+                                                        {:topic-id topic-id})
+                                                    (do (log/log-warn (str "URL import topic creation returned nil url=" url-val))
+                                                        (throw (ex-info "Failed to save article" {:type :url-import-failed})))))))))))]
+                        ;; Guard: e/Offload returns nil while pending. Without this,
+                        ;; side effects fire immediately on click (modal closes
+                        ;; before fetch completes, navigate! receives nil topic-id).
+                        ;; Pattern matches extract_page.cljc:139.
+                        (when (some? result)
+                          (swap! !mutations inc)
+                          (token)
+                          (reset! !url "")
+                          (reset! !show false)
+                          (navigate! :viewer (nav/nav-browse-topic (:topic-id result) nil))))
                       (token "Please enter a URL"))))))
             (dom/button
               (dom/props {:class "btn btn-secondary"})
