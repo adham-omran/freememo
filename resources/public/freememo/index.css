@@ -464,12 +464,14 @@ textarea:hover {
     .tab-bar::-webkit-scrollbar { display: none; }
     .page-container { padding: var(--sp-4); }
 
-    /* Quill toolbar: single scrollable row */
+    /* Quill toolbar: wrap to multiple rows on narrow screens.
+       Avoid overflow-x: auto here — per CSS spec, setting overflow on one
+       axis forces the other axis to clip, which would clip the color/
+       background picker dropdowns rendered as absolutely-positioned
+       children of the toolbar. */
     .ql-toolbar.ql-snow {
         display: flex;
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
+        flex-wrap: wrap;
         padding: 4px !important;
     }
     .ql-toolbar .ql-formats {
