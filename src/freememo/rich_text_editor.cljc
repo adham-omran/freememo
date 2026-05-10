@@ -24,6 +24,12 @@
 ;; Shape: {:html "..." :topic-id N}
 (defonce !dirty-html (atom nil))
 
+;; Most recent non-empty in-editor selection range. Used as fallback when
+;; (.getSelection ed) returns null/empty — happens in Chrome when clicking
+;; the toolbar Extract button focuses the button and blurs Quill before the
+;; click handler reads selection. Shape: {:index N :length N} or nil.
+(defonce !last-selection (atom nil))
+
 
 (defn destroy-editor!
   "Destroy the current global editor instance (if any)."
@@ -42,7 +48,8 @@
              (when-let [toolbar (.querySelector (.-parentNode ct) ".ql-toolbar")]
                (.remove toolbar))
              (set! (.-innerHTML ct) "")))
-         (reset! !editor-state nil)))))
+         (reset! !editor-state nil)
+         (reset! !last-selection nil)))))
 
 (defn- add-toolbar-tooltips!
   "Add title attributes to Quill toolbar buttons for hover tooltips."
@@ -227,7 +234,17 @@
                (let [^js root (.-root editor)
                      current-topic-id (:topic-id @!editor-state)]
                  (reset! !dirty-html {:html (.-innerHTML root)
-                                      :topic-id current-topic-id})))))
+                                      :topic-id current-topic-id})
+                 ;; User edits invalidate cached range — indices may now be stale
+                 (reset! !last-selection nil)))))
+         ;; Cache last non-empty selection so toolbar buttons (Extract, etc.)
+         ;; can read it after focus moves to the button (Chrome blurs Quill on
+         ;; mousedown for buttons; Safari/Firefox on macOS do not).
+         (.on editor "selection-change"
+           (fn [^js range _old _source]
+             (when (and range (> (.-length range) 0))
+               (reset! !last-selection {:index (.-index range)
+                                        :length (.-length range)}))))
          (reset! !editor-state {:editor editor :container container
                                 :topic-id topic-id})
          (add-toolbar-tooltips! editor)
@@ -279,6 +296,24 @@
              ^js root (.-root ed)]
          (.-innerHTML root)))))
 
+(defn- effective-range
+  "Live Quill range if non-empty; otherwise the cached last in-editor range.
+   Cache survives blur (Chrome focuses buttons on mousedown, blurring Quill
+   before the click handler runs). Bounds-checked against current editor
+   length so post-edit stale ranges are skipped. Returns {:index :length}
+   or nil."
+  [editor]
+  #?(:clj nil
+     :cljs
+     (let [^js ed editor
+           ^js sel (.getSelection ed)]
+       (if (and sel (> (.-length sel) 0))
+         {:index (.-index sel) :length (.-length sel)}
+         (when-let [{:keys [index length]} @!last-selection]
+           (when (and (> length 0)
+                   (<= (+ index length) (.getLength ed)))
+             {:index index :length length}))))))
+
 (defn get-selected-text!
   "Get selected text from Quill editor. Returns nil if no selection.
    Client-side only, never enters Electric reactive graph."
@@ -286,10 +321,9 @@
   #?(:clj nil
      :cljs
      (when-let [{:keys [editor]} @!editor-state]
-       (let [^js ed editor
-             ^js selection (.getSelection ed)]
-         (when (and selection (> (.-length selection) 0))
-           (.getText ed (.-index selection) (.-length selection)))))))
+       (when-let [{:keys [index length]} (effective-range editor)]
+         (let [^js ed editor]
+           (.getText ed index length))))))
 
 (defn get-selection!
   "Get selected text and its range from Quill. Returns nil if no selection."
@@ -297,12 +331,11 @@
   #?(:clj nil
      :cljs
      (when-let [{:keys [editor]} @!editor-state]
-       (let [^js ed editor
-             ^js sel (.getSelection ed)]
-         (when (and sel (> (.-length sel) 0))
-           {:text (.getText ed (.-index sel) (.-length sel))
-            :index (.-index sel)
-            :length (.-length sel)})))))
+       (when-let [{:keys [index length]} (effective-range editor)]
+         (let [^js ed editor]
+           {:text (.getText ed index length)
+            :index index
+            :length length})))))
 
 (defn get-selection-html!
   "Get selected HTML and range from Quill. Returns nil if no selection.
@@ -311,20 +344,17 @@
   #?(:clj nil
      :cljs
      (when-let [{:keys [editor]} @!editor-state]
-       (let [^js ed editor
-             ^js sel (.getSelection ed)]
-         (when (and sel (> (.-length sel) 0))
-           (let [idx (.-index sel)
-                 len (.-length sel)
-                 ^js delta (.getContents ed idx len)
-                 ^js temp-div (js/document.createElement "div")
-                 ^js temp-quill (new (.-Quill js/window) temp-div)
-                 _ (.setContents temp-quill delta)
-                 html (.-innerHTML (.-root temp-quill))]
-             {:html html
-              :text (.getText ed idx len)
-              :index idx
-              :length len}))))))
+       (when-let [{:keys [index length]} (effective-range editor)]
+         (let [^js ed editor
+               ^js delta (.getContents ed index length)
+               ^js temp-div (js/document.createElement "div")
+               ^js temp-quill (new (.-Quill js/window) temp-div)
+               _ (.setContents temp-quill delta)
+               html (.-innerHTML (.-root temp-quill))]
+           {:html html
+            :text (.getText ed index length)
+            :index index
+            :length length})))))
 
 (defn highlight-range!
   "Apply highlight formatting to a range in the Quill editor.
