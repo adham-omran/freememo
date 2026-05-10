@@ -76,11 +76,14 @@
   ;; columns could exist with default 0 and `had-usage?` becomes true forever.
   (let [had-usage? (some? (jdbc/execute-one! ds
                             ["SELECT 1 FROM information_schema.columns
-                              WHERE table_name = 'users' AND column_name = 'usage_bytes'"]))]
+                              WHERE table_name = 'users' AND column_name = 'usage_bytes'"]))
+        topic-files-exists? (some? (jdbc/execute-one! ds
+                                     ["SELECT 1 FROM information_schema.tables
+                                       WHERE table_name = 'topic_files'"]))]
     (jdbc/with-transaction [tx ds]
       (jdbc/execute! tx ["ALTER TABLE users ADD COLUMN IF NOT EXISTS usage_bytes BIGINT NOT NULL DEFAULT 0"])
       (jdbc/execute! tx ["ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_bytes BIGINT"])
-      (when-not had-usage?
+      (when (and (not had-usage?) topic-files-exists?)
         (tel/log! :info "Backfilling users.usage_bytes from topic_files.file_size")
         (jdbc/execute! tx
           ["UPDATE users SET usage_bytes = COALESCE(
