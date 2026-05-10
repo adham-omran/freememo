@@ -102,7 +102,7 @@
   #?(:cljs (if (< (.-innerHeight js/window) 900) 50 75)
      :clj 75))
 
-(e/defn OcrPage [user-id enc-key !nav-target llm-enabled?]
+(e/defn OcrPage [user-id enc-key !nav-target llm-enabled? navigate!]
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
@@ -344,7 +344,7 @@
                     (dom/props {:style {:width "280px" :flex-shrink "0"
                                         :min-width "0" :overflow "hidden"
                                         :display "flex" :flex-direction "column"}})
-                    (HierarchySidePanel user-id page-topic-id nil !nav-target)))
+                    (HierarchySidePanel user-id page-topic-id navigate! !nav-target)))
 
                 ;; RIGHT: existing content column (top row + v-divider + bottom panel)
                 (dom/div

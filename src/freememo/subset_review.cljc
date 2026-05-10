@@ -148,7 +148,7 @@
                   (dom/div
                     (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
                     (let [!nav (atom {:topic-id topic-id})]
-                      (OcrPage user-id enc-key !nav llm-enabled?)))
+                      (OcrPage user-id enc-key !nav llm-enabled? nil)))
                   (SubsetBottomBar topic-id outstanding? !queue-idx))
 
                 (dom/div
