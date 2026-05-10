@@ -11,6 +11,7 @@
    [freememo.anki-sync-panels :as sync-panels]
    #?(:clj [freememo.user-state :as us])
    [freememo.content-card-table :refer [ContentCardTable]]
+   [freememo.hierarchy-side-panel :refer [HierarchySidePanel]]
    [freememo.util :refer [start-drag!]]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])
@@ -101,7 +102,10 @@
               is-epub-root? (= topic-kind "epub")
               display-content (if is-epub-root?
                                 (e/server (epub-chapters-html* refresh topic-id))
-                                content)]
+                                content)
+              ;; Hierarchy side panel collapse state (ephemeral, per-session)
+              !side-collapsed? (atom false)
+              side-collapsed? (e/watch !side-collapsed?)]
 
           ;; Auto-save dirty edits to topic content
           ;; Auto-save: one-way editor → DB. Don't clear !dirty-html, don't bump !refresh.
@@ -144,7 +148,8 @@
                     (reset! editor/!import-status status)
                     (token)
                     (when (= status :done)
-                      (e/server (swap! (us/get-atom user-id :refresh) inc)))
+                      (e/server (swap! (us/get-atom user-id :refresh) inc))
+                      (e/server (swap! (us/get-atom user-id :tree-mutations) inc)))
                     (when (:topic-id result)
                       (navigate! :viewer (nav/nav-browse-topic (:topic-id result) nil))))))))
 
@@ -153,6 +158,15 @@
             (dom/props {:style {:display "flex" :align-items "center" :position "relative"
                                 :padding "4px var(--sp-3)" :flex-shrink "0"
                                 :justify-content "center"}})
+            ;; Hamburger toggle (absolute-positioned left so it doesn't disturb centered title)
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-secondary"
+                          :style {:padding "2px 8px" :font-size "16px" :line-height "1"
+                                  :position "absolute" :left "var(--sp-3)" :top "50%"
+                                  :transform "translateY(-50%)"}
+                          :data-tooltip (if side-collapsed? "Show hierarchy" "Hide hierarchy")})
+              (dom/text "☰")
+              (dom/On "click" (fn [_] (swap! !side-collapsed? not)) nil))
             (let [parent-is-intermediate (and parent-id root-topic-id (not= parent-id root-topic-id))
                   label (if parent-is-intermediate
                           (or parent-title "Untitled")
@@ -199,73 +213,91 @@
           (let [!top-pct (atom (default-split-pct))
                 top-pct (e/watch !top-pct)]
 
-            ;; Editor area — content is chapter list HTML for EPUB root, normal content otherwise
+            ;; BODY ROW: side panel | content (editor + divider + bottom)
             (dom/div
-              (dom/props {:style {:height (str top-pct "%") :min-height "0" :overflow "auto"
-                                  :display "flex" :justify-content "center"
-                                  :padding "8px 16px"}})
+              (dom/props {:style {:flex "1" :display "flex" :flex-direction "row"
+                                  :min-height "0" :overflow "hidden"}})
+
+              ;; LEFT: hierarchy side panel (collapsible)
+              (when-not side-collapsed?
+                (dom/div
+                  (dom/props {:style {:width "280px" :flex-shrink "0"
+                                      :min-width "0" :overflow "hidden"
+                                      :display "flex" :flex-direction "column"}})
+                  (HierarchySidePanel user-id topic-id navigate! nil)))
+
+              ;; RIGHT: existing content column (editor + divider + bottom)
+              (dom/div
+                (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
+                                    :min-width "0" :min-height "0" :overflow "hidden"}})
+
+                ;; Editor area — content is chapter list HTML for EPUB root, normal content otherwise
+                (dom/div
+                  (dom/props {:style {:height (str top-pct "%") :min-height "0" :overflow "auto"
+                                      :display "flex" :justify-content "center"
+                                      :padding "8px 16px"}})
               ;; Intercept chapter-link clicks (href="#topic-N") and navigate via Electric.
               ;; Quill's selection-change fires before this bubble handler and shows the link
               ;; tooltip ("Visit URL: …"); hide it explicitly so it doesn't flash before nav.
-              (dom/On "click"
-                (fn [e]
-                  (when is-epub-root?
-                    (let [target (.-target e)
-                          anchor (when target
-                                   (if (= "A" (.-tagName target))
-                                     target
-                                     (.closest target "a")))
-                          href (when anchor (.getAttribute anchor "href"))]
-                      (when (and href (.startsWith href "#topic-"))
-                        (.preventDefault e)
-                        (.stopPropagation e)
-                        (let [tid (js/parseInt (subs href 7))
-                              ^js ed (:editor @editor/!editor-state)
-                              tooltip (when ed (.-tooltip (.-theme ed)))]
-                          (when tooltip (.hide tooltip))
-                          (navigate! :viewer (nav/nav-browse-topic tid nil)))))))
-                nil)
-              (dom/div
-                (dom/props {:style {:width "100%"
-                                    :display "flex" :flex-direction "column"}})
-                (RichTextEditorComponent {:initial-html display-content
-                                          :topic-id topic-id})))
+                  (dom/On "click"
+                    (fn [e]
+                      (when is-epub-root?
+                        (let [target (.-target e)
+                              anchor (when target
+                                       (if (= "A" (.-tagName target))
+                                         target
+                                         (.closest target "a")))
+                              href (when anchor (.getAttribute anchor "href"))]
+                          (when (and href (.startsWith href "#topic-"))
+                            (.preventDefault e)
+                            (.stopPropagation e)
+                            (let [tid (js/parseInt (subs href 7))
+                                  ^js ed (:editor @editor/!editor-state)
+                                  tooltip (when ed (.-tooltip (.-theme ed)))]
+                              (when tooltip (.hide tooltip))
+                              (navigate! :viewer (nav/nav-browse-topic tid nil)))))))
+                    nil)
+                  (dom/div
+                    (dom/props {:style {:width "100%"
+                                        :display "flex" :flex-direction "column"}})
+                    (RichTextEditorComponent {:initial-html display-content
+                                              :topic-id topic-id})))
 
             ;; Draggable divider
-            (dom/div
-              (dom/props {:class "split-divider-v" :title "Drag to resize panels"})
-              (dom/On "pointerdown" (fn [e] (start-drag! e :y !top-pct)) nil))
+                (dom/div
+                  (dom/props {:class "split-divider-v" :title "Drag to resize panels"})
+                  (dom/On "pointerdown" (fn [e] (start-drag! e :y !top-pct)) nil))
 
             ;; Bottom: toolbar + cards
-            (dom/div
-              (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0"}})
+                (dom/div
+                  (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0"}})
 
               ;; Shared toolbar — content-text from !dirty-html (live) or server content (initial)
-              (let [dirty (e/watch editor/!dirty-html)
-                    live-content (if (and dirty (= (:topic-id dirty) topic-id))
-                                   (:html dirty)
-                                   content)]
-                (ContentToolbar {:user-id user-id
-                                 :enc-key enc-key
-                                 :topic-id topic-id
-                                 :root-topic-id root-topic-id
-                                 :page-number page-number
-                                 :content-text live-content
-                                 :parent-content parent-content
-                                 :context-mode :extract
-                                 :context-tooltip "Include context for better cards. With a selection: extract text. Without: original page text."
-                                 :llm-enabled? llm-enabled?
-                                 :extract-status extract-status
-                                 :navigate! navigate!
-                                 :origin origin}
-                  card-refresh))
+                  (let [dirty (e/watch editor/!dirty-html)
+                        live-content (if (and dirty (= (:topic-id dirty) topic-id))
+                                       (:html dirty)
+                                       content)]
+                    (ContentToolbar {:user-id user-id
+                                     :enc-key enc-key
+                                     :topic-id topic-id
+                                     :root-topic-id root-topic-id
+                                     :page-number page-number
+                                     :content-text live-content
+                                     :parent-content parent-content
+                                     :context-mode :extract
+                                     :context-tooltip "Include context for better cards. With a selection: extract text. Without: original page text."
+                                     :llm-enabled? llm-enabled?
+                                     :extract-status extract-status
+                                     :navigate! navigate!
+                                     :origin origin}
+                      card-refresh))
 
               ;; Shared card table
-              (ContentCardTable {:topic-id topic-id
-                                 :card-font-size card-font-size
-                                 :user-id user-id}
-                card-refresh))))
-
+                  (ContentCardTable {:topic-id topic-id
+                                     :card-font-size card-font-size
+                                     :user-id user-id}
+                    card-refresh)))))) ; ContentCardTable + bottom-div + content-column-div + body-row-div + let !top-pct + outer let
+        
         ;; No topic-id
         (dom/div
           (dom/props {:style {:padding "32px" :text-align "center" :color "var(--color-text-secondary)"}})

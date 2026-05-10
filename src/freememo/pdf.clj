@@ -29,6 +29,7 @@
               topic (db/create-pdf-topic! user-id filename file-bytes file-size page-count)
               topic-id (:topics/id topic)]
           (swap! (us/get-atom user-id :refresh) inc)
+          (swap! (us/get-atom user-id :tree-mutations) inc)
           {:success true :id topic-id})))
     (catch clojure.lang.ExceptionInfo e
       (let [data (ex-data e)]
@@ -60,6 +61,7 @@
   (try
     (db/delete-topic-for-user! user-id id)
     (swap! (us/get-atom user-id :refresh) inc)
+    (swap! (us/get-atom user-id :tree-mutations) inc)
     {:success true}
     (catch Exception e
       (tel/error! {:id ::delete-pdf} e)

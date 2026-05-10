@@ -15,6 +15,7 @@
    [freememo.content-toolbar-helpers :as ct-helpers]
    [freememo.anki-sync-panels :as sync-panels]
    [freememo.content-card-table :refer [ContentCardTable]]
+   [freememo.hierarchy-side-panel :refer [HierarchySidePanel]]
    #?(:clj [freememo.page-ocr :as page])
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.settings :as settings])
@@ -90,6 +91,7 @@
 (defn rename-and-refresh! [user-id id new-title]
   #?(:clj (do (db/rename-topic! id new-title)
             (swap! (us/get-atom user-id :refresh) inc)
+            (swap! (us/get-atom user-id :tree-mutations) inc)
             :ok)
      :cljs nil))
 
@@ -184,6 +186,9 @@
                 top-pct (e/watch !top-pct)
                 !left-pct (atom 50)
                 left-pct (e/watch !left-pct)
+                ;; Hierarchy side panel collapse state (ephemeral, per-session)
+                !side-collapsed? (atom false)
+                side-collapsed? (e/watch !side-collapsed?)
                 ;; PDF layout mode (per-document)
                 server-layout (e/server (when is-pdf (settings/get-pdf-layout user-id selected-doc)))
                 !layout (atom (or server-layout "left-right"))
@@ -263,6 +268,13 @@
                                       :padding "6px 12px" :flex-shrink "0"
                                       :background "var(--color-bg-subtle)"
                                       :border-bottom "1px solid var(--color-border)"}})
+                  (dom/button
+                    (dom/props {:class "btn btn-sm btn-secondary"
+                                :style {:padding "2px 8px" :font-size "16px" :line-height "1"
+                                        :flex-shrink "0"}
+                                :data-tooltip (if side-collapsed? "Show hierarchy" "Hide hierarchy")})
+                    (dom/text "☰")
+                    (dom/On "click" (fn [_] (swap! !side-collapsed? not)) nil))
                   (if editing-title
                     (e/for-by identity [_k [selected-doc]]
                       (dom/input
@@ -321,12 +333,30 @@
                                                       " ... and " (- (count remaining) 20) " more"))})
                         (dom/text (:done server-page-info) "/" (:total server-page-info)))))))
 
-              ;; TOP ROW: PDF | Editor — flex direction depends on layout mode
-              (let [top-bottom? (= layout "top-bottom")]
+              ;; BODY ROW: side panel | (top row + v-divider + bottom panel)
+              (dom/div
+                (dom/props {:style {:flex "1" :display "flex" :flex-direction "row"
+                                    :min-height "0" :overflow "hidden"}})
+
+                ;; LEFT: hierarchy side panel (collapsible)
+                (when-not side-collapsed?
+                  (dom/div
+                    (dom/props {:style {:width "280px" :flex-shrink "0"
+                                        :min-width "0" :overflow "hidden"
+                                        :display "flex" :flex-direction "column"}})
+                    (HierarchySidePanel user-id page-topic-id nil !nav-target)))
+
+                ;; RIGHT: existing content column (top row + v-divider + bottom panel)
                 (dom/div
-                  (dom/props {:style {:height (str top-pct "%") :display "flex"
-                                      :flex-direction (if top-bottom? "column" "row")
-                                      :min-height "0" :overflow "hidden"}})
+                  (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
+                                      :min-width "0" :min-height "0" :overflow "hidden"}})
+
+                  ;; TOP ROW: PDF | Editor — flex direction depends on layout mode
+                  (let [top-bottom? (= layout "top-bottom")]
+                    (dom/div
+                      (dom/props {:style {:height (str top-pct "%") :display "flex"
+                                          :flex-direction (if top-bottom? "column" "row")
+                                          :min-height "0" :overflow "hidden"}})
 
                   ;; PDF viewer + divider (hidden for web articles)
                   (when is-pdf
@@ -589,4 +619,4 @@
                 (ContentCardTable {:topic-id page-topic-id
                                    :card-font-size card-font-size
                                    :user-id user-id}
-                  card-refresh)))))))))
+                  card-refresh))))))))))) ; ContentCardTable + bottom-panel + content-column + body-row + outer-flex-col + let + when + let + outermost-div + e/client + e/defn

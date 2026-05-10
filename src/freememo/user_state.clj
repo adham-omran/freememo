@@ -19,6 +19,7 @@
           :settings-refresh (atom 0)
           :card-mutations   (atom 0)
           :sync-mutations   (atom 0)
+          :tree-mutations   (atom 0)
           :card-gen-status  (atom {})
           :scanning-pages   (atom #{})
           :ocr-errors       (atom {})
