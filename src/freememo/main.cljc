@@ -122,7 +122,7 @@
                   (dom/div
                     (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
                     (let [!vnav (atom {:type :browse-pdf :topic-id topic-id :page page :origin nil})]
-                      (OcrPage user-id enc-key !vnav llm-enabled?))))))
+                      (OcrPage user-id enc-key !vnav llm-enabled? navigate!))))))
 
             browse-topic
             (r/pop
