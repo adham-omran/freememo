@@ -131,6 +131,205 @@
     "markdown" ["MD" "var(--color-badge-web)"]
     ["Topic" "var(--color-badge-epub)"]))
 
+;; ---------------------------------------------------------------------------
+;; DocumentRow — extracted from DocumentTreeView so Electric's macroexpander
+;; doesn't blow the stack on the giant inlined row. Atoms passed positionally
+;; per CLAUDE.md "Never Put Atoms in Maps Passed to e/defn".
+;; ---------------------------------------------------------------------------
+
+(e/defn DocumentRow [user-id navigate! row i row-height
+                     expanded-set editing-id
+                     !expanded-set !editing-id !show-confirm !scroll-node]
+  (e/client
+    (let [{:keys [depth topic has-children is-root]} row
+          id (:topics/id topic)
+          title (or (:topics/title topic) "(empty)")
+          kind (or (:topics/kind topic) "basic")
+          topic-status (or (:topics/status topic) "active")
+          expanded? (contains? expanded-set id)
+          [badge-text badge-color] (kind-badge kind)]
+      (dom/tr
+        (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)"
+                            :height (str row-height "px")
+                            :opacity (case topic-status "done" "0.6" "1")
+                            :cursor "pointer"
+                            :--order (inc i)}})
+        (dom/On "click"
+          (fn [_] (navigate! :viewer (nav/nav-topic id :library)))
+          nil)
+        ;; Column 1: Document (arrow + badge + title)
+        (dom/td
+          (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
+                              :padding-left (str (+ 10 (* depth 20)) "px")
+                              :overflow "hidden"
+                              :border-left (when (= topic-status "done") "2px solid var(--color-success-lighter)")}})
+          (if has-children
+            (dom/span
+              (dom/props {:style {:width "16px" :font-size "10px" :cursor "pointer"
+                                  :user-select "none" :text-align "center" :flex-shrink "0"}})
+              (dom/text (if expanded? "▼" "▶"))
+              (dom/On "click"
+                (fn [e]
+                  (.stopPropagation e)
+                  (let [sn @!scroll-node
+                        st (when sn (.-scrollTop sn))]
+                    (swap! !expanded-set (fn [s] (if (contains? s id) (disj s id) (conj s id))))
+                    (when st
+                      (js/requestAnimationFrame (fn [] (set! (.-scrollTop sn) st))))))
+                nil))
+            (dom/span (dom/props {:style {:width "16px" :flex-shrink "0"}})))
+          (dom/span
+            (dom/props {:class "type-badge" :style {:background badge-color}})
+            (dom/text badge-text))
+          (if (= editing-id id)
+            (e/for-by identity [_k [id]]
+              (dom/input
+                (dom/props {:type "text"
+                            :placeholder "Title"
+                            :maxlength "500"
+                            :style {:flex "1" :min-width "0" :padding "2px 6px"
+                                    :font-size (if is-root "13px" "12px")
+                                    :border "1px solid var(--color-border)"
+                                    :border-radius "3px"
+                                    :background "var(--color-bg-card)"}})
+                (set! (.-value dom/node) (or title ""))
+                (let [n dom/node]
+                  (js/setTimeout
+                    (fn []
+                      (.focus n)
+                      (when (pos? (count (.-value n))) (.select n)))
+                    0))
+                (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+                (dom/On "keydown"
+                  (fn [e]
+                    (when (= (.-key e) "Escape")
+                      (.preventDefault e)
+                      (set! (.-value (.-target e)) (or title ""))
+                      (.blur (.-target e))
+                      (reset! !editing-id nil)))
+                  nil)
+                (let [event (dom/On "change" #(-> % .-target .-value) nil)
+                      [?token _] (e/Token event)]
+                  (when-some [token ?token]
+                    (let [trimmed (str/trim event)]
+                      (if (str/blank? trimmed)
+                        (do (token)
+                          (reset! !editing-id nil))
+                        (let [ok (e/server (rename-and-refresh! user-id id trimmed))]
+                          (when ok
+                            (token)
+                            (reset! !editing-id nil)))))))))
+            (dom/span
+              (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
+                                  :font-size (if is-root "13px" "12px")
+                                  :font-weight (if is-root "500" "400")
+                                  :color "var(--color-text-primary)"}
+                          :data-tooltip title})
+              (dom/text title))))
+        ;; Column 2: Done
+        (dom/td
+          (dom/props {:style {:padding "4px 6px" :text-align "center"
+                              :display "flex" :align-items "center" :justify-content "center"}})
+          (when is-root
+            (let [total (:total-items topic)
+                  done (:done-items topic)]
+              (dom/span
+                (dom/props {:style {:color (cond
+                                             (and (pos? total) (= done total)) "var(--color-success-dark)"
+                                             (pos? done) "var(--color-text-primary)"
+                                             :else "var(--color-text-secondary)")}})
+                (dom/text (str done " / " total))))))
+        ;; Column 3: Synced
+        (dom/td
+          (dom/props {:style {:padding "4px 6px" :text-align "center"
+                              :display "flex" :align-items "center" :justify-content "center"
+                              :color "var(--color-text-secondary)"}})
+          (when is-root
+            (let [total-cards (:total-cards topic)
+                  synced (:synced-cards topic)]
+              (dom/span
+                (dom/text (if (pos? total-cards)
+                            (str synced " / " total-cards)
+                            "–"))))))
+        ;; Column 4: Added
+        (dom/td
+          (dom/props {:style {:padding "4px 6px" :text-align "right"
+                              :display "flex" :align-items "center" :justify-content "flex-end"
+                              :color "var(--color-text-secondary)"}})
+          (when is-root
+            (dom/span
+              (dom/text (or (:formatted_date topic) "")))))
+        ;; Column 5: Actions
+        (dom/td
+          (dom/props {:style {:padding "4px 6px" :display "flex" :align-items "center"
+                              :justify-content "flex-end" :gap "4px"}})
+          (dom/button
+            (dom/props {:class "btn btn-sm btn-secondary"
+                        :style {:padding "2px 6px" :font-size "12px" :line-height "1"}
+                        :data-tooltip "Rename"})
+            (dom/text "✎")
+            (dom/On "click"
+              (fn [e]
+                (.stopPropagation e)
+                (reset! !editing-id id))
+              nil))
+          (when has-children
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-secondary"
+                          :style {:padding "2px 6px" :font-size "10px"}})
+              (dom/text "Review")
+              (dom/On "click"
+                (fn [e]
+                  (.stopPropagation e)
+                  (navigate! :viewer (nav/nav-subset-review id title)))
+                nil)))
+          (when is-root
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-danger-fill"
+                          :style {:padding "2px 6px" :font-size "12px" :line-height "1"}
+                          :data-tooltip "Delete"})
+              (dom/text "✕")
+              (dom/On "click" (fn [e] (.stopPropagation e) (reset! !show-confirm id)) nil))))))))
+
+;; ---------------------------------------------------------------------------
+;; DeleteConfirmModal — extracted to keep DocumentTreeView lean
+;; ---------------------------------------------------------------------------
+
+(e/defn DeleteConfirmModal [user-id show-confirm !show-confirm]
+  (e/client
+    (when (some? show-confirm)
+      (dom/div
+        (dom/props {:class "modal-backdrop"})
+        (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil)
+        (dom/On "keydown" (fn [e] (when (= (.-key e) "Escape") (reset! !show-confirm nil))) nil)
+        (dom/div
+          (dom/props {:class "modal-content modal-sm"})
+          (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+          (dom/div
+            (dom/props {:class "confirm-modal-body"})
+            (dom/p (dom/text "Delete this topic? All children, extracts, and cards will be permanently removed.")))
+          (dom/div
+            (dom/props {:class "confirm-modal-actions"})
+            (dom/button
+              (dom/props {:class "btn btn-secondary"})
+              (dom/text "Cancel")
+              (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil))
+            (dom/button
+              (dom/props {:class "btn btn-danger-fill"})
+              (dom/text "Delete")
+              (let [event (dom/On "click" (fn [_] show-confirm) nil)
+                    [?token _] (e/Token event)]
+                (when-some [token ?token]
+                  (let [topic-to-delete event
+                        note-ids (e/server (vec (db/get-all-anki-note-ids topic-to-delete)))]
+                    (e/server (db/delete-topic-for-user! user-id topic-to-delete))
+                    (e/server (swap! (us/get-atom user-id :refresh) inc))
+                    (e/server (swap! (us/get-atom user-id :tree-mutations) inc))
+                    (e/client (card-components/try-delete-anki-notes! note-ids))
+                    (e/client (pdf-cache/cache-delete topic-to-delete))
+                    (token)
+                    (reset! !show-confirm nil)))))))))))
+
 ;; Document tree view — used by LibraryPage
 ;; Flatten + virtual scroll for performance
 ;; `refresh` (caller-provided) covers content-level mutations; combined with
@@ -220,156 +419,9 @@
                       (e/for [i (Tape offset limit)]
                         (let [row (nth flat-rows i nil)]
                           (when row
-                            (let [{:keys [depth topic has-children is-root]} row
-                                  id (:topics/id topic)
-                                  title (or (:topics/title topic) "(empty)")
-                                  kind (or (:topics/kind topic) "basic")
-                                  topic-status (or (:topics/status topic) "active")
-                                  expanded? (contains? expanded-set id)
-                                  [badge-text badge-color] (kind-badge kind)]
-                              (dom/tr
-                                (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)"
-                                                    :height (str row-height "px")
-                                                    :opacity (case topic-status "done" "0.6" "1")
-                                                    :cursor "pointer"
-                                                    :--order (inc i)}})
-                                (dom/On "click"
-                                  (fn [_]
-                                    (navigate! :viewer (nav/nav-topic id :library)))
-                                  nil)
-                                ;; Column 1: Document (arrow + badge + title)
-                                (dom/td
-                                  (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
-                                                      :padding-left (str (+ 10 (* depth 20)) "px")
-                                                      :overflow "hidden"
-                                                      :border-left (when (= topic-status "done") "2px solid var(--color-success-lighter)")}})
-                                  (if has-children
-                                    (dom/span
-                                      (dom/props {:style {:width "16px" :font-size "10px" :cursor "pointer"
-                                                          :user-select "none" :text-align "center" :flex-shrink "0"}})
-                                      (dom/text (if expanded? "\u25BC" "\u25B6"))
-                                      (dom/On "click"
-                                        (fn [e]
-                                          (.stopPropagation e)
-                                          (let [sn @!scroll-node
-                                                st (when sn (.-scrollTop sn))]
-                                            (swap! !expanded-set (fn [s] (if (contains? s id) (disj s id) (conj s id))))
-                                            (when st
-                                              (js/requestAnimationFrame (fn [] (set! (.-scrollTop sn) st))))))
-                                        nil))
-                                    (dom/span (dom/props {:style {:width "16px" :flex-shrink "0"}})))
-                                  (dom/span
-                                    (dom/props {:class "type-badge" :style {:background badge-color}})
-                                    (dom/text badge-text))
-                                  (if (= editing-id id)
-                                    (e/for-by identity [_k [id]]
-                                      (dom/input
-                                        (dom/props {:type "text"
-                                                    :placeholder "Title"
-                                                    :maxlength "500"
-                                                    :style {:flex "1" :min-width "0" :padding "2px 6px"
-                                                            :font-size (if is-root "13px" "12px")
-                                                            :border "1px solid var(--color-border)"
-                                                            :border-radius "3px"
-                                                            :background "var(--color-bg-card)"}})
-                                        (set! (.-value dom/node) (or title ""))
-                                        (let [n dom/node]
-                                          (js/setTimeout
-                                            (fn []
-                                              (.focus n)
-                                              (when (pos? (count (.-value n))) (.select n)))
-                                            0))
-                                        (dom/On "click" (fn [e] (.stopPropagation e)) nil)
-                                        (dom/On "keydown"
-                                          (fn [e]
-                                            (when (= (.-key e) "Escape")
-                                              (.preventDefault e)
-                                              (set! (.-value (.-target e)) (or title ""))
-                                              (.blur (.-target e))
-                                              (reset! !editing-id nil)))
-                                          nil)
-                                        (let [event (dom/On "change" #(-> % .-target .-value) nil)
-                                              [?token _] (e/Token event)]
-                                          (when-some [token ?token]
-                                            (let [trimmed (str/trim event)]
-                                              (if (str/blank? trimmed)
-                                                (do (token)
-                                                  (reset! !editing-id nil))
-                                                (let [ok (e/server (rename-and-refresh! user-id id trimmed))]
-                                                  (when ok
-                                                    (token)
-                                                    (reset! !editing-id nil)))))))))
-                                    (dom/span
-                                      (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
-                                                          :font-size (if is-root "13px" "12px")
-                                                          :font-weight (if is-root "500" "400")
-                                                          :color "var(--color-text-primary)"}
-                                                  :data-tooltip title})
-                                      (dom/text title))))
-                                ;; Column 2: Done
-                                (dom/td
-                                  (dom/props {:style {:padding "4px 6px" :text-align "center"
-                                                      :display "flex" :align-items "center" :justify-content "center"}})
-                                  (when is-root
-                                    (let [total (:total-items topic)
-                                          done (:done-items topic)]
-                                      (dom/span
-                                        (dom/props {:style {:color (cond
-                                                                     (and (pos? total) (= done total)) "var(--color-success-dark)"
-                                                                     (pos? done) "var(--color-text-primary)"
-                                                                     :else "var(--color-text-secondary)")}})
-                                        (dom/text (str done " / " total))))))
-                                ;; Column 3: Synced
-                                (dom/td
-                                  (dom/props {:style {:padding "4px 6px" :text-align "center"
-                                                      :display "flex" :align-items "center" :justify-content "center"
-                                                      :color "var(--color-text-secondary)"}})
-                                  (when is-root
-                                    (let [total-cards (:total-cards topic)
-                                          synced (:synced-cards topic)]
-                                      (dom/span
-                                        (dom/text (if (pos? total-cards)
-                                                    (str synced " / " total-cards)
-                                                    "\u2013"))))))
-                                ;; Column 4: Added
-                                (dom/td
-                                  (dom/props {:style {:padding "4px 6px" :text-align "right"
-                                                      :display "flex" :align-items "center" :justify-content "flex-end"
-                                                      :color "var(--color-text-secondary)"}})
-                                  (when is-root
-                                    (dom/span
-                                      (dom/text (or (:formatted_date topic) "")))))
-                                ;; Column 5: Actions
-                                (dom/td
-                                  (dom/props {:style {:padding "4px 6px" :display "flex" :align-items "center"
-                                                      :justify-content "flex-end" :gap "4px"}})
-                                  (dom/button
-                                    (dom/props {:class "btn btn-sm btn-secondary"
-                                                :style {:padding "2px 6px" :font-size "12px" :line-height "1"}
-                                                :data-tooltip "Rename"})
-                                    (dom/text "✎")
-                                    (dom/On "click"
-                                      (fn [e]
-                                        (.stopPropagation e)
-                                        (reset! !editing-id id))
-                                      nil))
-                                  (when has-children
-                                    (dom/button
-                                      (dom/props {:class "btn btn-sm btn-secondary"
-                                                  :style {:padding "2px 6px" :font-size "10px"}})
-                                      (dom/text "Review")
-                                      (dom/On "click"
-                                        (fn [e]
-                                          (.stopPropagation e)
-                                          (navigate! :viewer (nav/nav-subset-review id title)))
-                                        nil)))
-                                  (when is-root
-                                    (dom/button
-                                      (dom/props {:class "btn btn-sm btn-danger-fill"
-                                                  :style {:padding "2px 6px" :font-size "12px" :line-height "1"}
-                                                  :data-tooltip "Delete"})
-                                      (dom/text "✕")
-                                      (dom/On "click" (fn [e] (.stopPropagation e) (reset! !show-confirm id)) nil)))))))))
+                            (DocumentRow user-id navigate! row i row-height
+                              expanded-set editing-id
+                              !expanded-set !editing-id !show-confirm !scroll-node))))
                       (dom/tr
                         (dom/td
                           (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
@@ -377,39 +429,7 @@
                           (dom/text "No content yet. Import content from the Import tab.")))))
                   (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))
 
-              ;; Delete confirm dialog
-              (when (some? show-confirm)
-                (dom/div
-                  (dom/props {:class "modal-backdrop"})
-                  (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil)
-                  (dom/On "keydown" (fn [e] (when (= (.-key e) "Escape") (reset! !show-confirm nil))) nil)
-                  (dom/div
-                    (dom/props {:class "modal-content modal-sm"})
-                    (dom/On "click" (fn [e] (.stopPropagation e)) nil)
-                    (dom/div
-                      (dom/props {:class "confirm-modal-body"})
-                      (dom/p (dom/text "Delete this topic? All children, extracts, and cards will be permanently removed.")))
-                    (dom/div
-                      (dom/props {:class "confirm-modal-actions"})
-                      (dom/button
-                        (dom/props {:class "btn btn-secondary"})
-                        (dom/text "Cancel")
-                        (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil))
-                      (dom/button
-                        (dom/props {:class "btn btn-danger-fill"})
-                        (dom/text "Delete")
-                        (let [event (dom/On "click" (fn [_] show-confirm) nil)
-                              [?token ?error] (e/Token event)]
-                          (when-some [token ?token]
-                            (let [topic-to-delete event
-                                  note-ids (e/server (vec (db/get-all-anki-note-ids topic-to-delete)))]
-                              (e/server (db/delete-topic-for-user! user-id topic-to-delete))
-                              (e/server (swap! (us/get-atom user-id :refresh) inc))
-                              (e/server (swap! (us/get-atom user-id :tree-mutations) inc))
-                              (e/client (card-components/try-delete-anki-notes! note-ids))
-                              (e/client (pdf-cache/cache-delete topic-to-delete))
-                              (token)
-                              (reset! !show-confirm nil))))))))))))))))
+              (DeleteConfirmModal user-id show-confirm !show-confirm))))))))
 
 
 ;; Legacy ContentsPage — no longer routed, kept for reference
