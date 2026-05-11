@@ -235,9 +235,7 @@
                                                     :--order (inc i)}})
                                 (dom/On "click"
                                   (fn [_]
-                                    (if (and is-root (= kind "pdf"))
-                                      (navigate! :viewer (nav/nav-browse-pdf id nil :library))
-                                      (navigate! :viewer (nav/nav-browse-topic id :library))))
+                                    (navigate! :viewer (nav/nav-topic id :library)))
                                   nil)
                                 ;; Column 1: Document (arrow + badge + title)
                                 (dom/td

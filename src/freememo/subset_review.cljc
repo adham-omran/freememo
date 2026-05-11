@@ -3,8 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [freememo.page-viewer :refer [OcrPage]]
-   [freememo.extract-page :refer [ExtractPage]]
+   [freememo.topic-page :refer [TopicPage]]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])))
 
@@ -131,30 +130,18 @@
 
           ;; Active topic
           (let [item (nth queue-vec idx nil)
-                kind (:topics/kind item)
                 topic-id (:topics/id item)
                 outstanding? (:outstanding? item)
-                show-pdf? (= kind "pdf")
                 ;; Count remaining outstanding items (from current idx onward)
                 outstanding-remaining (count (filter :outstanding? (subvec queue-vec idx)))]
             (when item
               ;; Header
               (SubsetSessionHeader item !queue-idx idx total outstanding-remaining root-name on-exit!)
 
-              ;; Content
-              (if show-pdf?
+              ;; Content — unified TopicPage; subset-review has no queue-ctx (no priority widget)
+              (dom/div
+                (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
                 (dom/div
-                  (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
-                  (dom/div
-                    (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                    (let [!nav (atom {:topic-id topic-id})]
-                      (OcrPage user-id enc-key !nav llm-enabled? nil)))
-                  (SubsetBottomBar topic-id outstanding? !queue-idx))
-
-                (dom/div
-                  (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
-                  (dom/div
-                    (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                    (ExtractPage {:user-id user-id :enc-key enc-key :topic-id topic-id
-                                  :llm-enabled? llm-enabled?}))
-                  (SubsetBottomBar topic-id outstanding? !queue-idx))))))))))
+                  (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
+                  (TopicPage user-id enc-key topic-id nil llm-enabled? nil))
+                (SubsetBottomBar topic-id outstanding? !queue-idx)))))))))

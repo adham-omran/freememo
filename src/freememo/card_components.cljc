@@ -1,5 +1,5 @@
 (ns freememo.card-components
-  "Shared card display components — used by both ocr-page and extract-page."
+  "Shared card display components — used by TopicPage's BottomPanel."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]

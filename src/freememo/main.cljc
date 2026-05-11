@@ -10,8 +10,7 @@
             [freememo.import-page :refer [ImportPage]]
             [freememo.learn-page :refer [LearnPage]]
             [freememo.learn-session :refer [LearnSession]]
-            [freememo.extract-page :refer [ExtractPage]]
-            [freememo.page-viewer :refer [OcrPage]]
+            [freememo.topic-page :refer [TopicPage]]
             [freememo.search-page :refer [SearchPage]]
             [freememo.subset-review :refer [SubsetReviewSession]]
             [freememo.landing-page :refer [LandingPage]]
@@ -71,9 +70,8 @@
                  :enc-key enc-key})))
      :cljs nil))
 
-;; Convert old navigate! API calls to route lists for router5
-;; Old: (navigate! :library) or (navigate! :viewer (nav/nav-browse-pdf 42 nil :library))
-;; New: route list like (library) or (viewer browse-pdf 42)
+;; Convert navigate! API calls to route lists for router5.
+;; Viewer navs use (nav/nav-topic id origin) — single /viewer/topic/<id> route.
 
 (defn- nav->route
   ([tab] (nav->route tab nil))
@@ -84,10 +82,7 @@
        :viewer (list 'viewer) ; empty viewer
        (list (symbol (name tab))))
      (case (:type nav-map)
-       :browse-pdf (if-let [page (:page nav-map)]
-                     (list 'viewer 'browse-pdf (:topic-id nav-map) page)
-                     (list 'viewer 'browse-pdf (:topic-id nav-map)))
-       :browse-topic (list 'viewer 'browse-topic (:topic-id nav-map))
+       :topic (list 'viewer 'topic (:topic-id nav-map))
        :learn-session (list 'viewer 'learn-session)
        :subset-review (list 'viewer 'subset-review (:root-id nav-map))
        (list (symbol (name tab)))))))
@@ -113,18 +108,7 @@
         (if (nil? vtype)
           (EmptyViewerView)
           (case vtype
-            browse-pdf
-            (r/pop
-              (let [[topic-id page] r/route
-                    authorized? (e/server (some? (db/get-topic-for-user user-id topic-id)))]
-                (if (not authorized?)
-                  (NotFoundView)
-                  (dom/div
-                    (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-                    (let [!vnav (atom {:type :browse-pdf :topic-id topic-id :page page :origin nil})]
-                      (OcrPage user-id enc-key !vnav llm-enabled? navigate!))))))
-
-            browse-topic
+            topic
             (r/pop
               (let [[topic-id] r/route
                     authorized? (e/server (some? (db/get-topic-for-user user-id topic-id)))]
@@ -132,14 +116,7 @@
                   (NotFoundView)
                   (dom/div
                     (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-                    (ExtractPage {:user-id user-id :enc-key enc-key :topic-id topic-id
-                                  :navigate! navigate!
-                                  :view-source! (fn [root-id page kind]
-                                                  (if (= kind "pdf")
-                                                    (navigate! :viewer (nav/nav-browse-pdf root-id page nil))
-                                                    (navigate! :viewer (nav/nav-browse-topic root-id nil))))
-                                  :llm-enabled? llm-enabled?
-                                  :origin nil})))))
+                    (TopicPage user-id enc-key topic-id navigate! llm-enabled? nil)))))
 
             learn-session
             (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))

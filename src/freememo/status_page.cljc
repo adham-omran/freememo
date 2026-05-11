@@ -186,9 +186,7 @@
                                                   :cursor "pointer" :--order (inc i)}})
                               (dom/On "click"
                                 (fn [_]
-                                  (if is-pdf?
-                                    (navigate! :viewer (nav/nav-browse-pdf id 1 :status))
-                                    (navigate! :viewer (nav/nav-browse-topic id :status))))
+                                  (navigate! :viewer (nav/nav-topic id :status)))
                                 nil)
                               ;; Document + badge
                               (dom/td

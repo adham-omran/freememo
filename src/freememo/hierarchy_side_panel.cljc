@@ -172,7 +172,7 @@
                                                                :page page-num})
                                           ;; Otherwise navigate to the topic
                                           navigate!
-                                          (navigate! :viewer (nav/nav-browse-topic id nil)))))
+                                          (navigate! :viewer (nav/nav-topic id nil)))))
                                     nil)
 
                                   (if has-children

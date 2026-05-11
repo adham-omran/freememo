@@ -206,7 +206,7 @@
                           (do (swap! !mutations inc)
                             (token)
                             (reset! !show false)
-                            (navigate! :viewer (nav/nav-browse-topic topic-id nil)))
+                            (navigate! :viewer (nav/nav-topic topic-id nil)))
                           (token "Failed to save article")))
                       (token "Title and content are required"))))))
             (dom/button
@@ -288,7 +288,7 @@
                           (token)
                           (reset! !url "")
                           (reset! !show false)
-                          (navigate! :viewer (nav/nav-browse-topic (:topic-id result) nil))))
+                          (navigate! :viewer (nav/nav-topic (:topic-id result) nil))))
                       (token "Please enter a URL"))))))
             (dom/button
               (dom/props {:class "btn btn-secondary"})
@@ -345,7 +345,7 @@
                                      (reset! !uploading false)
                                      (if (.-success data)
                                        (do (reset! !show false)
-                                         (navigate! :viewer (nav/nav-browse-pdf (or (.-topic_id data) (.-doc_id data)) nil nil)))
+                                         (navigate! :viewer (nav/nav-topic (or (.-topic_id data) (.-doc_id data)) nil)))
                                        (let [code (.-code data)]
                                          (reset! !quota-error? (or (= code "over-quota") (= code "file-too-large")))
                                          (reset! !error-msg (or (.-error data) "PDF upload failed"))))))
@@ -685,7 +685,7 @@
                             (do (swap! !mutations inc)
                               (token)
                               (reset! !show false)
-                              (navigate! :viewer (nav/nav-browse-topic topic-id nil)))
+                              (navigate! :viewer (nav/nav-topic topic-id nil)))
                             (token "Failed to import")))
                         (token "No file loaded")))))))
             (dom/button
@@ -779,7 +779,7 @@
                             (do (swap! !mutations inc)
                               (token)
                               (reset! !show false)
-                              (navigate! :viewer (nav/nav-browse-topic topic-id nil)))
+                              (navigate! :viewer (nav/nav-topic topic-id nil)))
                             (token "Failed to import")))
                         (token "Please enter some Markdown content")))))))
             (dom/button
@@ -830,7 +830,7 @@
                       (do (swap! !mutations inc)
                         (token)
                         (reset! !show false)
-                        (navigate! :viewer (nav/nav-browse-topic (:topic-id result) nil)))
+                        (navigate! :viewer (nav/nav-topic (:topic-id result) nil)))
                       (token "Failed to create topic"))))))
             (dom/button
               (dom/props {:class "btn btn-secondary"})
