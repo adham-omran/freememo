@@ -71,13 +71,9 @@
      :clj nil))
 
 (defn click-nav! [navigate! row]
-  (let [id (:id row)
-        kind (:kind row)]
-    (case kind
-      "pdf" (navigate! :viewer (nav/nav-browse-pdf id nil :search))
-      "page" (navigate! :viewer (nav/nav-browse-pdf (:parent-id row) (:page-number row) :search))
-      ;; basic, markdown, web, wikipedia, epub, anything else
-      (navigate! :viewer (nav/nav-browse-topic id :search)))))
+  ;; All kinds resolve to /viewer/topic/<id>. The page-topic-id is the row's own
+  ;; id when kind="page", so no special branching is needed.
+  (navigate! :viewer (nav/nav-topic (:id row) :search)))
 
 (e/defn ResultRow [row i row-height navigate!]
   (e/client

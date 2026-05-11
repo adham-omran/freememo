@@ -4,9 +4,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.logging :as log]
-   [freememo.navigation :as nav]
-   [freememo.page-viewer :refer [OcrPage]]
-   [freememo.extract-page :refer [ExtractPage]]
+   [freememo.topic-page :refer [TopicPage]]
    [freememo.keyboard :as keyboard]
    #?(:clj [freememo.db :as db])))
 
@@ -126,7 +124,7 @@
     ["Topic" "var(--color-badge-epub)"]))
 
 ;; Session header bar
-(e/defn SessionHeader [item !queue-idx navigate! idx total view-source!]
+(e/defn SessionHeader [item !queue-idx navigate! idx total]
   (e/client
     (let [topic-id (:topics/id item)
           kind (:topics/kind item)
@@ -140,26 +138,15 @@
                          (let [root-id (db/get-root-topic-id topic-id)]
                            (db/get-topic root-id))))
           root-title (when root-topic (:topics/title root-topic))
-          root-kind (when root-topic (:topics/kind root-topic))
           [type-label type-color] (kind-badge kind)]
 
       (dom/div
         (dom/props {:class "header-bar" :style {:gap "6px" :padding "2px var(--sp-3)"}})
 
-        ;; Title / source link
-        (if is-root
-          (dom/span
-            (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px"}})
-            (dom/text title))
-          (dom/span
-            (dom/props {:style {:color "var(--color-primary)" :font-size "13px" :cursor "pointer"
-                                :text-decoration "underline"}
-                        :title "View source"})
-            (dom/text (or root-title title))
-            (when (and view-source! parent-id)
-              (dom/On "click"
-                (fn [_] (view-source! (or (:topics/id root-topic) parent-id) nil root-kind))
-                nil))))
+        ;; Title (no source-click — the side panel handles tree navigation)
+        (dom/span
+          (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px"}})
+          (dom/text (or root-title title)))
 
         ;; Type badge
         (dom/span
@@ -222,34 +209,25 @@
           (let [item (nth queue-vec idx nil)
                 kind (:topics/kind item)
                 topic-id (:topics/id item)
-                show-pdf? (= kind "pdf")
-                view-source! (fn [root-id page root-kind]
-                               (if (= root-kind "pdf")
-                                 (navigate! :viewer (nav/nav-browse-pdf root-id page nil))
-                                 (navigate! :viewer (nav/nav-browse-topic root-id nil))))]
+                is-pdf? (= kind "pdf")
+                queue-pos (str (inc idx) " / " total)
+                item-priority (or (:topics/priority item) 50)
+                ;; Queue context only for non-PDFs (per design decision §3.2 = Y).
+                ;; For PDFs, the title bar's hamburger + page-stats already crowd the row.
+                queue-ctx (when-not is-pdf?
+                            {:queue-position queue-pos
+                             :priority item-priority
+                             :on-priority-change! (fn [new-val]
+                                                    (update-topic-priority* topic-id new-val))
+                             :origin :learn})]
 
             (when item
-              ;; Content
-              (let [queue-pos (str (inc idx) " / " total)
-                    item-priority (or (:topics/priority item) 50)]
-                (if show-pdf?
-                  (dom/div
-                    (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
-                    (dom/div
-                      (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                      (let [!nav (atom {:topic-id topic-id})]
-                        (OcrPage user-id enc-key !nav llm-enabled? nil)))
-                    (BottomBar topic-id !queue-idx))
-
-                  (dom/div
-                    (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
-                    (dom/div
-                      (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                      (ExtractPage {:user-id user-id :enc-key enc-key :topic-id topic-id
-                                    :navigate! (fn [& _] (swap! !queue-idx inc))
-                                    :view-source! view-source!
-                                    :llm-enabled? llm-enabled? :origin :learn
-                                    :queue-position queue-pos
-                                    :priority item-priority
-                                    :on-priority-change! (fn [new-val] (update-topic-priority* topic-id new-val))}))
-                    (BottomBar topic-id !queue-idx)))))))))))
+              (dom/div
+                (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
+                (dom/div
+                  (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
+                  (TopicPage user-id enc-key topic-id
+                    (fn [& _] (swap! !queue-idx inc))
+                    llm-enabled?
+                    queue-ctx))
+                (BottomBar topic-id !queue-idx)))))))))
