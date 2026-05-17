@@ -45,7 +45,9 @@
       nil)))
 
 (defn load-anki-preferences
-  "Load saved Anki sync preferences for a user (global)."
+  "Load saved Anki sync preferences for a user (global).
+   :basic-fields / :cloze-fields are user-level field ordering defaults; they
+   feed run-fetch-fields! after AnkiConnect returns the model's actual fields."
   [user-id]
   (try
     {:success true
@@ -57,7 +59,9 @@
              :use-header (settings/get-anki-use-header user-id)
              :header-text (settings/get-anki-header-text user-id)
              :use-tags (settings/get-anki-use-tags user-id)
-             :tags (settings/get-anki-tags user-id)}}
+             :tags (settings/get-anki-tags user-id)
+             :basic-fields (settings/get-anki-basic-fields user-id)
+             :cloze-fields (settings/get-anki-cloze-fields user-id)}}
     (catch Exception e
       (tel/error! {:id ::load-anki-preferences} e)
       {:success false :prefs {}})))
@@ -71,6 +75,27 @@
   "Save per-item Anki sync preset."
   [user-id root-topic-id preset-map]
   (settings/save-anki-preset user-id root-topic-id preset-map))
+
+(defn resolve-preferred-fields
+  "Resolve preferred field ordering for a doc. Lookup order:
+     per-doc preset → user-level setting → empty.
+   kind is :basic or :cloze. Called ONCE at modal open from
+   AnkiSyncSyncBody; the result is passed into run-fetch-fields! so it
+   overrides the fetched ordering when valid against the model's fields."
+  [user-id root-topic-id kind]
+  (try
+    (let [preset (when root-topic-id (settings/get-anki-preset user-id root-topic-id))
+          from-preset (case kind
+                        :basic (:basic-fields preset)
+                        :cloze (:cloze-fields preset))]
+      (if (seq from-preset)
+        (vec from-preset)
+        (case kind
+          :basic (settings/get-anki-basic-fields user-id)
+          :cloze (settings/get-anki-cloze-fields user-id))))
+    (catch Exception e
+      (tel/error! {:id ::resolve-preferred-fields :data {:kind kind}} e)
+      [])))
 
 (defn get-cards-for-sync
   "Get flashcards for Anki sync. Also returns the current root topic title/kind
@@ -154,7 +179,9 @@
     (settings/save-anki-sync-settings user-id prefs-map)
     (tel/log! {:level :info :id ::finalize-push!.global-saved} "global last-used saved")
     (when (= auto-load-mode "per-item")
-      (settings/save-anki-preset user-id root-topic-id prefs-map)
+      (let [existing (or (settings/get-anki-preset user-id root-topic-id) {})
+            new-preset (merge existing prefs-map)]
+        (settings/save-anki-preset user-id root-topic-id new-preset))
       (tel/log! {:level :info
                  :id ::finalize-push!.per-item-saved
                  :data {:root-topic-id root-topic-id}}

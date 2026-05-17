@@ -1,10 +1,11 @@
 (ns freememo.content-toolbar-extract
-  "Done/Restore and Delete buttons for extract topics in ContentToolbar.
+  "Done/Restore, History, and Delete buttons for topics in ContentToolbar.
    Extracted to stay under JVM 64KB method limit."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.card-components :as card-components]
+   [freememo.history-modal :refer [HistoryModal]]
    [freememo.icons :as icons]
    [freememo.keyboard :as keyboard]
    [freememo.navigation :as nav]
@@ -35,32 +36,80 @@
 
 (e/defn ExtractActions [cfg]
   (e/client
-    (let [{:keys [user-id topic-id extract-status navigate! origin]} cfg]
+    (let [{:keys [user-id topic-id extract-status navigate! origin on-done!]} cfg
+          ;; Local modal state — CLJS-side atom flipped by the History button
+          ;; and the modal's own dismiss handlers (backdrop click / Escape / X).
+          !history-open? (atom false)
+          ;; Reactive :refresh value powers the modal's re-query on session
+          ;; mutations (advance/touch/postpone/done/restore/priority-change all
+          ;; bump :refresh, so the table updates immediately after each event).
+          history-refresh (e/server (e/watch (us/get-atom user-id :refresh)))]
 
-      ;; Done/Restore button — only for extract topics (not PDF pages)
+      ;; History button — visible for all topic kinds (per spec §8.1). Sits
+      ;; immediately before Done/Restore so when extract-status is set the
+      ;; order reads History → Done; on PDF roots (extract-status nil) it
+      ;; stands alone.
+      (dom/button
+        (dom/props {:class "btn btn-sm btn-secondary"
+                    :style {:font-weight "500"}
+                    :aria-label "History"
+                    :data-tooltip "View repetition history for this topic"})
+        (icons/Icon :history :size 16)
+        (dom/span (dom/props {:class "icon-label"}) (dom/text "History"))
+        (dom/On "click" (fn [_] (reset! !history-open? true)) nil))
+
+      ;; Modal mounted unconditionally — its body is gated on `@!history-open?`,
+      ;; so an unopened modal is a cheap no-op in the reactive graph.
+      (HistoryModal topic-id !history-open? history-refresh)
+
+      ;; Done/Restore button — only for extract topics (not PDF pages).
+      ;; `busy` holds the active branch open during the queue-advance transition:
+      ;; the :refresh bump (after server done!) propagates faster than the queue
+      ;; advance, so without the hold, the button visibly flips Done→Restore for
+      ;; a frame before the next topic mounts. Mirrors the Next button's
+      ;; !busy/:disabled pattern (learn_session.cljc:99-116). In doc-context
+      ;; (no on-done!) busy stays false; branch flip happens normally.
       (when (some? extract-status)
-        (if (= extract-status "active")
-          ;; Active: show Done button
-          (let [!done-click (atom nil)
-                done-click (e/watch !done-click)]
-            (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary"
-                          :style {:color "var(--color-success-dark)" :border "1px solid var(--color-success-dark)"
-                                  :font-weight "500"}
-                          :aria-label "Done"
-                          :data-tooltip "Mark as fully processed (extracted/carded everything useful)"})
-              (icons/Icon :check :size 16)
-              (dom/span (dom/props {:class "icon-label"}) (dom/text "Done"))
-              (reset! keyboard/!done-btn-ref dom/node)
-              (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
-              (dom/On "click" (fn [_] (reset! !done-click (str (random-uuid)))) nil))
-            (let [[t _] (e/Token done-click)]
-              (when t
-                (case (e/server (e/Offload #(do (db/done-topic! topic-id) :ok)))
-                  (case (e/server (swap! (us/get-atom user-id :refresh) inc))
-                    (if (and navigate! origin)
-                      (case (navigate! origin) (t))
-                      (t)))))))
+        (let [!busy (atom false)
+              busy (e/watch !busy)]
+          (if (or busy (= extract-status "active"))
+            ;; Active (or transitioning): show Done button
+            (let [!done-click (atom nil)
+                  done-click (e/watch !done-click)]
+              (dom/button
+                (dom/props {:class "btn btn-sm btn-secondary"
+                            :style {:color "var(--color-success-dark)" :border "1px solid var(--color-success-dark)"
+                                    :font-weight "500"}
+                            :disabled busy
+                            :aria-label "Done"
+                            :data-tooltip "Mark as fully processed (extracted/carded everything useful)"})
+                (icons/Icon :check :size 16)
+                (dom/span (dom/props {:class "icon-label"}) (dom/text "Done"))
+                (reset! keyboard/!done-btn-ref dom/node)
+                (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
+                (dom/On "click" (fn [_] (when-not @!busy (reset! !done-click (str (random-uuid))))) nil))
+              ;; on-done! is set in queue contexts (/learn, subset-review) —
+              ;; advances !queue-idx so the next item loads after the server
+              ;; completes. Registered inside `(when t)` per CLAUDE.md "Local
+              ;; mutations that unmount the containing component MUST move
+              ;; into e/on-unmount". busy is set only when on-done! is present
+              ;; so doc-context never holds the branch.
+              ;;
+              ;; Electric stabilizes the `let [!busy ...]` binding across
+              ;; topic-id changes, so the same atom persists into the next
+              ;; queue item. Reset busy in the SAME on-unmount callback as
+              ;; on-done! — both writes settle before the next Electric tick,
+              ;; so the new topic renders with busy=false (button enabled).
+              ;; Splitting into two e/on-unmount calls would risk a frame
+              ;; where the new topic reads busy=true.
+              (let [[t _] (e/Token done-click)]
+                (when t
+                  (when on-done!
+                    (reset! !busy true)
+                    (e/on-unmount (fn [] (reset! !busy false) (on-done!))))
+                  (case (e/server (e/Offload #(do (db/done-topic! topic-id) :ok)))
+                    (case (e/server (swap! (us/get-atom user-id :refresh) inc))
+                      (t))))))
 
           ;; Done status: show Restore button
           (let [!restore-click (atom nil)
@@ -82,7 +131,7 @@
                   (case (e/server (swap! (us/get-atom user-id :refresh) inc))
                     (if (and navigate! origin)
                       (case (navigate! origin) (t))
-                      (t)))))))))
+                      (t))))))))))
 
       ;; Delete button — hidden, triggered via overflow menu proxy
       (when (some? extract-status)

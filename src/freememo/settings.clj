@@ -32,6 +32,8 @@
 (def ANKI_HEADER_TEXT "anki_header_text")
 (def ANKI_USE_TAGS "anki_use_tags")
 (def ANKI_TAGS "anki_tags")
+(def ANKI_BASIC_FIELDS "anki_basic_fields")
+(def ANKI_CLOZE_FIELDS "anki_cloze_fields")
 (def ANKI_SOURCE_FIELD "anki_source_field")
 (def ANKI_IMAGES_FRONT_FIELD "anki_images_front_field")
 (def ANKI_IMAGES_BACK_FIELD "anki_images_back_field")
@@ -52,6 +54,7 @@
 (def ENABLE_AI_SCAN_BUTTON "enable_ai_scan_button")
 (def ENABLE_PDFBOX_BUTTON "enable_pdfbox_button")
 (def ENABLE_PDFJS_BUTTON "enable_pdfjs_button")
+(def ZOTERO_ENABLED "zotero_enabled")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
 
 (defn get-email-updates [user-id]
@@ -218,6 +221,40 @@
     (let [raw (db/get-setting user-id ANKI_TAGS)]
       (if (seq raw) (clojure.edn/read-string raw) []))
     (catch Exception _ [])))
+
+(defn get-anki-basic-fields
+  "User-level default field ordering for basic cards. Vector of field names
+   (e.g. [\"Front\" \"Back\"]). Empty vector when unset."
+  [user-id]
+  (try
+    (let [raw (db/get-setting user-id ANKI_BASIC_FIELDS)]
+      (if (seq raw) (vec (clojure.edn/read-string raw)) []))
+    (catch Exception _ [])))
+
+(defn save-anki-basic-fields [user-id fields]
+  (try
+    (db/set-setting user-id ANKI_BASIC_FIELDS (pr-str (vec (or fields []))))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-anki-basic-fields} e)
+      {:success false :error "Failed to save Anki basic fields"})))
+
+(defn get-anki-cloze-fields
+  "User-level default field ordering for cloze cards. Vector of field names
+   (e.g. [\"Text\"]). Empty vector when unset."
+  [user-id]
+  (try
+    (let [raw (db/get-setting user-id ANKI_CLOZE_FIELDS)]
+      (if (seq raw) (vec (clojure.edn/read-string raw)) []))
+    (catch Exception _ [])))
+
+(defn save-anki-cloze-fields [user-id fields]
+  (try
+    (db/set-setting user-id ANKI_CLOZE_FIELDS (pr-str (vec (or fields []))))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-anki-cloze-fields} e)
+      {:success false :error "Failed to save Anki cloze fields"})))
 
 (defn get-anki-source-field [user-id]
   (or (db/get-setting user-id ANKI_SOURCE_FIELD) "Source"))
@@ -658,3 +695,20 @@ IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return
     (catch Exception e
       (tel/error! {:id ::reset-ocr-prompt} e)
       {:success false :error "Failed to reset OCR prompt"})))
+
+;; ── Zotero (per-user; values are stored as strings) ─────────────────
+
+(defn zotero-enabled?
+  "Single read site for the per-user Zotero feature flag.
+   Pre:  user-id non-nil.
+   Post: boolean — true when the user has explicitly enabled Zotero import."
+  [user-id]
+  (= "true" (db/get-setting user-id ZOTERO_ENABLED)))
+
+(defn save-zotero-enabled [user-id value]
+  (try
+    (db/set-setting user-id ZOTERO_ENABLED (str (boolean value)))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-zotero-enabled} e)
+      {:success false :error "Failed to save Zotero enabled"})))

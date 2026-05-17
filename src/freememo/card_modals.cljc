@@ -339,8 +339,9 @@
                    (.click btn)))))
           nil)
         (dom/div
-          (dom/props {:style {:background "var(--color-bg-card)" :border-radius "var(--radius-lg)" :padding "var(--sp-6)"
-                              :width "40vw" #_"650px" :box-shadow "0 4px 20px rgba(0,0,0,0.25)"
+          (dom/props {:class "card-modal-inner"
+                      :style {:background "var(--color-bg-card)" :border-radius "var(--radius-lg)" :padding "var(--sp-6)"
+                              :box-shadow "0 4px 20px rgba(0,0,0,0.25)"
                               :pointer-events "auto"}})
           (dom/On "pointerdown"
             (fn [e]
@@ -485,8 +486,9 @@
                    (.click btn)))))
           nil)
         (dom/div
-          (dom/props {:style {:background "var(--color-bg-card)" :border-radius "var(--radius-lg)" :padding "var(--sp-6)"
-                              :width "40vw" :box-shadow "0 4px 20px rgba(0,0,0,0.25)"
+          (dom/props {:class "card-modal-inner"
+                      :style {:background "var(--color-bg-card)" :border-radius "var(--radius-lg)" :padding "var(--sp-6)"
+                              :box-shadow "0 4px 20px rgba(0,0,0,0.25)"
                               :pointer-events "auto"}})
           (dom/On "pointerdown"
             (fn [e]

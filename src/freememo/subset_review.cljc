@@ -138,10 +138,12 @@
               ;; Header
               (SubsetSessionHeader item !queue-idx idx total outstanding-remaining root-name on-exit!)
 
-              ;; Content — unified TopicPage; subset-review has no queue-ctx (no priority widget)
+              ;; Content — unified TopicPage; queue-ctx carries only :on-done! so the
+              ;; toolbar Done button advances the subset-review queue (matches /learn).
               (dom/div
                 (dom/props {:style {:flex "1" :min-height "0" :display "flex" :flex-direction "column" :overflow "hidden"}})
                 (dom/div
                   (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-                  (TopicPage user-id enc-key topic-id nil llm-enabled? nil))
+                  (TopicPage user-id enc-key topic-id nil llm-enabled?
+                    {:on-done! #(swap! !queue-idx inc)}))
                 (SubsetBottomBar topic-id outstanding? !queue-idx)))))))))

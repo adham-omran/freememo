@@ -34,7 +34,7 @@
                   "Pull from Anki")]
 
       (dom/button
-        (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-item toolbar-collapse-early"
+        (dom/props {:class "btn btn-sm btn-secondary"
                     :style {:background "var(--color-bg-subtle)"
                             :color "var(--color-text-primary)"
                             :font-weight "500"}

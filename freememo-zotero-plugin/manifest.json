@@ -1,0 +1,15 @@
+{
+  "manifest_version": 2,
+  "name": "FreeMemo for Zotero",
+  "version": "0.1.0",
+  "description": "Exposes Zotero items and attachments to the FreeMemo web app via CORS-permissive endpoints under /freememo on Zotero's loopback server.",
+  "homepage_url": "https://freememo.net",
+  "applications": {
+    "zotero": {
+      "id": "freememo@freememo.net",
+      "update_url": "https://github.com/adham-omran/electric-card-maker/releases/latest/download/updates.json",
+      "strict_min_version": "6.999",
+      "strict_max_version": "9.999"
+    }
+  }
+}

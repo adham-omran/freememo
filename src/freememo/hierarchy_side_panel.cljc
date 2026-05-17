@@ -167,6 +167,8 @@
                                   kind (or (:topics/kind topic) "basic")
                                   is-page (= kind "page")
                                   page-num (:topics/page_number topic)
+                                  topic-status (or (:topics/status topic) "active")
+                                  done? (= topic-status "done")
                                   expanded? (or (= id current-id)
                                               (contains? expanded-set id))
                                   badge (side-panel-badge kind)]
@@ -178,9 +180,12 @@
                                                       :padding-right "8px"
                                                       :cursor (if current? "default" "pointer")
                                                       :background (when current? "var(--color-bg-card)")
-                                                      :border-left (if current?
-                                                                     "3px solid var(--color-primary)"
+                                                      :border-left (if done?
+                                                                     "3px solid var(--color-success-lighter)"
                                                                      "3px solid transparent")
+                                                      :opacity (when done? "0.6")
+                                                      :outline (when current? "2px solid var(--color-primary)")
+                                                      :outline-offset (when current? "-2px")
                                                       :font-weight (if current? "600" "400")}})
                                   (dom/On "click"
                                     (fn [_]

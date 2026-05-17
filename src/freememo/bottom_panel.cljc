@@ -23,12 +23,15 @@
      :extract-status       string (extract mode only)
      :navigate!            optional fn (extract mode only)
      :origin               keyword tab (extract mode only)
+     :on-done!             optional 0-arg fn (queue contexts only); invoked
+                           after Done's server mutation completes — advances
+                           !queue-idx in /learn and subset-review
      :card-font-size       int
    refresh: combined card-refresh value (refresh + sync-mutations + card-mutations)."
   [{:keys [user-id enc-key topic-id root-topic-id page-number
            static-content parent-content
            context-mode context-tooltip llm-enabled?
-           extract-status navigate! origin card-font-size]} refresh]
+           extract-status navigate! origin on-done! card-font-size]} refresh]
   (e/client
     (dom/div
       ;; min-width: 0 lets this flex item shrink below its intrinsic content
@@ -53,7 +56,8 @@
                             parent-content (assoc :parent-content parent-content)
                             extract-status (assoc :extract-status extract-status)
                             navigate! (assoc :navigate! navigate!)
-                            origin (assoc :origin origin))]
+                            origin (assoc :origin origin)
+                            on-done! (assoc :on-done! on-done!))]
         (ContentToolbar toolbar-props refresh))
 
       (ContentCardTable {:topic-id topic-id

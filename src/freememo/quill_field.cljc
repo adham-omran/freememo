@@ -11,6 +11,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.quill-table-ui :as table-ui]
    [clojure.string :as str]))
 
 ;; ---------------------------------------------------------------------------
@@ -130,6 +131,11 @@
                                  (when on-change
                                    (on-change (.-innerHTML root))))))))))))
                delta-arg)))
+         ;; Wire the table toolbar handler + contextual action bar.
+         ;; The QuillField's toolbar config includes "table", so without
+         ;; this the button is rendered but inert. Cleanup is paired in
+         ;; destroy-quill-field! via table-ui/teardown!.
+         (table-ui/init! ed)
          ed))
      :clj nil))
 
@@ -140,6 +146,9 @@
   #?(:cljs
      (when ed
        (let [^js ed ed]
+         ;; Remove table action bar from document.body and unregister
+         ;; window scroll/resize listeners. Idempotent.
+         (table-ui/teardown! ed)
          (.off ed "text-change")
          (let [^js container (.-container ed)]
            (when container

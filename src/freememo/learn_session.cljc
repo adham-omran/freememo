@@ -6,7 +6,6 @@
    [freememo.logging :as log]
    [freememo.topic-page :refer [TopicPage]]
    [freememo.bibliography-form :as bibform]
-   [freememo.keyboard :as keyboard]
    #?(:clj [freememo.db :as db])))
 
 (defn advance-topic* [id]
@@ -20,28 +19,6 @@
 (defn postpone-topic* [id days]
   #?(:clj (db/postpone-topic! id days)
      :cljs nil))
-
-(defn done-topic* [id]
-  #?(:clj (db/done-topic! id)
-     :cljs nil))
-
-;; Done button — marks topic as fully processed
-(e/defn DoneButton [topic-id !queue-idx]
-  (e/client
-    (dom/button
-      (dom/props {:class "btn btn-sm btn-secondary"
-                  :style {:padding "4px 10px" :background "transparent"
-                          :color "var(--color-success-dark)" :border "1px solid var(--color-success-dark)"}
-                  :title "Mark as fully processed (extracted/carded everything useful)"})
-      (dom/text "Done")
-      (reset! keyboard/!done-btn-ref dom/node)
-      (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
-      (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
-            [t _error] (e/Token event)]
-        (when t
-          (e/on-unmount #(swap! !queue-idx inc))
-          (case (e/server (e/Offload #(do (done-topic* topic-id) :ok)))
-            (t)))))))
 
 ;; Shared bottom bar with Postpone + Next
 (e/defn BottomBar [topic-id !queue-idx]
@@ -211,7 +188,8 @@
                              :priority item-priority
                              :on-priority-change! (fn [new-val]
                                                     (update-topic-priority* topic-id new-val))
-                             :origin :learn})]
+                             :origin :learn
+                             :on-done! #(swap! !queue-idx inc)})]
 
             (when item
               (dom/div
@@ -219,7 +197,7 @@
                 (dom/div
                   (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
                   (TopicPage user-id enc-key topic-id
-                    (fn [& _] (swap! !queue-idx inc))
+                    navigate!
                     llm-enabled?
                     queue-ctx))
                 (BottomBar topic-id !queue-idx)))))))))
