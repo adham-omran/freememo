@@ -25,7 +25,7 @@
                           button inside PdfViewerComponent.
 
    Returns the current page number (int)."
-  [{:keys [user-id pdf-root-id initial-page layout
+  [{:keys [user-id pdf-root-id initial-page layout target-page
            on-page-change! on-layout-toggle!]}]
   (e/client
     (let [!current-page   (atom (or initial-page 1))
@@ -50,6 +50,7 @@
             (PdfViewerComponent
               {:document-id pdf-root-id
                :initial-page initial-page
+               :target-page target-page
                :on-navigate! (fn [p]
                                (reset! !page-to-save p)
                                (when on-page-change! (on-page-change! p)))

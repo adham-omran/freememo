@@ -245,6 +245,17 @@
               !current-page   (atom initial-page)
               current-page    (e/watch !current-page)
 
+              ;; Same-doc page-jump channel from HierarchySidePanel.
+              ;; Hierarchy resets {:topic-id pdf-root-id :page n} on sibling-page
+              ;; click; we derive target-page for PdfPane (which calls
+              ;; viewer/go-to-page!) and clear nav-target one tick later so the
+              ;; viewer doesn't snap back if the user navigates manually.
+              !nav-target     (atom nil)
+              nav-target      (e/watch !nav-target)
+              target-page     (when (and is-pdf? pdf-root-id nav-target
+                                      (= (:topic-id nav-target) pdf-root-id))
+                                (:page nav-target))
+
               ;; Live page-info — re-derives as user navigates pages
               page-info       (e/server
                                 (when is-pdf?
@@ -340,8 +351,12 @@
               (dom/props {:style {:flex "1" :display "flex" :flex-direction "row"
                                   :min-height "0" :overflow "hidden"}})
 
+              ;; Clear nav-target after deriving target-page, so the viewer can
+              ;; navigate away manually without being snapped back.
+              (when target-page (reset! !nav-target nil))
+
               ;; LEFT: hierarchy side panel (manages its own open/collapsed state)
-              (HierarchySidePanel user-id page-topic-id root-topic-id navigate! nil)
+              (HierarchySidePanel user-id page-topic-id root-topic-id navigate! !nav-target)
 
               ;; RIGHT: content column
               (dom/div
@@ -381,6 +396,7 @@
                           (PdfPane {:user-id user-id
                                     :pdf-root-id pdf-root-id
                                     :initial-page initial-page
+                                    :target-page target-page
                                     :layout layout
                                     :on-page-change! (fn [p] (reset! !current-page p))
                                     :on-layout-toggle! toggle-layout!})))

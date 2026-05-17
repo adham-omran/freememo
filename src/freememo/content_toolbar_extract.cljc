@@ -55,8 +55,9 @@
               (when-some [token ?token]
                 (let [r (e/server (e/Offload #(do (db/done-topic! topic-id) :ok)))]
                   (when (some? r)
+                    (e/server (swap! (us/get-atom user-id :refresh) inc))
                     (token)
-                    (when navigate! (navigate! (or origin :learn))))))))
+                    (when (and navigate! origin) (navigate! origin)))))))
 
           ;; Done status: show Restore button
           (let [!restore-click (atom nil)
@@ -74,8 +75,9 @@
               (when-some [token ?token]
                 (let [r (e/server (e/Offload #(do (db/restore-topic! topic-id) :ok)))]
                   (when (some? r)
+                    (e/server (swap! (us/get-atom user-id :refresh) inc))
                     (token)
-                    (when navigate! (navigate! (or origin :learn))))))))))
+                    (when (and navigate! origin) (navigate! origin)))))))))
 
       ;; Delete button — hidden, triggered via overflow menu proxy
       (when (some? extract-status)
