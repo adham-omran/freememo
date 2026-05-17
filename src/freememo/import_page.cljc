@@ -66,8 +66,8 @@
               (.format ldt fmt)))
      :cljs nil))
 
-(defn create-web-topic* [user-id title html source-url]
-  #?(:clj (db/create-web-topic! user-id title (cleaner/clean-html html) source-url)
+(defn create-web-topic* [user-id title html bib]
+  #?(:clj (db/create-web-topic! user-id title (cleaner/clean-html html) bib)
      :cljs nil))
 
 (defn clean-html* [html]
@@ -174,7 +174,8 @@
                                                 (let [topic-id (create-web-topic* user-id
                                                                  (:title fetch-result)
                                                                  (:html fetch-result)
-                                                                 (:url fetch-result))]
+                                                                 {:url (:url fetch-result)
+                                                                  :source-type (:source-type fetch-result)})]
                                                   (if topic-id
                                                     (do (log/log-info (str "URL import topic created topic-id=" topic-id " url=" url-val))
                                                         {:ok topic-id})
@@ -629,8 +630,8 @@
                       (if (and (seq title-val) (seq html-val))
                         (let [result (e/server
                                        (e/Offload
-                                         #(let [tid (create-web-topic* user-id title-val html-val
-                                                      (when (seq url-val) url-val))]
+                                         #(let [bib (when (seq url-val) {:url url-val})
+                                                tid (create-web-topic* user-id title-val html-val bib)]
                                             (if tid {:ok tid} {:err "Failed to save article"}))))]
                           (when (some? result)
                             (if-let [tid (:ok result)]

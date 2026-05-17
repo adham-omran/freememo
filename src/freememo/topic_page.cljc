@@ -21,6 +21,7 @@
    [freememo.pdf-pane :refer [PdfPane]]
    [freememo.editor-pane :refer [EditorPane]]
    [freememo.bottom-panel :refer [BottomPanel]]
+   [freememo.bibliography-form :as bibform :refer [BibliographyForm]]
    [freememo.keyboard :as keyboard]
    [freememo.navigation :as nav]
    [freememo.util :as util]
@@ -113,7 +114,7 @@
 ;; (The hierarchy hamburger lives inside HierarchySidePanel itself.)
 ;; ---------------------------------------------------------------------------
 
-(e/defn TitleBar [user-id pdf-root-id refresh page-info]
+(e/defn TitleBar [user-id pdf-root-id refresh page-info !show-bib]
   (e/client
     (let [current-title  (e/server (get-topic-title* refresh pdf-root-id))
           !editing-title (atom false)
@@ -123,6 +124,15 @@
                             :padding "6px 12px" :flex-shrink "0"
                             :background "var(--color-bg-subtle)"
                             :border-bottom "1px solid var(--color-border)"}})
+
+        ;; Bibliography
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-secondary"
+                      :style {:padding "2px 8px" :font-size "13px" :line-height "1"
+                              :flex-shrink "0"}
+                      :data-tooltip "Edit bibliography"})
+          (dom/text "Bibliography")
+          (dom/On "click" (fn [_] (reset! !show-bib true)) nil))
 
         ;; Title — editable in place
         (if editing-title
@@ -252,6 +262,9 @@
                                   static-content)
 
               ;; UI state
+              !show-bib        (atom false)
+              show-bib?        (e/watch !show-bib)
+              bib-topic-id     (or pdf-root-id root-topic-id)
               !top-pct         (atom (default-split-pct))
               top-pct          (e/watch !top-pct)
 
@@ -283,7 +296,42 @@
 
             ;; Title bar (PDF only) — non-PDFs have no header row
             (when is-pdf?
-              (TitleBar user-id pdf-root-id refresh page-info))
+              (TitleBar user-id pdf-root-id refresh page-info !show-bib))
+
+            ;; Bibliography button row — non-PDF only (PDF gets it in TitleBar).
+            ;; Hamburger lives inside HierarchySidePanel post-refactor, so this
+            ;; is the only top-bar affordance non-PDF topics need.
+            (when-not is-pdf?
+              (dom/div
+                (dom/props {:style {:display "flex" :justify-content "flex-end"
+                                    :padding "4px 12px" :flex-shrink "0"
+                                    :border-bottom "1px solid var(--color-border)"}})
+                (dom/button
+                  (dom/props {:class "btn btn-sm btn-secondary"
+                              :style {:padding "2px 8px" :font-size "13px" :line-height "1"}
+                              :data-tooltip "Edit bibliography"})
+                  (dom/text "Bibliography")
+                  (dom/On "click" (fn [_] (reset! !show-bib true)) nil))))
+
+            ;; Citation row — visible when the topic has a sources row
+            (let [citation (e/server (bibform/get-topic-citation* refresh user-id bib-topic-id))]
+              (when citation
+                (dom/div
+                  (dom/props {:style {:padding "6px 12px"
+                                      :font-size "12px"
+                                      :color "var(--color-text-secondary)"
+                                      :background "var(--color-bg-subtle)"
+                                      :border-bottom "1px solid var(--color-border)"
+                                      :flex-shrink "0"
+                                      :overflow "hidden"
+                                      :text-overflow "ellipsis"
+                                      :white-space "nowrap"}
+                              :data-tooltip citation})
+                  (dom/text citation))))
+
+            ;; Bibliography modal — overlays everything when shown
+            (when show-bib?
+              (BibliographyForm !show-bib user-id bib-topic-id))
 
             ;; Body row: side panel | content column
             (dom/div
@@ -291,7 +339,7 @@
                                   :min-height "0" :overflow "hidden"}})
 
               ;; LEFT: hierarchy side panel (manages its own open/collapsed state)
-              (HierarchySidePanel user-id page-topic-id navigate! nil)
+              (HierarchySidePanel user-id page-topic-id root-topic-id navigate! nil)
 
               ;; RIGHT: content column
               (dom/div
@@ -392,4 +440,4 @@
                   card-refresh))
 
               ;; PIN SIDE PANEL: collapsible right-side pins for current topic
-              (PinSidePanel page-topic-id user-id))))))))
+              (PinSidePanel page-topic-id root-topic-id user-id))))))))

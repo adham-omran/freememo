@@ -6,21 +6,16 @@
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
    [freememo.navigation :as nav]
+   [freememo.bibliography-form :as bibform]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])))
-
-(defn kind-badge [kind]
-  (case kind
-    "pdf" ["PDF" "var(--color-badge-pdf)"]
-    "epub" ["EPUB" "var(--color-badge-epub)"]
-    ("web" "wikipedia") ["Web" "var(--color-badge-web)"]
-    "markdown" ["MD" "var(--color-badge-web)"]
-    ["Doc" "var(--color-badge-epub)"]))
 
 (defn parse-row [row]
   {:id (:topics/id row)
    :title (or (:topics/title row) "Untitled")
    :kind (or (:topics/kind row) "basic")
+   :source-container (:sources/container_title row)
+   :source-title (:sources/title row)
    :created-at (:topics/created_at row)
    :total-items (or (:total_items row) 0)
    :done-items (or (:done_items row) 0)
@@ -178,8 +173,8 @@
                     (e/for [i (Tape offset limit)]
                       (let [item (nth sorted i nil)]
                         (when item
-                          (let [{:keys [id title kind total-items done-items total-cards synced-cards]} item
-                                [badge-text badge-color] (kind-badge kind)
+                          (let [{:keys [id title kind source-container total-items done-items total-cards synced-cards]} item
+                                [badge-text badge-color] (bibform/topic-badge kind source-container)
                                 is-pdf? (= kind "pdf")]
                             (dom/tr
                               (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)" :height (str row-height "px")

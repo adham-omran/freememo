@@ -9,6 +9,7 @@
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])))
 
+
 ;; Section anchor ids + sidebar labels, in display order.
 ;; Storage is folded into the Account tab.
 (def section-defs
@@ -284,6 +285,12 @@
               server-source-field (e/server (settings/get-anki-source-field user-id))
               !source-field (atom server-source-field)
               source-field (e/watch !source-field)
+              server-bib-mode (e/server (settings/get-bibliography-display-mode user-id))
+              !bib-mode (atom server-bib-mode)
+              bib-mode (e/watch !bib-mode)
+              server-bib-field (e/server (settings/get-bibliography-field-name user-id))
+              !bib-field (atom server-bib-field)
+              bib-field (e/watch !bib-field)
               server-auto-mode (e/server (settings/get-anki-auto-load-mode user-id))
               !auto-mode (atom server-auto-mode)
               auto-mode (e/watch !auto-mode)
@@ -366,6 +373,91 @@
                       (token))))
                 (dom/div (dom/props {:class "hint"})
                   (dom/text "Anki field name that receives the source reference. Defaults to \"Source\"."))))
+
+            ;; Bibliography Display Mode
+            (dom/div
+              (dom/props {:class "field"})
+              (dom/label (dom/props {:class "label"}) (dom/text "Bibliography Display Mode"))
+              (dom/div
+                (dom/props {:style {:display "flex" :flex-direction "column" :gap "10px" :margin-top "4px"}})
+                (dom/label
+                  (dom/props {:style {:display "flex" :align-items "flex-start" :gap "8px" :cursor "pointer"}})
+                  (dom/input
+                    (dom/props {:type "radio" :name "bibliography-display-mode" :value "off"
+                                :checked (= bib-mode "off")
+                                :style {:margin-top "3px"}})
+                    (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                          [?token _] (e/Token change-event)]
+                      (when (some? change-event)
+                        (reset! !bib-mode change-event))
+                      (when-some [token ?token]
+                        (e/server (settings/save-bibliography-display-mode user-id change-event))
+                        (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                        (token))))
+                  (dom/div
+                    (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
+                      (dom/text "Off"))
+                    (dom/div (dom/props {:class "hint"})
+                      (dom/text "No bibliography in Anki output"))))
+                (dom/label
+                  (dom/props {:style {:display "flex" :align-items "flex-start" :gap "8px" :cursor "pointer"}})
+                  (dom/input
+                    (dom/props {:type "radio" :name "bibliography-display-mode" :value "append"
+                                :checked (= bib-mode "append")
+                                :style {:margin-top "3px"}})
+                    (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                          [?token _] (e/Token change-event)]
+                      (when (some? change-event)
+                        (reset! !bib-mode change-event))
+                      (when-some [token ?token]
+                        (e/server (settings/save-bibliography-display-mode user-id change-event))
+                        (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                        (token))))
+                  (dom/div
+                    (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
+                      (dom/text "Append to card"))
+                    (dom/div (dom/props {:class "hint"})
+                      (dom/text "Citation appended below the card content during Anki sync"))))
+                (dom/label
+                  (dom/props {:style {:display "flex" :align-items "flex-start" :gap "8px" :cursor "pointer"}})
+                  (dom/input
+                    (dom/props {:type "radio" :name "bibliography-display-mode" :value "field"
+                                :checked (= bib-mode "field")
+                                :style {:margin-top "3px"}})
+                    (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                          [?token _] (e/Token change-event)]
+                      (when (some? change-event)
+                        (reset! !bib-mode change-event))
+                      (when-some [token ?token]
+                        (e/server (settings/save-bibliography-display-mode user-id change-event))
+                        (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                        (token))))
+                  (dom/div
+                    (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
+                      (dom/text "Separate field"))
+                    (dom/div (dom/props {:class "hint"})
+                      (dom/text "Citation sent as a separate Anki field"))))))
+
+            ;; Bibliography Field Name — only meaningful in "field" mode
+            (when (= bib-mode "field")
+              (dom/div
+                (dom/props {:class "field"})
+                (dom/label (dom/props {:class "label"}) (dom/text "Bibliography Field Name"))
+                (dom/input
+                  (dom/props {:type "text"
+                              :value bib-field
+                              :placeholder "Bibliography"
+                              :class "input"
+                              :style {:width "240px"}})
+                  (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                        [?token _] (e/Token change-event)]
+                    (when (some? change-event)
+                      (reset! !bib-field change-event))
+                    (when-some [token ?token]
+                      (e/server (settings/save-bibliography-field-name user-id change-event))
+                      (token))))
+                (dom/div (dom/props {:class "hint"})
+                  (dom/text "Anki field name that receives the citation. Defaults to \"Bibliography\". When set to the same field as Source, the two values are combined in append style."))))
 
             ;; Image Display Mode — how pinned images are routed to Anki on push
             (dom/div

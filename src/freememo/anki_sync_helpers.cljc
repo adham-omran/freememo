@@ -28,13 +28,14 @@
 
 (defn strip-html
   "Remove all HTML tags and push-time decorations from Anki field text.
-   Strips: fm-header tagged headers, source suffix (<hr>...), then all remaining HTML tags."
+   Strips: fm-header tagged headers, source/bibliography suffix (<hr>...),
+   then all remaining HTML tags."
   [text]
   (if (str/blank? text)
     text
     (-> text
       (str/replace #"<p[^>]*class=\"fm-header\"[^>]*>.*?</p>" "") ;; strip tagged header
-      (str/replace #"\n?<hr[^>]*class=\"fm-source\"[^>]*>[\s\S]*$" "") ;; strip tagged source
+      (str/replace #"\n?<hr[^>]*class=\"fm-(?:source|bibliography)\"[^>]*>[\s\S]*$" "") ;; strip tagged source/bib block
       (str/replace #"<br\s*/?>" "\n") ;; preserve line breaks
       (str/replace #"<[^>]*>" "") ;; strip all remaining tags
       str/trim)))
@@ -45,6 +46,47 @@
   (if (and (not (str/blank? source-ref)))
     (str content "\n<hr class=\"fm-source\"><small style='color:#999'>Source: " source-ref "</small>")
     content))
+
+(declare html-escape)
+
+(defn format-bibliography-html
+  "Render a CSL map as the pre-wrapped HTML used in both Bibliography append
+   and field modes. Title becomes an <a href=URL> when csl.URL is present.
+   Returns nil for a blank citation. Server-side only — title/author/URL are
+   HTML-escaped here, so callers must NOT double-escape."
+  [csl]
+  #?(:clj
+     (when (map? csl)
+       (let [title       (some-> (:title csl) str/trim not-empty)
+             url         (some-> (:URL csl) str/trim not-empty)
+             first-auth  (first (:author csl))
+             author      (or (some-> (:family first-auth) str/trim not-empty)
+                           (some-> (:given first-auth) str/trim not-empty))
+             year        (some-> csl :issued :date-parts first first)
+             title-html  (when title
+                           (if url
+                             (str "<a href=\"" (html-escape url) "\">"
+                               (html-escape title) "</a>")
+                             (html-escape title)))
+             author-html (when author (html-escape author))
+             year-html   (when year (str (when author " ") "(" year ")"))
+             dash        (when (and title-html (or author-html year-html)) " — ")
+             body        (str (or title-html "")
+                           (or dash "")
+                           (or author-html "")
+                           (or year-html ""))]
+         (when (seq body)
+           (str "<small style='color:#999'>Bibliography: " body "</small>"))))
+     :cljs nil))
+
+(defn append-bibliography
+  "Append pre-wrapped bibliography HTML to card content when
+   bibliography-display-mode is 'append'. The HTML is built upstream by
+   format-bibliography-html and already includes the <small> wrapper."
+  [content bib-html]
+  (if (str/blank? bib-html)
+    content
+    (str content "\n<hr class=\"fm-bibliography\">" bib-html)))
 
 #?(:cljs
    (defn to-future! [token task]
@@ -244,7 +286,7 @@
         base (or app-base-url default-app-base-url)
         title topic-title
         page (:page_number card)
-        url (str base "/viewer/topic/" (:topic_id card))
+        url (str base "/viewer/topic/" (:flashcards/topic_id card))
         anchor-text (if page
                       (str title " - " page)
                       title)]
@@ -256,11 +298,13 @@
      "Build an AnkiConnect note map for addNote.
       settings = {:deck :basic-model :cloze-model :basic-fields :cloze-fields
                   :allow-dupes :use-header :header-text :tags :source-display-mode
+                  :bibliography-display-mode :bibliography-field-name :bibliography-html
                   :images-front-field :images-back-field :image-display-mode}
       filename-map = {media-id -> \"<id>.<ext>\"} — pre-uploaded filenames for src rewrite."
      [card settings filename-map]
      (let [{:keys [deck basic-model cloze-model basic-fields cloze-fields
                    allow-dupes use-header header-text tags source-display-mode
+                   bibliography-display-mode bibliography-html
                    images-front-field images-back-field image-display-mode]} settings
            kind (:flashcards/kind card)
            basic? (= kind "basic")
@@ -269,6 +313,13 @@
            source-ref (build-source-anchor card settings)
            append-source? (and (= source-display-mode "append") (not (str/blank? source-ref)))
            field-source? (and (= source-display-mode "field") (not (str/blank? source-ref)))
+           append-bib? (and (= bibliography-display-mode "append") (not (str/blank? bibliography-html)))
+           field-bib? (and (= bibliography-display-mode "field") (not (str/blank? bibliography-html)))
+           src-field-key (or (:source-field settings) "Source")
+           bib-field-name (or (:bibliography-field-name settings) "Bibliography")
+           same-field? (and field-source? field-bib?
+                         (= (str/lower-case (str/trim src-field-key))
+                           (str/lower-case (str/trim bib-field-name))))
            field-mode? (= image-display-mode "field")
            ;; Rewrite /api/media/<id> → filename in all field HTML
            raw-front (wrap-p (or (:flashcards/question card) ""))
@@ -277,31 +328,39 @@
            rw-front (rewrite-media-srcs raw-front filename-map)
            rw-back (rewrite-media-srcs raw-back filename-map)
            rw-cloze (rewrite-media-srcs raw-cloze filename-map)
-           ;; Basic field map (with optional header, source, and field-mode image split)
+           ;; Basic field map (with optional header, source, bibliography, and field-mode image split)
            field-map
            (if basic?
              (let [front-html (prepend-header rw-front use-header header-text)
-                   back-html (if append-source?
-                               (append-source rw-back source-ref)
-                               rw-back)
+                   ;; Source-first, Bibliography-second append order (footnote convention).
+                   back-html (cond-> rw-back
+                               append-source? (append-source source-ref)
+                               append-bib? (append-bibliography bibliography-html))
                    ;; Field mode: extract <img> from front/back, put in dedicated fields
                    main-front (if field-mode? (remove-img-tags front-html) front-html)
                    main-back (if field-mode? (remove-img-tags back-html) back-html)
                    imgs-front (when field-mode? (extract-img-tags front-html))
-                   imgs-back (when field-mode? (extract-img-tags back-html))]
+                   imgs-back (when field-mode? (extract-img-tags back-html))
+                   src-field-html (wrap-p source-ref)]
                (cond-> {(first fields) main-front
                         (second fields) main-back}
-                 field-source? (assoc (or (:source-field settings) "Source") (wrap-p source-ref))
+                 (and field-source? (not same-field?)) (assoc src-field-key src-field-html)
+                 (and field-bib? (not same-field?)) (assoc bib-field-name bibliography-html)
+                 same-field? (assoc src-field-key
+                               (append-bibliography src-field-html bibliography-html))
                  (and field-mode? (seq imgs-front) (seq images-front-field))
                  (assoc images-front-field imgs-front)
                  (and field-mode? (seq imgs-back) (seq images-back-field))
                  (assoc images-back-field imgs-back)))
              ;; Cloze — F2-uniform: all <img> stay in the Text (cloze) field
-             (let [cloze-html (if append-source?
-                                (append-source (prepend-header rw-cloze use-header header-text) source-ref)
-                                (prepend-header rw-cloze use-header header-text))]
+             (let [cloze-html (cond-> (prepend-header rw-cloze use-header header-text)
+                                append-source? (append-source source-ref)
+                                append-bib? (append-bibliography bibliography-html))]
                (cond-> {(first fields) cloze-html}
-                 field-source? (assoc (or (:source-field settings) "Source") source-ref))))]
+                 (and field-source? (not same-field?)) (assoc src-field-key source-ref)
+                 (and field-bib? (not same-field?)) (assoc bib-field-name bibliography-html)
+                 same-field? (assoc src-field-key
+                               (append-bibliography source-ref bibliography-html)))))]
        (cond-> {:deckName deck
                 :modelName model
                 :fields field-map
@@ -316,6 +375,7 @@
       filename-map = {media-id -> \"<id>.<ext>\"} — pre-uploaded filenames for src rewrite."
      [card settings filename-map]
      (let [{:keys [basic-fields cloze-fields use-header header-text source-display-mode
+                   bibliography-display-mode bibliography-html
                    images-front-field images-back-field image-display-mode]} settings
            kind (:flashcards/kind card)
            basic? (= kind "basic")
@@ -323,31 +383,45 @@
            source-ref (build-source-anchor card settings)
            append-src? (and (= source-display-mode "append") (not (str/blank? source-ref)))
            field-src? (and (= source-display-mode "field") (not (str/blank? source-ref)))
+           append-bib? (and (= bibliography-display-mode "append") (not (str/blank? bibliography-html)))
+           field-bib? (and (= bibliography-display-mode "field") (not (str/blank? bibliography-html)))
+           src-field-key (or (:source-field settings) "Source")
+           bib-field-name (or (:bibliography-field-name settings) "Bibliography")
+           same-field? (and field-src? field-bib?
+                         (= (str/lower-case (str/trim src-field-key))
+                           (str/lower-case (str/trim bib-field-name))))
            field-mode? (= image-display-mode "field")
            rw-front (rewrite-media-srcs (wrap-p (or (:flashcards/question card) "")) filename-map)
            rw-back (rewrite-media-srcs (wrap-p (or (:flashcards/answer card) "")) filename-map)
            rw-cloze (rewrite-media-srcs (or (:flashcards/cloze card) "") filename-map)]
        (if basic?
          (let [front-html (prepend-header rw-front use-header header-text)
-               back-html (if append-src?
-                           (append-source rw-back source-ref)
-                           rw-back)
+               back-html (cond-> rw-back
+                           append-src? (append-source source-ref)
+                           append-bib? (append-bibliography bibliography-html))
                main-front (if field-mode? (remove-img-tags front-html) front-html)
                main-back (if field-mode? (remove-img-tags back-html) back-html)
                imgs-front (when field-mode? (extract-img-tags front-html))
-               imgs-back (when field-mode? (extract-img-tags back-html))]
+               imgs-back (when field-mode? (extract-img-tags back-html))
+               src-field-html (wrap-p source-ref)]
            (cond-> {(first fields) main-front
                     (second fields) main-back}
-             field-src? (assoc (or (:source-field settings) "Source") (wrap-p source-ref))
+             (and field-src? (not same-field?)) (assoc src-field-key src-field-html)
+             (and field-bib? (not same-field?)) (assoc bib-field-name bibliography-html)
+             same-field? (assoc src-field-key
+                           (append-bibliography src-field-html bibliography-html))
              (and field-mode? (seq imgs-front) (seq images-front-field))
              (assoc images-front-field imgs-front)
              (and field-mode? (seq imgs-back) (seq images-back-field))
              (assoc images-back-field imgs-back)))
-         (let [cloze-html (if append-src?
-                            (append-source (prepend-header rw-cloze use-header header-text) source-ref)
-                            (prepend-header rw-cloze use-header header-text))]
+         (let [cloze-html (cond-> (prepend-header rw-cloze use-header header-text)
+                            append-src? (append-source source-ref)
+                            append-bib? (append-bibliography bibliography-html))]
            (cond-> {(first fields) cloze-html}
-             field-src? (assoc (or (:source-field settings) "Source") source-ref)))))))
+             (and field-src? (not same-field?)) (assoc src-field-key source-ref)
+             (and field-bib? (not same-field?)) (assoc bib-field-name bibliography-html)
+             same-field? (assoc src-field-key
+                           (append-bibliography source-ref bibliography-html))))))))
 
 #?(:cljs
    (defn do-anki-push!

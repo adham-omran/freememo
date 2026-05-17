@@ -45,7 +45,7 @@ Open http://localhost:8080.
 
 Navigate to **Settings** in the UI and enter your OpenAI API key. All settings are persisted per-user in the database.
 
-> **Note**: OCR and flashcard generation require a per-user OpenAI API key (BYOK). There is no shared demo key — every user supplies their own.
+> **Note**: OCR and flashcard generation use a per-user OpenAI API key (BYOK) by default. Self-host operators MAY set the `OPENAI_DEMO_KEY` environment variable as a server-wide fallback; it is used only for users who have not set their own key in Settings.
 
 Sign-in uses Google OAuth. Self-host requires configuring `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` (or dropping a `resources/google_client.json` from Google Cloud Console). Without these, `/auth/google` returns 503.
 
@@ -85,6 +85,7 @@ Schema auto-creates on first startup (no migration framework). Configure via env
 | `GOOGLE_CLIENT_ID` | _(none)_ | Google OAuth client ID. Required for sign-in. |
 | `GOOGLE_CLIENT_SECRET` | _(none)_ | Google OAuth client secret. |
 | `GOOGLE_REDIRECT_URI` | `http://localhost:8080/auth/google/callback` | Must match the URI registered in Google Cloud Console. |
+| `OPENAI_DEMO_KEY` | _(none)_ | Server-wide fallback OpenAI API key. Used only when a user has not set their own key in Settings. |
 
 Alternative to the three `GOOGLE_*` envs: drop the OAuth client JSON downloaded from Google Cloud Console at `resources/google_client.json` (gitignored).
 

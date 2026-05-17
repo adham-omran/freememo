@@ -82,12 +82,14 @@
                   [row])))]
       (vec (walk scope-root 0)))))
 
-(e/defn HierarchySidePanel [user-id page-topic-id navigate! !nav-target]
+(e/defn HierarchySidePanel [user-id page-topic-id root-topic-id navigate! !nav-target]
   (e/client
-    ;; Frame isolation — remounts cleanly when page-topic-id changes, so
-    ;; !open? re-seeds from the new topic's saved state.
-    (e/for-by identity [tid [page-topic-id]]
-      (let [initial-open?   (e/server (settings/get-hierarchy-open user-id tid))
+    ;; Frame isolation — remounts only when root-topic-id changes (i.e. when
+    ;; navigating between documents). Page navigation within one document
+    ;; updates :current? reactively without remount, so !open? state and the
+    ;; DOM subtree persist across page scrolls.
+    (e/for-by identity [_k [root-topic-id]]
+      (let [initial-open?   (e/server (settings/get-hierarchy-open user-id root-topic-id))
             !open?          (atom initial-open?)
             open?           (e/watch !open?)
             !save           (atom nil)
@@ -95,7 +97,7 @@
             [?save-token _] (e/Token save-val)]
 
         (when-some [token ?save-token]
-          (e/server (settings/save-hierarchy-open user-id tid save-val))
+          (e/server (settings/save-hierarchy-open user-id root-topic-id save-val))
           (token))
 
         (dom/div
@@ -122,14 +124,14 @@
                 (dom/text "Hierarchy"))))
 
           (when open?
-            (if (nil? tid)
+            (if (nil? page-topic-id)
               (dom/div
                 (dom/props {:style {:padding "16px 12px" :font-size "13px"
                                     :color "var(--color-text-secondary)"}})
                 (dom/text "No page selected."))
 
               (let [tree-rev   (e/server (e/watch (us/get-atom user-id :tree-mutations)))
-                    data       (e/server (get-hierarchy-data* tree-rev user-id tid))
+                    data       (e/server (get-hierarchy-data* tree-rev user-id page-topic-id))
                     scope-root (:scope-root data)
                     current-id (:current-id data)
                     items      (vec (:items data))]

@@ -4,9 +4,10 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.navigation :as nav]
    #?(:clj [freememo.settings :as settings])
+   #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])))
 
-(defn get-api-key-status* [user-id enc-key]
+(defn get-api-key-status* [_refresh user-id enc-key]
   #?(:clj (settings/get-openai-api-key-status user-id enc-key)
      :cljs nil))
 
@@ -37,7 +38,8 @@
 
 (e/defn HomePage [navigate! user-id enc-key]
   (e/client
-    (let [api-status (e/server (get-api-key-status* user-id enc-key))
+    (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
+          api-status (e/server (get-api-key-status* settings-refresh user-id enc-key))
           configured? (:configured? api-status)
           queue-count (e/server (get-queue-count* user-id))
           total-count (e/server (get-total-count* user-id))

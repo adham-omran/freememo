@@ -9,6 +9,7 @@
    [freememo.navigation :as nav]
    [freememo.card-components :as card-components]
    [freememo.pdf-cache :as pdf-cache]
+   [freememo.bibliography-form :as bibform]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])))
 
@@ -122,14 +123,8 @@
           (conj result {:depth depth :topic topic
                         :has-children has-children :is-root is-root}))))))
 
-;; Badge for topic kind
-(defn kind-badge [kind]
-  (case kind
-    "pdf" ["PDF" "var(--color-badge-pdf)"]
-    "epub" ["EPUB" "var(--color-badge-epub)"]
-    ("web" "wikipedia") ["Web" "var(--color-badge-web)"]
-    "markdown" ["MD" "var(--color-badge-web)"]
-    ["Topic" "var(--color-badge-epub)"]))
+;; Badge helper — delegated to bibliography-form/topic-badge so wiki sources
+;; render as "Wikipedia" via container-title even when topic.kind='web'.
 
 ;; ---------------------------------------------------------------------------
 ;; DocumentRow — extracted from DocumentTreeView so Electric's macroexpander
@@ -145,9 +140,10 @@
           id (:topics/id topic)
           title (or (:topics/title topic) "(empty)")
           kind (or (:topics/kind topic) "basic")
+          source-container (:sources/container_title topic)
           topic-status (or (:topics/status topic) "active")
           expanded? (contains? expanded-set id)
-          [badge-text badge-color] (kind-badge kind)]
+          [badge-text badge-color] (bibform/topic-badge kind source-container)]
       (dom/tr
         (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)"
                             :height (str row-height "px")

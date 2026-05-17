@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.logging :as log]
    [freememo.topic-page :refer [TopicPage]]
+   [freememo.bibliography-form :as bibform]
    [freememo.keyboard :as keyboard]
    #?(:clj [freememo.db :as db])))
 
@@ -114,20 +115,12 @@
                 (swap! !queue-idx inc)
                 (js/setTimeout (fn [] (reset! !busy false)) 500)))))))))
 
-;; Badge display for topic kinds
-(defn kind-badge [kind]
-  (case kind
-    "pdf" ["PDF" "var(--color-badge-pdf)"]
-    "epub" ["EPUB" "var(--color-badge-epub)"]
-    ("web" "wikipedia") ["Web" "var(--color-badge-web)"]
-    "markdown" ["MD" "var(--color-badge-web)"]
-    ["Topic" "var(--color-badge-epub)"]))
-
 ;; Session header bar
 (e/defn SessionHeader [item !queue-idx navigate! idx total]
   (e/client
     (let [topic-id (:topics/id item)
           kind (:topics/kind item)
+          source-container (:sources/container_title item)
           parent-id (:topics/parent_id item)
           title (or (:topics/title item) "-")
           priority (or (:topics/priority item) 50)
@@ -138,7 +131,7 @@
                          (let [root-id (db/get-root-topic-id topic-id)]
                            (db/get-topic root-id))))
           root-title (when root-topic (:topics/title root-topic))
-          [type-label type-color] (kind-badge kind)]
+          [type-label type-color] (bibform/topic-badge kind source-container)]
 
       (dom/div
         (dom/props {:class "header-bar" :style {:gap "6px" :padding "2px var(--sp-3)"}})

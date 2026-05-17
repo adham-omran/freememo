@@ -6,6 +6,8 @@
    [freememo.db :as db]
    [freememo.settings :as settings]
    [freememo.user-state :as us]
+   [freememo.anki-sync-helpers :as helpers]
+   [freememo.bibliography-form :as bibform]
    [taoensso.telemere :as tel])
   (:import [java.util Base64]))
 
@@ -72,7 +74,8 @@
 
 (defn get-cards-for-sync
   "Get flashcards for Anki sync. Also returns the current root topic title/kind
-   so the Source field reflects rename edits made since the modal was opened.
+   and pre-resolved bibliography (text + HTML) so the Source field and the
+   Bibliography field/append reflect edits made since the modal was opened.
    opts: {:user-id N, :topic-id N, :root-topic-id N}
    When topic-id is nil, returns all cards for the root topic."
   [{:keys [user-id topic-id root-topic-id]}]
@@ -87,17 +90,25 @@
                   (db/get-flashcards topic-id)
                   (db/get-all-flashcards root-topic-id))
           root-topic (when (and user-id root-topic-id)
-                       (db/get-topic-for-user user-id root-topic-id))]
+                       (db/get-topic-for-user user-id root-topic-id))
+          source-id (:topics/source_id root-topic)
+          source (when source-id (db/get-source source-id))
+          csl (:sources/csl source)
+          bib-text (bibform/format-citation csl)
+          bib-html (helpers/format-bibliography-html csl)]
       (tel/log! {:level :info
                  :id ::get-cards-for-sync.resolved
                  :data {:topic-title (:topics/title root-topic)
                         :topic-kind (:topics/kind root-topic)
-                        :card-count (count cards)}}
+                        :card-count (count cards)
+                        :has-bibliography (some? bib-text)}}
         "get-cards-for-sync resolved")
       {:success true
        :cards cards
        :topic-title (:topics/title root-topic)
-       :topic-kind (:topics/kind root-topic)})
+       :topic-kind (:topics/kind root-topic)
+       :bibliography-text bib-text
+       :bibliography-html bib-html})
     (catch Exception e
       (tel/error! {:id ::get-cards-for-sync} e)
       {:success false :error (.getMessage e)})))
