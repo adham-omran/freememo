@@ -116,7 +116,30 @@
     [:line {:x1 "9" :x2 "15" :y1 "15" :y2 "15"}]]
 
    :loader-2
-   [[:path {:d "M21 12a9 9 0 1 1-6.219-8.56"}]]})
+   [[:path {:d "M21 12a9 9 0 1 1-6.219-8.56"}]]
+
+   :library
+   [[:path {:d "m16 6 4 14"}]
+    [:path {:d "M12 6v14"}]
+    [:path {:d "M8 8v12"}]
+    [:path {:d "M4 4v16"}]]
+
+   :scan-text
+   [[:path {:d "M3 7V5a2 2 0 0 1 2-2h2"}]
+    [:path {:d "M17 3h2a2 2 0 0 1 2 2v2"}]
+    [:path {:d "M21 17v2a2 2 0 0 1-2 2h-2"}]
+    [:path {:d "M7 21H5a2 2 0 0 1-2-2v-2"}]
+    [:path {:d "M7 8h8"}]
+    [:path {:d "M7 12h10"}]
+    [:path {:d "M7 16h6"}]]
+
+   :chevron-down
+   [[:path {:d "m6 9 6 6 6-6"}]]
+
+   :history
+   [[:path {:d "M3 12a9 9 0 1 0 3-6.7L3 8"}]
+    [:path {:d "M3 3v5h5"}]
+    [:path {:d "M12 7v5l4 2"}]]})
 
 (defn- icon-known? [name]
   (contains? icon-paths name))
@@ -146,9 +169,9 @@
       (when (icon-known? name)
         (e/for [[tag attrs] (e/diff-by hash (get icon-paths name))]
           (case tag
-            :path     (svg/path     (dom/props attrs))
-            :line     (svg/line     (dom/props attrs))
-            :circle   (svg/circle   (dom/props attrs))
-            :rect     (svg/rect     (dom/props attrs))
+            :path (svg/path (dom/props attrs))
+            :line (svg/line (dom/props attrs))
+            :circle (svg/circle (dom/props attrs))
+            :rect (svg/rect (dom/props attrs))
             :polyline (svg/polyline (dom/props attrs))
             nil))))))

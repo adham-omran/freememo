@@ -95,6 +95,12 @@
   #?(:clj (when topic-id (:topics/title (db/get-topic topic-id)))
      :cljs nil))
 
+(defn get-topic-status*
+  "Latest status for a topic id. Re-fetches on :meta-refresh."
+  [_meta-refresh topic-id]
+  #?(:clj (when topic-id (or (:topics/status (db/get-topic topic-id)) "active"))
+     :cljs nil))
+
 (defn rename-and-bump!
   "Atomic rename + bump both :refresh (for doc lists) and :tree-mutations
    (for side panel + library tree)."
@@ -114,11 +120,12 @@
 ;; (The hierarchy hamburger lives inside HierarchySidePanel itself.)
 ;; ---------------------------------------------------------------------------
 
-(e/defn TitleBar [user-id pdf-root-id refresh page-info !show-bib citation]
+(e/defn TitleBar [user-id pdf-root-id refresh page-info !show-bib citation pdf-root? pdf-status]
   (e/client
     (let [current-title (e/server (get-topic-title* refresh pdf-root-id))
           !editing-title (atom false)
-          editing-title (e/watch !editing-title)]
+          editing-title (e/watch !editing-title)
+          done? (= pdf-status "done")]
       (dom/div
         (dom/props {:class "title-bar"
                     :style {:display "flex" :align-items "baseline" :gap "14px"
@@ -135,6 +142,27 @@
                       :data-tooltip "Edit bibliography"})
           (dom/text "Bibliography")
           (dom/On "click" (fn [_] (reset! !show-bib true)) nil))
+
+        ;; PDF Done toggle — visible only at the PDF root (not on child pages).
+        ;; Flips topics.status between "active" and "done"; bumps :meta-refresh
+        ;; so the label updates without a page reload. Pages keep their own
+        ;; status independently (no cascade).
+        (when pdf-root?
+          (dom/button
+            (dom/props {:class "btn btn-sm btn-secondary"
+                        :style {:flex-shrink "0"}
+                        :data-tooltip (if done?
+                                        "Restore this PDF to the active queue"
+                                        "Mark this PDF as completed")})
+            (dom/text (if done? "Restore PDF" "Mark PDF Done"))
+            (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
+                  [t ?error] (e/Token event)]
+              (when t
+                (case (e/server (if done?
+                                  (db/restore-topic! pdf-root-id)
+                                  (db/done-topic! pdf-root-id)))
+                  (case (e/server (swap! (us/get-atom user-id :meta-refresh) inc))
+                    (t)))))))
 
         ;; Citation — italic caption framed by separator dots
         (when citation
@@ -340,11 +368,14 @@
                                 :min-height "0" :overflow "hidden"}})
 
             ;; Bibliography header — single line in both modes:
-            ;; PDF:     [Bibliography] citation? title [stats]
+            ;; PDF:     [Bibliography] [Mark PDF Done?] citation? title [stats]
             ;; non-PDF: [Bibliography] citation
-            (let [citation (e/server (bibform/get-topic-citation* refresh user-id bib-topic-id))]
+            (let [citation (e/server (bibform/get-topic-citation* refresh user-id bib-topic-id))
+                  pdf-root? (and is-pdf? (= kind "pdf"))
+                  pdf-status (e/server (when pdf-root?
+                                         (get-topic-status* meta-refresh pdf-root-id)))]
               (if is-pdf?
-                (TitleBar user-id pdf-root-id refresh page-info !show-bib citation)
+                (TitleBar user-id pdf-root-id refresh page-info !show-bib citation pdf-root? pdf-status)
                 (dom/div
                   (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
                                       :padding "6px 12px" :flex-shrink "0"
@@ -496,6 +527,7 @@
                    :extract-status (when-not is-pdf? extract-status)
                    :navigate! navigate!
                    :origin (:origin queue-ctx)
+                   :on-done! (:on-done! queue-ctx)
                    :card-font-size card-font-size}
                   card-refresh))
 

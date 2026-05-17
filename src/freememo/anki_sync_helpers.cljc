@@ -601,15 +601,46 @@
 
 (defn run-fetch-fields!
   "Fetch model field names from Anki and store in atom.
-   Atom values: :loading while in flight, vector of field names on success, [] on error."
-  [model-name !fields-atom]
+   Atom values: :loading while in flight, vector of field names on success, [] on error.
+
+   `preferred-fields` (optional) — vector of user-saved field ordering. When
+   every preferred name exists in the model's fetched fields, the atom is set
+   to `preferred-fields` instead of the fetched order; otherwise fetched wins.
+   Resolved once at modal open from per-doc preset → user-level setting; see
+   anki_sync_server/resolve-preferred-fields."
+  ([model-name !fields-atom]
+   (run-fetch-fields! model-name !fields-atom nil))
+  ([model-name !fields-atom preferred-fields]
+   #?(:cljs
+      (when model-name
+        (reset! !fields-atom :loading)
+        (do ((anki-call! "modelFieldNames" {:modelName model-name})
+             (fn [fields]
+               (let [fetched (vec (js->clj fields))
+                     pref (vec (or preferred-fields []))
+                     valid? (and (seq pref)
+                              (every? (fn [f] (some #{f} fetched)) pref))]
+                 (reset! !fields-atom (if valid? pref fetched))))
+             (fn [_] (reset! !fields-atom [])))
+          nil))
+      :clj nil)))
+
+(defn run-fetch-models!
+  "Fetch the list of model names from AnkiConnect and update status/models atoms.
+   Used by the Settings page field-defaults UI to check AnkiConnect reachability
+   and populate the model pickers. Sets :connecting → :connected | :error."
+  [!status !models !error]
   #?(:cljs
-     (when model-name
-       (reset! !fields-atom :loading)
-       (do ((anki-call! "modelFieldNames" {:modelName model-name})
-            (fn [fields] (reset! !fields-atom (vec (js->clj fields))))
-            (fn [_] (reset! !fields-atom [])))
-         nil))
+     (do (reset! !status :connecting)
+       (reset! !error nil)
+       ((anki-call! "modelNames" nil)
+        (fn [models]
+          (reset! !models (vec (js->clj models)))
+          (reset! !status :connected))
+        (fn [err]
+          (reset! !error (.-message err))
+          (reset! !status :error)))
+       nil)
      :clj nil))
 
 (defn run-push!

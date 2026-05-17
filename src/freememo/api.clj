@@ -16,6 +16,8 @@
    [freememo.wikipedia :as wiki]
    [freememo.markdown :as md]
    [freememo.url-validate :as url]
+   [freememo.csl :as csl]
+   [freememo.settings :as settings]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
    [clojure.string :as str]
@@ -291,13 +293,14 @@
 
           :else
           (if-let [entry (staging/claim! user-id upload-id)]
-            (let [{:keys [^bytes bytes filename flow]} entry]
+            (let [{:keys [^bytes bytes filename flow extra]} entry
+                  web-biblio (:web-biblio extra)]
               (case flow
                 :pdf
                 (let [result (pdf/save-pdf user-id filename bytes)]
                   (if (:success result)
                     (let [topic-id (:id result)]
-                      (try (biblio-import/prepare-biblio! user-id topic-id)
+                      (try (biblio-import/prepare-biblio! user-id topic-id web-biblio)
                            (catch Exception e
                              (tel/log! {:level :warn :id ::upload-staged-pdf-biblio}
                                (.getMessage e))))
@@ -342,6 +345,69 @@
       (catch Exception e
         (tel/error! {:id ::upload-staged-handler} e)
         (json-response 500 {:success false :error "Import failed. Please try again."})))
+    (json-response 401 {:success false :error "Not authenticated"})))
+
+;; ── /api/zotero/stage — accept PDF bytes from the FreeMemo Zotero plugin ──
+;;
+;; All Zotero I/O now lives in the browser, mediated by the FreeMemo
+;; for-Zotero plugin. The browser fetches bytes + CSL-JSON from the plugin's
+;; loopback endpoints and POSTs them here for staging. Server stays the
+;; trust boundary: it re-enforces the size cap and runs the CSL → web-biblio
+;; conversion before handing off to staging/stage!.
+
+(defn zotero-stage-handler
+  "POST /api/zotero/stage — multipart {file, filename?, csljson?}.
+   Pre:  authenticated; Zotero enabled in settings; file is PDF bytes from
+         the FreeMemo Zotero plugin; csljson is optional raw CSL-JSON for
+         the parent item (JSON-encoded string).
+   Post: {:success true :upload_id ... :flow \"pdf\" :filename :size}.
+   Blame: 413 when bytes exceed per-file cap (caller); 400 missing file;
+          401 unauthenticated; 403 Zotero disabled."
+  [request]
+  (if-let [user-id (require-auth request)]
+    (if-not (= "true" (db/get-setting user-id settings/ZOTERO_ENABLED))
+      (json-response 403 {:success false :error "Zotero is not enabled"})
+      (try
+        (if-let [file (get-in request [:params "file"])]
+          (let [filename    (or (not-empty (get-in request [:params "filename"]))
+                                (:filename file)
+                                "attachment.pdf")
+                csljson-str (get-in request [:params "csljson"])
+                csljson     (when (and csljson-str (not (str/blank? csljson-str)))
+                              (try (json/parse-string csljson-str true)
+                                   (catch Exception _ nil)))
+                web-biblio  (csl/csljson->web-biblio csljson)
+                ^bytes bytes (read-multipart-bytes (:tempfile file))
+                size        (alength bytes)
+                cap         (upload-byte-cap)]
+            (cond
+              (and cap (> size cap))
+              (do (log-upload-failure! ::zotero-stage-too-large request
+                    {:user-id user-id :filename filename :file-size size :limit cap})
+                  (json-response 413 {:success false
+                                      :error (str "File exceeds " cap " bytes")
+                                      :code "file-too-large"
+                                      :limit cap :incoming size}))
+
+              :else
+              (let [upload-id (staging/stage! user-id bytes filename :pdf
+                                {:web-biblio web-biblio
+                                 :source     :zotero})]
+                (json-response 200 {:success true
+                                    :upload_id upload-id
+                                    :flow      "pdf"
+                                    :filename  filename
+                                    :size      size}))))
+          (json-response 400 {:success false :error "Missing file"}))
+        (catch clojure.lang.ExceptionInfo e
+          (let [data (ex-data e)]
+            (if (quota/quota-error? data)
+              (quota-info->response data)
+              (do (tel/error! {:id ::zotero-stage} e)
+                  (json-response 500 {:success false :error "Stage failed"})))))
+        (catch Exception e
+          (tel/error! {:id ::zotero-stage} e)
+          (json-response 500 {:success false :error "Stage failed"}))))
     (json-response 401 {:success false :error "Not authenticated"})))
 
 (defn create-topic-handler [request]
@@ -544,6 +610,9 @@
 
       (and (= uri "/api/upload-staged") (= method :post))
       (upload-staged-handler request)
+
+      (and (= uri "/api/zotero/stage") (= method :post))
+      (zotero-stage-handler request)
 
       (and (= uri "/api/create-topic") (= method :post))
       (create-topic-handler request)

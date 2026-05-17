@@ -13,7 +13,7 @@
     (let [!show-export (atom false)
           show-export (e/watch !show-export)]
       (dom/button
-        (dom/props {:class "btn btn-sm btn-secondary toolbar-collapse-second"
+        (dom/props {:class "btn btn-sm btn-secondary"
                     :style {:font-weight "500"}
                     :aria-label "Export"
                     :data-tooltip "Export"})

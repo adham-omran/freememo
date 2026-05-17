@@ -40,6 +40,10 @@
        (when-let [{:keys [editor container]} @!editor-state]
          (let [^js ed editor
                ^js ct container]
+           ;; Tear down the table action bar (appended to document.body)
+           ;; and its window scroll/resize listeners. Idempotent; safe
+           ;; even if table-ui/init! never ran.
+           (table-ui/teardown! ed)
            (.off ed "text-change")
            (.off ed "selection-change")
            (remove-watch !import-status ::tooltip-btn)

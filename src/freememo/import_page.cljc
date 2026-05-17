@@ -1,13 +1,13 @@
 (ns freememo.import-page
-  "Import tab — Link, Upload, Paste, New Topic. Four entry cards each open
-   the unified ImportModal with a different :source-preset. All upload
-   data flows over HTTP endpoints in `freememo.api`; Electric drives the
-   reactive UI only."
+  "Import tab — Link, Upload, Paste, New Topic, Zotero. Each entry card
+   opens its respective modal. All upload data flows over HTTP endpoints
+   in `freememo.api`; Electric drives the reactive UI only."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
-   [freememo.import-modal :refer [ImportModal]]))
+   [freememo.import-modal :refer [ImportModal]]
+   [freememo.zotero-picker-modal :refer [ZoteroPickerModal]]))
 
 ;; ImportCard — single tile that opens its modal on click.
 ;; `icon` is a Lucide keyword (e.g. :link, :upload). Rendered at size 24 so
@@ -29,6 +29,9 @@
     (dom/div (dom/props {:style {:margin-bottom "8px"}}) (icons/Icon icon :size 24))
     (dom/div (dom/props {:style {:font-size "14px" :font-weight "600" :margin-bottom "4px"}}) (dom/text label))
     (dom/div (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}}) (dom/text desc))))
+
+;; Zotero entry tile — opens the Zotero library picker. Requires the
+;; FreeMemo for Zotero plugin installed and Zotero running.
 
 (e/defn ImportPage [user-id navigate! _enc-key _llm-enabled?]
   (e/client
@@ -60,4 +63,10 @@
               show-topic (e/watch !show-topic)]
           (ImportCard :file-plus "New Topic" "Create a blank topic to write in" !show-topic)
           (when show-topic
-            (ImportModal !show-topic user-id :new-topic navigate!)))))))
+            (ImportModal !show-topic user-id :new-topic navigate!)))
+
+        (let [!show-zotero (atom false)
+              show-zotero (e/watch !show-zotero)]
+          (ImportCard :library "Zotero" "Pick a PDF from your local Zotero library" !show-zotero)
+          (when show-zotero
+            (ZoteroPickerModal !show-zotero user-id navigate!)))))))

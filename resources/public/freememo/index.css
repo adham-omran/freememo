@@ -246,6 +246,10 @@ html, body {
 .modal-md { width: 420px; max-width: 90%; }
 .modal-lg { width: 600px; max-width: 90%; }
 
+/* Card add/edit modal inner panel — viewport-relative.
+   Non-desktop override lives in the (max-width: 1024px) block below. */
+.card-modal-inner { width: 60vw; }
+
 /* ── Toolbar / Header bar ──────────────────────────────────────── */
 .toolbar-container {
     position: relative;
@@ -356,56 +360,65 @@ html, body {
    - collapse-0: nothing hidden, all labels visible
    - collapse-1: labels hidden (icon-only buttons)
    - collapse-2: + Context inline hidden (.toolbar-collapse-first)
-   - collapse-3: + Export inline hidden (.toolbar-collapse-second)
-   - collapse-4: + Pull/Sync inline hidden (.toolbar-collapse-early)
-   - collapse-5: + card-type selector hidden (.toolbar-collapse-card-type)
-   - collapse-6: + remaining defaults hidden (.toolbar-overflow-item) */
+   - collapse-3: + Card-type radio hidden (.toolbar-collapse-card-type)
+   - collapse-4: + CardCount stepper hidden (.toolbar-collapse-cardcount)
+   - collapse-5: + Bibliography/AutoExtract group hidden (.toolbar-collapse-bib)
+   - collapse-6: + remaining defaults hidden (.toolbar-overflow-item)
+   - collapse-7: + Sync dropdown trigger hidden (.toolbar-collapse-sync) */
 
 /* Labels hide at tier ≥1 */
-.toolbar-container:is(.collapse-1, .collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6) .icon-label {
+.toolbar-container:is(.collapse-1, .collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .icon-label {
     display: none;
 }
 
 /* Context inline hides at tier ≥2 */
-.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6) .toolbar-collapse-first {
+.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .toolbar-collapse-first {
     display: none !important;
 }
 
-/* Export inline hides at tier ≥3 */
-.toolbar-container:is(.collapse-3, .collapse-4, .collapse-5, .collapse-6) .toolbar-collapse-second {
+/* Card-type selector hides at tier ≥3 */
+.toolbar-container:is(.collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .toolbar-collapse-card-type {
     display: none !important;
 }
 
-/* Pull/Sync inline hides at tier ≥4 */
-.toolbar-container:is(.collapse-4, .collapse-5, .collapse-6) .toolbar-collapse-early {
+/* CardCount stepper hides at tier ≥4 */
+.toolbar-container:is(.collapse-4, .collapse-5, .collapse-6, .collapse-7) .toolbar-collapse-cardcount {
     display: none !important;
 }
 
-/* Card-type selector hides at tier ≥5 (before generic defaults) */
-.toolbar-container:is(.collapse-5, .collapse-6) .toolbar-collapse-card-type {
+/* Bibliography + AutoExtract group hides at tier ≥5 */
+.toolbar-container:is(.collapse-5, .collapse-6, .collapse-7) .toolbar-collapse-bib {
     display: none !important;
 }
 
-/* Remaining defaults hide at tier 6 */
-.toolbar-container.collapse-6 .toolbar-overflow-item {
+/* Remaining defaults hide at tier ≥6 */
+.toolbar-container:is(.collapse-6, .collapse-7) .toolbar-overflow-item {
+    display: none !important;
+}
+
+/* Sync dropdown trigger hides at tier 7 */
+.toolbar-container.collapse-7 .toolbar-collapse-sync {
     display: none !important;
 }
 
 /* Proxy reveal — mirror the inline collapse, but only when dropdown is open. */
 .toolbar-container.overflow-open .toolbar-overflow-keep { display: flex; }
-.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6).overflow-open .toolbar-overflow-first {
+.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7).overflow-open .toolbar-overflow-first {
     display: flex;
 }
-.toolbar-container:is(.collapse-3, .collapse-4, .collapse-5, .collapse-6).overflow-open .toolbar-overflow-second {
+.toolbar-container:is(.collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7).overflow-open .toolbar-overflow-card-type {
     display: flex;
 }
-.toolbar-container:is(.collapse-4, .collapse-5, .collapse-6).overflow-open .toolbar-overflow-early {
+.toolbar-container:is(.collapse-4, .collapse-5, .collapse-6, .collapse-7).overflow-open .toolbar-overflow-cardcount {
     display: flex;
 }
-.toolbar-container:is(.collapse-5, .collapse-6).overflow-open .toolbar-overflow-card-type {
+.toolbar-container:is(.collapse-5, .collapse-6, .collapse-7).overflow-open .toolbar-overflow-bib {
     display: flex;
 }
-.toolbar-container.collapse-6.overflow-open .toolbar-overflow-default {
+.toolbar-container:is(.collapse-6, .collapse-7).overflow-open .toolbar-overflow-default {
+    display: flex;
+}
+.toolbar-container.collapse-7.overflow-open .toolbar-overflow-sync {
     display: flex;
 }
 
@@ -417,7 +430,7 @@ html, body {
     display: flex;
     visibility: hidden;
 }
-.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6) .toolbar-overflow-trigger {
+.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .toolbar-overflow-trigger {
     display: flex;
     visibility: visible;
 }
@@ -436,15 +449,31 @@ html, body {
 .radio-dot--checked { color: var(--color-primary); }
 .toolbar-generate-group { margin-left: auto; }
 
-/* Generate cluster — wraps card-count stepper + Generate buttons so the
-   parameter visually groups with the action that consumes it. Subtle
-   background + tight inner spacing signal "one unit"; outer margin-left:auto
-   on the inner .toolbar-generate-group is neutralized inside the cluster. */
-.toolbar-generate-cluster {
+/* Document-context group: Bibliography + Auto-extract buttons. Sits
+   immediately to the left of the Generate cluster (no separator — the F6
+   spec treats them as adjacent groups that intentionally share visual
+   space). `margin-left: auto` is delegated here from the Generate cluster
+   so this group pushes itself (and the cluster + everything after it,
+   thanks to flex sibling chaining) to the right edge of the toolbar. Inner
+   `gap: 8px` matches the toolbar's own `gap: var(--sp-2)`, so the two
+   buttons look like normal toolbar siblings — not visibly nested. */
+.toolbar-doc-context-group {
     display: flex;
     align-items: center;
     gap: 8px;
     margin-left: auto;
+}
+
+/* Generate cluster — wraps card-count stepper + Generate buttons so the
+   parameter visually groups with the action that consumes it. Subtle
+   background + tight inner spacing signal "one unit"; outer margin-left:auto
+   on the inner .toolbar-generate-group is neutralized inside the cluster.
+   The cluster no longer carries `margin-left: auto` — that role moved to
+   `.toolbar-doc-context-group` which renders directly before it. */
+.toolbar-generate-cluster {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     padding: 3px 10px;
     background: var(--color-bg-card);
     border: 1px solid var(--color-border);
@@ -552,6 +581,124 @@ html, body {
    beats the bare .icon-label rule regardless of viewport. */
 .toolbar-container.overflow-open .toolbar-overflow-panel .icon-label {
     display: inline;
+}
+
+/* ── Toolbar dropdowns (Generate / Sync) ──────────────────────────────────
+   Generate + Sync each consolidate multiple buttons into one trigger that
+   opens a menu. The source buttons remain mounted (hidden) so their refs,
+   modals, and e/Token paths stay live; menu items dispatch via .click() on
+   the existing refs (same pattern the overflow proxies use).
+
+   Layout: .toolbar-dropdown is a positioning anchor for the absolute menu.
+   The trigger is a normal flex button; the menu floats below it. */
+.toolbar-dropdown {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
+/* Hidden source-button wrapper. `display: contents` removes the wrapper from
+   the layout entirely; the inner direct-child `button` rule hides each source
+   button but leaves modal divs (rendered as sibling children inside each
+   *Button e/defn) visible — display:none on the wrapper itself would have
+   killed the modals too.
+
+   The `.toolbar-generate-group` rule covers `ToolbarGenerate`'s Generate +
+   Generate-with-Prompt buttons, which are grandchildren of the sources
+   wrapper (nested inside an internal `.toolbar-generate-group` div) and
+   therefore NOT caught by the `> button` direct-child selector. The
+   PromptDialog modal sits as a separate `dom/div` sibling inside the same
+   `ToolbarGenerate` body, so it remains visible when activated. */
+.toolbar-dropdown-sources {
+    display: contents;
+}
+.toolbar-dropdown-sources > button {
+    display: none !important;
+}
+.toolbar-dropdown-sources .toolbar-generate-group {
+    display: none !important;
+}
+
+/* Trigger button — chevron sits to the right of the label so the action name
+   reads first. Inherits .btn base styles; the dropdown-specific tweaks below
+   are scoped tightly. */
+.toolbar-dropdown-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.toolbar-dropdown-trigger svg:last-child {
+    /* The chevron — slight inset against the label for visual rhythm. */
+    margin-left: 2px;
+    opacity: 0.85;
+}
+
+/* Menu — absolutely positioned below trigger. z-index above tooltips/PDF.
+   Card background, modal-style shadow to lift it visually off the toolbar. */
+.toolbar-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 200;
+    min-width: 220px;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-modal);
+    padding: var(--sp-2);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+/* Sync dropdown sits at the right edge of the toolbar — right-align its menu
+   so it doesn't overflow the viewport on narrow screens. */
+.toolbar-sync-dropdown .toolbar-dropdown-menu {
+    left: auto;
+    right: 0;
+}
+
+/* Menu items — full-width rows, icon + label, hover/focus states match the
+   rest of the app's secondary buttons. */
+.toolbar-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-primary);
+    font-size: 13px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+}
+.toolbar-dropdown-item:hover:not(:disabled) {
+    background: var(--color-bg-subtle);
+}
+.toolbar-dropdown-item:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: -2px;
+}
+.toolbar-dropdown-item:disabled {
+    color: var(--color-text-hint);
+    cursor: not-allowed;
+}
+.toolbar-dropdown-item svg {
+    flex-shrink: 0;
+}
+
+/* Shortcut hint inside menu items — right-aligned, muted, smaller font.
+   `margin-left: auto` pushes it past the label to the right edge of the item;
+   the icon-to-label `gap: 8px` from `.toolbar-dropdown-item` is preserved. */
+.dropdown-shortcut {
+    margin-left: auto;
+    padding-left: 12px;
+    font-size: 11px;
+    color: var(--color-text-hint);
+    white-space: nowrap;
 }
 
 .header-bar {
@@ -731,6 +878,8 @@ textarea:hover {
 
 /* ── Tablet (≤1024px) ────────────────────────────────────────── */
 @media (max-width: 1024px) {
+    /* Card add/edit modal inner panel — wider on non-desktop */
+    .card-modal-inner { width: 80vw; }
     /* Tab bar: horizontal scroll instead of clip */
     .tab-bar {
         overflow-x: auto;
@@ -764,23 +913,12 @@ textarea:hover {
     .pdf-collapse-md { display: none !important; }
     .pdf-collapse-sm { display: none !important; }
 
-    /* Content toolbar fallback on mobile — when tier collapse maxes out and
-       items still don't fit, allow horizontal scroll instead of clipping.
-       overflow-y stays visible so tooltips can escape. */
-    .toolbar {
-        overflow-x: auto;
-        overflow-y: visible;
-        -webkit-overflow-scrolling: touch;
-    }
-
-    /* Mobile-only: pin the ⋮ trigger to the right edge of the
-       horizontally-scrolling toolbar so it stays reachable. */
-    .toolbar-overflow-trigger {
-        position: sticky;
-        right: 0;
-        z-index: 2;
-        background: var(--color-bg-subtle);
-    }
+    /* Content toolbar: keep desktop `overflow-x: clip; overflow-y: visible`
+       at narrow widths too — the T7 tier ladder collapses the toolbar enough
+       to fit any practical viewport (~220px min). A prior `overflow-x: auto`
+       fallback here coerced overflow-y to auto (CSS spec), clipping tooltips
+       and the dropdown menu at the toolbar's bottom edge so the card-table
+       below visually painted over them. */
 
     /* Remove auto-margin push in dropdown context */
     .toolbar-generate-group { margin-left: 0; }
@@ -1795,6 +1933,36 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     color: var(--color-text-primary);
     font-weight: 600;
     border-bottom-color: var(--color-primary);
+}
+
+/* ── Anki Sync tab — section visual distinction ───────────────────
+   Scoped to #settings-anki so the visual treatment cannot leak into
+   other settings tabs. Each top-level group (Source / Bibliography /
+   Images / Auto-load / Field Defaults) lives inside its own card-style
+   container with a tinted background, soft border, and an h4 title. */
+#settings-anki .anki-settings-section {
+    background: var(--color-bg-subtle);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: var(--sp-3) var(--sp-4);
+    margin-bottom: var(--sp-4);
+}
+
+#settings-anki .anki-settings-section:last-child {
+    margin-bottom: 0;
+}
+
+#settings-anki .anki-settings-section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    margin: 0 0 var(--sp-3) 0;
+    padding-bottom: var(--sp-1);
+    border-bottom: 1px solid var(--color-border);
+}
+
+#settings-anki .anki-settings-section .field:last-child {
+    margin-bottom: 0;
 }
 
 /* Settings accordion (native <details>) for long, advanced prompts */

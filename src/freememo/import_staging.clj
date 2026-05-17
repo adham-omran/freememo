@@ -18,21 +18,25 @@
 (defn stage!
   "Stage bytes under a fresh upload-id for the user.
    Pre:  user-id non-nil; bytes is byte[]; filename non-blank string;
-         flow is :pdf|:epub|:html|:markdown.
+         flow is :pdf|:epub|:html|:markdown. `extra` (5-arity) is an
+         arbitrary map carried alongside the bytes through claim!.
    Post: returns the new upload-id (string); subsequent (claim! user-id id)
          returns the entry exactly once.
    Invariant: per-user FIFO eviction once outstanding count exceeds 10."
-  [user-id ^bytes bytes filename flow]
-  (let [upload-id (str (random-uuid))
-        entry {:upload-id upload-id
-               :bytes bytes
-               :filename filename
-               :flow flow
-               :size (alength bytes)
-               :created-at (System/currentTimeMillis)}]
-    (swap! !staged update user-id
-      (fn [entries] (evict-overflow (conj (or entries []) entry))))
-    upload-id))
+  ([user-id ^bytes bytes filename flow]
+   (stage! user-id bytes filename flow nil))
+  ([user-id ^bytes bytes filename flow extra]
+   (let [upload-id (str (random-uuid))
+         entry (cond-> {:upload-id upload-id
+                        :bytes bytes
+                        :filename filename
+                        :flow flow
+                        :size (alength bytes)
+                        :created-at (System/currentTimeMillis)}
+                 extra (assoc :extra extra))]
+     (swap! !staged update user-id
+       (fn [entries] (evict-overflow (conj (or entries []) entry))))
+     upload-id)))
 
 (defn claim!
   "Atomically retrieve and remove a staged entry.

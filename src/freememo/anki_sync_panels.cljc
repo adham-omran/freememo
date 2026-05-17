@@ -54,6 +54,10 @@
   #?(:clj settings/app-base-url
      :cljs nil))
 
+(defn resolve-preferred-fields* [user-id root-topic-id kind]
+  #?(:clj (sync/resolve-preferred-fields user-id root-topic-id kind)
+     :cljs nil))
+
 (e/defn AnkiSyncExecutor
   "Handles push execution and server recording. Pull is handled by the
    toolbar Pull button (content_toolbar_actions), not the modal.
@@ -112,7 +116,9 @@
                    :basic-model basic-model :cloze-model cloze-model
                    :allow-dupes allow-dupes
                    :use-header use-header :header-text header-text
-                   :use-tags use-tags :tags tags}]
+                   :use-tags use-tags :tags tags
+                   :basic-fields (if (vector? basic-fields) basic-fields [])
+                   :cloze-fields (if (vector? cloze-fields) cloze-fields [])}]
 
     ;; All post-push server work in a single e/server call whose result is
     ;; observed below — Electric drops unused intermediate side effects when
@@ -196,7 +202,12 @@
 (defn apply-prefs!
   "Apply a preferences map to form/conn atoms, validating deck/model against available lists.
    Source-field is no longer part of prefs — it lives on the settings page now;
-   any :source-field key in legacy presets is ignored."
+   any :source-field key in legacy presets is ignored.
+
+   :basic-fields/:cloze-fields are applied directly here only as a fallback for
+   the rare case where the model picker hasn't triggered run-fetch-fields! yet.
+   Authoritative loading happens through run-fetch-fields!'s preferred-fields
+   argument so the ordering is validated against the model's actual fields."
   [prefs conn form decks models]
   (when (:scope prefs) (reset! (:!scope form) (:scope prefs)))
   (when (:deck prefs)
@@ -217,7 +228,11 @@
   (when (some? (:use-tags prefs))
     (reset! (:!use-tags form) (:use-tags prefs)))
   (when (:tags prefs)
-    (reset! (:!tags form) (:tags prefs))))
+    (reset! (:!tags form) (:tags prefs)))
+  (when (some? (:basic-fields prefs))
+    (reset! (:!basic-fields form) (vec (:basic-fields prefs))))
+  (when (some? (:cloze-fields prefs))
+    (reset! (:!cloze-fields form) (vec (:cloze-fields prefs)))))
 
 (e/defn AnkiSyncConnectedPanel
   "Connected state: preset auto-load (per the user's auto-load mode), form, and status.
@@ -236,9 +251,10 @@
           applied-mode (e/watch !applied-mode)]
 
       ;; First-render auto-load: branch on user's auto-load mode.
-      ;; "per-item": apply item preset if present.
-      ;; "global":   apply global last-used.
-      ;; "none":     skip.
+      ;; Spec lookup order (per-doc → user-level → empty):
+      ;;   "per-item": apply per-doc preset; on miss, fall through to global.
+      ;;   "global":   apply global last-used (user-level layer).
+      ;;   "none":     skip.
       (when (and (nil? applied-mode) (seq decks) (seq models))
         (log/log-info (str "[anki-sync] auto-load fire mode=" auto-load-mode
                         " root-id=" root-id
@@ -251,7 +267,17 @@
                                            " basic-model=" (:basic-model item-preset)))
                          (apply-prefs! item-preset conn form decks models)
                          (reset! !applied-mode "per-item"))
-                       (log/log-info "[anki-sync] per-item mode but no preset — leaving defaults"))
+                       ;; No per-doc preset — FALL THROUGH to user-level
+                       ;; (global). Without this, user-level :basic-fields /
+                       ;; :cloze-fields (and other defaults) never load in
+                       ;; per-item mode. Applied-mode is "global" here, not
+                       ;; "per-item", so the doc-specific indicator stays off.
+                       (do (log/log-info (str "[anki-sync] per-item mode but no preset — falling through to global"
+                                           " deck=" (:deck global-prefs)
+                                           " basic-fields=" (:basic-fields global-prefs)
+                                           " cloze-fields=" (:cloze-fields global-prefs)))
+                         (apply-prefs! global-prefs conn form decks models)
+                         (reset! !applied-mode "global")))
           "global" (do (log/log-info (str "[anki-sync] applying global prefs deck=" (:deck global-prefs)))
                      (apply-prefs! global-prefs conn form decks models)
                      (reset! !applied-mode "global"))
@@ -318,14 +344,23 @@
                 :!push-pairs !push-pairs}
           conn-status (e/watch (:!status conn))
           basic-model (e/watch (:!basic-model conn))
-          cloze-model (e/watch (:!cloze-model conn))]
+          cloze-model (e/watch (:!cloze-model conn))
+          ;; Resolve preferred field ordering ONCE at modal open.
+          ;; Lookup order: per-doc preset → user-level setting → empty.
+          ;; root-id derives from a stable selected-doc, so this e/server is
+          ;; effectively resolved-once per modal session.
+          root-id (e/server (get-root-topic-id* selected-doc))
+          preferred-basic-fields (e/server (resolve-preferred-fields* user-id root-id :basic))
+          preferred-cloze-fields (e/server (resolve-preferred-fields* user-id root-id :cloze))]
       (let [[t _] (e/Token [:anki-sync-basic-fields conn-status basic-model])]
         (when (and basic-model (= conn-status :connected))
           (when t
-            (case (helpers/run-fetch-fields! basic-model (:!basic-fields form)) (t)))))
+            (case (helpers/run-fetch-fields! basic-model (:!basic-fields form)
+                    preferred-basic-fields) (t)))))
       (let [[t _] (e/Token [:anki-sync-cloze-fields conn-status cloze-model])]
         (when (and cloze-model (= conn-status :connected))
           (when t
-            (case (helpers/run-fetch-fields! cloze-model (:!cloze-fields form)) (t)))))
+            (case (helpers/run-fetch-fields! cloze-model (:!cloze-fields form)
+                    preferred-cloze-fields) (t)))))
       (AnkiSyncExecutor user-id selected-doc current-pdf-page conn form sync)
       (AnkiSyncModalDom user-id selected-doc !show-modal conn form sync))))

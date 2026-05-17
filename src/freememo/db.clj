@@ -128,15 +128,39 @@
       a_factor REAL DEFAULT 2.0,
       next_review_at TIMESTAMP,
       last_review_at TIMESTAMP,
-      review_count INTEGER DEFAULT 0,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )"])
+
+  ;; review_count scalar superseded by topic_repetitions append-only log
+  ;; (count derivable as COUNT(*) WHERE event_type IN ('advance','touch')).
+  (jdbc/execute! ds ["ALTER TABLE topics DROP COLUMN IF EXISTS review_count"])
 
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_parent ON topics(parent_id)"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_user ON topics(user_id)"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_next_review ON topics(next_review_at)"])
   (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_topics_page
                       ON topics(parent_id, page_number) WHERE page_number IS NOT NULL"])
+
+  ;; Topic repetition log — append-only history of session-driven mutations.
+  ;; Each row captures pre-mutation snapshot of the six SR-relevant topic
+  ;; fields so a SuperMemo-style history view can reconstruct what changed.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS topic_repetitions (
+      id BIGSERIAL PRIMARY KEY,
+      topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      event_type TEXT NOT NULL
+        CHECK (event_type IN ('advance','touch','postpone','done','restore','priority-change')),
+      event_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      status_before TEXT NOT NULL,
+      priority_before INTEGER,
+      interval_days_before REAL NOT NULL,
+      a_factor_before REAL NOT NULL,
+      next_review_at_before TIMESTAMP,
+      last_review_at_before TIMESTAMP
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_repetitions_topic_time
+                      ON topic_repetitions(topic_id, event_at DESC)"])
 
   ;; Search: plain-text column derived from HTML content, trigram GIN index
   (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS content_text text"])
@@ -321,7 +345,7 @@
       (jdbc/execute! tx
         ["INSERT INTO topics (id, user_id, parent_id, kind, title, content, source_url,
                               status, priority, interval_days, a_factor, next_review_at, last_review_at,
-                              review_count, created_at)
+                              created_at)
           SELECT id, user_id, NULL,
                  CASE source_type WHEN 'topic' THEN 'basic' WHEN 'pdf' THEN 'pdf'
                                   WHEN 'epub' THEN 'epub' WHEN 'web' THEN 'web'
@@ -329,7 +353,7 @@
                  COALESCE(filename, 'Untitled'), html_content, source_url,
                  COALESCE(status, 'active'), COALESCE(priority, 50),
                  COALESCE(interval_days, 1.0), COALESCE(a_factor, 2.0),
-                 next_review_at, last_review_at, COALESCE(review_count, 0), uploaded_at
+                 next_review_at, last_review_at, uploaded_at
           FROM documents
           ON CONFLICT (id) DO NOTHING"]))
 
@@ -355,7 +379,7 @@
       (let [pages (jdbc/execute! tx
                     ["SELECT p.id AS page_id, p.document_id, p.page_number, p.text, p.is_done,
                               p.priority, p.interval_days, p.a_factor, p.next_review_at,
-                              p.last_review_at, p.review_count, p.created_at, d.user_id
+                              p.last_review_at, p.created_at, d.user_id
                        FROM pages p JOIN documents d ON p.document_id = d.id
                        ORDER BY p.id"]
                     {:builder-fn rs/as-unqualified-maps})]
@@ -363,8 +387,8 @@
           (let [new-topic (jdbc/execute-one! tx
                             ["INSERT INTO topics (user_id, parent_id, kind, title, content, page_number,
                                                   status, priority, interval_days, a_factor,
-                                                  next_review_at, last_review_at, review_count, created_at)
-                              VALUES (?, ?, 'page', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                                  next_review_at, last_review_at, created_at)
+                              VALUES (?, ?, 'page', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                               ON CONFLICT (parent_id, page_number) WHERE page_number IS NOT NULL
                               DO NOTHING
                               RETURNING id"
@@ -375,7 +399,6 @@
                              (or (:interval_days p) 1.0)
                              (or (:a_factor p) 2.0)
                              (:next_review_at p) (:last_review_at p)
-                             (or (:review_count p) 0)
                              (:created_at p)]
                             {:builder-fn rs/as-unqualified-maps})]
             (when-let [new-id (:id new-topic)]
@@ -393,7 +416,7 @@
       (let [items (jdbc/execute! tx
                     ["SELECT ci.id, ci.document_id, ci.page_number, ci.kind, ci.content,
                             ci.status, ci.priority, ci.interval_days, ci.a_factor,
-                            ci.next_review_at, ci.last_review_at, ci.review_count,
+                            ci.next_review_at, ci.last_review_at,
                             ci.created_at, d.user_id
                      FROM content_items ci JOIN documents d ON ci.document_id = d.id
                      WHERE ci.parent_content_item_id IS NULL
@@ -438,7 +461,6 @@
                                                    :a_factor (or (:a_factor ci) 2.0)
                                                    :next_review_at (:next_review_at ci)
                                                    :last_review_at (:last_review_at ci)
-                                                   :review_count (or (:review_count ci) 0)
                                                    :created_at (:created_at ci)}]
                                          :returning [:id]}
                               {:builder-fn rs/as-unqualified-maps}))]
@@ -453,7 +475,7 @@
                     ["SELECT ci.id, ci.document_id, ci.page_number, ci.kind, ci.content,
                             ci.parent_content_item_id, ci.status, ci.priority,
                             ci.interval_days, ci.a_factor, ci.next_review_at,
-                            ci.last_review_at, ci.review_count, ci.created_at, d.user_id
+                            ci.last_review_at, ci.created_at, d.user_id
                      FROM content_items ci JOIN documents d ON ci.document_id = d.id
                      WHERE ci.parent_content_item_id IS NOT NULL
                      ORDER BY ci.id"]
@@ -484,7 +506,6 @@
                                                    :a_factor (or (:a_factor ci) 2.0)
                                                    :next_review_at (:next_review_at ci)
                                                    :last_review_at (:last_review_at ci)
-                                                   :review_count (or (:review_count ci) 0)
                                                    :created_at (:created_at ci)}]
                                          :returning [:id]}
                               {:builder-fn rs/as-unqualified-maps}))]
@@ -1506,54 +1527,156 @@
 ;; Scheduling (unified — no topic-type dispatch)
 ;; ---------------------------------------------------------------------------
 
+;; ---------------------------------------------------------------------------
+;; Repetition history — append-only log of session-driven mutations.
+;; Every mutation that writes to topics from a learn session also writes one
+;; row capturing the pre-mutation snapshot of the six SR-relevant fields,
+;; inside the same transaction.
+;; ---------------------------------------------------------------------------
+
+(defn- snapshot-topic-row
+  "Read the six SR-relevant fields + user_id from `topics` inside an open tx.
+   Returns nil if the topic doesn't exist."
+  [tx id]
+  (jdbc/execute-one! tx
+    ["SELECT user_id, status, priority, interval_days, a_factor,
+            next_review_at, last_review_at
+       FROM topics WHERE id = ?" id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn- insert-repetition!
+  "Append one row to topic_repetitions inside an open tx.
+   Pre:  `before` is the snapshot returned by `snapshot-topic-row`.
+   Post: one row exists with `event_type` and pre-mutation fields equal to `before`."
+  [tx topic-id event-type before]
+  (jdbc/execute-one! tx
+    ["INSERT INTO topic_repetitions
+        (topic_id, user_id, event_type,
+         status_before, priority_before, interval_days_before, a_factor_before,
+         next_review_at_before, last_review_at_before)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+     topic-id (:user_id before) event-type
+     (or (:status before) "active")
+     (:priority before)
+     (double (or (:interval_days before) 1.0))
+     (double (or (:a_factor before) 2.0))
+     (:next_review_at before)
+     (:last_review_at before)]))
+
 (defn advance-topic!
-  "Advance a topic's review schedule using A-Factor algorithm."
+  "Advance a topic's review schedule using A-Factor algorithm.
+   Logs 'advance' event with pre-mutation snapshot."
   [id]
-  (jdbc/execute-one! ds
-    ["UPDATE topics
-      SET interval_days = COALESCE(interval_days, 1.0) * COALESCE(a_factor, 2.0),
-          next_review_at = NOW() + (COALESCE(interval_days, 1.0) * COALESCE(a_factor, 2.0)) * INTERVAL '1 day',
-          last_review_at = NOW(),
-          review_count = COALESCE(review_count, 0) + 1
-      WHERE id = ?"
-     id]))
+  (jdbc/with-transaction [tx ds]
+    (when-let [before (snapshot-topic-row tx id)]
+      (insert-repetition! tx id "advance" before)
+      (jdbc/execute-one! tx
+        ["UPDATE topics
+          SET interval_days = COALESCE(interval_days, 1.0) * COALESCE(a_factor, 2.0),
+              next_review_at = NOW() + (COALESCE(interval_days, 1.0) * COALESCE(a_factor, 2.0)) * INTERVAL '1 day',
+              last_review_at = NOW()
+          WHERE id = ?"
+         id]))))
 
 (defn update-topic-priority!
-  "Update a topic's priority (0=highest, 100=lowest)."
+  "Update a topic's priority (0=highest, 100=lowest).
+   Logs 'priority-change' event only when new value differs from current (no-op skipped)."
   [id priority]
-  (jdbc/execute-one! ds
-    ["UPDATE topics SET priority = ? WHERE id = ?" priority id]))
+  (jdbc/with-transaction [tx ds]
+    (when-let [before (snapshot-topic-row tx id)]
+      (when (not= (:priority before) priority)
+        (insert-repetition! tx id "priority-change" before)
+        (jdbc/execute-one! tx
+          ["UPDATE topics SET priority = ? WHERE id = ?" priority id])))))
 
 (defn postpone-topic!
-  "Postpone a topic by N days without changing interval/a-factor."
+  "Postpone a topic by N days without changing interval/a-factor.
+   Logs 'postpone' event with pre-mutation snapshot."
   [id days]
-  (jdbc/execute-one! ds
-    ["UPDATE topics
-      SET next_review_at = NOW() + ? * INTERVAL '1 day',
-          last_review_at = NOW()
-      WHERE id = ?"
-     (double days) id]))
+  (jdbc/with-transaction [tx ds]
+    (when-let [before (snapshot-topic-row tx id)]
+      (insert-repetition! tx id "postpone" before)
+      (jdbc/execute-one! tx
+        ["UPDATE topics
+          SET next_review_at = NOW() + ? * INTERVAL '1 day',
+              last_review_at = NOW()
+          WHERE id = ?"
+         (double days) id]))))
 
 (defn done-topic!
-  "Mark a topic as done."
+  "Mark a topic as done. Logs 'done' event with pre-mutation snapshot."
   [id]
-  (jdbc/execute-one! ds
-    ["UPDATE topics SET status = 'done' WHERE id = ?" id]))
+  (jdbc/with-transaction [tx ds]
+    (when-let [before (snapshot-topic-row tx id)]
+      (insert-repetition! tx id "done" before)
+      (jdbc/execute-one! tx
+        ["UPDATE topics SET status = 'done' WHERE id = ?" id]))))
 
 (defn restore-topic!
-  "Restore a done topic back to active queue."
+  "Restore a done topic back to active queue. Logs 'restore' event."
   [id]
-  (jdbc/execute-one! ds
-    ["UPDATE topics SET status = 'active', next_review_at = NULL WHERE id = ?" id]))
+  (jdbc/with-transaction [tx ds]
+    (when-let [before (snapshot-topic-row tx id)]
+      (insert-repetition! tx id "restore" before)
+      (jdbc/execute-one! tx
+        ["UPDATE topics SET status = 'active', next_review_at = NULL WHERE id = ?" id]))))
 
 (defn touch-topic!
-  "Update last_review_at without advancing the interval."
+  "Update last_review_at without advancing the interval (subset-review soft rep).
+   Logs 'touch' event with pre-mutation snapshot."
   [id]
+  (jdbc/with-transaction [tx ds]
+    (when-let [before (snapshot-topic-row tx id)]
+      (insert-repetition! tx id "touch" before)
+      (jdbc/execute-one! tx
+        ["UPDATE topics SET last_review_at = NOW() WHERE id = ?" id]))))
+
+(defn get-topic-history
+  "Return repetition history rows for a topic, newest first.
+   Timestamps pre-formatted server-side; interval_since_prev_days computed
+   via LAG over ascending event_at so each row shows the gap from the prior
+   chronological event. Numeric columns are cast to float8 so they cross the
+   Transit wire as JS doubles (BigDecimal would arrive as an opaque tagged value)."
+  [topic-id]
+  (try
+    (jdbc/execute! ds
+      ["SELECT id,
+              event_type,
+              TO_CHAR(event_at, 'YYYY-MM-DD HH24:MI:SS')               AS event_at,
+              status_before,
+              priority_before,
+              interval_days_before::float8                             AS interval_days_before,
+              a_factor_before::float8                                  AS a_factor_before,
+              TO_CHAR(next_review_at_before, 'YYYY-MM-DD HH24:MI:SS')  AS next_review_at_before,
+              TO_CHAR(last_review_at_before, 'YYYY-MM-DD HH24:MI:SS')  AS last_review_at_before,
+              (EXTRACT(EPOCH FROM
+                       (event_at - LAG(event_at)
+                                     OVER (ORDER BY event_at ASC, id ASC)))
+                / 86400.0)::float8                                     AS interval_since_prev_days
+         FROM topic_repetitions
+         WHERE topic_id = ?
+         ORDER BY event_at DESC, id DESC"
+       topic-id]
+      {:builder-fn rs/as-unqualified-maps})
+    (catch Exception e
+      (tel/error! {:id ::get-topic-history :data {:topic-id topic-id}} e)
+      [])))
+
+(defn get-topic-next-review
+  "Return current next_review_at + status + title for a topic, formatted for the
+   HistoryModal's 'Next' header row (SuperMemo parity).
+   days_until_next is cast to float8 — see get-topic-history for the rationale."
+  [topic-id]
   (jdbc/execute-one! ds
-    ["UPDATE topics
-      SET last_review_at = NOW(), review_count = COALESCE(review_count, 0) + 1
-      WHERE id = ?"
-     id]))
+    ["SELECT title,
+            status,
+            TO_CHAR(next_review_at, 'YYYY-MM-DD HH24:MI:SS') AS next_review_at,
+            CASE WHEN next_review_at IS NULL THEN NULL
+                 ELSE (EXTRACT(EPOCH FROM (next_review_at - NOW())) / 86400.0)::float8 END
+                                                              AS days_until_next
+       FROM topics WHERE id = ?"
+     topic-id]
+    {:builder-fn rs/as-unqualified-maps}))
 
 ;; ---------------------------------------------------------------------------
 ;; Queue queries (single SELECT, no UNION ALL)
@@ -1567,7 +1690,7 @@
   (try
     (jdbc/execute! ds
       ["SELECT t.id, t.parent_id, t.kind, t.title, t.content, t.priority,
-              t.next_review_at, t.interval_days, t.a_factor, t.review_count,
+              t.next_review_at, t.interval_days, t.a_factor,
               t.status,
               s.url, s.title, s.csl_type, s.container_title
        FROM topics t

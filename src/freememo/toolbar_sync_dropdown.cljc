@@ -1,0 +1,154 @@
+(ns freememo.toolbar-sync-dropdown
+  "Sync dropdown — replaces the inline Export + Pull from Anki + Anki Sync
+   buttons with a single dropdown trigger. The three source buttons are
+   rendered (hidden) inside this component so their refs / modals / e/Token
+   paths stay live; menu items dispatch by calling `.click()` on the existing
+   button refs in `freememo.keyboard`.
+
+   New e/defn lives in its own namespace to stay under the JVM 64KB bytecode
+   limit (pattern from `extract_topic_button.cljc`).
+
+   See `toolbar_generate_dropdown.cljc` for the listener-install rationale —
+   the same plain-defn helper would be appropriate but is duplicated here to
+   keep each dropdown component self-contained (one file per e/defn, two
+   independent dropdowns)."
+  (:require
+   [hyperfiddle.electric3 :as e]
+   [hyperfiddle.electric-dom3 :as dom]
+   [freememo.anki-sync :refer [AnkiSyncButton]]
+   [freememo.anki-pull-button :refer [PullFromAnkiButton]]
+   [freememo.export-button :refer [ExportButton]]
+   [freememo.icons :as icons]
+   [freememo.keyboard :as keyboard]))
+
+;; See `toolbar_generate_dropdown.cljc:install-dropdown-listeners!` for
+;; rationale on keeping this as a plain (defn) outside e/defn bodies. We
+;; duplicate rather than share to keep each dropdown a self-contained unit.
+(defn install-dropdown-listeners! [!open trigger-class menu-class]
+  #?(:cljs
+     (let [trigger-sel (str "." trigger-class)
+           menu-sel (str "." menu-class)
+           on-key (fn [e]
+                    (when (= (.-key e) "Escape")
+                      (reset! !open false)))
+           on-mouse (fn [e]
+                      (let [target (.-target e)]
+                        (when-not (or (.closest target menu-sel)
+                                    (.closest target trigger-sel))
+                          (reset! !open false))))]
+       (.addEventListener js/document "keydown" on-key)
+       (.addEventListener js/document "mousedown" on-mouse)
+       (fn []
+         (.removeEventListener js/document "keydown" on-key)
+         (.removeEventListener js/document "mousedown" on-mouse)))
+     :clj (fn [] nil)))
+
+(e/defn SyncDropdown [cfg]
+  (e/client
+    (let [{:keys [user-id topic-id root-topic-id page-number
+                  card-type unsynced-count mod-key]} cfg
+          !open (atom false)
+          open (e/watch !open)
+          has-unsynced? (and unsynced-count (pos? unsynced-count))
+          trigger-label (if has-unsynced?
+                          (str "Sync (" unsynced-count ")")
+                          "Sync")]
+
+      ;; Hidden source buttons — mount them so their refs/modals/tokens stay
+      ;; live. CSS hides the buttons themselves (direct-child `button` rule);
+      ;; the wrapper uses `display: contents` so it takes no layout space, and
+      ;; the modals (rendered as div siblings inside each *Button e/defn) are
+      ;; not affected by the button-only display:none.
+      (dom/div
+        (dom/props {:class "toolbar-dropdown-sources"})
+        (ExportButton user-id topic-id root-topic-id unsynced-count)
+        (PullFromAnkiButton user-id root-topic-id)
+        (AnkiSyncButton user-id root-topic-id page-number card-type unsynced-count))
+
+      ;; Visible dropdown. `toolbar-collapse-sync` participates in the tier
+      ;; ladder — hidden at viewport-tier 7 so only the trigger collapses;
+      ;; source buttons + their modals (sibling div above) stay mounted.
+      (dom/div
+        (dom/props {:class "toolbar-dropdown toolbar-sync-dropdown toolbar-collapse-sync"})
+
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-secondary toolbar-dropdown-trigger toolbar-sync-trigger"
+                      :style {:background "var(--color-bg-subtle)"
+                              :color "var(--color-text-primary)"
+                              :font-weight "500"}
+                      :aria-haspopup "menu"
+                      :aria-expanded (if open "true" "false")
+                      :aria-label "Sync menu"
+                      :data-tooltip "Sync with Anki, or export cards"})
+          (icons/Icon :refresh-cw :size 16)
+          (dom/span (dom/props {:class "icon-label"}) (dom/text trigger-label))
+          (icons/Icon :chevron-down :size 14)
+          (dom/On "click"
+            (fn [e]
+              #?(:cljs (.stopPropagation e))
+              (swap! !open not))
+            nil))
+
+        (when open
+          (let [cleanup (install-dropdown-listeners!
+                          !open
+                          "toolbar-sync-trigger"
+                          "toolbar-sync-menu")]
+            (e/on-unmount cleanup)
+            (dom/div
+              (dom/props {:class "toolbar-dropdown-menu toolbar-sync-menu"
+                          :role "menu"})
+
+              ;; Export
+              (dom/button
+                (dom/props {:class "toolbar-dropdown-item"
+                            :role "menuitem"
+                            :aria-label "Export"})
+                (icons/Icon :download :size 16)
+                (dom/span (dom/text (if has-unsynced?
+                                      (str "Export (" unsynced-count ")...")
+                                      "Export...")))
+                (dom/On "click"
+                  (fn [_]
+                    #?(:cljs
+                       (when-let [btn @keyboard/!export-btn-ref]
+                         (when-not (.-disabled btn)
+                           (.click btn))))
+                    (reset! !open false))
+                  nil))
+
+              ;; Pull from Anki
+              (dom/button
+                (dom/props {:class "toolbar-dropdown-item"
+                            :role "menuitem"
+                            :aria-label "Pull from Anki"})
+                (icons/Icon :cloud-download :size 16)
+                (dom/span (dom/text "Pull from Anki"))
+                (dom/On "click"
+                  (fn [_]
+                    #?(:cljs
+                       (when-let [btn @keyboard/!pull-anki-btn-ref]
+                         (when-not (.-disabled btn)
+                           (.click btn))))
+                    (reset! !open false))
+                  nil))
+
+              ;; Push to Anki
+              (dom/button
+                (dom/props {:class "toolbar-dropdown-item"
+                            :role "menuitem"
+                            :aria-label "Push to Anki"})
+                (icons/Icon :refresh-cw :size 16)
+                (dom/span (dom/text (if has-unsynced?
+                                      (str "Push to Anki (" unsynced-count ")...")
+                                      "Push to Anki...")))
+                (dom/span (dom/props {:class "dropdown-shortcut"})
+                  (dom/text (str mod-key "+Shift+X")))
+                (dom/On "click"
+                  (fn [_]
+                    #?(:cljs
+                       (when-let [btn @keyboard/!anki-sync-btn-ref]
+                         (when-not (.-disabled btn)
+                           (.click btn))))
+                    (reset! !open false))
+                  nil)))))))))
