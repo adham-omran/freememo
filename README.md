@@ -13,6 +13,7 @@ Built with [Hyperfiddle Electric v3](https://github.com/hyperfiddle/electric) (C
 - **OCR** — OpenAI Vision converts PDF pages to editable semantic HTML
 - **Rich text editor** — Quill-based editor with highlighting and selection-based card generation
 - **Anki sync** — Push/pull cards directly to your Anki collection via AnkiConnect
+- **Zotero import** — Pull PDFs (with citation metadata) straight from your local Zotero library via the [FreeMemo for Zotero](./freememo-zotero-plugin/) plugin
 - **PDF viewer** — In-browser rendering via PDF.js with zoom and navigation
 - **Subset review** — Review a chosen subset of cards from any topic
 - **Search** — Full-text search across topics and cards
@@ -48,6 +49,21 @@ Navigate to **Settings** in the UI and enter your OpenAI API key. All settings a
 > **Note**: OCR and flashcard generation use a per-user OpenAI API key (BYOK) by default. Self-host operators MAY set the `OPENAI_DEMO_KEY` environment variable as a server-wide fallback; it is used only for users who have not set their own key in Settings.
 
 Sign-in uses Google OAuth. Self-host requires configuring `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` (or dropping a `resources/google_client.json` from Google Cloud Console). Without these, `/auth/google` returns 503.
+
+### Optional: Zotero import
+
+Zotero import is gated by a small Zotero plugin (the `FreeMemo for Zotero` add-on under `freememo-zotero-plugin/`). The plugin runs inside the user's Zotero, exposes a CORS-permissive HTTP API under `/freememo/*` on Zotero's loopback server (port 23119), and streams attachment bytes inline. The FreeMemo browser tab talks to it directly — Zotero data never travels through the FreeMemo server.
+
+To enable end-to-end:
+
+1. Get the `.xpi`. Either:
+   - **Download the pre-built `.xpi`** committed in this repo at [`freememo-zotero-plugin/dist/freememo-zotero-plugin-0.1.0.xpi`](https://github.com/adham-omran/electric-card-maker/raw/main/freememo-zotero-plugin/dist/freememo-zotero-plugin-0.1.0.xpi) — recommended for most users; or
+   - **Build from source**: `cd freememo-zotero-plugin && ./build.sh` (produces `dist/freememo-zotero-plugin-<version>.xpi`).
+2. Install in Zotero: Tools → Plugins → gear icon → "Install Plugin From File…", pick the `.xpi`. Restart Zotero.
+3. Zotero → Settings → Advanced → enable **"Allow other applications on this computer to communicate with Zotero"**.
+4. In FreeMemo: Settings → Zotero → toggle **Enable Zotero import** on. Click **Test Connection** to verify.
+
+Why a plugin: Zotero's built-in API sends no CORS headers, returns `file://` redirects for binary attachments (unreachable from web JS), and silently cancels any "browser-shaped" request as a CSRF mitigation. A Zotero plugin is the smallest layer that solves all three. See `freememo-zotero-plugin/README.md` for the full rationale, endpoint contracts, and dev-proxy workflow.
 
 ## Tech Stack
 
