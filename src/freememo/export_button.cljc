@@ -4,6 +4,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.icons :as icons]
    [freememo.card-modals :refer [ExportModal]]
    [freememo.keyboard :as keyboard]))
 
@@ -12,10 +13,15 @@
     (let [!show-export (atom false)
           show-export (e/watch !show-export)]
       (dom/button
-        (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-item" :style {:font-weight "500"}})
-        (dom/text (if (pos? unsynced-count)
-                    (str "Export (" unsynced-count ")...")
-                    "Export..."))
+        (dom/props {:class "btn btn-sm btn-secondary toolbar-collapse-second"
+                    :style {:font-weight "500"}
+                    :aria-label "Export"
+                    :data-tooltip "Export"})
+        (icons/Icon :download :size 16)
+        (dom/span (dom/props {:class "icon-label"})
+          (dom/text (if (pos? unsynced-count)
+                      (str "Export (" unsynced-count ")...")
+                      "Export...")))
         (reset! keyboard/!export-btn-ref dom/node)
         (e/on-unmount (fn [] (reset! keyboard/!export-btn-ref nil)))
         (dom/On "click" (fn [_] (reset! !show-export true)) nil))

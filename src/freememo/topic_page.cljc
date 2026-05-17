@@ -114,25 +114,41 @@
 ;; (The hierarchy hamburger lives inside HierarchySidePanel itself.)
 ;; ---------------------------------------------------------------------------
 
-(e/defn TitleBar [user-id pdf-root-id refresh page-info !show-bib]
+(e/defn TitleBar [user-id pdf-root-id refresh page-info !show-bib citation]
   (e/client
     (let [current-title (e/server (get-topic-title* refresh pdf-root-id))
           !editing-title (atom false)
           editing-title (e/watch !editing-title)]
       (dom/div
-        (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
-                            :padding "6px 12px" :flex-shrink "0"
+        (dom/props {:class "title-bar"
+                    :style {:display "flex" :align-items "baseline" :gap "14px"
+                            :padding "10px 16px" :flex-shrink "0"
                             :background "var(--color-bg-subtle)"
                             :border-bottom "1px solid var(--color-border)"}})
 
-        ;; Bibliography
+        ;; Bibliography — matches the app's standard btn-secondary used in
+        ;; the bottom-panel toolbar, so the bar's affordance reads as part
+        ;; of the same system rather than a one-off custom pill.
         (dom/button
           (dom/props {:class "btn btn-sm btn-secondary"
-                      :style {:padding "2px 8px" :font-size "13px" :line-height "1"
-                              :flex-shrink "0"}
+                      :style {:flex-shrink "0"}
                       :data-tooltip "Edit bibliography"})
           (dom/text "Bibliography")
           (dom/On "click" (fn [_] (reset! !show-bib true)) nil))
+
+        ;; Citation — italic caption framed by separator dots
+        (when citation
+          (dom/span
+            (dom/props {:style {:font-size "12px"
+                                :font-style "italic"
+                                :color "var(--color-text-hint)"
+                                :flex-shrink "0"
+                                :max-width "32%"
+                                :overflow "hidden"
+                                :text-overflow "ellipsis"
+                                :white-space "nowrap"}
+                        :data-tooltip citation})
+            (dom/text citation)))
 
         ;; Title — editable in place
         (if editing-title
@@ -161,30 +177,46 @@
                 nil)
               (let [event (dom/On "change" #(-> % .-target .-value) nil)
                     [t _] (e/Token event)]
-                (e/on-unmount #(reset! !editing-title false))
                 (when t
+                  (e/on-unmount #(reset! !editing-title false))
                   (let [trimmed (str/trim event)]
                     (if (str/blank? trimmed)
                       (t)
                       (let [ok (e/server (e/Offload #(rename-and-bump! user-id pdf-root-id trimmed)))]
                         (when (some? ok)
                           (case ok (t))))))))))
+          ;; Outer span owns the tooltip + click; inner span clips with
+          ;; ellipsis. Splitting prevents overflow:hidden from clipping the
+          ;; tooltip ::after popup (it would inherit the outer's clip).
           (dom/span
-            (dom/props {:style {:flex "1" :font-size "13px"
-                                :color "var(--color-text-primary)" :cursor "pointer"
-                                :overflow "hidden" :text-overflow "ellipsis"
-                                :white-space "nowrap"}
-                        :data-tooltip "Click to rename"})
-            (dom/text (or current-title ""))
-            (dom/On "click" (fn [_] (reset! !editing-title true)) nil)))
+            (dom/props {:style {:flex "1" :min-width "0" :cursor "pointer"
+                                :display "block"}
+                        :data-tooltip "Click to edit"})
+            (dom/On "click" (fn [_] (reset! !editing-title true)) nil)
+            (dom/span
+              (dom/props {:style {:display "block"
+                                  :font-size "15px" :font-weight "700"
+                                  :color "var(--color-text-primary)"
+                                  :overflow "hidden"
+                                  :text-overflow "ellipsis"
+                                  :white-space "nowrap"}})
+              (dom/text (or current-title "")))))
 
-        ;; Page-stats badge (X / Y) with tooltip listing remaining pages
+        ;; Page-stats badge (X / Y) — folio-style chip with tabular numerals
         (when (and page-info (pos? (:total page-info)))
           (let [remaining (:remaining page-info)]
             (dom/span
               (dom/props {:class "tooltip-right"
-                          :style {:color "var(--color-text-hint)" :font-size "12px"
-                                  :white-space "nowrap" :flex-shrink "0"}
+                          :style {:color "var(--color-text-primary)"
+                                  :font-size "11px"
+                                  :font-family "ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
+                                  :font-variant-numeric "tabular-nums"
+                                  :letter-spacing "0.04em"
+                                  :white-space "nowrap" :flex-shrink "0"
+                                  :padding "3px 8px"
+                                  :background "var(--color-bg-card)"
+                                  :border "1px solid var(--color-border)"
+                                  :border-radius "10px"}
                           :data-tooltip (cond
                                           (empty? remaining) "All pages done!"
                                           (<= (count remaining) 20)
@@ -307,40 +339,33 @@
             (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
                                 :min-height "0" :overflow "hidden"}})
 
-            ;; Title bar (PDF only) — non-PDFs have no header row
-            (when is-pdf?
-              (TitleBar user-id pdf-root-id refresh page-info !show-bib))
-
-            ;; Bibliography button row — non-PDF only (PDF gets it in TitleBar).
-            ;; Hamburger lives inside HierarchySidePanel post-refactor, so this
-            ;; is the only top-bar affordance non-PDF topics need.
-            (when-not is-pdf?
-              (dom/div
-                (dom/props {:style {:display "flex" :justify-content "flex-end"
-                                    :padding "4px 12px" :flex-shrink "0"
-                                    :border-bottom "1px solid var(--color-border)"}})
-                (dom/button
-                  (dom/props {:class "btn btn-sm btn-secondary"
-                              :style {:padding "2px 8px" :font-size "13px" :line-height "1"}
-                              :data-tooltip "Edit bibliography"})
-                  (dom/text "Bibliography")
-                  (dom/On "click" (fn [_] (reset! !show-bib true)) nil))))
-
-            ;; Citation row — visible when the topic has a sources row
+            ;; Bibliography header — single line in both modes:
+            ;; PDF:     [Bibliography] citation? title [stats]
+            ;; non-PDF: [Bibliography] citation
             (let [citation (e/server (bibform/get-topic-citation* refresh user-id bib-topic-id))]
-              (when citation
+              (if is-pdf?
+                (TitleBar user-id pdf-root-id refresh page-info !show-bib citation)
                 (dom/div
-                  (dom/props {:style {:padding "6px 12px"
-                                      :font-size "12px"
-                                      :color "var(--color-text-secondary)"
-                                      :background "var(--color-bg-subtle)"
+                  (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
+                                      :padding "6px 12px" :flex-shrink "0"
                                       :border-bottom "1px solid var(--color-border)"
-                                      :flex-shrink "0"
-                                      :overflow "hidden"
-                                      :text-overflow "ellipsis"
-                                      :white-space "nowrap"}
-                              :data-tooltip citation})
-                  (dom/text citation))))
+                                      :background "var(--color-bg-subtle)"}})
+                  (dom/button
+                    (dom/props {:class "btn btn-sm btn-secondary"
+                                :style {:padding "2px 8px" :font-size "13px" :line-height "1"
+                                        :flex-shrink "0"}
+                                :data-tooltip "Edit bibliography"})
+                    (dom/text "Bibliography")
+                    (dom/On "click" (fn [_] (reset! !show-bib true)) nil))
+                  (dom/span
+                    (dom/props {:style {:flex "1" :min-width "0"
+                                        :font-size "12px"
+                                        :color "var(--color-text-secondary)"
+                                        :overflow "hidden"
+                                        :text-overflow "ellipsis"
+                                        :white-space "nowrap"}
+                                :data-tooltip (or citation "")})
+                    (dom/text (or citation ""))))))
 
             ;; Auto-open biblio modal once on first mount after a fresh
             ;; import. claim-pending-biblio-show?* returns true (and clears the
@@ -367,8 +392,13 @@
               ;; navigate away manually without being snapped back.
               (when target-page (reset! !nav-target nil))
 
-              ;; LEFT: hierarchy side panel (manages its own open/collapsed state)
-              (HierarchySidePanel user-id page-topic-id root-topic-id navigate! !nav-target)
+              ;; LEFT: hierarchy side panel (manages its own open/collapsed state).
+              ;; Pass !nav-target only when this TopicPage hosts the PDF viewer —
+              ;; only in that mode is the target-page derivation (which gates on
+              ;; is-pdf?) able to consume an in-document page jump. Outside PDF
+              ;; mode the side panel must fall through to (navigate! :viewer …).
+              (HierarchySidePanel user-id page-topic-id root-topic-id navigate!
+                (when is-pdf? !nav-target))
 
               ;; RIGHT: content column
               (dom/div

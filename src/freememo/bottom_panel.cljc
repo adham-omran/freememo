@@ -31,7 +31,11 @@
            extract-status navigate! origin card-font-size]} refresh]
   (e/client
     (dom/div
-      (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0"}})
+      ;; min-width: 0 lets this flex item shrink below its intrinsic content
+      ;; width — required so the toolbar's container reports a clientWidth that
+      ;; reflects the visible pane width (not the natural content width).
+      (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
+                          :min-width "0" :min-height "0"}})
 
       (let [dirty (e/watch editor/!dirty-html)
             live-content (if (and dirty (= (:topic-id dirty) topic-id))

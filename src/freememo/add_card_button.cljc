@@ -4,6 +4,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.icons :as icons]
    [freememo.rich-text-editor :as editor]
    [freememo.card-modals :refer [AddCardModal]]
    [freememo.keyboard :as keyboard]))
@@ -15,8 +16,12 @@
           !card-kind (atom card-type)
           !captured-selection (atom "")]
       (dom/button
-        (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-item" :style {:font-weight "500"}})
-        (dom/text "Add new card")
+        (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-item"
+                    :style {:font-weight "500"}
+                    :aria-label "Add new card"
+                    :data-tooltip "Add new card"})
+        (icons/Icon :plus :size 16)
+        (dom/span (dom/props {:class "icon-label"}) (dom/text "Add new card"))
         (reset! keyboard/!add-new-btn-ref dom/node)
         (e/on-unmount (fn [] (reset! keyboard/!add-new-btn-ref nil)))
         (dom/On "click"

@@ -178,16 +178,9 @@
                                 :gap "var(--sp-2)" :padding "var(--sp-1) var(--sp-2)"
                                 :flex-shrink "0"}})
 
-            ;; p.<page-number> indicator
-            (dom/span
-              (dom/props {:style {:font-weight "600" :font-size "13px"
-                                  :color "var(--color-text-primary)"}})
-              (dom/text "p." page-number))
-
             ;; Done checkbox
             (dom/label
-              (dom/props {:style {:display "flex" :align-items "center"
-                                  :gap "3px" :font-size "12px" :cursor "pointer"}
+              (dom/props {:style {:display "flex" :align-items "center" :gap "3px" :font-size "12px" :cursor "pointer"}
                           :title "Mark this page as completed to track your extraction progress"})
               (e/for-by identity [_page [page-number]]
                 (dom/input
@@ -206,7 +199,7 @@
                       (case (e/server (db/toggle-page-done! root-topic-id (:page change-event)))
                         (case (e/server (swap! (us/get-atom user-id :meta-refresh) inc))
                           (t)))))))
-              (dom/text "Done"))
+              (dom/text (str "Mark page " page-number " as done")))
 
             ;; Scan Page button (AI OCR)
             (when (and llm-enabled? enable-ai?)
@@ -311,8 +304,8 @@
 
                 ;; Persist PDF.js extraction result server-side
                 (let [[t _] (e/Token pdfjs-result)]
-                  (e/on-unmount #(reset! !pdfjs-result nil))
                   (when t
+                    (e/on-unmount #(reset! !pdfjs-result nil))
                     (let [{:keys [page doc text error]} pdfjs-result
                           result (e/server
                                    (e/Offload
@@ -388,8 +381,8 @@
 
           ;; e/Token: handle one pin-request at a time
           (let [[t _] (e/Token pin-request)]
-            (e/on-unmount #(reset! !pin-request nil))
             (when t
+              (e/on-unmount #(reset! !pin-request nil))
               (let [{:keys [media-id placement topic-id]} pin-request
                     result (e/server
                              (e/Offload

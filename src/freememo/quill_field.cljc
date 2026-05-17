@@ -134,19 +134,21 @@
      :clj nil))
 
 (defn destroy-quill-field!
-  "Destroy a QuillField Quill instance and clean up its DOM. No ^js params."
+  "Destroy a QuillField Quill instance and clean up its DOM. No ^js params —
+   ^js hints live on let-bindings inside the :cljs branch."
   [ed]
   #?(:cljs
      (when ed
-       (.off ed "text-change")
-       (let [container (.-container ed)]
-         (when container
-           (let [parent (.-parentNode container)]
-             (when parent
-               (let [toolbar (.querySelector parent ".ql-toolbar")]
-                 (when toolbar
-                   (.remove toolbar)))))
-           (set! (.-innerHTML container) ""))))
+       (let [^js ed ed]
+         (.off ed "text-change")
+         (let [^js container (.-container ed)]
+           (when container
+             (let [^js parent (.-parentNode container)]
+               (when parent
+                 (let [^js toolbar (.querySelector parent ".ql-toolbar")]
+                   (when toolbar
+                     (.remove toolbar)))))
+             (set! (.-innerHTML container) "")))))
      :clj nil))
 
 (defn schedule-quill-init!

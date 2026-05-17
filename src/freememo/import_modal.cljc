@@ -10,6 +10,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [hyperfiddle.electric-forms5 :as forms]
    [freememo.navigation :as nav]
    #?(:clj [freememo.quota :as quota])))
 
@@ -150,25 +151,37 @@
 
 ;; ── Sub-components ─────────────────────────────────────────────────
 
-(e/defn UrlInput [!url on-fetch]
+;; Pre:  `on-fetch` is a 1-arg fn taking a non-blank url string.
+;; Post: on submit (button click or Enter inside the Form's <form>), `(on-fetch url)`
+;;       fires once and the form's token is spent.
+;; Invariant: :required + HTML validation blocks submit on empty.
+(e/defn UrlInput [on-fetch]
   (e/client
-    (dom/p
-      (dom/props {:style {:margin "0 0 12px 0" :font-size "13px" :color "var(--color-text-secondary)"}})
-      (dom/text "Paste a Wikipedia or any web page URL. PDFs and EPUBs are recognized and offered for import."))
-    (dom/input
-      (dom/props {:type "text"
-                  :placeholder "https://en.wikipedia.org/wiki/..."
-                  :value (e/watch !url)
-                  :class "input input-full"
-                  :style {:padding "10px 12px" :margin-bottom "var(--sp-3)"}})
-      (dom/On "input" (fn [e] (reset! !url (-> e .-target .-value))) nil)
-      (dom/On "keydown" (fn [e] (when (= (.-key e) "Enter") (on-fetch))) nil))
-    (dom/div
-      (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
-      (dom/button
-        (dom/props {:class "btn btn-primary" :style {:font-weight "600" :order "1"}})
-        (dom/text "Fetch")
-        (dom/On "click" (fn [_] (on-fetch)) nil)))))
+    (let [commits (forms/Form! {:url ""}
+                    (e/fn Fields [{:keys [url]}]
+                      (e/amb
+                        (dom/p
+                          (dom/props {:style {:margin "0 0 12px 0" :font-size "13px"
+                                              :color "var(--color-text-secondary)"}})
+                          (dom/text "Paste a Wikipedia or any web page URL. PDFs and EPUBs are recognized and offered for import."))
+                        (forms/Input! :url (or url "")
+                          :type "text"
+                          :placeholder "https://en.wikipedia.org/wiki/..."
+                          :required true
+                          :class "input input-full"
+                          :style {:padding "10px 12px" :margin-bottom "var(--sp-3)"})
+                        (dom/div
+                          (dom/props {:style {:display "flex" :gap "var(--sp-2)"
+                                              :justify-content "flex-end"}})
+                          (forms/SubmitButton! :label "Fetch"
+                            :class "btn btn-primary"
+                            :style {:font-weight "600" :order "1"}))))
+                    :type :command
+                    :show-buttons false
+                    :Parse (e/fn [{:keys [url]} _tempid]
+                             [`Fetch-url url]))]
+      (e/for [[token cmd] (e/diff-by first (e/as-vec commits))]
+        (do (on-fetch (nth cmd 1)) (token))))))
 
 (e/defn FilePicker [!file !file-input on-file cap-bytes]
   (e/client
@@ -291,58 +304,90 @@
           (dom/text "Import")
           (dom/On "click" (fn [_] (on-import)) nil))))))
 
-(e/defn TextFileReviewStage [!flow !title !filename on-confirm on-cancel]
+;; Pre:  `!flow`, `!filename`, `!title` are atoms; !title may carry a
+;;       file-extracted seed value. `on-confirm` is a 1-arg fn taking the
+;;       edited title (non-blank by :required). `on-cancel` is a 0-arg fn.
+;; Post: on submit → `(on-confirm title)`; on cancel → `(on-cancel)`. Token spent.
+;; Invariant: :required blocks submit on empty title. The Form! owns the title
+;;            field after mount; !title atom is no longer mutated by edits here.
+(e/defn TextFileReviewCancelButton [on-cancel]
+  (dom/button
+    (dom/props {:class "btn btn-secondary" :type "button"})
+    (dom/text "Cancel")
+    (dom/On "click" (fn [_] (on-cancel)) nil))
+  (e/amb))
+
+(e/defn TextFileReviewStage [!flow !filename !title on-confirm on-cancel]
   (e/client
     (let [flow (e/watch !flow)
-          title (e/watch !title)
           filename (e/watch !filename)
-          label (flow-label flow)]
-      (dom/p
-        (dom/props {:style {:margin "0 0 12px 0" :font-size "13px"}})
-        (dom/text (str "This is an " label " file.")))
-      (dom/div
-        (dom/props {:style {:padding "12px" :margin-bottom "var(--sp-3)"
-                            :background "var(--color-bg-subtle)"
-                            :border-radius "var(--radius-sm)"
-                            :font-size "13px" :font-weight "500"}})
-        (dom/text (or filename "")))
-      (dom/label
-        (dom/props {:class "label" :style {:color "var(--color-text-secondary)"}})
-        (dom/text "Title"))
-      (dom/input
-        (dom/props {:type "text" :placeholder "Document title"
-                    :value (or title "")
-                    :class "input input-full" :style {:margin-bottom "var(--sp-3)"}})
-        (dom/On "input" (fn [e] (reset! !title (-> e .-target .-value))) nil))
-      (dom/div
-        (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
-        (dom/button
-          (dom/props {:class "btn btn-primary" :style {:font-weight "600" :order "1"}
-                      :disabled (empty? title)})
-          (dom/text "Import")
-          (dom/On "click" (fn [_] (on-confirm)) nil))
-        (dom/button
-          (dom/props {:class "btn btn-secondary"})
-          (dom/text "Cancel")
-          (dom/On "click" (fn [_] (on-cancel)) nil))))))
+          title (e/watch !title)
+          label (flow-label flow)
+          commits (forms/Form! {:title (or title "")}
+                    (e/fn Fields [{:keys [title]}]
+                      (e/amb
+                        (dom/p
+                          (dom/props {:style {:margin "0 0 12px 0" :font-size "13px"}})
+                          (dom/text (str "This is an " label " file.")))
+                        (dom/div
+                          (dom/props {:style {:padding "12px" :margin-bottom "var(--sp-3)"
+                                              :background "var(--color-bg-subtle)"
+                                              :border-radius "var(--radius-sm)"
+                                              :font-size "13px" :font-weight "500"}})
+                          (dom/text (or filename "")))
+                        (dom/label
+                          (dom/props {:class "label" :style {:color "var(--color-text-secondary)"}})
+                          (dom/text "Title"))
+                        (forms/Input! :title (or title "")
+                          :type "text"
+                          :placeholder "Document title"
+                          :required true
+                          :class "input input-full"
+                          :style {:margin-bottom "var(--sp-3)"})
+                        (dom/div
+                          (dom/props {:style {:display "flex" :gap "var(--sp-2)"
+                                              :justify-content "flex-end"}})
+                          (e/amb
+                            (forms/SubmitButton! :label "Import"
+                              :class "btn btn-primary"
+                              :style {:font-weight "600" :order "1"})
+                            (TextFileReviewCancelButton on-cancel)))))
+                    :type :command
+                    :show-buttons false
+                    :Parse (e/fn [{:keys [title]} _tempid]
+                             [`Text-confirm title]))]
+      (e/for [[token cmd] (e/diff-by first (e/as-vec commits))]
+        (do (on-confirm (nth cmd 1)) (token))))))
 
-(e/defn NewTopicInput [!title on-create]
+;; Pre:  `on-create` is a 1-arg fn taking a title string (possibly empty).
+;; Post: on submit, `(on-create title)` fires once and the form's token is spent.
+;; Invariant: empty title is allowed — the parent's callback defaults to "New Topic".
+(e/defn NewTopicInput [on-create]
   (e/client
-    (dom/p
-      (dom/props {:style {:margin "0 0 12px 0" :font-size "13px" :color "var(--color-text-secondary)"}})
-      (dom/text "Create a blank topic. You can add content later."))
-    (dom/input
-      (dom/props {:type "text" :placeholder "Topic title..."
-                  :value (e/watch !title)
-                  :class "input input-full" :style {:padding "10px 12px" :margin-bottom "var(--sp-3)"}})
-      (dom/On "input" (fn [e] (reset! !title (-> e .-target .-value))) nil)
-      (dom/On "keydown" (fn [e] (when (= (.-key e) "Enter") (on-create))) nil))
-    (dom/div
-      (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
-      (dom/button
-        (dom/props {:class "btn btn-primary" :style {:font-weight "600" :order "1"}})
-        (dom/text "Create")
-        (dom/On "click" (fn [_] (on-create)) nil)))))
+    (let [commits (forms/Form! {:title ""}
+                    (e/fn Fields [{:keys [title]}]
+                      (e/amb
+                        (dom/p
+                          (dom/props {:style {:margin "0 0 12px 0" :font-size "13px"
+                                              :color "var(--color-text-secondary)"}})
+                          (dom/text "Create a blank topic. You can add content later."))
+                        (forms/Input! :title (or title "")
+                          :type "text"
+                          :placeholder "Topic title..."
+                          :class "input input-full"
+                          :style {:padding "10px 12px" :margin-bottom "var(--sp-3)"})
+                        (dom/div
+                          (dom/props {:style {:display "flex" :gap "var(--sp-2)"
+                                              :justify-content "flex-end"}})
+                          (forms/SubmitButton! :label "Create"
+                            :class "btn btn-primary"
+                            :style {:font-weight "600" :order "1"}))))
+                    :type :command
+                    :show-buttons false
+                    :Parse (e/fn [{:keys [title]} _tempid]
+                             [`Create-topic title]))]
+      (e/for [[token cmd] (e/diff-by first (e/as-vec commits))]
+        (do (on-create (nth cmd 1)) (token))))))
 
 (e/defn ConfirmingStage [!staged !flow !image-mode !advanced-open on-confirm on-cancel]
   (e/client
@@ -450,7 +495,6 @@
           !filename (atom nil)
           !error (atom nil)
           !quota-error? (atom false)
-          !url (atom "")
           !file (atom nil)
           !file-input (atom nil)
           !title (atom "")
@@ -489,15 +533,13 @@
                               (post-multipart! "/api/upload-file" f {}
                                 handle-resp
                                 handle-fetch-err))))
-          on-fetch-url (fn []
+          ;; Pre: url is a non-blank string (UrlInput's :required enforces non-empty).
+          on-fetch-url (fn [url]
                          (reset-error! !error !quota-error?)
-                         (if (empty? @!url)
-                           (do (reset! !error "Please enter a URL.")
-                               (reset! !stage :error))
-                           (do (reset! !stage :fetching)
-                               (post-form! "/api/upload-url" {"url" @!url}
-                                 handle-resp
-                                 handle-fetch-err))))
+                         (reset! !stage :fetching)
+                         (post-form! "/api/upload-url" {"url" url}
+                           handle-resp
+                           handle-fetch-err))
           on-paste-import (fn []
                             (reset-error! !error !quota-error?)
                             (let [format-v @!format
@@ -522,9 +564,10 @@
                                         (assoc "url" @!paste-url))
                                       handle-resp
                                       handle-fetch-err)))))
-          on-new-topic (fn []
+          ;; Pre: title may be empty (defaults to "New Topic"). No Forms5 validation.
+          on-new-topic (fn [title]
                          (reset-error! !error !quota-error?)
-                         (let [title-v (if (seq @!title) @!title "New Topic")]
+                         (let [title-v (if (seq title) title "New Topic")]
                            (reset! !stage :importing)
                            (post-form! "/api/create-topic" {"title" title-v}
                              handle-resp
@@ -541,24 +584,18 @@
                               (reset! !staged nil)
                               (reset! !flow nil)
                               (reset! !stage :collecting))
-          on-text-confirm (fn []
+          ;; Pre: title is non-blank (TextFileReviewStage's :required enforces).
+          on-text-confirm (fn [title]
                             (reset-error! !error !quota-error?)
                             (let [flow-v @!flow
-                                  title-v @!title
                                   content-v (if (= flow-v "html") @!html-text @!md-text)]
-                              (cond
-                                (empty? title-v)
-                                (do (reset! !error "Title is required.")
-                                    (reset! !stage :error))
-
-                                :else
-                                (do (reset! !stage :importing)
-                                    (post-form! "/api/upload-paste"
-                                      {"format" flow-v
-                                       "title" title-v
-                                       "content" content-v}
-                                      handle-resp
-                                      handle-fetch-err)))))
+                              (reset! !stage :importing)
+                              (post-form! "/api/upload-paste"
+                                {"format" flow-v
+                                 "title" title
+                                 "content" content-v}
+                                handle-resp
+                                handle-fetch-err)))
           on-cancel-text (fn []
                            (reset! !html-text "")
                            (reset! !md-text "")
@@ -609,15 +646,15 @@
             :importing (StatusStage "Importing…")
             :confirming (ConfirmingStage !staged !flow !image-mode !advanced-open
                                          on-confirm on-cancel-confirm)
-            :text-confirming (TextFileReviewStage !flow !title !filename
+            :text-confirming (TextFileReviewStage !flow !filename !title
                                                   on-text-confirm on-cancel-text)
             :error (ErrorStage !error !quota-error? on-try-again on-manage-library)
             :done nil
             ;; :collecting (default)
             (case source
-              :url (UrlInput !url on-fetch-url)
+              :url (UrlInput on-fetch-url)
               :file (FilePicker !file !file-input handle-file cap-bytes)
               :paste (PasteEditor !format !title !paste-url !html-text !md-text
                                   on-paste-import)
-              :new-topic (NewTopicInput !title on-new-topic)
+              :new-topic (NewTopicInput on-new-topic)
               nil)))))))

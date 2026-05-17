@@ -9,6 +9,7 @@
    [cheshire.core :as json]
    [taoensso.telemere :as tel]
    [clojure.string :as str]
+   [freememo.csl-util :as csl]
    [freememo.input-check :as input]
    [freememo.quota :as quota]
    [freememo.text :as text])
@@ -1117,7 +1118,7 @@
                            :URL url
                            :accessed {:date-parts (now-date-parts)}}
                     wikipedia? (assoc :container-title "Wikipedia")
-                    (seq issued-dp) (assoc :issued {:date-parts issued-dp}))]
+                    (seq issued-dp) (assoc :issued {:date-parts (csl/pad-date-parts issued-dp)}))]
           (create-source! {:user-id user-id
                            :csl-type "webpage"
                            :csl csl

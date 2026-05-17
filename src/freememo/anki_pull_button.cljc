@@ -5,6 +5,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.anki-sync-helpers :as anki]
+   [freememo.icons :as icons]
    [freememo.keyboard :as keyboard]
    #?(:clj [freememo.anki-sync-server :as sync])))
 
@@ -33,15 +34,17 @@
                   "Pull from Anki")]
 
       (dom/button
-        (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-item"
+        (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-item toolbar-collapse-early"
                     :style {:background "var(--color-bg-subtle)"
                             :color "var(--color-text-primary)"
                             :font-weight "500"}
                     :disabled in-flight?
-                    :title (case pull-phase
-                             :error (or pull-error "Pull failed")
-                             "Pull edits from Anki for this document. Reads notes by their stored Anki note id.")})
-        (dom/text label)
+                    :aria-label "Pull from Anki"
+                    :data-tooltip (case pull-phase
+                                    :error (or pull-error "Pull failed")
+                                    "Pull edits from Anki for this document.")})
+        (icons/Icon :cloud-download :size 16)
+        (dom/span (dom/props {:class "icon-label"}) (dom/text label))
         (reset! keyboard/!pull-anki-btn-ref dom/node)
         (e/on-unmount (fn [] (reset! keyboard/!pull-anki-btn-ref nil)))
         (dom/On "click"
