@@ -37,12 +37,11 @@
       (reset! keyboard/!done-btn-ref dom/node)
       (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
       (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
-            [?token _error] (e/Token event)]
-        (when-some [token ?token]
-          (let [r (e/server (e/Offload #(do (done-topic* topic-id) :ok)))]
-            (when (some? r)
-              (token)
-              (swap! !queue-idx inc))))))))
+            [t _error] (e/Token event)]
+        (e/on-unmount #(swap! !queue-idx inc))
+        (when t
+          (case (e/server (e/Offload #(do (done-topic* topic-id) :ok)))
+            (t)))))))
 
 ;; Shared bottom bar with Postpone + Next
 (e/defn BottomBar [topic-id !queue-idx]
@@ -77,14 +76,14 @@
                                 {:id (str (random-uuid))
                                  :days #?(:cljs (js/parseInt v) :clj nil)}))
                             nil)
-                    [?token _error] (e/Token event)]
-                (when-some [token ?token]
-                  (when-some [days (:days event)]
-                    (when (pos? days)
-                      (e/server (postpone-topic* topic-id days))))
-                  (reset! !show-postpone false)
-                  (token)
-                  (swap! !queue-idx inc))))
+                    [t _error] (e/Token event)]
+                (e/on-unmount #(swap! !queue-idx inc))
+                (when t
+                  (let [days (:days event)]
+                    (case (e/server (when (and days (pos? days))
+                                      (postpone-topic* topic-id days)))
+                      (case (e/client (reset! !show-postpone false))
+                        (t)))))))
             (dom/button
               (dom/props {:class "btn btn-sm btn-secondary" :style {:padding "6px 12px"}})
               (dom/text "Cancel")
@@ -107,14 +106,14 @@
                                 :cursor (if busy "not-allowed" "pointer")}})
             (dom/text "Next")
             (let [event (dom/On "click" (fn [_] (when-not @!busy (str (random-uuid)))) nil)
-                  [?token _error] (e/Token event)]
-              (when-some [token ?token]
+                  [t _error] (e/Token event)]
+              (e/on-unmount #(do (swap! !queue-idx inc)
+                               (js/setTimeout (fn [] (reset! !busy false)) 500)))
+              (when t
                 (reset! !busy true)
-                (e/server (advance-topic* topic-id))
-                (token)
-                (log/log-debug (str "Session advancing idx=" (inc @!queue-idx)))
-                (swap! !queue-idx inc)
-                (js/setTimeout (fn [] (reset! !busy false)) 500)))))))))
+                (case (e/server (advance-topic* topic-id))
+                  (case (e/client (log/log-debug (str "Session advancing idx=" (inc @!queue-idx))))
+                    (t)))))))))))
 
 ;; Session header bar
 (e/defn SessionHeader [item !queue-idx navigate! idx total]
@@ -159,11 +158,10 @@
                                   :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)" :text-align "center"}})
               (set! (.-value dom/node) (str priority))
               (let [change-event (dom/On "change" #(-> % .-target .-value js/parseInt) nil)
-                    [?token _] (e/Token change-event)]
-                (when-some [token ?token]
-                  (let [r (e/server (e/Offload #(do (update-topic-priority* topic-id change-event) :ok)))]
-                    (when (some? r)
-                      (token))))))))
+                    [t _] (e/Token change-event)]
+                (when t
+                  (case (e/server (e/Offload #(do (update-topic-priority* topic-id change-event) :ok)))
+                    (t)))))))
 
         ;; Counter
         (dom/span
@@ -195,10 +193,9 @@
               (dom/props {:class "btn btn-primary" :style {:padding "10px 28px" :font-size "15px" :font-weight "600"}})
               (dom/text "Back to Overview")
               (let [event (dom/On "click" (fn [_] :back) nil)
-                    [?token _error] (e/Token event)]
-                (when-some [token ?token]
-                  (token)
-                  (navigate! :learn)))))
+                    [t _error] (e/Token event)]
+                (when t
+                  (case (t) (navigate! :learn))))))
 
           ;; Active topic
           (let [item (nth queue-vec idx nil)

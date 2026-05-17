@@ -51,13 +51,13 @@
               (reset! keyboard/!done-btn-ref dom/node)
               (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
               (dom/On "click" (fn [_] (reset! !done-click (str (random-uuid)))) nil))
-            (let [[?token _] (e/Token done-click)]
-              (when-some [token ?token]
-                (let [r (e/server (e/Offload #(do (db/done-topic! topic-id) :ok)))]
-                  (when (some? r)
-                    (e/server (swap! (us/get-atom user-id :refresh) inc))
-                    (token)
-                    (when (and navigate! origin) (navigate! origin)))))))
+            (let [[t _] (e/Token done-click)]
+              (when t
+                (case (e/server (e/Offload #(do (db/done-topic! topic-id) :ok)))
+                  (case (e/server (swap! (us/get-atom user-id :refresh) inc))
+                    (if (and navigate! origin)
+                      (case (navigate! origin) (t))
+                      (t)))))))
 
           ;; Done status: show Restore button
           (let [!restore-click (atom nil)
@@ -71,13 +71,13 @@
               (reset! keyboard/!done-btn-ref dom/node)
               (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
               (dom/On "click" (fn [_] (reset! !restore-click (str (random-uuid)))) nil))
-            (let [[?token _] (e/Token restore-click)]
-              (when-some [token ?token]
-                (let [r (e/server (e/Offload #(do (db/restore-topic! topic-id) :ok)))]
-                  (when (some? r)
-                    (e/server (swap! (us/get-atom user-id :refresh) inc))
-                    (token)
-                    (when (and navigate! origin) (navigate! origin)))))))))
+            (let [[t _] (e/Token restore-click)]
+              (when t
+                (case (e/server (e/Offload #(do (db/restore-topic! topic-id) :ok)))
+                  (case (e/server (swap! (us/get-atom user-id :refresh) inc))
+                    (if (and navigate! origin)
+                      (case (navigate! origin) (t))
+                      (t)))))))))
 
       ;; Delete button — hidden, triggered via overflow menu proxy
       (when (some? extract-status)
@@ -119,21 +119,15 @@
                     (dom/props {:class "btn btn-danger-fill"})
                     (dom/text "Delete")
                     (let [event (dom/On "click" (fn [_] :confirmed) nil)
-                          [?token _] (e/Token event)]
-                      (when-some [token ?token]
-                        ;; result MUST be inside when-some so e/server stays
-                        ;; mounted until the response arrives. The (when (some?
-                        ;; result) ...) guard waits for the server roundtrip
-                        ;; before firing any side effects — without it, (token)
-                        ;; closes ?token, the subtree unmounts, and the cond
-                        ;; never gets to see the resolved value.
+                          [t _] (e/Token event)]
+                      (when t
                         (let [result (e/server (e/Offload #(delete-topic-with-parent! user-id topic-id)))]
-                          (when (some? result)
-                            (e/client (card-components/try-delete-anki-notes! (:note-ids result)))
-                            (token)
-                            (reset! !delete-state nil)
-                            (when navigate!
-                              (cond
-                                (:parent-id result) (navigate! :viewer (nav/nav-topic (:parent-id result) origin))
-                                origin (navigate! origin)
-                                :else (navigate! :library)))))))))))))))))
+                          (case result
+                            (case (e/client (card-components/try-delete-anki-notes! (:note-ids result)))
+                              (if navigate!
+                                (case (cond
+                                        (:parent-id result) (navigate! :viewer (nav/nav-topic (:parent-id result) origin))
+                                        origin (navigate! origin)
+                                        :else (navigate! :library))
+                                  (case (reset! !delete-state nil) (t)))
+                                (case (reset! !delete-state nil) (t))))))))))))))))))

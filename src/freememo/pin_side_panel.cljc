@@ -70,22 +70,18 @@
           (dom/props {:class "pin-thumb__badge"})
           (dom/text badge-text)
           (let [click-ev (dom/On "click" identity nil)
-                [?token _] (e/Token click-ev)]
-            (when-some [token ?token]
-              (let [result (e/server (e/Offload #(toggle-pin-placement!* user-id pin-id placement)))]
-                (when result
-                  (token))))))
+                [t _] (e/Token click-ev)]
+            (when t
+              (case (e/server (e/Offload #(toggle-pin-placement!* user-id pin-id placement))) (t)))))
 
         ;; × remove button
         (dom/button
           (dom/props {:class "pin-thumb__remove"})
           (dom/text "×")
           (let [click-ev (dom/On "click" identity nil)
-                [?token _] (e/Token click-ev)]
-            (when-some [token ?token]
-              (let [result (e/server (e/Offload #(remove-pin!* user-id pin-id)))]
-                (when result
-                  (token))))))))))
+                [t _] (e/Token click-ev)]
+            (when t
+              (case (e/server (e/Offload #(remove-pin!* user-id pin-id))) (t)))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; PinSidePanel — exported component
@@ -99,17 +95,17 @@
     ;; DOM subtree persist across page scrolls. Pin data still queries by
     ;; topic-id since pins are per-topic.
     (e/for-by identity [_k [root-topic-id]]
-      (let [initial-open?   (e/server (settings/get-pins-open user-id root-topic-id))
-            !open?          (atom initial-open?)
-            open?           (e/watch !open?)
-            !save           (atom nil)
-            save-val        (e/watch !save)
-            [?save-token _] (e/Token save-val)]
+      (let [initial-open? (e/server (settings/get-pins-open user-id root-topic-id))
+            !open? (atom initial-open?)
+            open? (e/watch !open?)
+            !save (atom nil)
+            save-val (e/watch !save)
+            [t _] (e/Token save-val)]
 
-        (when-some [token ?save-token]
+        (when t
           (let [r (e/server (e/Offload #(settings/save-pins-open user-id root-topic-id save-val)))]
-            (when (some? r)
-              (if (:success r) (token) (token (:error r))))))
+            (case r
+              (case (if (:success r) (t) (t (:error r)))))))
 
         (dom/div
           (dom/props {:class (str "pin-side-panel"

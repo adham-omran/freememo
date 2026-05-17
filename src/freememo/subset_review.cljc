@@ -45,16 +45,16 @@
                               :cursor (if busy "not-allowed" "pointer")}})
           (dom/text "Next")
           (let [event (dom/On "click" (fn [_] (when-not @!busy (str (random-uuid)))) nil)
-                [?token _error] (e/Token event)]
-            (when-some [token ?token]
+                [t _error] (e/Token event)]
+            (when t
               (reset! !busy true)
-              (e/server
-                (if outstanding?
-                  (db/advance-topic! topic-id)
-                  (db/touch-topic! topic-id)))
-              (token)
-              (swap! !queue-idx inc)
-              (js/setTimeout (fn [] (reset! !busy false)) 500))))))))
+              (case (e/server
+                      (if outstanding?
+                        (db/advance-topic! topic-id)
+                        (db/touch-topic! topic-id)))
+                (case (e/client (swap! !queue-idx inc)
+                        (js/setTimeout (fn [] (reset! !busy false)) 500))
+                  (t))))))))))
 
 ;; Session header — banner, counter, back button
 (e/defn SubsetSessionHeader [item !queue-idx idx total outstanding-remaining root-name on-exit!]

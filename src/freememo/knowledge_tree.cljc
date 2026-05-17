@@ -205,16 +205,15 @@
                       (reset! !editing-id nil)))
                   nil)
                 (let [event (dom/On "change" #(-> % .-target .-value) nil)
-                      [?token _] (e/Token event)]
-                  (when-some [token ?token]
+                      [t _] (e/Token event)]
+                  (when t
                     (let [trimmed (str/trim event)]
                       (if (str/blank? trimmed)
-                        (do (token)
-                          (reset! !editing-id nil))
+                        (case (e/client (reset! !editing-id nil)) (t))
                         (let [ok (e/server (e/Offload #(rename-and-refresh! user-id id trimmed)))]
-                          (when (some? ok)
-                            (token)
-                            (reset! !editing-id nil)))))))))
+                          (case ok
+                            (case (e/client (reset! !editing-id nil))
+                              (t))))))))))
             (dom/span
               (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
                                   :font-size (if is-root "13px" "12px")
@@ -314,19 +313,19 @@
               (dom/props {:class "btn btn-danger-fill"})
               (dom/text "Delete")
               (let [event (dom/On "click" (fn [_] show-confirm) nil)
-                    [?token _] (e/Token event)]
-                (when-some [token ?token]
+                    [t _] (e/Token event)]
+                (when t
                   (let [topic-to-delete event
                         note-ids (e/server (e/Offload #(vec (db/get-all-anki-note-ids topic-to-delete))))]
-                    (when (some? note-ids)
+                    (case note-ids
                       (let [r (e/server (e/Offload #(do (db/delete-topic-for-user! user-id topic-to-delete) :ok)))]
-                        (when (some? r)
-                          (e/server (swap! (us/get-atom user-id :refresh) inc))
-                          (e/server (swap! (us/get-atom user-id :tree-mutations) inc))
-                          (e/client (card-components/try-delete-anki-notes! note-ids))
-                          (e/client (pdf-cache/cache-delete topic-to-delete))
-                          (token)
-                          (reset! !show-confirm nil))))))))))))))
+                        (case r
+                          (case (e/server (swap! (us/get-atom user-id :refresh) inc))
+                            (case (e/server (swap! (us/get-atom user-id :tree-mutations) inc))
+                              (case (e/client (card-components/try-delete-anki-notes! note-ids))
+                                (case (e/client (pdf-cache/cache-delete topic-to-delete))
+                                  (case (e/client (reset! !show-confirm nil))
+                                    (t)))))))))))))))))))
 
 ;; Document tree view — used by LibraryPage
 ;; Flatten + virtual scroll for performance

@@ -20,13 +20,13 @@
             (dom/input
               (dom/props {:type "checkbox" :checked use-context})
               (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
-                    [?token ?error] (e/Token change-event)]
+                    [t ?error] (e/Token change-event)]
                 (when (some? change-event)
                   (reset! !use-context change-event))
-                (when-some [token ?token]
+                (when t
                   (let [r (e/server (e/Offload #(settings/save-context-enabled user-id change-event)))]
-                    (when (some? r)
-                      (if (:success r) (token) (token (:error r))))))))
+                    (case r
+                      (if (:success r) (t) (t (:error r))))))))
             (dom/text "Context"))
           (dom/input
             (dom/props {:type "number" :min "1" :max "10" :value (str context-window)
@@ -38,13 +38,13 @@
                                 (fn [e] (let [v (-> e .-target .-value)]
                                           (if (seq v) (js/parseInt v) nil)))
                                 nil)
-                  [?token ?error] (e/Token input-event)]
+                  [t ?error] (e/Token input-event)]
               (when (some? input-event)
                 (reset! !context-window input-event))
-              (when-some [token ?token]
+              (when t
                 (let [r (e/server (e/Offload #(settings/save-context-pages user-id input-event)))]
-                  (when (some? r)
-                    (if (:success r) (token) (token (:error r))))))))
+                  (case r
+                    (if (:success r) (t) (t (:error r))))))))
           (dom/span (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)"}}) (dom/text "pages")))
 
         ;; Separator
@@ -118,13 +118,13 @@
                                 (fn [e] (let [v (-> e .-target .-value)]
                                           (if (seq v) (js/parseInt v) nil)))
                                 nil)
-                  [?token ?error] (e/Token input-event)]
+                  [t ?error] (e/Token input-event)]
               (when (some? input-event)
                 (reset! !card-count input-event))
-              (when-some [token ?token]
+              (when t
                 (let [r (e/server (e/Offload #(settings/save-card-count user-id input-event)))]
-                  (when (some? r)
-                    (if (:success r) (token) (token (:error r))))))))
+                  (case r
+                    (if (:success r) (t) (t (:error r))))))))
 
           ;; Increment button (visible on touch only via CSS)
           (dom/button

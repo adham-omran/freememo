@@ -74,13 +74,12 @@
         (let [pull-data (e/watch !pull-updates)
               updates (:updates pull-data)
               deleted (:deleted pull-data)
-              [?token _] (e/Token [::toolbar-record-pull root-topic-id])]
-          (when-some [token ?token]
+              [t _] (e/Token [::toolbar-record-pull root-topic-id])]
+          (when t
             (let [result (e/server (e/Offload #(sync/apply-pull-updates user-id updates deleted)))]
               (when (some? result)
                 (if (:success result)
-                  (do (reset! !pull-phase :done)
-                    (token))
-                  (do (reset! !pull-error (:error result))
-                    (reset! !pull-phase :error)
-                    (token)))))))))))
+                  (case (e/client (reset! !pull-phase :done)) (t))
+                  (case (e/client (reset! !pull-error (:error result))
+                          (reset! !pull-phase :error))
+                    (t)))))))))))

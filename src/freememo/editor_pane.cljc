@@ -148,24 +148,26 @@
         ;; Wikipedia link import effect
         ;; -----------------------------------------------------------------------
         (let [import-data (e/watch editor/!import-url)
-              [?token _] (e/Token import-data)]
-          (when-some [token ?token]
+              [t _] (e/Token import-data)]
+          (when t
             (let [url (:url import-data)
                   result (e/server
                            (e/Offload
                              #(import-wikipedia-url* user-id url)))]
-              (when (some? result)
+              (case result
                 (let [status (cond
                                (:imported result) :done
                                (:already-exists result) :already-exists
                                :else :error)]
                   (reset! editor/!import-status status)
-                  (token)
-                  (when (= status :done)
-                    (e/server (swap! (us/get-atom user-id :refresh) inc))
-                    (e/server (swap! (us/get-atom user-id :tree-mutations) inc)))
-                  (when (and (:topic-id result) on-imported-navigate!)
-                    (on-imported-navigate! (:topic-id result))))))))
+                  (if (= status :done)
+                    (case (e/server (swap! (us/get-atom user-id :refresh) inc))
+                      (case (e/server (swap! (us/get-atom user-id :tree-mutations) inc))
+                        (if (and (:topic-id result) on-imported-navigate!)
+                          (case (on-imported-navigate! (:topic-id result))
+                            (t))
+                          (t))))
+                    (t)))))))
 
         ;; -----------------------------------------------------------------------
         ;; Page header (PDF mode only)
@@ -199,11 +201,11 @@
                                        (fn [ev] {:checked (-> ev .-target .-checked)
                                                  :page page-number})
                                        nil)
-                        [?token _] (e/Token change-event)]
-                    (when-some [token ?token]
-                      (e/server (db/toggle-page-done! root-topic-id (:page change-event)))
-                      (e/server (swap! (us/get-atom user-id :meta-refresh) inc))
-                      (token)))))
+                        [t _] (e/Token change-event)]
+                    (when t
+                      (case (e/server (db/toggle-page-done! root-topic-id (:page change-event)))
+                        (case (e/server (swap! (us/get-atom user-id :meta-refresh) inc))
+                          (t)))))))
               (dom/text "Done"))
 
             ;; Scan Page button (AI OCR)
@@ -222,8 +224,8 @@
                   (let [click-event (dom/On "click"
                                       (fn [_] {:id (str (random-uuid)) :page page-number})
                                       nil)
-                        [?token _] (e/Token click-event)]
-                    (when-some [token ?token]
+                        [t _] (e/Token click-event)]
+                    (when t
                       (case (e/server
                               (let [pg (:page click-event)
                                     doc root-topic-id
@@ -232,7 +234,7 @@
                                 (if (contains? @(us/get-atom uid :scanning-pages) [doc pg])
                                   (log/log-info (str "OCR scan already in progress topic-id=" doc " page=" pg))
                                   (start-ocr-scan! uid doc pg ek scan-dpi))))
-                        (token)))))))
+                        (t)))))))
 
             ;; Extract (PDFBox) button
             (when enable-pdfbox?
@@ -251,8 +253,8 @@
                   (let [click-event (dom/On "click"
                                       (fn [_] {:id (str (random-uuid)) :page page-number})
                                       nil)
-                        [?token _] (e/Token click-event)]
-                    (when-some [token ?token]
+                        [t _] (e/Token click-event)]
+                    (when t
                       (let [pg (:page click-event)
                             result (e/server
                                      (let [doc root-topic-id
@@ -270,8 +272,7 @@
                                                 r)
                                               (finally
                                                 (swap! (us/get-atom uid :scanning-pages) disj [doc p])))))))]
-                        (when result
-                          (token))))))))
+                        (case result (t))))))))
 
             ;; Extract (PDF.js) button
             (when enable-pdfjs?
@@ -309,8 +310,9 @@
                     nil))
 
                 ;; Persist PDF.js extraction result server-side
-                (let [[?pdfjs-token _] (e/Token pdfjs-result)]
-                  (when-some [token ?pdfjs-token]
+                (let [[t _] (e/Token pdfjs-result)]
+                  (e/on-unmount #(reset! !pdfjs-result nil))
+                  (when t
                     (let [{:keys [page doc text error]} pdfjs-result
                           result (e/server
                                    (e/Offload
@@ -329,9 +331,7 @@
                                                     r))
                                           (finally
                                             (swap! (us/get-atom user-id :scanning-pages) disj [doc page]))))))]
-                      (when result
-                        (token)
-                        (reset! !pdfjs-result nil)))))))
+                      (case result (t)))))))
 
             ;; OCR error display — auto-dismiss after 3 seconds
             (when-let [ocr-err (get ocr-errors [root-topic-id page-number])]
@@ -387,8 +387,9 @@
               pin-count (e/server (count-pins-for-topic* pin-rev topic-id))]
 
           ;; e/Token: handle one pin-request at a time
-          (let [[?pin-token _] (e/Token pin-request)]
-            (when-some [token ?pin-token]
+          (let [[t _] (e/Token pin-request)]
+            (e/on-unmount #(reset! !pin-request nil))
+            (when t
               (let [{:keys [media-id placement topic-id]} pin-request
                     result (e/server
                              (e/Offload
@@ -402,13 +403,12 @@
                                       {:success false :reason (:reason data)}))
                                   (catch Exception ex
                                     {:success false :error (.getMessage ex)}))))]
-                (when (some? result)
-                  (token)
-                  (reset! !pin-request nil)
-                  (when (:success result)
-                    (e/server (swap! (us/get-atom user-id :pin-mutations) inc)))
-                  (when-not (:success result)
-                    (log/log-debug (str "EditorPane set-pin! failed: " result)))))))
+                (case result
+                  (if (:success result)
+                    (case (e/server (swap! (us/get-atom user-id :pin-mutations) inc))
+                      (t))
+                    (do (log/log-debug (str "EditorPane set-pin! failed: " result))
+                      (t)))))))
 
           ;; -----------------------------------------------------------------------
           ;; Editor area

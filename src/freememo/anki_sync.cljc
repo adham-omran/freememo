@@ -45,10 +45,9 @@
                 :!all-tags (atom [])}]
 
       ;; On mount: fetch decks, models, and tags
-      (let [[?token _] (e/Token :anki-sync-fetch-config)]
-        (when-some [token ?token]
-          (helpers/run-fetch-config! conn)
-          (token)))
+      (let [[t _] (e/Token :anki-sync-fetch-config)]
+        (when t
+          (case (e/client (helpers/run-fetch-config! conn)) (t))))
 
       (AnkiSyncModalBody user-id selected-doc current-pdf-page !show-modal conn))))
 

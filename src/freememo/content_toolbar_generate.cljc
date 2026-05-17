@@ -93,29 +93,29 @@
               nil))))
 
       ;; Process generate button clicks via e/Token
-      (let [[?token _] (e/Token gen-click)]
-        (when-some [token ?token]
-          (let [enqueued (e/server
-                           (let [sel-text (:selection-text gen-click)
-                                 context (when use-context
-                                           (case context-mode
-                                             :extract (if sel-text content-text parent-content)
-                                             :page (let [prev (helpers/get-context-pages* root-topic-id page-number context-window)]
-                                                     (if sel-text
-                                                       (if prev (str prev "\n\n---\n\n" content-text) content-text)
-                                                       prev))))]
-                             (helpers/enqueue-card-gen!
-                               {:id (:id gen-click)
-                                :content (or sel-text content-text)
-                                :context context
-                                :card-type card-type
-                                :card-count card-count-val
-                                :user-id user-id
-                                :enc-key enc-key
-                                :topic-id topic-id
-                                :root-topic-id root-topic-id
-                                :pre-prompt nil})))]
-            (when enqueued (token)))))
+      (let [[t _] (e/Token gen-click)]
+        (when t
+          (case (e/server
+                  (let [sel-text (:selection-text gen-click)
+                        context (when use-context
+                                  (case context-mode
+                                    :extract (if sel-text content-text parent-content)
+                                    :page (let [prev (helpers/get-context-pages* root-topic-id page-number context-window)]
+                                            (if sel-text
+                                              (if prev (str prev "\n\n---\n\n" content-text) content-text)
+                                              prev))))]
+                    (helpers/enqueue-card-gen!
+                      {:id (:id gen-click)
+                       :content (or sel-text content-text)
+                       :context context
+                       :card-type card-type
+                       :card-count card-count-val
+                       :user-id user-id
+                       :enc-key enc-key
+                       :topic-id topic-id
+                       :root-topic-id root-topic-id
+                       :pre-prompt nil})))
+            (t))))
 
       ;; Pre-prompt modal dialog (LLM only)
       (when (and llm-enabled? show-prompt-dialog)
@@ -129,28 +129,28 @@
 
       ;; Process prompt dialog submissions via e/Token
       (let [submit prompt-submit
-            [?token _] (e/Token submit)]
-        (when-some [token ?token]
-          (let [enqueued (e/server
-                           (let [{:keys [selection pre-prompt kind]} submit
-                                 ct (or kind card-type)
-                                 sel-text selection
-                                 context (when use-context
-                                           (case context-mode
-                                             :extract (if sel-text content-text parent-content)
-                                             :page (let [prev (helpers/get-context-pages* root-topic-id page-number context-window)]
-                                                     (if sel-text
-                                                       (if prev (str prev "\n\n---\n\n" content-text) content-text)
-                                                       prev))))]
-                             (helpers/enqueue-card-gen!
-                               {:id (str (random-uuid))
-                                :content (or sel-text content-text)
-                                :context context
-                                :card-type ct
-                                :card-count card-count-val
-                                :user-id user-id
-                                :enc-key enc-key
-                                :topic-id topic-id
-                                :root-topic-id root-topic-id
-                                :pre-prompt pre-prompt})))]
-            (when enqueued (token))))))))
+            [t _] (e/Token submit)]
+        (when t
+          (case (e/server
+                  (let [{:keys [selection pre-prompt kind]} submit
+                        ct (or kind card-type)
+                        sel-text selection
+                        context (when use-context
+                                  (case context-mode
+                                    :extract (if sel-text content-text parent-content)
+                                    :page (let [prev (helpers/get-context-pages* root-topic-id page-number context-window)]
+                                            (if sel-text
+                                              (if prev (str prev "\n\n---\n\n" content-text) content-text)
+                                              prev))))]
+                    (helpers/enqueue-card-gen!
+                      {:id (str (random-uuid))
+                       :content (or sel-text content-text)
+                       :context context
+                       :card-type ct
+                       :card-count card-count-val
+                       :user-id user-id
+                       :enc-key enc-key
+                       :topic-id topic-id
+                       :root-topic-id root-topic-id
+                       :pre-prompt pre-prompt})))
+            (t)))))))

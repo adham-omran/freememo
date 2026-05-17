@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [hyperfiddle.electric-forms5 :as forms]
    [clojure.string :as str]
    [freememo.typeahead :refer [Typeahead]]
    [freememo.quill-field :refer [QuillField]]
@@ -75,119 +76,133 @@
            20)))
      :clj nil))
 
-;; Export modal
+;; Export modal — Forms5 (Form! + Input!/Checkbox!).
+;; Scope and Card Type render via A1-fallback selects (atom-backed); their
+;; values are merged into the parsed command at commit time. Pattern mirrors
+;; bibliography_form.cljc CslTypeSelect.
+(def ^:private export-scope-options
+  [["Current Page" "Current Page"]
+   ["Entire Doc" "Entire Document"]])
+
+(def ^:private export-kind-options
+  [["Both" "Both (Basic + Cloze)"]
+   ["Basic" "Basic Only"]
+   ["Cloze" "Cloze Only"]])
+
+(e/defn ExportScopeSelect [!scope]
+  (let [current (e/watch !scope)]
+    (dom/div
+      (dom/props {:style {:margin-bottom "var(--sp-4)"}})
+      (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500"}})
+        (dom/text "Scope:"))
+      (dom/select
+        (dom/props {:class "select" :style {:width "100%"}})
+        (dom/On "change" (fn [e] (reset! !scope (-> e .-target .-value))) nil)
+        (e/for [[v label] (e/diff-by first export-scope-options)]
+          (dom/option
+            (dom/props {:value v :selected (= v current)})
+            (dom/text label))))))
+  (e/amb))
+
+(e/defn ExportKindSelect [!kind]
+  (let [current (e/watch !kind)]
+    (dom/div
+      (dom/props {:style {:margin-bottom "var(--sp-6)"}})
+      (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500"}})
+        (dom/text "Card Type:"))
+      (dom/select
+        (dom/props {:class "select" :style {:width "100%"}})
+        (dom/On "change" (fn [e] (reset! !kind (-> e .-target .-value))) nil)
+        (e/for [[v label] (e/diff-by first export-kind-options)]
+          (dom/option
+            (dom/props {:value v :selected (= v current)})
+            (dom/text label))))))
+  (e/amb))
+
+(e/defn ExportCancelButton [!show-export]
+  (dom/button
+    (dom/props {:class "btn btn-secondary" :type "button"})
+    (dom/text "Cancel")
+    (dom/On "click" (fn [_] (reset! !show-export false)) nil))
+  (e/amb))
+
 ;; !show-export: atom bool  topic-id: current topic  root-topic-id: root topic  user-id: int
 (e/defn ExportModal [!show-export topic-id root-topic-id user-id]
   (e/client
-    (let [!export-scope (atom "Current Page")
-          export-scope (e/watch !export-scope)
-          !export-kind (atom "Both")
-          export-kind (e/watch !export-kind)
-          !use-header (atom false)
-          use-header (e/watch !use-header)
-          !header-text (atom "")
-          header-text (e/watch !header-text)
-          !primary-btn (atom nil)]
+    ;; e/snapshot seeds A1 atoms once at mount — mirrors bibliography_form.cljc:296-297.
+    (let [!scope (atom (e/snapshot "Current Page"))
+          !kind (atom (e/snapshot "Both"))]
       (dom/div
         (dom/props {:class "modal-backdrop" :tabindex "-1"})
         (dom/On "click" (fn [_] (reset! !show-export false)) nil)
         (dom/On "keydown"
           (fn [e]
             #?(:cljs
-               (cond
-                 (= (.-key e) "Escape")
-                 (reset! !show-export false)
-                 (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
-                 (when-let [btn @!primary-btn]
-                   (.preventDefault e)
-                   (.click btn)))))
+               (when (= (.-key e) "Escape")
+                 (reset! !show-export false))))
           nil)
         (dom/div
           (dom/props {:class "modal-content modal-sm"})
           (dom/On "click" (fn [e] (.stopPropagation e)) nil)
           (dom/h3 (dom/props {:style {:margin-top "0" :margin-bottom "20px"}})
             (dom/text "Export Cards"))
-          ;; Custom header checkbox
-          (dom/div
-            (dom/props {:style {:margin-bottom "var(--sp-4)"}})
-            (dom/label
-              (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-2)" :margin-bottom "var(--sp-2)"}})
-              (dom/input (dom/props {:type "checkbox" :checked use-header})
-                (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
-                  (when (some? v) (reset! !use-header v))))
-              (dom/text "Add custom header to each card"))
-            (when use-header
-              (dom/input
-                (dom/props {:type "text" :value header-text :placeholder "e.g., Chapter 5: Accounting"
-                            :class "input input-full" :style {:padding "var(--sp-2)"}})
-                (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-                  (when (some? v) (reset! !header-text v))))))
-          ;; Scope select
-          (dom/div
-            (dom/props {:style {:margin-bottom "var(--sp-4)"}})
-            (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500"}})
-              (dom/text "Scope:"))
-            (dom/select
-              (dom/props {:class "select" :style {:width "100%"}})
-              (dom/option (dom/props {:value "Current Page"}) (dom/text "Current Page"))
-              (dom/option (dom/props {:value "Entire Doc"}) (dom/text "Entire Document"))
-              (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
-                (when (some? v) (reset! !export-scope v)))))
-          ;; Card type select
-          (dom/div
-            (dom/props {:style {:margin-bottom "var(--sp-6)"}})
-            (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500"}})
-              (dom/text "Card Type:"))
-            (dom/select
-              (dom/props {:class "select" :style {:width "100%"}})
-              (dom/option (dom/props {:value "Both"}) (dom/text "Both (Basic + Cloze)"))
-              (dom/option (dom/props {:value "Basic"}) (dom/text "Basic Only"))
-              (dom/option (dom/props {:value "Cloze"}) (dom/text "Cloze Only"))
-              (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
-                (when (some? v) (reset! !export-kind v)))))
-          ;; Buttons
-          (dom/div
-            (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-3)"}})
-            (dom/button
-              (dom/props {:class "btn btn-primary" :style {:order "1"}})
-              (reset! !primary-btn dom/node)
-              (dom/text "Export")
-              (let [click-event (dom/On "click" identity nil)
-                    [?token ?error] (e/Token click-event)]
-                (dom/props {:disabled (some? ?token)
-                            :class "btn btn-primary"})
-                (when ?error
-                  (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-2)"}})
-                    (dom/text "Error: " ?error)))
-                (when-some [token ?token]
-                  (let [export-opts {:topic-id topic-id
+          (let [commits (forms/Form! {:use-header? false :header-text ""}
+                          (e/fn Fields [{:keys [use-header? header-text]}]
+                            (e/amb
+                              (dom/div
+                                (dom/props {:style {:margin-bottom "var(--sp-4)"}})
+                                (dom/label
+                                  (dom/props {:style {:display "flex" :align-items "center"
+                                                      :gap "var(--sp-2)" :margin-bottom "var(--sp-2)"}})
+                                  (forms/Checkbox! :use-header? (boolean use-header?))
+                                  (dom/text "Add custom header to each card"))
+                                (e/When use-header?
+                                  (forms/Input! :header-text (or header-text "")
+                                    :placeholder "e.g., Chapter 5: Accounting"
+                                    :class "input input-full"
+                                    :style {:padding "var(--sp-2)"})))
+
+                              (ExportScopeSelect !scope)
+                              (ExportKindSelect !kind)
+
+                              (dom/div
+                                (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-3)"}})
+                                (e/amb
+                                  (forms/SubmitButton! :label "Export"
+                                    :class "btn btn-primary"
+                                    :style {:font-weight "600" :order "1"})
+                                  (ExportCancelButton !show-export)))))
+                          :Parse (e/fn [fields _tempid]
+                                   [`Export-cards
+                                    {:topic-id topic-id
                                      :root-topic-id root-topic-id
-                                     :scope export-scope
-                                     :header-text (when use-header header-text)
-                                     :user-id user-id}]
-                    (if (= export-kind "Both")
-                      (let [basic-result (e/server (cards/export-cards-csv (assoc export-opts :kind "basic")))
-                            cloze-result (e/server (cards/export-cards-csv (assoc export-opts :kind "cloze")))]
-                        (let [any-success? (or (:success basic-result) (:success cloze-result))]
-                          (when (:success basic-result)
-                            (trigger-download! (:filename basic-result) (:csv basic-result)))
-                          (when (:success cloze-result)
-                            (trigger-download! (:filename cloze-result) (:csv cloze-result)))
-                          (if any-success?
-                            (do (reset! !show-export false) (token))
-                            (token (str "Export failed: " (or (:error basic-result) (:error cloze-result)))))))
-                      (let [export-result (e/server (cards/export-cards-csv
-                                                      (assoc export-opts :kind (str/lower-case export-kind))))]
-                        (if (:success export-result)
-                          (do
-                            (trigger-download! (:filename export-result) (:csv export-result))
-                            (reset! !show-export false)
-                            (token))
-                          (token (:error export-result)))))))))
-            (dom/button
-              (dom/props {:class "btn btn-secondary"})
-              (dom/text "Cancel")
-              (dom/On "click" (fn [_] (reset! !show-export false)) nil))))))))
+                                     :user-id user-id
+                                     :scope (e/watch !scope)
+                                     :kind (e/watch !kind)
+                                     :header-text (when (:use-header? fields)
+                                                    (:header-text fields))}])
+                          :type :command
+                          :show-buttons false)]
+            (e/for [[token cmd] (e/diff-by first (e/as-vec commits))]
+              (let [opts (nth cmd 1)
+                    kind (:kind opts)
+                    results (if (= "Both" kind)
+                              (e/server
+                                (e/Offload
+                                  #(mapv (fn [k] (cards/export-cards-csv (assoc opts :kind k)))
+                                     ["basic" "cloze"])))
+                              (e/server
+                                (e/Offload
+                                  #(vector (cards/export-cards-csv
+                                             (assoc opts :kind (str/lower-case kind)))))))]
+                (when (some? results)
+                  (let [successes (filter :success results)]
+                    (if (seq successes)
+                      (do (doseq [r successes]
+                            (trigger-download! (:filename r) (:csv r)))
+                        (reset! !show-export false)
+                        (token))
+                      (token (or (some :error results) "Export failed")))))))))))))
 
 ;; Pre-prompt dialog
 ;; state map keys: :!show :!prompt-submit :!pre-prompt :!prompt-history
@@ -397,14 +412,14 @@
               (reset! !primary-btn dom/node)
               (dom/text "Save")
               (let [click-event (dom/On "click" identity nil)
-                    [?token ?error] (e/Token click-event)]
+                    [t ?error] (e/Token click-event)]
                 (when ?error
                   (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-2)"}})
                     (dom/text "Error: " ?error)))
-                (when-some [token ?token]
+                (when t
                   (let [validation-error (when (= kind "cloze") (validate-cloze cloze))]
                     (if validation-error
-                      (token validation-error)
+                      (t validation-error)
                       (let [clean-q (e/server (sanitize-card-field question))
                             clean-a (e/server (sanitize-card-field answer))
                             clean-c (e/server (sanitize-card-field cloze))
@@ -415,11 +430,10 @@
                                        (assoc :answer clean-a)))
                             result (e/server (cards/update-card card-id fields))]
                         (if (:success result)
-                          (do
-                            (e/server (swap! (us/get-atom user-id :card-mutations) inc))
-                            (reset! !editing-card nil)
-                            (token))
-                          (token (:error result)))))))))
+                          (do (e/on-unmount #(reset! !editing-card nil))
+                              (case (e/server (swap! (us/get-atom user-id :card-mutations) inc))
+                                (t)))
+                          (t (:error result)))))))))
             (dom/button
               (dom/props {:class "btn btn-secondary"})
               (dom/text "Cancel")
@@ -560,14 +574,14 @@
               (reset! !primary-btn dom/node)
               (dom/text "Save")
               (let [click-event (dom/On "click" identity nil)
-                    [?token ?error] (e/Token click-event)]
+                    [t ?error] (e/Token click-event)]
                 (when ?error
                   (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-2)"}})
                     (dom/text "Error: " ?error)))
-                (when-some [token ?token]
+                (when t
                   (let [validation-error (when (= kind "cloze") (validate-cloze cloze))]
                     (if validation-error
-                      (token validation-error)
+                      (t validation-error)
                       (let [clean-q (e/server (sanitize-card-field question))
                             clean-a (e/server (sanitize-card-field answer))
                             clean-c (e/server (sanitize-card-field cloze))
@@ -580,11 +594,10 @@
                             ;; appends pinned <img> tags before insert (P3d).
                             result (e/server (cards/save-cards topic-id root-topic-id kind card-data))]
                         (if (:success result)
-                          (do
-                            (e/server (swap! (us/get-atom user-id :card-mutations) inc))
-                            (reset! !show-add false)
-                            (token))
-                          (token (:error result)))))))))
+                          (do (e/on-unmount #(reset! !show-add false))
+                              (case (e/server (swap! (us/get-atom user-id :card-mutations) inc))
+                                (t)))
+                          (t (:error result)))))))))
             (dom/button
               (dom/props {:class "btn btn-secondary"})
               (dom/text "Cancel")

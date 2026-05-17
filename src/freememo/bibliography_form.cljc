@@ -7,7 +7,8 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [clojure.string :as str]
-   #?(:clj [freememo.db :as db])))
+   #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.biblio-import :as biblio-import])))
 
 (def csl-type-options
   [["webpage" "Webpage"]
@@ -43,6 +44,32 @@
          (when (seq ints) [ints])))
      :cljs nil))
 
+(defn- literal->family-given
+  "Split a single literal name string into {:family :given}. Last whitespace-
+   separated token → family; everything before → given. Works for Western
+   name order; users edit afterwards for outliers (e.g. 'van der Linden')."
+  [literal]
+  (let [parts (when literal (str/split (str/trim literal) #"\s+"))]
+    (cond
+      (nil? parts)         {:family "" :given ""}
+      (= 1 (count parts))  {:family (first parts) :given ""}
+      :else                {:family (last parts)
+                            :given  (str/join " " (butlast parts))})))
+
+(defn- csl-author->form
+  "Map one CSL author object to a form row {:family :given}. Handles both
+   structured ({:family :given}) and literal ({:literal}) forms."
+  [a]
+  (cond
+    (or (seq (:family a)) (seq (:given a)))
+    {:family (or (:family a) "") :given (or (:given a) "")}
+
+    (:literal a)
+    (literal->family-given (:literal a))
+
+    :else
+    {:family "" :given ""}))
+
 (defn- csl->form
   "CSL map → form-shaped map of strings + authors vector."
   [csl]
@@ -53,9 +80,7 @@
    :page            (or (:page csl) "")
    :accessed        (or (format-date-parts (get-in csl [:accessed :date-parts])) "")
    :issued          (or (format-date-parts (get-in csl [:issued :date-parts])) "")
-   :authors         (mapv (fn [a] {:family (or (:family a) "")
-                                   :given (or (:given a) "")})
-                      (or (:author csl) []))})
+   :authors         (mapv csl-author->form (or (:author csl) []))})
 
 (defn- form->csl
   "Form map → CSL-JSON map, dropping blank fields."
@@ -139,6 +164,15 @@
          {:source-id source-id
           :form      (csl->form csl)}))
      :cljs nil))
+
+(defn claim-pending-biblio-show?*
+  "Server: returns true exactly once per (user-id, topic-id) after
+   biblio-import marked the topic as just-imported. Use to auto-open the
+   bibliography modal on the topic's first mount post-import."
+  [user-id topic-id]
+  #?(:clj (when (and user-id topic-id)
+            (biblio-import/claim-show? user-id topic-id))
+     :cljs false))
 
 (defn save-source-for-topic!*
   "Persist form values to the topic's source row; link via topics.source_id.

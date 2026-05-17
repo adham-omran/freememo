@@ -44,8 +44,8 @@
                                    (log/log-debug (str "[EXTRACT-CLICK " click-id "] returning html"))
                                    html))))
                            nil)
-              [?token _] (e/Token click-html)]
-          (when-some [token ?token]
+              [t _] (e/Token click-html)]
+          (when t
             (log/log-debug (str "[EXTRACT-WHEN-SOME] token activated, html-len=" (count click-html)))
             (let [html click-html
                   title (let [raw (str/replace (or html "") #"<[^>]+>" "")]
@@ -53,18 +53,17 @@
                   result (e/server
                            (e/Offload
                              #(helpers/create-extract-topic-safe! topic-id user-id html title)))]
-              ;; Guard: e/Offload returns nil while pending. Only branch on real result.
-              (when (some? result)
-                (log/log-debug (str "[EXTRACT-RESULT] result=" (pr-str result)))
-                (if (:success result)
-                  (do (log/log-debug "[EXTRACT-SUCCESS] closing token + bumping :tree-mutations")
-                    (token)
-                    (e/server
-                      (do (log/log-info "[EXTRACT-BUMP-TREE] bumping :tree-mutations")
-                        (swap! (us/get-atom user-id :tree-mutations) inc))))
-                  (do (log/log-debug (str "[EXTRACT-ERROR] err=" (pr-str (:error result))))
-                    (reset! !error (or (:error result) "Failed to save extract"))
-                    (token (or (:error result) "Failed to save extract")))))))))
+              (case result
+                (do (log/log-debug (str "[EXTRACT-RESULT] result=" (pr-str result)))
+                  (if (:success result)
+                    (do (log/log-debug "[EXTRACT-SUCCESS] closing token + bumping :tree-mutations")
+                      (case (e/server
+                              (do (log/log-info "[EXTRACT-BUMP-TREE] bumping :tree-mutations")
+                                (swap! (us/get-atom user-id :tree-mutations) inc)))
+                        (t)))
+                    (do (log/log-debug (str "[EXTRACT-ERROR] err=" (pr-str (:error result))))
+                      (reset! !error (or (:error result) "Failed to save extract"))
+                      (t (or (:error result) "Failed to save extract"))))))))))
       (when error
         (dom/span
           (dom/props {:style {:color "var(--color-danger)" :font-size "12px"}})
