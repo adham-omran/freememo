@@ -12,18 +12,31 @@
            :layout <str>, :on-layout-toggle! <fn>}
    Returns: The current page number (for OCR integration)."
   [{:keys [document-id initial-page on-navigate!
-           layout on-layout-toggle!]}]
+           layout on-layout-toggle! target-page]}]
   (e/client
-    (let [!page (atom (or initial-page 1))
+    ;; e/snapshot seeds the atoms ONCE at first mount. Without it, Electric
+    ;; re-evaluates (atom …) on subsequent reactive cycles when callers
+    ;; rebuild prop closures, recreating !page and silently throwing away
+    ;; scroll-induced page changes (observed: scroll to p14 → atom reset → p15).
+    (let [seed-page (e/snapshot (or initial-page 1))
+          !page (atom seed-page)
           !total (atom 0)
           !container (atom nil)
           !viewer-div (atom nil)
-          !input-val (atom (str (or initial-page 1)))
+          !input-val (atom (str seed-page))
           !inp-focused (atom false)
           page (e/watch !page)
           total (e/watch !total)
           input-val (e/watch !input-val)
           inp-focused (e/watch !inp-focused)]
+
+      ;; External page-jump request (e.g. hierarchy click). The viewer's own
+      ;; on-page-change callback (registered at init time) is the single
+      ;; source of truth for !page + on-navigate! — calling them directly here
+      ;; rebuilds the on-navigate closure identity, which re-fires the
+      ;; setTimeout below and destroys/reinits the viewer mid-jump.
+      (when (and target-page (pos? total) (not= target-page page))
+        (viewer/go-to-page! target-page))
 
       ;; Sync page → input-val when not typing
       (when (and (not inp-focused) (not= input-val (str page)))
@@ -236,8 +249,14 @@
                       (viewer/on-page-change! (fn [page-num]
                                                 (reset! !page page-num)
                                                 (when on-navigate! (on-navigate! page-num))))
-                      (when (and initial-page (> initial-page 1))
-                        (viewer/go-to-page-after-load! initial-page))
+                      ;; Read @!page (viewer's last-known page) not the static
+                      ;; initial-page prop — Electric re-fires this setTimeout on
+                      ;; closure-identity churn, and using initial-page here
+                      ;; would snap the user back to their starting page after
+                      ;; any sibling-page jump.
+                      (let [resume-page (or @!page initial-page 1)]
+                        (when (> resume-page 1)
+                          (viewer/go-to-page-after-load! resume-page)))
                       (viewer/setup-pinch-zoom! @!container))))
                 100)))))
 
