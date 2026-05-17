@@ -4,6 +4,8 @@
    Counter `users.usage_bytes` tracks the sum of `topic_files.file_size`.
    Optional override `users.quota_bytes` (NULL = use env default).
 
+   Sentinel: 0 means unlimited — applies to env defaults and per-user overrides.
+
    Override is absolute: a later raise of STORAGE_QUOTA_BYTES does not lift
    per-user overrides automatically."
   (:require [next.jdbc :as jdbc]))
@@ -17,6 +19,11 @@
   (try
     (Long/parseLong (or (System/getenv "STORAGE_PER_FILE_MAX_BYTES") "104857600"))
     (catch Exception _ 104857600)))
+
+(defn unlimited?
+  "Sentinel check — `0` means no cap."
+  [n]
+  (or (nil? n) (zero? n)))
 
 (defn get-user-quota
   "Effective per-user cap: override if set, else env default.
@@ -64,7 +71,8 @@
    Invariant: between SELECT FOR UPDATE and UPDATE, no other tx can read
    or write this user's usage_bytes."
   [tx user-id incoming-bytes]
-  (when (> incoming-bytes per-file-max-bytes)
+  (when (and (not (unlimited? per-file-max-bytes))
+             (> incoming-bytes per-file-max-bytes))
     (throw (quota-error :file-too-large
              {:limit per-file-max-bytes :incoming incoming-bytes})))
   (let [row (jdbc/execute-one! tx
@@ -76,7 +84,8 @@
     (when (or (nil? used) (nil? limit))
       (throw (ex-info "User not found for quota check"
                {:type ::user-not-found :user-id user-id})))
-    (when (> (+ used incoming-bytes) limit)
+    (when (and (not (unlimited? limit))
+               (> (+ used incoming-bytes) limit))
       (throw (quota-error :over-quota
                {:used used :limit limit :incoming incoming-bytes})))
     (jdbc/execute! tx

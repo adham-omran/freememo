@@ -209,6 +209,36 @@
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_user_events_user_type
                       ON user_events (user_id, event_type, created_at DESC)"])
 
+  ;; Media registry — per-user blobs (images today; audio/video/file reserved).
+  ;; Served via /api/media/:id with per-user auth. Deduped by (user_id, sha256).
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS media (
+      id BIGSERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('image','audio','video','file')),
+      bytes BYTEA NOT NULL,
+      mime_type TEXT NOT NULL,
+      sha256 CHAR(64) NOT NULL,
+      byte_size INTEGER NOT NULL,
+      source_url TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"])
+  (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_media_user_sha
+                      ON media(user_id, sha256)"])
+
+  ;; Topic pins — up to 2 image references per topic with front/back placement.
+  ;; K1 cap enforced in the insert layer (set-pin!). EC-snapshot: extract creation
+  ;; copies parent's rows into child via copy-pins-to-child!.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS topic_pins (
+      id SERIAL PRIMARY KEY,
+      topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      media_id BIGINT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+      placement TEXT NOT NULL CHECK (placement IN ('front','back')),
+      ord SMALLINT NOT NULL DEFAULT 0
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_pins_topic ON topic_pins(topic_id)"])
+
   ;; Drop deprecated source_reference columns — title is the single source of truth.
   (jdbc/execute! ds ["ALTER TABLE topics DROP COLUMN IF EXISTS source_reference"])
   (jdbc/execute! ds ["ALTER TABLE flashcards DROP COLUMN IF EXISTS source_reference"])
@@ -1424,6 +1454,121 @@
       WHERE t.user_id = ? OR t.user_id IS NULL
       ORDER BY t.parent_id ASC NULLS FIRST, t.page_number ASC NULLS LAST, t.id ASC"
      root-id user-id]))
+
+;; ---------------------------------------------------------------------------
+;; Media registry — per-user blobs (images today)
+;; ---------------------------------------------------------------------------
+
+(defn- bytes-sha256
+  "Hex-encoded SHA-256 of a byte array."
+  [^bytes b]
+  (let [md (java.security.MessageDigest/getInstance "SHA-256")
+        digest (.digest md b)]
+    (apply str (map #(format "%02x" (bit-and % 0xff)) digest))))
+
+(defn find-media-by-sha
+  "Look up an existing media row for (user-id, sha256). Returns row or nil."
+  [user-id sha256]
+  (jdbc/execute-one! ds
+    (sql/format {:select [:id :mime_type :byte_size :kind]
+                 :from [:media]
+                 :where [:and [:= :user_id user-id] [:= :sha256 sha256]]})))
+
+(defn get-media
+  "Get a media row by id (includes bytes for serving)."
+  [id]
+  (jdbc/execute-one! ds
+    (sql/format {:select [:id :user_id :kind :bytes :mime_type :byte_size]
+                 :from [:media]
+                 :where [:= :id id]})))
+
+(defn upsert-media!
+  "Insert media or return existing id if same bytes already stored for this user.
+   Charges quota only on actual insert."
+  [{:keys [user-id kind ^bytes bytes mime-type source-url]}]
+  (let [sha256 (bytes-sha256 bytes)
+        byte-size (alength bytes)]
+    (if-let [existing (find-media-by-sha user-id sha256)]
+      (:media/id existing)
+      (jdbc/with-transaction [tx ds]
+        (quota/check-and-bump! tx user-id byte-size)
+        (-> (jdbc/execute-one! tx
+              (sql/format {:insert-into :media
+                           :values [{:user_id user-id
+                                     :kind (or kind "image")
+                                     :bytes bytes
+                                     :mime_type mime-type
+                                     :sha256 sha256
+                                     :byte_size byte-size
+                                     :source_url source-url}]
+                           :returning [:id]}))
+          :media/id)))))
+
+;; ---------------------------------------------------------------------------
+;; Topic pins — per-topic media references with front/back placement (K1 cap = 2)
+;; ---------------------------------------------------------------------------
+
+(defn get-pins
+  "Return all pins for a topic, ordered by ord ASC."
+  [topic-id]
+  (jdbc/execute! ds
+    (sql/format {:select [:id :topic_id :media_id :placement :ord]
+                 :from [:topic_pins]
+                 :where [:= :topic_id topic-id]
+                 :order-by [[:ord :asc]]})))
+
+(defn set-pin!
+  "Insert a new pin for a topic. Enforces K1 cap (≤2 per topic).
+   Throws ex-info :pin-cap-exceeded on violation. Returns new row id."
+  [{:keys [topic-id media-id placement]}]
+  (when-not (#{"front" "back"} placement)
+    (throw (ex-info "Invalid placement" {:placement placement})))
+  (jdbc/with-transaction [tx ds]
+    (let [existing (jdbc/execute! tx
+                     (sql/format {:select [:id] :from [:topic_pins]
+                                  :where [:= :topic_id topic-id]}))]
+      (when (>= (count existing) 2)
+        (throw (ex-info "Topic already has 2 pins (max)"
+                 {:reason :pin-cap-exceeded :topic-id topic-id})))
+      (-> (jdbc/execute-one! tx
+            (sql/format {:insert-into :topic_pins
+                         :values [{:topic_id topic-id
+                                   :media_id media-id
+                                   :placement placement
+                                   :ord (count existing)}]
+                         :returning [:id]}))
+        :topic_pins/id))))
+
+(defn remove-pin!
+  "Delete a pin row by id."
+  [pin-id]
+  (jdbc/execute-one! ds
+    (sql/format {:delete-from :topic_pins
+                 :where [:= :id pin-id]})))
+
+(defn update-pin-placement!
+  "Update a pin's placement. Throws on invalid value."
+  [pin-id new-placement]
+  (when-not (#{"front" "back"} new-placement)
+    (throw (ex-info "Invalid placement" {:placement new-placement})))
+  (jdbc/execute-one! ds
+    (sql/format {:update :topic_pins
+                 :set {:placement new-placement}
+                 :where [:= :id pin-id]})))
+
+(defn copy-pins-to-child!
+  "Snapshot parent topic's pins into a newly created child topic.
+   Called from extract-create flow (EC-snapshot). No-op if parent has no pins."
+  [parent-topic-id child-topic-id]
+  (when-let [parent-pins (seq (get-pins parent-topic-id))]
+    (jdbc/execute! ds
+      (sql/format {:insert-into :topic_pins
+                   :values (mapv (fn [row]
+                                   {:topic_id child-topic-id
+                                    :media_id (:topic_pins/media_id row)
+                                    :placement (:topic_pins/placement row)
+                                    :ord (:topic_pins/ord row)})
+                             parent-pins)}))))
 
 (defn- tree-order-items
   "Sort items in depth-first tree order."

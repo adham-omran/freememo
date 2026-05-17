@@ -5,10 +5,19 @@
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
    [freememo.typeahead :refer [Typeahead]]
+   [freememo.quill-field :refer [QuillField]]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.cards :as cards])
+   #?(:clj [freememo.html-cleaner :as cleaner])
    #?(:clj [freememo.settings :as settings])))
+
+(defn sanitize-card-field
+  "Sanitize a card field's HTML server-side. Uses clean-html (the user-trust
+   variant) — user-pasted <img> tags survive (pin-aware authoring may use them)."
+  [html]
+  #?(:clj (when html (cleaner/clean-html html))
+     :cljs html))
 
 ;; Browser download helper
 (defn trigger-download! [filename content]
@@ -353,48 +362,34 @@
           (if (= kind "basic")
             (dom/div
               (dom/label (dom/text "Question:"))
-              (dom/textarea
-                (dom/props {:dir "auto" :value question :rows 3
-                            :style {:width "100%" :padding "var(--sp-2)" :margin-bottom "var(--sp-3)"
-                                    :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
-                (let [focus-node dom/node]
-                  (js/setTimeout (fn [] (.focus focus-node)) 50))
-                (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-                  (when (some? ev) (reset! !question ev))))
-              (dom/label (dom/text "Answer:"))
-              (dom/textarea
-                (dom/props {:dir "auto" :value answer :rows 3
-                            :style {:width "100%" :padding "var(--sp-2)"
-                                    :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
-                (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-                  (when (some? ev) (reset! !answer ev)))))
-            (dom/div
               (dom/div
-                (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-2)" :margin-bottom "var(--sp-2)"}})
-                (dom/label (dom/text "Cloze:"))
-                (dom/button
-                  (dom/props {:class "btn btn-secondary"
-                              :style {:padding "2px 8px" :font-size "12px" :line-height "1.4"}})
-                  (dom/text "c+")
-                  (dom/On "click"
-                    (fn [_] (wrap-cloze! !cloze !ta-ref (inc (cloze-max-n @!cloze))))
-                    nil))
-                (dom/button
-                  (dom/props {:class "btn btn-secondary"
-                              :style {:padding "2px 8px" :font-size "12px" :line-height "1.4"}})
-                  (dom/text "c=")
-                  (dom/On "click"
-                    (fn [_] (wrap-cloze! !cloze !ta-ref (max 1 (cloze-max-n @!cloze))))
-                    nil)))
-              (dom/textarea
-                (dom/props {:dir "auto" :value cloze :rows 4
-                            :style {:width "100%" :padding "var(--sp-2)"
-                                    :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
-                (reset! !ta-ref dom/node)
-                (let [focus-node dom/node]
-                  (js/setTimeout (fn [] (.focus focus-node)) 50))
-                (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-                  (when (some? ev) (reset! !cloze ev))))))
+                (dom/props {:style {:margin-bottom "var(--sp-3)" :font-size modal-font}})
+                (QuillField {:value-string init-q
+                             :on-change (fn [html] (reset! !question html))
+                             :placeholder "Question..."
+                             :field-key [:edit-q card-id]}))
+              (dom/label (dom/text "Answer:"))
+              (dom/div
+                (dom/props {:style {:font-size modal-font}})
+                (QuillField {:value-string init-a
+                             :on-change (fn [html] (reset! !answer html))
+                             :placeholder "Answer..."
+                             :field-key [:edit-a card-id]})))
+            (dom/div
+              (dom/label (dom/text "Cloze:"))
+              (dom/div
+                (dom/props {:style {:margin-bottom "var(--sp-3)" :font-size modal-font}})
+                (QuillField {:value-string init-c
+                             :on-change (fn [html] (reset! !cloze html))
+                             :placeholder "Cloze text with {{c1::deletion}}..."
+                             :field-key [:edit-c card-id]}))
+              (dom/label (dom/text "Back Extra:"))
+              (dom/div
+                (dom/props {:style {:font-size modal-font}})
+                (QuillField {:value-string init-a
+                             :on-change (fn [html] (reset! !answer html))
+                             :placeholder "Optional back extra..."
+                             :field-key [:edit-be card-id]}))))
           (dom/div
             (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
             (dom/button
@@ -410,9 +405,14 @@
                   (let [validation-error (when (= kind "cloze") (validate-cloze cloze))]
                     (if validation-error
                       (token validation-error)
-                      (let [fields (if (= kind "basic")
-                                     {:question question :answer answer}
-                                     {:cloze cloze})
+                      (let [clean-q (e/server (sanitize-card-field question))
+                            clean-a (e/server (sanitize-card-field answer))
+                            clean-c (e/server (sanitize-card-field cloze))
+                            fields (if (= kind "basic")
+                                     {:question clean-q :answer clean-a}
+                                     (cond-> {:cloze clean-c}
+                                       (and clean-a (not (str/blank? clean-a)))
+                                       (assoc :answer clean-a)))
                             result (e/server (cards/update-card card-id fields))]
                         (if (:success result)
                           (do
@@ -525,58 +525,34 @@
           (if (= kind "basic")
             (dom/div
               (dom/label (dom/text "Question:"))
-              (dom/textarea
-                (dom/props {:dir "auto" :value question :rows 3
-                            :style {:width "100%" :padding "var(--sp-2)" :margin-bottom "var(--sp-3)"
-                                    :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
-                (let [focus-node dom/node]
-                  (js/setTimeout
-                    (fn []
-                      (.focus focus-node)
-                      (let [end (count (.-value focus-node))]
-                        (when (pos? end) (.setSelectionRange focus-node end end))))
-                    50))
-                (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-                  (when (some? ev) (reset! !question ev))))
-              (dom/label (dom/text "Answer:"))
-              (dom/textarea
-                (dom/props {:dir "auto" :value answer :rows 3
-                            :style {:width "100%" :padding "var(--sp-2)"
-                                    :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
-                (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-                  (when (some? ev) (reset! !answer ev)))))
-            (dom/div
               (dom/div
-                (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-2)" :margin-bottom "var(--sp-2)"}})
-                (dom/label (dom/text "Cloze:"))
-                (dom/button
-                  (dom/props {:class "btn btn-secondary"
-                              :style {:padding "2px 8px" :font-size "12px" :line-height "1.4"}})
-                  (dom/text "c+")
-                  (dom/On "click"
-                    (fn [_] (wrap-cloze! !cloze !ta-ref (inc (cloze-max-n @!cloze))))
-                    nil))
-                (dom/button
-                  (dom/props {:class "btn btn-secondary"
-                              :style {:padding "2px 8px" :font-size "12px" :line-height "1.4"}})
-                  (dom/text "c=")
-                  (dom/On "click"
-                    (fn [_] (wrap-cloze! !cloze !ta-ref (max 1 (cloze-max-n @!cloze))))
-                    nil)))
-              (dom/textarea
-                (dom/props {:dir "auto" :value cloze :rows 4
-                            :style {:width "100%" :padding "var(--sp-2)"
-                                    :font-family "system-ui, -apple-system, sans-serif" :font-size modal-font}})
-                (reset! !ta-ref dom/node)
-                (let [focus-node dom/node]
-                  (js/setTimeout
-                    (fn []
-                      (.focus focus-node)
-                      (let [end (count (.-value focus-node))]
-                        (when (pos? end) (.setSelectionRange focus-node end end))))
-                    50))
-                (let [ev (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-                  (when (some? ev) (reset! !cloze ev))))))
+                (dom/props {:style {:margin-bottom "var(--sp-3)" :font-size modal-font}})
+                (QuillField {:value-string init-q
+                             :on-change (fn [html] (reset! !question html))
+                             :placeholder "Question..."
+                             :field-key [:add-q]}))
+              (dom/label (dom/text "Answer:"))
+              (dom/div
+                (dom/props {:style {:font-size modal-font}})
+                (QuillField {:value-string ""
+                             :on-change (fn [html] (reset! !answer html))
+                             :placeholder "Answer..."
+                             :field-key [:add-a]})))
+            (dom/div
+              (dom/label (dom/text "Cloze:"))
+              (dom/div
+                (dom/props {:style {:margin-bottom "var(--sp-3)" :font-size modal-font}})
+                (QuillField {:value-string init-c
+                             :on-change (fn [html] (reset! !cloze html))
+                             :placeholder "Cloze text with {{c1::deletion}}..."
+                             :field-key [:add-c]}))
+              (dom/label (dom/text "Back Extra:"))
+              (dom/div
+                (dom/props {:style {:font-size modal-font}})
+                (QuillField {:value-string ""
+                             :on-change (fn [html] (reset! !answer html))
+                             :placeholder "Optional back extra..."
+                             :field-key [:add-be]}))))
           (dom/div
             (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
             (dom/button
@@ -592,18 +568,17 @@
                   (let [validation-error (when (= kind "cloze") (validate-cloze cloze))]
                     (if validation-error
                       (token validation-error)
-                      (let [card-data (if (= kind "basic")
-                                        [{:q question :a answer}]
-                                        [{:c cloze}])
-                            rows (e/server
-                                   (mapv (fn [card]
-                                           (cond-> {:topic_id topic-id
-                                                    :root_topic_id root-topic-id
-                                                    :kind kind}
-                                             (= kind "basic") (assoc :question (:q card) :answer (:a card))
-                                             (= kind "cloze") (assoc :cloze (:c card))))
-                                     card-data))
-                            result (e/server (insert-flashcards-safe! rows))]
+                      (let [clean-q (e/server (sanitize-card-field question))
+                            clean-a (e/server (sanitize-card-field answer))
+                            clean-c (e/server (sanitize-card-field cloze))
+                            card-data (if (= kind "basic")
+                                        [{:q clean-q :a clean-a}]
+                                        [(cond-> {:c clean-c}
+                                           (and clean-a (not (str/blank? clean-a)))
+                                           (assoc :a clean-a))])
+                            ;; Route through cards/save-cards so bake-card-html
+                            ;; appends pinned <img> tags before insert (P3d).
+                            result (e/server (cards/save-cards topic-id root-topic-id kind card-data))]
                         (if (:success result)
                           (do
                             (e/server (swap! (us/get-atom user-id :card-mutations) inc))

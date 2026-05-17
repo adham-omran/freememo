@@ -98,6 +98,66 @@
                         (:result result))))))))))
 
 #?(:cljs
+   (defn mime->ext
+     "Derive a file extension from a MIME type string (client-side, mirrors server)."
+     [mime]
+     (case (str/lower-case (or mime ""))
+       "image/png" "png"
+       "image/jpeg" "jpg"
+       "image/jpg" "jpg"
+       "image/gif" "gif"
+       "image/webp" "webp"
+       "image/svg+xml" "svg"
+       "image/bmp" "bmp"
+       "image/tiff" "tiff"
+       "bin")))
+
+#?(:cljs
+   (defn fetch-and-store-media!
+     "Fetch bytes for a media item from the local app server (/api/media/<id>),
+      derive the filename from the response Content-Type header, call AnkiConnect
+      storeMediaFile, and return the filename string (e.g. \"42.png\").
+      Concurrency-safe: each call is independent; dedup is handled by the caller."
+     [media-id]
+     (from-future
+       (fn [token]
+         (let [ctrl (js/AbortController.)
+               filename-atom (atom nil)]
+           (.finally token #(.abort ctrl))
+           (-> (js/fetch (str "/api/media/" media-id)
+                 (clj->js {:signal (.-signal ctrl)}))
+             (.then (fn [resp]
+                      (when-not (.-ok resp)
+                        (throw (js/Error. (str "HTTP " (.-status resp)
+                                            " fetching /api/media/" media-id))))
+                      (let [ct (.get (.-headers resp) "content-type")
+                            ext (mime->ext (when ct (first (str/split ct #";"))))
+                            fn (str media-id "." ext)]
+                        (reset! filename-atom fn)
+                        (.arrayBuffer resp))))
+             (.then (fn [buf]
+                      ;; Convert ArrayBuffer to base64. Chunked to dodge
+                      ;; "Maximum call stack" on large files; each chunk uses
+                      ;; String.fromCharCode.apply(null, slice) — applying the
+                      ;; byte array as arguments to fromCharCode (NOT to String).
+                      (let [bytes (js/Uint8Array. buf)
+                            byte-len (.-length bytes)
+                            chunks (js/Array.)
+                            chunk-sz 8192]
+                        (doseq [i (range 0 byte-len chunk-sz)]
+                          (let [slice (.slice bytes i (+ i chunk-sz))]
+                            (.push chunks (.apply (.-fromCharCode js/String) nil slice))))
+                        (let [b64 (.btoa js/window (.join chunks ""))]
+                          ;; anki-call! returns a missionary task fn (2-arity),
+                          ;; NOT a Promise. Wrap it so .then can await the upload.
+                          (js/Promise.
+                            (fn [resolve reject]
+                              (let [task (anki-call! "storeMediaFile"
+                                           {:filename @filename-atom :data b64})]
+                                (task resolve reject))))))))
+             (.then (fn [_] @filename-atom))))))))
+
+#?(:cljs
    (defn fetch-anki-config! []
      (m/join (fn [decks models tags]
                {:decks (vec (js->clj decks))
@@ -107,7 +167,61 @@
        (anki-call! "modelNames" nil)
        (anki-call! "getTags" nil))))
 
-(def ^:private freememo-base-url "https://freememo.net")
+;; ---------------------------------------------------------------------------
+;; Media image handling for Anki push
+;; ---------------------------------------------------------------------------
+
+(defn extract-media-ids
+  "Return a set of media ID strings found in /api/media/<id> src attributes
+   within the given HTML string. Works on both CLJ and CLJS (no numeric parsing)."
+  [html]
+  (when-not (str/blank? html)
+    (->> (re-seq #"/api/media/(\d+)" html)
+      (map second)
+      set)))
+
+(defn rewrite-media-srcs
+  "Replace every /api/media/<id> occurrence in html with the filename
+   from filename-map (a map of id-string -> filename string).
+   IDs not present in filename-map are left unchanged."
+  [html filename-map]
+  (if (or (str/blank? html) (empty? filename-map))
+    html
+    (str/replace html #"/api/media/(\d+)"
+      (fn [[match id-str]]
+        (or (get filename-map id-str) match)))))
+
+(defn collect-card-media-ids
+  "Return a set of all media ID strings referenced in any HTML field of a card."
+  [card]
+  (reduce into #{}
+    (keep extract-media-ids
+      [(:flashcards/question card)
+       (:flashcards/answer card)
+       (:flashcards/cloze card)])))
+
+(defn extract-img-tags
+  "Return a string of all <img ...> tags extracted from html, preserving order.
+   Used in field-mode to move images into a dedicated Anki field."
+  [html]
+  (if (str/blank? html)
+    ""
+    (let [matches (re-seq #"<img[^>]*/?>|<img[^>]*></img>" html)]
+      (str/join "" matches))))
+
+(defn remove-img-tags
+  "Remove all <img ...> tags from html, returning the text-only remainder."
+  [html]
+  (if (str/blank? html)
+    html
+    (-> html
+      (str/replace #"<img[^>]*/?>|<img[^>]*></img>" "")
+      str/trim)))
+
+(def ^:private default-app-base-url
+  "Fallback when the caller's settings map omits :app-base-url. Hosted default;
+   self-host supplies the value via `freememo.settings/app-base-url` (env-driven)."
+  "https://freememo.net")
 
 (defn html-escape
   "Escape HTML-special characters so titles/URLs can be embedded safely."
@@ -121,14 +235,16 @@
 
 (defn build-source-anchor
   "Build an HTML anchor linking back to the source item in FreeMemo.
-   Links unconditionally to /viewer/topic/<topic-id>.
+   Links unconditionally to <app-base-url>/viewer/topic/<topic-id>.
    Anchor text is '<title> - <page>' when the card has a :page_number, else '<title>'.
-   Returns nil when title is blank."
+   Returns nil when title is blank.
+   Pre: caller supplies `:app-base-url` in `settings`; falls back to default if absent."
   [card settings]
-  (let [{:keys [topic-kind root-topic-id topic-title]} settings
+  (let [{:keys [topic-kind root-topic-id topic-title app-base-url]} settings
+        base (or app-base-url default-app-base-url)
         title topic-title
         page (:page_number card)
-        url (str freememo-base-url "/viewer/topic/" (:topic_id card))
+        url (str base "/viewer/topic/" (:topic_id card))
         anchor-text (if page
                       (str title " - " page)
                       title)]
@@ -139,10 +255,13 @@
    (defn build-note
      "Build an AnkiConnect note map for addNote.
       settings = {:deck :basic-model :cloze-model :basic-fields :cloze-fields
-                  :allow-dupes :use-header :header-text :tags :source-display-mode}"
-     [card settings]
+                  :allow-dupes :use-header :header-text :tags :source-display-mode
+                  :images-front-field :images-back-field :image-display-mode}
+      filename-map = {media-id -> \"<id>.<ext>\"} — pre-uploaded filenames for src rewrite."
+     [card settings filename-map]
      (let [{:keys [deck basic-model cloze-model basic-fields cloze-fields
-                   allow-dupes use-header header-text tags source-display-mode]} settings
+                   allow-dupes use-header header-text tags source-display-mode
+                   images-front-field images-back-field image-display-mode]} settings
            kind (:flashcards/kind card)
            basic? (= kind "basic")
            model (if basic? basic-model cloze-model)
@@ -150,16 +269,39 @@
            source-ref (build-source-anchor card settings)
            append-source? (and (= source-display-mode "append") (not (str/blank? source-ref)))
            field-source? (and (= source-display-mode "field") (not (str/blank? source-ref)))
-           field-map (if basic?
-                       (cond-> {(first fields) (prepend-header (wrap-p (or (:flashcards/question card) "")) use-header header-text)
-                                (second fields) (if append-source?
-                                                  (append-source (wrap-p (or (:flashcards/answer card) "")) source-ref)
-                                                  (wrap-p (or (:flashcards/answer card) "")))}
-                         field-source? (assoc (or (:source-field settings) "Source") (wrap-p source-ref)))
-                       (cond-> {(first fields) (if append-source?
-                                                 (append-source (prepend-header (or (:flashcards/cloze card) "") use-header header-text) source-ref)
-                                                 (prepend-header (or (:flashcards/cloze card) "") use-header header-text))}
-                         field-source? (assoc (or (:source-field settings) "Source") source-ref)))]
+           field-mode? (= image-display-mode "field")
+           ;; Rewrite /api/media/<id> → filename in all field HTML
+           raw-front (wrap-p (or (:flashcards/question card) ""))
+           raw-back (wrap-p (or (:flashcards/answer card) ""))
+           raw-cloze (or (:flashcards/cloze card) "")
+           rw-front (rewrite-media-srcs raw-front filename-map)
+           rw-back (rewrite-media-srcs raw-back filename-map)
+           rw-cloze (rewrite-media-srcs raw-cloze filename-map)
+           ;; Basic field map (with optional header, source, and field-mode image split)
+           field-map
+           (if basic?
+             (let [front-html (prepend-header rw-front use-header header-text)
+                   back-html (if append-source?
+                               (append-source rw-back source-ref)
+                               rw-back)
+                   ;; Field mode: extract <img> from front/back, put in dedicated fields
+                   main-front (if field-mode? (remove-img-tags front-html) front-html)
+                   main-back (if field-mode? (remove-img-tags back-html) back-html)
+                   imgs-front (when field-mode? (extract-img-tags front-html))
+                   imgs-back (when field-mode? (extract-img-tags back-html))]
+               (cond-> {(first fields) main-front
+                        (second fields) main-back}
+                 field-source? (assoc (or (:source-field settings) "Source") (wrap-p source-ref))
+                 (and field-mode? (seq imgs-front) (seq images-front-field))
+                 (assoc images-front-field imgs-front)
+                 (and field-mode? (seq imgs-back) (seq images-back-field))
+                 (assoc images-back-field imgs-back)))
+             ;; Cloze — F2-uniform: all <img> stay in the Text (cloze) field
+             (let [cloze-html (if append-source?
+                                (append-source (prepend-header rw-cloze use-header header-text) source-ref)
+                                (prepend-header rw-cloze use-header header-text))]
+               (cond-> {(first fields) cloze-html}
+                 field-source? (assoc (or (:source-field settings) "Source") source-ref))))]
        (cond-> {:deckName deck
                 :modelName model
                 :fields field-map
@@ -170,31 +312,49 @@
 
 #?(:cljs
    (defn build-update-fields
-     "Build Anki field map for updating an existing note."
-     [card settings]
-     (let [{:keys [basic-fields cloze-fields use-header header-text source-display-mode]} settings
+     "Build Anki field map for updating an existing note.
+      filename-map = {media-id -> \"<id>.<ext>\"} — pre-uploaded filenames for src rewrite."
+     [card settings filename-map]
+     (let [{:keys [basic-fields cloze-fields use-header header-text source-display-mode
+                   images-front-field images-back-field image-display-mode]} settings
            kind (:flashcards/kind card)
            basic? (= kind "basic")
            fields (if basic? basic-fields cloze-fields)
            source-ref (build-source-anchor card settings)
            append-src? (and (= source-display-mode "append") (not (str/blank? source-ref)))
-           field-src? (and (= source-display-mode "field") (not (str/blank? source-ref)))]
+           field-src? (and (= source-display-mode "field") (not (str/blank? source-ref)))
+           field-mode? (= image-display-mode "field")
+           rw-front (rewrite-media-srcs (wrap-p (or (:flashcards/question card) "")) filename-map)
+           rw-back (rewrite-media-srcs (wrap-p (or (:flashcards/answer card) "")) filename-map)
+           rw-cloze (rewrite-media-srcs (or (:flashcards/cloze card) "") filename-map)]
        (if basic?
-         (cond-> {(first fields) (prepend-header (wrap-p (or (:flashcards/question card) "")) use-header header-text)
-                  (second fields) (if append-src?
-                                    (append-source (wrap-p (or (:flashcards/answer card) "")) source-ref)
-                                    (wrap-p (or (:flashcards/answer card) "")))}
-           field-src? (assoc (or (:source-field settings) "Source") (wrap-p source-ref)))
-         (cond-> {(first fields) (if append-src?
-                                   (append-source (prepend-header (or (:flashcards/cloze card) "") use-header header-text) source-ref)
-                                   (prepend-header (or (:flashcards/cloze card) "") use-header header-text))}
-           field-src? (assoc (or (:source-field settings) "Source") source-ref))))))
+         (let [front-html (prepend-header rw-front use-header header-text)
+               back-html (if append-src?
+                           (append-source rw-back source-ref)
+                           rw-back)
+               main-front (if field-mode? (remove-img-tags front-html) front-html)
+               main-back (if field-mode? (remove-img-tags back-html) back-html)
+               imgs-front (when field-mode? (extract-img-tags front-html))
+               imgs-back (when field-mode? (extract-img-tags back-html))]
+           (cond-> {(first fields) main-front
+                    (second fields) main-back}
+             field-src? (assoc (or (:source-field settings) "Source") (wrap-p source-ref))
+             (and field-mode? (seq imgs-front) (seq images-front-field))
+             (assoc images-front-field imgs-front)
+             (and field-mode? (seq imgs-back) (seq images-back-field))
+             (assoc images-back-field imgs-back)))
+         (let [cloze-html (if append-src?
+                            (append-source (prepend-header rw-cloze use-header header-text) source-ref)
+                            (prepend-header rw-cloze use-header header-text))]
+           (cond-> {(first fields) cloze-html}
+             field-src? (assoc (or (:source-field settings) "Source") source-ref)))))))
 
 #?(:cljs
    (defn do-anki-push!
      "Push cards to Anki. Returns Missionary task resolving to result map.
       settings = {:deck :basic-model :cloze-model :basic-fields :cloze-fields
-                  :allow-dupes :use-header :header-text :tags}"
+                  :allow-dupes :use-header :header-text :tags
+                  :images-front-field :images-back-field :image-display-mode}"
      [cards settings]
      (let [new-cards (vec (filter #(nil? (:flashcards/anki_note_id %)) cards))
            ;; Re-push every previously-synced card on every push so changes to
@@ -207,10 +367,29 @@
                         " new=" (count new-cards)
                         " update=" (count changed-cards)
                         " mode=" (:source-display-mode settings)
+                        " image-display-mode=" (:image-display-mode settings)
                         " topic-title=" (pr-str (:topic-title settings))
                         " topic-kind=" (pr-str (:topic-kind settings))))
        (m/sp
-         (let [;; Phase 1: add new cards (sequential, concurrency 1)
+         ;; Phase 0: collect all unique media IDs across every card, upload each once,
+         ;; build filename-map {id -> "<id>.<ext>"} for src rewriting.
+         (let [all-media-ids (reduce (fn [acc card] (into acc (collect-card-media-ids card)))
+                               #{}
+                               (concat new-cards changed-cards))
+               filename-map
+               (m/? (m/reduce
+                      (fn [acc [id filename]] (assoc acc id filename))
+                      {}
+                      (m/ap
+                        (let [media-id (m/?> 3 (m/seed (vec all-media-ids)))]
+                          (try
+                            (let [filename (m/? (fetch-and-store-media! media-id))]
+                              [media-id filename])
+                            (catch :default err
+                              (log/log-error (str "[anki-push] storeMediaFile FAILED id=" media-id
+                                               " error=" (.-message err)))
+                              [media-id (str "/api/media/" media-id)]))))))
+               ;; Phase 1: add new cards (sequential, concurrency 1)
                add-result
                (m/? (m/reduce
                       (fn [acc item] (merge-with into acc item))
@@ -218,7 +397,7 @@
                       (m/ap
                         (let [card (m/?> 1 (m/seed new-cards))]
                           (try
-                            (let [note (build-note card settings)
+                            (let [note (build-note card settings filename-map)
                                   note-id (m/? (anki-call! "addNote" {:note note}))]
                               (if note-id
                                 {:pairs [{:card-id (:flashcards/id card) :anki-note-id note-id}]}
@@ -233,7 +412,7 @@
                       (m/ap
                         (let [card (m/?> 10 (m/seed changed-cards))]
                           (try
-                            (let [field-map (build-update-fields card settings)]
+                            (let [field-map (build-update-fields card settings filename-map)]
                               (log/log-debug (str "[anki-push] updateNote card-id=" (:flashcards/id card)
                                                " note-id=" (:flashcards/anki_note_id card)
                                                " field-keys=" (vec (keys field-map))

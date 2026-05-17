@@ -45,7 +45,9 @@ Open http://localhost:8080.
 
 Navigate to **Settings** in the UI and enter your OpenAI API key. All settings are persisted per-user in the database.
 
-> **Note**: freememo.net currently uses a shared demo OpenAI key for convenience. This will be removed in the future and per-user keys will become a self-host-only option.
+> **Note**: OCR and flashcard generation require a per-user OpenAI API key (BYOK). There is no shared demo key — every user supplies their own.
+
+Sign-in uses Google OAuth. Self-host requires configuring `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` (or dropping a `resources/google_client.json` from Google Cloud Console). Without these, `/auth/google` returns 503.
 
 ## Tech Stack
 
@@ -74,9 +76,19 @@ Schema auto-creates on first startup (no migration framework). Configure via env
 | `DB_NAME` | `cardmaker` | |
 | `DB_USER` | `cardmaker` | |
 | `DB_PASSWORD` | `dev` | Override in production |
-| `ENC_KEY_SECRET` | _(none)_ | Session-cookie key derivation. **Required in production.** |
+| `ENC_KEY_SECRET` | _(none)_ | Session-cookie key derivation. **Required in production.** Generate: `openssl rand -hex 32` |
 | `LOG_LEVEL` | `info` (prod) / `debug` (dev) | `trace`, `debug`, `info`, `warn`, `error`, `fatal` |
 | `PORT` | `8080` | HTTP port |
+| `STORAGE_QUOTA_BYTES` | `1073741824` (1 GB) | Total per-user storage. `0` = unlimited. |
+| `STORAGE_PER_FILE_MAX_BYTES` | `104857600` (100 MB) | Per-file upload cap. `0` = unlimited. Also drives Jetty body + WebSocket size limits. |
+| `APP_BASE_URL` | `https://freememo.net` | Public base URL embedded in Anki card source anchors. Set to your domain when self-hosting. |
+| `GOOGLE_CLIENT_ID` | _(none)_ | Google OAuth client ID. Required for sign-in. |
+| `GOOGLE_CLIENT_SECRET` | _(none)_ | Google OAuth client secret. |
+| `GOOGLE_REDIRECT_URI` | `http://localhost:8080/auth/google/callback` | Must match the URI registered in Google Cloud Console. |
+
+Alternative to the three `GOOGLE_*` envs: drop the OAuth client JSON downloaded from Google Cloud Console at `resources/google_client.json` (gitignored).
+
+> Self-host requires Google OAuth. There is no username/password login route.
 
 ## Production
 
@@ -92,20 +104,26 @@ clj -J-Xss4m -X:build:prod uberjar :build/jar-name '"app.jar"'
 java -jar target/app.jar
 ```
 
-### Docker
+### Self-host with Docker Compose
+
+One-command bundle (app + Postgres):
+
+```bash
+cp .env.example .env       # then edit DB_PASSWORD, ENC_KEY_SECRET, GOOGLE_* (optional)
+docker compose -f self-host.yml up -d
+```
+
+Storage caps default to **unlimited** in the bundle. Set `STORAGE_QUOTA_BYTES` / `STORAGE_PER_FILE_MAX_BYTES` in `.env` to enforce them.
+
+Or build and run the app image manually:
 
 ```bash
 docker build -t freememo:latest .
 docker run -d --name freememo -p 8080:8080 \
   -e DB_HOST=your-db-host \
   -e DB_PASSWORD=your-password \
+  -e ENC_KEY_SECRET=$(openssl rand -hex 32) \
   freememo:latest
-```
-
-Or with Docker Compose (app + database):
-
-```bash
-docker compose -f docker-compose.prod.yml up -d
 ```
 
 ### Reverse Proxy
@@ -120,7 +138,7 @@ location / {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_read_timeout 300s;
-    client_max_body_size 100M;
+    client_max_body_size 100M;  # must be ≥ STORAGE_PER_FILE_MAX_BYTES (or 0/large when unlimited)
 }
 ```
 
@@ -136,13 +154,13 @@ your-domain.com {
 Backup the database:
 
 ```bash
-docker compose -f docker-compose.prod.yml exec db pg_dump -U cardmaker cardmaker > backup.sql
+docker compose -f self-host.yml exec db pg_dump -U cardmaker cardmaker > backup.sql
 ```
 
 Restore:
 
 ```bash
-cat backup.sql | docker compose -f docker-compose.prod.yml exec -T db psql -U cardmaker cardmaker
+cat backup.sql | docker compose -f self-host.yml exec -T db psql -U cardmaker cardmaker
 ```
 
 A remote-pull variant is in `scripts/backup.sh`.

@@ -4,11 +4,33 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [freememo.logging :as log]
    [freememo.card-components :as card-components]
    [freememo.keyboard :as keyboard]
+   [freememo.navigation :as nav]
+   #?(:clj [taoensso.telemere :as tel])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])))
+
+(defn delete-topic-with-parent!
+  "Server-only: snapshot parent_id + anki note ids, delete the topic, bump
+   :tree-mutations, and return {:parent-id _ :note-ids _}. Returns parent_id
+   captured BEFORE deletion so the client can navigate up.
+
+   Intentionally does NOT bump :refresh — TopicPage watches :refresh, and
+   bumping it during the same WS tick as this fn's return propagates an
+   overview re-query that unmounts the toolbar subtree before the client-side
+   handler can call navigate!, stranding the user on the now-deleted topic's
+   URL. :tree-mutations is watched only by HierarchySidePanel and
+   DocumentTreeView (per CLAUDE.md), so bumping it is safe."
+  [user-id topic-id]
+  #?(:clj
+     (let [pid (:topics/parent_id (db/get-topic topic-id))
+           note-ids (vec (db/get-anki-note-ids topic-id))]
+       (db/delete-topic! topic-id)
+       (swap! (us/get-atom user-id :tree-mutations) inc)
+       (tel/log! :info (str "Topic deleted topic-id=" topic-id " parent-id=" pid))
+       {:parent-id pid :note-ids note-ids})
+     :cljs nil))
 
 (e/defn ExtractActions [cfg]
   (e/client
@@ -55,11 +77,15 @@
 
       ;; Delete button — hidden, triggered via overflow menu proxy
       (when (some? extract-status)
+        ;; !delete-state tracks ONLY the modal: nil | :confirming.
+        ;; Navigation happens directly in the click handler (matching the
+        ;; Done/Restore pattern). A reactive watch on a post-delete :deleted
+        ;; status would race with TopicPage's :refresh-driven re-query — the
+        ;; overview becomes nil after delete, extract-status becomes nil, this
+        ;; whole subtree unmounts, the atom is destroyed before its watch can
+        ;; fire, and navigation never runs (URL stays on the deleted topic).
         (let [!delete-state (atom nil)
               delete-state (e/watch !delete-state)]
-          ;; Reactive navigation — fires when delete completes
-          (when (= delete-state :deleted)
-            (when navigate! (navigate! (or origin :learn))))
           (dom/button
             (dom/props {:class "btn btn-sm btn-danger-fill toolbar-overflow-item"
                         :style {:padding "4px 10px" :font-size "12px"}
@@ -91,11 +117,19 @@
                     (let [event (dom/On "click" (fn [_] :confirmed) nil)
                           [?token _] (e/Token event)]
                       (when-some [token ?token]
-                        (let [note-ids (e/server (db/get-anki-note-ids topic-id))]
-                          (e/server (db/delete-topic! topic-id))
-                          (e/server (swap! (us/get-atom user-id :refresh) inc))
-                          (e/server (swap! (us/get-atom user-id :tree-mutations) inc))
-                          (e/client (card-components/try-delete-anki-notes! note-ids))
-                          (log/log-info (str "Topic deleted topic-id=" topic-id))
-                          (token)
-                          (reset! !delete-state :deleted))))))))))))))
+                        ;; result MUST be inside when-some so e/server stays
+                        ;; mounted until the response arrives. The (when (some?
+                        ;; result) ...) guard waits for the server roundtrip
+                        ;; before firing any side effects — without it, (token)
+                        ;; closes ?token, the subtree unmounts, and the cond
+                        ;; never gets to see the resolved value.
+                        (let [result (e/server (delete-topic-with-parent! user-id topic-id))]
+                          (when (some? result)
+                            (e/client (card-components/try-delete-anki-notes! (:note-ids result)))
+                            (token)
+                            (reset! !delete-state nil)
+                            (when navigate!
+                              (cond
+                                (:parent-id result) (navigate! :viewer (nav/nav-topic (:parent-id result) origin))
+                                origin (navigate! origin)
+                                :else (navigate! :library)))))))))))))))))

@@ -3,10 +3,43 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [clojure.string :as str]
    [freememo.logging :as log]
    #?(:clj [freememo.cards :as cards])
    #?(:cljs [freememo.anki-sync-helpers :refer [anki-call!]])
    #?(:clj [freememo.user-state :as us])))
+
+(defn replace-img-with-chip
+  "Replace each <img ...> tag with an inline `[image]` chip so card rows stay compact."
+  [html]
+  (when html
+    (str/replace html #"(?i)<img\b[^>]*>"
+      "<span class=\"card-row-img-chip\">[image]</span>")))
+
+(defn truncate-html-for-row
+  "Trim HTML to ~max-chars visible text. Combined with single-line clamp CSS,
+   broken tail markup at the truncation point is invisible."
+  [html max-chars]
+  (when html
+    (let [visible (str/replace html #"<[^>]+>" "")]
+      (if (<= (count visible) max-chars)
+        html
+        (str (subs html 0 (min (count html) max-chars)) "…")))))
+
+(defn card-row-html
+  "Prepare card-field HTML for inline rendering inside a CardRow cell."
+  [html]
+  (-> (or html "")
+    replace-img-with-chip
+    (truncate-html-for-row 200)))
+
+(defn set-inner-html!
+  "CLJS-only side effect: write html into node.innerHTML. CLJ no-op.
+   Plain defn so the reader conditional is invisible to Electric's reactive
+   compiler — keeps CLJ/CLJS signal counts identical (CLAUDE.md frame-mismatch rule)."
+  [node html]
+  #?(:cljs (set! (.-innerHTML node) (str (or html "")))
+     :clj nil))
 
 ;; RTL detection — checks if text starts with Arabic/Hebrew characters
 (defn rtl-text? [text]
@@ -89,21 +122,31 @@
                                          :synced "var(--color-success)"
                                          :modified "var(--color-warning)")}}))
           ;; Front column — cloze spans both content columns via CSS Grid
-          (let [front-text (if cloze? cloze question)]
+          (let [front-text (if cloze? cloze question)
+                front-html (card-row-html front-text)]
             (dom/td
               (dom/props {:dir "auto"
+                          :class "card-row-cell"
                           :style (merge {:padding-block "6px" :padding-inline "8px"
                                          :border-bottom "1px solid var(--color-border)"}
                                    (when cloze? {:grid-column "span 2"}))})
-              (dom/text front-text)))
+              (e/for-by identity [_k [(str "f-" id)]]
+                (dom/div
+                  (dom/props {:class "card-row-html"})
+                  (set-inner-html! dom/node front-html)))))
           ;; Back column — hidden for cloze (front cell spans both)
-          (let [back-text (if cloze? "" (or answer ""))]
+          (let [back-text (if cloze? "" (or answer ""))
+                back-html (card-row-html back-text)]
             (dom/td
               (dom/props {:dir "auto"
+                          :class "card-row-cell"
                           :style (merge {:padding-block "6px" :padding-inline "8px"
                                          :border-bottom "1px solid var(--color-border)"}
                                    (when cloze? {:display "none"}))})
-              (dom/text back-text)))
+              (e/for-by identity [_k [(str "b-" id)]]
+                (dom/div
+                  (dom/props {:class "card-row-html"})
+                  (set-inner-html! dom/node back-html)))))
           ;; Delete column
           (dom/td
             (dom/props {:style {:padding "6px 4px" :text-align "center"

@@ -2,11 +2,12 @@
   "Unified viewer for any topic — PDF root, PDF page, basic/wiki/web/epub.
 
    Resolves topic kind server-side; composes:
-     - TitleBar (PDF only) — doc title + rename + page-stats + hamburger
-     - HierarchySidePanel (always when expanded)
+     - TitleBar (PDF only) — doc title + rename + page-stats
+     - HierarchySidePanel (always; owns its own open/collapsed state)
      - PdfPane (PDF only)
      - EditorPane (always)
      - BottomPanel (always) — ContentToolbar + ContentCardTable
+     - PinSidePanel (always; owns its own open/collapsed state)
 
    Routing collapses /viewer/browse-pdf/<root>/<page> and /viewer/browse-topic/<id>
    into a single /viewer/topic/<id>. Page navigation inside a PDF does not
@@ -16,6 +17,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.logging :as log]
    [freememo.hierarchy-side-panel :refer [HierarchySidePanel]]
+   [freememo.pin-side-panel :refer [PinSidePanel]]
    [freememo.pdf-pane :refer [PdfPane]]
    [freememo.editor-pane :refer [EditorPane]]
    [freememo.bottom-panel :refer [BottomPanel]]
@@ -107,29 +109,20 @@
      :clj 75))
 
 ;; ---------------------------------------------------------------------------
-;; TitleBar — PDF-only header with doc title + rename + page-stats + hamburger
+;; TitleBar — PDF-only header with doc title + rename + page-stats
+;; (The hierarchy hamburger lives inside HierarchySidePanel itself.)
 ;; ---------------------------------------------------------------------------
 
-(e/defn TitleBar [user-id pdf-root-id refresh page-info !side-collapsed?]
+(e/defn TitleBar [user-id pdf-root-id refresh page-info]
   (e/client
     (let [current-title  (e/server (get-topic-title* refresh pdf-root-id))
           !editing-title (atom false)
-          editing-title  (e/watch !editing-title)
-          side-collapsed? (e/watch !side-collapsed?)]
+          editing-title  (e/watch !editing-title)]
       (dom/div
         (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
                             :padding "6px 12px" :flex-shrink "0"
                             :background "var(--color-bg-subtle)"
                             :border-bottom "1px solid var(--color-border)"}})
-
-        ;; Hamburger toggle
-        (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary"
-                      :style {:padding "2px 8px" :font-size "16px" :line-height "1"
-                              :flex-shrink "0"}
-                      :data-tooltip (if side-collapsed? "Show hierarchy" "Hide hierarchy")})
-          (dom/text "☰")
-          (dom/On "click" (fn [_] (swap! !side-collapsed? not)) nil))
 
         ;; Title — editable in place
         (if editing-title
@@ -190,25 +183,6 @@
                                           (str "Remaining: " (str/join ", " (take 20 remaining))
                                             " ... and " (- (count remaining) 20) " more"))})
               (dom/text (:done page-info) "/" (:total page-info)))))))))
-
-;; ---------------------------------------------------------------------------
-;; NonPdfHamburger — minimal hamburger for non-PDF topics (no title bar)
-;; ---------------------------------------------------------------------------
-
-(e/defn NonPdfHamburger [!side-collapsed?]
-  (e/client
-    (let [side-collapsed? (e/watch !side-collapsed?)]
-      (dom/div
-        (dom/props {:style {:display "flex" :align-items "center"
-                            :padding "4px 12px" :flex-shrink "0"
-                            :border-bottom "1px solid var(--color-border)"}})
-        (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary"
-                      :style {:padding "2px 8px" :font-size "16px" :line-height "1"
-                              :flex-shrink "0"}
-                      :data-tooltip (if side-collapsed? "Show hierarchy" "Hide hierarchy")})
-          (dom/text "☰")
-          (dom/On "click" (fn [_] (swap! !side-collapsed? not)) nil))))))
 
 ;; ---------------------------------------------------------------------------
 ;; TopicPage shell
@@ -278,8 +252,6 @@
                                   static-content)
 
               ;; UI state
-              !side-collapsed? (atom false)
-              side-collapsed?  (e/watch !side-collapsed?)
               !top-pct         (atom (default-split-pct))
               top-pct          (e/watch !top-pct)
 
@@ -309,23 +281,17 @@
             (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
                                 :min-height "0" :overflow "hidden"}})
 
-            ;; Title bar (PDF only) — non-PDFs get a minimal hamburger row
-            (if is-pdf?
-              (TitleBar user-id pdf-root-id refresh page-info !side-collapsed?)
-              (NonPdfHamburger !side-collapsed?))
+            ;; Title bar (PDF only) — non-PDFs have no header row
+            (when is-pdf?
+              (TitleBar user-id pdf-root-id refresh page-info))
 
             ;; Body row: side panel | content column
             (dom/div
               (dom/props {:style {:flex "1" :display "flex" :flex-direction "row"
                                   :min-height "0" :overflow "hidden"}})
 
-              ;; LEFT: hierarchy side panel
-              (when-not side-collapsed?
-                (dom/div
-                  (dom/props {:style {:width "280px" :flex-shrink "0"
-                                      :min-width "0" :overflow "hidden"
-                                      :display "flex" :flex-direction "column"}})
-                  (HierarchySidePanel user-id page-topic-id navigate! nil)))
+              ;; LEFT: hierarchy side panel (manages its own open/collapsed state)
+              (HierarchySidePanel user-id page-topic-id navigate! nil)
 
               ;; RIGHT: content column
               (dom/div
@@ -423,4 +389,7 @@
                    :navigate!       navigate!
                    :origin          (:origin queue-ctx)
                    :card-font-size  card-font-size}
-                  card-refresh)))))))))
+                  card-refresh))
+
+              ;; PIN SIDE PANEL: collapsible right-side pins for current topic
+              (PinSidePanel page-topic-id user-id))))))))

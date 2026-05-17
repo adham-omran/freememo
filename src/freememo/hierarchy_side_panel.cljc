@@ -7,7 +7,9 @@
    :tree-mutations is bumped only when the topic tree shape changes (extract
    create/delete, rename, document import). Decoupling from :refresh keeps the
    rich-text editor's `topic` re-fetch out of the side-panel update path so
-   extracting does not destroy and recreate the Quill instance."
+   extracting does not destroy and recreate the Quill instance.
+
+   Open/collapsed state is persisted per-topic via freememo.settings."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -15,6 +17,7 @@
    [contrib.data :refer [clamp-left]]
    [freememo.navigation :as nav]
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])))
 
 #?(:clj
@@ -22,22 +25,20 @@
      (dissoc t :topics/content :topics/content_text)))
 
 (defn get-hierarchy-data*
-  "Server fetch — single subtree query rooted at the parent of the current
-   page topic (or the current topic if it has no parent). Strips :content /
-   :content_text to keep the WebSocket payload small.
+  "Server fetch — single subtree query rooted at the document root (topmost
+   ancestor) of the current page topic. Strips :content / :content_text to
+   keep the WebSocket payload small.
    `_tree-rev` is the watched value of (us/get-atom user-id :tree-mutations);
    bumping it re-runs this query."
   [_tree-rev user-id page-topic-id]
   #?(:clj
      (when (and user-id page-topic-id)
-       (when-let [current (db/get-topic page-topic-id)]
-         (let [parent-id  (:topics/parent_id current)
-               scope-id   (or parent-id page-topic-id)
-               scope-root (if parent-id (db/get-topic parent-id) current)
-               items      (mapv slim-topic (db/get-subtree user-id scope-id))]
-           {:scope-root (slim-topic scope-root)
-            :current-id page-topic-id
-            :items      items})))
+       (when-let [root-id (db/get-root-topic-id page-topic-id)]
+         (when-let [scope-root (db/get-topic root-id)]
+           (let [items (mapv slim-topic (db/get-subtree user-id root-id))]
+             {:scope-root (slim-topic scope-root)
+              :current-id page-topic-id
+              :items      items}))))
      :cljs nil))
 
 (defn side-panel-badge
@@ -49,80 +50,97 @@
     "epub"       ["EPUB"    "var(--color-badge-epub)"]
     ("web" "wikipedia") ["Web" "var(--color-badge-web)"]
     "markdown"   ["MD"      "var(--color-badge-web)"]
-    "basic"      ["Extract" "var(--color-badge-epub)"]
+    "basic"      ["E"       "var(--color-badge-epub)"]
     nil))
 
 (defn build-rows
-  "Pure: depth-bounded flatten. Returns a vec of
-   {:depth :topic :has-children :current?} rows.
-   - depth 0: scope-root
-   - depth 1: scope-root's children (siblings of the current page)
-   - depth 2: extracts of an expanded depth-1 sibling
-   The current page is always treated as expanded; the user can additionally
-   toggle other siblings via the expanded-set."
-  [scope-root current-id children-map expanded-set]
-  (let [scope-id (:topics/id scope-root)
-        siblings (vec (get children-map scope-id))]
-    (into [{:depth 0
-            :topic scope-root
-            :has-children (boolean (seq siblings))
-            :current? (= scope-id current-id)}]
-      (mapcat (fn [s]
-                (let [id (:topics/id s)
-                      kids (vec (get children-map id))
-                      expanded? (or (= id current-id)
-                                  (contains? expanded-set id))
-                      row {:depth 1
-                           :topic s
-                           :has-children (boolean (seq kids))
-                           :current? (= id current-id)}]
-                  (if (and expanded? (seq kids))
-                    (cons row
-                      (mapv (fn [k]
-                              {:depth 2
-                               :topic k
-                               :has-children false
-                               :current? (= (:topics/id k) current-id)})
-                        kids))
-                    [row])))
-        siblings))))
+  "Pure: depth-first flatten of the subtree rooted at scope-root.
+   Returns a vec of {:depth :topic :has-children :current?} rows.
+
+   A node's children are rendered when the node is on the path from
+   scope-root to current-id, or when the user explicitly expanded it.
+   scope-root is always treated as expanded."
+  [scope-root current-id children-map expanded-set items]
+  (let [id->parent (into {} (map (juxt :topics/id :topics/parent_id)) items)
+        path-set   (loop [id current-id acc (transient #{})]
+                     (if (or (nil? id) (contains? acc id))
+                       (persistent! acc)
+                       (recur (get id->parent id) (conj! acc id))))]
+    (letfn [(walk [node depth]
+              (let [id   (:topics/id node)
+                    kids (vec (get children-map id))
+                    has? (boolean (seq kids))
+                    row  {:depth depth
+                          :topic node
+                          :has-children has?
+                          :current? (= id current-id)}
+                    expanded? (or (zero? depth)
+                                (contains? path-set id)
+                                (contains? expanded-set id))]
+                (if (and expanded? has?)
+                  (cons row (mapcat #(walk % (inc depth)) kids))
+                  [row])))]
+      (vec (walk scope-root 0)))))
 
 (e/defn HierarchySidePanel [user-id page-topic-id navigate! !nav-target]
   (e/client
-    (dom/div
-      (dom/props {:style {:height "100%" :display "flex" :flex-direction "column"
-                          :overflow "hidden"
-                          :background "var(--color-bg-subtle)"
-                          :border-right "1px solid var(--color-border)"}})
+    ;; Frame isolation — remounts cleanly when page-topic-id changes, so
+    ;; !open? re-seeds from the new topic's saved state.
+    (e/for-by identity [tid [page-topic-id]]
+      (let [initial-open?   (e/server (settings/get-hierarchy-open user-id tid))
+            !open?          (atom initial-open?)
+            open?           (e/watch !open?)
+            !save           (atom nil)
+            save-val        (e/watch !save)
+            [?save-token _] (e/Token save-val)]
 
-      (dom/div
-        (dom/props {:style {:padding "8px 12px" :font-size "11px"
-                            :font-weight "600" :text-transform "uppercase"
-                            :letter-spacing "0.04em"
-                            :color "var(--color-text-secondary)"
-                            :border-bottom "1px solid var(--color-border)"
-                            :flex-shrink "0"}})
-        (dom/text "Hierarchy"))
+        (when-some [token ?save-token]
+          (e/server (settings/save-hierarchy-open user-id tid save-val))
+          (token))
 
-      (if (nil? page-topic-id)
         (dom/div
-          (dom/props {:style {:padding "16px 12px" :font-size "13px"
-                              :color "var(--color-text-secondary)"}})
-          (dom/text "No page selected."))
+          (dom/props {:class (str "hierarchy-side-panel"
+                               (when-not open? " hierarchy-side-panel--collapsed"))})
 
-        (let [tree-rev   (e/server (e/watch (us/get-atom user-id :tree-mutations)))
-              data       (e/server (get-hierarchy-data* tree-rev user-id page-topic-id))
-              scope-root (:scope-root data)
-              current-id (:current-id data)
-              items      (vec (:items data))]
-          (when scope-root
-            (let [children-map (group-by :topics/parent_id items)
-                  !expanded-set (atom #{})
-                  expanded-set (e/watch !expanded-set)
-                  rows (build-rows scope-root current-id children-map expanded-set)
-                  row-count (count rows)
-                  row-height 36
-                  !scroll-node (atom nil)]
+          ;; Header row — toggle (always visible) + title (only when open).
+          ;; The row renders even when collapsed so the 32px gutter still
+          ;; surfaces the hamburger.
+          (dom/div
+            (dom/props {:class "side-panel__header"})
+            (dom/button
+              (dom/props {:class "side-panel__toggle"})
+              (dom/text "☰")
+              (dom/On "click"
+                (fn [_]
+                  (let [next-open? (not @!open?)]
+                    (reset! !open? next-open?)
+                    (reset! !save next-open?)))
+                nil))
+            (when open?
+              (dom/span
+                (dom/props {:class "side-panel__title"})
+                (dom/text "Hierarchy"))))
+
+          (when open?
+            (if (nil? tid)
+              (dom/div
+                (dom/props {:style {:padding "16px 12px" :font-size "13px"
+                                    :color "var(--color-text-secondary)"}})
+                (dom/text "No page selected."))
+
+              (let [tree-rev   (e/server (e/watch (us/get-atom user-id :tree-mutations)))
+                    data       (e/server (get-hierarchy-data* tree-rev user-id tid))
+                    scope-root (:scope-root data)
+                    current-id (:current-id data)
+                    items      (vec (:items data))]
+                (when scope-root
+                  (let [children-map (group-by :topics/parent_id items)
+                        !expanded-set (atom #{})
+                        expanded-set (e/watch !expanded-set)
+                        rows (build-rows scope-root current-id children-map expanded-set items)
+                        row-count (count rows)
+                        row-height 36
+                        !scroll-node (atom nil)]
 
               (dom/div
                 (dom/props {:class "tape-scroll"
@@ -216,8 +234,7 @@
                                                         :text-overflow "ellipsis"
                                                         :white-space "nowrap"
                                                         :flex "1" :min-width "0"
-                                                        :color "var(--color-text-primary)"}
-                                                :data-tooltip title})
+                                                        :color "var(--color-text-primary)"}})
                                     (dom/text title))))))))
                       (dom/tr
                         (dom/props {:style {:--order 1}})
@@ -225,4 +242,4 @@
                           (dom/props {:style {:padding "16px 12px" :text-align "center"
                                               :color "var(--color-text-secondary)" :font-size "13px"}})
                           (dom/text "No items.")))))
-                  (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))))))))
+                  (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))))))))))

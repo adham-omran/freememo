@@ -73,10 +73,29 @@
                      (.addAttributes "td" (into-array String ["colspan" "rowspan"]))
                      (.addAttributes "th" (into-array String ["colspan" "rowspan"]))
                      (.addProtocols "a" "href" (into-array String ["http" "https" "mailto"]))
-                     (.addProtocols "img" "src" (into-array String ["http" "https" "data"])))]
+                     (.addProtocols "img" "src" (into-array String ["http" "https" "data"]))
+                     ;; Keep relative URLs (e.g. /api/media/<id>) intact —
+                     ;; without this, Jsoup strips relative srcs because they
+                     ;; don't match any allowed protocol.
+                     (.preserveRelativeLinks true))]
       (doseq [tag styled-tags]
         (.addAttributes safelist tag (into-array String ["style"])))
-      (let [cleaned (Jsoup/clean html safelist)
+      ;; Pass a baseUri so Jsoup can resolve relative URLs (e.g. /api/media/<id>)
+      ;; against the http allow-list; combined with preserveRelativeLinks(true),
+      ;; the output keeps them as relative paths instead of stripping them.
+      (let [cleaned (Jsoup/clean html "http://localhost" safelist)
             doc (Jsoup/parseBodyFragment cleaned)]
         (post-filter-styles! doc)
         (.html (.body doc))))))
+
+(defn clean-html-llm
+  "Sanitize HTML from LLM output. Same allow-list as `clean-html`, then strips
+   every `<img>` tag — pins are the sole source of images in cards (LL3-yes).
+   Preserves cloze syntax `{{cN::text}}` in text nodes."
+  [html]
+  (when html
+    (let [cleaned (clean-html html)
+          doc (Jsoup/parseBodyFragment cleaned)]
+      (doseq [^org.jsoup.nodes.Element img (.select doc "img")]
+        (.remove img))
+      (.html (.body doc)))))

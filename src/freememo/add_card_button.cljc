@@ -16,7 +16,7 @@
           !captured-selection (atom "")]
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-item" :style {:font-weight "500"}})
-        (dom/text "Add new")
+        (dom/text "Add new card")
         (reset! keyboard/!add-new-btn-ref dom/node)
         (e/on-unmount (fn [] (reset! keyboard/!add-new-btn-ref nil)))
         (dom/On "click"

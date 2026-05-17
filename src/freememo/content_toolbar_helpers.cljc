@@ -16,21 +16,10 @@
   #?(:clj (db/get-unsynced-card-count topic-id)
      :cljs 0))
 
-;; Save generated cards to DB using topic-id and root-topic-id
+;; Save generated cards to DB. Routes through cards/save-cards so bake-card-html
+;; runs and topic pins land in :q / :a (basic) or :c (cloze) per P3d.
 (defn save-cards-for-topic [topic-id root-topic-id kind generated-cards]
-  #?(:clj
-     (try
-       (let [rows (mapv (fn [card]
-                          (cond-> {:topic_id topic-id
-                                   :root_topic_id root-topic-id
-                                   :kind kind}
-                            (= kind "basic") (assoc :question (:q card) :answer (:a card))
-                            (= kind "cloze") (assoc :cloze (:c card))))
-                    generated-cards)]
-         (db/insert-flashcards! rows)
-         {:success true})
-       (catch Exception e
-         {:success false :error (.getMessage e)}))
+  #?(:clj (cards/save-cards topic-id root-topic-id kind generated-cards)
      :cljs nil))
 
 ;; Get context from previous pages (for page-mode card generation)
@@ -63,6 +52,7 @@
                                                :kind "basic"
                                                :title title})]
                 (log/log-info (str "[CREATE-EXTRACT " invocation-id "] DB-INSERT-OK new-id=" (:topics/id created)))
+                (db/copy-pins-to-child! parent-id (:topics/id created))
                 {:success true})
               (catch Exception e
                 (log/log-info (str "[CREATE-EXTRACT " invocation-id "] DB-INSERT-FAILED " (.getMessage e)))

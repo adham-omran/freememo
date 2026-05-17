@@ -8,15 +8,10 @@
    [clojure.java.io :as io]
    [clojure.string :as str]))
 
-;; Toggle: set to false from REPL to disable shared key fallback
-(defonce !use-shared-key (atom true))
-
-;; Load the shared key once from resources/openai.txt (nil if file absent)
-(defonce shared-api-key
-  (delay
-    (when-let [r (clojure.java.io/resource "openai.txt")]
-      (let [k (clojure.string/trim (slurp r))]
-        (when (seq k) k)))))
+(def app-base-url
+  "Public base URL for self-references (e.g. Anki card source links).
+   Override with APP_BASE_URL env."
+  (or (System/getenv "APP_BASE_URL") "https://freememo.net"))
 
 ;; Setting keys (constants)
 (def OPENAI_API_KEY "openai_api_key")
@@ -38,6 +33,9 @@
 (def ANKI_USE_TAGS "anki_use_tags")
 (def ANKI_TAGS "anki_tags")
 (def ANKI_SOURCE_FIELD "anki_source_field")
+(def ANKI_IMAGES_FRONT_FIELD "anki_images_front_field")
+(def ANKI_IMAGES_BACK_FIELD "anki_images_back_field")
+(def IMAGE_DISPLAY_MODE "image_display_mode")
 (def ANKI_AUTO_LOAD_MODE "anki_auto_load_mode")
 (def SOURCE_DISPLAY_MODE "source_display_mode")
 (def LLM_ENABLED "llm_enabled")
@@ -65,27 +63,15 @@
       (tel/error! {:id ::save-email-updates} e)
       {:success false :error "Failed to save email updates preference"})))
 
-;; OpenAI key helpers
-(defn- get-user-openai-api-key [user-id enc-key]
-  (crypto/decrypt (or (db/get-setting user-id OPENAI_API_KEY) "") enc-key))
-
-(defn- get-shared-openai-api-key []
-  (when @!use-shared-key @shared-api-key))
-
-;; Get functions
+;; OpenAI key helpers — per-user only (BYOK).
 (defn get-openai-api-key [user-id enc-key]
-  (let [user-key (get-user-openai-api-key user-id enc-key)]
-    (if (seq user-key)
-      user-key
-      (get-shared-openai-api-key))))
+  (let [k (crypto/decrypt (or (db/get-setting user-id OPENAI_API_KEY) "") enc-key)]
+    (when (seq k) k)))
 
 (defn get-openai-api-key-status [user-id enc-key]
-  (let [user-key (get-user-openai-api-key user-id enc-key)
-        shared-key (get-shared-openai-api-key)]
-    (cond
-      (seq user-key) {:source :user :configured? true}
-      (seq shared-key) {:source :shared :configured? true}
-      :else {:source :none :configured? false})))
+  (if (seq (get-openai-api-key user-id enc-key))
+    {:source :user :configured? true}
+    {:source :none :configured? false}))
 
 (defn get-model [user-id]
   (or (db/get-setting user-id MODEL) "gpt-5.1"))
@@ -204,6 +190,44 @@
     (catch Exception e
       (tel/error! {:id ::save-anki-source-field} e)
       {:success false :error "Failed to save Anki source field name"})))
+
+(defn get-anki-images-front-field [user-id]
+  (or (db/get-setting user-id ANKI_IMAGES_FRONT_FIELD) "Images Front"))
+
+(defn save-anki-images-front-field [user-id value]
+  (try
+    (db/set-setting user-id ANKI_IMAGES_FRONT_FIELD (or value "Images Front"))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-anki-images-front-field} e)
+      {:success false :error "Failed to save Anki front images field name"})))
+
+(defn get-anki-images-back-field [user-id]
+  (or (db/get-setting user-id ANKI_IMAGES_BACK_FIELD) "Images Back"))
+
+(defn save-anki-images-back-field [user-id value]
+  (try
+    (db/set-setting user-id ANKI_IMAGES_BACK_FIELD (or value "Images Back"))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-anki-images-back-field} e)
+      {:success false :error "Failed to save Anki back images field name"})))
+
+(defn get-image-display-mode
+  "Returns \"inline\" (default; images stay in front/back/cloze HTML) or
+   \"field\" (images extracted to dedicated Anki fields on push)."
+  [user-id]
+  (or (db/get-setting user-id IMAGE_DISPLAY_MODE) "inline"))
+
+(defn save-image-display-mode [user-id mode]
+  (try
+    (when-not (#{"inline" "field"} mode)
+      (throw (Exception. "Invalid image display mode")))
+    (db/set-setting user-id IMAGE_DISPLAY_MODE mode)
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-image-display-mode} e)
+      {:success false :error "Failed to save image display mode"})))
 
 (defn get-anki-auto-load-mode
   "Returns one of \"per-item\", \"global\", or \"none\". Defaults to \"per-item\"."
@@ -341,6 +365,36 @@
     {:success true}
     (catch Exception e
       (tel/error! {:id ::save-pdf-layout} e)
+      {:success false})))
+
+;; Per-topic pane open/closed state. Keys: "hierarchy_open_<topic-id>",
+;; "pins_open_<topic-id>". Missing key → default open (true).
+(defn get-hierarchy-open [user-id topic-id]
+  (try
+    (let [v (db/get-setting user-id (str "hierarchy_open_" topic-id))]
+      (if (nil? v) true (= v "true")))
+    (catch Exception _ true)))
+
+(defn save-hierarchy-open [user-id topic-id open?]
+  (try
+    (db/set-setting user-id (str "hierarchy_open_" topic-id) (str (boolean open?)))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-hierarchy-open} e)
+      {:success false})))
+
+(defn get-pins-open [user-id topic-id]
+  (try
+    (let [v (db/get-setting user-id (str "pins_open_" topic-id))]
+      (if (nil? v) true (= v "true")))
+    (catch Exception _ true)))
+
+(defn save-pins-open [user-id topic-id open?]
+  (try
+    (db/set-setting user-id (str "pins_open_" topic-id) (str (boolean open?)))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-pins-open} e)
       {:success false})))
 
 (defn add-to-history [history new-prompt]
