@@ -50,10 +50,12 @@
 (declare html-escape)
 
 (defn format-bibliography-html
-  "Render a CSL map as the pre-wrapped HTML used in both Bibliography append
-   and field modes. Title becomes an <a href=URL> when csl.URL is present.
-   Returns nil for a blank citation. Server-side only — title/author/URL are
-   HTML-escaped here, so callers must NOT double-escape."
+  "Render a CSL map as the bibliography body HTML — title link + author + year.
+   Returns nil for a blank citation. No presentation wrapper, no
+   \"Bibliography: \" prefix — callers add those when appending. Mirrors the
+   source/append-source split: field mode writes the raw body, append mode
+   wraps it. Server-side only — title/author/URL are HTML-escaped here, so
+   callers must NOT double-escape."
   [csl]
   #?(:clj
      (when (map? csl)
@@ -75,18 +77,18 @@
                            (or dash "")
                            (or author-html "")
                            (or year-html ""))]
-         (when (seq body)
-           (str "<small style='color:#999'>Bibliography: " body "</small>"))))
+         (when (seq body) body)))
      :cljs nil))
 
 (defn append-bibliography
-  "Append pre-wrapped bibliography HTML to card content when
-   bibliography-display-mode is 'append'. The HTML is built upstream by
-   format-bibliography-html and already includes the <small> wrapper."
-  [content bib-html]
-  (if (str/blank? bib-html)
+  "Append bibliography body to card content when bibliography-display-mode is
+   'append'. Wraps with the fm-bibliography <hr> divider and the
+   <small>Bibliography: …</small> presentation. Pull-side strip-html removes
+   this same wrapper."
+  [content bib-body]
+  (if (str/blank? bib-body)
     content
-    (str content "\n<hr class=\"fm-bibliography\">" bib-html)))
+    (str content "\n<hr class=\"fm-bibliography\"><small style='color:#999'>Bibliography: " bib-body "</small>")))
 
 #?(:cljs
    (defn to-future! [token task]

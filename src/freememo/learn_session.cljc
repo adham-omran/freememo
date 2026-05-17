@@ -38,8 +38,8 @@
       (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
       (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
             [t _error] (e/Token event)]
-        (e/on-unmount #(swap! !queue-idx inc))
         (when t
+          (e/on-unmount #(swap! !queue-idx inc))
           (case (e/server (e/Offload #(do (done-topic* topic-id) :ok)))
             (t)))))))
 
@@ -77,8 +77,8 @@
                                  :days #?(:cljs (js/parseInt v) :clj nil)}))
                             nil)
                     [t _error] (e/Token event)]
-                (e/on-unmount #(swap! !queue-idx inc))
                 (when t
+                  (e/on-unmount #(swap! !queue-idx inc))
                   (let [days (:days event)]
                     (case (e/server (when (and days (pos? days))
                                       (postpone-topic* topic-id days)))
@@ -107,9 +107,9 @@
             (dom/text "Next")
             (let [event (dom/On "click" (fn [_] (when-not @!busy (str (random-uuid)))) nil)
                   [t _error] (e/Token event)]
-              (e/on-unmount #(do (swap! !queue-idx inc)
-                               (js/setTimeout (fn [] (reset! !busy false)) 500)))
               (when t
+                (e/on-unmount #(do (swap! !queue-idx inc)
+                                 (js/setTimeout (fn [] (reset! !busy false)) 500)))
                 (reset! !busy true)
                 (case (e/server (advance-topic* topic-id))
                   (case (e/client (log/log-debug (str "Session advancing idx=" (inc @!queue-idx))))

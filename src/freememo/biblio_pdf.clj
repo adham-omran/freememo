@@ -3,6 +3,7 @@
    XMP packet (parsed via jsoup XML mode), and DOI/arXiv/ISBN regex over the
    text of pages 1, 2, and the last page. Pure CLJ; server-only."
   (:require [clojure.string :as str]
+            [freememo.csl-util :as csl]
             [freememo.ocr :as ocr]
             [taoensso.telemere :as tel])
   (:import [org.apache.pdfbox Loader]
@@ -22,7 +23,7 @@
   (when c (.get c Calendar/YEAR)))
 
 (defn- year->issued [year]
-  (when year {:date-parts [[year]]}))
+  (when year {:date-parts (csl/pad-date-parts [[year]])}))
 
 (defn- str->author-array [s]
   (when-let [v (not-empty-str s)] [{:literal (str/trim v)}]))

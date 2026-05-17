@@ -250,23 +250,181 @@ html, body {
 .toolbar-container {
     position: relative;
     flex-shrink: 0;
+    /* min-width: 0 lets the toolbar-container shrink below its intrinsic
+       content width when its column-flex parent is narrower than the natural
+       content. Without this, the container expands to fit content and the
+       ResizeObserver can never detect overflow (scrollWidth ≡ clientWidth). */
+    min-width: 0;
+    /* Establishes a stacking context so tooltips (and the overflow dropdown)
+       paint over later DOM siblings such as .tape-scroll. Without this,
+       sibling elements after .toolbar-container paint on top regardless of
+       the tooltip's z-index, since both live in the same stacking context. */
+    z-index: 2;
 }
+/* `.toolbar` MUST be `flex-wrap: nowrap` for the content-aware ResizeObserver
+   to work: with wrapping, items push to a new row instead of overflowing
+   horizontally, and `scrollWidth ≤ clientWidth` would incorrectly report
+   "everything fits". `overflow: hidden` clips during the brief render window
+   before the observer fires; `min-width: 0` lets the toolbar shrink below its
+   intrinsic content min when its container narrows (e.g. side panels open).
+   Children must `flex-shrink: 0` — otherwise flex would shrink them below
+   their natural width and `scrollWidth` would equal `clientWidth` even when
+   content visibly overflows. */
 .toolbar {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: var(--sp-2);
     padding: var(--sp-1) var(--sp-2);
     border-bottom: 1px solid var(--color-border);
     background: var(--color-bg-subtle);
+    /* overflow-x: clip clips horizontal overflow (the content-aware tier
+       system's purpose); overflow-y: visible lets tooltips and dropdowns
+       escape vertically. `clip` is the only overflow value that does NOT
+       coerce a sibling `visible` to `auto`. */
+    overflow-x: clip;
+    overflow-y: visible;
+    min-width: 0;
 }
+.toolbar > * { flex-shrink: 0; }
 
-/* Overflow menu — on desktop, panel is invisible wrapper (contents flow inline) */
-.toolbar-overflow-trigger { display: none; }
+/* Overflow menu — panel is an invisible wrapper by default (contents flow
+   inline); when .overflow-open is on the container, panel becomes a dropdown
+   over the toolbar.
+
+   Reactive visibility (Google Docs pattern): each proxy carries a tier class
+   describing WHEN it should appear in the dropdown. Proxies show only at the
+   width where their inline counterpart has hidden. ⋮ trigger uses :has() to
+   appear only when at least one proxy is currently active. */
+.toolbar-overflow-trigger {
+    /* Default: not rendered. Per-tier rules below opt in.
+       Tier 0: display:none (no slot — full toolbar fits).
+       Tier 1: display:flex + visibility:hidden (slot reserved so scrollWidth
+               includes trigger width — the fit algorithm escalates naturally
+               to tier 2 when content + slot won't fit).
+       Tier ≥ 2: display:flex + visibility:visible (visible affordance over a
+                 non-empty dropdown). */
+    display: none;
+    align-items: center;
+    flex-shrink: 0;
+    padding-left: 4px;
+}
 .toolbar-overflow-backdrop { display: none; }
 .toolbar-overflow-panel { display: contents; }
 .toolbar-overflow-panel-action { display: none; }
 .toolbar-overflow-panel-separator { display: none; }
+
+/* When dropdown is open: panel becomes an absolutely-positioned card,
+   action items show as full-width rows, backdrop catches outside clicks. */
+.toolbar-container.overflow-open .toolbar-overflow-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 99;
+}
+.toolbar-container.overflow-open .toolbar-overflow-panel {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    bottom: 100%;
+    right: 0;
+    z-index: 100;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-modal);
+    padding: var(--sp-2);
+    gap: 6px;
+    min-width: 220px;
+}
+.toolbar-container.overflow-open .toolbar-overflow-panel .btn {
+    width: 100%;
+    text-align: left;
+    justify-content: flex-start;
+}
+.toolbar-container.overflow-open .toolbar-overflow-panel-separator {
+    border-top: 1px solid var(--color-border);
+    margin: 2px 0;
+}
+.toolbar-overflow-panel .toolbar-sep { display: none; }
+
+/* Tier classes — content-aware. The `.collapse-N` class on .toolbar-container
+   is set imperatively by a ResizeObserver in content_toolbar.cljc that finds
+   the smallest tier where inline content fits without overflow.
+
+   Tier ladder (cumulative; tier N also implies all of tier <N):
+   - collapse-0: nothing hidden, all labels visible
+   - collapse-1: labels hidden (icon-only buttons)
+   - collapse-2: + Context inline hidden (.toolbar-collapse-first)
+   - collapse-3: + Export inline hidden (.toolbar-collapse-second)
+   - collapse-4: + Pull/Sync inline hidden (.toolbar-collapse-early)
+   - collapse-5: + card-type selector hidden (.toolbar-collapse-card-type)
+   - collapse-6: + remaining defaults hidden (.toolbar-overflow-item) */
+
+/* Labels hide at tier ≥1 */
+.toolbar-container:is(.collapse-1, .collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6) .icon-label {
+    display: none;
+}
+
+/* Context inline hides at tier ≥2 */
+.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6) .toolbar-collapse-first {
+    display: none !important;
+}
+
+/* Export inline hides at tier ≥3 */
+.toolbar-container:is(.collapse-3, .collapse-4, .collapse-5, .collapse-6) .toolbar-collapse-second {
+    display: none !important;
+}
+
+/* Pull/Sync inline hides at tier ≥4 */
+.toolbar-container:is(.collapse-4, .collapse-5, .collapse-6) .toolbar-collapse-early {
+    display: none !important;
+}
+
+/* Card-type selector hides at tier ≥5 (before generic defaults) */
+.toolbar-container:is(.collapse-5, .collapse-6) .toolbar-collapse-card-type {
+    display: none !important;
+}
+
+/* Remaining defaults hide at tier 6 */
+.toolbar-container.collapse-6 .toolbar-overflow-item {
+    display: none !important;
+}
+
+/* Proxy reveal — mirror the inline collapse, but only when dropdown is open. */
+.toolbar-container.overflow-open .toolbar-overflow-keep { display: flex; }
+.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6).overflow-open .toolbar-overflow-first {
+    display: flex;
+}
+.toolbar-container:is(.collapse-3, .collapse-4, .collapse-5, .collapse-6).overflow-open .toolbar-overflow-second {
+    display: flex;
+}
+.toolbar-container:is(.collapse-4, .collapse-5, .collapse-6).overflow-open .toolbar-overflow-early {
+    display: flex;
+}
+.toolbar-container:is(.collapse-5, .collapse-6).overflow-open .toolbar-overflow-card-type {
+    display: flex;
+}
+.toolbar-container.collapse-6.overflow-open .toolbar-overflow-default {
+    display: flex;
+}
+
+/* ⋮ trigger — tier-conditional paint. At tier 1 the trigger occupies layout
+   (so the fit algorithm sees its width) but is visually hidden — there is no
+   overflow content at tier 1. From tier 2 up, real affordance over the
+   dropdown. .toolbar-overflow-keep (e.g. modeful pins) forces visible. */
+.toolbar-container.collapse-1 .toolbar-overflow-trigger {
+    display: flex;
+    visibility: hidden;
+}
+.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6) .toolbar-overflow-trigger {
+    display: flex;
+    visibility: visible;
+}
+.toolbar-container:has(.toolbar-overflow-keep) .toolbar-overflow-trigger {
+    display: flex;
+    visibility: visible;
+}
 .toolbar-settings-row {
     display: flex;
     align-items: center;
@@ -277,6 +435,124 @@ html, body {
 .radio-dot { font-size: 14px; color: var(--color-text-hint); user-select: none; line-height: 1; }
 .radio-dot--checked { color: var(--color-primary); }
 .toolbar-generate-group { margin-left: auto; }
+
+/* Generate cluster — wraps card-count stepper + Generate buttons so the
+   parameter visually groups with the action that consumes it. Subtle
+   background + tight inner spacing signal "one unit"; outer margin-left:auto
+   on the inner .toolbar-generate-group is neutralized inside the cluster. */
+.toolbar-generate-cluster {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    padding: 3px 10px;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+.toolbar-generate-cluster .toolbar-generate-group { margin-left: 0; }
+.toolbar-generate-cluster .card-count-control { gap: 2px; }
+
+/* Group-boundary divider — taller, more deliberate than .toolbar-sep `|`
+   characters. Used between every visual group in the toolbar: cluster →
+   topic actions, card-edit → Anki, Anki → lifecycle. */
+.toolbar-group-divider {
+    flex-shrink: 0;
+    align-self: center;
+    width: 1px;
+    height: 28px;
+    background: var(--color-border);
+    margin: 0 var(--sp-3);
+}
+
+/* ── Icon buttons (Lucide SVG via freememo.icons) ─────────────────
+   Foundations: square aspect, ≥32×32 touch target, hover bg, focus ring.
+   Per-icon SVGs inherit `currentColor` so button color flows to stroke.
+   Tooltip on hover is driven by [data-tooltip] (see index.css:1303). */
+.icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-primary);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.icon-btn:hover:not(:disabled) {
+    background: var(--color-bg-subtle);
+    border-color: var(--color-border);
+}
+.icon-btn:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+}
+.icon-btn:disabled {
+    color: var(--color-text-hint);
+    cursor: not-allowed;
+}
+
+/* Icon-label combo buttons — icon + text side by side.
+   gap:6px handles icon↔label spacing; no extra rule needed for .btn-primary
+   as long as it carries .icon-label-btn. If it doesn't, the fallback below
+   (via flex on .btn) keeps things tidy. */
+.icon-label-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.icon-label-btn svg { flex-shrink: 0; }
+
+/* Spin animation — used by icons/Icon :loader-2 when Generate is busy.
+   Agent 2 applies class="spin" to the SVG element directly. */
+@keyframes icon-spin { to { transform: rotate(360deg); } }
+.spin {
+    animation: icon-spin 0.8s linear infinite;
+    transform-origin: center;
+}
+
+/* Icon-button state variants ─────────────────────────────────────────────
+   aria-busy: Forms5's existing rule covers input/select/textarea only (line ~1703);
+   icon-buttons need their own warm-tint to signal in-flight work.
+   aria-busy on .icon-btn shows yellow background (matches form field convention).
+   Error state: icon stroke turns danger-red via currentColor.
+   Disabled: already handled by .icon-btn:disabled above (color-text-hint). */
+.icon-btn[aria-busy="true"] {
+    background-color: var(--color-warning-bg);
+    border-color: var(--color-warning);
+}
+.icon-btn[aria-busy="true"] svg {
+    animation: icon-spin 0.8s linear infinite;
+    transform-origin: center;
+}
+.icon-btn[data-error="true"],
+.icon-btn.error {
+    color: var(--color-danger);
+}
+
+/* Focus ring on any button when keyboard-navigated */
+.btn:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+}
+
+/* Pull/Sync (.toolbar-collapse-early) hide via the content-aware tier system
+   (collapse-4+ rule above), not a viewport breakpoint. A prior @media rule
+   here forced display:none at viewport ≤1280px regardless of tier; that
+   removed them from `scrollWidth` and starved the fit algorithm — tier
+   settled at 1 with Pull/Sync invisible and no trigger painted. */
+
+/* Overflow dropdown is a vertical list — show full icon+label even when the
+   viewport is narrow (would otherwise hide labels via the 1399px rule above).
+   Higher specificity (.toolbar-container.overflow-open .toolbar-overflow-panel .icon-label)
+   beats the bare .icon-label rule regardless of viewport. */
+.toolbar-container.overflow-open .toolbar-overflow-panel .icon-label {
+    display: inline;
+}
 
 .header-bar {
     display: flex;
@@ -488,78 +764,30 @@ textarea:hover {
     .pdf-collapse-md { display: none !important; }
     .pdf-collapse-sm { display: none !important; }
 
-    /* Content toolbar: horizontal scroll instead of multi-row wrap */
+    /* Content toolbar fallback on mobile — when tier collapse maxes out and
+       items still don't fit, allow horizontal scroll instead of clipping.
+       overflow-y stays visible so tooltips can escape. */
     .toolbar {
-        flex-wrap: nowrap;
         overflow-x: auto;
+        overflow-y: visible;
         -webkit-overflow-scrolling: touch;
     }
 
-    /* Normalize button heights in toolbar (btn matches btn-sm) */
-    .toolbar .btn {
-        padding: 4px 12px;
-        font-size: 13px;
-        white-space: nowrap;
-    }
-
-    /* Hide overflow items — accessed via ⋮ menu instead */
-    .toolbar-overflow-item { display: none !important; }
-
-    /* Show overflow trigger — sticky at right edge of scrollable toolbar */
+    /* Mobile-only: pin the ⋮ trigger to the right edge of the
+       horizontally-scrolling toolbar so it stays reachable. */
     .toolbar-overflow-trigger {
-        display: flex;
         position: sticky;
         right: 0;
-        flex-shrink: 0;
         z-index: 2;
         background: var(--color-bg-subtle);
-        padding-left: 4px;
     }
 
-    /* Backdrop covers screen to catch outside taps */
-    .toolbar-overflow-backdrop {
-        display: block;
-        position: fixed;
-        inset: 0;
-        z-index: 99;
-    }
-
-    /* Panel: hidden by default on mobile, shown as dropdown when .overflow-open */
-    .toolbar-overflow-panel { display: none; }
-    .toolbar-container.overflow-open .toolbar-overflow-panel {
-        display: flex;
-        flex-direction: column;
-        position: absolute;
-        bottom: 100%;
-        right: 0;
-        z-index: 100;
-        background: var(--color-bg-card);
-        border: 1px solid var(--color-border);
-        border-radius: var(--radius-md);
-        box-shadow: var(--shadow-modal);
-        padding: var(--sp-2);
-        gap: 6px;
-        min-width: 220px;
-    }
-    .toolbar-container.overflow-open .toolbar-overflow-panel .btn {
-        width: 100%;
-        text-align: left;
-        justify-content: flex-start;
-    }
-    .toolbar-container.overflow-open .toolbar-overflow-panel-action { display: flex; }
-    .toolbar-container.overflow-open .toolbar-overflow-panel-separator {
-        border-top: 1px solid var(--color-border);
-        margin: 2px 0;
-    }
-    /* Hide inline separators between settings groups inside dropdown */
-    .toolbar-overflow-panel .toolbar-sep { display: none; }
     /* Remove auto-margin push in dropdown context */
     .toolbar-generate-group { margin-left: 0; }
 
-    /* Card table: ensure min width so columns aren't clipped */
-    .card-table {
-        min-width: 500px;
-    }
+    /* Card-table min-width intentionally not set here: at narrow viewports the
+       table is allowed to shrink so its fixed 40px X-delete column stays
+       within the scroll viewport. Question/answer columns ellipsize as needed. */
 }
 
 /* ── Mobile (≤640px) ─────────────────────────────────────────── */
@@ -569,10 +797,6 @@ textarea:hover {
         gap: 6px;
     }
     .btn-sm {
-        padding: 4px 8px;
-        font-size: 12px;
-    }
-    .toolbar .btn {
         padding: 4px 8px;
         font-size: 12px;
     }

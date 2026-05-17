@@ -7,7 +7,9 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [clojure.string :as str]
+   [freememo.icons :as icons]
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.biblio-import :as biblio-import])))
 
 (def csl-type-options
@@ -17,6 +19,7 @@
    ["document" "Document / report"]
    ["chapter" "Book chapter"]
    ["manuscript" "Manuscript"]])
+
 
 ;; ---------------------------------------------------------------------------
 ;; CSL <-> form translation
@@ -43,6 +46,23 @@
              ints  (vec (keep #(try (Integer/parseInt %) (catch Exception _ nil)) parts))]
          (when (seq ints) [ints])))
      :cljs nil))
+
+(defn- pad-date-string
+  "Pad partial date strings to YYYY-MM-DD for the native HTML date picker.
+   Used as Forms5 :Unparse so legacy year-only / year-month CSL renders in
+   the picker. Input not matching a partial-or-full date shape is returned
+   stringified-unchanged; Input!'s :Unparse only affects initial display, so
+   untouched fields preserve their original CSL precision on save.
+   Coerces non-string input (nil, etc.) via str — Input! can pass non-strings
+   during reactive transitions."
+  [s]
+  (let [s (str s)]
+    (cond
+      (str/blank? s) s
+      (re-matches #"\d{4}" s) (str s "-01-01")
+      (re-matches #"\d{4}-\d{2}" s) (str s "-01")
+      :else s)))
+
 
 (defn- literal->family-given
   "Split a single literal name string into {:family :given}. Last whitespace-
@@ -187,16 +207,18 @@
              topic     (db/get-topic-for-user user-id topic-id)]
          (when-not topic
            (throw (ex-info "Topic not found" {:type ::topic-missing :id topic-id})))
-         (let [current-sid (:topics/source_id topic)]
-           (if current-sid
-             (do (db/update-source! {:id current-sid :csl-type csl-type
-                                     :csl csl :url url :title title})
-                 {:ok true :source-id current-sid})
-             (let [new-src (db/create-source! {:user-id user-id :csl-type csl-type
-                                               :csl csl :url url :title title})
-                   sid     (:sources/id new-src)]
-               (db/attach-source-to-topic! user-id topic-id sid)
-               {:ok true :source-id sid}))))
+         (let [current-sid (:topics/source_id topic)
+               result (if current-sid
+                        (do (db/update-source! {:id current-sid :csl-type csl-type
+                                                :csl csl :url url :title title})
+                            {:ok true :source-id current-sid})
+                        (let [new-src (db/create-source! {:user-id user-id :csl-type csl-type
+                                                          :csl csl :url url :title title})
+                              sid     (:sources/id new-src)]
+                          (db/attach-source-to-topic! user-id topic-id sid)
+                          {:ok true :source-id sid}))]
+           (swap! (us/get-atom user-id :refresh) inc)
+           result))
        (catch Exception e
          {:ok false :error (.getMessage e)}))
      :cljs nil))
@@ -210,14 +232,16 @@
     (dom/props {:class "label" :style {:color "var(--color-text-secondary)"}})
     (dom/text text)))
 
-(e/defn CslTypeSelect
-  "A1-fallback select for CSL type: stores selection in !csl-type atom.
-   Each <option> declares its own :selected based on the atom value. Setting
-   dom/props :value on <select> races with option mounting — sets .value property,
-   which silently no-ops when no matching option exists yet. :selected on each
-   option is reconciled at the option level, so the correct one is always chosen
-   once its DOM node mounts."
-  [!csl-type]
+;; CSL type — A1-fallback select. Forms5 has no tracked-dropdown primitive
+;; (RadioPicker! renders radios with raw values shown as <dt> labels, which is
+;; unsuitable for a 6-option list). The atom-backed select preserves the
+;; dropdown UI; the parent Form! reads (e/watch !csl-type) from :Parse to
+;; merge the value into the saved CSL.
+;;
+;; Pre:  !csl-type is an atom holding the current CSL type string.
+;; Post: on change, atom updated and select reflects authoritative value.
+;;       Returns (e/amb) — no edit contribution to Forms5's e/amb.
+(e/defn CslTypeSelect [!csl-type]
   (let [csl-type (e/watch !csl-type)
         current  (or csl-type "webpage")]
     (dom/select
@@ -230,37 +254,43 @@
           (dom/text label)))))
   (e/amb))
 
-(e/defn AuthorRows
-  "Renders editable Family/Given rows for the authors vector and mutates !authors.
-   Returns the empty e/amb — A1 fallback per spec 1.2.4: collection editor state
-   lives in the atom, Form! :Parse merges via @!authors at commit time."
-  [!authors]
+(defn- author-family-key [i] (keyword (str "author-" i "-family")))
+(defn- author-given-key  [i] (keyword (str "author-" i "-given")))
+
+;; AuthorRows — collection-editing case that doesn't map cleanly to Forms5.
+;; Atom !authors holds the vector structure (count, add, remove). Per-cell
+;; values are tracked via forms/Input! using positional field keys
+;; (:author-0-family etc.). :Parse reads dirty values from merged-fields and
+;; falls back to atom values for untouched cells.
+;;
+;; Pre:  !authors is an atom holding a vector of {:family :given} maps.
+;; Post: Each row's Family/Given Input! contributes an edit to the surrounding
+;;       Form!'s e/amb. Remove/add buttons mutate the atom directly.
+;; Invariant: position-based keys shift on add/remove. Mid-edit removal of
+;;            row k discards row k's dirty state (Input! unmounts before
+;;            commit). Tracked per CLAUDE.md "Forms5 patterns".
+(e/defn AuthorRows [!authors]
   (let [authors (e/watch !authors)]
     (e/for [[i author] (e/diff-by first (map-indexed vector authors))]
       (dom/div
         (dom/props {:style {:display "flex" :gap "8px" :margin-bottom "6px"}})
-        (dom/input
-          (dom/props {:type "text" :placeholder "Family" :class "input"
-                      :style {:flex "1"} :value (:family author)})
-          (dom/On "input"
-            (fn [e] (swap! !authors assoc-in [i :family] (-> e .-target .-value)))
-            nil))
-        (dom/input
-          (dom/props {:type "text" :placeholder "Given" :class "input"
-                      :style {:flex "1"} :value (:given author)})
-          (dom/On "input"
-            (fn [e] (swap! !authors assoc-in [i :given] (-> e .-target .-value)))
-            nil))
-        (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary" :type "button"
-                      :data-tooltip "Remove author"})
-          (dom/text "×")
-          (dom/On "click"
-            (fn [_]
-              (swap! !authors
-                (fn [as] (vec (concat (subvec as 0 i) (subvec as (inc i)))))))
-            nil))))
-    (e/amb)))
+        (e/amb
+          (forms/Input! (author-family-key i) (or (:family author) "")
+            :type "text" :placeholder "Family" :class "input" :style {:flex "1"})
+          (forms/Input! (author-given-key i) (or (:given author) "")
+            :type "text" :placeholder "Given" :class "input" :style {:flex "1"})
+          (do
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-secondary" :type "button"
+                          :data-tooltip "Remove author"
+                          :aria-label "Remove author"})
+              (icons/Icon :x :size 12 :title "Remove author")
+              (dom/On "click"
+                (fn [_]
+                  (swap! !authors
+                    (fn [as] (vec (concat (subvec as 0 i) (subvec as (inc i)))))))
+                nil))
+            (e/amb)))))))
 
 (e/defn AddAuthorButton [!authors]
   (dom/button
@@ -293,6 +323,14 @@
   ;; through reactive transitions, recreating the atoms and silently throwing away
   ;; user edits (observed: csl-change reset! to "article-journal" was reverted to
   ;; "book" on the next Parse cycle).
+  ;; !authors holds vector structure (count + values for add/remove). Per-cell
+  ;; values are also tracked through Forms5 via :author-i-family/given Input!s;
+  ;; on commit, :Parse reads dirty values from merged-fields and falls back
+  ;; to atom values for cells the user didn't touch.
+  ;;
+  ;; :type :command — :entity would require dirty fields to enable Submit, but
+  ;; "add author" doesn't fire an Input! token (the new row's Input!s are
+  ;; pristine), so a brand-new-author commit wouldn't be reachable under :entity.
   (let [!authors  (atom (e/snapshot (or (:authors initial) [])))
         !csl-type (atom (e/snapshot (or (:csl-type initial) "webpage")))
         commits (forms/Form! initial
@@ -323,6 +361,7 @@
 
                       (FieldLabel "Publication date")
                       (forms/Input! :issued (or issued "") :type "date"
+                        :Unparse (e/fn [s] (pad-date-string s))
                         :class "input input-full"
                         :style {:margin-bottom "var(--sp-3)"})
 
@@ -345,13 +384,25 @@
                             :style {:font-weight "600" :order "1"})
                           (CancelButton !show)))))
                   :Parse (e/fn [merged-fields _tempid]
-                           ;; e/watch (not @deref) — @!csl-type is non-reactive, so
-                           ;; Forms5 wouldn't re-run :Parse on atom mutations and
-                           ;; parsed-form-v would stay stale at submit time.
-                           [`SaveBibliography topic-id
-                            (-> merged-fields
-                                (assoc :csl-type (e/watch !csl-type))
-                                (assoc :authors  (e/watch !authors)))])
+                           ;; csl-type: read reactively via e/watch — atom is
+                           ;; the truth (CslTypeSelect's A1 fallback).
+                           ;; Authors: reconstruct from per-cell Input! dirty values,
+                           ;; falling back to atom snapshot for untouched cells. Atom
+                           ;; is the authority for row count (add/remove mutate it).
+                           (let [authors-snapshot (e/watch !authors)
+                                 reconstructed-authors
+                                 (vec
+                                   (map-indexed
+                                     (fn [i a]
+                                       {:family (or (get merged-fields (author-family-key i))
+                                                    (:family a) "")
+                                        :given  (or (get merged-fields (author-given-key i))
+                                                    (:given a) "")})
+                                     authors-snapshot))]
+                             [`SaveBibliography topic-id
+                              (-> merged-fields
+                                  (assoc :csl-type (e/watch !csl-type))
+                                  (assoc :authors  reconstructed-authors))]))
                   :type :command
                   :show-buttons false)]
     (e/for [[token cmd] (e/diff-by first (e/as-vec commits))]

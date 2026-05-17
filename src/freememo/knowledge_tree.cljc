@@ -10,6 +10,7 @@
    [freememo.card-components :as card-components]
    [freememo.pdf-cache :as pdf-cache]
    [freememo.bibliography-form :as bibform]
+   [freememo.icons :as icons]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])))
 
@@ -161,7 +162,8 @@
                               :border-left (when (= topic-status "done") "2px solid var(--color-success-lighter)")}})
           (if has-children
             (dom/span
-              (dom/props {:style {:width "16px" :font-size "10px" :cursor "pointer"
+              (dom/props {:style {:width "28px" :padding "4px 6px" :margin "-4px -6px"
+                                  :font-size "12px" :cursor "pointer"
                                   :user-select "none" :text-align "center" :flex-shrink "0"}})
               (dom/text (if expanded? "▼" "▶"))
               (dom/On "click"
@@ -282,50 +284,75 @@
             (dom/button
               (dom/props {:class "btn btn-sm btn-danger-fill"
                           :style {:padding "2px 6px" :font-size "12px" :line-height "1"}
-                          :data-tooltip "Delete"})
-              (dom/text "✕")
+                          :aria-label "Delete topic"
+                          :data-tooltip "Delete topic"})
+              (icons/Icon :x :size 14 :title "Delete topic")
               (dom/On "click" (fn [e] (.stopPropagation e) (reset! !show-confirm id)) nil))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; DeleteConfirmModal — extracted to keep DocumentTreeView lean
 ;; ---------------------------------------------------------------------------
 
+;; Pre:  `show-confirm` is the topic-id to delete, or nil (modal hidden).
+;; Post: Esc / backdrop click / Cancel → close (reset! !show-confirm nil).
+;;       Delete click or Cmd/Ctrl+Enter → run delete sequence, then close.
+;; Invariant: Delete button receives focus on mount (via RAF, after DOM attach)
+;;            so Tab cycles between Delete↔Cancel and the keydown shortcut works.
 (e/defn DeleteConfirmModal [user-id show-confirm !show-confirm]
   (e/client
     (when (some? show-confirm)
-      (dom/div
-        (dom/props {:class "modal-backdrop"})
-        (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil)
-        (dom/On "keydown" (fn [e] (when (= (.-key e) "Escape") (reset! !show-confirm nil))) nil)
+      (let [!delete-btn (atom nil)]
         (dom/div
-          (dom/props {:class "modal-content modal-sm"})
-          (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+          (dom/props {:class "modal-backdrop"})
+          (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil)
+          (dom/On "keydown"
+            (fn [e]
+              #?(:cljs
+                 (cond
+                   (= (.-key e) "Escape")
+                   (reset! !show-confirm nil)
+
+                   (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
+                   (when-some [btn @!delete-btn]
+                     (.preventDefault e)
+                     (.click btn)))))
+            nil)
           (dom/div
-            (dom/props {:class "confirm-modal-body"})
-            (dom/p (dom/text "Delete this topic? All children, extracts, and cards will be permanently removed.")))
-          (dom/div
-            (dom/props {:class "confirm-modal-actions"})
-            (dom/button
-              (dom/props {:class "btn btn-secondary"})
-              (dom/text "Cancel")
-              (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil))
-            (dom/button
-              (dom/props {:class "btn btn-danger-fill"})
-              (dom/text "Delete")
-              (let [event (dom/On "click" (fn [_] show-confirm) nil)
-                    [t _] (e/Token event)]
-                (when t
-                  (let [topic-to-delete event
-                        note-ids (e/server (e/Offload #(vec (db/get-all-anki-note-ids topic-to-delete))))]
-                    (case note-ids
-                      (let [r (e/server (e/Offload #(do (db/delete-topic-for-user! user-id topic-to-delete) :ok)))]
-                        (case r
-                          (case (e/server (swap! (us/get-atom user-id :refresh) inc))
-                            (case (e/server (swap! (us/get-atom user-id :tree-mutations) inc))
-                              (case (e/client (card-components/try-delete-anki-notes! note-ids))
-                                (case (e/client (pdf-cache/cache-delete topic-to-delete))
-                                  (case (e/client (reset! !show-confirm nil))
-                                    (t)))))))))))))))))))
+            (dom/props {:class "modal-content modal-sm"})
+            (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+            (dom/div
+              (dom/props {:class "confirm-modal-body"})
+              (dom/p (dom/text "Delete this topic? All children, extracts, and cards will be permanently removed.")))
+            (dom/div
+              (dom/props {:class "confirm-modal-actions"})
+              (dom/button
+                (dom/props {:class "btn btn-secondary"})
+                (dom/text "Cancel")
+                (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil))
+              (dom/button
+                (dom/props {:class "btn btn-danger-fill"})
+                (reset! !delete-btn dom/node)
+                ;; RAF-deferred focus — HTML autofocus doesn't fire on
+                ;; dynamically inserted elements; synchronous .focus races
+                ;; with DOM attach. RAF schedules after attach + layout.
+                ((fn []
+                   #?(:cljs (.requestAnimationFrame js/window
+                              (fn [] (.focus dom/node))))))
+                (dom/text "Delete")
+                (let [event (dom/On "click" (fn [_] show-confirm) nil)
+                      [t _] (e/Token event)]
+                  (when t
+                    (let [topic-to-delete event
+                          note-ids (e/server (e/Offload #(vec (db/get-all-anki-note-ids topic-to-delete))))]
+                      (case note-ids
+                        (let [r (e/server (e/Offload #(do (db/delete-topic-for-user! user-id topic-to-delete) :ok)))]
+                          (case r
+                            (case (e/server (swap! (us/get-atom user-id :refresh) inc))
+                              (case (e/server (swap! (us/get-atom user-id :tree-mutations) inc))
+                                (case (e/client (card-components/try-delete-anki-notes! note-ids))
+                                  (case (e/client (pdf-cache/cache-delete topic-to-delete))
+                                    (case (e/client (reset! !show-confirm nil))
+                                      (t))))))))))))))))))))
 
 ;; Document tree view — used by LibraryPage
 ;; Flatten + virtual scroll for performance

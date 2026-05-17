@@ -2,6 +2,7 @@
   "EPUB parsing: extracts metadata and HTML content from .epub files.
    An EPUB is a ZIP archive containing XHTML chapters, images, and metadata."
   (:require [freememo.html-cleaner :as cleaner]
+            [freememo.csl-util :as csl]
             [taoensso.telemere :as tel]
             [clojure.string :as str])
   (:import [java.util.zip ZipInputStream ZipEntry]
@@ -377,7 +378,7 @@
                                (seq languages)    (assoc :language (first languages))
                                (seq subjects)     (assoc :keyword (str/join ", " subjects))
                                (seq description)  (assoc :abstract description)
-                               year               (assoc :issued {:date-parts [[year]]})
+                               year               (assoc :issued {:date-parts (csl/pad-date-parts [[year]])})
                                isbn               (assoc :ISBN isbn)
                                doi                (assoc :DOI doi))]
             {:local local

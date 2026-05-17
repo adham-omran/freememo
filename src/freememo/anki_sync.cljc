@@ -7,6 +7,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.anki-sync-panels :as panels]
+   [freememo.icons :as icons]
    [freememo.keyboard :as keyboard]))
 
 (e/defn AnkiSyncInnerBody
@@ -58,10 +59,15 @@
 
       ;; Toolbar button
       (dom/button
-        (dom/props {:class "btn btn-sm btn-secondary" :style {:background "var(--color-bg-subtle)" :color "var(--color-text-primary)" :font-weight "500"}})
-        (dom/text (if (and unsynced-count (pos? unsynced-count))
-                    (str "Anki Sync (" unsynced-count ")...")
-                    "Anki Sync..."))
+        (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-item toolbar-collapse-early"
+                    :style {:background "var(--color-bg-subtle)" :color "var(--color-text-primary)" :font-weight "500"}
+                    :aria-label "Anki Sync"
+                    :data-tooltip "Anki Sync"})
+        (icons/Icon :refresh-cw :size 16)
+        (dom/span (dom/props {:class "icon-label"})
+          (dom/text (if (and unsynced-count (pos? unsynced-count))
+                      (str "Anki Sync (" unsynced-count ")...")
+                      "Anki Sync...")))
         (reset! keyboard/!anki-sync-btn-ref dom/node)
         (e/on-unmount (fn [] (reset! keyboard/!anki-sync-btn-ref nil)))
         (dom/On "click" (fn [_] (reset! !show-modal true)) nil))

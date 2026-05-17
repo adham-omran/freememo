@@ -161,9 +161,6 @@
                   (dom/button
                     (let [click-event (dom/On "click" identity nil)
                           [t _] (e/Token click-event)]
-                      (e/on-unmount #(do (reset! !draft-key "")
-                                       (reset! !key-save-error nil)
-                                       (reset! !show-key-modal false)))
                       (dom/props {:type "button"
                                   :disabled (some? t)
                                   :class "btn btn-primary"
@@ -173,8 +170,11 @@
                         (let [result (e/server (e/Offload #(settings/save-openai-api-key user-id draft-key enc-key)))]
                           (case result
                             (if (:success result)
-                              (case (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
-                                (t))
+                              (do (e/on-unmount #(do (reset! !draft-key "")
+                                                   (reset! !key-save-error nil)
+                                                   (reset! !show-key-modal false)))
+                                  (case (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                    (t)))
                               (let [err-msg (or (:error result) "Failed to save API key")]
                                 (reset! !key-save-error err-msg)
                                 (t err-msg))))))))

@@ -6,7 +6,8 @@
   (:require [cheshire.core :as json]
             [clj-http.client :as http]
             [clojure.string :as str]
-            [taoensso.telemere :as tel])
+            [taoensso.telemere :as tel]
+            [freememo.csl-util :as csl])
   (:import [org.jsoup Jsoup]
            [org.jsoup.nodes Element]
            [org.jsoup.parser Parser]))
@@ -80,7 +81,7 @@
     (cond-> {:type (or (get message "type") "article-journal")}
       title                       (assoc :title title)
       (seq authors)               (assoc :author authors)
-      issued                      (assoc :issued {:date-parts issued})
+      issued                      (assoc :issued {:date-parts (csl/pad-date-parts issued)})
       container                   (assoc :container-title container)
       (get message "volume")      (assoc :volume (get message "volume"))
       (get message "issue")       (assoc :issue (get message "issue"))
@@ -121,7 +122,7 @@
     (cond-> {:type "article"}
       title         (assoc :title title)
       (seq authors) (assoc :author authors)
-      year          (assoc :issued {:date-parts [[year]]})
+      year          (assoc :issued {:date-parts (csl/pad-date-parts [[year]])})
       url           (assoc :URL url)
       doi           (assoc :DOI doi)
       summary       (assoc :abstract summary))))
@@ -158,7 +159,7 @@
     (cond-> {:type "book"}
       (get data "title")    (assoc :title (get data "title"))
       (seq authors)         (assoc :author authors)
-      year                  (assoc :issued {:date-parts [[year]]})
+      year                  (assoc :issued {:date-parts (csl/pad-date-parts [[year]])})
       (seq publishers)      (assoc :publisher (first publishers))
       (get data "url")      (assoc :URL (get data "url"))
       (or isbn-13 isbn-10)  (assoc :ISBN (or isbn-13 isbn-10)))))

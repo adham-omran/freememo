@@ -16,10 +16,15 @@
     (let [{:keys [user-id topic-id root-topic-id page-number
                   context-mode mod-key unsynced-count
                   card-type]} cfg]
+      ;; IR Tools group: Extract + Add new
       (ExtractTopicButton user-id topic-id context-mode mod-key)
       (AddCardButton user-id topic-id root-topic-id card-type)
-      (dom/span (dom/props {:class "toolbar-overflow-item" :style {:color "var(--color-border)"}}) (dom/text "|"))
+      ;; Group boundary → Sync group. Divider's tier-collapse class mirrors
+      ;; Sync group's last-to-collapse item (Pull/Sync, .toolbar-collapse-early)
+      ;; so the divider hides exactly when its right-hand group is empty —
+      ;; avoids the "| |" orphan when Export/Pull/Sync all moved to overflow.
+      (dom/span (dom/props {:class "toolbar-collapse-early toolbar-group-divider"}))
+      ;; Sync group: Export + Pull + Sync
       (ExportButton user-id topic-id root-topic-id unsynced-count)
-      (dom/span (dom/props {:class "toolbar-overflow-item" :style {:color "var(--color-border)"}}) (dom/text "|"))
       (PullFromAnkiButton user-id root-topic-id)
       (AnkiSyncButton user-id root-topic-id page-number card-type unsynced-count))))

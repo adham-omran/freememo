@@ -5,6 +5,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.card-components :as card-components]
+   [freememo.icons :as icons]
    [freememo.keyboard :as keyboard]
    [freememo.navigation :as nav]
    #?(:clj [taoensso.telemere :as tel])
@@ -46,8 +47,10 @@
               (dom/props {:class "btn btn-sm btn-secondary"
                           :style {:color "var(--color-success-dark)" :border "1px solid var(--color-success-dark)"
                                   :font-weight "500"}
-                          :title "Mark as fully processed (extracted/carded everything useful)"})
-              (dom/text "Done")
+                          :aria-label "Done"
+                          :data-tooltip "Mark as fully processed (extracted/carded everything useful)"})
+              (icons/Icon :check :size 16)
+              (dom/span (dom/props {:class "icon-label"}) (dom/text "Done"))
               (reset! keyboard/!done-btn-ref dom/node)
               (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
               (dom/On "click" (fn [_] (reset! !done-click (str (random-uuid)))) nil))
@@ -66,8 +69,10 @@
               (dom/props {:class "btn btn-sm btn-secondary"
                           :style {:color "var(--color-primary)" :border "1px solid var(--color-primary)"
                                   :font-weight "500"}
-                          :title "Restore to active review queue"})
-              (dom/text "Restore")
+                          :aria-label "Restore"
+                          :data-tooltip "Restore to active review queue"})
+              (icons/Icon :rotate-ccw :size 16)
+              (dom/span (dom/props {:class "icon-label"}) (dom/text "Restore"))
               (reset! keyboard/!done-btn-ref dom/node)
               (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
               (dom/On "click" (fn [_] (reset! !restore-click (str (random-uuid)))) nil))
@@ -93,8 +98,10 @@
           (dom/button
             (dom/props {:class "btn btn-sm btn-danger-fill toolbar-overflow-item"
                         :style {:padding "4px 10px" :font-size "12px"}
-                        :title "Delete this extract and its cards"})
-            (dom/text "Delete")
+                        :aria-label "Delete"
+                        :data-tooltip "Delete this extract and its cards"})
+            (icons/Icon :trash-2 :size 16)
+            (dom/span (dom/props {:class "icon-label"}) (dom/text "Delete"))
             (reset! keyboard/!delete-btn-ref dom/node)
             (e/on-unmount (fn [] (reset! keyboard/!delete-btn-ref nil)))
             (dom/On "click" (fn [_] (reset! !delete-state :confirming)) nil))

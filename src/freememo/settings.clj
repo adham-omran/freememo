@@ -357,7 +357,7 @@
 (defn save-card-count [user-id value]
   (try
     (let [parsed (Integer/parseInt (str value))
-          clamped (max 1 (min 50 parsed))] ; Enforce 1-50 range
+          clamped (max 1 (min 20 parsed))] ; Enforce 1-20 range
       (db/set-setting user-id CARD_COUNT (str clamped))
       {:success true})
     (catch Exception e

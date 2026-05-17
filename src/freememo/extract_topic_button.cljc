@@ -8,6 +8,7 @@
    [clojure.string :as str]
    [freememo.rich-text-editor :as editor]
    [freememo.content-toolbar-helpers :as helpers]
+   [freememo.icons :as icons]
    [freememo.keyboard :as keyboard]
    [freememo.logging :as log]
    #?(:clj [freememo.user-state :as us])))
@@ -19,10 +20,12 @@
       (dom/button
         (dom/props {:class "btn btn-sm btn-primary"
                     :style {:font-weight "500"}
-                    :title (if (= context-mode :extract)
-                             (str "Extract selected text as a child topic (" mod-key "+Shift+E)")
-                             (str "Extract selected text as a topic (" mod-key "+Shift+E)"))})
-        (dom/text "Extract")
+                    :aria-label "Extract"
+                    :data-tooltip (if (= context-mode :extract)
+                                    (str "Extract selected text as a child topic (" mod-key "+Shift+E)")
+                                    (str "Extract selected text as a topic (" mod-key "+Shift+E)"))})
+        (icons/Icon :scissors :size 16)
+        (dom/span (dom/props {:class "icon-label"}) (dom/text "Extract"))
         (reset! keyboard/!extract-btn-ref dom/node)
         (e/on-unmount (fn [] (reset! keyboard/!extract-btn-ref nil)))
         ;; Event-driven token (one-shot per click) — prevents the e/server

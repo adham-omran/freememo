@@ -4,7 +4,8 @@
    <title>. Pure CLJ; server-only."
   (:require [cheshire.core :as json]
             [clojure.string :as str]
-            [taoensso.telemere :as tel])
+            [taoensso.telemere :as tel]
+            [freememo.csl-util :as csl])
   (:import [org.jsoup Jsoup]
            [org.jsoup.nodes Document Element]))
 
@@ -55,7 +56,7 @@
     (cond-> {}
       (meta-value doc "citation_title")        (assoc :title (meta-value doc "citation_title"))
       (seq authors)                            (assoc :author (literals authors))
-      year                                     (assoc :issued {:date-parts [[year]]})
+      year                                     (assoc :issued {:date-parts (csl/pad-date-parts [[year]])})
       (meta-value doc "citation_journal_title") (assoc :container-title (meta-value doc "citation_journal_title"))
       (meta-value doc "citation_volume")       (assoc :volume (meta-value doc "citation_volume"))
       (meta-value doc "citation_issue")        (assoc :issue (meta-value doc "citation_issue"))
@@ -106,7 +107,7 @@
       (get m "headline")                              (assoc :title (get m "headline"))
       (and (nil? (get m "headline")) (get m "name"))  (assoc :title (get m "name"))
       (seq authors)                                   (assoc :author authors)
-      year                                            (assoc :issued {:date-parts [[year]]})
+      year                                            (assoc :issued {:date-parts (csl/pad-date-parts [[year]])})
       publisher                                       (assoc :publisher publisher)
       (get m "description")                           (assoc :abstract (get m "description"))
       (get m "url")                                   (assoc :URL (get m "url"))
@@ -156,7 +157,7 @@
       (assoc :author (literals creators))
 
       year
-      (assoc :issued {:date-parts [[year]]})
+      (assoc :issued {:date-parts (csl/pad-date-parts [[year]])})
 
       (dc-val doc "DC.publisher" "DCTERMS.publisher")
       (assoc :publisher (dc-val doc "DC.publisher" "DCTERMS.publisher"))
@@ -186,7 +187,7 @@
       (meta-value doc "prism.number")          (assoc :issue (meta-value doc "prism.number"))
       (meta-value doc "prism.doi")             (assoc :DOI (meta-value doc "prism.doi"))
       (meta-value doc "prism.issn")            (assoc :ISSN (meta-value doc "prism.issn"))
-      year                                     (assoc :issued {:date-parts [[year]]}))))
+      year                                     (assoc :issued {:date-parts (csl/pad-date-parts [[year]])}))))
 
 ;; ── OpenGraph + article:* ──────────────────────────────────────────
 
@@ -199,7 +200,7 @@
       (meta-value doc "og:url")          (assoc :URL (meta-value doc "og:url"))
       (meta-value doc "og:site_name")    (assoc :container-title (meta-value doc "og:site_name"))
       (seq authors)                       (assoc :author (literals authors))
-      year                                (assoc :issued {:date-parts [[year]]}))))
+      year                                (assoc :issued {:date-parts (csl/pad-date-parts [[year]])}))))
 
 ;; ── <title> fallback ───────────────────────────────────────────────
 

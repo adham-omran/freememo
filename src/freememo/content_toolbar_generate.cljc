@@ -8,6 +8,7 @@
    [freememo.rich-text-editor :as editor]
    [freememo.card-modals :refer [PromptDialog]]
    [freememo.content-toolbar-helpers :as helpers]
+   [freememo.icons :as icons]
    [freememo.keyboard :as keyboard]
    #?(:clj [freememo.settings :as settings])))
 
@@ -48,23 +49,38 @@
           (dom/props {:class "toolbar-generate-group"
                       :style {:display "flex" :gap "8px"}})
 
-          ;; Generate button
-          (let [no-content? (empty? content-text)]
+          ;; Generate button — label and tooltip include the parameters
+          ;; (count, type, context) so users see exactly what will happen.
+          (let [no-content? (empty? content-text)
+                type-label (case card-type
+                             "basic" "Basic"
+                             "cloze" "Cloze"
+                             (str card-type))
+                action-summary (str "Generate " card-count-val " " type-label
+                                    (when use-context
+                                      (str " · " context-window
+                                           " page" (when (not= 1 context-window) "s")
+                                           " context")))]
             (dom/button
               (dom/props {:class "btn btn-sm btn-primary"
                           :style {:background (cond no-content? "var(--color-disabled-bg)" gen-active? "var(--color-primary-light)" :else "var(--color-primary)")
                                   :cursor (if no-content? "not-allowed" "pointer")
                                   :font-weight "bold"}
                           :disabled no-content?
-                          :title (if no-content? "Extract text first to generate flashcards"
-                                   (str "Generate flashcards from editor text or selected text (" mod-key "+Shift+G)"))})
+                          :aria-label action-summary
+                          :data-tooltip (if no-content?
+                                          "Extract text first to generate flashcards"
+                                          (str action-summary " (" mod-key "+Shift+G)"))})
+              (if (and gen-active? (nil? gen-error))
+                (icons/Icon :loader-2 :size 16 :class "spin")
+                (icons/Icon :sparkles :size 16))
+              (dom/span
+                (dom/props {:class "icon-label"})
+                (dom/text (cond gen-error gen-error
+                            gen-active? "Generating..."
+                            :else "Generate")))
               (when (and gen-active? (nil? gen-error))
-                (dom/span (dom/props {:class "spinner"})))
-              (dom/text (cond gen-error gen-error
-                          gen-active? "Generating..."
-                          :else "Generate"))
-              (when (and gen-active? (nil? gen-error))
-                (dom/text (str " (" gen-pending ")")))
+                (dom/span (dom/props {:class "icon-label"}) (dom/text (str " (" gen-pending ")"))))
               (reset! keyboard/!generate-btn-ref dom/node)
               (e/on-unmount (fn [] (reset! keyboard/!generate-btn-ref nil)))
               (dom/On "click"
@@ -79,8 +95,10 @@
           (dom/button
             (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-item"
                         :style {:font-weight "500"}
-                        :title "Add custom instructions to guide card generation"})
-            (dom/text "Generate with Prompt...")
+                        :aria-label "Generate with Prompt"
+                        :data-tooltip "Add custom instructions to guide card generation"})
+            (icons/Icon :pen-sparkles :size 16)
+            (dom/span (dom/props {:class "icon-label"}) (dom/text "Generate with Prompt..."))
             (reset! keyboard/!gen-prompt-btn-ref dom/node)
             (e/on-unmount (fn [] (reset! keyboard/!gen-prompt-btn-ref nil)))
             (dom/On "click" (fn [_]

@@ -10,6 +10,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.icons :as icons]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])))
@@ -65,19 +66,29 @@
                       :class "pin-thumb__img"
                       :alt (str (if (= placement "front") "Front" "Back") " pin")}))
 
-        ;; F/B badge — click cycles placement
+        ;; F/B badge — click cycles placement.
+        ;; Snapshot `placement` at click time inside the `dom/On` callback —
+        ;; do NOT close over the reactive `placement` signal in the Offload
+        ;; thunk. The server mutation bumps :pin-mutations, which re-queries
+        ;; pins and changes `placement`; if the Offload closure read the
+        ;; reactive signal, latest-wins would restart it with the new
+        ;; placement, toggling again forever.
         (dom/button
           (dom/props {:class "pin-thumb__badge"})
           (dom/text badge-text)
-          (let [click-ev (dom/On "click" identity nil)
+          (let [click-ev (dom/On "click"
+                           (fn [_] {:id (str (random-uuid)) :placement placement})
+                           nil)
                 [t _] (e/Token click-ev)]
             (when t
-              (case (e/server (e/Offload #(toggle-pin-placement!* user-id pin-id placement))) (t)))))
+              (case (e/server (e/Offload #(toggle-pin-placement!* user-id pin-id (:placement click-ev)))) (t)))))
 
         ;; × remove button
         (dom/button
-          (dom/props {:class "pin-thumb__remove"})
-          (dom/text "×")
+          (dom/props {:class "pin-thumb__remove"
+                      :aria-label "Remove pin"
+                      :data-tooltip "Remove pin"})
+          (icons/Icon :x :size 14 :title "Remove pin")
           (let [click-ev (dom/On "click" identity nil)
                 [t _] (e/Token click-ev)]
             (when t
@@ -105,7 +116,7 @@
         (when t
           (let [r (e/server (e/Offload #(settings/save-pins-open user-id root-topic-id save-val)))]
             (case r
-              (case (if (:success r) (t) (t (:error r)))))))
+              (if (:success r) (t) (t (:error r))))))
 
         (dom/div
           (dom/props {:class (str "pin-side-panel"
