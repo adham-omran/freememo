@@ -57,9 +57,12 @@
                 (when (some? change-event)
                   (reset! !llm-enabled change-event))
                 (when-some [token ?token]
-                  (e/server (settings/save-llm-enabled user-id change-event))
-                  (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
-                  (token))))
+                  (let [r (e/server (e/Offload #(settings/save-llm-enabled user-id change-event)))]
+                    (when (some? r)
+                      (if (:success r)
+                        (do (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                            (token))
+                        (token (:error r))))))))
             (dom/div
               (dom/span
                 (dom/props {:style {:font-size "14px" :font-weight "500" :color "var(--color-text-primary)"}})
@@ -164,7 +167,7 @@
                                   :style {:order "1"}})
                       (dom/text (if (some? ?token) "Saving..." "Save"))
                       (when-some [token ?token]
-                        (let [result (e/server (settings/save-openai-api-key user-id draft-key enc-key))]
+                        (let [result (e/server (e/Offload #(settings/save-openai-api-key user-id draft-key enc-key)))]
                           (when (some? result)
                             (if (:success result)
                               (do
@@ -194,8 +197,9 @@
                 (when (some? change-event)
                   (reset! !model change-event))
                 (when-some [token ?token]
-                  (e/server (settings/save-model user-id change-event))
-                  (token))))
+                  (let [r (e/server (e/Offload #(settings/save-model user-id change-event)))]
+                    (when (some? r)
+                      (if (:success r) (token) (token (:error r))))))))
             (dom/div (dom/props {:class "hint"})
               (dom/text "OpenAI model used for OCR and flashcard generation.")))
 
@@ -215,8 +219,9 @@
                 (when (some? change-event)
                   (reset! !reasoning change-event))
                 (when-some [token ?token]
-                  (e/server (settings/save-reasoning user-id change-event))
-                  (token))))
+                  (let [r (e/server (e/Offload #(settings/save-reasoning user-id change-event)))]
+                    (when (some? r)
+                      (if (:success r) (token) (token (:error r))))))))
             (dom/div (dom/props {:class "hint"})
               (dom/text "Higher = better quality but slower and more expensive")))
 
@@ -234,8 +239,9 @@
                 (when (some? change-event)
                   (reset! !verbosity change-event))
                 (when-some [token ?token]
-                  (e/server (settings/save-verbosity user-id change-event))
-                  (token))))
+                  (let [r (e/server (e/Offload #(settings/save-verbosity user-id change-event)))]
+                    (when (some? r)
+                      (if (:success r) (token) (token (:error r))))))))
             (dom/div (dom/props {:class "hint"})
               (dom/text "Controls detail level of generated flashcards")))
 
@@ -256,8 +262,9 @@
                   (when (some? change-event)
                     (reset! !dpi change-event))
                   (when-some [token ?token]
-                    (e/server (settings/save-scan-dpi user-id change-event))
-                    (token))))
+                    (let [r (e/server (e/Offload #(settings/save-scan-dpi user-id change-event)))]
+                      (when (some? r)
+                        (if (:success r) (token) (token (:error r))))))))
               (dom/div (dom/props {:class "hint"})
                 (dom/text "Higher quality improves text recognition but increases processing time and API cost"))))
 
@@ -293,8 +300,9 @@
                     (when (some? change-event)
                       (reset! !sys-prompt change-event))
                     (when-some [token ?token]
-                      (e/server (settings/save-system-prompt user-id change-event))
-                      (token))))
+                      (let [r (e/server (e/Offload #(settings/save-system-prompt user-id change-event)))]
+                        (when (some? r)
+                          (if (:success r) (token) (token (:error r))))))))
                 (dom/button
                   (dom/props {:type "button" :class "btn btn-secondary"
                               :disabled (= sys-prompt default-sys)
@@ -303,9 +311,11 @@
                   (let [click-event (dom/On "click" identity nil)
                         [?token _] (e/Token click-event)]
                     (when-some [token ?token]
-                      (e/server (settings/reset-system-prompt user-id))
-                      (reset! !sys-prompt default-sys)
-                      (token))))))
+                      (let [r (e/server (e/Offload #(settings/reset-system-prompt user-id)))]
+                        (when (some? r)
+                          (if (:success r)
+                            (do (reset! !sys-prompt default-sys) (token))
+                            (token (:error r))))))))))
 
             ;; OCR Extraction Prompt — collapsed by default
             (dom/details
@@ -329,8 +339,9 @@
                     (when (some? change-event)
                       (reset! !ocr-prompt change-event))
                     (when-some [token ?token]
-                      (e/server (settings/save-ocr-prompt user-id change-event))
-                      (token)))))
+                      (let [r (e/server (e/Offload #(settings/save-ocr-prompt user-id change-event)))]
+                        (when (some? r)
+                          (if (:success r) (token) (token (:error r)))))))))
               (dom/button
                 (dom/props {:type "button" :class "btn btn-secondary"
                             :disabled (= ocr-prompt default-ocr)
@@ -339,6 +350,8 @@
                 (let [click-event (dom/On "click" identity nil)
                       [?token _] (e/Token click-event)]
                   (when-some [token ?token]
-                    (e/server (settings/reset-ocr-prompt user-id))
-                    (reset! !ocr-prompt default-ocr)
-                    (token)))))))))))
+                    (let [r (e/server (e/Offload #(settings/reset-ocr-prompt user-id)))]
+                      (when (some? r)
+                        (if (:success r)
+                          (do (reset! !ocr-prompt default-ocr) (token))
+                          (token (:error r)))))))))))))))

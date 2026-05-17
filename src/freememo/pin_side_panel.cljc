@@ -72,7 +72,7 @@
           (let [click-ev (dom/On "click" identity nil)
                 [?token _] (e/Token click-ev)]
             (when-some [token ?token]
-              (let [result (e/server (toggle-pin-placement!* user-id pin-id placement))]
+              (let [result (e/server (e/Offload #(toggle-pin-placement!* user-id pin-id placement)))]
                 (when result
                   (token))))))
 
@@ -83,7 +83,7 @@
           (let [click-ev (dom/On "click" identity nil)
                 [?token _] (e/Token click-ev)]
             (when-some [token ?token]
-              (let [result (e/server (remove-pin!* user-id pin-id))]
+              (let [result (e/server (e/Offload #(remove-pin!* user-id pin-id)))]
                 (when result
                   (token))))))))))
 
@@ -107,8 +107,9 @@
             [?save-token _] (e/Token save-val)]
 
         (when-some [token ?save-token]
-          (e/server (settings/save-pins-open user-id root-topic-id save-val))
-          (token))
+          (let [r (e/server (e/Offload #(settings/save-pins-open user-id root-topic-id save-val)))]
+            (when (some? r)
+              (if (:success r) (token) (token (:error r))))))
 
         (dom/div
           (dom/props {:class (str "pin-side-panel"
