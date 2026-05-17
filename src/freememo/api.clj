@@ -37,7 +37,12 @@
    :headers {"Location" "/"}
    :session nil})
 
-(def ^:private upload-byte-cap 104857600) ;; 100 MB; backstop in case the Ring middleware is bypassed.
+(defn- upload-byte-cap
+  "Per-request size cap from `quota/per-file-max-bytes`; nil when unlimited (env=0).
+   Backstop in case the Ring middleware is bypassed."
+  []
+  (when-not (quota/unlimited? quota/per-file-max-bytes)
+    quota/per-file-max-bytes))
 
 (defn log-upload-failure!
   "Emit :warn so upload failures are diagnosable from app.log. Always
@@ -66,12 +71,13 @@
                       (let [baos (java.io.ByteArrayOutputStream.)]
                         (io/copy in baos)
                         (.toByteArray baos)))
-              size (alength bytes)]
-          (if (> size upload-byte-cap)
+              size (alength bytes)
+              cap (upload-byte-cap)]
+          (if (and cap (> size cap))
             (do (log-upload-failure! ::upload-pdf-too-large request
-                  {:user-id user-id :filename filename :file-size size :limit upload-byte-cap})
-                (json-response 413 {:success false :error "File exceeds 100 MB limit"
-                                    :code "file-too-large" :limit upload-byte-cap :incoming size}))
+                  {:user-id user-id :filename filename :file-size size :limit cap})
+                (json-response 413 {:success false :error (str "File exceeds " cap " bytes")
+                                    :code "file-too-large" :limit cap :incoming size}))
             (let [result (pdf/save-pdf user-id filename bytes)]
               (if (:success result)
                 (json-response 200 {:success true :doc_id (:id result)})
@@ -102,13 +108,14 @@
                       (let [baos (java.io.ByteArrayOutputStream.)]
                         (io/copy in baos)
                         (.toByteArray baos)))
-              file-size (alength bytes)]
+              file-size (alength bytes)
+              cap (upload-byte-cap)]
           (cond
-            (> file-size upload-byte-cap)
+            (and cap (> file-size cap))
             (do (log-upload-failure! ::upload-epub-too-large request
-                  {:user-id user-id :filename filename :file-size file-size :limit upload-byte-cap})
-                (json-response 413 {:success false :error "File exceeds 100 MB limit"
-                                    :code "file-too-large" :limit upload-byte-cap :incoming file-size}))
+                  {:user-id user-id :filename filename :file-size file-size :limit cap})
+                (json-response 413 {:success false :error (str "File exceeds " cap " bytes")
+                                    :code "file-too-large" :limit cap :incoming file-size}))
 
             (not (epub/epub-magic-bytes? bytes))
             (do (log-upload-failure! ::upload-epub-bad-magic request
@@ -185,6 +192,69 @@
     {:status 401
      :headers {"Content-Type" "application/json"}
      :body (json/generate-string {:success false :error "Not authenticated"})}))
+
+(defn upload-media-handler
+  "Accept a multipart image upload, dedup by (user, sha256), return media id."
+  [request]
+  (if-let [user-id (require-auth request)]
+    (try
+      (if-let [file (get-in request [:params "file"])]
+        (let [filename (:filename file)
+              mime-type (or (:content-type file) "application/octet-stream")
+              tempfile (:tempfile file)
+              bytes (with-open [in (io/input-stream tempfile)]
+                      (let [baos (java.io.ByteArrayOutputStream.)]
+                        (io/copy in baos)
+                        (.toByteArray baos)))
+              size (alength bytes)
+              cap (upload-byte-cap)]
+          (cond
+            (not (re-find #"^image/" mime-type))
+            (json-response 400 {:success false :error "Only image uploads are supported"})
+
+            (and cap (> size cap))
+            (do (log-upload-failure! ::upload-media-too-large request
+                  {:user-id user-id :filename filename :file-size size :limit cap})
+                (json-response 413 {:success false :error (str "File exceeds " cap " bytes")
+                                    :code "file-too-large" :limit cap :incoming size}))
+
+            :else
+            (let [id (db/upsert-media! {:user-id user-id
+                                        :kind "image"
+                                        :bytes bytes
+                                        :mime-type mime-type})]
+              (json-response 200 {:success true :id id}))))
+        (json-response 400 {:success false :error "No file provided"}))
+      (catch Exception e
+        (tel/error! {:id ::upload-media-handler} e)
+        (json-response 500 {:success false :error "Upload failed. Please try again."})))
+    (do (log-upload-failure! ::upload-media-not-authenticated request {})
+        (json-response 401 {:success false :error "Not authenticated"}))))
+
+(defn get-media-handler
+  "Serve media bytes by id, auth-checked per user."
+  [request]
+  (if-let [user-id (require-auth request)]
+    (try
+      (let [uri (:uri request)
+            media-id (-> uri (clojure.string/split #"/") last parse-long)
+            row (db/get-media media-id)]
+        (cond
+          (nil? row)
+          {:status 404 :body "Not found"}
+
+          (not= (:media/user_id row) user-id)
+          {:status 403 :body "Forbidden"}
+
+          :else
+          {:status 200
+           :headers {"Content-Type" (:media/mime_type row)
+                     "Cache-Control" "private, max-age=86400"}
+           :body (io/input-stream (:media/bytes row))}))
+      (catch Exception e
+        (tel/error! {:id ::get-media-handler} e)
+        {:status 500 :body "Internal server error"}))
+    {:status 401 :body "Not authenticated"}))
 
 (defn get-pdf-handler [request]
   "Serve PDF file by topic ID from database."
@@ -302,6 +372,12 @@
 
       (and (re-matches #"/api/pdf/\d+" uri) (= method :get))
       (get-pdf-handler request)
+
+      (and (= uri "/api/upload-media") (= method :post))
+      (upload-media-handler request)
+
+      (and (re-matches #"/api/media/\d+" uri) (= method :get))
+      (get-media-handler request)
 
       (and (= uri "/api/save-page-text") (= method :post))
       (save-page-text-handler request)

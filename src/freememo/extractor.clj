@@ -10,6 +10,33 @@
 
 (def ^:private block-tags #{"p" "div" "blockquote" "table" "ul" "ol" "pre" "figure" "dl" "hr"})
 
+(def ^:private leaf-block-tags
+  "Content blocks treated as opaque leaves during the flatten walk. `div` is
+   intentionally excluded — divs are descended into so headings inside
+   wrappers like <div id=\"content\"> get surfaced."
+  #{"p" "blockquote" "table" "ul" "ol" "pre" "figure" "dl" "hr"})
+
+(defn- has-descendant-heading? [^Element el]
+  (some? (.selectFirst el "h1, h2, h3, h4, h5, h6")))
+
+(defn- flatten-content
+  "Depth-first walk producing a document-order seq of headings and leaf-ish
+   content blocks. A container whose subtree contains a heading is descended
+   into rather than emitted, so structures like <div id=\"content\">…<h2/>
+   surface their headings without double-counting the wrapper."
+  [^Element el]
+  (let [tag (.tagName el)]
+    (cond
+      (contains? heading-tags tag)
+      [el]
+
+      (and (contains? leaf-block-tags tag)
+           (not (has-descendant-heading? el)))
+      [el]
+
+      :else
+      (mapcat flatten-content (.children el)))))
+
 (def ^:private extract-highlight-color
   "Background color for extracted sections. Matches manual extract highlight (#44C2FF)
    so auto-extracted sections look identical to user-selected extracts in Quill."
@@ -83,11 +110,11 @@
   (when (and html-content (not (str/blank? html-content)))
     (let [doc (Jsoup/parseBodyFragment html-content)
           body (.body doc)
-          children (seq (.children body))
-          has-headings? (some heading? children)
+          flat (vec (mapcat flatten-content (.children body)))
+          has-headings? (some heading? flat)
           raw-sections (if has-headings?
-                         (heading-split children)
-                         (paragraph-group children))]
+                         (heading-split flat)
+                         (paragraph-group flat))]
       (vec (remove #(trivial? (:content %)) raw-sections)))))
 
 (defn- highlight-element!
@@ -109,41 +136,40 @@
   (when (and html-content (not (str/blank? html-content)))
     (let [doc (Jsoup/parseBodyFragment html-content)
           body (.body doc)
-          children (seq (.children body))
-          has-headings? (some heading? children)
+          flat (vec (mapcat flatten-content (.children body)))
+          has-headings? (some heading? flat)
           ;; Extract sections from current (unmodified) HTML — captures outerHtml snapshots
           raw-sections (if has-headings?
-                         (heading-split children)
-                         (paragraph-group children))
+                         (heading-split flat)
+                         (paragraph-group flat))
           sections (vec (remove #(trivial? (:content %)) raw-sections))]
       (when (seq sections)
-        ;; Now annotate: highlight ALL elements belonging to extracted sections
+        ;; Now annotate: highlight ALL elements belonging to extracted sections.
+        ;; Mutations on `flat` elements propagate to the parsed `body` because
+        ;; they're shared DOM references, so (.html body) below picks up the
+        ;; highlight spans even when the headings are nested inside wrappers.
         (if has-headings?
-          ;; Walk children, track whether we're "inside" an extracted section
           (let [section-titles (set (map :title sections))]
-            (loop [remaining children
+            (loop [remaining flat
                    inside? false]
               (when remaining
                 (let [^Element child (first remaining)]
                   (if (heading? child)
-                    ;; Heading: check if it starts an extracted section
                     (let [now-inside? (contains? section-titles (.text child))]
                       (when now-inside?
                         (highlight-element! child))
                       (recur (next remaining) now-inside?))
-                    ;; Non-heading: highlight if inside an extracted section
                     (do
                       (when inside?
                         (highlight-element! child))
                       (recur (next remaining) inside?)))))))
-          ;; Paragraph-group: highlight every element in each chunk
           (let [chunk-first-texts (set (map (fn [s]
                                               (let [t (:title s)]
                                                 (if (str/ends-with? t "...")
                                                   (subs t 0 (- (count t) 3))
                                                   t)))
                                             sections))]
-            (loop [remaining children
+            (loop [remaining flat
                    inside? false]
               (when remaining
                 (let [^Element child (first remaining)

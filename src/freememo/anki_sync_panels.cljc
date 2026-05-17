@@ -11,6 +11,41 @@
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.db :as db])))
 
+(defn get-source-display-mode* [user-id]
+  #?(:clj (settings/get-source-display-mode user-id)
+     :cljs nil))
+
+(defn get-anki-source-field* [user-id]
+  #?(:clj (settings/get-anki-source-field user-id)
+     :cljs nil))
+
+(defn get-anki-auto-load-mode* [user-id]
+  #?(:clj (settings/get-anki-auto-load-mode user-id)
+     :cljs nil))
+
+(defn get-anki-images-front-field* [user-id]
+  #?(:clj (when-let [f (requiring-resolve 'freememo.settings/get-anki-images-front-field)]
+            (f user-id))
+     :cljs nil))
+
+(defn get-anki-images-back-field* [user-id]
+  #?(:clj (when-let [f (requiring-resolve 'freememo.settings/get-anki-images-back-field)]
+            (f user-id))
+     :cljs nil))
+
+(defn get-image-display-mode* [user-id]
+  #?(:clj (when-let [f (requiring-resolve 'freememo.settings/get-image-display-mode)]
+            (f user-id))
+     :cljs nil))
+
+(defn get-root-topic-id* [selected-doc]
+  #?(:clj (db/get-root-topic-id selected-doc)
+     :cljs nil))
+
+(defn get-app-base-url* []
+  #?(:clj settings/app-base-url
+     :cljs nil))
+
 (e/defn AnkiSyncExecutor
   "Handles push execution and server recording. Pull is handled by the
    toolbar Pull button (content_toolbar_actions), not the modal.
@@ -31,14 +66,18 @@
         header-text (e/watch (:!header-text form))
         use-tags (e/watch (:!use-tags form))
         tags (e/watch (:!tags form))
-        source-display-mode (e/server (settings/get-source-display-mode user-id))
-        source-field (e/server (settings/get-anki-source-field user-id))
-        auto-load-mode (e/server (settings/get-anki-auto-load-mode user-id))
-        root-id (e/server (db/get-root-topic-id selected-doc))
+        source-display-mode (e/server (get-source-display-mode* user-id))
+        source-field (e/server (get-anki-source-field* user-id))
+        auto-load-mode (e/server (get-anki-auto-load-mode* user-id))
+        images-front-field (e/server (get-anki-images-front-field* user-id))
+        images-back-field (e/server (get-anki-images-back-field* user-id))
+        image-display-mode (e/server (get-image-display-mode* user-id))
+        root-id (e/server (get-root-topic-id* selected-doc))
         topic-info (e/server (when selected-doc
                                (let [t (db/get-topic-for-user user-id selected-doc)]
                                  {:kind (:topics/kind t)
                                   :title (:topics/title t)})))
+        app-base-url (e/server (get-app-base-url*))
         settings {:deck selected-deck
                   :basic-model basic-model
                   :cloze-model cloze-model
@@ -50,9 +89,13 @@
                   :tags tags
                   :source-display-mode source-display-mode
                   :source-field source-field
+                  :images-front-field images-front-field
+                  :images-back-field images-back-field
+                  :image-display-mode image-display-mode
                   :topic-kind (:kind topic-info)
                   :topic-title (:title topic-info)
-                  :root-topic-id selected-doc}
+                  :root-topic-id selected-doc
+                  :app-base-url app-base-url}
         prefs-map {:scope scope :deck selected-deck
                    :basic-model basic-model :cloze-model cloze-model
                    :allow-dupes allow-dupes
@@ -171,8 +214,8 @@
   (e/client
     (let [decks (e/watch (:!decks conn))
           models (e/watch (:!models conn))
-          root-id (e/server (db/get-root-topic-id selected-doc))
-          auto-load-mode (e/server (settings/get-anki-auto-load-mode user-id))
+          root-id (e/server (get-root-topic-id* selected-doc))
+          auto-load-mode (e/server (get-anki-auto-load-mode* user-id))
           item-preset (e/server (sync/load-item-preset user-id root-id))
           global-prefs (e/server (:prefs (sync/load-anki-preferences user-id)))
           !applied-mode (atom nil)
@@ -210,7 +253,7 @@
                                 :animation "fade-in 0.3s ease-in"}})
             (dom/text "Using saved settings for this document")))
 
-        (form/AnkiSyncForm conn form)
+        (form/AnkiSyncForm user-id conn form)
         (form/AnkiSyncStatus sync !show-modal)))))
 
 (e/defn AnkiSyncModalDom

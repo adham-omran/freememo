@@ -5,7 +5,8 @@
    [clojure.string :as string]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [freememo.typeahead :refer [Typeahead]]))
+   [freememo.typeahead :refer [Typeahead]]
+   #?(:clj [freememo.settings :as settings])))
 
 (e/defn AnkiSyncModelSelect
   "Reusable model typeahead with field mapping hint.
@@ -200,7 +201,7 @@
   "The connected-state form: scope, deck, model selection, field mapping, custom header, tags.
    conn = {:!decks :!models :!selected-deck :!basic-model :!cloze-model :!all-tags ...}
    form = {:!scope :!basic-fields :!cloze-fields ...}"
-  [conn form]
+  [user-id conn form]
   (e/client
     (let [scope (e/watch (:!scope form))
           decks (e/watch (:!decks conn))

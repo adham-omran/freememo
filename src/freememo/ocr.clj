@@ -72,12 +72,13 @@
      (let [api-key (settings/get-openai-api-key user-id enc-key)
            _ (when (empty? api-key)
                (throw (ex-info "OpenAI API key not configured" {})))
+           model (settings/get-model user-id)
            image (pdf-page->image pdf-bytes page-number dpi)
            base64-image (image->base64 image)
            prompt (settings/get-ocr-prompt user-id)
            t-start (System/nanoTime)
            response (api/create-chat-completion
-                      {:model "gpt-5.1"
+                      {:model model
                        :messages [{:role "user"
                                    :content [{:type "text" :text prompt}
                                              {:type "image_url"
@@ -87,7 +88,7 @@
            usage (:usage response)
            _ (tel/log! {:level :info :id ::openai-completion
                         :data {:user-id user-id
-                               :model "gpt-5.1"
+                               :model model
                                :endpoint :ocr.extract
                                :prompt-tokens (:prompt_tokens usage)
                                :completion-tokens (:completion_tokens usage)

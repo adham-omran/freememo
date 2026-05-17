@@ -1297,3 +1297,319 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     right: 0;
     transform: translateY(4px);
 }
+
+/* ── Pin Context Menu (right-click on <img> in editor) ──────────── */
+.pin-context-menu {
+    position: fixed;
+    z-index: 9999;
+    background: var(--color-bg-card, #fff);
+    border: 1px solid var(--color-border, #d1d5db);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    padding: 4px 0;
+    min-width: 200px;
+    font-size: 13px;
+    animation: fade-in 0.1s ease;
+}
+.pin-context-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    padding: 8px 14px;
+    cursor: pointer;
+    color: var(--color-text-primary, #111827);
+    font-size: 13px;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+.pin-context-menu button:hover:not(:disabled) {
+    background: var(--color-bg-hover, #f3f4f6);
+}
+.pin-context-menu button:disabled {
+    color: var(--color-text-hint, #9ca3af);
+    cursor: not-allowed;
+}
+/* Last button is "Cancel" — visually separated */
+.pin-context-menu button:last-child {
+    border-top: 1px solid var(--color-border, #d1d5db);
+    margin-top: 2px;
+    padding-top: 8px;
+    color: var(--color-text-secondary, #6b7280);
+}
+
+/* Pin side panel — collapsible right-side viewer for topic pins */
+.pin-side-panel {
+    display: flex;
+    flex-direction: column;
+    width: 180px;
+    flex-shrink: 0;
+    border-left: 1px solid var(--color-border);
+    background: var(--color-bg-card, #fff);
+    overflow: hidden;
+}
+
+.pin-side-panel--collapsed {
+    width: 32px;
+}
+
+.hierarchy-side-panel {
+    display: flex;
+    flex-direction: column;
+    width: 280px;
+    flex-shrink: 0;
+    min-width: 0;
+    overflow: hidden;
+    background: var(--color-bg-subtle);
+    border-right: 1px solid var(--color-border);
+}
+
+.hierarchy-side-panel--collapsed {
+    width: 32px;
+}
+
+/* Header row containing the hamburger toggle + (when open) the title label.
+   Always renders, so the toggle is reachable in the collapsed 32px state. */
+.side-panel__header {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid var(--color-border);
+    flex-shrink: 0;
+}
+
+/* Right-side pin panel mirrors the left: hamburger anchors to the outer
+   (right) edge, title sits to its left. Row-reverse keeps the toggle pinned
+   to the panel's right edge so it does not slide when the panel collapses. */
+.pin-side-panel .side-panel__header {
+    flex-direction: row-reverse;
+}
+
+.side-panel__toggle {
+    border: none;
+    background: transparent;
+    padding: 8px 4px;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+}
+
+.side-panel__toggle:hover {
+    background: var(--color-bg-subtle);
+}
+
+.side-panel__title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-text-secondary);
+    padding: 0 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex: 1;
+}
+
+.pin-thumb {
+    position: relative;
+    width: 100%;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-bg-subtle, #f9fafb);
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.pin-thumb__img {
+    display: block;
+    width: 100%;
+    max-height: 140px;
+    object-fit: contain;
+    background: #fff;
+}
+
+.pin-thumb__badge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(31, 41, 55, 0.85);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.pin-thumb__badge:hover {
+    background: rgba(31, 41, 55, 1);
+}
+
+.pin-thumb__remove {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(239, 68, 68, 0.85);
+    color: #fff;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.pin-thumb__remove:hover {
+    background: rgba(239, 68, 68, 1);
+}
+
+/* Card row HTML rendering (CR1) — sanitized field HTML inside table cells */
+.card-row-cell {
+    overflow: hidden;
+}
+
+.card-row-html {
+    max-height: 28px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.card-row-html * {
+    display: inline;
+    margin: 0;
+    padding: 0;
+}
+
+.card-row-img-chip {
+    display: inline-block;
+    padding: 0 6px;
+    margin: 0 2px;
+    font-size: 11px;
+    line-height: 18px;
+    background: var(--color-bg-subtle, #f3f4f6);
+    color: var(--color-text-secondary, #6b7280);
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    vertical-align: middle;
+}
+
+/* QuillField inside card-edit modal */
+.quill-field-wrapper {
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.quill-field-wrapper .ql-container {
+    min-height: 80px;
+    max-height: 200px;
+    overflow-y: auto;
+    font-size: inherit;
+}
+
+.quill-field-wrapper .ql-editor {
+    min-height: 80px;
+}
+
+/* Settings page — top tab bar (Anki-style) */
+.settings-tabs-page {
+    display: flex;
+    flex-direction: column;
+}
+
+.settings-nav {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0;
+    border-bottom: 1px solid var(--color-border);
+    margin-bottom: 16px;
+    position: sticky;
+    top: 0;
+    background: var(--color-bg-page);
+    z-index: 5;
+}
+
+.settings-content {
+    min-width: 0;
+}
+
+.settings-nav__item {
+    display: inline-block;
+    padding: 10px 16px;
+    color: var(--color-text-secondary);
+    font-size: 14px;
+    text-decoration: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px; /* overlap parent border so active tab's underline sits on it */
+    cursor: pointer;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+
+.settings-nav__item:hover {
+    color: var(--color-text-primary);
+    background: var(--color-bg-subtle);
+}
+
+.settings-nav__item--active {
+    color: var(--color-text-primary);
+    font-weight: 600;
+    border-bottom-color: var(--color-primary);
+}
+
+/* Settings accordion (native <details>) for long, advanced prompts */
+.settings-accordion {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-card);
+    margin-bottom: 12px;
+}
+
+.settings-accordion__summary {
+    padding: 10px 14px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--color-text-primary);
+    list-style: none;
+    user-select: none;
+}
+
+.settings-accordion__summary::-webkit-details-marker { display: none; }
+
+.settings-accordion__summary::before {
+    content: "▸";
+    display: inline-block;
+    margin-right: 8px;
+    color: var(--color-text-secondary);
+    transition: transform 0.15s ease;
+}
+
+.settings-accordion[open] > .settings-accordion__summary::before {
+    transform: rotate(90deg);
+}
+
+.settings-accordion__summary:hover {
+    background: var(--color-bg-subtle);
+}
+
+.settings-accordion__body {
+    padding: 0 14px 14px 14px;
+    border-top: 1px solid var(--color-border);
+}

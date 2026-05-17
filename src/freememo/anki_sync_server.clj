@@ -2,10 +2,45 @@
   "Server-side Anki sync operations — fetching cards for sync,
    recording pushed note IDs, and applying pull updates."
   (:require
+   [clojure.string :as str]
    [freememo.db :as db]
    [freememo.settings :as settings]
    [freememo.user-state :as us]
-   [taoensso.telemere :as tel]))
+   [taoensso.telemere :as tel])
+  (:import [java.util Base64]))
+
+(defn mime-type->ext
+  "Derive a file extension from a MIME type string. Defaults to \"bin\" for unknowns."
+  [mime-type]
+  (case (str/lower-case (or mime-type ""))
+    "image/png" "png"
+    "image/jpeg" "jpg"
+    "image/jpg" "jpg"
+    "image/gif" "gif"
+    "image/webp" "webp"
+    "image/svg+xml" "svg"
+    "image/bmp" "bmp"
+    "image/tiff" "tiff"
+    "bin"))
+
+(defn get-media-base64
+  "Fetch a media row by id and return {:filename \"<id>.<ext>\" :data \"<base64>\"}
+   or nil if the row does not exist or the media table is not yet available.
+   Called server-side from the push pipeline.
+   Uses requiring-resolve so the compile succeeds even before db/get-media is defined."
+  [media-id]
+  (try
+    (when-let [get-media-fn (requiring-resolve 'freememo.db/get-media)]
+      (when-let [row (get-media-fn media-id)]
+        (let [^bytes raw-bytes (:media/bytes row)
+              mime (:media/mime_type row)
+              ext (mime-type->ext mime)
+              filename (str media-id "." ext)
+              b64 (.encodeToString (Base64/getEncoder) raw-bytes)]
+          {:filename filename :data b64})))
+    (catch Exception e
+      (tel/error! {:id ::get-media-base64 :data {:media-id media-id}} e)
+      nil)))
 
 (defn load-anki-preferences
   "Load saved Anki sync preferences for a user (global)."

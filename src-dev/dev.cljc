@@ -10,6 +10,7 @@
    #?(:clj [freememo.logging :as logging])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.api :as api])
+   #?(:clj [freememo.quota :as quota])
 
    #?(:clj [nrepl.server :as nrepl])
    #?(:clj [ring.adapter.jetty :as ring])
@@ -43,7 +44,8 @@
 
 #?(:clj
    (defn wrap-route-body-size
-     "Cap request body size on /api/*. 100 MB on uploads, 10 MB elsewhere.
+     "Cap request body size on /api/*. Upload routes use `quota/per-file-max-bytes`
+      (nil when env=0 → unlimited); 10 MB on other /api/* (request-shape guard).
       Returns 411 for chunked uploads (no body length to enforce upfront);
       413 when Content-Length exceeds the cap."
      [handler]
@@ -51,7 +53,10 @@
        (let [uri (:uri request)
              method (:request-method request)
              max-bytes (cond
-                         (and (= method :post) (upload-routes uri)) 104857600
+                         (and (= method :post) (upload-routes uri))
+                         (when-not (quota/unlimited? quota/per-file-max-bytes)
+                           quota/per-file-max-bytes)
+
                          (and (= method :post) (.startsWith ^String uri "/api/")) 10485760
                          :else nil)
              transfer-encoding (some-> (get-in request [:headers "transfer-encoding"])
@@ -111,9 +116,11 @@
                                                                           (java.util.Arrays/copyOf hash 16))})
                                     :cookie-attrs {:max-age 2592000 :same-site :lax :http-only true}})) ; 0. session middleware (outermost – runs first)
                    {:host "0.0.0.0", :port 8080, :join? false
-                    :ws-idle-timeout (* 60 1000)          ; 60 seconds in milliseconds
-                    :ws-max-binary-size (* 100 1024 1024) ; 100MB - for demo
-                    :ws-max-text-size (* 100 1024 1024)}))  ; 100M - for demo.
+                    :ws-idle-timeout (* 60 1000) ; 60 seconds in milliseconds
+                    :ws-max-binary-size (if (quota/unlimited? quota/per-file-max-bytes)
+                                          Long/MAX_VALUE quota/per-file-max-bytes)
+                    :ws-max-text-size   (if (quota/unlimited? quota/per-file-max-bytes)
+                                          Long/MAX_VALUE quota/per-file-max-bytes)}))
      (log/info "👉 http://0.0.0.0:8080")
 
      (dev-metadata/start!)))

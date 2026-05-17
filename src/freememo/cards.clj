@@ -215,28 +215,80 @@
       {:success false :error (humanize-error (.getMessage e))})))
 
 ;; Card persistence
+
+(defn effective-pins-for-bake
+  "Return pin rows for topic-id ordered by ord ASC.
+   Under EC-snapshot semantics this is a direct local lookup — no ancestor walk."
+  [topic-id]
+  (db/get-pins topic-id))
+
+(defn bake-card-html
+  "Append pinned <img> tags to card field HTML at gen/Add-Item time.
+
+  topic-id  – int: the topic the card belongs to.
+  kind      – \"basic\" or \"cloze\".
+  fields    – map:
+                basic: {:q html :a html}
+                cloze: {:c html :a html-or-nil}  (:a is back-extra, unchanged)
+
+  Returns fields map with img tags appended per placement.
+
+  Basic:
+    front pins → <p><img src=\"/api/media/<id>\"></p> appended to :q
+    back  pins → same appended to :a
+
+  Cloze (F2-uniform):
+    ALL pins (front + back) appended to :c in ord order.
+    :a (back-extra) is never modified by bake."
+  [topic-id kind fields]
+  (let [pins (effective-pins-for-bake topic-id)]
+    (if (empty? pins)
+      fields
+      (let [img-tag (fn [media-id]
+                      (str "<p><img src=\"/api/media/" media-id "\"></p>"))]
+        (if (= kind "basic")
+          (let [front-imgs (->> pins
+                             (filter #(= "front" (:topic_pins/placement %)))
+                             (map #(img-tag (:topic_pins/media_id %)))
+                             (apply str))
+                back-imgs (->> pins
+                            (filter #(= "back" (:topic_pins/placement %)))
+                            (map #(img-tag (:topic_pins/media_id %)))
+                            (apply str))]
+            (cond-> fields
+              (not (str/blank? front-imgs)) (update :q str front-imgs)
+              (not (str/blank? back-imgs)) (update :a str back-imgs)))
+          ;; cloze — F2-uniform: all pins appended to :c regardless of placement
+          (let [all-imgs (->> pins
+                           (map #(img-tag (:topic_pins/media_id %)))
+                           (apply str))]
+            (cond-> fields
+              (not (str/blank? all-imgs)) (update :c str all-imgs))))))))
+
 (defn save-cards
   "Save generated cards to the database.
    For basic cards: expects [{:q \"...\" :a \"...\"}]
-   For cloze cards: expects [{:c \"...\"}]
+   For cloze cards: expects [{:c \"...\" :a html-or-nil}]
    topic-id: the page or extract topic that owns these cards.
-   root-topic-id: the root PDF/EPUB/web/basic topic."
+   root-topic-id: the root PDF/EPUB/web/basic topic.
+   Bakes pinned images into each card's HTML before insert."
   [topic-id root-topic-id kind cards]
   (try
     (let [rows (map (fn [card]
-                      (if (= kind "basic")
-                        {:topic_id topic-id
-                         :root_topic_id root-topic-id
-                         :kind kind
-                         :question (:q card)
-                         :answer (:a card)
-                         :cloze nil}
-                        {:topic_id topic-id
-                         :root_topic_id root-topic-id
-                         :kind kind
-                         :question nil
-                         :answer nil
-                         :cloze (:c card)}))
+                      (let [baked (bake-card-html topic-id kind card)]
+                        (if (= kind "basic")
+                          {:topic_id topic-id
+                           :root_topic_id root-topic-id
+                           :kind kind
+                           :question (:q baked)
+                           :answer (:a baked)
+                           :cloze nil}
+                          {:topic_id topic-id
+                           :root_topic_id root-topic-id
+                           :kind kind
+                           :question nil
+                           :answer (:a baked)
+                           :cloze (:c baked)})))
                  cards)]
       (db/insert-flashcards! rows)
       {:success true})

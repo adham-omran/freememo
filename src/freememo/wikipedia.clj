@@ -105,6 +105,18 @@
        :url (str "https://en.wikipedia.org/wiki/" (java.net.URLEncoder/encode title "UTF-8"))
        :source-type "wikipedia"})))
 
+(defn- cloudflare-blocked?
+  "True when the response is a Cloudflare bot challenge — a status 403
+   served by Cloudflare or any response carrying `cf-mitigated`. clj-http
+   lowercases header names by default."
+  [resp]
+  (let [headers (:headers resp)
+        status  (:status resp)
+        server  (or (get headers "server") "")]
+    (or (some? (get headers "cf-mitigated"))
+        (and (= 403 status)
+             (str/includes? (str/lower-case server) "cloudflare")))))
+
 (defn- fetch-generic-url [url]
   (let [resp (http/get url
                {:headers {"User-Agent" "Mozilla/5.0 (compatible; FreeMemo/1.0)"}
@@ -118,6 +130,12 @@
     (cond
       (<= 300 status 399)
       (redirect-error resp url)
+
+      (cloudflare-blocked? resp)
+      {:success false
+       :error (str "This site blocks automated fetching (Cloudflare). "
+                "Open the page in your browser, select all (Ctrl/Cmd+A), "
+                "copy, and use \"Paste Article\" instead.")}
 
       (not= 200 status)
       {:success false :error (str "Fetch failed (HTTP " status ")")}

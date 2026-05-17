@@ -10,6 +10,7 @@
    [freememo.keyboard :as keyboard]
    [freememo.navigation :as nav]
    [clojure.string :as str]
+   #?(:cljs [freememo.editor-pin-menu :as pin-menu])
    #?(:clj [freememo.page-ocr :as page])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
@@ -17,6 +18,27 @@
    #?(:clj [missionary.core :as m]))
   #?(:clj (:import [missionary Cancelled]
                    [java.util.concurrent Executors])))
+
+;; ---------------------------------------------------------------------------
+;; Pin contextmenu helper — wraps CLJS-only install-contextmenu! so the
+;; reader conditional lives in a plain defn body, not in the Electric graph.
+;; ---------------------------------------------------------------------------
+
+(defn install-pin-contextmenu!
+  "Attach pin contextmenu to container-el. Returns a cleanup fn.
+   CLJS-only; returns nil on CLJ."
+  [container-el get-topic-id get-pin-count on-pin!]
+  #?(:cljs (pin-menu/install-contextmenu!
+             container-el get-topic-id get-pin-count on-pin!)
+     :clj nil))
+
+(defn count-pins-for-topic*
+  "Server-side pin count. Takes _pin-rev as first arg so the value is part of
+   the call site — forces Electric to subscribe to the :pin-mutations channel
+   that produced _pin-rev. Matches pin_side_panel/get-pins-for-topic*."
+  [_pin-rev topic-id]
+  #?(:clj (count (db/get-pins topic-id))
+     :cljs 0))
 
 ;; ---------------------------------------------------------------------------
 ;; OCR scan infrastructure (moved from page_viewer.cljc)
@@ -347,20 +369,83 @@
                       (js/setTimeout (fn [] (reset! !show false)) 2000))))))))
 
         ;; -----------------------------------------------------------------------
-        ;; Editor area
+        ;; Pin-request atom — CLJS contextmenu callback fires into this atom;
+        ;; e/Token picks it up and runs the server-side set-pin! call.
+        ;; Shape: {:media-id <int> :placement "front"|"back" :topic-id <int>}
+        ;; or nil (no pending request).
         ;; -----------------------------------------------------------------------
-        (dom/div
-          (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-          (if (nil? static-content)
-            ;; Genuinely loading — server fetch in flight
-            (dom/p
-              (dom/props {:style {:color "var(--color-text-hint)"}})
-              (dom/span (dom/props {:class "spinner"}))
-              (dom/text "Loading text..."))
-            ;; Render editor for any string (including "") — PDF pages without
-            ;; scanned text yet are editable
-            (dom/div
-              (dom/props {:style {:height "100%" :display "flex" :flex-direction "column"
-                                  :overflow "hidden"}})
-              (RichTextEditorComponent {:initial-html static-content
-                                        :topic-id topic-id}))))))))
+        (let [!pin-request (atom nil)
+              pin-request (e/watch !pin-request)
+              ;; Reactive pin count — used for K1 cap check in the context menu
+              ;; Watch :pin-mutations so the menu's K1 cap check refreshes
+              ;; after the side panel adds/removes a pin.
+              ;; CRITICAL: pin-rev must be PASSED INTO the server fn (not
+              ;; ignored via `_` binding), otherwise Electric optimizes the
+              ;; subscription away — see pin_side_panel.cljc/get-pins-for-topic*
+              ;; for the working precedent.
+              pin-rev (e/server (e/watch (us/get-atom user-id :pin-mutations)))
+              pin-count (e/server (count-pins-for-topic* pin-rev topic-id))]
+
+          ;; e/Token: handle one pin-request at a time
+          (let [[?pin-token _] (e/Token pin-request)]
+            (when-some [token ?pin-token]
+              (let [{:keys [media-id placement topic-id]} pin-request
+                    result (e/server
+                             (e/Offload
+                               #(try
+                                  (db/set-pin! {:topic-id topic-id
+                                                :media-id media-id
+                                                :placement placement})
+                                  {:success true}
+                                  (catch clojure.lang.ExceptionInfo ex
+                                    (let [data (ex-data ex)]
+                                      {:success false :reason (:reason data)}))
+                                  (catch Exception ex
+                                    {:success false :error (.getMessage ex)}))))]
+                (when (some? result)
+                  (token)
+                  (reset! !pin-request nil)
+                  (when (:success result)
+                    (e/server (swap! (us/get-atom user-id :pin-mutations) inc)))
+                  (when-not (:success result)
+                    (log/log-debug (str "EditorPane set-pin! failed: " result)))))))
+
+          ;; -----------------------------------------------------------------------
+          ;; Editor area
+          ;; -----------------------------------------------------------------------
+          (dom/div
+            (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
+            (if (nil? static-content)
+              ;; Genuinely loading — server fetch in flight
+              (dom/p
+                (dom/props {:style {:color "var(--color-text-hint)"}})
+                (dom/span (dom/props {:class "spinner"}))
+                (dom/text "Loading text..."))
+              ;; Render editor for any string (including "") — PDF pages without
+              ;; scanned text yet are editable
+              (dom/div
+                (dom/props {:style {:height "100%" :display "flex" :flex-direction "column"
+                                    :overflow "hidden"}
+                            :data-role "editor-host"})
+                (RichTextEditorComponent {:initial-html static-content
+                                          :topic-id topic-id})
+                ;; Install contextmenu listener on this container after mount.
+                ;; The accessor closures MUST be created here (inside the Electric
+                ;; reactive let), not inside js/setTimeout — closures created in
+                ;; plain CLJS callbacks snapshot values once; closures created in
+                ;; the reactive body capture signal references and re-read the
+                ;; latest value at invocation (CLAUDE.md "fn closures capture
+                ;; signal references"). Without this, the K1 cap check is stale
+                ;; until full page refresh.
+                (let [host dom/node
+                      !cleanup-fn (atom nil)
+                      get-topic-id (fn [] topic-id)
+                      get-pin-count (fn [] pin-count)
+                      on-pin-fn (fn [req] (reset! !pin-request req))]
+                  (js/setTimeout
+                    (fn []
+                      (reset! !cleanup-fn
+                        (install-pin-contextmenu! host get-topic-id get-pin-count on-pin-fn)))
+                    0)
+                  (e/on-unmount (fn [] (when-let [f @!cleanup-fn] (f)))))))))))))
+
