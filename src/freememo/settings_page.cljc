@@ -308,10 +308,11 @@
           (AnkiBasicDefaults user-id connected? models)
           (AnkiClozeDefaults user-id connected? models))))))
 
-;; Plugin .xpi download URL — points at the latest GitHub Release.
-;; Update this if the plugin's repo/owner changes.
+;; Plugin .xpi download URL — points at the committed artifact in the repo.
+;; Bump the version segment in the filename when freememo-zotero-plugin/manifest.json
+;; version changes (the build.sh output filename embeds it).
 (def ^:private plugin-download-url
-  "https://github.com/adham-omran/electric-card-maker/releases/latest")
+  "https://github.com/adham-omran/electric-card-maker/raw/main/freememo-zotero-plugin/dist/freememo-zotero-plugin-0.1.0.xpi")
 
 (e/defn ZoteroSection
   "Settings → Zotero. Per-user enable toggle + plugin-install link + a
