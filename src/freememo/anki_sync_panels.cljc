@@ -19,6 +19,14 @@
   #?(:clj (settings/get-anki-source-field user-id)
      :cljs nil))
 
+(defn get-bibliography-display-mode* [user-id]
+  #?(:clj (settings/get-bibliography-display-mode user-id)
+     :cljs nil))
+
+(defn get-bibliography-field-name* [user-id]
+  #?(:clj (settings/get-bibliography-field-name user-id)
+     :cljs nil))
+
 (defn get-anki-auto-load-mode* [user-id]
   #?(:clj (settings/get-anki-auto-load-mode user-id)
      :cljs nil))
@@ -68,6 +76,8 @@
         tags (e/watch (:!tags form))
         source-display-mode (e/server (get-source-display-mode* user-id))
         source-field (e/server (get-anki-source-field* user-id))
+        bibliography-display-mode (e/server (get-bibliography-display-mode* user-id))
+        bibliography-field-name (e/server (get-bibliography-field-name* user-id))
         auto-load-mode (e/server (get-anki-auto-load-mode* user-id))
         images-front-field (e/server (get-anki-images-front-field* user-id))
         images-back-field (e/server (get-anki-images-back-field* user-id))
@@ -89,6 +99,8 @@
                   :tags tags
                   :source-display-mode source-display-mode
                   :source-field source-field
+                  :bibliography-display-mode bibliography-display-mode
+                  :bibliography-field-name bibliography-field-name
                   :images-front-field images-front-field
                   :images-back-field images-back-field
                   :image-display-mode image-display-mode
@@ -148,7 +160,9 @@
                   push-settings (assoc settings
                                   :tags (if use-tags tags [])
                                   :topic-title (:topic-title cards-result)
-                                  :topic-kind (:topic-kind cards-result))]
+                                  :topic-kind (:topic-kind cards-result)
+                                  :bibliography-text (:bibliography-text cards-result)
+                                  :bibliography-html (:bibliography-html cards-result))]
               (helpers/run-push! cards push-settings sync))))))))
 
 (e/defn AnkiSyncErrorPanel

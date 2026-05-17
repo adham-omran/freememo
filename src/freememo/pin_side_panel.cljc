@@ -91,12 +91,15 @@
 ;; PinSidePanel — exported component
 ;; ---------------------------------------------------------------------------
 
-(e/defn PinSidePanel [topic-id user-id]
+(e/defn PinSidePanel [topic-id root-topic-id user-id]
   (e/client
-    ;; Frame isolation — remounts cleanly when topic-id changes, so !open?
-    ;; re-seeds from the new topic's saved state.
-    (e/for-by identity [tid [topic-id]]
-      (let [initial-open?   (e/server (settings/get-pins-open user-id tid))
+    ;; Frame isolation — remounts only when root-topic-id changes (i.e. when
+    ;; navigating between documents). Page navigation within one document
+    ;; updates topic-id reactively without remount, so !open? state and the
+    ;; DOM subtree persist across page scrolls. Pin data still queries by
+    ;; topic-id since pins are per-topic.
+    (e/for-by identity [_k [root-topic-id]]
+      (let [initial-open?   (e/server (settings/get-pins-open user-id root-topic-id))
             !open?          (atom initial-open?)
             open?           (e/watch !open?)
             !save           (atom nil)
@@ -104,7 +107,7 @@
             [?save-token _] (e/Token save-val)]
 
         (when-some [token ?save-token]
-          (e/server (settings/save-pins-open user-id tid save-val))
+          (e/server (settings/save-pins-open user-id root-topic-id save-val))
           (token))
 
         (dom/div
@@ -137,9 +140,9 @@
                                   :gap "8px" :padding "8px"}})
 
               ;; Thumbnail list (re-queries on :pin-mutations bump)
-              (if (nil? tid)
+              (if (nil? topic-id)
                 nil
                 (let [pin-rev (e/server (e/watch (us/get-atom user-id :pin-mutations)))
-                      pins (e/server (vec (get-pins-for-topic* pin-rev tid)))]
+                      pins (e/server (vec (get-pins-for-topic* pin-rev topic-id)))]
                   (e/for-by :topic_pins/id [pin pins]
                     (PinThumbnail user-id pin)))))))))))

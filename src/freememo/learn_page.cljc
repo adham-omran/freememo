@@ -6,18 +6,10 @@
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
    [freememo.navigation :as nav]
+   [freememo.bibliography-form :as bibform]
    #?(:clj [freememo.user-state :as us])
    [freememo.util :as util]
    #?(:clj [freememo.db :as db])))
-
-;; Badge display for topic kinds
-(defn kind-badge [kind]
-  (case kind
-    "pdf" ["PDF" "var(--color-badge-pdf)"]
-    "epub" ["EPUB" "var(--color-badge-epub)"]
-    ("web" "wikipedia") ["Web" "var(--color-badge-web)"]
-    "markdown" ["MD" "var(--color-badge-web)"]
-    ["Topic" "var(--color-badge-epub)"]))
 
 ;; Queue data helpers
 
@@ -58,7 +50,9 @@
                       :kind kind
                       :display-title display-title
                       :due-label (format-due (:topics/next_review_at row) (or (:topics/status row) "active"))
-                      :status (or (:topics/status row) "active")}))
+                      :status (or (:topics/status row) "active")
+                      :source-container (:sources/container_title row)
+                      :source-title (:sources/title row)}))
               raw)))
      :cljs nil))
 
@@ -135,7 +129,8 @@
                                 due-label (:due-label item)
                                 display-title (or (:display-title item) "")
                                 id (:id item)
-                                [badge-text badge-color] (kind-badge kind)]
+                                source-container (:source-container item)
+                                [badge-text badge-color] (bibform/topic-badge kind source-container)]
                             (dom/tr
                               (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)" :height (str row-height "px")
                                                   :opacity (if inactive? "0.6" "1")

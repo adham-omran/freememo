@@ -38,6 +38,8 @@
 (def IMAGE_DISPLAY_MODE "image_display_mode")
 (def ANKI_AUTO_LOAD_MODE "anki_auto_load_mode")
 (def SOURCE_DISPLAY_MODE "source_display_mode")
+(def BIBLIOGRAPHY_DISPLAY_MODE "bibliography_display_mode")
+(def ANKI_BIBLIOGRAPHY_FIELD "anki_bibliography_field")
 (def LLM_ENABLED "llm_enabled")
 (def LAST_DOCUMENT "last_document")
 (def PRE_PROMPT_HISTORY "pre_prompt_history")
@@ -63,14 +65,27 @@
       (tel/error! {:id ::save-email-updates} e)
       {:success false :error "Failed to save email updates preference"})))
 
-;; OpenAI key helpers — per-user only (BYOK).
-(defn get-openai-api-key [user-id enc-key]
+;; OpenAI key helpers — per-user (BYOK), with optional server-wide demo
+;; fallback via OPENAI_DEMO_KEY env var.
+(defn- get-user-openai-api-key [user-id enc-key]
   (let [k (crypto/decrypt (or (db/get-setting user-id OPENAI_API_KEY) "") enc-key)]
     (when (seq k) k)))
 
+(defn- get-shared-openai-api-key []
+  (let [k (some-> (System/getenv "OPENAI_DEMO_KEY") str/trim)]
+    (when (seq k) k)))
+
+(defn get-openai-api-key [user-id enc-key]
+  (or (get-user-openai-api-key user-id enc-key)
+      (get-shared-openai-api-key)))
+
 (defn get-openai-api-key-status [user-id enc-key]
-  (if (seq (get-openai-api-key user-id enc-key))
+  (cond
+    (some? (get-user-openai-api-key user-id enc-key))
     {:source :user :configured? true}
+    (some? (get-shared-openai-api-key))
+    {:source :shared :configured? true}
+    :else
     {:source :none :configured? false}))
 
 (defn get-model [user-id]
@@ -137,6 +152,30 @@
     (catch Exception e
       (tel/error! {:id ::save-source-display-mode} e)
       {:success false :error "Failed to save source display mode"})))
+
+(defn get-bibliography-display-mode [user-id]
+  (or (db/get-setting user-id BIBLIOGRAPHY_DISPLAY_MODE) "append"))
+
+(defn save-bibliography-display-mode [user-id mode]
+  (try
+    (when-not (#{"off" "append" "field"} mode)
+      (throw (Exception. "Invalid bibliography display mode")))
+    (db/set-setting user-id BIBLIOGRAPHY_DISPLAY_MODE mode)
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-bibliography-display-mode} e)
+      {:success false :error "Failed to save bibliography display mode"})))
+
+(defn get-bibliography-field-name [user-id]
+  (or (db/get-setting user-id ANKI_BIBLIOGRAPHY_FIELD) "Bibliography"))
+
+(defn save-bibliography-field-name [user-id value]
+  (try
+    (db/set-setting user-id ANKI_BIBLIOGRAPHY_FIELD (or value "Bibliography"))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-bibliography-field-name} e)
+      {:success false :error "Failed to save Anki bibliography field name"})))
 
 (defn get-llm-enabled [user-id]
   (let [v (db/get-setting user-id LLM_ENABLED)]
@@ -367,17 +406,27 @@
       (tel/error! {:id ::save-pdf-layout} e)
       {:success false})))
 
-;; Per-topic pane open/closed state. Keys: "hierarchy_open_<topic-id>",
-;; "pins_open_<topic-id>". Missing key → default open (true).
+;; Per-document pane open/closed state. Keys: "hierarchy_open_<root-id>",
+;; "pins_open_<root-id>". State is shared across every topic in the same
+;; document tree (PDF root + pages + extracts) so collapsing the panel on
+;; one page persists when navigating to a sibling page. Missing key →
+;; default open (true).
+(defn- pane-scope-id
+  "Resolves the topic-id under which pane state is keyed: the document root
+   (topmost ancestor via parent_id), or `topic-id` itself when the ancestor
+   walk yields nil (orphan / unknown row)."
+  [topic-id]
+  (or (db/get-root-topic-id topic-id) topic-id))
+
 (defn get-hierarchy-open [user-id topic-id]
   (try
-    (let [v (db/get-setting user-id (str "hierarchy_open_" topic-id))]
+    (let [v (db/get-setting user-id (str "hierarchy_open_" (pane-scope-id topic-id)))]
       (if (nil? v) true (= v "true")))
     (catch Exception _ true)))
 
 (defn save-hierarchy-open [user-id topic-id open?]
   (try
-    (db/set-setting user-id (str "hierarchy_open_" topic-id) (str (boolean open?)))
+    (db/set-setting user-id (str "hierarchy_open_" (pane-scope-id topic-id)) (str (boolean open?)))
     {:success true}
     (catch Exception e
       (tel/error! {:id ::save-hierarchy-open} e)
@@ -385,13 +434,13 @@
 
 (defn get-pins-open [user-id topic-id]
   (try
-    (let [v (db/get-setting user-id (str "pins_open_" topic-id))]
+    (let [v (db/get-setting user-id (str "pins_open_" (pane-scope-id topic-id)))]
       (if (nil? v) true (= v "true")))
     (catch Exception _ true)))
 
 (defn save-pins-open [user-id topic-id open?]
   (try
-    (db/set-setting user-id (str "pins_open_" topic-id) (str (boolean open?)))
+    (db/set-setting user-id (str "pins_open_" (pane-scope-id topic-id)) (str (boolean open?)))
     {:success true}
     (catch Exception e
       (tel/error! {:id ::save-pins-open} e)

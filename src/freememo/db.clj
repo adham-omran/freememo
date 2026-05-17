@@ -6,15 +6,18 @@
    [next.jdbc :as jdbc]
    [next.jdbc.result-set :as rs]
    [honey.sql :as sql]
+   [cheshire.core :as json]
    [taoensso.telemere :as tel]
    [clojure.string :as str]
    [freememo.input-check :as input]
    [freememo.quota :as quota]
-   [freememo.text :as text]))
+   [freememo.text :as text])
+  (:import [org.postgresql.util PGobject]))
 
 (declare sanitize-utf8)
 (declare migrate-to-topics!)
 (declare backfill-content-text!)
+(declare backfill-sources!)
 
 ;; ---------------------------------------------------------------------------
 ;; Connection configuration
@@ -242,6 +245,42 @@
   ;; Drop deprecated source_reference columns — title is the single source of truth.
   (jdbc/execute! ds ["ALTER TABLE topics DROP COLUMN IF EXISTS source_reference"])
   (jdbc/execute! ds ["ALTER TABLE flashcards DROP COLUMN IF EXISTS source_reference"])
+
+  ;; Sources — bibliography records, decoupled from the FM topic tree.
+  ;; One row per origin (wiki article, PDF, book). Many topics may cite the
+  ;; same source via topics.source_id. csl JSONB stores the full CSL-JSON
+  ;; record; url + title denormalize the hot fields for indexing.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS sources (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      csl_type TEXT NOT NULL,
+      csl JSONB NOT NULL DEFAULT '{}'::jsonb,
+      url TEXT,
+      title TEXT,
+      container_title TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"])
+  ;; Idempotent column add for installs that created the table without container_title.
+  (jdbc/execute! ds ["ALTER TABLE sources ADD COLUMN IF NOT EXISTS container_title TEXT"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_sources_user_url ON sources(user_id, url)"])
+
+  ;; topics.source_id — FK into sources. Nullable: a topic may have no
+  ;; bibliography. ON DELETE SET NULL preserves topic content if a source row
+  ;; is deleted (sources are reference data; topics are user content).
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS
+                       source_id INTEGER REFERENCES sources(id) ON DELETE SET NULL"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_source ON topics(source_id)"])
+
+  ;; Backfill sources from legacy topics.source_url (idempotent — only runs
+  ;; on rows where source_url IS NOT NULL AND source_id IS NULL).
+  (backfill-sources!)
+
+  ;; Drop the legacy topics.source_url column. All bibliography lives in
+  ;; `sources` now; topics reference via source_id. Runs after backfill so
+  ;; existing URL data is migrated, not lost.
+  (jdbc/execute! ds ["ALTER TABLE topics DROP COLUMN IF EXISTS source_url"])
 
   ;; Canonicalize legacy titles: replace _ with space, strip trailing .pdf,
   ;; collapse whitespace, trim. Idempotent — clean rows are skipped by WHERE.
@@ -621,7 +660,8 @@
 (defn create-topic!
   "Create a topic. attrs is a map with keys:
    :user-id :kind :title :parent-id :content :page-number
-   :source-url :status :priority
+   :source-id :status :priority
+   :source-id attaches an existing `sources` row (bibliography).
    Returns the created row with :topics/id."
   [attrs]
   (let [clean-title (input/prettify-title (input/sanitize-filename (:title attrs)))
@@ -636,7 +676,7 @@
               sanitized (assoc :content sanitized
                           :content_text (text/strip-html sanitized))
               (:page-number attrs) (assoc :page_number (:page-number attrs))
-              (:source-url attrs) (assoc :source_url (:source-url attrs)))]
+              (:source-id attrs) (assoc :source_id (:source-id attrs)))]
     (jdbc/execute-one! ds
       (sql/format {:insert-into :topics
                    :values [row]
@@ -660,14 +700,17 @@
 
 (defn get-root-topics
   "Get all root topics for a user (parent_id IS NULL). Replaces get-documents.
-   Includes file_size from topic_files or content length."
+   Includes file_size from topic_files or content length, plus bibliography
+   fields joined from `sources` (NULL when topic has no source_id)."
   [user-id]
   (let [topics (jdbc/execute! ds
-                 (sql/format {:select [:t/id :t/title :t/kind :t/source_url
+                 (sql/format {:select [:t/id :t/title :t/kind
+                                       :s/url :s/title :s/csl_type :s/container_title
                                        :t/status :t/priority :t/created_at :t/content
                                        :tf/file_size]
                               :from [[:topics :t]]
-                              :left-join [[:topic_files :tf] [:= :t/id :tf/topic_id]]
+                              :left-join [[:topic_files :tf] [:= :t/id :tf/topic_id]
+                                          [:sources :s] [:= :t/source_id :s/id]]
                               :where [:and [:= :t/user_id user-id] [:= :t/parent_id nil]]
                               :order-by [[:t/created_at :desc]]}))]
     (mapv (fn [t]
@@ -837,11 +880,173 @@
      topic-id file-bytes file-size mime-type]))
 
 ;; ---------------------------------------------------------------------------
+;; Sources — bibliography records (CSL-JSON shaped)
+;; ---------------------------------------------------------------------------
+
+(defn- ->jsonb
+  "Wrap a Clojure value as a PostgreSQL JSONB parameter."
+  [v]
+  (doto (PGobject.)
+    (.setType "jsonb")
+    (.setValue (json/generate-string (or v {})))))
+
+(defn- pgobject->clj
+  "Parse a PGobject (jsonb) back to a Clojure value. Keywordizes keys.
+   nil → nil; non-PGobject inputs pass through."
+  [v]
+  (cond
+    (nil? v) nil
+    (instance? PGobject v) (json/parse-string (.getValue ^PGobject v) true)
+    :else v))
+
+(defn create-source!
+  "Insert a sources row. attrs = {:user-id :csl-type :csl :url :title}.
+   :csl is a CSL-JSON map (may be nil → {}). Returns full row with :sources/id.
+   container_title is denormalized from csl.container-title."
+  [{:keys [user-id csl-type csl url title] :as attrs}]
+  (when (or (nil? user-id) (str/blank? csl-type))
+    (throw (ex-info "create-source! requires :user-id and :csl-type"
+             {:type ::invalid-source-attrs :attrs attrs})))
+  (let [container (when (map? csl) (:container-title csl))
+        row (jdbc/execute-one! ds
+              (sql/format {:insert-into :sources
+                           :values [{:user_id user-id
+                                     :csl_type csl-type
+                                     :csl (->jsonb (or csl {}))
+                                     :url url
+                                     :title title
+                                     :container_title container}]
+                           :returning [:*]}))]
+    (update row :sources/csl pgobject->clj)))
+
+(defn get-source
+  "Get a source by id. Parses csl JSONB to a Clojure map. Returns nil for nil id."
+  [id]
+  (when id
+    (when-let [row (jdbc/execute-one! ds
+                     (sql/format {:select [:*]
+                                  :from [:sources]
+                                  :where [:= :id id]}))]
+      (update row :sources/csl pgobject->clj))))
+
+(defn find-source-by-url
+  "Look up a sources row for (user-id, url). Returns row or nil.
+   Used at import to dedupe — same wiki article → one sources row, many topics."
+  [user-id url]
+  (when (and user-id (not (str/blank? url)))
+    (when-let [row (jdbc/execute-one! ds
+                     (sql/format {:select [:*]
+                                  :from [:sources]
+                                  :where [:and [:= :user_id user-id] [:= :url url]]
+                                  :limit 1}))]
+      (update row :sources/csl pgobject->clj))))
+
+(defn update-source!
+  "Update a sources row. attrs = {:id :csl-type :csl :url :title}. id required;
+   other keys updated only when present. Bumps updated_at. container_title
+   is re-denormalized when csl is provided."
+  [{:keys [id csl-type csl url title]}]
+  (when (nil? id) (throw (ex-info "update-source! requires :id" {:type ::missing-id})))
+  (let [set-map (cond-> {:updated_at (java.sql.Timestamp. (System/currentTimeMillis))}
+                  csl-type (assoc :csl_type csl-type)
+                  (some? csl) (assoc :csl (->jsonb csl)
+                                :container_title (when (map? csl) (:container-title csl)))
+                  (some? url) (assoc :url url)
+                  (some? title) (assoc :title title))
+        row (jdbc/execute-one! ds
+              (sql/format {:update :sources
+                           :set set-map
+                           :where [:= :id id]
+                           :returning [:*]}))]
+    (some-> row (update :sources/csl pgobject->clj))))
+
+(defn attach-source-to-topic!
+  "Set topics.source_id for a topic owned by user-id. Returns update count."
+  [user-id topic-id source-id]
+  (jdbc/execute-one! ds
+    ["UPDATE topics SET source_id = ? WHERE id = ? AND user_id = ?"
+     source-id topic-id user-id]))
+
+(defn- kind->csl-type
+  "Map legacy topics.kind values to CSL-JSON type tokens."
+  [kind]
+  (case kind
+    "pdf" "document"
+    "epub" "book"
+    "webpage"))
+
+(defn- ts->date-parts
+  "Convert a java.sql.Timestamp to a CSL date-parts vector [[year month day]]."
+  [^java.sql.Timestamp ts]
+  (let [ldt (.toLocalDateTime ts)]
+    [[(.getYear ldt) (.getMonthValue ldt) (.getDayOfMonth ldt)]]))
+
+(defn- now-date-parts
+  "CSL date-parts for the current instant. Convenience for accessed-at."
+  []
+  (ts->date-parts (java.sql.Timestamp. (System/currentTimeMillis))))
+
+(defn backfill-sources!
+  "Idempotent migration: build a sources row for every distinct
+   (user_id, source_url) on topics where source_id IS NULL. Links the
+   topics back via source_id.
+
+   Mapping for the legacy topics.kind on the earliest-created row in each group:
+     pdf       → csl_type='document'
+     epub      → csl_type='book'
+     wikipedia → csl_type='webpage' + csl.container-title='Wikipedia'
+     web/other → csl_type='webpage'
+
+   csl.URL ← source_url, csl.title ← topics.title, csl.accessed ←
+   topics.created_at (approx — accessed-at ≈ import time)."
+  []
+  (let [groups (try
+                 (jdbc/execute! ds
+                   ["SELECT user_id, source_url,
+                            MIN(created_at) AS first_seen,
+                            (ARRAY_AGG(kind ORDER BY created_at))[1] AS canonical_kind,
+                            (ARRAY_AGG(title ORDER BY created_at))[1] AS canonical_title
+                     FROM topics
+                     WHERE source_url IS NOT NULL AND source_id IS NULL
+                     GROUP BY user_id, source_url"]
+                   {:builder-fn rs/as-unqualified-maps})
+                 ;; If the column was already dropped (post-T4 reboot), this
+                 ;; query errors; treat as "nothing to backfill".
+                 (catch Exception _ []))]
+    (when (seq groups)
+      (jdbc/with-transaction [tx ds]
+        (doseq [{:keys [user_id source_url first_seen canonical_kind canonical_title]} groups]
+          (let [csl-type (kind->csl-type canonical_kind)
+                csl (cond-> {:type csl-type
+                             :title canonical_title
+                             :URL source_url
+                             :accessed {:date-parts (ts->date-parts first_seen)}}
+                      (= canonical_kind "wikipedia")
+                      (assoc :container-title "Wikipedia"))
+                src (jdbc/execute-one! tx
+                      (sql/format {:insert-into :sources
+                                   :values [{:user_id user_id
+                                             :csl_type csl-type
+                                             :csl (->jsonb csl)
+                                             :url source_url
+                                             :title canonical_title
+                                             :container_title (:container-title csl)
+                                             :created_at first_seen}]
+                                   :returning [:id]}))
+                sid (:sources/id src)]
+            (jdbc/execute! tx
+              ["UPDATE topics SET source_id = ?
+                WHERE user_id = ? AND source_url = ? AND source_id IS NULL"
+               sid user_id source_url])))
+        (tel/log! {:level :info :id ::backfill-sources :data {:count (count groups)}}
+          (str "Backfilled " (count groups) " source(s) from topics.source_url"))))))
+
+;; ---------------------------------------------------------------------------
 ;; Compound creation helpers
 ;; ---------------------------------------------------------------------------
 
 (defn create-pdf-topic!
-  "Create a PDF root topic with file data and page stubs.
+  "Create a PDF root topic with file data, page stubs, and a `sources` row.
    Atomically checks quota and increments users.usage_bytes by file-size.
    Throws `quota/quota-error` on cap violation — caller's tx aborts.
    Returns the result with :topics/id."
@@ -850,11 +1055,22 @@
     (input/check-length! :title clean-name input/title-max)
     (jdbc/with-transaction [tx ds]
       (quota/check-and-bump! tx user-id file-size)
-      (let [topic (jdbc/execute-one! tx
+      (let [csl {:type "document" :title clean-name
+                 :accessed {:date-parts (now-date-parts)}}
+            source (jdbc/execute-one! tx
+                     (sql/format {:insert-into :sources
+                                  :values [{:user_id user-id
+                                            :csl_type "document"
+                                            :csl (->jsonb csl)
+                                            :title clean-name}]
+                                  :returning [:id]}))
+            source-id (:sources/id source)
+            topic (jdbc/execute-one! tx
                     (sql/format {:insert-into :topics
                                  :values [{:user_id user-id
                                            :kind "pdf"
-                                           :title clean-name}]
+                                           :title clean-name
+                                           :source_id source-id}]
                                  :returning [:id]}))
             topic-id (:topics/id topic)]
         (jdbc/execute! tx
@@ -884,20 +1100,48 @@
                          [:is :parent_id nil]
                          [:= [:lower :title] (str/lower-case title)]]})))
 
+(defn ensure-source-for-url!
+  "Find or create a sources row for (user-id, url). Returns row map (with id).
+   bib = {:source-type 'wikipedia'|'webpage'|nil :title nil-or-str}.
+   Used at import time to dedupe by URL."
+  [user-id url bib]
+  (when (and user-id (not (str/blank? url)))
+    (or (find-source-by-url user-id url)
+        (let [wikipedia? (= (:source-type bib) "wikipedia")
+              title (:title bib)
+              csl (cond-> {:type "webpage"
+                           :title title
+                           :URL url
+                           :accessed {:date-parts (now-date-parts)}}
+                    wikipedia? (assoc :container-title "Wikipedia"))]
+          (create-source! {:user-id user-id
+                           :csl-type "webpage"
+                           :csl csl
+                           :url url
+                           :title title})))))
+
 (defn create-web-topic!
-  "Create a web article topic. Returns topic-id."
-  [user-id title html-content source-url]
+  "Create a web article topic. Returns topic-id.
+   `bib` (optional) = {:url ... :source-type 'wikipedia'|'webpage'|nil}.
+   When :url is non-blank, ensures a `sources` row (per-user dedup by URL)
+   and links topics.source_id. :source-type 'wikipedia' tags
+   csl.container-title='Wikipedia'."
+  [user-id title html-content bib]
   (let [clean-title (input/prettify-title (input/sanitize-filename title))
         _ (input/check-length! :title clean-title input/title-max)
         sanitized (sanitize-utf8 html-content)
+        url (some-> bib :url str/trim not-empty)
+        source-id (some-> (ensure-source-for-url! user-id url
+                            (assoc bib :title clean-title))
+                    :sources/id)
         topic (jdbc/execute-one! ds
                 (sql/format {:insert-into :topics
-                             :values [{:user_id user-id
-                                       :kind "web"
-                                       :title clean-title
-                                       :content sanitized
-                                       :content_text (text/strip-html sanitized)
-                                       :source_url source-url}]
+                             :values [(cond-> {:user_id user-id
+                                               :kind "web"
+                                               :title clean-title
+                                               :content sanitized
+                                               :content_text (text/strip-html sanitized)}
+                                        source-id (assoc :source_id source-id))]
                              :returning [:id]}))]
     (:topics/id topic)))
 
@@ -918,7 +1162,7 @@
     (:topics/id topic)))
 
 (defn create-epub-topic!
-  "Create an EPUB root topic with file and chapter children.
+  "Create an EPUB root topic with file, chapter children, and a `sources` row.
    chapters is a vec of {:html :title} maps.
    Atomically checks quota and increments users.usage_bytes by file-size.
    Throws `quota/quota-error` on cap violation — caller's tx aborts.
@@ -928,11 +1172,22 @@
     (input/check-length! :title clean-title input/title-max)
     (jdbc/with-transaction [tx ds]
       (quota/check-and-bump! tx user-id file-size)
-      (let [topic (jdbc/execute-one! tx
+      (let [csl {:type "book" :title clean-title
+                 :accessed {:date-parts (now-date-parts)}}
+            source (jdbc/execute-one! tx
+                     (sql/format {:insert-into :sources
+                                  :values [{:user_id user-id
+                                            :csl_type "book"
+                                            :csl (->jsonb csl)
+                                            :title clean-title}]
+                                  :returning [:id]}))
+            source-id (:sources/id source)
+            topic (jdbc/execute-one! tx
                     (sql/format {:insert-into :topics
                                  :values [{:user_id user-id
                                            :kind "epub"
-                                           :title clean-title}]
+                                           :title clean-title
+                                           :source_id source-id}]
                                  :returning [:id]}))
             topic-id (:topics/id topic)]
         (jdbc/execute! tx
@@ -1195,10 +1450,12 @@
    For PDFs: counts kind='page' direct children.
    For non-PDFs: counts root itself + all descendants (recursive).
    Returns a vector of maps with :id, :title, :kind, :created_at,
-   :total_items, :done_items, :total_cards, :synced_cards."
+   :total_items, :done_items, :total_cards, :synced_cards, plus
+   bibliography fields from sources (:sources/title etc.)."
   [user-id]
   (jdbc/execute! ds
     ["SELECT t.id, t.title, t.kind, t.created_at,
+             s.title, s.csl_type, s.container_title,
              CASE WHEN t.kind = 'pdf' THEN COALESCE(ps.total_pages, 0)
                   ELSE COALESCE(ds.total_items, 0)
              END AS total_items,
@@ -1208,6 +1465,7 @@
              COALESCE(cs.total_cards, 0)  AS total_cards,
              COALESCE(cs.synced_cards, 0) AS synced_cards
       FROM topics t
+      LEFT JOIN sources s ON s.id = t.source_id
       LEFT JOIN LATERAL (
         SELECT COUNT(*)                                  AS total_pages,
                COUNT(*) FILTER (WHERE p.status = 'done') AS done_pages
@@ -1297,18 +1555,23 @@
 ;; ---------------------------------------------------------------------------
 
 (defn get-learning-queue
-  "Due topics for incremental reading. Single query, no UNION."
+  "Due topics for incremental reading. Single query, no UNION.
+   Joins `sources` to surface bibliography fields (source_url, source_title,
+   source_csl_type, source_container); NULL when the topic has no source_id."
   [user-id]
   (try
     (jdbc/execute! ds
-      ["SELECT id, parent_id, kind, title, content, priority, next_review_at,
-              interval_days, a_factor, review_count, status, source_url
-       FROM topics
-       WHERE user_id = ?
-         AND kind != 'page'
-         AND (next_review_at::date <= CURRENT_DATE OR next_review_at IS NULL)
-         AND (status = 'active' OR status IS NULL)
-       ORDER BY priority ASC, next_review_at ASC NULLS FIRST, id ASC" user-id])
+      ["SELECT t.id, t.parent_id, t.kind, t.title, t.content, t.priority,
+              t.next_review_at, t.interval_days, t.a_factor, t.review_count,
+              t.status,
+              s.url, s.title, s.csl_type, s.container_title
+       FROM topics t
+       LEFT JOIN sources s ON s.id = t.source_id
+       WHERE t.user_id = ?
+         AND t.kind != 'page'
+         AND (t.next_review_at::date <= CURRENT_DATE OR t.next_review_at IS NULL)
+         AND (t.status = 'active' OR t.status IS NULL)
+       ORDER BY t.priority ASC, t.next_review_at ASC NULLS FIRST, t.id ASC" user-id])
     (catch Exception e
       (tel/error! {:id ::get-learning-queue} e)
       [])))
@@ -1337,17 +1600,21 @@
     (or (:total result) 0)))
 
 (defn get-full-queue
-  "All topics with scheduling info. No date filter."
+  "All topics with scheduling info. No date filter.
+   Joins `sources` to surface bibliography fields (source_url, source_title,
+   source_csl_type, source_container); NULL when the topic has no source_id."
   [user-id]
   (try
     (jdbc/execute! ds
-      ["SELECT id, parent_id, kind, title, priority, next_review_at,
-              interval_days, status, content, source_url
-       FROM topics
-       WHERE user_id = ? AND kind != 'page'
-       ORDER BY CASE WHEN status = 'active' OR status IS NULL THEN 0
-                     WHEN status = 'done' THEN 1 ELSE 2 END,
-                priority ASC, next_review_at ASC NULLS FIRST, id ASC" user-id])
+      ["SELECT t.id, t.parent_id, t.kind, t.title, t.priority, t.next_review_at,
+              t.interval_days, t.status, t.content,
+              s.url, s.title, s.csl_type, s.container_title
+       FROM topics t
+       LEFT JOIN sources s ON s.id = t.source_id
+       WHERE t.user_id = ? AND t.kind != 'page'
+       ORDER BY CASE WHEN t.status = 'active' OR t.status IS NULL THEN 0
+                     WHEN t.status = 'done' THEN 1 ELSE 2 END,
+                t.priority ASC, t.next_review_at ASC NULLS FIRST, t.id ASC" user-id])
     (catch Exception e
       (tel/error! {:id ::get-full-queue} e)
       [])))
@@ -1410,16 +1677,20 @@
 
 (defn get-knowledge-tree
   "Fetch all topics with parent references for building the knowledge tree.
-   Includes page topics so parent chain (PDF → page → extract) is intact."
+   Includes page topics so parent chain (PDF → page → extract) is intact.
+   Joins `sources` to surface bibliography fields (source_title,
+   source_csl_type, source_container) for badge + subtitle rendering."
   [user-id]
   (jdbc/execute! ds
     (sql/format {:select [[:t.id :id] [:t.parent_id :parent_id] [:t.title :title]
                           [:t.kind :kind] [:t.status :status] [:t.created_at :created_at]
                           [:t.page_number :page_number] [:t.last_review_at :last_review_at]
+                          :s.title :s.csl_type :s.container_title
                           [[:coalesce :tf.file_size [:octet_length [:coalesce :t.content ""]]] :file_size]
                           [[:to_char :t.created_at [:inline "Mon DD"]] :formatted_date]]
                  :from [[:topics :t]]
-                 :left-join [[:topic_files :tf] [:= :tf.topic_id :t.id]]
+                 :left-join [[:topic_files :tf] [:= :tf.topic_id :t.id]
+                             [:sources :s] [:= :t.source_id :s.id]]
                  :where [:= :t.user_id user-id]
                  :order-by [[:t.parent_id :asc-nulls-first] [:t.page_number :asc-nulls-first] [:t.created_at :asc]]})))
 

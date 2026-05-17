@@ -74,7 +74,8 @@
                   (log/log-info (str "OCR scan error topic-id=" doc " page=" page " ex=" (.getMessage e)))
                   (swap! (us/get-atom uid :ocr-errors) assoc [doc page] (.getMessage e)))
                 (swap! (us/get-atom uid :scanning-pages) disj [doc page])))]
-         (swap! (us/get-atom uid :scan-cancellers) assoc [doc page] cancel-fn)))
+         (swap! (us/get-atom uid :scan-cancellers) assoc [doc page] cancel-fn))
+       nil)
      :cljs nil))
 
 ;; ---------------------------------------------------------------------------
@@ -97,7 +98,8 @@
              (let [result (wiki/fetch-url url)]
                (if-not (:success result)
                  {:error (:error result)}
-                 (let [topic-id (db/create-web-topic! user-id (:title result) (:html result) (:url result))]
+                 (let [topic-id (db/create-web-topic! user-id (:title result) (:html result)
+                                  {:url (:url result) :source-type (:source-type result)})]
                    {:imported true :title (:title result) :topic-id topic-id}))))))
        (catch Exception e
          {:error (.getMessage e)}))
@@ -222,17 +224,15 @@
                                       nil)
                         [?token _] (e/Token click-event)]
                     (when-some [token ?token]
-                      (e/server
-                        (let [pg (:page click-event)
-                              doc root-topic-id
-                              uid user-id
-                              ek enc-key]
-                          (if (contains? @(us/get-atom uid :scanning-pages) [doc pg])
-                            (log/log-info (str "OCR scan already in progress topic-id=" doc " page=" pg))
-                            (do
-                              (start-ocr-scan! uid doc pg ek scan-dpi)
-                              :started))))
-                      (token))))))
+                      (case (e/server
+                              (let [pg (:page click-event)
+                                    doc root-topic-id
+                                    uid user-id
+                                    ek enc-key]
+                                (if (contains? @(us/get-atom uid :scanning-pages) [doc pg])
+                                  (log/log-info (str "OCR scan already in progress topic-id=" doc " page=" pg))
+                                  (start-ocr-scan! uid doc pg ek scan-dpi))))
+                        (token)))))))
 
             ;; Extract (PDFBox) button
             (when enable-pdfbox?

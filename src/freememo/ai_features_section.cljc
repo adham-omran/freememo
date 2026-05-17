@@ -5,6 +5,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.home-page :refer [get-api-key-status*]]
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])))
 
@@ -13,11 +14,8 @@
     (let [server-llm-enabled (e/server (settings/get-llm-enabled user-id))
           !llm-enabled (atom server-llm-enabled)
           llm-enabled (e/watch !llm-enabled)
-          !key-status-refresh (atom 0)
-          key-status-refresh (e/watch !key-status-refresh)
-          api-key-status (e/server
-                           (do key-status-refresh
-                             (settings/get-openai-api-key-status user-id enc-key)))
+          settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
+          api-key-status (e/server (get-api-key-status* settings-refresh user-id enc-key))
           api-key-source (:source api-key-status)
           !show-key-modal (atom false)
           show-key-modal (e/watch !show-key-modal)
@@ -85,9 +83,11 @@
               (dom/span
                 (dom/props {:class (case api-key-source
                                      :user "badge badge-success"
+                                     :shared "badge badge-warning"
                                      "badge badge-error")})
                 (dom/text (case api-key-source
                             :user "Configured"
+                            :shared "Demo key"
                             "Not set"))))
             (dom/button
               (dom/props {:type "button"
@@ -165,16 +165,17 @@
                       (dom/text (if (some? ?token) "Saving..." "Save"))
                       (when-some [token ?token]
                         (let [result (e/server (settings/save-openai-api-key user-id draft-key enc-key))]
-                          (if (:success result)
-                            (do
-                              (reset! !draft-key "")
-                              (reset! !key-save-error nil)
-                              (swap! !key-status-refresh inc)
-                              (reset! !show-key-modal false)
-                              (token))
-                            (let [err-msg (or (:error result) "Failed to save API key")]
-                              (reset! !key-save-error err-msg)
-                              (token err-msg)))))))
+                          (when (some? result)
+                            (if (:success result)
+                              (do
+                                (reset! !draft-key "")
+                                (reset! !key-save-error nil)
+                                (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                (reset! !show-key-modal false)
+                                (token))
+                              (let [err-msg (or (:error result) "Failed to save API key")]
+                                (reset! !key-save-error err-msg)
+                                (token err-msg))))))))
                   (dom/button
                     (dom/props {:type "button"
                                 :class "btn btn-secondary"})
