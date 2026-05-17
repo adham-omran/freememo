@@ -1102,18 +1102,22 @@
 
 (defn ensure-source-for-url!
   "Find or create a sources row for (user-id, url). Returns row map (with id).
-   bib = {:source-type 'wikipedia'|'webpage'|nil :title nil-or-str}.
+   bib = {:source-type 'wikipedia'|'webpage'|nil
+          :title nil-or-str
+          :issued-date-parts nil-or-[[Y M? D?]]}.
    Used at import time to dedupe by URL."
   [user-id url bib]
   (when (and user-id (not (str/blank? url)))
     (or (find-source-by-url user-id url)
         (let [wikipedia? (= (:source-type bib) "wikipedia")
               title (:title bib)
+              issued-dp (:issued-date-parts bib)
               csl (cond-> {:type "webpage"
                            :title title
                            :URL url
                            :accessed {:date-parts (now-date-parts)}}
-                    wikipedia? (assoc :container-title "Wikipedia"))]
+                    wikipedia? (assoc :container-title "Wikipedia")
+                    (seq issued-dp) (assoc :issued {:date-parts issued-dp}))]
           (create-source! {:user-id user-id
                            :csl-type "webpage"
                            :csl csl

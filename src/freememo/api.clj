@@ -10,10 +10,17 @@
    [freememo.html-cleaner :as cleaner]
    [freememo.quota :as quota]
    [freememo.user-state :as us]
+   [freememo.biblio-import :as biblio-import]
+   [freememo.content-type :as ct]
+   [freememo.import-staging :as staging]
+   [freememo.wikipedia :as wiki]
+   [freememo.markdown :as md]
+   [freememo.url-validate :as url]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
-   [clojure.string]
-   [cheshire.core :as json]))
+   [clojure.string :as str]
+   [cheshire.core :as json])
+  (:import [org.jsoup Jsoup]))
 
 (defn- error-status
   "Map a result :code to an HTTP status. Defaults to 500."
@@ -61,116 +68,281 @@
     (clojure.string/join " "
       (map #(format "%02X" (aget b %)) (range 4)))))
 
-(defn upload-pdf-handler [request]
+;; ── Helpers shared by new upload handlers ───────────────────────────
+
+(defn- read-multipart-bytes [tempfile]
+  (with-open [in (io/input-stream tempfile)]
+    (let [baos (java.io.ByteArrayOutputStream.)]
+      (io/copy in baos)
+      (.toByteArray baos))))
+
+(defn- quota-info->response [data]
+  (case (:reason data)
+    :file-too-large (json-response 413 {:success false
+                                        :error (str "File exceeds per-file limit (" (:limit data) " bytes)")
+                                        :code "file-too-large"
+                                        :limit (:limit data) :incoming (:incoming data)})
+    :over-quota (json-response 507 {:success false
+                                    :error "Storage quota exceeded — delete documents to free space"
+                                    :code "over-quota"
+                                    :used (:used data) :limit (:limit data) :incoming (:incoming data)})))
+
+(defn- html-default-title [html-str filename]
+  (let [doc (Jsoup/parse (or html-str ""))]
+    (or (some-> (.selectFirst doc "title") .text str/trim not-empty)
+        (some-> (.selectFirst doc "h1") .text str/trim not-empty)
+        (some-> (.selectFirst doc "h2") .text str/trim not-empty)
+        (when filename (str/replace filename #"(?i)\.(html?|htm)$" ""))
+        "Untitled")))
+
+(defn- markdown-default-title [md-content filename]
+  (or (md/extract-frontmatter-title md-content)
+      (when filename (str/replace filename #"(?i)\.(md|markdown)$" ""))
+      "Untitled"))
+
+;; ── /api/upload-url ────────────────────────────────────────────────
+
+(defn upload-url-handler
+  "POST /api/upload-url — {url}.
+   Pre:  authenticated; url present and safe.
+   Post: returns one of:
+         {:success true :doc_id N :flow \"web\"}    — HTML committed
+         {:success true :upload_id ... :flow \"pdf|epub\" :filename :size} — staged
+         {:success false :error <msg>}"
+  [request]
+  (if-let [user-id (require-auth request)]
+    (try
+      (let [url-val (get-in request [:params "url"])]
+        (cond
+          (str/blank? url-val)
+          (json-response 400 {:success false :error "URL is required"})
+
+          :else
+          (let [result (wiki/fetch-url url-val)]
+            (cond
+              (false? (:success result))
+              (json-response 400 {:success false :error (:error result)})
+
+              (:dispatch result)
+              (let [{:keys [bytes filename]} result
+                    flow (:dispatch result)
+                    upload-id (staging/stage! user-id bytes filename flow)]
+                (json-response 200 {:success true
+                                    :upload_id upload-id
+                                    :flow (name flow)
+                                    :filename filename
+                                    :size (alength ^bytes bytes)}))
+
+              :else
+              (let [topic-id (db/create-web-topic! user-id
+                               (:title result)
+                               (:html result)
+                               {:url (:url result)
+                                :source-type (:source-type result)
+                                :issued-date-parts (:issued-date-parts result)})]
+                (when topic-id
+                  (try (biblio-import/prepare-biblio! user-id topic-id (:biblio result))
+                       (catch Exception e
+                         (tel/log! {:level :warn :id ::upload-url-biblio} (.getMessage e)))))
+                (swap! (us/get-atom user-id :refresh) inc)
+                (swap! (us/get-atom user-id :tree-mutations) inc)
+                (json-response 200 {:success true :doc_id topic-id :flow "web"}))))))
+      (catch Exception e
+        (tel/error! {:id ::upload-url-handler} e)
+        (json-response 500 {:success false :error "URL import failed. Please try again."})))
+    (json-response 401 {:success false :error "Not authenticated"})))
+
+;; ── /api/upload-file ───────────────────────────────────────────────
+
+(defn upload-file-handler
+  "POST /api/upload-file — multipart file.
+   Pre:  authenticated; size within cap.
+   Post: one of:
+         {:success true :upload_id ... :flow \"pdf|epub\" :filename :size} — staged
+         {:success true :flow \"html|markdown\" :content :default_title :filename}
+         {:success false :error <msg> :code <...>}"
+  [request]
   (if-let [user-id (require-auth request)]
     (try
       (if-let [file (get-in request [:params "file"])]
         (let [filename (:filename file)
+              mime-type (or (:content-type file) "")
               tempfile (:tempfile file)
-              bytes (with-open [in (io/input-stream tempfile)]
-                      (let [baos (java.io.ByteArrayOutputStream.)]
-                        (io/copy in baos)
-                        (.toByteArray baos)))
+              ^bytes bytes (read-multipart-bytes tempfile)
               size (alength bytes)
               cap (upload-byte-cap)]
-          (if (and cap (> size cap))
-            (do (log-upload-failure! ::upload-pdf-too-large request
+          (cond
+            (and cap (> size cap))
+            (do (log-upload-failure! ::upload-file-too-large request
                   {:user-id user-id :filename filename :file-size size :limit cap})
                 (json-response 413 {:success false :error (str "File exceeds " cap " bytes")
                                     :code "file-too-large" :limit cap :incoming size}))
-            (let [result (pdf/save-pdf user-id filename bytes)]
-              (if (:success result)
-                (json-response 200 {:success true :doc_id (:id result)})
-                (do (log-upload-failure! ::upload-pdf-process-error request
-                      {:user-id user-id :filename filename :file-size size
-                       :reason (:error result) :code (:code result)})
-                    (json-response (error-status (:code result))
-                      (cond-> {:success false :error (:error result)}
-                        (:code result) (assoc :code (:code result))
-                        (:used result) (assoc :used (:used result))
-                        (:limit result) (assoc :limit (:limit result)))))))))
-        (json-response 400 {:success false :error "No file provided"}))
-      (catch Exception e
-        (tel/error! {:id ::upload-pdf-handler} e)
-        (json-response 500 {:success false :error "Upload failed. Please try again with a different file."})))
-    (do (log-upload-failure! ::upload-pdf-not-authenticated request {})
-        (json-response 401 {:success false :error "Not authenticated"}))))
-
-(defn upload-epub-handler [request]
-  (if-let [user-id (require-auth request)]
-    (try
-      (if-let [file (get-in request [:params "file"])]
-        (let [filename (:filename file)
-              tempfile (:tempfile file)
-              auto-extract? (= "true" (get-in request [:params "auto_extract"]))
-              image-mode (keyword (or (get-in request [:params "image_mode"]) "reduce"))
-              bytes (with-open [in (io/input-stream tempfile)]
-                      (let [baos (java.io.ByteArrayOutputStream.)]
-                        (io/copy in baos)
-                        (.toByteArray baos)))
-              file-size (alength bytes)
-              cap (upload-byte-cap)]
-          (cond
-            (and cap (> file-size cap))
-            (do (log-upload-failure! ::upload-epub-too-large request
-                  {:user-id user-id :filename filename :file-size file-size :limit cap})
-                (json-response 413 {:success false :error (str "File exceeds " cap " bytes")
-                                    :code "file-too-large" :limit cap :incoming file-size}))
-
-            (not (epub/epub-magic-bytes? bytes))
-            (do (log-upload-failure! ::upload-epub-bad-magic request
-                  {:user-id user-id :filename filename :file-size file-size
-                   :magic-hex (bytes->magic-hex bytes)})
-                (json-response 400 {:success false :error "Not a valid EPUB file"
-                                    :code "invalid-file-type"}))
 
             :else
-            (let [result (epub/process-epub bytes image-mode)]
-              (if (:error result)
-                (do (log-upload-failure! ::upload-epub-process-error request
-                      {:user-id user-id :filename filename :file-size file-size
-                       :reason (:error result)})
-                    (json-response 400 {:success false :error (:error result)}))
-                (let [{:keys [title chapters]} result
-                      display-name (or title filename "Untitled EPUB")
-                      {:keys [topic-id chapter-ids]} (db/create-epub-topic! user-id display-name bytes file-size chapters)]
-                  (when (and auto-extract? topic-id (seq chapter-ids))
-                    (try
-                      (doseq [[ch-id ch] (map vector chapter-ids chapters)]
-                        (when (and ch-id (seq (:html ch)))
-                          (when-let [{:keys [sections]} (extractor/extract-and-annotate (:html ch))]
-                            (let [clean-sections (mapv #(update % :content cleaner/clean-html) sections)]
-                              (doseq [section clean-sections]
-                                (db/create-topic! {:user-id user-id
-                                                   :parent-id ch-id
-                                                   :kind "basic"
-                                                   :title (or (first (re-find #"[^<]+" (:content section))) "Extract")
-                                                   :content (:content section)}))))))
-                      (catch Exception e
-                        (tel/log! {:level :warn :id ::upload-epub-auto-extract} (.getMessage e)))))
-                  (swap! (us/get-atom user-id :refresh) inc)
-                  (swap! (us/get-atom user-id :tree-mutations) inc)
-                  (json-response 200 {:success true :doc_id topic-id}))))))
+            (let [[kind reject-msg] (ct/classify-multipart filename mime-type bytes)]
+              (case kind
+                :pdf
+                (let [upload-id (staging/stage! user-id bytes filename :pdf)]
+                  (json-response 200 {:success true :upload_id upload-id :flow "pdf"
+                                      :filename filename :size size}))
+
+                :epub
+                (if (epub/epub-magic-bytes? bytes)
+                  (let [upload-id (staging/stage! user-id bytes filename :epub)]
+                    (json-response 200 {:success true :upload_id upload-id :flow "epub"
+                                        :filename filename :size size}))
+                  (do (log-upload-failure! ::upload-file-bad-epub request
+                        {:user-id user-id :filename filename :file-size size
+                         :magic-hex (bytes->magic-hex bytes)})
+                      (json-response 400 {:success false :error "Not a valid EPUB file"
+                                          :code "invalid-file-type"})))
+
+                :html
+                (let [content (String. bytes "UTF-8")
+                      default-title (html-default-title content filename)]
+                  (json-response 200 {:success true :flow "html"
+                                      :content content
+                                      :default_title default-title
+                                      :filename filename}))
+
+                :markdown
+                (let [content (String. bytes "UTF-8")
+                      default-title (markdown-default-title content filename)]
+                  (json-response 200 {:success true :flow "markdown"
+                                      :content content
+                                      :default_title default-title
+                                      :filename filename}))
+
+                :reject
+                (json-response 400 {:success false :error reject-msg
+                                    :code "invalid-file-type"})))))
         (json-response 400 {:success false :error "No file provided"}))
+      (catch Exception e
+        (tel/error! {:id ::upload-file-handler} e)
+        (json-response 500 {:success false :error "Upload failed. Please try again with a different file."})))
+    (json-response 401 {:success false :error "Not authenticated"})))
+
+;; ── /api/upload-paste ──────────────────────────────────────────────
+
+(defn upload-paste-handler
+  "POST /api/upload-paste — {format, title, content, url?}.
+   Pre:  authenticated; title and content non-blank; format is \"html\" or \"markdown\".
+   Post: {:success true :doc_id N} or {:success false :error <msg>}."
+  [request]
+  (if-let [user-id (require-auth request)]
+    (try
+      (let [format (get-in request [:params "format"])
+            title (get-in request [:params "title"])
+            content (get-in request [:params "content"])
+            url-val (get-in request [:params "url"])]
+        (cond
+          (str/blank? title)
+          (json-response 400 {:success false :error "Title is required"})
+
+          (str/blank? content)
+          (json-response 400 {:success false :error "Content is required"})
+
+          (= format "html")
+          (let [bib (when (seq url-val) {:url url-val :source-type "web"})
+                topic-id (db/create-web-topic! user-id title
+                           (cleaner/clean-html content)
+                           bib)]
+            (when topic-id
+              (try (biblio-import/prepare-biblio! user-id topic-id nil)
+                   (catch Exception e
+                     (tel/log! {:level :warn :id ::upload-paste-biblio} (.getMessage e)))))
+            (swap! (us/get-atom user-id :refresh) inc)
+            (swap! (us/get-atom user-id :tree-mutations) inc)
+            (json-response 200 {:success true :doc_id topic-id}))
+
+          (= format "markdown")
+          (let [html (md/parse-markdown content)
+                topic-id (db/create-markdown-topic! user-id title html)]
+            (when topic-id
+              (try (biblio-import/prepare-biblio! user-id topic-id nil)
+                   (catch Exception e
+                     (tel/log! {:level :warn :id ::upload-paste-biblio} (.getMessage e)))))
+            (swap! (us/get-atom user-id :refresh) inc)
+            (swap! (us/get-atom user-id :tree-mutations) inc)
+            (json-response 200 {:success true :doc_id topic-id}))
+
+          :else
+          (json-response 400 {:success false :error "Unsupported format"})))
+      (catch Exception e
+        (tel/error! {:id ::upload-paste-handler} e)
+        (json-response 500 {:success false :error "Import failed. Please try again."})))
+    (json-response 401 {:success false :error "Not authenticated"})))
+
+;; ── /api/upload-staged ─────────────────────────────────────────────
+
+(defn upload-staged-handler
+  "POST /api/upload-staged — {upload_id, image_mode?}.
+   Pre:  authenticated; upload-id refers to an unclaimed entry staged by this user.
+   Post: {:success true :doc_id N} or error JSON.
+   Invariant: claim is one-shot — replays return 404."
+  [request]
+  (if-let [user-id (require-auth request)]
+    (try
+      (let [upload-id (get-in request [:params "upload_id"])
+            image-mode (keyword (or (get-in request [:params "image_mode"]) "reduce"))]
+        (cond
+          (str/blank? upload-id)
+          (json-response 400 {:success false :error "Missing upload_id"})
+
+          :else
+          (if-let [entry (staging/claim! user-id upload-id)]
+            (let [{:keys [^bytes bytes filename flow]} entry]
+              (case flow
+                :pdf
+                (let [result (pdf/save-pdf user-id filename bytes)]
+                  (if (:success result)
+                    (let [topic-id (:id result)]
+                      (try (biblio-import/prepare-biblio! user-id topic-id)
+                           (catch Exception e
+                             (tel/log! {:level :warn :id ::upload-staged-pdf-biblio}
+                               (.getMessage e))))
+                      (json-response 200 {:success true :doc_id topic-id}))
+                    (do (log-upload-failure! ::upload-staged-pdf-error request
+                          {:user-id user-id :filename filename
+                           :reason (:error result) :code (:code result)})
+                        (json-response (error-status (:code result))
+                          (cond-> {:success false :error (:error result)}
+                            (:code result) (assoc :code (:code result))
+                            (:used result) (assoc :used (:used result))
+                            (:limit result) (assoc :limit (:limit result)))))))
+
+                :epub
+                (let [result (epub/process-epub bytes image-mode)]
+                  (if (:error result)
+                    (do (log-upload-failure! ::upload-staged-epub-process-error request
+                          {:user-id user-id :filename filename
+                           :reason (:error result)})
+                        (json-response 400 {:success false :error (:error result)}))
+                    (let [{:keys [title chapters]} result
+                          display-name (or title filename "Untitled EPUB")
+                          file-size (alength bytes)
+                          {:keys [topic-id]} (db/create-epub-topic!
+                                               user-id display-name bytes file-size chapters)]
+                      (swap! (us/get-atom user-id :refresh) inc)
+                      (swap! (us/get-atom user-id :tree-mutations) inc)
+                      (try (biblio-import/prepare-biblio! user-id topic-id)
+                           (catch Exception e
+                             (tel/log! {:level :warn :id ::upload-staged-epub-biblio}
+                               (.getMessage e))))
+                      (json-response 200 {:success true :doc_id topic-id}))))
+
+                (json-response 400 {:success false :error (str "Unknown flow: " flow)})))
+            (json-response 404 {:success false :error "Upload not found or expired"}))))
       (catch clojure.lang.ExceptionInfo e
         (let [data (ex-data e)]
           (if (quota/quota-error? data)
-            (case (:reason data)
-              :file-too-large (json-response 413 {:success false
-                                                  :error (str "File exceeds per-file limit (" (:limit data) " bytes)")
-                                                  :code "file-too-large"
-                                                  :limit (:limit data) :incoming (:incoming data)})
-              :over-quota (json-response 507 {:success false
-                                              :error "Storage quota exceeded — delete documents to free space"
-                                              :code "over-quota"
-                                              :used (:used data) :limit (:limit data) :incoming (:incoming data)}))
-            (do (tel/error! {:id ::upload-epub-handler} e)
-                (json-response 500 {:success false :error "Upload failed. Please try again with a different file."})))))
+            (quota-info->response data)
+            (do (tel/error! {:id ::upload-staged-handler} e)
+                (json-response 500 {:success false :error "Import failed. Please try again."})))))
       (catch Exception e
-        (tel/error! {:id ::upload-epub-handler} e)
-        (json-response 500 {:success false :error "Upload failed. Please try again with a different file."})))
-    (do (log-upload-failure! ::upload-epub-not-authenticated request {})
-        (json-response 401 {:success false :error "Not authenticated"}))))
+        (tel/error! {:id ::upload-staged-handler} e)
+        (json-response 500 {:success false :error "Import failed. Please try again."})))
+    (json-response 401 {:success false :error "Not authenticated"})))
 
 (defn create-topic-handler [request]
   (if-let [user-id (require-auth request)]
@@ -361,11 +533,17 @@
       (and (= uri "/api/logout") (= method :post))
       (logout-handler request)
 
-      (and (= uri "/api/upload-pdf") (= method :post))
-      (upload-pdf-handler request)
+      (and (= uri "/api/upload-url") (= method :post))
+      (upload-url-handler request)
 
-      (and (= uri "/api/upload-epub") (= method :post))
-      (upload-epub-handler request)
+      (and (= uri "/api/upload-file") (= method :post))
+      (upload-file-handler request)
+
+      (and (= uri "/api/upload-paste") (= method :post))
+      (upload-paste-handler request)
+
+      (and (= uri "/api/upload-staged") (= method :post))
+      (upload-staged-handler request)
 
       (and (= uri "/api/create-topic") (= method :post))
       (create-topic-handler request)

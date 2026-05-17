@@ -307,3 +307,83 @@
     (catch Exception e
       (tel/error! {:id ::process-epub} e)
       {:error (str "Failed to parse EPUB: " (.getMessage e))})))
+
+;; ── 1.4 OPF biblio extraction ────────────────────────────────────
+
+(defn- opf-meta-texts
+  "Trimmed text content of every element matching `metadata <selector>`."
+  [^Document doc selector]
+  (->> (.select doc (str "metadata " selector))
+       (keep (fn [^Element e]
+               (let [t (str/trim (.text e))]
+                 (when (seq t) t))))
+       vec))
+
+(defn- opf-identifiers
+  "All <dc:identifier> as [{:scheme :value} ...]. Scheme from opf:scheme
+   attribute or detected from value prefix."
+  [^Document doc]
+  (->> (.select doc "metadata dc\\:identifier, metadata identifier")
+       (mapv (fn [^Element e]
+               (let [v      (str/trim (.text e))
+                     attr-s (.attr e "opf:scheme")
+                     vl     (str/lower-case v)
+                     scheme (cond
+                              (seq attr-s)                       (str/lower-case attr-s)
+                              (str/starts-with? vl "urn:isbn:")  "isbn"
+                              (str/starts-with? vl "doi:")       "doi"
+                              (re-find #"^10\." v)               "doi"
+                              :else                              "unknown")]
+                 {:scheme scheme :value v})))))
+
+(defn- year-from-date [s]
+  (when (and (string? s) (>= (count s) 4))
+    (try (Integer/parseInt (subs s 0 4)) (catch Exception _ nil))))
+
+(defn extract-biblio
+  "Parse OPF metadata from an EPUB into CSL-JSON shape.
+   Pre:  file-bytes is a non-empty byte array of a valid EPUB.
+   Post: {:local <csl-json> :identifiers {:isbn-13 :doi}} on success;
+         {:local {} :identifiers {}} on parse failure."
+  [^bytes file-bytes]
+  (try
+    (let [entries (read-zip-entries file-bytes)]
+      (if-let [opf-path (find-opf-path entries)]
+        (if-let [opf-bytes (get entries opf-path)]
+          (let [doc          (parse-xml opf-bytes)
+                title        (or (some-> (.selectFirst doc "metadata dc\\:title") .text str/trim)
+                                 (some-> (.selectFirst doc "metadata title") .text str/trim))
+                creators     (opf-meta-texts doc "dc\\:creator, creator")
+                contributors (opf-meta-texts doc "dc\\:contributor, contributor")
+                publishers   (opf-meta-texts doc "dc\\:publisher, publisher")
+                languages    (opf-meta-texts doc "dc\\:language, language")
+                subjects     (opf-meta-texts doc "dc\\:subject, subject")
+                description  (some-> (.selectFirst doc "metadata dc\\:description, metadata description")
+                                     .text str/trim)
+                dates        (opf-meta-texts doc "dc\\:date, date")
+                year         (some year-from-date dates)
+                ids          (opf-identifiers doc)
+                isbn         (some #(when (= "isbn" (:scheme %))
+                                      (str/replace (:value %) #"(?i)^urn:isbn:" ""))
+                                   ids)
+                doi          (some #(when (= "doi" (:scheme %))
+                                      (str/replace (:value %) #"(?i)^doi:" ""))
+                                   ids)
+                local        (cond-> {:type "book"}
+                               (seq title)        (assoc :title title)
+                               (seq creators)     (assoc :author (mapv #(hash-map :literal %) creators))
+                               (seq contributors) (assoc :editor (mapv #(hash-map :literal %) contributors))
+                               (seq publishers)   (assoc :publisher (first publishers))
+                               (seq languages)    (assoc :language (first languages))
+                               (seq subjects)     (assoc :keyword (str/join ", " subjects))
+                               (seq description)  (assoc :abstract description)
+                               year               (assoc :issued {:date-parts [[year]]})
+                               isbn               (assoc :ISBN isbn)
+                               doi                (assoc :DOI doi))]
+            {:local local
+             :identifiers (cond-> {} isbn (assoc :isbn-13 isbn) doi (assoc :doi doi))})
+          {:local {} :identifiers {}})
+        {:local {} :identifiers {}}))
+    (catch Exception e
+      (tel/log! {:level :warn :id ::extract-biblio} (.getMessage e))
+      {:local {} :identifiers {}})))

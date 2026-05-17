@@ -62,24 +62,24 @@
       (dom/props {:class "btn-delete-x"})
       (dom/text "\u00D7")
       (let [click-event (dom/On "click" (fn [e] (.stopPropagation e) id) nil)
-            [?token ?error] (e/Token click-event)]
-        (dom/props {:disabled (some? ?token)
+            [t ?error] (e/Token click-event)]
+        (dom/props {:disabled (some? t)
                     :class "btn-delete-x"
-                    :style {:background (if (some? ?token) "var(--color-text-hint)" "var(--color-danger)")
-                            :cursor (if (some? ?token) "not-allowed" "pointer")}})
+                    :style {:background (if (some? t) "var(--color-text-hint)" "var(--color-danger)")
+                            :cursor (if (some? t) "not-allowed" "pointer")}})
         (when ?error
           (dom/div
             (dom/props {:style {:color "var(--color-danger)" :font-size "11px"}})
             (dom/text ?error)))
-        (when-some [token ?token]
+        (when t
           (let [result (e/server (e/Offload #(cards/delete-card click-event)))]
             (when (some? result)
               (if (:success result)
-                (do (e/server (swap! (us/get-atom user-id :card-mutations) inc))
-                  (when-some [note-id (:anki-note-id result)]
-                    (e/client (try-delete-anki-notes! [note-id])))
-                  (token))
-                (token (:error result))))))))))
+                (case (e/server (swap! (us/get-atom user-id :card-mutations) inc))
+                  (case (e/client (when-some [note-id (:anki-note-id result)]
+                                    (try-delete-anki-notes! [note-id])))
+                    (t)))
+                (t (:error result))))))))))
 
 ;; Card table row component
 (defn sync-state

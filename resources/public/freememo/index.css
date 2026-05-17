@@ -1613,3 +1613,23 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     padding: 0 14px 14px 14px;
     border-top: 1px solid var(--color-border);
 }
+
+/* Forms5 — visible busy/error reflection on tracked fields. Forms5 sets
+   aria-busy=true during in-flight commits and aria-invalid=true on transaction
+   failure (separate from CSS :invalid which fires on HTML validation). */
+input[aria-busy="true"],
+select[aria-busy="true"],
+textarea[aria-busy="true"] {
+    background-color: var(--color-warning-bg);
+}
+
+input[aria-invalid="true"],
+select[aria-invalid="true"],
+textarea[aria-invalid="true"] {
+    background-color: var(--color-danger-bg);
+    border-color: var(--color-danger);
+}
+
+form[aria-busy="true"] {
+    cursor: progress;
+}

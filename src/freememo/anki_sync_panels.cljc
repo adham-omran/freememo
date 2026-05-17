@@ -319,15 +319,13 @@
           conn-status (e/watch (:!status conn))
           basic-model (e/watch (:!basic-model conn))
           cloze-model (e/watch (:!cloze-model conn))]
-      (let [[?token _] (e/Token [:anki-sync-basic-fields conn-status basic-model])]
+      (let [[t _] (e/Token [:anki-sync-basic-fields conn-status basic-model])]
         (when (and basic-model (= conn-status :connected))
-          (when-some [token ?token]
-            (helpers/run-fetch-fields! basic-model (:!basic-fields form))
-            (token))))
-      (let [[?token _] (e/Token [:anki-sync-cloze-fields conn-status cloze-model])]
+          (when t
+            (case (helpers/run-fetch-fields! basic-model (:!basic-fields form)) (t)))))
+      (let [[t _] (e/Token [:anki-sync-cloze-fields conn-status cloze-model])]
         (when (and cloze-model (= conn-status :connected))
-          (when-some [token ?token]
-            (helpers/run-fetch-fields! cloze-model (:!cloze-fields form))
-            (token))))
+          (when t
+            (case (helpers/run-fetch-fields! cloze-model (:!cloze-fields form)) (t)))))
       (AnkiSyncExecutor user-id selected-doc current-pdf-page conn form sync)
       (AnkiSyncModalDom user-id selected-doc !show-modal conn form sync))))

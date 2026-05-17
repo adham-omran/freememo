@@ -53,16 +53,16 @@
               (dom/props {:type "checkbox" :checked llm-enabled
                           :style {:width "18px" :height "18px" :accent-color "var(--color-primary)"}})
               (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
-                    [?token ?error] (e/Token change-event)]
+                    [t ?error] (e/Token change-event)]
                 (when (some? change-event)
                   (reset! !llm-enabled change-event))
-                (when-some [token ?token]
+                (when t
                   (let [r (e/server (e/Offload #(settings/save-llm-enabled user-id change-event)))]
-                    (when (some? r)
+                    (case r
                       (if (:success r)
-                        (do (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
-                            (token))
-                        (token (:error r))))))))
+                        (case (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                          (t))
+                        (t (:error r))))))))
             (dom/div
               (dom/span
                 (dom/props {:style {:font-size "14px" :font-weight "500" :color "var(--color-text-primary)"}})
@@ -160,25 +160,24 @@
                                       :margin-top "20px"}})
                   (dom/button
                     (let [click-event (dom/On "click" identity nil)
-                          [?token _] (e/Token click-event)]
+                          [t _] (e/Token click-event)]
+                      (e/on-unmount #(do (reset! !draft-key "")
+                                       (reset! !key-save-error nil)
+                                       (reset! !show-key-modal false)))
                       (dom/props {:type "button"
-                                  :disabled (some? ?token)
+                                  :disabled (some? t)
                                   :class "btn btn-primary"
                                   :style {:order "1"}})
-                      (dom/text (if (some? ?token) "Saving..." "Save"))
-                      (when-some [token ?token]
+                      (dom/text (if (some? t) "Saving..." "Save"))
+                      (when t
                         (let [result (e/server (e/Offload #(settings/save-openai-api-key user-id draft-key enc-key)))]
-                          (when (some? result)
+                          (case result
                             (if (:success result)
-                              (do
-                                (reset! !draft-key "")
-                                (reset! !key-save-error nil)
-                                (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
-                                (reset! !show-key-modal false)
-                                (token))
+                              (case (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                (t))
                               (let [err-msg (or (:error result) "Failed to save API key")]
                                 (reset! !key-save-error err-msg)
-                                (token err-msg))))))))
+                                (t err-msg))))))))
                   (dom/button
                     (dom/props {:type "button"
                                 :class "btn btn-secondary"})
@@ -193,13 +192,13 @@
               (dom/props {:value model :class "select"})
               (dom/option (dom/props {:value "gpt-5.1"}) (dom/text "gpt-5.1"))
               (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                    [?token _] (e/Token change-event)]
+                    [t _] (e/Token change-event)]
                 (when (some? change-event)
                   (reset! !model change-event))
-                (when-some [token ?token]
+                (when t
                   (let [r (e/server (e/Offload #(settings/save-model user-id change-event)))]
-                    (when (some? r)
-                      (if (:success r) (token) (token (:error r))))))))
+                    (case r
+                      (if (:success r) (t) (t (:error r))))))))
             (dom/div (dom/props {:class "hint"})
               (dom/text "OpenAI model used for OCR and flashcard generation.")))
 
@@ -215,13 +214,13 @@
               (dom/option (dom/props {:value "medium"}) (dom/text "Medium"))
               (dom/option (dom/props {:value "high"}) (dom/text "High"))
               (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                    [?token ?error] (e/Token change-event)]
+                    [t ?error] (e/Token change-event)]
                 (when (some? change-event)
                   (reset! !reasoning change-event))
-                (when-some [token ?token]
+                (when t
                   (let [r (e/server (e/Offload #(settings/save-reasoning user-id change-event)))]
-                    (when (some? r)
-                      (if (:success r) (token) (token (:error r))))))))
+                    (case r
+                      (if (:success r) (t) (t (:error r))))))))
             (dom/div (dom/props {:class "hint"})
               (dom/text "Higher = better quality but slower and more expensive")))
 
@@ -235,13 +234,13 @@
               (dom/option (dom/props {:value "medium"}) (dom/text "Medium"))
               (dom/option (dom/props {:value "high"}) (dom/text "High"))
               (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                    [?token ?error] (e/Token change-event)]
+                    [t ?error] (e/Token change-event)]
                 (when (some? change-event)
                   (reset! !verbosity change-event))
-                (when-some [token ?token]
+                (when t
                   (let [r (e/server (e/Offload #(settings/save-verbosity user-id change-event)))]
-                    (when (some? r)
-                      (if (:success r) (token) (token (:error r))))))))
+                    (case r
+                      (if (:success r) (t) (t (:error r))))))))
             (dom/div (dom/props {:class "hint"})
               (dom/text "Controls detail level of generated flashcards")))
 
@@ -258,13 +257,13 @@
                 (dom/option (dom/props {:value "150"}) (dom/text "Standard (150 DPI)"))
                 (dom/option (dom/props {:value "300"}) (dom/text "High (300 DPI)"))
                 (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                      [?token ?error] (e/Token change-event)]
+                      [t ?error] (e/Token change-event)]
                   (when (some? change-event)
                     (reset! !dpi change-event))
-                  (when-some [token ?token]
+                  (when t
                     (let [r (e/server (e/Offload #(settings/save-scan-dpi user-id change-event)))]
-                      (when (some? r)
-                        (if (:success r) (token) (token (:error r))))))))
+                      (case r
+                        (if (:success r) (t) (t (:error r))))))))
               (dom/div (dom/props {:class "hint"})
                 (dom/text "Higher quality improves text recognition but increases processing time and API cost"))))
 
@@ -296,26 +295,26 @@
                                       :color "var(--color-text-primary)"}})
                   (set! (.-value dom/node) sys-prompt)
                   (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                        [?token _] (e/Token change-event)]
+                        [t _] (e/Token change-event)]
                     (when (some? change-event)
                       (reset! !sys-prompt change-event))
-                    (when-some [token ?token]
+                    (when t
                       (let [r (e/server (e/Offload #(settings/save-system-prompt user-id change-event)))]
-                        (when (some? r)
-                          (if (:success r) (token) (token (:error r))))))))
+                        (case r
+                          (if (:success r) (t) (t (:error r))))))))
                 (dom/button
                   (dom/props {:type "button" :class "btn btn-secondary"
                               :disabled (= sys-prompt default-sys)
                               :style {:margin-top "8px" :padding "4px 12px" :font-size "12px"}})
                   (dom/text "Reset to Default")
                   (let [click-event (dom/On "click" identity nil)
-                        [?token _] (e/Token click-event)]
-                    (when-some [token ?token]
+                        [t _] (e/Token click-event)]
+                    (when t
                       (let [r (e/server (e/Offload #(settings/reset-system-prompt user-id)))]
-                        (when (some? r)
+                        (case r
                           (if (:success r)
-                            (do (reset! !sys-prompt default-sys) (token))
-                            (token (:error r))))))))))
+                            (do (reset! !sys-prompt default-sys) (t))
+                            (t (:error r))))))))))
 
             ;; OCR Extraction Prompt — collapsed by default
             (dom/details
@@ -335,23 +334,23 @@
                                       :color "var(--color-text-primary)"}})
                   (set! (.-value dom/node) ocr-prompt)
                   (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                        [?token _] (e/Token change-event)]
+                        [t _] (e/Token change-event)]
                     (when (some? change-event)
                       (reset! !ocr-prompt change-event))
-                    (when-some [token ?token]
+                    (when t
                       (let [r (e/server (e/Offload #(settings/save-ocr-prompt user-id change-event)))]
-                        (when (some? r)
-                          (if (:success r) (token) (token (:error r)))))))))
+                        (case r
+                          (if (:success r) (t) (t (:error r)))))))))
               (dom/button
                 (dom/props {:type "button" :class "btn btn-secondary"
                             :disabled (= ocr-prompt default-ocr)
                             :style {:margin-top "8px" :padding "4px 12px" :font-size "12px"}})
                 (dom/text "Reset to Default")
                 (let [click-event (dom/On "click" identity nil)
-                      [?token _] (e/Token click-event)]
-                  (when-some [token ?token]
+                      [t _] (e/Token click-event)]
+                  (when t
                     (let [r (e/server (e/Offload #(settings/reset-ocr-prompt user-id)))]
-                      (when (some? r)
+                      (case r
                         (if (:success r)
-                          (do (reset! !ocr-prompt default-ocr) (token))
-                          (token (:error r)))))))))))))))
+                          (do (reset! !ocr-prompt default-ocr) (t))
+                          (t (:error r)))))))))))))))
