@@ -24,8 +24,9 @@
                 (when (some? change-event)
                   (reset! !use-context change-event))
                 (when-some [token ?token]
-                  (e/server (settings/save-context-enabled user-id change-event))
-                  (token))))
+                  (let [r (e/server (e/Offload #(settings/save-context-enabled user-id change-event)))]
+                    (when (some? r)
+                      (if (:success r) (token) (token (:error r))))))))
             (dom/text "Context"))
           (dom/input
             (dom/props {:type "number" :min "1" :max "10" :value (str context-window)
@@ -41,8 +42,9 @@
               (when (some? input-event)
                 (reset! !context-window input-event))
               (when-some [token ?token]
-                (e/server (settings/save-context-pages user-id input-event))
-                (token))))
+                (let [r (e/server (e/Offload #(settings/save-context-pages user-id input-event)))]
+                  (when (some? r)
+                    (if (:success r) (token) (token (:error r))))))))
           (dom/span (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)"}}) (dom/text "pages")))
 
         ;; Separator
@@ -61,8 +63,9 @@
             (e/for [[t e] (dom/On-all "click")]
               (when e
                 (reset! !card-type "basic")
-                (e/server (settings/save-card-type user-id "basic")))
-              (t))
+                (let [r (e/server (e/Offload #(settings/save-card-type user-id "basic")))]
+                  (when (some? r)
+                    (if (:success r) (t) (t (:error r)))))))
             (dom/text "Basic"))
           (dom/span
             (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :cursor "pointer"}})
@@ -73,8 +76,9 @@
             (e/for [[t e] (dom/On-all "click")]
               (when e
                 (reset! !card-type "cloze")
-                (e/server (settings/save-card-type user-id "cloze")))
-              (t))
+                (let [r (e/server (e/Offload #(settings/save-card-type user-id "cloze")))]
+                  (when (some? r)
+                    (if (:success r) (t) (t (:error r)))))))
             (dom/text "Cloze")))
 
         ;; Separator
@@ -98,9 +102,10 @@
             (dom/text "\u2212")
             (e/for [[t e] (dom/On-all "click")]
               (when e
-                (let [new-val (swap! !card-count (fn [v] (max 1 (dec v))))]
-                  (e/server (settings/save-card-count user-id new-val))))
-              (t)))
+                (let [new-val (swap! !card-count (fn [v] (max 1 (dec v))))
+                      r (e/server (e/Offload #(settings/save-card-count user-id new-val)))]
+                  (when (some? r)
+                    (if (:success r) (t) (t (:error r))))))))
 
           ;; Number input (keyboard suppressed on touch via inputmode)
           (dom/input
@@ -117,8 +122,9 @@
               (when (some? input-event)
                 (reset! !card-count input-event))
               (when-some [token ?token]
-                (e/server (settings/save-card-count user-id input-event))
-                (token))))
+                (let [r (e/server (e/Offload #(settings/save-card-count user-id input-event)))]
+                  (when (some? r)
+                    (if (:success r) (token) (token (:error r))))))))
 
           ;; Increment button (visible on touch only via CSS)
           (dom/button
@@ -132,6 +138,7 @@
             (dom/text "+")
             (e/for [[t e] (dom/On-all "click")]
               (when e
-                (let [new-val (swap! !card-count (fn [v] (min 50 (inc v))))]
-                  (e/server (settings/save-card-count user-id new-val))))
-              (t))))))))
+                (let [new-val (swap! !card-count (fn [v] (min 50 (inc v))))
+                      r (e/server (e/Offload #(settings/save-card-count user-id new-val)))]
+                  (when (some? r)
+                    (if (:success r) (t) (t (:error r)))))))))))))

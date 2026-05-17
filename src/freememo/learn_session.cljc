@@ -39,9 +39,10 @@
       (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
             [?token _error] (e/Token event)]
         (when-some [token ?token]
-          (e/server (done-topic* topic-id))
-          (token)
-          (swap! !queue-idx inc))))))
+          (let [r (e/server (e/Offload #(do (done-topic* topic-id) :ok)))]
+            (when (some? r)
+              (token)
+              (swap! !queue-idx inc))))))))
 
 ;; Shared bottom bar with Postpone + Next
 (e/defn BottomBar [topic-id !queue-idx]
@@ -160,8 +161,9 @@
               (let [change-event (dom/On "change" #(-> % .-target .-value js/parseInt) nil)
                     [?token _] (e/Token change-event)]
                 (when-some [token ?token]
-                  (e/server (update-topic-priority* topic-id change-event))
-                  (token))))))
+                  (let [r (e/server (e/Offload #(do (update-topic-priority* topic-id change-event) :ok)))]
+                    (when (some? r)
+                      (token))))))))
 
         ;; Counter
         (dom/span

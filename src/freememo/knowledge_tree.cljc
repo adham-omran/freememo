@@ -211,8 +211,8 @@
                       (if (str/blank? trimmed)
                         (do (token)
                           (reset! !editing-id nil))
-                        (let [ok (e/server (rename-and-refresh! user-id id trimmed))]
-                          (when ok
+                        (let [ok (e/server (e/Offload #(rename-and-refresh! user-id id trimmed)))]
+                          (when (some? ok)
                             (token)
                             (reset! !editing-id nil)))))))))
             (dom/span
@@ -317,14 +317,16 @@
                     [?token _] (e/Token event)]
                 (when-some [token ?token]
                   (let [topic-to-delete event
-                        note-ids (e/server (vec (db/get-all-anki-note-ids topic-to-delete)))]
-                    (e/server (db/delete-topic-for-user! user-id topic-to-delete))
-                    (e/server (swap! (us/get-atom user-id :refresh) inc))
-                    (e/server (swap! (us/get-atom user-id :tree-mutations) inc))
-                    (e/client (card-components/try-delete-anki-notes! note-ids))
-                    (e/client (pdf-cache/cache-delete topic-to-delete))
-                    (token)
-                    (reset! !show-confirm nil)))))))))))
+                        note-ids (e/server (e/Offload #(vec (db/get-all-anki-note-ids topic-to-delete))))]
+                    (when (some? note-ids)
+                      (let [r (e/server (e/Offload #(do (db/delete-topic-for-user! user-id topic-to-delete) :ok)))]
+                        (when (some? r)
+                          (e/server (swap! (us/get-atom user-id :refresh) inc))
+                          (e/server (swap! (us/get-atom user-id :tree-mutations) inc))
+                          (e/client (card-components/try-delete-anki-notes! note-ids))
+                          (e/client (pdf-cache/cache-delete topic-to-delete))
+                          (token)
+                          (reset! !show-confirm nil))))))))))))))
 
 ;; Document tree view — used by LibraryPage
 ;; Flatten + virtual scroll for performance

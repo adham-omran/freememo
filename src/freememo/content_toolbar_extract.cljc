@@ -53,9 +53,10 @@
               (dom/On "click" (fn [_] (reset! !done-click (str (random-uuid)))) nil))
             (let [[?token _] (e/Token done-click)]
               (when-some [token ?token]
-                (e/server (db/done-topic! topic-id))
-                (token)
-                (when navigate! (navigate! (or origin :learn))))))
+                (let [r (e/server (e/Offload #(do (db/done-topic! topic-id) :ok)))]
+                  (when (some? r)
+                    (token)
+                    (when navigate! (navigate! (or origin :learn))))))))
 
           ;; Done status: show Restore button
           (let [!restore-click (atom nil)
@@ -71,9 +72,10 @@
               (dom/On "click" (fn [_] (reset! !restore-click (str (random-uuid)))) nil))
             (let [[?token _] (e/Token restore-click)]
               (when-some [token ?token]
-                (e/server (db/restore-topic! topic-id))
-                (token)
-                (when navigate! (navigate! (or origin :learn))))))))
+                (let [r (e/server (e/Offload #(do (db/restore-topic! topic-id) :ok)))]
+                  (when (some? r)
+                    (token)
+                    (when navigate! (navigate! (or origin :learn))))))))))
 
       ;; Delete button — hidden, triggered via overflow menu proxy
       (when (some? extract-status)
@@ -123,7 +125,7 @@
                         ;; before firing any side effects — without it, (token)
                         ;; closes ?token, the subtree unmounts, and the cond
                         ;; never gets to see the resolved value.
-                        (let [result (e/server (delete-topic-with-parent! user-id topic-id))]
+                        (let [result (e/server (e/Offload #(delete-topic-with-parent! user-id topic-id)))]
                           (when (some? result)
                             (e/client (card-components/try-delete-anki-notes! (:note-ids result)))
                             (token)

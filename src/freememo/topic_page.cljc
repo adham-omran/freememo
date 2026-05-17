@@ -165,8 +165,8 @@
                   (let [trimmed (str/trim event)]
                     (if (str/blank? trimmed)
                       (do (token) (reset! !editing-title false))
-                      (let [ok (e/server (rename-and-bump! user-id pdf-root-id trimmed))]
-                        (when ok
+                      (let [ok (e/server (e/Offload #(rename-and-bump! user-id pdf-root-id trimmed)))]
+                        (when (some? ok)
                           (token)
                           (reset! !editing-title false)))))))))
           (dom/span
@@ -286,9 +286,11 @@
 
           ;; Persist layout on toggle
           (when-some [token ?layout-token]
-            (when (and is-pdf? pdf-root-id)
-              (e/server (settings/save-pdf-layout user-id pdf-root-id layout-save)))
-            (token))
+            (if (and is-pdf? pdf-root-id)
+              (let [r (e/server (e/Offload #(settings/save-pdf-layout user-id pdf-root-id layout-save)))]
+                (when (some? r)
+                  (if (:success r) (token) (token (:error r)))))
+              (token)))
 
           (dom/div
             (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"

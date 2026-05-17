@@ -120,8 +120,9 @@
                   (when (some? change-event)
                     (reset! !email-updates change-event))
                   (when-some [token ?token]
-                    (e/server (settings/save-email-updates user-id change-event))
-                    (token))))
+                    (let [r (e/server (e/Offload #(settings/save-email-updates user-id change-event)))]
+                      (when (some? r)
+                        (if (:success r) (token) (token (:error r))))))))
               (dom/span
                 (dom/props {:style {:font-size "14px" :font-weight "500" :color "var(--color-text-primary)"}})
                 (dom/text "Subscribe to email updates")))))
@@ -162,8 +163,9 @@
                   (when (some? change-event)
                     (reset! !ai-btn change-event))
                   (when-some [token ?token]
-                    (e/server (settings/save-enable-ai-scan-button user-id change-event))
-                    (token))))
+                    (let [r (e/server (e/Offload #(settings/save-enable-ai-scan-button user-id change-event)))]
+                      (when (some? r)
+                        (if (:success r) (token) (token (:error r))))))))
               (dom/div
                 (dom/span
                   (dom/props {:style {:font-size "14px" :font-weight "500" :color "var(--color-text-primary)"}})
@@ -185,8 +187,9 @@
                   (when (some? change-event)
                     (reset! !pdfbox-btn change-event))
                   (when-some [token ?token]
-                    (e/server (settings/save-enable-pdfbox-button user-id change-event))
-                    (token))))
+                    (let [r (e/server (e/Offload #(settings/save-enable-pdfbox-button user-id change-event)))]
+                      (when (some? r)
+                        (if (:success r) (token) (token (:error r))))))))
               (dom/div
                 (dom/span
                   (dom/props {:style {:font-size "14px" :font-weight "500" :color "var(--color-text-primary)"}})
@@ -208,8 +211,9 @@
                   (when (some? change-event)
                     (reset! !pdfjs-btn change-event))
                   (when-some [token ?token]
-                    (e/server (settings/save-enable-pdfjs-button user-id change-event))
-                    (token))))
+                    (let [r (e/server (e/Offload #(settings/save-enable-pdfjs-button user-id change-event)))]
+                      (when (some? r)
+                        (if (:success r) (token) (token (:error r))))))))
               (dom/div
                 (dom/span
                   (dom/props {:style {:font-size "14px" :font-weight "500" :color "var(--color-text-primary)"}})
@@ -248,9 +252,12 @@
                   (when (some? change-event)
                     (reset! !theme change-event))
                   (when-some [token ?token]
-                    (e/server (settings/save-theme user-id change-event))
-                    (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
-                    (token))))
+                    (let [r (e/server (e/Offload #(settings/save-theme user-id change-event)))]
+                      (when (some? r)
+                        (if (:success r)
+                          (do (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                              (token))
+                          (token (:error r))))))))
               (dom/div (dom/props {:class "hint"})
                 (dom/text "Auto follows your system preference")))
 
@@ -271,8 +278,9 @@
                       (when (some? change-event)
                         (reset! !font-size change-event))
                       (when-some [token ?token]
-                        (e/server (settings/save-card-font-size user-id change-event))
-                        (token)))))
+                        (let [r (e/server (e/Offload #(settings/save-card-font-size user-id change-event)))]
+                          (when (some? r)
+                            (if (:success r) (token) (token (:error r)))))))))
                 (dom/span (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
                   (dom/text "px")))
               (dom/div (dom/props {:class "hint"})
@@ -325,9 +333,12 @@
                       (when (some? change-event)
                         (reset! !source-mode change-event))
                       (when-some [token ?token]
-                        (e/server (settings/save-source-display-mode user-id change-event))
-                        (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
-                        (token))))
+                        (let [r (e/server (e/Offload #(settings/save-source-display-mode user-id change-event)))]
+                          (when (some? r)
+                            (if (:success r)
+                              (do (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                  (token))
+                              (token (:error r))))))))
                   (dom/div
                     (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
                       (dom/text "Append to card"))
@@ -344,9 +355,12 @@
                       (when (some? change-event)
                         (reset! !source-mode change-event))
                       (when-some [token ?token]
-                        (e/server (settings/save-source-display-mode user-id change-event))
-                        (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
-                        (token))))
+                        (let [r (e/server (e/Offload #(settings/save-source-display-mode user-id change-event)))]
+                          (when (some? r)
+                            (if (:success r)
+                              (do (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                  (token))
+                              (token (:error r))))))))
                   (dom/div
                     (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
                       (dom/text "Separate field"))
@@ -369,8 +383,9 @@
                     (when (some? change-event)
                       (reset! !source-field change-event))
                     (when-some [token ?token]
-                      (e/server (settings/save-anki-source-field user-id change-event))
-                      (token))))
+                      (let [r (e/server (e/Offload #(settings/save-anki-source-field user-id change-event)))]
+                        (when (some? r)
+                          (if (:success r) (token) (token (:error r))))))))
                 (dom/div (dom/props {:class "hint"})
                   (dom/text "Anki field name that receives the source reference. Defaults to \"Source\"."))))
 
@@ -391,9 +406,12 @@
                       (when (some? change-event)
                         (reset! !bib-mode change-event))
                       (when-some [token ?token]
-                        (e/server (settings/save-bibliography-display-mode user-id change-event))
-                        (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
-                        (token))))
+                        (let [r (e/server (e/Offload #(settings/save-bibliography-display-mode user-id change-event)))]
+                          (when (some? r)
+                            (if (:success r)
+                              (do (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                  (token))
+                              (token (:error r))))))))
                   (dom/div
                     (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
                       (dom/text "Off"))
@@ -410,9 +428,12 @@
                       (when (some? change-event)
                         (reset! !bib-mode change-event))
                       (when-some [token ?token]
-                        (e/server (settings/save-bibliography-display-mode user-id change-event))
-                        (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
-                        (token))))
+                        (let [r (e/server (e/Offload #(settings/save-bibliography-display-mode user-id change-event)))]
+                          (when (some? r)
+                            (if (:success r)
+                              (do (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                  (token))
+                              (token (:error r))))))))
                   (dom/div
                     (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
                       (dom/text "Append to card"))
@@ -429,9 +450,12 @@
                       (when (some? change-event)
                         (reset! !bib-mode change-event))
                       (when-some [token ?token]
-                        (e/server (settings/save-bibliography-display-mode user-id change-event))
-                        (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
-                        (token))))
+                        (let [r (e/server (e/Offload #(settings/save-bibliography-display-mode user-id change-event)))]
+                          (when (some? r)
+                            (if (:success r)
+                              (do (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                  (token))
+                              (token (:error r))))))))
                   (dom/div
                     (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
                       (dom/text "Separate field"))
@@ -454,8 +478,9 @@
                     (when (some? change-event)
                       (reset! !bib-field change-event))
                     (when-some [token ?token]
-                      (e/server (settings/save-bibliography-field-name user-id change-event))
-                      (token))))
+                      (let [r (e/server (e/Offload #(settings/save-bibliography-field-name user-id change-event)))]
+                        (when (some? r)
+                          (if (:success r) (token) (token (:error r))))))))
                 (dom/div (dom/props {:class "hint"})
                   (dom/text "Anki field name that receives the citation. Defaults to \"Bibliography\". When set to the same field as Source, the two values are combined in append style."))))
 
@@ -476,9 +501,12 @@
                       (when (some? change-event)
                         (reset! !image-mode change-event))
                       (when-some [token ?token]
-                        (e/server (settings/save-image-display-mode user-id change-event))
-                        (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
-                        (token))))
+                        (let [r (e/server (e/Offload #(settings/save-image-display-mode user-id change-event)))]
+                          (when (some? r)
+                            (if (:success r)
+                              (do (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                  (token))
+                              (token (:error r))))))))
                   (dom/div
                     (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
                       (dom/text "Inline"))
@@ -495,9 +523,12 @@
                       (when (some? change-event)
                         (reset! !image-mode change-event))
                       (when-some [token ?token]
-                        (e/server (settings/save-image-display-mode user-id change-event))
-                        (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
-                        (token))))
+                        (let [r (e/server (e/Offload #(settings/save-image-display-mode user-id change-event)))]
+                          (when (some? r)
+                            (if (:success r)
+                              (do (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                  (token))
+                              (token (:error r))))))))
                   (dom/div
                     (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
                       (dom/text "Separate fields"))
@@ -520,8 +551,9 @@
                     (when (some? change-event)
                       (reset! !images-front change-event))
                     (when-some [token ?token]
-                      (e/server (settings/save-anki-images-front-field user-id change-event))
-                      (token))))
+                      (let [r (e/server (e/Offload #(settings/save-anki-images-front-field user-id change-event)))]
+                        (when (some? r)
+                          (if (:success r) (token) (token (:error r))))))))
                 (dom/div (dom/props {:class "hint"})
                   (dom/text "Anki field receiving front-pin images. Defaults to \"Images Front\"."))))
 
@@ -540,8 +572,9 @@
                     (when (some? change-event)
                       (reset! !images-back change-event))
                     (when-some [token ?token]
-                      (e/server (settings/save-anki-images-back-field user-id change-event))
-                      (token))))
+                      (let [r (e/server (e/Offload #(settings/save-anki-images-back-field user-id change-event)))]
+                        (when (some? r)
+                          (if (:success r) (token) (token (:error r))))))))
                 (dom/div (dom/props {:class "hint"})
                   (dom/text "Anki field receiving back-pin images. Defaults to \"Images Back\"."))))
 
@@ -562,8 +595,9 @@
                       (when (some? change-event)
                         (reset! !auto-mode change-event))
                       (when-some [token ?token]
-                        (e/server (settings/save-anki-auto-load-mode user-id change-event))
-                        (token))))
+                        (let [r (e/server (e/Offload #(settings/save-anki-auto-load-mode user-id change-event)))]
+                          (when (some? r)
+                            (if (:success r) (token) (token (:error r))))))))
                   (dom/div
                     (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
                       (dom/text "Use Last Settings Per Item"))
@@ -580,8 +614,9 @@
                       (when (some? change-event)
                         (reset! !auto-mode change-event))
                       (when-some [token ?token]
-                        (e/server (settings/save-anki-auto-load-mode user-id change-event))
-                        (token))))
+                        (let [r (e/server (e/Offload #(settings/save-anki-auto-load-mode user-id change-event)))]
+                          (when (some? r)
+                            (if (:success r) (token) (token (:error r))))))))
                   (dom/div
                     (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
                       (dom/text "Use Last Settings Globally"))
@@ -598,8 +633,9 @@
                       (when (some? change-event)
                         (reset! !auto-mode change-event))
                       (when-some [token ?token]
-                        (e/server (settings/save-anki-auto-load-mode user-id change-event))
-                        (token))))
+                        (let [r (e/server (e/Offload #(settings/save-anki-auto-load-mode user-id change-event)))]
+                          (when (some? r)
+                            (if (:success r) (token) (token (:error r))))))))
                   (dom/div
                     (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
                       (dom/text "None (Manual)"))

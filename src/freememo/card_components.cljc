@@ -72,13 +72,14 @@
             (dom/props {:style {:color "var(--color-danger)" :font-size "11px"}})
             (dom/text ?error)))
         (when-some [token ?token]
-          (let [result (e/server (cards/delete-card click-event))]
-            (if (:success result)
-              (do (e/server (swap! (us/get-atom user-id :card-mutations) inc))
-                (when-some [note-id (:anki-note-id result)]
-                  (e/client (try-delete-anki-notes! [note-id])))
-                (token))
-              (token (:error result)))))))))
+          (let [result (e/server (e/Offload #(cards/delete-card click-event)))]
+            (when (some? result)
+              (if (:success result)
+                (do (e/server (swap! (us/get-atom user-id :card-mutations) inc))
+                  (when-some [note-id (:anki-note-id result)]
+                    (e/client (try-delete-anki-notes! [note-id])))
+                  (token))
+                (token (:error result))))))))))
 
 ;; Card table row component
 (defn sync-state
