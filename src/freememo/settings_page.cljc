@@ -309,10 +309,12 @@
           (AnkiClozeDefaults user-id connected? models))))))
 
 ;; Plugin .xpi download URL — points at the committed artifact in the repo.
-;; Bump the version segment in the filename when freememo-zotero-plugin/manifest.json
-;; version changes (the build.sh output filename embeds it).
+;; /raw/ (not /blob/) so the browser downloads the binary instead of rendering
+;; GitHub's HTML "binary file" preview page. Bump the version segment in the
+;; filename when freememo-zotero-plugin/manifest.json version changes (the
+;; build.sh output filename embeds it).
 (def ^:private plugin-download-url
-  "https://github.com/adham-omran/electric-card-maker/raw/main/freememo-zotero-plugin/dist/freememo-zotero-plugin-0.1.0.xpi")
+  "https://github.com/adham-omran/freememo/raw/main/freememo-zotero-plugin/dist/freememo-zotero-plugin-0.1.0.xpi")
 
 (e/defn ZoteroSection
   "Settings → Zotero. Per-user enable toggle + plugin-install link + a
@@ -379,7 +381,10 @@
             (dom/props {:style {:display "flex" :align-items "center" :gap "10px"}})
             (dom/a
               (dom/props {:href plugin-download-url
-                          :target "_blank"
+                          ;; download attribute hints "save as" instead of
+                          ;; navigating; GitHub's raw redirect already serves
+                          ;; binary so this is belt-and-braces.
+                          :download "freememo-zotero-plugin-0.1.0.xpi"
                           :rel "noopener noreferrer"
                           :class "btn btn-secondary"
                           :style {:font-size "13px"}})

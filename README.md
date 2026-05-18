@@ -57,7 +57,7 @@ Zotero import is gated by a small Zotero plugin (the `FreeMemo for Zotero` add-o
 To enable end-to-end:
 
 1. Get the `.xpi`. Either:
-   - **Download the pre-built `.xpi`** committed in this repo at [`freememo-zotero-plugin/dist/freememo-zotero-plugin-0.1.0.xpi`](https://github.com/adham-omran/electric-card-maker/raw/main/freememo-zotero-plugin/dist/freememo-zotero-plugin-0.1.0.xpi) — recommended for most users; or
+   - **Download the pre-built `.xpi`** committed in this repo at [`freememo-zotero-plugin/dist/freememo-zotero-plugin-0.1.0.xpi`](https://github.com/adham-omran/freememo/raw/main/freememo-zotero-plugin/dist/freememo-zotero-plugin-0.1.0.xpi) — recommended for most users; or
    - **Build from source**: `cd freememo-zotero-plugin && ./build.sh` (produces `dist/freememo-zotero-plugin-<version>.xpi`).
 2. Install in Zotero: Tools → Plugins → gear icon → "Install Plugin From File…", pick the `.xpi`. Restart Zotero.
 3. Zotero → Settings → Advanced → enable **"Allow other applications on this computer to communicate with Zotero"**.
