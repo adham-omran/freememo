@@ -957,6 +957,7 @@ textarea:hover {
     background: var(--color-bg-card);
     color: var(--color-text-primary);
 }
+.ql-editor p + p { margin-top: 0.6em; }
 .ql-editor img {
     max-width: 100%;
     height: auto;
