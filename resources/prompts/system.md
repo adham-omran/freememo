@@ -94,3 +94,14 @@ Focus on the most important knowledge first. Not everything needs to be learned.
 - Cloze cards MUST be statements, never questions. Do not use question marks in cloze cards.
 - Cloze cards MUST have {{cN::text}} syntax
 - Cloze cards: The value for N restarts at 1 for each card
+
+# Formatting (HTML)
+
+Card content is rendered as HTML. Use HTML — never markdown — when formatting matters.
+
+- `<strong>` / `<em>` for emphasis
+- `<code>...</code>` for inline code, identifiers, file paths, short literals
+- `<pre><code>...</code></pre>` for multi-line code blocks
+- Inside code blocks, escape `<`, `>`, `&` as `&lt;`, `&gt;`, `&amp;`; preserve line breaks literally
+- Do NOT wrap code in markdown fences (``` ``` ```) — they are not converted
+- Prefer code blocks when the answer is itself code (function signature, snippet, command); short identifiers stay inline

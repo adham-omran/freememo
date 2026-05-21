@@ -8,6 +8,7 @@
    formatting on round-trip."
   (:require [clojure.string :as str])
   (:import [org.jsoup Jsoup]
+           [org.jsoup.nodes Document$OutputSettings]
            [org.jsoup.safety Safelist]))
 
 ;; A "safe value" is a single token: hex literal, rgb()/rgba(), or a named colour.
@@ -126,7 +127,13 @@
    Preserves only `style=\"background-color: <safe>\"` (used by extract highlights)."
   [html]
   (when html
-    (let [styled-tags (into-array String ["span" "div" "p" "h1" "h2" "h3" "h4" "h5" "h6"
+    (let [;; Pre-strip `<select>...</select>` (including content) before
+          ;; Jsoup. Jsoup's safelist removes the wrapper but keeps the
+          ;; <option> text as siblings, corrupting card and extract HTML
+          ;; with the concatenated language-picker labels Quill 2's
+          ;; syntax module renders into `.ql-code-block-container`.
+          pre-stripped (str/replace html #"(?is)<select\b[^>]*>.*?</select>" "")
+          styled-tags (into-array String ["span" "div" "p" "h1" "h2" "h3" "h4" "h5" "h6"
                                           "li" "td" "th" "blockquote"])
           ;; Tags Quill applies format classes to. Superset of styled-tags +
           ;; <pre> (for legacy Quill 1.x `ql-syntax` blocks).
@@ -162,8 +169,18 @@
       ;; Pass a baseUri so Jsoup can resolve relative URLs (e.g. /api/media/<id>)
       ;; against the http allow-list; combined with preserveRelativeLinks(true),
       ;; the output keeps them as relative paths instead of stripping them.
-      (let [cleaned (Jsoup/clean html "http://localhost" safelist)
+      ;; Disable Jsoup's pretty-print on BOTH steps. Default formatting
+      ;; injects newlines and indentation between sibling elements; when
+      ;; the cleaned HTML is re-parsed by `parseBodyFragment`, that
+      ;; whitespace becomes text nodes in the tree, then collapses into
+      ;; the adjacent `.ql-code-block` line on the next Quill load,
+      ;; merging multi-line code blocks into a single line. Compact
+      ;; output preserves the semantic line structure unchanged for
+      ;; every other element.
+      (let [compact-settings (doto (Document$OutputSettings.) (.prettyPrint false))
+            cleaned (Jsoup/clean pre-stripped "http://localhost" safelist compact-settings)
             doc (Jsoup/parseBodyFragment cleaned)]
+        (.prettyPrint (.outputSettings doc) false)
         (post-filter-styles! doc)
         (post-filter-classes! doc)
         (post-filter-quill-data-attrs! doc)

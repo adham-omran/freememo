@@ -208,6 +208,16 @@
                             (str/replace #"^```html\s*\n?" "")
                             (str/replace #"^```\s*\n?" "")
                             (str/replace #"\n?```\s*$" "")
+                            ;; Cleanup of paragraphs already corrupted by a
+                            ;; previous load — the literal label string from
+                            ;; both pre-Clojure and current pickers. (Future
+                            ;; corruption is prevented by the `select.ql-ui`
+                            ;; clipboard matcher registered below — stripping
+                            ;; the <select> from the HTML pre-convert was
+                            ;; collapsing multi-line code blocks because
+                            ;; Quill's container matcher iterates children in
+                            ;; place and the regex disturbed that structure.)
+                            (str/replace #"<p>PlainBashC\+\+C#(?:Clojure)?CSSDiffHTML/XMLJavaJavaScriptMarkdownPHPPythonRubySQL</p>" "")
                             str/trim)
              t0 (when js/goog.DEBUG (js/performance.now))
              ^js editor (new Quill container
@@ -245,6 +255,18 @@
                                               :table true}
                                     :placeholder "Enter text..."}))
              ^js clipboard (.-clipboard editor)
+             ;; Tell Quill's clipboard pipeline to ignore the syntax module's
+             ;; language-picker <select>. Without this, Quill's default
+             ;; handling extracts the <option> labels as text and emits a <p>
+             ;; with the concatenated picker labels on every reload, growing
+             ;; one corrupted paragraph per save cycle. Returning a fresh
+             ;; empty Delta tells the converter this subtree contributes
+             ;; nothing — the surrounding container + child line divs are
+             ;; processed by their own matchers and continue to render as
+             ;; multi-line code blocks.
+             Delta (.import (.-Quill js/window) "delta")
+             _ (.addMatcher clipboard "select.ql-ui"
+                 (fn [_node _delta] (new Delta)))
              delta (.convert clipboard #js {:html cleaned-html})]
          (when (seq cleaned-html)
            (.setContents editor delta))

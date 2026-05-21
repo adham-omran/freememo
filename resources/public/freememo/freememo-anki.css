@@ -38,7 +38,12 @@
     white-space: pre-wrap;
 }
 
-/* Quill 1.x legacy fallback */
+/* Plain `<pre>` (LLM-generated, never opened in editor) and Quill 1.x
+   `pre.ql-syntax` legacy. Both render as a styled monospace block.
+   `<code>` inside `<pre>` reuses the pre's font and background, so the
+   inline-code pill styling further below is suppressed by the `pre > code`
+   rule. */
+pre,
 pre.ql-syntax {
     font-family: "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
     font-size: 0.9em;
@@ -52,6 +57,15 @@ pre.ql-syntax {
     white-space: pre-wrap;
     overflow-x: auto;
     color: #24292e;
+}
+
+pre > code {
+    font-family: inherit;
+    font-size: inherit;
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: inherit;
 }
 
 /* ── Language Badge (top-right of container) ─────────────────── */
@@ -173,6 +187,7 @@ pre.ql-syntax {
 /* Anki adds `.nightMode` to the body in night mode. */
 
 .nightMode .ql-code-block-container,
+.nightMode pre,
 .nightMode pre.ql-syntax {
     background: #282c34;
     border-color: #3e4451;

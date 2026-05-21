@@ -20,7 +20,9 @@
 
 (defn quill-config
   "Returns the Quill constructor options map (passed via clj->js).
-   Same toolbar and modules as the main editor so visual parity is preserved."
+   Same toolbar, syntax module, and modules as the main editor so the card
+   modals offer the identical formatting surface, including code-block with
+   highlight.js syntax colouring."
   [placeholder]
   {:theme "snow"
    :modules {:toolbar [["bold" "italic" "underline" "strike"]
@@ -30,9 +32,28 @@
                        [{"list" "ordered"} {"list" "bullet"}]
                        [{"align" []}]
                        [{"direction" "rtl"}]
+                       ["code-block"]
                        ["clean"]
                        ["image"]
                        ["table"]]
+             ;; Syntax module — requires window.hljs + clojure pack (loaded in
+             ;; index*.html). Same `:languages` list as the main editor for
+             ;; consistent picker UX across modals and the page editor.
+             :syntax {:languages [{:key "plain"      :label "Plain"}
+                                  {:key "bash"       :label "Bash"}
+                                  {:key "cpp"        :label "C++"}
+                                  {:key "cs"         :label "C#"}
+                                  {:key "clojure"    :label "Clojure"}
+                                  {:key "css"        :label "CSS"}
+                                  {:key "diff"       :label "Diff"}
+                                  {:key "xml"        :label "HTML/XML"}
+                                  {:key "java"       :label "Java"}
+                                  {:key "javascript" :label "JavaScript"}
+                                  {:key "markdown"   :label "Markdown"}
+                                  {:key "php"        :label "PHP"}
+                                  {:key "python"     :label "Python"}
+                                  {:key "ruby"       :label "Ruby"}
+                                  {:key "sql"        :label "SQL"}]}
              :table true}
    :placeholder (or placeholder "Enter text...")})
 
@@ -95,11 +116,28 @@
              cfg (clj->js (quill-config placeholder))
              ed (new Quill container cfg)
              cb (.-clipboard ed)
+             ;; Tell Quill's clipboard pipeline to ignore the syntax module's
+             ;; language-picker <select>. Without this, Quill's default
+             ;; handling extracts <option> labels as text and emits a <p> with
+             ;; the concatenated picker labels on every reload. Returning an
+             ;; empty Delta makes the converter treat the <select> subtree as
+             ;; if it didn't exist; container + child line divs are processed
+             ;; by their own matchers and continue to render as multi-line
+             ;; code blocks.
+             Delta (.import (.-Quill js/window) "delta")
+             _ (.addMatcher cb "select.ql-ui"
+                 (fn [_node _delta] (new Delta)))
              raw (or initial-html "")
              cleaned (-> raw
                        (str/replace (js/RegExp. "^```html\\s*\\n?" "") "")
                        (str/replace (js/RegExp. "^```\\s*\\n?" "") "")
                        (str/replace (js/RegExp. "\\n?```\\s*$" "") "")
+                       ;; Cleanup of paragraphs already corrupted by a prior
+                       ;; reload — exact label-concatenation string from both
+                       ;; pre-Clojure and current pickers. (Future corruption
+                       ;; is prevented by the `select.ql-ui` clipboard matcher
+                       ;; registered below.)
+                       (str/replace (js/RegExp. "<p>PlainBashC\\+\\+C#(?:Clojure)?CSSDiffHTML/XMLJavaJavaScriptMarkdownPHPPythonRubySQL</p>" "g") "")
                        str/trim)
              delta (.convert cb (clj->js {:html cleaned}))]
          (when (seq cleaned)
