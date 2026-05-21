@@ -74,14 +74,25 @@
       (when (seq tokens)
         (str/join " " tokens)))))
 
+(defn- inside-code-block-container?
+  "True iff `el` is, or is a descendant of, a `.ql-code-block-container`.
+   Inside the carve-out, class and data-* attributes pass through unfiltered —
+   Quill's syntax module emits `<span class=\"hljs-*\">` and arbitrary
+   `data-language` values that are not in the general allow-list."
+  [^org.jsoup.nodes.Element el]
+  (some? (.closest el ".ql-code-block-container")))
+
 (defn- post-filter-classes!
-  "Mutate `doc` in place: rewrite or remove every `class` attribute."
+  "Mutate `doc` in place: rewrite or remove every `class` attribute.
+   Elements inside `.ql-code-block-container` are exempt — their class values
+   pass through unchanged (syntax-highlighter hljs spans live here)."
   [^org.jsoup.nodes.Document doc]
   (doseq [^org.jsoup.nodes.Element el (.select doc "[class]")]
-    (let [filtered (sanitize-class-value (.attr el "class"))]
-      (if filtered
-        (.attr el "class" filtered)
-        (.removeAttr el "class"))))
+    (when-not (inside-code-block-container? el)
+      (let [filtered (sanitize-class-value (.attr el "class"))]
+        (if filtered
+          (.attr el "class" filtered)
+          (.removeAttr el "class")))))
   doc)
 
 (def ^:private data-language-re #"^[a-zA-Z0-9_-]+$")
@@ -91,17 +102,22 @@
 (defn- post-filter-quill-data-attrs!
   "Mutate `doc` in place: drop Quill data-attribute values that fail validation.
    `data-language` and `data-row` must match a strict identifier regex;
-   `data-list` must be \"bullet\" or \"ordered\"."
+   `data-list` must be \"bullet\" or \"ordered\".
+   Elements inside `.ql-code-block-container` are exempt — their `data-language`
+   values pass through unchanged."
   [^org.jsoup.nodes.Document doc]
   (doseq [^org.jsoup.nodes.Element el (.select doc "[data-language]")]
-    (when-not (re-matches data-language-re (.attr el "data-language"))
-      (.removeAttr el "data-language")))
+    (when-not (inside-code-block-container? el)
+      (when-not (re-matches data-language-re (.attr el "data-language"))
+        (.removeAttr el "data-language"))))
   (doseq [^org.jsoup.nodes.Element el (.select doc "[data-list]")]
-    (when-not (contains? data-list-values (.attr el "data-list"))
-      (.removeAttr el "data-list")))
+    (when-not (inside-code-block-container? el)
+      (when-not (contains? data-list-values (.attr el "data-list"))
+        (.removeAttr el "data-list"))))
   (doseq [^org.jsoup.nodes.Element el (.select doc "[data-row]")]
-    (when-not (re-matches data-row-re (.attr el "data-row"))
-      (.removeAttr el "data-row")))
+    (when-not (inside-code-block-container? el)
+      (when-not (re-matches data-row-re (.attr el "data-row"))
+        (.removeAttr el "data-row"))))
   doc)
 
 (defn clean-html

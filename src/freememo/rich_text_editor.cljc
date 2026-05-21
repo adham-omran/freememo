@@ -75,6 +75,7 @@
                                   [".ql-background .ql-picker-label" "Background Color"]
                                   [".ql-size .ql-picker-label" "Font Size"]
                                   [".ql-direction" "Text Direction (RTL)"]
+                                  [".ql-code-block" "Code Block"]
                                   [".ql-clean" "Clear Formatting"]]]
          (when-let [^js el (.querySelector toolbar-el selector)]
            (.setAttribute el "title" title))))
@@ -218,8 +219,29 @@
                                                         [{"list" "ordered"} {"list" "bullet"}]
                                                         [{"align" []}]
                                                         [{"direction" "rtl"}]
+                                                        ["code-block"]
                                                         ["clean"]
                                                         ["table"]]
+                                              ;; Quill 2 syntax module — requires window.hljs (loaded in index*.html).
+                                              ;; Renders `<span class="hljs-*">` spans inside `.ql-code-block` line divs;
+                                              ;; html-cleaner carves out `.ql-code-block-container` so the spans survive.
+                                              ;; `:languages` overrides Quill's 14-item default to insert Clojure
+                                              ;; (its language pack is loaded in index*.html alongside highlight.min.js).
+                                              :syntax {:languages [{:key "plain"      :label "Plain"}
+                                                                   {:key "bash"       :label "Bash"}
+                                                                   {:key "cpp"        :label "C++"}
+                                                                   {:key "cs"         :label "C#"}
+                                                                   {:key "clojure"    :label "Clojure"}
+                                                                   {:key "css"        :label "CSS"}
+                                                                   {:key "diff"       :label "Diff"}
+                                                                   {:key "xml"        :label "HTML/XML"}
+                                                                   {:key "java"       :label "Java"}
+                                                                   {:key "javascript" :label "JavaScript"}
+                                                                   {:key "markdown"   :label "Markdown"}
+                                                                   {:key "php"        :label "PHP"}
+                                                                   {:key "python"     :label "Python"}
+                                                                   {:key "ruby"       :label "Ruby"}
+                                                                   {:key "sql"        :label "SQL"}]}
                                               :table true}
                                     :placeholder "Enter text..."}))
              ^js clipboard (.-clipboard editor)
