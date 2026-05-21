@@ -1,0 +1,259 @@
+/* ================================================================
+   FreeMemo Anki Card Stylesheet
+   ----------------------------------------------------------------
+   Install: Anki → Tools → Manage Note Types → <model> →
+   Cards → Styling. Paste this entire file.
+
+   Styles:
+     • Quill 2 code blocks      (.ql-code-block-container / .ql-code-block)
+     • Quill 1.x legacy blocks  (pre.ql-syntax)
+     • Inline <code>
+     • highlight.js syntax spans (light palette + .nightMode dark palette)
+
+   Palette light: derived from Emacs Org-mode face colours.
+   Palette dark : atom-one-dark inspired.
+   ================================================================ */
+
+/* ── Code Block Container ─────────────────────────────────────── */
+
+.ql-code-block-container {
+    position: relative;
+    font-family: "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 0.9em;
+    line-height: 1.45;
+    background: #f5f5f5;
+    border: 1px solid #d4d4d4;
+    border-radius: 4px;
+    padding: 0.6em 0.9em;
+    margin: 1em 0;
+    text-align: left;
+    direction: ltr;
+    white-space: pre-wrap;
+    overflow-x: auto;
+    color: #24292e;
+}
+
+.ql-code-block {
+    display: block;
+    white-space: pre-wrap;
+}
+
+/* Quill 1.x legacy fallback */
+pre.ql-syntax {
+    font-family: "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 0.9em;
+    line-height: 1.45;
+    background: #f5f5f5;
+    border: 1px solid #d4d4d4;
+    border-radius: 4px;
+    padding: 0.6em 0.9em;
+    margin: 1em 0;
+    text-align: left;
+    white-space: pre-wrap;
+    overflow-x: auto;
+    color: #24292e;
+}
+
+/* ── Language Badge (top-right of container) ─────────────────── */
+/* Quill 2 places `data-language` on the line div, not the container.
+   The first child's ::before is positioned absolutely so it sits on
+   the container border without shifting code layout. */
+
+.ql-code-block-container > .ql-code-block:first-child::before {
+    content: attr(data-language);
+    position: absolute;
+    top: 0;
+    right: 0;
+    padding: 0.15em 0.6em;
+    font-size: 0.7em;
+    font-family: inherit;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #888;
+    background: #e8e8e8;
+    border-bottom-left-radius: 4px;
+}
+
+/* Default sentinel — Quill emits data-language="plain" when no language
+   was picked. Hide the badge to avoid visual noise. */
+.ql-code-block-container > .ql-code-block:first-child[data-language="plain"]::before {
+    display: none;
+}
+
+/* ── Inline <code> ───────────────────────────────────────────── */
+
+:not(pre) > code {
+    font-family: "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 0.9em;
+    padding: 0.1em 0.4em;
+    background: #f0f0f0;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    color: #24292e;
+}
+
+/* ── highlight.js — Light Palette ────────────────────────────── */
+/* Derived from Emacs Org-mode face colours. */
+
+.hljs-keyword,
+.hljs-symbol,
+.hljs-tag,
+.hljs-name,
+.hljs-template-tag,
+.hljs-template-variable {
+    color: #a020f0;
+}
+
+.hljs-string,
+.hljs-regexp {
+    color: #8b2252;
+}
+
+.hljs-comment,
+.hljs-quote {
+    color: #b22222;
+    font-style: italic;
+}
+
+.hljs-doctag,
+.hljs-meta {
+    color: #483d8b;
+}
+
+.hljs-function .hljs-title,
+.hljs-title.function_,
+.hljs-section {
+    color: #0000ff;
+}
+
+.hljs-variable,
+.hljs-attr,
+.hljs-attribute,
+.hljs-params {
+    color: #a0522d;
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-bullet,
+.hljs-link {
+    color: #008b8b;
+}
+
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-title.class_ {
+    color: #228b22;
+}
+
+.hljs-built_in {
+    color: #483d8b;
+}
+
+.hljs-selector-tag { color: #0000ff; }
+.hljs-selector-id  { color: #a0522d; }
+.hljs-selector-class,
+.hljs-selector-attr,
+.hljs-selector-pseudo { color: #228b22; }
+
+.hljs-addition {
+    color: #228b22;
+    background: rgba(34, 139, 34, 0.08);
+}
+
+.hljs-deletion {
+    color: #b22222;
+    background: rgba(178, 34, 34, 0.08);
+}
+
+.hljs-emphasis { font-style: italic; }
+.hljs-strong   { font-weight: bold;  }
+
+/* ── .nightMode — Dark Palette (Anki convention) ─────────────── */
+/* Anki adds `.nightMode` to the body in night mode. */
+
+.nightMode .ql-code-block-container,
+.nightMode pre.ql-syntax {
+    background: #282c34;
+    border-color: #3e4451;
+    color: #abb2bf;
+}
+
+.nightMode .ql-code-block-container > .ql-code-block:first-child::before {
+    color: #5c6370;
+    background: #21252b;
+}
+
+.nightMode :not(pre) > code {
+    background: #2c313a;
+    border-color: #3e4451;
+    color: #e6e6e6;
+}
+
+.nightMode .hljs-keyword,
+.nightMode .hljs-symbol,
+.nightMode .hljs-tag,
+.nightMode .hljs-name,
+.nightMode .hljs-template-tag,
+.nightMode .hljs-template-variable {
+    color: #c678dd;
+}
+
+.nightMode .hljs-string,
+.nightMode .hljs-regexp {
+    color: #98c379;
+}
+
+.nightMode .hljs-comment,
+.nightMode .hljs-quote {
+    color: #5c6370;
+    font-style: italic;
+}
+
+.nightMode .hljs-doctag,
+.nightMode .hljs-meta {
+    color: #56b6c2;
+}
+
+.nightMode .hljs-function .hljs-title,
+.nightMode .hljs-title.function_,
+.nightMode .hljs-section {
+    color: #61afef;
+}
+
+.nightMode .hljs-variable,
+.nightMode .hljs-attr,
+.nightMode .hljs-attribute,
+.nightMode .hljs-params {
+    color: #e06c75;
+}
+
+.nightMode .hljs-number,
+.nightMode .hljs-literal,
+.nightMode .hljs-bullet,
+.nightMode .hljs-link {
+    color: #d19a66;
+}
+
+.nightMode .hljs-type,
+.nightMode .hljs-class .hljs-title,
+.nightMode .hljs-title.class_,
+.nightMode .hljs-built_in {
+    color: #e5c07b;
+}
+
+.nightMode .hljs-selector-tag   { color: #e06c75; }
+.nightMode .hljs-selector-id    { color: #d19a66; }
+.nightMode .hljs-selector-class,
+.nightMode .hljs-selector-attr,
+.nightMode .hljs-selector-pseudo { color: #e5c07b; }
+
+.nightMode .hljs-addition {
+    color: #98c379;
+    background: rgba(152, 195, 121, 0.12);
+}
+
+.nightMode .hljs-deletion {
+    color: #e06c75;
+    background: rgba(224, 108, 117, 0.12);
+}

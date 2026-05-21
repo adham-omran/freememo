@@ -19,6 +19,12 @@
 	    }
 	</script>
 
+	<!-- highlight.js — required by Quill 2 syntax module. MUST load before quill.js -->
+	<!-- No theme CSS — freememo-anki.css + index.css own the palette. -->
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+	<!-- Clojure language pack (not in the common bundle). MUST load after highlight.min.js -->
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/clojure.min.js"></script>
+
 	<!-- Quill Rich Text Editor (alternative to TipTap, better CDN support) -->
 	<link href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css" rel="stylesheet">
 	<script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>

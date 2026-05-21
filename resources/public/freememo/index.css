@@ -833,6 +833,71 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
     font-size: 0.9em;
 }
 
+/* ── highlight.js Token Palette (in-editor) ──────────────────── */
+/* Quill snow.css keeps `.ql-code-block-container` on a dark olive
+   background in both light and dark themes, so we use an
+   atom-one-dark inspired palette here regardless of `data-theme`.
+   The mirror palette in `freememo-anki.css` does theme-switching
+   via `.nightMode` for Anki's convention. Language label badge is
+   intentionally omitted — Quill's `.ql-ui` <select> picker already
+   shows the current language in the editor. */
+
+.ql-editor .hljs-keyword,
+.ql-editor .hljs-symbol,
+.ql-editor .hljs-tag,
+.ql-editor .hljs-name,
+.ql-editor .hljs-template-tag,
+.ql-editor .hljs-template-variable { color: #c678dd; }
+
+.ql-editor .hljs-string,
+.ql-editor .hljs-regexp             { color: #98c379; }
+
+.ql-editor .hljs-comment,
+.ql-editor .hljs-quote {
+    color: #5c6370;
+    font-style: italic;
+}
+
+.ql-editor .hljs-doctag,
+.ql-editor .hljs-meta               { color: #56b6c2; }
+
+.ql-editor .hljs-function .hljs-title,
+.ql-editor .hljs-title.function_,
+.ql-editor .hljs-section            { color: #61afef; }
+
+.ql-editor .hljs-variable,
+.ql-editor .hljs-attr,
+.ql-editor .hljs-attribute,
+.ql-editor .hljs-params             { color: #e06c75; }
+
+.ql-editor .hljs-number,
+.ql-editor .hljs-literal,
+.ql-editor .hljs-bullet,
+.ql-editor .hljs-link               { color: #d19a66; }
+
+.ql-editor .hljs-type,
+.ql-editor .hljs-class .hljs-title,
+.ql-editor .hljs-title.class_,
+.ql-editor .hljs-built_in           { color: #e5c07b; }
+
+.ql-editor .hljs-selector-tag       { color: #e06c75; }
+.ql-editor .hljs-selector-id        { color: #d19a66; }
+.ql-editor .hljs-selector-class,
+.ql-editor .hljs-selector-attr,
+.ql-editor .hljs-selector-pseudo    { color: #e5c07b; }
+
+.ql-editor .hljs-addition {
+    color: #98c379;
+    background: rgba(152, 195, 121, 0.12);
+}
+.ql-editor .hljs-deletion {
+    color: #e06c75;
+    background: rgba(224, 108, 117, 0.12);
+}
+
+.ql-editor .hljs-emphasis { font-style: italic; }
+.ql-editor .hljs-strong   { font-weight: bold;  }
+
 /* ── Card Table RTL ───────────────────────────────────────────── */
 /* dir="auto" on .card-table handles column flip via CSS Grid.
    Additional rules for RTL-aware spacing and alignment. */
