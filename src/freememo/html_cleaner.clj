@@ -1,7 +1,11 @@
 (ns freememo.html-cleaner
   "HTML sanitization using Jsoup. Strips scripts, iframes, event handlers,
    and unsafe attributes. Allows `style` only for `background-color: <safe-value>`
-   to preserve auto-extract highlights."
+   to preserve auto-extract highlights. Allows `class` only for allow-listed
+   Quill format tokens (code-block, align, indent, size, syntax, ui) and the
+   Quill `data-language` / `data-list` / `data-row` attributes — so the extract
+   path (and every other `clean-html` consumer) preserves Quill-rendered
+   formatting on round-trip."
   (:require [clojure.string :as str])
   (:import [org.jsoup Jsoup]
            [org.jsoup.safety Safelist]))
@@ -50,6 +54,56 @@
         (.removeAttr el "style"))))
   doc)
 
+;; Allow-listed Quill format classes. `ql-cursor` is intentionally absent —
+;; it marks transient editor state that must not persist.
+(def ^:private quill-class-allow-list
+  #{"ql-code-block-container" "ql-code-block"
+    "ql-align-center" "ql-align-justify"
+    "ql-indent-1" "ql-indent-2"
+    "ql-size-small" "ql-size-large" "ql-size-huge"
+    "ql-syntax" "ql-ui"})
+
+(defn- sanitize-class-value
+  "Keep only allow-listed Quill format tokens. Returns the cleaned class string,
+   or nil if no allow-listed tokens remained."
+  [class-str]
+  (when class-str
+    (let [tokens (->> (str/split class-str #"\s+")
+                   (remove str/blank?)
+                   (filter quill-class-allow-list))]
+      (when (seq tokens)
+        (str/join " " tokens)))))
+
+(defn- post-filter-classes!
+  "Mutate `doc` in place: rewrite or remove every `class` attribute."
+  [^org.jsoup.nodes.Document doc]
+  (doseq [^org.jsoup.nodes.Element el (.select doc "[class]")]
+    (let [filtered (sanitize-class-value (.attr el "class"))]
+      (if filtered
+        (.attr el "class" filtered)
+        (.removeAttr el "class"))))
+  doc)
+
+(def ^:private data-language-re #"^[a-zA-Z0-9_-]+$")
+(def ^:private data-row-re #"^[a-zA-Z0-9_-]+$")
+(def ^:private data-list-values #{"bullet" "ordered"})
+
+(defn- post-filter-quill-data-attrs!
+  "Mutate `doc` in place: drop Quill data-attribute values that fail validation.
+   `data-language` and `data-row` must match a strict identifier regex;
+   `data-list` must be \"bullet\" or \"ordered\"."
+  [^org.jsoup.nodes.Document doc]
+  (doseq [^org.jsoup.nodes.Element el (.select doc "[data-language]")]
+    (when-not (re-matches data-language-re (.attr el "data-language"))
+      (.removeAttr el "data-language")))
+  (doseq [^org.jsoup.nodes.Element el (.select doc "[data-list]")]
+    (when-not (contains? data-list-values (.attr el "data-list"))
+      (.removeAttr el "data-list")))
+  (doseq [^org.jsoup.nodes.Element el (.select doc "[data-row]")]
+    (when-not (re-matches data-row-re (.attr el "data-row"))
+      (.removeAttr el "data-row")))
+  doc)
+
 (defn clean-html
   "Sanitize HTML using a whitelist of safe tags and attributes.
    Strips scripts, iframes, event handlers, and most attributes.
@@ -58,6 +112,10 @@
   (when html
     (let [styled-tags (into-array String ["span" "div" "p" "h1" "h2" "h3" "h4" "h5" "h6"
                                           "li" "td" "th" "blockquote"])
+          ;; Tags Quill applies format classes to. Superset of styled-tags +
+          ;; <pre> (for legacy Quill 1.x `ql-syntax` blocks).
+          class-tags (into-array String ["span" "div" "p" "h1" "h2" "h3" "h4" "h5" "h6"
+                                         "li" "td" "th" "blockquote" "pre"])
           safelist (-> (Safelist/relaxed)
                      (.addTags (into-array String ["h1" "h2" "h3" "h4" "h5" "h6"
                                                    "p" "br" "hr"
@@ -70,8 +128,11 @@
                                                    "dl" "dt" "dd"]))
                      (.addAttributes "a" (into-array String ["href" "title"]))
                      (.addAttributes "img" (into-array String ["src" "alt" "width" "height"]))
-                     (.addAttributes "td" (into-array String ["colspan" "rowspan"]))
+                     (.addAttributes "td" (into-array String ["colspan" "rowspan" "data-row"]))
                      (.addAttributes "th" (into-array String ["colspan" "rowspan"]))
+                     (.addAttributes "tr" (into-array String ["data-row"]))
+                     (.addAttributes "div" (into-array String ["data-language"]))
+                     (.addAttributes "li" (into-array String ["data-list"]))
                      (.addProtocols "a" "href" (into-array String ["http" "https" "mailto"]))
                      (.addProtocols "img" "src" (into-array String ["http" "https" "data"]))
                      ;; Keep relative URLs (e.g. /api/media/<id>) intact —
@@ -80,12 +141,16 @@
                      (.preserveRelativeLinks true))]
       (doseq [tag styled-tags]
         (.addAttributes safelist tag (into-array String ["style"])))
+      (doseq [tag class-tags]
+        (.addAttributes safelist tag (into-array String ["class"])))
       ;; Pass a baseUri so Jsoup can resolve relative URLs (e.g. /api/media/<id>)
       ;; against the http allow-list; combined with preserveRelativeLinks(true),
       ;; the output keeps them as relative paths instead of stripping them.
       (let [cleaned (Jsoup/clean html "http://localhost" safelist)
             doc (Jsoup/parseBodyFragment cleaned)]
         (post-filter-styles! doc)
+        (post-filter-classes! doc)
+        (post-filter-quill-data-attrs! doc)
         (.html (.body doc))))))
 
 (defn clean-html-llm
