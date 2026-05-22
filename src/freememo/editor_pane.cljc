@@ -14,7 +14,7 @@
    #?(:clj [freememo.page-ocr :as page])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
-   #?(:clj [freememo.wikipedia :as wiki])
+   #?(:clj [freememo.web-import :as web-import])
    #?(:clj [missionary.core :as m]))
   #?(:clj (:import [missionary Cancelled]
                    [java.util.concurrent Executors])))
@@ -79,33 +79,6 @@
      :cljs nil))
 
 ;; ---------------------------------------------------------------------------
-;; Wikipedia import helper (moved from extract_page.cljc)
-;; ---------------------------------------------------------------------------
-
-(defn import-wikipedia-url*
-  "Import a Wikipedia article by URL.
-   Returns {:already-exists true :title ... :topic-id ...}
-          {:imported true :title ... :topic-id ...}
-       or {:error ...}."
-  [user-id url]
-  #?(:clj
-     (try
-       (let [{:keys [title]} (wiki/parse-wikipedia-url url)]
-         (if-not title
-           {:error "Not a valid Wikipedia URL"}
-           (if-let [existing (db/find-web-topic-by-title user-id title)]
-             {:already-exists true :title title :topic-id (:topics/id existing)}
-             (let [result (wiki/fetch-url url)]
-               (if-not (:success result)
-                 {:error (:error result)}
-                 (let [topic-id (db/create-web-topic! user-id (:title result) (:html result)
-                                  {:url (:url result) :source-type (:source-type result)})]
-                   {:imported true :title (:title result) :topic-id topic-id}))))))
-       (catch Exception e
-         {:error (.getMessage e)}))
-     :cljs nil))
-
-;; ---------------------------------------------------------------------------
 ;; EditorPane
 ;; ---------------------------------------------------------------------------
 
@@ -150,23 +123,20 @@
         (let [import-data (e/watch editor/!import-url)
               [t _] (e/Token import-data)]
           (when t
+            (e/on-unmount #(reset! editor/!import-url nil))
             (let [url (:url import-data)
                   result (e/server
                            (e/Offload
-                             #(import-wikipedia-url* user-id url)))]
+                             #(web-import/import-url!* user-id url)))]
               (case result
                 (let [status (cond
-                               (:imported result) :done
-                               (:already-exists result) :already-exists
+                               (and (:ok result) (= :imported (:flow result)))       :done
+                               (and (:ok result) (= :already-exists (:flow result))) :already-exists
                                :else :error)]
                   (reset! editor/!import-status status)
-                  (if (= status :done)
-                    (case (e/server (swap! (us/get-atom user-id :refresh) inc))
-                      (case (e/server (swap! (us/get-atom user-id :tree-mutations) inc))
-                        (if (and (:topic-id result) on-imported-navigate!)
-                          (case (on-imported-navigate! (:topic-id result))
-                            (t))
-                          (t))))
+                  (if (and (#{:done :already-exists} status)
+                        (:topic-id result) on-imported-navigate!)
+                    (case (on-imported-navigate! (:topic-id result)) (t))
                     (t)))))))
 
         ;; -----------------------------------------------------------------------

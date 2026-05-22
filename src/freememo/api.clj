@@ -14,7 +14,6 @@
    [freememo.biblio-import :as biblio-import]
    [freememo.content-type :as ct]
    [freememo.import-staging :as staging]
-   [freememo.wikipedia :as wiki]
    [freememo.markdown :as md]
    [freememo.url-validate :as url]
    [freememo.csl :as csl]
@@ -103,57 +102,9 @@
       (when filename (str/replace filename #"(?i)\.(md|markdown)$" ""))
       "Untitled"))
 
-;; ── /api/upload-url ────────────────────────────────────────────────
-
-(defn upload-url-handler
-  "POST /api/upload-url — {url}.
-   Pre:  authenticated; url present and safe.
-   Post: returns one of:
-         {:success true :doc_id N :flow \"web\"}    — HTML committed
-         {:success true :upload_id ... :flow \"pdf|epub\" :filename :size} — staged
-         {:success false :error <msg>}"
-  [request]
-  (if-let [user-id (require-auth request)]
-    (try
-      (let [url-val (get-in request [:params "url"])]
-        (cond
-          (str/blank? url-val)
-          (json-response 400 {:success false :error "URL is required"})
-
-          :else
-          (let [result (wiki/fetch-url url-val)]
-            (cond
-              (false? (:success result))
-              (json-response 400 {:success false :error (:error result)})
-
-              (:dispatch result)
-              (let [{:keys [bytes filename]} result
-                    flow (:dispatch result)
-                    upload-id (staging/stage! user-id bytes filename flow)]
-                (json-response 200 {:success true
-                                    :upload_id upload-id
-                                    :flow (name flow)
-                                    :filename filename
-                                    :size (alength ^bytes bytes)}))
-
-              :else
-              (let [topic-id (db/create-web-topic! user-id
-                               (:title result)
-                               (:html result)
-                               {:url (:url result)
-                                :source-type (:source-type result)
-                                :issued-date-parts (:issued-date-parts result)})]
-                (when topic-id
-                  (try (biblio-import/prepare-biblio! user-id topic-id (:biblio result))
-                       (catch Exception e
-                         (tel/log! {:level :warn :id ::upload-url-biblio} (.getMessage e)))))
-                (swap! (us/get-atom user-id :refresh) inc)
-                (swap! (us/get-atom user-id :tree-mutations) inc)
-                (json-response 200 {:success true :doc_id topic-id :flow "web"}))))))
-      (catch Exception e
-        (tel/error! {:id ::upload-url-handler} e)
-        (json-response 500 {:success false :error "URL import failed. Please try again."})))
-    (json-response 401 {:success false :error "Not authenticated"})))
+;; URL import previously lived at /api/upload-url. It now runs through the
+;; Electric service in `freememo.import-modal` calling
+;; `freememo.web-import/import-url!*` directly — no HTTP endpoint needed.
 
 ;; ── /api/upload-file ───────────────────────────────────────────────
 
@@ -623,10 +574,7 @@
       (and (= uri "/api/logout") (= method :post))
       (logout-handler request)
 
-      (and (= uri "/api/upload-url") (= method :post))
-      (upload-url-handler request)
-
-      (and (= uri "/api/upload-file") (= method :post))
+(and (= uri "/api/upload-file") (= method :post))
       (upload-file-handler request)
 
       (and (= uri "/api/upload-paste") (= method :post))
