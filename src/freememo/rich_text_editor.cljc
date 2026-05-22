@@ -267,6 +267,16 @@
              Delta (.import (.-Quill js/window) "delta")
              _ (.addMatcher clipboard "select.ql-ui"
                  (fn [_node _delta] (new Delta)))
+             ;; Strip Quill syntax-module token wrappers. CodeToken.formats
+             ;; in Quill 2.0.3 returns boolean `true` instead of the actual
+             ;; hljs-X value, producing `class="hljs-true"` and collapsing
+             ;; adjacent same-value inlines into one span. By returning a
+             ;; Delta with just the textContent (no code-token attribute),
+             ;; we hand Quill clean text; the syntax module's 1 s timer
+             ;; re-applies fresh, correctly-classed tokens.
+             _ (.addMatcher clipboard "span.ql-token"
+                 (fn [^js node _delta]
+                   (-> (new Delta) (.insert (.-textContent node)))))
              delta (.convert clipboard #js {:html cleaned-html})]
          (when (seq cleaned-html)
            (.setContents editor delta))

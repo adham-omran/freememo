@@ -10,6 +10,7 @@
    [taoensso.telemere :as tel]
    [clojure.string :as str]
    [freememo.csl-util :as csl]
+   [freememo.html-cleaner :as cleaner]
    [freememo.input-check :as input]
    [freememo.quota :as quota]
    [freememo.text :as text])
@@ -754,9 +755,13 @@
                  :order-by [[:page_number :asc-nulls-last] [:created_at :asc]]})))
 
 (defn update-topic-content!
-  "Update the content of a topic."
+  "Update the content of a topic.
+
+   Strips `<span class=\"ql-token …\">` wrappers before persisting — Quill 2.0.3's
+   `clipboard.convert` misreads them as `code-token: true`, corrupting render on
+   reload. The browser's `syntax` module re-applies tokens on each load."
   [id content]
-  (let [sanitized (sanitize-utf8 content)]
+  (let [sanitized (sanitize-utf8 (cleaner/strip-ql-tokens content))]
     (jdbc/execute-one! ds
       (sql/format {:update :topics
                    :set {:content sanitized
