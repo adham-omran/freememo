@@ -6,7 +6,7 @@
    [hyperfiddle.electric-forms5 :as forms]
    [clojure.string :as str]
    [freememo.typeahead :refer [Typeahead]]
-   [freememo.quill-field :refer [QuillField]]
+   [freememo.quill-field :refer [QuillField flush-syntax-tokens!]]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.cards :as cards])
@@ -315,6 +315,9 @@
           !answer (atom init-a)
           !cloze (atom init-c)
           !ta-ref (atom nil)
+          !q-editor (atom nil)
+          !a-editor (atom nil)
+          !c-editor (atom nil)
           question (e/watch !question)
           answer (e/watch !answer)
           cloze (e/watch !cloze)
@@ -383,14 +386,16 @@
                 (QuillField {:value-string init-q
                              :on-change (fn [html] (reset! !question html))
                              :placeholder "Question..."
-                             :field-key [:edit-q card-id]}))
+                             :field-key [:edit-q card-id]
+                             :!editor-atom !q-editor}))
               (dom/label (dom/text "Answer:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
                 (QuillField {:value-string init-a
                              :on-change (fn [html] (reset! !answer html))
                              :placeholder "Answer..."
-                             :field-key [:edit-a card-id]})))
+                             :field-key [:edit-a card-id]
+                             :!editor-atom !a-editor})))
             (dom/div
               (dom/label (dom/text "Cloze:"))
               (dom/div
@@ -398,21 +403,40 @@
                 (QuillField {:value-string init-c
                              :on-change (fn [html] (reset! !cloze html))
                              :placeholder "Cloze text with {{c1::deletion}}..."
-                             :field-key [:edit-c card-id]}))
+                             :field-key [:edit-c card-id]
+                             :!editor-atom !c-editor}))
               (dom/label (dom/text "Back Extra:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
                 (QuillField {:value-string init-a
                              :on-change (fn [html] (reset! !answer html))
                              :placeholder "Optional back extra..."
-                             :field-key [:edit-be card-id]}))))
+                             :field-key [:edit-be card-id]
+                             :!editor-atom !a-editor}))))
           (dom/div
             (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
             (dom/button
               (dom/props {:class "btn btn-primary" :style {:order "1"}})
               (reset! !primary-btn dom/node)
               (dom/text "Save")
-              (let [click-event (dom/On "click" identity nil)
+              ;; Force the syntax module to flush its hljs-* spans into the
+              ;; DOM, then read the post-flush innerHTML and reset! the
+              ;; matching atom directly. Quill 2.0.3's syntax module does
+              ;; NOT fire any observable text-change for its formatAt pass,
+              ;; so on-change cannot deliver the tokenized HTML; we MUST
+              ;; capture it via the flush return value here. Without this,
+              ;; cards persist as bare text and the Anki card back renders
+              ;; uncoloured.
+              (let [click-event (dom/On "click"
+                                  (fn [e]
+                                    (when-let [html (flush-syntax-tokens! @!q-editor)]
+                                      (reset! !question html))
+                                    (when-let [html (flush-syntax-tokens! @!a-editor)]
+                                      (reset! !answer html))
+                                    (when-let [html (flush-syntax-tokens! @!c-editor)]
+                                      (reset! !cloze html))
+                                    e)
+                                  nil)
                     [t ?error] (e/Token click-event)]
                 (when ?error
                   (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-2)"}})
@@ -462,6 +486,9 @@
           !answer (atom "")
           !cloze (atom init-c)
           !ta-ref (atom nil)
+          !q-editor (atom nil)
+          !a-editor (atom nil)
+          !c-editor (atom nil)
           question (e/watch !question)
           answer (e/watch !answer)
           cloze (e/watch !cloze)
@@ -546,14 +573,16 @@
                 (QuillField {:value-string init-q
                              :on-change (fn [html] (reset! !question html))
                              :placeholder "Question..."
-                             :field-key [:add-q]}))
+                             :field-key [:add-q]
+                             :!editor-atom !q-editor}))
               (dom/label (dom/text "Answer:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
                 (QuillField {:value-string ""
                              :on-change (fn [html] (reset! !answer html))
                              :placeholder "Answer..."
-                             :field-key [:add-a]})))
+                             :field-key [:add-a]
+                             :!editor-atom !a-editor})))
             (dom/div
               (dom/label (dom/text "Cloze:"))
               (dom/div
@@ -561,21 +590,37 @@
                 (QuillField {:value-string init-c
                              :on-change (fn [html] (reset! !cloze html))
                              :placeholder "Cloze text with {{c1::deletion}}..."
-                             :field-key [:add-c]}))
+                             :field-key [:add-c]
+                             :!editor-atom !c-editor}))
               (dom/label (dom/text "Back Extra:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
                 (QuillField {:value-string ""
                              :on-change (fn [html] (reset! !answer html))
                              :placeholder "Optional back extra..."
-                             :field-key [:add-be]}))))
+                             :field-key [:add-be]
+                             :!editor-atom !a-editor}))))
           (dom/div
             (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
             (dom/button
               (dom/props {:class "btn btn-primary" :style {:border-radius "var(--radius-sm)" :order "1"}})
               (reset! !primary-btn dom/node)
               (dom/text "Save")
-              (let [click-event (dom/On "click" identity nil)
+              ;; Mirror the EditCardModal Save: force-flush hljs spans and
+              ;; capture the post-flush innerHTML via the return value.
+              ;; The Quill 2.0.3 syntax module does not fire text-change for
+              ;; its formatAt pass, so on-change cannot deliver the
+              ;; tokenized HTML — we MUST reset! atoms directly here.
+              (let [click-event (dom/On "click"
+                                  (fn [e]
+                                    (when-let [html (flush-syntax-tokens! @!q-editor)]
+                                      (reset! !question html))
+                                    (when-let [html (flush-syntax-tokens! @!a-editor)]
+                                      (reset! !answer html))
+                                    (when-let [html (flush-syntax-tokens! @!c-editor)]
+                                      (reset! !cloze html))
+                                    e)
+                                  nil)
                     [t ?error] (e/Token click-event)]
                 (when ?error
                   (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-2)"}})

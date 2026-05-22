@@ -340,7 +340,7 @@
           (dom/text "Card Stylesheet"))
         (dom/div
           (dom/props {:class "hint" :style {:margin-bottom "var(--sp-3)"}})
-          (dom/text "Adds syntax-highlighted code blocks to your Anki cards. Includes light + .nightMode dark palettes. Paste into your note type's Styling box."))
+          (dom/text "Styles code blocks in your Anki cards. Manually-edited cards keep per-token colours from highlight.js; LLM-generated cards fall back to a per-language tint. Includes light + .nightMode dark palettes. Paste into your note type's Styling box."))
 
         (dom/div
           (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :flex-wrap "wrap"}})

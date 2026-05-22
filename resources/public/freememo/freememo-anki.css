@@ -183,6 +183,34 @@ pre > code {
 .hljs-emphasis { font-style: italic; }
 .hljs-strong   { font-weight: bold;  }
 
+/* ── Per-Language Tint (fallback for non-hljs-tokenized code) ── */
+/* Applies to bare text in `.ql-code-block[data-language="X"]` ONLY
+   when the block contains no `<span class="ql-token …">` — i.e. on
+   LLM-generated cards that never passed through Quill's syntax
+   module. Tokenized blocks fall back to the `.ql-code-block-container`
+   default text colour (#24292e) for bare text, while `hljs-*` spans
+   paint their own per-token colours.
+   Requires `:has()` selector support (Chrome 105+, Safari 15.4+,
+   Firefox 121+, Anki Desktop with Qt6 / AnkiDroid recent / AnkiMobile
+   iOS 15.4+). Older clients see uniform default colour on every block.
+   Light-mode accents clear 4.5:1 contrast against #f5f5f5;
+   `plain` is intentionally omitted (badge is hidden for it). */
+
+.ql-code-block:not(:has(span.ql-token))[data-language="bash"]       { color: #208000; }
+.ql-code-block:not(:has(span.ql-token))[data-language="cpp"]        { color: #0000ff; }
+.ql-code-block:not(:has(span.ql-token))[data-language="cs"]         { color: #68217a; }
+.ql-code-block:not(:has(span.ql-token))[data-language="clojure"]    { color: #3949ab; }
+.ql-code-block:not(:has(span.ql-token))[data-language="css"]        { color: #1572b6; }
+.ql-code-block:not(:has(span.ql-token))[data-language="diff"]       { color: #666666; }
+.ql-code-block:not(:has(span.ql-token))[data-language="xml"]        { color: #c33620; }
+.ql-code-block:not(:has(span.ql-token))[data-language="java"]       { color: #8a5a14; }
+.ql-code-block:not(:has(span.ql-token))[data-language="javascript"] { color: #a020f0; }
+.ql-code-block:not(:has(span.ql-token))[data-language="markdown"]   { color: #083fa1; }
+.ql-code-block:not(:has(span.ql-token))[data-language="php"]        { color: #4f5d95; }
+.ql-code-block:not(:has(span.ql-token))[data-language="python"]     { color: #3572a5; }
+.ql-code-block:not(:has(span.ql-token))[data-language="ruby"]       { color: #b22222; }
+.ql-code-block:not(:has(span.ql-token))[data-language="sql"]        { color: #a0522d; }
+
 /* ── .nightMode — Dark Palette (Anki convention) ─────────────── */
 /* Anki adds `.nightMode` to the body in night mode. */
 
@@ -272,3 +300,23 @@ pre > code {
     color: #e06c75;
     background: rgba(224, 108, 117, 0.12);
 }
+
+/* ── .nightMode — Per-Language Tint (mirror of light variant) ── */
+/* Same `:not(:has(span.ql-token))` gate as the light variant —
+   language tint applies only to untokenized blocks; tokenized blocks
+   fall back to atom-one-dark default with per-token hljs colours. */
+
+.nightMode .ql-code-block:not(:has(span.ql-token))[data-language="bash"]       { color: #98c379; }
+.nightMode .ql-code-block:not(:has(span.ql-token))[data-language="cpp"]        { color: #61afef; }
+.nightMode .ql-code-block:not(:has(span.ql-token))[data-language="cs"]         { color: #c678dd; }
+.nightMode .ql-code-block:not(:has(span.ql-token))[data-language="clojure"]    { color: #61afef; }
+.nightMode .ql-code-block:not(:has(span.ql-token))[data-language="css"]        { color: #61afef; }
+.nightMode .ql-code-block:not(:has(span.ql-token))[data-language="diff"]       { color: #abb2bf; }
+.nightMode .ql-code-block:not(:has(span.ql-token))[data-language="xml"]        { color: #e06c75; }
+.nightMode .ql-code-block:not(:has(span.ql-token))[data-language="java"]       { color: #d19a66; }
+.nightMode .ql-code-block:not(:has(span.ql-token))[data-language="javascript"] { color: #c678dd; }
+.nightMode .ql-code-block:not(:has(span.ql-token))[data-language="markdown"]   { color: #61afef; }
+.nightMode .ql-code-block:not(:has(span.ql-token))[data-language="php"]        { color: #c678dd; }
+.nightMode .ql-code-block:not(:has(span.ql-token))[data-language="python"]     { color: #61afef; }
+.nightMode .ql-code-block:not(:has(span.ql-token))[data-language="ruby"]       { color: #e06c75; }
+.nightMode .ql-code-block:not(:has(span.ql-token))[data-language="sql"]        { color: #d19a66; }
