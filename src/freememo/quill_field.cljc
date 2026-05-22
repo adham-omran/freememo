@@ -151,7 +151,12 @@
              delta (.convert cb (clj->js {:html cleaned}))]
          (when (seq cleaned)
            (.setContents ed delta))
-         ;; text-change: call on-change whenever user edits
+         ;; text-change: call on-change on user edits. Quill 2.0.3's syntax
+         ;; module mutates the DOM under quill.update(SILENT) without firing
+         ;; any text-change event observable by listeners, so on-change
+         ;; cannot be used to capture the post-tokenize HTML — see
+         ;; `flush-syntax-tokens!` and the Save-side callers in
+         ;; `freememo.card-modals` for the explicit capture path.
          (.on ed "text-change"
            (fn [_delta _old source]
              (when (and (= source "user") on-change)
@@ -212,11 +217,12 @@
    Wrapper exists so the reader conditional lives in a plain defn — keeps
    CLJ/CLJS signal counts identical inside the e/defn reactive body
    (CLAUDE.md frame-mismatch rule)."
-  [!ed-state container value-string placeholder on-change]
+  [!ed-state container value-string placeholder on-change !editor-atom]
   #?(:cljs (js/setTimeout
              (fn []
-               (reset! !ed-state
-                 (init-quill-field! container value-string placeholder on-change)))
+               (let [ed (init-quill-field! container value-string placeholder on-change)]
+                 (reset! !ed-state ed)
+                 (when !editor-atom (reset! !editor-atom ed))))
              0)
      :clj nil))
 
@@ -224,23 +230,57 @@
 ;; Electric component
 ;; ---------------------------------------------------------------------------
 
+(defn flush-syntax-tokens!
+  "Synchronously run the Quill syntax module's highlight() pass on the given
+   editor, then return the post-flush innerHTML of the editor's root.
+
+   Quill 2.0.3's syntax module mutates the DOM via formatAt and wraps its
+   work in quill.update(SILENT) — but no text-change event reaches any
+   listener for that mutation pass. Verified empirically by attaching a
+   text-change listener and observing zero events fire when highlight()
+   runs. Callers therefore CANNOT rely on the QuillField's `:on-change`
+   callback to learn that tokens have been applied; they must take the
+   returned HTML and persist it directly.
+
+   Pre  : `ed` is a Quill instance (CLJS) or nil.
+   Post : DOM under `ed.root` carries up-to-date hljs-* spans for every
+          `.ql-code-block-container`; returned string is the editor's
+          innerHTML after the flush.
+   Inv  : returns nil iff `ed` is nil; never throws on nil input."
+  [ed]
+  #?(:cljs
+     (when ed
+       (let [^js ed ed
+             ^js syntax (.getModule ed "syntax")]
+         (when syntax (.highlight syntax))
+         (.-innerHTML (.-root ed))))
+     :clj nil))
+
 (e/defn QuillField
   "Standalone Quill editor field.
 
    Parameters: single opts map.
      :value-string  string  Initial HTML content (mount-time only).
-     :on-change     fn      Called with updated HTML string on every user edit.
+     :on-change     fn      Called with updated HTML string on every user edit
+                             AND on every syntax-module re-tokenize.
      :placeholder   string  Editor placeholder text.
      :field-key     any     Stable key for e/for-by frame isolation.
                              When this changes the Quill instance remounts.
                              Use card-id + field-name e.g. [:question card-id].
+     :!editor-atom  atom    OPTIONAL. If supplied, QuillField will reset! it
+                             to the Quill instance on mount and to nil on
+                             unmount. Callers use it to invoke
+                             `flush-syntax-tokens!` before reading the
+                             captured HTML — necessary when the user may
+                             click Save inside the syntax module's 1 s
+                             debounce window.
 
    Usage:
      (QuillField {:value-string (or (:question card) \"\")
                   :on-change    (fn [html] (reset! !question html))
                   :placeholder  \"Question...\"
                   :field-key    [:question card-id]})"
-  [{:keys [value-string on-change placeholder field-key]}]
+  [{:keys [value-string on-change placeholder field-key !editor-atom]}]
   (e/client
     ;; e/for-by provides frame isolation: Quill remounts when field-key changes.
     (e/for-by identity [_k [(or field-key :quill-field)]]
@@ -249,8 +289,9 @@
         (let [!ed-state (atom nil)]
           ;; Schedule init via plain defn — reader conditional lives there,
           ;; not in this reactive body (avoids CLJ/CLJS signal-count mismatch).
-          (schedule-quill-init! !ed-state dom/node value-string placeholder on-change)
+          (schedule-quill-init! !ed-state dom/node value-string placeholder on-change !editor-atom)
           (e/on-unmount
             (fn []
               (destroy-quill-field! @!ed-state)
-              (reset! !ed-state nil))))))))
+              (reset! !ed-state nil)
+              (when !editor-atom (reset! !editor-atom nil)))))))))
