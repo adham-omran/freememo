@@ -277,6 +277,22 @@
              _ (.addMatcher clipboard "span.ql-token"
                  (fn [^js node _delta]
                    (-> (new Delta) (.insert (.-textContent node)))))
+             ;; Preserve leading/trailing/inter-character whitespace inside
+             ;; code blocks. Quill 2.0.3's default clipboard text-node walker
+             ;; runs through the HTML parser's whitespace normalization,
+             ;; which collapses leading runs of spaces at element boundaries
+             ;; — losing user-typed indentation on every reload. By reading
+             ;; the div's textContent verbatim and emitting one text op +
+             ;; one code-block-attributed newline op per line, we hand Quill
+             ;; clean, whitespace-faithful text; the syntax module re-applies
+             ;; hljs spans on its 1 s timer after setContents.
+             _ (.addMatcher clipboard "div.ql-code-block"
+                 (fn [^js node _delta]
+                   (let [text (.-textContent node)
+                         lang (or (.getAttribute node "data-language") "plain")]
+                     (-> (new Delta)
+                       (.insert text)
+                       (.insert "\n" #js {"code-block" lang})))))
              delta (.convert clipboard #js {:html cleaned-html})]
          (when (seq cleaned-html)
            (.setContents editor delta))

@@ -136,6 +136,19 @@
              _ (.addMatcher cb "span.ql-token"
                  (fn [^js node _delta]
                    (-> (new Delta) (.insert (.-textContent node)))))
+             ;; Preserve whitespace inside code blocks. Quill 2.0.3's
+             ;; default text-node walker collapses leading whitespace at
+             ;; element boundaries (HTML parser whitespace normalization),
+             ;; dropping user-typed indentation on reload. Reading the
+             ;; div's textContent verbatim sidesteps that path; the
+             ;; syntax module re-applies hljs spans after setContents.
+             _ (.addMatcher cb "div.ql-code-block"
+                 (fn [^js node _delta]
+                   (let [text (.-textContent node)
+                         lang (or (.getAttribute node "data-language") "plain")]
+                     (-> (new Delta)
+                       (.insert text)
+                       (.insert "\n" #js {"code-block" lang})))))
              raw (or initial-html "")
              cleaned (-> raw
                        (str/replace (js/RegExp. "^```html\\s*\\n?" "") "")
