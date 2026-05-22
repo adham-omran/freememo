@@ -1127,6 +1127,24 @@
                          [:is :parent_id nil]
                          [:= [:lower :title] (str/lower-case title)]]})))
 
+(defn find-web-topic-by-source-id
+  "Find an existing root-level web topic for (user-id, source-id).
+   Used to dedupe URL imports — a single sources row may already be
+   linked from a topic, in which case re-importing should return the
+   existing topic instead of creating a duplicate.
+   Returns {:topics/id ...} or nil."
+  [user-id source-id]
+  (when (and user-id source-id)
+    (jdbc/execute-one! ds
+      (sql/format {:select [:id :title]
+                   :from [:topics]
+                   :where [:and
+                           [:= :user_id user-id]
+                           [:= :kind "web"]
+                           [:is :parent_id nil]
+                           [:= :source_id source-id]]
+                   :limit 1}))))
+
 (defn ensure-source-for-url!
   "Find or create a sources row for (user-id, url). Returns row map (with id).
    bib = {:source-type 'wikipedia'|'webpage'|nil

@@ -11,8 +11,10 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
+   [clojure.string :as str]
    [freememo.navigation :as nav]
-   #?(:clj [freememo.quota :as quota])))
+   #?(:clj [freememo.quota :as quota])
+   #?(:clj [freememo.web-import :as web-import])))
 
 ;; ── Server helpers ─────────────────────────────────────────────────
 
@@ -96,6 +98,30 @@
      (reset! !error nil)
      (reset! !quota-error? false)))
 
+;; ── State-update helpers for the URL/Confirm Forms5 services ───────
+;; Bundle synchronous atom mutations into single fns so the calling
+;; Electric `case` chains stay one-line per phase. Returning nil is fine —
+;; `case` only needs the test to resolve before the default-branch fires.
+
+#?(:cljs
+   (defn- url-set-staged!
+     "Transition to the :confirming stage with staged binary data."
+     [!staged !flow !stage staged-result]
+     (reset! !staged {:upload-id (:upload-id staged-result)
+                      :filename (:filename staged-result)
+                      :size 0
+                      :flow (name (:dispatch staged-result))})
+     (reset! !flow (name (:dispatch staged-result)))
+     (reset! !stage :confirming)))
+
+#?(:cljs
+   (defn- url-set-error!
+     "Transition to the :error stage with a message."
+     [!error !quota-error? !stage msg]
+     (reset! !error (or msg "Import failed."))
+     (reset! !quota-error? false)
+     (reset! !stage :error)))
+
 ;; ── Result handlers ────────────────────────────────────────────────
 ;; A response from any upload-* endpoint has one of three shapes:
 ;;   {:success true :doc_id N :flow "web|html|markdown"}     — committed
@@ -151,11 +177,12 @@
 
 ;; ── Sub-components ─────────────────────────────────────────────────
 
-;; Pre:  `on-fetch` is a 1-arg fn taking a non-blank url string.
-;; Post: on submit (button click or Enter inside the Form's <form>), `(on-fetch url)`
-;;       fires once and the form's token is spent.
-;; Invariant: :required + HTML validation blocks submit on empty.
-(e/defn UrlInput [on-fetch]
+;; Pre:  user-id is a logged-in user; navigate-to-viewer! is a 1-arg fn.
+;; Post: on submit, dispatches `[Import-wiki-url url]` to web-import/import-url!*
+;;       via e/server, then either navigates (HTML topic) or transitions to
+;;       :confirming (binary). Token spends after server returns.
+;; Invariant: :required blocks submit on empty.
+(e/defn UrlInput [user-id navigate-to-viewer! !stage !staged !flow !error !quota-error?]
   (e/client
     (let [commits (forms/Form! {:url ""}
                     (e/fn Fields [{:keys [url]}]
@@ -179,9 +206,20 @@
                     :type :command
                     :show-buttons false
                     :Parse (e/fn [{:keys [url]} _tempid]
-                             [`Fetch-url url]))]
-      (e/for [[token cmd] (e/diff-by first (e/as-vec commits))]
-        (do (on-fetch (nth cmd 1)) (token))))))
+                             [`Import-wiki-url (str/trim (or url ""))]))]
+      (e/for [[token [_head url]] (e/diff-by first (e/as-vec commits))]
+        (when token
+          (case (reset-error! !error !quota-error?)
+            (let [r (e/server (e/Offload #(web-import/import-url!* user-id url)))]
+              (case r
+                (if (:ok r)
+                  (case (:flow r)
+                    :imported       (case (navigate-to-viewer! (:topic-id r)) (token))
+                    :already-exists (case (navigate-to-viewer! (:topic-id r)) (token))
+                    :staged         (case (url-set-staged! !staged !flow !stage r) (token))
+                    (case (url-set-error! !error !quota-error? !stage
+                            (str "Unexpected flow: " (:flow r))) (token)))
+                  (case (url-set-error! !error !quota-error? !stage (:error r)) (token)))))))))))
 
 (e/defn FilePicker [!file !file-input on-file cap-bytes]
   (e/client
@@ -389,69 +427,96 @@
       (e/for [[token cmd] (e/diff-by first (e/as-vec commits))]
         (do (on-create (nth cmd 1)) (token))))))
 
-(e/defn ConfirmingStage [!staged !flow !image-mode !advanced-open on-confirm on-cancel]
+;; Pre:  !staged holds {:upload-id :filename :flow}; user-id owns the upload.
+;; Post: on submit, dispatches `[Confirm-staged-upload upload-id image-mode]` to
+;;       web-import/confirm-staged-upload!* via e/server, navigates on success.
+;; Cancel button: locally resets staged state without claiming the upload.
+(e/defn ConfirmingStage [user-id navigate-to-viewer! !stage !staged !flow
+                         !image-mode !advanced-open !error !quota-error?]
   (e/client
     (let [staged (e/watch !staged)
           flow (e/watch !flow)
           filename (:filename staged)
           size (:size staged)
           label (flow-label flow)
-          advanced-open (e/watch !advanced-open)]
-      (dom/p
-        (dom/props {:style {:margin "0 0 12px 0" :font-size "13px"}})
-        (dom/text (str "This is a " label ". Import as " label "?")))
+          advanced-open (e/watch !advanced-open)
+          image-mode (e/watch !image-mode)
+          upload-id (:upload-id staged)
+          commits (forms/Form! {}
+                    (e/fn Fields [_]
+                      (e/amb
+                        (dom/p
+                          (dom/props {:style {:margin "0 0 12px 0" :font-size "13px"}})
+                          (dom/text (str "This is a " label ". Import as " label "?")))
+                        (dom/div
+                          (dom/props {:style {:padding "12px" :margin-bottom "var(--sp-3)"
+                                              :background "var(--color-bg-subtle)"
+                                              :border-radius "var(--radius-sm)"
+                                              :font-size "13px"}})
+                          (dom/div (dom/props {:style {:font-weight "500"}}) (dom/text (or filename "")))
+                          (dom/div (dom/props {:style {:color "var(--color-text-secondary)" :margin-top "4px"}})
+                            (dom/text (format-bytes size))))
+                        (when (= flow "epub")
+                          (dom/div
+                            (dom/props {:style {:margin-bottom "var(--sp-3)"}})
+                            (dom/button
+                              (dom/props {:type "button"
+                                          :style {:background "transparent" :border "none" :color "var(--color-text-secondary)"
+                                                  :font-size "13px" :cursor "pointer" :padding "0"
+                                                  :display "flex" :align-items "center" :gap "4px"}})
+                              (dom/text (if advanced-open "▾ Advanced" "▸ Advanced"))
+                              (dom/On "click" (fn [_] (swap! !advanced-open not)) nil))
+                            (when advanced-open
+                              (dom/div
+                                (dom/props {:style {:margin-top "8px" :padding "10px"
+                                                    :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"
+                                                    :background "var(--color-bg-subtle)"
+                                                    :display "flex" :flex-direction "column" :gap "6px"}})
+                                (dom/span
+                                  (dom/props {:style {:font-size "12px" :font-weight "500" :color "var(--color-text-label)"}})
+                                  (dom/text "Images"))
+                                (dom/label
+                                  (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "13px" :cursor "pointer"}})
+                                  (dom/input (dom/props {:type "radio" :name "image_mode" :value "reduce"})
+                                    (set! (.-checked dom/node) (= image-mode "reduce"))
+                                    (dom/On "change" (fn [_] (reset! !image-mode "reduce")) nil))
+                                  (dom/text "Reduce size — shrink for faster loading"))
+                                (dom/label
+                                  (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "13px" :cursor "pointer"}})
+                                  (dom/input (dom/props {:type "radio" :name "image_mode" :value "strip"})
+                                    (set! (.-checked dom/node) (= image-mode "strip"))
+                                    (dom/On "change" (fn [_] (reset! !image-mode "strip")) nil))
+                                  (dom/text "Strip images — text only"))))))
+                        (dom/div
+                          (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
+                          (forms/SubmitButton! :label (str "Import as " label)
+                            :class "btn btn-primary"
+                            :style {:font-weight "600" :order "1"}))))
+                    :type :command
+                    :show-buttons false
+                    :Parse (e/fn [_ _tempid]
+                             [`Confirm-staged-upload upload-id (keyword image-mode)]))]
+      ;; Cancel button — local-only reset, not part of the form's commit stream.
       (dom/div
-        (dom/props {:style {:padding "12px" :margin-bottom "var(--sp-3)"
-                            :background "var(--color-bg-subtle)"
-                            :border-radius "var(--radius-sm)"
-                            :font-size "13px"}})
-        (dom/div (dom/props {:style {:font-weight "500"}}) (dom/text (or filename "")))
-        (dom/div (dom/props {:style {:color "var(--color-text-secondary)" :margin-top "4px"}})
-          (dom/text (format-bytes size))))
-
-      (when (= flow "epub")
-        (dom/div
-          (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-          (dom/button
-            (dom/props {:type "button"
-                        :style {:background "transparent" :border "none" :color "var(--color-text-secondary)"
-                                :font-size "13px" :cursor "pointer" :padding "0"
-                                :display "flex" :align-items "center" :gap "4px"}})
-            (dom/text (if advanced-open "▾ Advanced" "▸ Advanced"))
-            (dom/On "click" (fn [_] (swap! !advanced-open not)) nil))
-          (when advanced-open
-            (let [image-mode (e/watch !image-mode)]
-              (dom/div
-                (dom/props {:style {:margin-top "8px" :padding "10px"
-                                    :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"
-                                    :background "var(--color-bg-subtle)"
-                                    :display "flex" :flex-direction "column" :gap "6px"}})
-                (dom/span
-                  (dom/props {:style {:font-size "12px" :font-weight "500" :color "var(--color-text-label)"}})
-                  (dom/text "Images"))
-                (dom/label
-                  (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "13px" :cursor "pointer"}})
-                  (dom/input (dom/props {:type "radio" :name "image_mode" :value "reduce"})
-                    (set! (.-checked dom/node) (= image-mode "reduce"))
-                    (dom/On "change" (fn [_] (reset! !image-mode "reduce")) nil))
-                  (dom/text "Reduce size — shrink for faster loading"))
-                (dom/label
-                  (dom/props {:style {:display "flex" :align-items "center" :gap "8px" :font-size "13px" :cursor "pointer"}})
-                  (dom/input (dom/props {:type "radio" :name "image_mode" :value "strip"})
-                    (set! (.-checked dom/node) (= image-mode "strip"))
-                    (dom/On "change" (fn [_] (reset! !image-mode "strip")) nil))
-                  (dom/text "Strip images — text only")))))))
-
-      (dom/div
-        (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
-        (dom/button
-          (dom/props {:class "btn btn-primary" :style {:font-weight "600" :order "1"}})
-          (dom/text (str "Import as " label))
-          (dom/On "click" (fn [_] (on-confirm)) nil))
+        (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"
+                            :margin-top "var(--sp-2)"}})
         (dom/button
           (dom/props {:class "btn btn-secondary"})
           (dom/text "Cancel")
-          (dom/On "click" (fn [_] (on-cancel)) nil))))))
+          (dom/On "click" (fn [_]
+                            (reset! !staged nil)
+                            (reset! !flow nil)
+                            (reset! !stage :collecting))
+            nil)))
+      (e/for [[token [_head u-id i-mode]] (e/diff-by first (e/as-vec commits))]
+        (when token
+          (case (reset-error! !error !quota-error?)
+            (let [r (e/server (e/Offload #(web-import/confirm-staged-upload!*
+                                            user-id u-id i-mode)))]
+              (case r
+                (if (:ok r)
+                  (case (navigate-to-viewer! (:topic-id r)) (token))
+                  (case (url-set-error! !error !quota-error? !stage (:error r)) (token)))))))))))
 
 (e/defn StatusStage [message]
   (e/client
@@ -533,13 +598,6 @@
                               (post-multipart! "/api/upload-file" f {}
                                 handle-resp
                                 handle-fetch-err))))
-          ;; Pre: url is a non-blank string (UrlInput's :required enforces non-empty).
-          on-fetch-url (fn [url]
-                         (reset-error! !error !quota-error?)
-                         (reset! !stage :fetching)
-                         (post-form! "/api/upload-url" {"url" url}
-                           handle-resp
-                           handle-fetch-err))
           on-paste-import (fn []
                             (reset-error! !error !quota-error?)
                             (let [format-v @!format
@@ -572,18 +630,6 @@
                            (post-form! "/api/create-topic" {"title" title-v}
                              handle-resp
                              handle-fetch-err)))
-          on-confirm (fn []
-                       (reset-error! !error !quota-error?)
-                       (reset! !stage :importing)
-                       (post-form! "/api/upload-staged"
-                         {"upload_id" (:upload-id @!staged)
-                          "image_mode" @!image-mode}
-                         handle-resp
-                         handle-fetch-err))
-          on-cancel-confirm (fn []
-                              (reset! !staged nil)
-                              (reset! !flow nil)
-                              (reset! !stage :collecting))
           ;; Pre: title is non-blank (TextFileReviewStage's :required enforces).
           on-text-confirm (fn [title]
                             (reset-error! !error !quota-error?)
@@ -644,15 +690,18 @@
           (case stage
             :fetching (StatusStage "Fetching…")
             :importing (StatusStage "Importing…")
-            :confirming (ConfirmingStage !staged !flow !image-mode !advanced-open
-                                         on-confirm on-cancel-confirm)
+            :confirming (ConfirmingStage user-id navigate-to-viewer!
+                                         !stage !staged !flow
+                                         !image-mode !advanced-open
+                                         !error !quota-error?)
             :text-confirming (TextFileReviewStage !flow !filename !title
                                                   on-text-confirm on-cancel-text)
             :error (ErrorStage !error !quota-error? on-try-again on-manage-library)
             :done nil
             ;; :collecting (default)
             (case source
-              :url (UrlInput on-fetch-url)
+              :url (UrlInput user-id navigate-to-viewer!
+                             !stage !staged !flow !error !quota-error?)
               :file (FilePicker !file !file-input handle-file cap-bytes)
               :paste (PasteEditor !format !title !paste-url !html-text !md-text
                                   on-paste-import)
