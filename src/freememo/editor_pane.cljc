@@ -90,7 +90,7 @@
   [user-id url]
   #?(:clj
      (try
-       (let [title (wiki/extract-wiki-title url)]
+       (let [{:keys [title]} (wiki/parse-wikipedia-url url)]
          (if-not title
            {:error "Not a valid Wikipedia URL"}
            (if-let [existing (db/find-web-topic-by-title user-id title)]
