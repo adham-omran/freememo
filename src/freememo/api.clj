@@ -5,6 +5,7 @@
    [freememo.epub :as epub]
    [freememo.page-ocr :as page]
    [freememo.db :as db]
+   [freememo.auth :as auth]
    [freememo.google-oauth :as google-oauth]
    [freememo.extractor :as extractor]
    [freememo.html-cleaner :as cleaner]
@@ -564,6 +565,29 @@
            :headers {"Location" "/"}
            :session {:auth-error "Google sign-in failed — please try again"}})))))
 
+(defn login-handler
+  "GET /login?user=X&password=Y — dev-only username/password login.
+   On success: 302 → / with :session {:user-id N}.
+   On failure: 302 → / with :session {:auth-error ...}.
+   Query-string credentials leak into server logs and browser history —
+   acceptable only for local Playwright-driven testing."
+  [request]
+  (let [params (:params request)
+        username (get params "user")
+        password (get params "password")]
+    (if (or (str/blank? username) (str/blank? password))
+      {:status 302
+       :headers {"Location" "/"}
+       :session {:auth-error "Missing user or password"}}
+      (let [result (auth/authenticate username password)]
+        (if (:success result)
+          {:status 302
+           :headers {"Location" "/"}
+           :session {:user-id (:user-id result)}}
+          {:status 302
+           :headers {"Location" "/"}
+           :session {:auth-error (:error result)}})))))
+
 (defn save-page-text-handler [request]
   (if-let [user-id (require-auth request)]
     (try
@@ -628,6 +652,9 @@
 
       (and (= uri "/api/save-page-text") (= method :post))
       (save-page-text-handler request)
+
+      (and (= uri "/login") (= method :get))
+      (login-handler request)
 
       (and (= uri "/auth/google") (= method :get))
       (google-auth-handler request)

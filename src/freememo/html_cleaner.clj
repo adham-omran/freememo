@@ -186,6 +186,29 @@
         (post-filter-quill-data-attrs! doc)
         (.html (.body doc))))))
 
+(defn strip-ql-tokens
+  "Unwrap every `<span class=\"ql-token …\">` element, preserving its children.
+
+   Quill 2.0.3's `clipboard.convert` reads such a span as
+   `code-token: true` (boolean) instead of the actual `hljs-X` value, which
+   then renders as `class=\"hljs-true\"` and collapses adjacent same-value
+   inlines into a single span covering the whole code line.
+
+   Saved topic content MUST NOT carry these wrappers; the Quill `syntax`
+   module re-applies them in the browser via its 1 s debounced timer.
+
+   Pre  : `html` is a string or nil.
+   Post : returns nil iff `html` is nil; otherwise the same HTML with every
+          `span.ql-token` unwrapped (children move up into the span's parent).
+   Inv  : text content and all non-`ql-token` markup are unchanged."
+  [html]
+  (when html
+    (let [doc (Jsoup/parseBodyFragment html)]
+      (.prettyPrint (.outputSettings doc) false)
+      (doseq [^org.jsoup.nodes.Element el (.select doc "span.ql-token")]
+        (.unwrap el))
+      (.html (.body doc)))))
+
 (defn clean-html-llm
   "Sanitize HTML from LLM output. Same allow-list as `clean-html`, then strips
    every `<img>` tag — pins are the sole source of images in cards (LL3-yes).
