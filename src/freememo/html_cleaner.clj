@@ -139,6 +139,11 @@
           ;; <pre> (for legacy Quill 1.x `ql-syntax` blocks).
           class-tags (into-array String ["span" "div" "p" "h1" "h2" "h3" "h4" "h5" "h6"
                                          "li" "td" "th" "blockquote" "pre"])
+          ;; Tags allowed to carry `dir` and `lang` — preserves RTL layout
+          ;; (Arabic, Hebrew, …) on imported Wikipedia articles.
+          i18n-tags (into-array String ["span" "div" "p" "h1" "h2" "h3" "h4" "h5" "h6"
+                                        "li" "td" "th" "blockquote"
+                                        "table" "tr" "ul" "ol" "a" "figure" "figcaption"])
           safelist (-> (Safelist/relaxed)
                      (.addTags (into-array String ["h1" "h2" "h3" "h4" "h5" "h6"
                                                    "p" "br" "hr"
@@ -166,6 +171,8 @@
         (.addAttributes safelist tag (into-array String ["style"])))
       (doseq [tag class-tags]
         (.addAttributes safelist tag (into-array String ["class"])))
+      (doseq [tag i18n-tags]
+        (.addAttributes safelist tag (into-array String ["dir" "lang"])))
       ;; Pass a baseUri so Jsoup can resolve relative URLs (e.g. /api/media/<id>)
       ;; against the http allow-list; combined with preserveRelativeLinks(true),
       ;; the output keeps them as relative paths instead of stripping them.

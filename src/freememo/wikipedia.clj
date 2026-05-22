@@ -8,7 +8,7 @@
             [freememo.url-validate :as url])
   (:import [org.jsoup Jsoup]))
 
-;; Forward decl — fetch-wikipedia-summary is defined after fetch-wikipedia-by-title.
+;; Forward decl — fetch-wikipedia-summary is defined after fetch-wikipedia-article.
 (declare fetch-wikipedia-summary)
 
 (def ^:private outbound-max-bytes 26214400)  ;; 25 MB
@@ -87,9 +87,13 @@
   "Pre-process Wikipedia REST API HTML before sanitization:
    1. Remove <math> elements (prevents Jsoup text promotion of MathML nodes)
    2. Simplify alt text on math <img> fallbacks
-   3. Rewrite protocol-relative URLs to https://"
-  [html]
-  (let [doc (Jsoup/parse html)]
+   3. Rewrite protocol-relative URLs to https://
+   4. Rewrite relative `./<slug>` hrefs to https://<lang>.wikipedia.org/wiki/<slug>
+   5. Wrap body contents in a <div> carrying the source <body>'s `dir`/`lang`
+      so RTL layout survives `clean-html` (which discards the body element)."
+  [html lang]
+  (let [doc (Jsoup/parse html)
+        wiki-link-prefix (str "https://" lang ".wikipedia.org/wiki/")]
     ;; Phase 0: Strip navigation chrome (navboxes, portalboxes)
     (doseq [nav (.select doc "[role=navigation], nav")]
       (.remove nav))
@@ -103,26 +107,47 @@
     ;; Phase 2: Images — rewrite protocol-relative URLs
     (doseq [img (.select doc "img[src^=//]")]
       (.attr img "src" (str "https:" (.attr img "src"))))
-    ;; Phase 3: Links — rewrite relative hrefs to absolute Wikipedia URLs
+    ;; Phase 3: Links — rewrite relative hrefs to absolute same-wiki URLs
     (doseq [a (.select doc "a[href^=./]")]
       (let [href (.attr a "href")
             slug (subs href 2)] ;; strip "./"
-        (.attr a "href" (str "https://en.wikipedia.org/wiki/" slug))))
-    (.html (.body doc))))
+        (.attr a "href" (str wiki-link-prefix slug))))
+    ;; Phase 4: Propagate body dir/lang into a wrapping <div>
+    (let [body (.body doc)
+          body-dir  (.attr body "dir")
+          body-lang (.attr body "lang")
+          inner     (.html body)]
+      (str "<div"
+           (when (seq body-dir)  (str " dir=\""  body-dir  "\""))
+           (when (seq body-lang) (str " lang=\"" body-lang "\""))
+           ">" inner "</div>"))))
 
-(defn- wikipedia-url? [url]
-  (and (string? url)
-       (re-find #"(?i)wikipedia\.org/wiki/" url)))
+;; Matches: <lang>.wikipedia.org, <lang>.m.wikipedia.org, m.<lang>.wikipedia.org.
+;; Captures: lang (group 1, ≥2 chars so bare `m.wikipedia.org` doesn't capture
+;; "m"), URL-encoded title up to ? or # (group 2).
+(def ^:private wiki-url-re
+  #"(?i)^https?://(?:m\.)?([a-z]{2,}[a-z0-9-]*)(?:\.m)?\.wikipedia\.org/wiki/([^?#]+)")
 
-(defn extract-wiki-title
-  "Extract the article title from a Wikipedia URL. Returns nil for non-Wikipedia URLs."
+(defn parse-wikipedia-url
+  "Parse a Wikipedia article URL into {:lang :title}, or nil if not a
+   recognised Wikipedia article URL. URL-decodes the title; strips
+   fragment and query. Accepts mobile subdomains in either position;
+   rejects URLs with no language subdomain."
   [url]
-  (when-let [m (re-find #"wikipedia\.org/wiki/(.+?)(?:#.*)?$" url)]
-    (java.net.URLDecoder/decode (second m) "UTF-8")))
+  (when (string? url)
+    (when-let [m (re-find wiki-url-re url)]
+      {:lang  (str/lower-case (nth m 1))
+       :title (java.net.URLDecoder/decode (nth m 2) "UTF-8")})))
 
-(defn- fetch-wikipedia-by-title [title]
-  (let [api-url (str "https://en.wikipedia.org/api/rest_v1/page/html/"
-                     (java.net.URLEncoder/encode title "UTF-8"))
+(defn- fetch-wikipedia-article
+  "Fetch and post-process the Parsoid HTML for a Wikipedia article.
+   Pre  : ctx = {:lang :title}; both non-blank strings.
+   Post : success → {:title :html :url :source-type \"wikipedia\" :biblio};
+          3xx     → {:success false :error <msg>};
+          non-200 → {:success false :error <msg>}."
+  [{:keys [lang title]}]
+  (let [encoded-title (java.net.URLEncoder/encode title "UTF-8")
+        api-url (str "https://" lang ".wikipedia.org/api/rest_v1/page/html/" encoded-title)
         resp (http/get api-url
                {:headers {"User-Agent" "FreeMemo/1.0 (incremental reading app)"
                           "Accept" "text/html"}
@@ -141,9 +166,8 @@
       {:success false :error (str "Wikipedia fetch failed (HTTP " status ")")}
 
       :else
-      (let [page-url (str "https://en.wikipedia.org/wiki/"
-                          (java.net.URLEncoder/encode title "UTF-8"))
-            summary  (try (fetch-wikipedia-summary title) (catch Exception _ nil))
+      (let [page-url (str "https://" lang ".wikipedia.org/wiki/" encoded-title)
+            summary  (try (fetch-wikipedia-summary {:lang lang :title title}) (catch Exception _ nil))
             biblio   {:local (cond-> {:type "webpage"
                                       :title title
                                       :URL page-url
@@ -152,7 +176,7 @@
                                (assoc :abstract (:extract summary)))
                       :identifiers {}}]
         {:title title
-         :html (-> (:body resp) preprocess-wikipedia-html cleaner/clean-html)
+         :html (-> (:body resp) (preprocess-wikipedia-html lang) cleaner/clean-html)
          :url page-url
          :source-type "wikipedia"
          :biblio biblio}))))
@@ -277,8 +301,9 @@
         {:success false :error "URL not allowed (only public http/https addresses)"}
 
         :else
-        (let [result (if (wikipedia-url? url)
-                       (fetch-wikipedia-by-title (extract-wiki-title url))
+        (let [wiki-ctx (parse-wikipedia-url url)
+              result (if wiki-ctx
+                       (fetch-wikipedia-article wiki-ctx)
                        (fetch-generic-url url))]
           ;; Helper may have returned {:success false :error ...} for redirects
           ;; or non-200 statuses — pass through; otherwise mark success.
@@ -291,12 +316,12 @@
 ;; ── 1.5 Wikipedia REST summary endpoint ───────────────────────────
 
 (defn fetch-wikipedia-summary
-  "Fetch the structured summary for a Wikipedia article title.
-   Pre:  title is a non-blank string (URL-decoded article slug).
-   Post: {:extract :description :thumbnail :pageid :wikibase-item :url}
-   on 200; {:error <string>} otherwise."
-  [title]
-  (let [api-url (str "https://en.wikipedia.org/api/rest_v1/page/summary/"
+  "Fetch the structured summary for a Wikipedia article.
+   Pre  : ctx = {:lang :title}; both non-blank strings.
+   Post : {:extract :description :thumbnail :pageid :wikibase-item :url}
+          on 200; {:error <string>} otherwise."
+  [{:keys [lang title]}]
+  (let [api-url (str "https://" lang ".wikipedia.org/api/rest_v1/page/summary/"
                      (java.net.URLEncoder/encode title "UTF-8"))
         resp (http/get api-url
                {:headers {"User-Agent" "FreeMemo/1.0 (incremental reading app)"
