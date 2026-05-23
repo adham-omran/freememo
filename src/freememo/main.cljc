@@ -14,6 +14,7 @@
             [freememo.search-page :refer [SearchPage]]
             [freememo.subset-review :refer [SubsetReviewSession]]
             [freememo.landing-page :refer [LandingPage]]
+            [freememo.icons :as icons]
             [freememo.keyboard :as keyboard]
             #?(:clj [freememo.settings :as settings])
             #?(:clj [freememo.quota :as quota])
@@ -198,39 +199,48 @@
                     (dom/text "FreeMemo")
                     (dom/On "click" (fn [_] (navigate! :home)) nil))
 
+                  ;; Each tab: Icon + label-span. CSS hides `.nav-tab-label`
+                  ;; at <600px so phone shows icon-only.
                   (dom/button
-                    (dom/props {:style (tab-style :home)})
-                    (dom/text "Home")
+                    (dom/props {:class "nav-tab" :style (tab-style :home)})
+                    (icons/Icon :home :size 18)
+                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Home"))
                     (dom/On "click" (fn [_] (navigate! :home)) nil))
 
                   (dom/button
-                    (dom/props {:style (tab-style :learn)})
-                    (dom/text "Learn")
+                    (dom/props {:class "nav-tab" :style (tab-style :learn)})
+                    (icons/Icon :graduation-cap :size 18)
+                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Learn"))
                     (dom/On "click" (fn [_] (navigate! :learn)) nil))
 
                   (dom/button
-                    (dom/props {:style (tab-style :viewer)})
-                    (dom/text "Viewer")
+                    (dom/props {:class "nav-tab" :style (tab-style :viewer)})
+                    (icons/Icon :book-open :size 18)
+                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Viewer"))
                     (dom/On "click" (fn [_] (navigate! :viewer)) nil))
 
                   (dom/button
-                    (dom/props {:style (tab-style :library)})
-                    (dom/text "Library")
+                    (dom/props {:class "nav-tab" :style (tab-style :library)})
+                    (icons/Icon :library :size 18)
+                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Library"))
                     (dom/On "click" (fn [_] (navigate! :library)) nil))
 
                   (dom/button
-                    (dom/props {:style (tab-style :search)})
-                    (dom/text "Search")
+                    (dom/props {:class "nav-tab" :style (tab-style :search)})
+                    (icons/Icon :search :size 18)
+                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Search"))
                     (dom/On "click" (fn [_] (navigate! :search)) nil))
 
                   (dom/button
-                    (dom/props {:style (tab-style :import)})
-                    (dom/text "Import")
+                    (dom/props {:class "nav-tab" :style (tab-style :import)})
+                    (icons/Icon :plus :size 18)
+                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Import"))
                     (dom/On "click" (fn [_] (navigate! :import)) nil))
 
                   (dom/button
-                    (dom/props {:style (tab-style :settings)})
-                    (dom/text "Settings")
+                    (dom/props {:class "nav-tab" :style (tab-style :settings)})
+                    (icons/Icon :settings :size 18)
+                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Settings"))
                     (dom/On "click" (fn [_] (navigate! :settings)) nil)))
 
                 ;; Storage warning banner — appears when usage exceeds 80%.

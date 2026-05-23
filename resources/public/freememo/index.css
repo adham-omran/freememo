@@ -880,6 +880,32 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
     }
 }
 
+/* ── Nav (top tabs) ─────────────────────────────────────────────
+   Each button is `Icon + .nav-tab-label`. The phone media query below
+   hides the label so all 7 tabs fit on a 414px viewport as icons. */
+.nav-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.nav-tab-label { display: inline; }
+
+/* ── Phone-only tweaks (≤600px) ─────────────────────────────────
+   1. Icon-only nav (issue 2 — B2)
+   2. Tap-target floor: 36px on .btn, .input, .nav-tab (issue 4 — D1) */
+@media (max-width: 600px) {
+    .nav-tab-label { display: none; }
+    /* Compact horizontal padding so 7 icon-tabs + brand fit in 414px.
+       `!important` overrides the inline `padding: 6px 16px` from `tab-style`
+       in main.cljc (the inline style otherwise wins specificity-wise). */
+    .nav-tab { padding: 6px 7px !important; min-height: 36px; }
+    .btn { min-height: 36px; padding: 8px 14px; }
+    .input { min-height: 36px; }
+    /* Library row buttons (`.btn-sm`) already get bumped via the
+       `.library-table-body td:nth-child(5) .btn` rule above — leave that
+       alone so its `padding: 6px 10px` overrides this. */
+}
+
 /* ── Tree View ───────────────────────────────────────────────── */
 .tree-title:hover { text-decoration: underline; }
 
