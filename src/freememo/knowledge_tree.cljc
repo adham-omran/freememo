@@ -11,20 +11,9 @@
    [freememo.pdf-cache :as pdf-cache]
    [freememo.bibliography-form :as bibform]
    [freememo.icons :as icons]
+   [freememo.viewport :as viewport]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])))
-
-;; Reactive viewport flag — true while window matches (max-width: 600px).
-;; Atom is declared on both sides so e/watch in `e/defn` bodies compiles
-;; identically for CLJ and CLJS (CLAUDE.md frame-mismatch rule).
-(defonce !phone? (atom false))
-
-#?(:cljs
-   (defonce phone-mq-installed?
-     (let [mq (.matchMedia js/window "(max-width: 600px)")]
-       (reset! !phone? (.-matches mq))
-       (.addEventListener mq "change" (fn [e] (reset! !phone? (.-matches e))))
-       true)))
 
 ;; Server wrapper — _refresh param creates Electric reactive dependency
 (defn get-tree-items* [_refresh user-id]
@@ -407,7 +396,7 @@
                 editing-id (e/watch !editing-id)
                 flat-rows (flatten-tree roots children-map expanded-set)
                 row-count (count flat-rows)
-                phone? (e/watch !phone?)
+                phone? (e/watch viewport/!phone?)
                 row-height (if phone? 80 36)
                 grid-cols (if phone? "1fr" "1fr 70px 80px 80px 110px")
                 !scroll-node (atom nil)]

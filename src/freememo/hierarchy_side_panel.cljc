@@ -16,6 +16,7 @@
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
    [freememo.navigation :as nav]
+   [freememo.viewport :as viewport]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])))
@@ -89,7 +90,11 @@
     ;; updates :current? reactively without remount, so !open? state and the
     ;; DOM subtree persist across page scrolls.
     (e/for-by identity [_k [root-topic-id]]
-      (let [initial-open?   (e/server (settings/get-hierarchy-open user-id root-topic-id))
+      (let [phone?          (e/watch viewport/!phone?)
+            persisted-open? (e/server (settings/get-hierarchy-open user-id root-topic-id))
+            ;; Phone defaults to collapsed regardless of persisted desktop pref.
+            ;; The toggle still works — user can open it manually on phone.
+            initial-open?   (and (not phone?) persisted-open?)
             !open?          (atom initial-open?)
             open?           (e/watch !open?)
             !save           (atom nil)

@@ -11,6 +11,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
+   [freememo.viewport :as viewport]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])))
@@ -106,7 +107,10 @@
     ;; DOM subtree persist across page scrolls. Pin data still queries by
     ;; topic-id since pins are per-topic.
     (e/for-by identity [_k [root-topic-id]]
-      (let [initial-open? (e/server (settings/get-pins-open user-id root-topic-id))
+      (let [phone?          (e/watch viewport/!phone?)
+            persisted-open? (e/server (settings/get-pins-open user-id root-topic-id))
+            ;; Phone defaults to collapsed; desktop persisted pref preserved.
+            initial-open?   (and (not phone?) persisted-open?)
             !open? (atom initial-open?)
             open? (e/watch !open?)
             !save (atom nil)
