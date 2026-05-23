@@ -1039,9 +1039,7 @@ textarea:hover {
 .ql-container.ql-snow { border-color: var(--color-border) !important; }
 .ql-toolbar.ql-snow { border-color: var(--color-border) !important; }
 .ql-editor.ql-blank::before { color: var(--color-text-hint) !important; }
-.ql-editor[dir="rtl"] {
-    text-align: right;
-}
+.ql-snow .ql-editor { text-align: start; }
 
 /* Quill Snow tooltip — Import button for Wikipedia links */
 .ql-snow .ql-tooltip .ql-import {

@@ -296,6 +296,12 @@
              delta (.convert clipboard #js {:html cleaned-html})]
          (when (seq cleaned-html)
            (.setContents editor delta))
+         ;; dir="auto" → browser resolves direction from first strong
+         ;; directional character. Paired with .ql-editor{text-align:start}
+         ;; in index.css so RTL imports (Arabic, Hebrew) render right-aligned
+         ;; without needing a stored language column. Per-block direction
+         ;; from Quill's toolbar still overrides this on its own block.
+         (.setAttribute (.-root editor) "dir" "auto")
          (when (and js/goog.DEBUG t0)
            (js/console.log "[Editor perf] init TOTAL:" (.toFixed (- (js/performance.now) t0) 1) "ms, html-len:" (count cleaned-html)))
          ;; Immediate text-change: sets !dirty-html on every user edit
