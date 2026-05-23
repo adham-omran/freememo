@@ -164,6 +164,8 @@
              delta (.convert cb (clj->js {:html cleaned}))]
          (when (seq cleaned)
            (.setContents ed delta))
+         ;; See rich_text_editor.cljc for the dir="auto" rationale.
+         (.setAttribute (.-root ed) "dir" "auto")
          ;; text-change: call on-change on user edits. Quill 2.0.3's syntax
          ;; module mutates the DOM under quill.update(SILENT) without firing
          ;; any text-change event observable by listeners, so on-change
