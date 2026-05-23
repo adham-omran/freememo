@@ -14,6 +14,18 @@
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])))
 
+;; Reactive viewport flag — true while window matches (max-width: 600px).
+;; Atom is declared on both sides so e/watch in `e/defn` bodies compiles
+;; identically for CLJ and CLJS (CLAUDE.md frame-mismatch rule).
+(defonce !phone? (atom false))
+
+#?(:cljs
+   (defonce phone-mq-installed?
+     (let [mq (.matchMedia js/window "(max-width: 600px)")]
+       (reset! !phone? (.-matches mq))
+       (.addEventListener mq "change" (fn [e] (reset! !phone? (.-matches e))))
+       true)))
+
 ;; Server wrapper — _refresh param creates Electric reactive dependency
 (defn get-tree-items* [_refresh user-id]
   #?(:clj (vec (db/get-knowledge-tree user-id))
@@ -155,9 +167,12 @@
           (fn [_] (navigate! :viewer (nav/nav-topic id :library)))
           nil)
         ;; Column 1: Document (arrow + badge + title)
+        ;; --row-indent carries the depth indent as a custom property so the
+        ;; phone media query can flatten it (`var(--row-indent, 10px)` → 10px).
         (dom/td
           (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
-                              :padding-left (str (+ 10 (* depth 20)) "px")
+                              :--row-indent (str (+ 10 (* depth 20)) "px")
+                              :padding-left "var(--row-indent)"
                               :overflow "hidden"
                               :border-left (when (= topic-status "done") "2px solid var(--color-success-lighter)")}})
           (if has-children
@@ -392,15 +407,17 @@
                 editing-id (e/watch !editing-id)
                 flat-rows (flatten-tree roots children-map expanded-set)
                 row-count (count flat-rows)
-                row-height 36
-                grid-cols "1fr 70px 80px 80px 110px"
+                phone? (e/watch !phone?)
+                row-height (if phone? 80 36)
+                grid-cols (if phone? "1fr" "1fr 70px 80px 80px 110px")
                 !scroll-node (atom nil)]
             (dom/div
               (dom/props {:style {:display "flex" :flex-direction "column" :min-height "0" :flex "1"}})
 
               ;; Fixed header
               (dom/table
-                (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :flex-shrink "0"}})
+                (dom/props {:class "library-table library-table-header"
+                            :style {:width "100%" :display "grid" :grid-template-columns grid-cols :flex-shrink "0"}})
                 (dom/thead
                   (dom/props {:style {:display "contents"}})
                   (dom/tr
@@ -438,7 +455,8 @@
                   (dom/props {:class "tape-scroll"
                               :style {:--offset offset :--row-height (str row-height "px")}})
                   (dom/table
-                    (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
+                    (dom/props {:class "library-table library-table-body"
+                                :style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
                     (if (pos? row-count)
                       (e/for [i (Tape offset limit)]
                         (let [row (nth flat-rows i nil)]
