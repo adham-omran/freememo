@@ -810,6 +810,76 @@ html, body {
 .tape-scroll table tr:hover td { background: light-dark(#f5f7fa, #263040); }
 table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
 
+/* ── Library Card Layout (phone) ─────────────────────────────────
+   Below 600px the .library-table reshapes each row into a 2-row card:
+     row 1: badge + title  +  action buttons (right-aligned, spanning both)
+     row 2: Done · Synced · Added (with ::before pseudo-labels)
+   The cljc passes row-height=80 so the tape-scroll var(--row-height) matches.
+   --row-indent (set inline per row from depth) is collapsed to 10px so
+   children render at the same indent as roots (flat list on phone). */
+@media (max-width: 600px) {
+    /* Hide the header table — labels are inlined as pseudo-prefixes on each value cell. */
+    .library-table-header { display: none !important; }
+    /* Selectors prefixed with `.tape-scroll` so specificity beats the default
+       `.tape-scroll table tr { display: contents }` / `.tape-scroll table td
+       { grid-row: var(--order); height: var(--row-height) }` rules above. */
+    .tape-scroll .library-table-body tr {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr auto;
+        grid-template-rows: auto auto;
+        column-gap: 8px;
+        row-gap: 2px;
+        align-items: center;
+        padding: 8px 12px;
+        height: var(--row-height);
+        box-sizing: border-box;
+        grid-row: var(--order);
+        border-bottom: 1px solid var(--color-bg-subtle);
+    }
+    .tape-scroll .library-table-body td {
+        grid-row: auto;
+        height: auto;
+        padding: 0;
+        font-size: 13px;
+    }
+    /* Document cell: row 1, spans the three metadata columns. Indent flattened. */
+    .tape-scroll .library-table-body tr > td:nth-child(1) {
+        grid-column: 1 / 4;
+        grid-row: 1;
+        --row-indent: 0px;
+        overflow: hidden;
+    }
+    /* Done / Synced / Added: row 2, one per column */
+    .tape-scroll .library-table-body tr > td:nth-child(2),
+    .tape-scroll .library-table-body tr > td:nth-child(3),
+    .tape-scroll .library-table-body tr > td:nth-child(4) {
+        grid-row: 2;
+        font-size: 11px;
+        color: var(--color-text-secondary);
+        justify-content: flex-start;
+        text-align: left;
+    }
+    .tape-scroll .library-table-body tr > td:nth-child(2) { grid-column: 1; }
+    .tape-scroll .library-table-body tr > td:nth-child(3) { grid-column: 2; }
+    .tape-scroll .library-table-body tr > td:nth-child(4) { grid-column: 3; }
+    /* Pseudo-labels so values are self-describing without a header. */
+    .tape-scroll .library-table-body tr > td:nth-child(2)::before { content: "Done "; opacity: 0.55; }
+    .tape-scroll .library-table-body tr > td:nth-child(3)::before { content: "Sync "; opacity: 0.55; }
+    .tape-scroll .library-table-body tr > td:nth-child(4)::before { content: "Added "; opacity: 0.55; }
+    /* Actions: right column, spans both rows */
+    .tape-scroll .library-table-body tr > td:nth-child(5) {
+        grid-column: 4;
+        grid-row: 1 / 3;
+        align-self: center;
+        justify-content: flex-end;
+    }
+    /* Bigger tap targets on phone */
+    .tape-scroll .library-table-body tr > td:nth-child(5) .btn {
+        padding: 6px 10px;
+        font-size: 13px;
+    }
+}
+
 /* ── Tree View ───────────────────────────────────────────────── */
 .tree-title:hover { text-decoration: underline; }
 
