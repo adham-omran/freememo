@@ -52,7 +52,11 @@
            left-doc (- (+ (.-right rect) (.-scrollX js/window)) bw)
            top-doc (+ (.-top rect) (.-scrollY js/window))]
        (set! (.. b -style -position) "absolute")
-       (set! (.. b -style -right) "")
+       ;; "auto" (not "") so the CSS rule `.ql-table-actions { right: var(--sp-2) }`
+       ;; is overridden, not just unset. Otherwise inline left + cascade right
+       ;; both apply, stretching the bar; each repositioning reads the stretched
+       ;; offsetWidth and drifts left by the gap on every call.
+       (set! (.. b -style -right) "auto")
        (set! (.. b -style -bottom) "")
        (set! (.. b -style -left) (str left-doc "px"))
        (set! (.. b -style -top) (str top-doc "px")))))
