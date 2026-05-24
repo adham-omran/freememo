@@ -24,6 +24,21 @@
 
 (def ^:private row-height 52)
 
+(def ^:private blocked-item-types
+  "Zotero item_type values dropped from the picker. Standalone attachments
+   and notes pass Zotero's onlyTopLevel filter (no parent), but the picker's
+   import path requires a parent with PDF children. PDF annotations occupy
+   the same non-bibliographic shape."
+  #{"attachment" "note" "annotation"})
+
+#?(:cljs
+   (defn- bib-item?
+     "Pre: item is a Zotero item map carrying :item-type or :item_type.
+      Post: true iff item-type ∉ blocked-item-types."
+     [item]
+     (not (contains? blocked-item-types
+            (or (:item-type item) (:item_type item))))))
+
 #?(:cljs
    (defn- format-meta [item]
      ;; The plugin returns :creators_summary / :item_type with snake_case
@@ -63,14 +78,17 @@
 #?(:cljs
    (defn- fetch-all-items!
      "Drain the user's Zotero library through the FreeMemo plugin
-      (zc/list-all-items!). On success call (on-ok items total). On
-      failure call (on-err msg)."
+      (zc/list-all-items!), then drop non-bibliographic rows.
+      On success call (on-ok bib-items raw-total) where bib-items is the
+      block-list-filtered vector and raw-total is the count Zotero returned.
+      On failure call (on-err msg)."
      [on-ok on-err]
      (-> (zc/list-all-items!)
        (.then (fn [result]
                 (if (:ok? result)
-                  (let [items (get-in result [:data :items] [])]
-                    (on-ok (vec items) (count items)))
+                  (let [items (get-in result [:data :items] [])
+                        bib-items (filterv bib-item? items)]
+                    (on-ok bib-items (count items)))
                   (on-err (or (:error result)
                             "Failed to reach Zotero. Is the FreeMemo plugin installed and Zotero running?"))))))))
 
@@ -175,7 +193,7 @@
                             :margin-top "2px"}})
         (dom/text (format-meta item))))))
 
-(e/defn VirtualItemList [filtered on-pick]
+(e/defn VirtualItemList [filtered on-pick empty-message]
   (e/client
     (let [row-count (count filtered)]
       (dom/div
@@ -204,7 +222,7 @@
                   (dom/props {:style {:padding "24px 12px" :text-align "center"
                                       :color "var(--color-text-secondary)"
                                       :font-size "13px"}})
-                  (dom/text "No items match your filter.")))))
+                  (dom/text empty-message)))))
           (dom/div (dom/props {:style {:height (str occluded "px")}})))))))
 
 (e/defn AttachmentChooser [candidates on-pick on-cancel]
@@ -263,6 +281,7 @@
   (e/client
     (let [!stage (atom :loading)
           !all-items (atom [])
+          !raw-total (atom 0)
           !query (atom "")
           !error (atom nil)
           !candidates (atom nil)
@@ -270,6 +289,7 @@
           stage (e/watch !stage)
           query (e/watch !query)
           all-items (e/watch !all-items)
+          raw-total (e/watch !raw-total)
           candidates (e/watch !candidates)
           filtered (filter-items all-items query)
           total (count all-items)
@@ -293,8 +313,9 @@
             (reset! !stage :loading)
             (reset! !error nil)
             (fetch-all-items!
-              (fn [items _total]
+              (fn [items raw]
                 (reset! !all-items (vec items))
+                (reset! !raw-total raw)
                 (reset! !stage :browsing))
               on-error!))
 
@@ -386,6 +407,8 @@
                                 :margin-bottom "var(--sp-3)"}})
             (dom/text
               (str "Library — " total " item" (when (not= total 1) "s")
+                (when (and (pos? raw-total) (not= raw-total total))
+                  (str " (filtered from " raw-total ")"))
                 (when (and (seq query) (not= shown total))
                   (str " (" shown " shown)")))))
 
@@ -400,4 +423,7 @@
             ;; :browsing (default)
             (do
               (SearchBar !query)
-              (VirtualItemList filtered pick-item!))))))))
+              (VirtualItemList filtered pick-item!
+                (if (zero? total)
+                  "No bibliographic items in your Zotero library."
+                  "No items match your filter.")))))))))
