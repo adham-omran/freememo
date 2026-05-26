@@ -18,6 +18,19 @@
 ;; Quill config — shared with rich_text_editor.cljc via this defn.
 ;; ---------------------------------------------------------------------------
 
+;; Mirror of the icon override in rich_text_editor.cljc — idempotent (same SVG
+;; string; either ns loading first sets it). See that ns for context.
+#?(:cljs
+   (defonce ^:private code-block-icon-installed?
+     (let [icons (.import js/Quill "ui/icons")]
+       (aset icons "code-block"
+         (str "<svg viewbox=\"0 0 18 18\">"
+           "<rect class=\"ql-stroke\" x=\"2\" y=\"4\" width=\"14\" height=\"10\" rx=\"1\" ry=\"1\" fill=\"none\"/>"
+           "<polyline class=\"ql-stroke\" points=\"5 7 7 9 5 11\" fill=\"none\"/>"
+           "<line class=\"ql-stroke\" x1=\"9\" y1=\"11\" x2=\"13\" y2=\"11\"/>"
+           "</svg>"))
+       true)))
+
 (defn quill-config
   "Returns the Quill constructor options map (passed via clj->js).
    Same toolbar, syntax module, and modules as the main editor so the card
@@ -39,21 +52,21 @@
              ;; Syntax module — requires window.hljs + clojure pack (loaded in
              ;; index*.html). Same `:languages` list as the main editor for
              ;; consistent picker UX across modals and the page editor.
-             :syntax {:languages [{:key "plain"      :label "Plain"}
-                                  {:key "bash"       :label "Bash"}
-                                  {:key "cpp"        :label "C++"}
-                                  {:key "cs"         :label "C#"}
-                                  {:key "clojure"    :label "Clojure"}
-                                  {:key "css"        :label "CSS"}
-                                  {:key "diff"       :label "Diff"}
-                                  {:key "xml"        :label "HTML/XML"}
-                                  {:key "java"       :label "Java"}
+             :syntax {:languages [{:key "plain" :label "Plain"}
+                                  {:key "bash" :label "Bash"}
+                                  {:key "cpp" :label "C++"}
+                                  {:key "cs" :label "C#"}
+                                  {:key "clojure" :label "Clojure"}
+                                  {:key "css" :label "CSS"}
+                                  {:key "diff" :label "Diff"}
+                                  {:key "xml" :label "HTML/XML"}
+                                  {:key "java" :label "Java"}
                                   {:key "javascript" :label "JavaScript"}
-                                  {:key "markdown"   :label "Markdown"}
-                                  {:key "php"        :label "PHP"}
-                                  {:key "python"     :label "Python"}
-                                  {:key "ruby"       :label "Ruby"}
-                                  {:key "sql"        :label "SQL"}]}
+                                  {:key "markdown" :label "Markdown"}
+                                  {:key "php" :label "PHP"}
+                                  {:key "python" :label "Python"}
+                                  {:key "ruby" :label "Ruby"}
+                                  {:key "sql" :label "SQL"}]}
              :table true}
    :placeholder (or placeholder "Enter text...")})
 
