@@ -2,6 +2,7 @@
   "Add-new-card toolbar button + modal trigger. Extracted from
    content_toolbar_actions so each e/defn stays under the JVM 64KB limit."
   (:require
+   [clojure.string :as str]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
@@ -26,7 +27,8 @@
         (e/on-unmount (fn [] (reset! keyboard/!add-new-btn-ref nil)))
         (dom/On "click"
           (fn [_]
-            (reset! !captured-selection (or (editor/get-selected-text!) ""))
+            (let [{:keys [html text]} (editor/get-selection-html!)]
+              (reset! !captured-selection (if (str/blank? text) "" html)))
             (reset! !show-add true))
           nil))
       (when show-add
