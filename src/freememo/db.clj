@@ -1693,6 +1693,9 @@
   (jdbc/execute-one! ds
     ["SELECT title,
             status,
+            priority,
+            interval_days::float8                            AS interval_days,
+            a_factor::float8                                 AS a_factor,
             TO_CHAR(next_review_at, 'YYYY-MM-DD HH24:MI:SS') AS next_review_at,
             CASE WHEN next_review_at IS NULL THEN NULL
                  ELSE (EXTRACT(EPOCH FROM (next_review_at - NOW())) / 86400.0)::float8 END

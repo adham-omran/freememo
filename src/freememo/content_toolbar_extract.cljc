@@ -36,14 +36,21 @@
 
 (e/defn ExtractActions [cfg]
   (e/client
-    (let [{:keys [user-id topic-id extract-status navigate! origin on-done!]} cfg
+    (let [{:keys [user-id topic-id root-topic-id extract-status navigate! origin on-done!]} cfg
           ;; Local modal state — CLJS-side atom flipped by the History button
           ;; and the modal's own dismiss handlers (backdrop click / Escape / X).
           !history-open? (atom false)
           ;; Reactive :refresh value powers the modal's re-query on session
           ;; mutations (advance/touch/postpone/done/restore/priority-change all
           ;; bump :refresh, so the table updates immediately after each event).
-          history-refresh (e/server (e/watch (us/get-atom user-id :refresh)))]
+          history-refresh (e/server (e/watch (us/get-atom user-id :refresh)))
+          ;; History scopes to the document, not the page. In PDF context
+          ;; (extract-status nil per content_toolbar.cljc's pass-through),
+          ;; :root-topic-id is the PDF root (topic_page.cljc:518 passes
+          ;; `(or pdf-root-id root-topic-id)`). For extract/wiki/epub topics
+          ;; (extract-status non-nil), each topic has its own rep schedule —
+          ;; show its own history.
+          history-topic-id (if extract-status topic-id (or root-topic-id topic-id))]
 
       ;; History button — visible for all topic kinds (per spec §8.1). Sits
       ;; immediately before Done/Restore so when extract-status is set the
@@ -60,7 +67,7 @@
 
       ;; Modal mounted unconditionally — its body is gated on `@!history-open?`,
       ;; so an unopened modal is a cheap no-op in the reactive graph.
-      (HistoryModal topic-id !history-open? history-refresh)
+      (HistoryModal history-topic-id !history-open? history-refresh)
 
       ;; Done/Restore button — only for extract topics (not PDF pages).
       ;; `busy` holds the active branch open during the queue-advance transition:

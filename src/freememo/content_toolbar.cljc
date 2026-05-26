@@ -357,7 +357,8 @@
                 (dom/span (dom/props {:class "toolbar-group-divider"})))
 
           ;; Done/Restore + Delete — extract topics only (separate e/defn for bytecode limit)
-              (ExtractActions {:user-id user-id :topic-id topic-id :extract-status extract-status
+              (ExtractActions {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
+                               :extract-status extract-status
                                :navigate! navigate! :origin origin :on-done! on-done!})
 
           ;; Overflow trigger — visible only on mobile/tablet via CSS

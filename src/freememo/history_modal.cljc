@@ -1,10 +1,10 @@
 (ns freememo.history-modal
-  "Per-topic repetition history modal. Mirrors SuperMemo's Repetition History
-   window: chronological table of session-driven events with pre-mutation
-   snapshot of SR-relevant fields. Triggered from ContentToolbar/ExtractActions.
-   Rows come from db/get-topic-history (server-formatted timestamps + LAG-derived
-   interval gap). A leading 'Next' row shows the topic's currently-scheduled
-   next review, mirroring SuperMemo's top-of-history Next entry."
+  "Per-topic repetition history modal. Item-level scheduling state
+   (priority, interval, A-factor) renders as metric cards above the table;
+   the upcoming review is an info-tinted callout; the table itself shows
+   past events only as Time / Action / Δ. Triggered from
+   ContentToolbar/ExtractActions. Past rows come from db/get-topic-history;
+   current scheduling state comes from db/get-topic-next-review."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -38,15 +38,13 @@
 
 ;; -- Formatters --------------------------------------------------------------
 ;; Cross-platform (CLJ + CLJS) so Electric's dual compiler can resolve every
-;; call regardless of which side ultimately renders. Inputs are scalars from
-;; db queries (strings + numbers); date formatting itself happens server-side
-;; via TO_CHAR.
+;; call regardless of which side ultimately renders.
 ;;
 ;; `coerce-double` defends against non-Double numerics crossing the Transit
 ;; wire (e.g. PostgreSQL NUMERIC returns as a tagged value in CLJS rather
-;; than a JS number). Without this coercion, `.toFixed` fails with
-;; "n.toFixed is not a function" on rows from server builds where the SQL
-;; cast to float8 has not been hot-reloaded.
+;; than a JS number) — without it, `.toFixed` fails with "n.toFixed is not
+;; a function" on rows from server builds where the SQL cast to float8 has
+;; not been hot-reloaded.
 
 (defn- coerce-double [n]
   (cond
@@ -70,7 +68,7 @@
 
 (defn fmt-days
   "Render an interval in days. nil/unparseable → blank; negative renders with
-   leading minus (a 'next' row may be overdue)."
+   leading minus."
   [n]
   (let [d (coerce-double n)]
     (if (nil? d)
@@ -82,150 +80,144 @@
 (defn fmt-priority [p]
   (if (nil? p) "—" (str p)))
 
-(defn event-label
-  "User-facing label for an event_type."
-  [t]
-  (case t
-    "advance"         "Advance"
-    "touch"           "Touch"
-    "postpone"        "Postpone"
-    "done"            "Done"
-    "restore"         "Restore"
-    "priority-change" "Priority"
-    t))
+(defn- fmt-interval-days
+  "Interval rendered with explicit unit suffix for the metric card."
+  [n]
+  (let [d (coerce-double n)]
+    (if (nil? d) "—" (str (fmt-num d 2) " d"))))
 
-(defn event-color
-  "Color hint for the event-type badge."
-  [t]
-  (case t
-    "advance"         "var(--color-primary)"
-    "touch"           "var(--color-text-secondary)"
-    "postpone"        "var(--color-warning, #b8860b)"
-    "done"            "var(--color-success-dark)"
-    "restore"         "var(--color-primary)"
-    "priority-change" "var(--color-text-secondary)"
-    "var(--color-text-secondary)"))
+;; event_type → [bg-var fg-var past-tense-label icon-or-nil].
+;; All six event types log past actions; the pill encodes them uniformly so
+;; the reduced 3-col table loses no information.
+(def ^:private event-pill
+  {"done"            ["--color-success-light" "--color-success-dark"   "Done"             :check]
+   "restore"         ["--color-info-bg-light" "--color-primary"        "Restored"         :refresh-cw]
+   "advance"         ["--color-info-bg-light" "--color-primary"        "Advanced"         nil]
+   "touch"           ["--color-bg-subtle"     "--color-text-secondary" "Touched"          nil]
+   "postpone"        ["--color-warning-light" "--color-warning-dark"   "Postponed"        nil]
+   "priority-change" ["--color-bg-subtle"     "--color-text-secondary" "Priority changed" nil]})
 
-;; Grid: time | Δ since prev | event | status | priority | interval | a-factor | next | last
-;; Timestamp columns (Time/Next/Last) sized to fit "YYYY-MM-DD HH:MM:SS" in a
-;; 13px monospace font without truncation. Total = 970px; modal width sized
-;; to accommodate.
-(def ^:private grid-cols "180px 60px 90px 70px 60px 80px 70px 180px 180px")
+(def ^:private default-pill
+  ["--color-bg-subtle" "--color-text-secondary" nil nil])
 
-(e/defn HistoryHeader []
+(e/defn MetricCard [label value]
   (e/client
-    (let [th-base {:padding "8px 8px"
-                   :border-bottom "2px solid var(--color-border)"
-                   :font-weight "600"
-                   :color "var(--color-text-primary)"
-                   :text-align "left"
-                   :font-size "12px"
-                   :text-transform "uppercase"
-                   :letter-spacing "0.04em"}]
+    (dom/div
+      (dom/props {:style {:background "var(--color-bg-subtle)"
+                          :border-radius "var(--radius-lg)"
+                          :padding "10px 12px"
+                          :flex "1"
+                          :min-width "0"}})
+      (dom/div
+        (dom/props {:style {:font-size "12px"
+                            :font-weight "400"
+                            :color "var(--color-text-secondary)"
+                            :text-transform "uppercase"
+                            :letter-spacing "0.04em"
+                            :margin-bottom "4px"}})
+        (dom/text label))
+      (dom/div
+        (dom/props {:style {:font-size "18px"
+                            :font-weight "500"
+                            :color "var(--color-text-primary)"}})
+        (dom/text value)))))
+
+(e/defn UpNextCallout [next-info]
+  (e/client
+    (let [next-at (:next_review_at next-info)
+          status  (:status next-info)]
+      ;; Done topics keep their last next_review_at in the row (only restore-topic!
+      ;; nulls it; see db.clj/done-topic!). Filter by status, not by date alone.
+      (when (and next-at (not= status "done"))
+        (dom/div
+          (dom/props {:style {:display "flex"
+                              :align-items "center"
+                              :gap "10px"
+                              :background "var(--color-info-bg-light)"
+                              :color "var(--color-primary)"
+                              :border-radius "var(--radius-lg)"
+                              :padding "10px 12px"
+                              :margin-top "var(--sp-3)"}})
+          (icons/Icon :clock :size 18)
+          (dom/div
+            (dom/props {:style {:display "flex" :flex-direction "column" :gap "2px" :min-width "0"}})
+            (dom/div
+              (dom/props {:style {:font-size "12px" :font-weight "500"}})
+              (dom/text "Up next"))
+            (dom/div
+              (dom/props {:style {:font-size "13px" :font-weight "400"}})
+              (dom/span
+                (dom/props {:style {:font-family "ui-monospace, monospace"}})
+                (dom/text next-at))
+              (dom/span (dom/text " · "))
+              (dom/span (dom/text (or status "—"))))))))))
+
+(e/defn ActionPill [event-type]
+  (e/client
+    (let [[bg fg label icon] (get event-pill event-type default-pill)
+          display-label (or label event-type)]
+      (dom/span
+        (dom/props {:style {:display "inline-flex"
+                            :align-items "center"
+                            :gap "4px"
+                            :padding "2px 10px"
+                            :border-radius "var(--radius-pill)"
+                            :font-size "12px"
+                            :font-weight "500"
+                            :background (str "var(" bg ")")
+                            :color (str "var(" fg ")")}})
+        (when icon (icons/Icon icon :size 12))
+        (dom/text display-label)))))
+
+(e/defn HistoryTableHeader []
+  (e/client
+    (let [th {:padding "8px 8px"
+              :border-bottom "0.5px solid var(--color-border-light)"
+              :font-weight "500"
+              :color "var(--color-text-secondary)"
+              :text-align "left"
+              :font-size "12px"
+              :text-transform "uppercase"
+              :letter-spacing "0.04em"}]
       (dom/thead
         (dom/props {:style {:display "contents"}})
         (dom/tr
           (dom/props {:style {:display "contents"}})
-          (dom/th (dom/props {:style th-base}) (dom/text "Time"))
-          (dom/th (dom/props {:style (assoc th-base :text-align "right")}) (dom/text "Δ"))
-          (dom/th (dom/props {:style th-base}) (dom/text "Event"))
-          (dom/th (dom/props {:style th-base}) (dom/text "Status"))
-          (dom/th (dom/props {:style (assoc th-base :text-align "right")}) (dom/text "Priority"))
-          (dom/th (dom/props {:style (assoc th-base :text-align "right")}) (dom/text "Interval"))
-          (dom/th (dom/props {:style (assoc th-base :text-align "right")}) (dom/text "A-Factor"))
-          (dom/th (dom/props {:style th-base}) (dom/text "Next"))
-          (dom/th (dom/props {:style th-base}) (dom/text "Last")))))))
-
-(e/defn NextRow [next-info]
-  (e/client
-    (let [td {:padding "6px 8px"
-              :border-bottom "1px dashed var(--color-border)"
-              :background "var(--color-bg-subtle, #f5f7fa)"
-              :font-size "13px"
-              :white-space "nowrap"
-              :overflow "hidden"
-              :text-overflow "ellipsis"}
-          status (:status next-info)
-          next-at (:next_review_at next-info)
-          days (:days_until_next next-info)]
-      (dom/tr
-        (dom/props {:style {:display "contents"}})
-        (dom/td (dom/props {:style (assoc td :font-family "ui-monospace, monospace")})
-          (dom/text (or next-at "—")))
-        (dom/td (dom/props {:style (assoc td :text-align "right")})
-          (dom/text (if (nil? days) "" (fmt-days days))))
-        (dom/td (dom/props {:style (assoc td :font-weight "600" :color "var(--color-primary)")})
-          (dom/text "Next"))
-        (dom/td (dom/props {:style td})
-          (dom/text (or status "—")))
-        (dom/td (dom/props {:style (assoc td :text-align "right")}) (dom/text ""))
-        (dom/td (dom/props {:style (assoc td :text-align "right")}) (dom/text ""))
-        (dom/td (dom/props {:style (assoc td :text-align "right")}) (dom/text ""))
-        (dom/td (dom/props {:style td}) (dom/text ""))
-        (dom/td (dom/props {:style td}) (dom/text ""))))))
+          (dom/th (dom/props {:style th}) (dom/text "Time"))
+          (dom/th (dom/props {:style th}) (dom/text "Action"))
+          (dom/th (dom/props {:style (assoc th :text-align "right")}) (dom/text "Δ")))))))
 
 (e/defn HistoryRow [row]
   (e/client
-    (let [td-base {:padding "6px 8px"
-                   :border-bottom "1px solid var(--color-bg-subtle)"
-                   :font-size "13px"
-                   :height "36px"
-                   :line-height "24px"
-                   :white-space "nowrap"
-                   :overflow "hidden"
-                   :text-overflow "ellipsis"}
-          mono (assoc td-base :font-family "ui-monospace, monospace")
-          right (assoc td-base :text-align "right")
-          event-type (:event_type row)]
+    (let [td {:padding "6px 8px"
+              :border-bottom "0.5px solid var(--color-border-light)"
+              :font-size "13px"
+              :white-space "nowrap"
+              :overflow "hidden"
+              :text-overflow "ellipsis"
+              :display "flex"
+              :align-items "center"
+              :height "36px"}
+          mono (assoc td :font-family "ui-monospace, monospace")]
       (dom/tr
         (dom/props {:style {:display "contents"}})
-        ;; Time
         (dom/td (dom/props {:style mono :data-tooltip (str (:event_at row))})
           (dom/text (or (:event_at row) "—")))
-        ;; Δ since prev
-        (dom/td (dom/props {:style right})
-          (dom/text (fmt-days (:interval_since_prev_days row))))
-        ;; Event-type badge
-        (dom/td (dom/props {:style td-base})
-          (dom/span
-            (dom/props {:style {:display "inline-block"
-                                :padding "2px 8px"
-                                :border-radius "10px"
-                                :font-size "11px"
-                                :font-weight "600"
-                                :color "white"
-                                :background (event-color event-type)}})
-            (dom/text (event-label event-type))))
-        ;; Status before
-        (dom/td (dom/props {:style td-base})
-          (dom/text (or (:status_before row) "—")))
-        ;; Priority before
-        (dom/td (dom/props {:style right})
-          (dom/text (fmt-priority (:priority_before row))))
-        ;; Interval-days before
-        (dom/td (dom/props {:style right})
-          (dom/text (fmt-num (:interval_days_before row) 2)))
-        ;; A-factor before
-        (dom/td (dom/props {:style right})
-          (dom/text (fmt-num (:a_factor_before row) 2)))
-        ;; Next-review before
-        (dom/td (dom/props {:style (assoc mono :font-size "12px")
-                            :data-tooltip (str (:next_review_at_before row))})
-          (dom/text (or (:next_review_at_before row) "—")))
-        ;; Last-review before
-        (dom/td (dom/props {:style (assoc mono :font-size "12px")
-                            :data-tooltip (str (:last_review_at_before row))})
-          (dom/text (or (:last_review_at_before row) "—")))))))
+        (dom/td (dom/props {:style td})
+          (ActionPill (:event_type row)))
+        (dom/td (dom/props {:style (assoc mono :justify-content "flex-end")})
+          (dom/text (fmt-days (:interval_since_prev_days row))))))))
 
 ;; Pre:  `topic-id` identifies an existing topic owned by the current user.
-;;       `!open?` is the modal's open/closed atom — the caller flips it true
-;;       to open and the modal flips it false when the user dismisses.
-;;       `refresh` is the already-watched value of the user's :refresh channel
-;;       (caller does `(e/server (e/watch (us/get-atom user-id :refresh)))`).
-;;       Bumped by session mutations so the table re-queries reactively.
-;; Post: While `@!open?` is true, a fixed backdrop + modal renders. Rows are
-;;       re-queried whenever `refresh` changes so a fresh rep advances the
-;;       table immediately after the user clicks Next/Done/Postpone.
+;;       `!open?` is the modal's open/closed atom — caller flips true to
+;;       open; modal flips false on dismiss (X / Escape / backdrop click).
+;;       `refresh` is the already-watched value of the user's :refresh
+;;       channel. Bumped by session mutations so the table re-queries
+;;       reactively.
+;; Post: While `@!open?` is true, a fixed backdrop + modal renders. Metric
+;;       cards reflect the topic's CURRENT scheduling parameters. The
+;;       Up-next callout shows the scheduled next review (omitted when
+;;       next_review_at is nil). The table lists past events newest-first.
 (e/defn HistoryModal [topic-id !open? refresh]
   (e/client
     (let [open? (e/watch !open?)]
@@ -237,61 +229,97 @@
           (dom/div
             (dom/props {:class "modal-backdrop"})
             (dom/On "click" (fn [_] (reset! !open? false)) nil)
-            ;; Escape-to-close. Document-level listener (vs. dom/On "keydown"
-            ;; on this div, which would require focus on the backdrop to fire).
-            ;; let-bind the cleanup so install runs exactly once at mount —
-            ;; mirrors toolbar_generate_dropdown.cljc:install-dropdown-listeners!.
             (let [cleanup (install-escape-listener! !open?)]
               (e/on-unmount cleanup))
             (dom/div
-              (dom/props {:class "modal-content modal-lg"
-                          :style {:width "min(1020px, 95vw)"
+              (dom/props {:class "modal-content"
+                          :style {:width "min(680px, 95vw)"
                                   :max-height "85vh"
                                   :overflow "hidden"
                                   :display "flex"
-                                  :flex-direction "column"}})
+                                  :flex-direction "column"
+                                  :padding "0"}})
               (dom/On "click" (fn [e] (.stopPropagation e)) nil)
               ;; Header
               (dom/div
                 (dom/props {:style {:padding "16px 20px"
-                                    :border-bottom "1px solid var(--color-border)"
+                                    :border-bottom "0.5px solid var(--color-border-light)"
                                     :display "flex"
                                     :align-items "center"
-                                    :justify-content "space-between"}})
+                                    :justify-content "space-between"
+                                    :gap "12px"}})
                 (dom/div
+                  (dom/props {:style {:min-width "0"}})
                   (dom/h3
-                    (dom/props {:style {:margin "0" :font-size "16px" :font-weight "600"}})
+                    (dom/props {:style {:margin "0" :font-size "16px" :font-weight "500"}})
                     (dom/text "Repetition history"))
                   (dom/div
-                    (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)" :margin-top "2px"}})
+                    (dom/props {:style {:font-size "13px"
+                                        :font-weight "400"
+                                        :color "var(--color-text-secondary)"
+                                        :margin-top "2px"
+                                        :overflow "hidden"
+                                        :text-overflow "ellipsis"
+                                        :white-space "nowrap"}})
                     (dom/text (str (or topic-title "Topic")
                                 " · " row-count " event" (when (not= row-count 1) "s")))))
                 (dom/button
-                  (dom/props {:class "btn btn-sm btn-secondary" :aria-label "Close"})
-                  (icons/Icon :x :size 16)
+                  (dom/props {:aria-label "Close"
+                              :style {:width "28px"
+                                      :height "28px"
+                                      :display "inline-flex"
+                                      :align-items "center"
+                                      :justify-content "center"
+                                      :flex "0 0 28px"
+                                      :background "transparent"
+                                      :border "0.5px solid var(--color-border)"
+                                      :border-radius "var(--radius-md)"
+                                      :color "var(--color-text-secondary)"
+                                      :cursor "pointer"
+                                      :padding "0"}})
+                  (icons/Icon :x :size 14)
                   (dom/On "click" (fn [_] (reset! !open? false)) nil)))
-              ;; Table
+              ;; Body
               (dom/div
-                (dom/props {:class "tape-scroll"
-                            :style {:flex "1 1 auto"
+                (dom/props {:style {:padding "16px 20px"
                                     :overflow "auto"
-                                    :padding "0 4px 8px"
-                                    :--row-height "36px"}})
+                                    :flex "1 1 auto"}})
+                ;; Metric cards
+                (when next-info
+                  (dom/div
+                    (dom/props {:style {:display "flex"
+                                        :gap "var(--sp-3)"}})
+                    (MetricCard "Priority" (fmt-priority (:priority next-info)))
+                    (MetricCard "Interval" (fmt-interval-days (:interval_days next-info)))
+                    (MetricCard "A-Factor" (fmt-num (:a_factor next-info) 2))))
+                ;; Up-next callout
+                (UpNextCallout next-info)
+                ;; History section label
+                (dom/div
+                  (dom/props {:style {:font-size "12px"
+                                      :font-weight "400"
+                                      :color "var(--color-text-secondary)"
+                                      :text-transform "uppercase"
+                                      :letter-spacing "0.04em"
+                                      :margin "16px 0 8px"}})
+                  (dom/text "History"))
+                ;; Table
                 (dom/table
                   (dom/props {:style {:width "100%"
                                       :display "grid"
-                                      :grid-template-columns grid-cols
+                                      :grid-template-columns "180px 1fr 80px"
                                       :font-size "13px"}})
-                  (HistoryHeader)
-                  (when next-info (NextRow next-info))
+                  (HistoryTableHeader)
                   (if (pos? row-count)
                     (e/for [row (e/diff-by :id rows)]
                       (HistoryRow row))
                     (dom/tr
+                      (dom/props {:style {:display "contents"}})
                       (dom/td
                         (dom/props {:style {:grid-column "1 / -1"
                                             :text-align "center"
                                             :padding "24px 12px"
                                             :color "var(--color-text-secondary)"
-                                            :font-size "13px"}})
+                                            :font-size "13px"
+                                            :font-weight "400"}})
                         (dom/text "No repetitions yet. Mark this topic Next/Postpone/Done in a learn session to log events.")))))))))))))
