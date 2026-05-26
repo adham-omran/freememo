@@ -47,6 +47,20 @@
     (str content "\n<hr class=\"fm-source\"><small style='color:#999'>Source: " source-ref "</small>")
     content))
 
+(defn wrap-fm-source
+  "Wrap source-anchor HTML in <p class=\"fm-source\"> for separate-field emission. No-op on blank input."
+  [source-html]
+  (if (str/blank? source-html)
+    source-html
+    (str "<p class=\"fm-source\">" source-html "</p>")))
+
+(defn wrap-fm-bibliography
+  "Wrap bibliography body HTML in <p class=\"fm-bibliography\"> for separate-field emission. No-op on blank input."
+  [bib-html]
+  (if (str/blank? bib-html)
+    bib-html
+    (str "<p class=\"fm-bibliography\">" bib-html "</p>")))
+
 (declare html-escape)
 
 (defn format-bibliography-html
@@ -59,24 +73,24 @@
   [csl]
   #?(:clj
      (when (map? csl)
-       (let [title       (some-> (:title csl) str/trim not-empty)
-             url         (some-> (:URL csl) str/trim not-empty)
-             first-auth  (first (:author csl))
-             author      (or (some-> (:family first-auth) str/trim not-empty)
-                           (some-> (:given first-auth) str/trim not-empty))
-             year        (some-> csl :issued :date-parts first first)
-             title-html  (when title
-                           (if url
-                             (str "<a href=\"" (html-escape url) "\">"
-                               (html-escape title) "</a>")
-                             (html-escape title)))
+       (let [title (some-> (:title csl) str/trim not-empty)
+             url (some-> (:URL csl) str/trim not-empty)
+             first-auth (first (:author csl))
+             author (or (some-> (:family first-auth) str/trim not-empty)
+                      (some-> (:given first-auth) str/trim not-empty))
+             year (some-> csl :issued :date-parts first first)
+             title-html (when title
+                          (if url
+                            (str "<a href=\"" (html-escape url) "\">"
+                              (html-escape title) "</a>")
+                            (html-escape title)))
              author-html (when author (html-escape author))
-             year-html   (when year (str (when author " ") "(" year ")"))
-             dash        (when (and title-html (or author-html year-html)) " — ")
-             body        (str (or title-html "")
-                           (or dash "")
-                           (or author-html "")
-                           (or year-html ""))]
+             year-html (when year (str (when author " ") "(" year ")"))
+             dash (when (and title-html (or author-html year-html)) " — ")
+             body (str (or title-html "")
+                    (or dash "")
+                    (or author-html "")
+                    (or year-html ""))]
          (when (seq body) body)))
      :cljs nil))
 
@@ -346,8 +360,8 @@
                    src-field-html (wrap-p source-ref)]
                (cond-> {(first fields) main-front
                         (second fields) main-back}
-                 (and field-source? (not same-field?)) (assoc src-field-key src-field-html)
-                 (and field-bib? (not same-field?)) (assoc bib-field-name bibliography-html)
+                 (and field-source? (not same-field?)) (assoc src-field-key (wrap-fm-source source-ref))
+                 (and field-bib? (not same-field?)) (assoc bib-field-name (wrap-fm-bibliography bibliography-html))
                  same-field? (assoc src-field-key
                                (append-bibliography src-field-html bibliography-html))
                  (and field-mode? (seq imgs-front) (seq images-front-field))
@@ -359,8 +373,8 @@
                                 append-source? (append-source source-ref)
                                 append-bib? (append-bibliography bibliography-html))]
                (cond-> {(first fields) cloze-html}
-                 (and field-source? (not same-field?)) (assoc src-field-key source-ref)
-                 (and field-bib? (not same-field?)) (assoc bib-field-name bibliography-html)
+                 (and field-source? (not same-field?)) (assoc src-field-key (wrap-fm-source source-ref))
+                 (and field-bib? (not same-field?)) (assoc bib-field-name (wrap-fm-bibliography bibliography-html))
                  same-field? (assoc src-field-key
                                (append-bibliography source-ref bibliography-html)))))]
        (cond-> {:deckName deck
@@ -408,8 +422,8 @@
                src-field-html (wrap-p source-ref)]
            (cond-> {(first fields) main-front
                     (second fields) main-back}
-             (and field-src? (not same-field?)) (assoc src-field-key src-field-html)
-             (and field-bib? (not same-field?)) (assoc bib-field-name bibliography-html)
+             (and field-src? (not same-field?)) (assoc src-field-key (wrap-fm-source source-ref))
+             (and field-bib? (not same-field?)) (assoc bib-field-name (wrap-fm-bibliography bibliography-html))
              same-field? (assoc src-field-key
                            (append-bibliography src-field-html bibliography-html))
              (and field-mode? (seq imgs-front) (seq images-front-field))
@@ -420,8 +434,8 @@
                             append-src? (append-source source-ref)
                             append-bib? (append-bibliography bibliography-html))]
            (cond-> {(first fields) cloze-html}
-             (and field-src? (not same-field?)) (assoc src-field-key source-ref)
-             (and field-bib? (not same-field?)) (assoc bib-field-name bibliography-html)
+             (and field-src? (not same-field?)) (assoc src-field-key (wrap-fm-source source-ref))
+             (and field-bib? (not same-field?)) (assoc bib-field-name (wrap-fm-bibliography bibliography-html))
              same-field? (assoc src-field-key
                            (append-bibliography source-ref bibliography-html))))))))
 
