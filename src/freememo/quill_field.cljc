@@ -32,7 +32,7 @@
                        [{"list" "ordered"} {"list" "bullet"}]
                        [{"align" []}]
                        [{"direction" "rtl"}]
-                       ["code-block"]
+                       ["code" "code-block"]
                        ["clean"]
                        ["image"]
                        ["table"]]

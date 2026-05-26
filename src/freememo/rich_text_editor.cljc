@@ -75,6 +75,7 @@
                                   [".ql-background .ql-picker-label" "Background Color"]
                                   [".ql-size .ql-picker-label" "Font Size"]
                                   [".ql-direction" "Text Direction (RTL)"]
+                                  [".ql-code" "Inline Code"]
                                   [".ql-code-block" "Code Block"]
                                   [".ql-clean" "Clear Formatting"]]]
          (when-let [^js el (.querySelector toolbar-el selector)]
@@ -229,7 +230,7 @@
                                                         [{"list" "ordered"} {"list" "bullet"}]
                                                         [{"align" []}]
                                                         [{"direction" "rtl"}]
-                                                        ["code-block"]
+                                                        ["code" "code-block"]
                                                         ["clean"]
                                                         ["table"]]
                                               ;; Quill 2 syntax module — requires window.hljs (loaded in index*.html).
