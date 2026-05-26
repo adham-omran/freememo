@@ -30,6 +30,20 @@
 ;; click handler reads selection. Shape: {:index N :length N} or nil.
 (defonce !last-selection (atom nil))
 
+;; Quill 2.0.3 ships one `code.svg` aliased to both "code" and "code-block",
+;; making the two toolbar buttons visually identical. Override "code-block"
+;; with a terminal-frame glyph so users can distinguish inline from block.
+;; Inline "code" stays on Quill's default `</>` icon.
+#?(:cljs
+   (defonce ^:private code-block-icon-installed?
+     (let [icons (.import js/Quill "ui/icons")]
+       (aset icons "code-block"
+         (str "<svg viewbox=\"0 0 18 18\">"
+           "<rect class=\"ql-stroke\" x=\"2\" y=\"4\" width=\"14\" height=\"10\" rx=\"1\" ry=\"1\" fill=\"none\"/>"
+           "<polyline class=\"ql-stroke\" points=\"5 7 7 9 5 11\" fill=\"none\"/>"
+           "<line class=\"ql-stroke\" x1=\"9\" y1=\"12\" x2=\"13\" y2=\"12\"/>"
+           "</svg>"))
+       true)))
 
 (defn destroy-editor!
   "Destroy the current global editor instance (if any)."
@@ -62,22 +76,22 @@
      (when-let [^js toolbar-el (some-> ^js editor .-container .-parentNode
                                  (.querySelector ".ql-toolbar"))]
        (doseq [[selector title] [[".ql-bold" "Bold"]
-                                  [".ql-italic" "Italic"]
-                                  [".ql-underline" "Underline"]
-                                  [".ql-strike" "Strikethrough"]
-                                  [".ql-header[value=\"1\"]" "Heading 1"]
-                                  [".ql-header[value=\"2\"]" "Heading 2"]
-                                  [".ql-header[value=\"3\"]" "Heading 3"]
-                                  [".ql-list[value=\"ordered\"]" "Numbered List"]
-                                  [".ql-list[value=\"bullet\"]" "Bullet List"]
-                                  [".ql-align .ql-picker-label" "Alignment"]
-                                  [".ql-color .ql-picker-label" "Text Color"]
-                                  [".ql-background .ql-picker-label" "Background Color"]
-                                  [".ql-size .ql-picker-label" "Font Size"]
-                                  [".ql-direction" "Text Direction (RTL)"]
-                                  [".ql-code" "Inline Code"]
-                                  [".ql-code-block" "Code Block"]
-                                  [".ql-clean" "Clear Formatting"]]]
+                                 [".ql-italic" "Italic"]
+                                 [".ql-underline" "Underline"]
+                                 [".ql-strike" "Strikethrough"]
+                                 [".ql-header[value=\"1\"]" "Heading 1"]
+                                 [".ql-header[value=\"2\"]" "Heading 2"]
+                                 [".ql-header[value=\"3\"]" "Heading 3"]
+                                 [".ql-list[value=\"ordered\"]" "Numbered List"]
+                                 [".ql-list[value=\"bullet\"]" "Bullet List"]
+                                 [".ql-align .ql-picker-label" "Alignment"]
+                                 [".ql-color .ql-picker-label" "Text Color"]
+                                 [".ql-background .ql-picker-label" "Background Color"]
+                                 [".ql-size .ql-picker-label" "Font Size"]
+                                 [".ql-direction" "Text Direction (RTL)"]
+                                 [".ql-code" "Inline Code"]
+                                 [".ql-code-block" "Code Block"]
+                                 [".ql-clean" "Clear Formatting"]]]
          (when-let [^js el (.querySelector toolbar-el selector)]
            (.setAttribute el "title" title))))
      :clj nil))
@@ -238,21 +252,21 @@
                                               ;; html-cleaner carves out `.ql-code-block-container` so the spans survive.
                                               ;; `:languages` overrides Quill's 14-item default to insert Clojure
                                               ;; (its language pack is loaded in index*.html alongside highlight.min.js).
-                                              :syntax {:languages [{:key "plain"      :label "Plain"}
-                                                                   {:key "bash"       :label "Bash"}
-                                                                   {:key "cpp"        :label "C++"}
-                                                                   {:key "cs"         :label "C#"}
-                                                                   {:key "clojure"    :label "Clojure"}
-                                                                   {:key "css"        :label "CSS"}
-                                                                   {:key "diff"       :label "Diff"}
-                                                                   {:key "xml"        :label "HTML/XML"}
-                                                                   {:key "java"       :label "Java"}
+                                              :syntax {:languages [{:key "plain" :label "Plain"}
+                                                                   {:key "bash" :label "Bash"}
+                                                                   {:key "cpp" :label "C++"}
+                                                                   {:key "cs" :label "C#"}
+                                                                   {:key "clojure" :label "Clojure"}
+                                                                   {:key "css" :label "CSS"}
+                                                                   {:key "diff" :label "Diff"}
+                                                                   {:key "xml" :label "HTML/XML"}
+                                                                   {:key "java" :label "Java"}
                                                                    {:key "javascript" :label "JavaScript"}
-                                                                   {:key "markdown"   :label "Markdown"}
-                                                                   {:key "php"        :label "PHP"}
-                                                                   {:key "python"     :label "Python"}
-                                                                   {:key "ruby"       :label "Ruby"}
-                                                                   {:key "sql"        :label "SQL"}]}
+                                                                   {:key "markdown" :label "Markdown"}
+                                                                   {:key "php" :label "PHP"}
+                                                                   {:key "python" :label "Python"}
+                                                                   {:key "ruby" :label "Ruby"}
+                                                                   {:key "sql" :label "SQL"}]}
                                               :table true}
                                     :placeholder "Enter text..."}))
              ^js clipboard (.-clipboard editor)
