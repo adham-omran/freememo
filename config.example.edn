@@ -1,0 +1,43 @@
+;; FreeMemo credit system configuration.
+;;
+;; Copy this file to `config.edn` (gitignored) and fill real values.
+;; config.edn is read once at startup from the working directory — restart to
+;; pick up changes.
+;;
+;; Three sections:
+;;   :credits     — economic tunables (rates, FX, markup, presets, grants).
+;;   :deployment  — deployment flags (CREDITS_ENABLED, WAYL_ENV).
+;;   :secrets     — credentials (Wayl token + webhook secret, platform OpenAI key).
+;;
+;; Env vars take precedence over :deployment / :secrets entries. Names map
+;; lowercased-kebab → SCREAMING_SNAKE (e.g. :credits-enabled? ↔ CREDITS_ENABLED).
+;; See plans/credits-wayl-payment-system.md §5.3.
+
+{:credits
+ {;; Markup multiplier applied to OpenAI cost on the debit side.
+  :markup nil
+
+  ;; IQD per 1 USD. Update when the rate (or OpenAI prices) move, else margin erodes.
+  :fx-iqd-per-usd nil
+
+  ;; OpenAI price in USD per 1,000,000 tokens, per class. Fill from your OpenAI
+  ;; dashboard. :cached-input is the discounted rate for cached prompt tokens.
+  :models {"gpt-5.1" {:input 0.0 :cached-input 0.0 :output 0.0}}
+
+  ;; Top-up amounts shown as buttons, in IQD (Wayl minimum per link is 1000).
+  :presets [nil]
+
+  ;; One-time credit grants, in IQD.
+  :signup-grant nil
+  :grandfather-grant nil}
+
+ ;; Deployment flags — also accept env vars CREDITS_ENABLED, WAYL_ENV.
+ :deployment
+ {:credits-enabled? false   ;; true = official (platform key + billing); false = self-host (BYO key)
+  :wayl-env "test"}         ;; "test" routes to staging; "live" to prod
+
+ ;; Secrets — also accept env vars WAYL_MERCHANT_TOKEN, WAYL_WEBHOOK_SECRET, PLATFORM_OPENAI_API_KEY.
+ :secrets
+ {:wayl-merchant-token nil      ;; X-WAYL-AUTHENTICATION header for Wayl API
+  :wayl-webhook-secret nil      ;; shared secret for HMAC-SHA256 webhook verification
+  :platform-openai-api-key nil}}

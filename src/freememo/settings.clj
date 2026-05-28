@@ -3,6 +3,7 @@
   (:require
    [freememo.db :as db]
    [freememo.crypto :as crypto]
+   [freememo.config :as config]
    [freememo.input-check :as input]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
@@ -47,6 +48,7 @@
 (def PRE_PROMPT_HISTORY "pre_prompt_history")
 (def CARD_FONT_SIZE "card_font_size")
 (def SCAN_DPI "scan_dpi")
+(def CARD_GEN_MAX_RETRIES "card_gen_max_retries")
 (def PROMPT_SYSTEM "prompt_system")
 (def PROMPT_OCR "prompt_ocr")
 (def EMAIL_UPDATES "email_updates")
@@ -78,12 +80,23 @@
   (let [k (some-> (System/getenv "OPENAI_DEMO_KEY") str/trim)]
     (when (seq k) k)))
 
-(defn get-openai-api-key [user-id enc-key]
-  (or (get-user-openai-api-key user-id enc-key)
-      (get-shared-openai-api-key)))
+(defn get-openai-api-key
+  "Resolve the OpenAI key for a request.
+   Official (CREDITS_ENABLED): the platform key only — no BYO, no demo (Choice B).
+   Self-host: per-user key → demo fallback (unchanged)."
+  [user-id enc-key]
+  (if (config/credits-enabled?)
+    (config/platform-openai-api-key)
+    (or (get-user-openai-api-key user-id enc-key)
+        (get-shared-openai-api-key))))
 
-(defn get-openai-api-key-status [user-id enc-key]
+(defn get-openai-api-key-status
+  "Status for the settings UI. :platform in official mode (key block hidden);
+   :user / :shared / :none in self-host."
+  [user-id enc-key]
   (cond
+    (config/credits-enabled?)
+    {:source :platform :configured? (some? (config/platform-openai-api-key))}
     (some? (get-user-openai-api-key user-id enc-key))
     {:source :user :configured? true}
     (some? (get-shared-openai-api-key))
@@ -536,6 +549,23 @@
     (catch Exception e
       (tel/error! {:id ::save-scan-dpi} e)
       {:success false :error "Failed to save scan DPI"})))
+
+(defn get-card-gen-max-retries
+  "Max card-generation attempts on count mismatch (1–3, default 2). All attempts
+   are billed (§5.4.5), so a lower value caps billed retries."
+  [user-id]
+  (try
+    (max 1 (min 3 (Integer/parseInt (or (db/get-setting user-id CARD_GEN_MAX_RETRIES) "2"))))
+    (catch Exception _ 2)))
+
+(defn save-card-gen-max-retries [user-id value]
+  (try
+    (let [n (max 1 (min 3 (Integer/parseInt (str value))))]
+      (db/set-setting user-id CARD_GEN_MAX_RETRIES (str n))
+      {:success true})
+    (catch Exception e
+      (tel/error! {:id ::save-card-gen-max-retries} e)
+      {:success false :error "Failed to save retry setting"})))
 
 (defn get-theme [user-id]
   (or (db/get-setting user-id THEME) "auto"))

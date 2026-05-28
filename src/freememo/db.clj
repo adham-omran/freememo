@@ -13,6 +13,7 @@
    [freememo.html-cleaner :as cleaner]
    [freememo.input-check :as input]
    [freememo.quota :as quota]
+   [freememo.config :as config]
    [freememo.text :as text])
   (:import [org.postgresql.util PGobject]))
 
@@ -20,6 +21,7 @@
 (declare migrate-to-topics!)
 (declare backfill-content-text!)
 (declare backfill-sources!)
+(declare run-grandfather-migration!)
 
 ;; ---------------------------------------------------------------------------
 ;; Connection configuration
@@ -328,6 +330,52 @@
   ;; Backfill content_text for existing rows (idempotent)
   (backfill-content-text!)
 
+  ;; Credits — pass-through AI billing (official deployment only).
+  ;; Per-user IQD balance (denormalized, mirrors usage_bytes) + append-only
+  ;; ledger (source of truth: SUM(amount_iqd) per user == credit_balance_iqd)
+  ;; + Wayl order tracking (reference_id UNIQUE = webhook idempotency).
+  ;; See plans/credits-wayl-payment-system.md §5.1.
+  (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS credit_balance_iqd BIGINT NOT NULL DEFAULT 0"])
+
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS credit_orders (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      reference_id TEXT NOT NULL UNIQUE,
+      amount_iqd BIGINT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','complete','failed')),
+      wayl_code TEXT,
+      wayl_link_id TEXT,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      completed_at TIMESTAMP
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_credit_orders_user
+                      ON credit_orders(user_id, created_at DESC)"])
+
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS credit_transactions (
+      id BIGSERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('purchase','debit','grant','adjustment')),
+      amount_iqd BIGINT NOT NULL,
+      balance_after BIGINT NOT NULL,
+      endpoint TEXT,
+      model TEXT,
+      input_tokens INTEGER,
+      cached_tokens INTEGER,
+      output_tokens INTEGER,
+      reasoning_tokens INTEGER,
+      attempts INTEGER,
+      order_reference_id TEXT,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_credit_transactions_user
+                      ON credit_transactions(user_id, created_at DESC)"])
+
+  ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
+  (run-grandfather-migration!)
+
   (tel/log! :info "Database ready"))
 
 ;; ---------------------------------------------------------------------------
@@ -614,6 +662,166 @@
                  :where [:and
                          [:= :user_id user-id]
                          [:= :key key]]})))
+
+;; ---------------------------------------------------------------------------
+;; Credits — pass-through AI billing (see plans/credits-wayl-payment-system.md §5)
+;; ---------------------------------------------------------------------------
+
+(defn get-credit-balance
+  "Current IQD credit balance for a user. 0 for unknown users.
+   `connectable` defaults to the pool; pass a tx for transactional reads."
+  ([user-id] (get-credit-balance ds user-id))
+  ([connectable user-id]
+   (or (:users/credit_balance_iqd
+         (jdbc/execute-one! connectable
+           ["SELECT credit_balance_iqd FROM users WHERE id = ?" user-id]))
+     0)))
+
+(defn- sum-tokens [maps k] (reduce + 0 (map #(or (k %) 0) maps)))
+
+(defn debit-credits!
+  "Atomic debit for a completed AI action. Locks the balance row, subtracts
+   `cost-iqd`, appends a 'debit' ledger row with summed token detail.
+   Pre:  cost-iqd >= 0; attempts is a non-empty seq of token maps.
+   Post: balance decreased by cost-iqd (may go negative — the gate allows one
+         overshoot); ledger row written. Returns the new balance.
+   Invariant: between SELECT FOR UPDATE and UPDATE no other tx touches the row."
+  [user-id cost-iqd {:keys [endpoint model attempts]}]
+  (jdbc/with-transaction [tx ds]
+    (let [locked (jdbc/execute-one! tx
+                   ["SELECT credit_balance_iqd FROM users WHERE id = ? FOR UPDATE" user-id])
+          bal (or (:users/credit_balance_iqd locked) 0)
+          new-bal (- bal cost-iqd)]
+      (jdbc/execute! tx
+        ["UPDATE users SET credit_balance_iqd = ? WHERE id = ?" new-bal user-id])
+      (jdbc/execute! tx
+        (sql/format {:insert-into :credit_transactions
+                     :values [{:user_id user-id
+                               :kind "debit"
+                               :amount_iqd (- cost-iqd)
+                               :balance_after new-bal
+                               :endpoint endpoint
+                               :model model
+                               :input_tokens (sum-tokens attempts :prompt-tokens)
+                               :cached_tokens (sum-tokens attempts :cached-tokens)
+                               :output_tokens (sum-tokens attempts :completion-tokens)
+                               :reasoning_tokens (sum-tokens attempts :reasoning-tokens)
+                               :attempts (count attempts)}]}))
+      new-bal)))
+
+(defn credit-account!
+  "Add `amount-iqd` to a user's balance + append a credit ledger row.
+   `kind` is \"purchase\" | \"grant\" | \"adjustment\". `connectable` MUST be a
+   live transaction (the SELECT FOR UPDATE requires it) — webhook crediting
+   reuses the order-completion tx; grants wrap their own.
+   Pre: amount-iqd > 0. Post: balance increased; ledger row written.
+   Returns the new balance."
+  [connectable user-id amount-iqd kind {:keys [order-reference-id]}]
+  (let [locked (jdbc/execute-one! connectable
+                 ["SELECT credit_balance_iqd FROM users WHERE id = ? FOR UPDATE" user-id])
+        bal (or (:users/credit_balance_iqd locked) 0)
+        new-bal (+ bal amount-iqd)]
+    (jdbc/execute! connectable
+      ["UPDATE users SET credit_balance_iqd = ? WHERE id = ?" new-bal user-id])
+    (jdbc/execute! connectable
+      (sql/format {:insert-into :credit_transactions
+                   :values [{:user_id user-id :kind kind :amount_iqd amount-iqd
+                             :balance_after new-bal :order_reference_id order-reference-id}]}))
+    new-bal))
+
+(defn insert-credit-order!
+  "Create a pending order. Returns the row."
+  [user-id reference-id amount-iqd]
+  (jdbc/execute-one! ds
+    (sql/format {:insert-into :credit_orders
+                 :values [{:user_id user-id :reference_id reference-id
+                           :amount_iqd amount-iqd :status "pending"}]
+                 :returning [:*]})))
+
+(defn set-order-wayl-fields!
+  "Record Wayl's code/link-id on a pending order after link creation."
+  [reference-id wayl-code wayl-link-id]
+  (jdbc/execute! ds
+    ["UPDATE credit_orders SET wayl_code = ?, wayl_link_id = ? WHERE reference_id = ?"
+     wayl-code wayl-link-id reference-id]))
+
+(defn get-credit-order [reference-id]
+  (jdbc/execute-one! ds
+    (sql/format {:select [:*] :from [:credit_orders]
+                 :where [:= :reference_id reference-id]})))
+
+(defn complete-credit-order!
+  "Idempotently mark an order complete and credit the buyer, in one tx. Locks
+   the order row; a redelivered webhook (already complete) is a no-op.
+   Pre:  reference-id from a verified webhook.
+   Post: on first completion the order is 'complete' and balance += amount.
+   Returns {:credited true :amount n :user-id u} or {:credited false :reason
+            :already|:unknown}."
+  [reference-id]
+  (jdbc/with-transaction [tx ds]
+    (let [order (jdbc/execute-one! tx
+                  ["SELECT * FROM credit_orders WHERE reference_id = ? FOR UPDATE" reference-id]
+                  {:builder-fn rs/as-unqualified-maps})]
+      (cond
+        (nil? order) {:credited false :reason :unknown}
+        (= "complete" (:status order)) {:credited false :reason :already}
+        :else
+        (let [user-id (:user_id order)
+              amount (:amount_iqd order)]
+          (jdbc/execute! tx
+            ["UPDATE credit_orders SET status = 'complete', completed_at = CURRENT_TIMESTAMP
+              WHERE reference_id = ?" reference-id])
+          (credit-account! tx user-id amount "purchase" {:order-reference-id reference-id})
+          {:credited true :amount amount :user-id user-id})))))
+
+(defn fail-credit-order!
+  "Mark a pending order failed (provider error / Cancelled / Rejected / Returned).
+   No-op once the order is complete."
+  [reference-id]
+  (jdbc/execute! ds
+    ["UPDATE credit_orders SET status = 'failed'
+      WHERE reference_id = ? AND status = 'pending'" reference-id]))
+
+(defn- user-has-grant? [connectable user-id]
+  (some? (jdbc/execute-one! connectable
+           ["SELECT 1 FROM credit_transactions WHERE user_id = ? AND kind = 'grant' LIMIT 1"
+            user-id])))
+
+(defn grant-credits!
+  "Grant `amount-iqd` to a user (own tx). Returns the new balance."
+  [user-id amount-iqd]
+  (jdbc/with-transaction [tx ds]
+    (credit-account! tx user-id amount-iqd "grant" {})))
+
+(defn grant-signup-credits!
+  "One-time signup grant (idempotent per user). No-op when credits are disabled,
+   the configured amount is 0, or the user already holds a grant."
+  [user-id]
+  (let [amount (config/signup-grant)]
+    (when (and (config/credits-enabled?) (pos? amount)
+               (not (user-has-grant? ds user-id)))
+      (grant-credits! user-id amount)
+      (tel/log! {:level :info :id ::signup-grant :data {:user-id user-id :amount amount}}
+        "Signup credit grant"))))
+
+(defn run-grandfather-migration!
+  "One-time grant to every pre-existing user without a grant. Idempotent (the
+   grant-row check excludes already-granted users). No-op when credits are
+   disabled or the configured amount is 0. Called at boot from setup-schema."
+  []
+  (let [amount (config/grandfather-grant)]
+    (when (and (config/credits-enabled?) (pos? amount))
+      (let [users (jdbc/execute! ds
+                    ["SELECT u.id FROM users u
+                      WHERE NOT EXISTS (SELECT 1 FROM credit_transactions t
+                                        WHERE t.user_id = u.id AND t.kind = 'grant')"]
+                    {:builder-fn rs/as-unqualified-maps})]
+        (when (seq users)
+          (doseq [{:keys [id]} users]
+            (grant-credits! id amount))
+          (tel/log! {:level :info :id ::grandfather-grant
+                     :data {:count (count users) :amount amount}}
+            "Grandfather credit grant"))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Google OAuth user queries (unchanged)

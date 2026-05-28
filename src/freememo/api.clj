@@ -18,6 +18,9 @@
    [freememo.url-validate :as url]
    [freememo.csl :as csl]
    [freememo.settings :as settings]
+   [freememo.credits :as credits]
+   [freememo.wayl :as wayl]
+   [freememo.config :as config]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
    [clojure.string :as str]
@@ -507,6 +510,9 @@
               email (str (:email claims))
               display-name (str (:name claims))
               {:keys [user-id]} (google-oauth/find-or-create-user google-sub email display-name)]
+          ;; One-time signup credit grant (idempotent; no-op in self-host).
+          (try (db/grant-signup-credits! user-id)
+               (catch Exception e (tel/error! {:id ::signup-grant} e)))
           {:status 302
            :headers {"Location" "/"}
            :session {:user-id user-id}})
@@ -567,6 +573,74 @@
      :headers {"Location" "/"}
      :body ""}))
 
+;; ── Credits: checkout + Wayl webhook (§5.5 / §5.6) ──────────────────
+
+(defn credits-checkout-handler
+  "POST /api/credits/checkout — {amount_iqd}. Creates a Wayl top-up link.
+   Pre:  authenticated; credits enabled; amount is a configured preset.
+   Post: {:success true :url u} or {:success false :error msg}.
+   Blame: 401 unauth (caller); 400 bad amount / credits off / provider error."
+  [request]
+  (if-let [user-id (require-auth request)]
+    (try
+      (let [amount (some-> (get-in request [:params "amount_iqd"]) parse-long)
+            r (credits/start-checkout! user-id amount settings/app-base-url)]
+        (if (:ok r)
+          (json-response 200 {:success true :url (:url r)})
+          (json-response 400 {:success false :error (:error r)})))
+      (catch Exception e
+        (tel/error! {:id ::credits-checkout} e)
+        (json-response 500 {:success false :error "Checkout failed. Please try again."})))
+    (json-response 401 {:success false :error "Not authenticated"})))
+
+(defn- request-body-bytes
+  "Raw request body bytes. Wayl posts application/json, which Ring's param
+   middleware does not consume, so the stream is intact here — required to
+   verify the HMAC over the exact bytes received."
+  ^bytes [request]
+  (when-let [^java.io.InputStream b (:body request)]
+    (let [baos (java.io.ByteArrayOutputStream.)]
+      (io/copy b baos)
+      (.toByteArray baos))))
+
+(defn wayl-webhook-handler
+  "POST /api/wayl/webhook — Wayl payment callback. Verifies HMAC over the raw
+   body, then credits idempotently on a paid status.
+   Post: 401 forged signature; 200 once accepted (so Wayl stops retrying);
+         500 on internal error (so Wayl retries a transient failure)."
+  [request]
+  (let [raw (request-body-bytes request)
+        sig (get-in request [:headers "x-wayl-signature-256"])]
+    (if-not (wayl/verify-signature? raw sig)
+      (json-response 401 {:success false :error "Invalid signature"})
+      (try
+        (let [payload (json/parse-string (String. raw "UTF-8") true)
+              reference-id (:referenceId payload)
+              status (or (:paymentStatus payload) (:status payload))]
+          (cond
+            (str/blank? reference-id)
+            (json-response 200 {:success true})
+
+            (#{"Complete" "Delivered"} status)
+            (let [r (db/complete-credit-order! reference-id)]
+              (when (:credited r)
+                (swap! (us/get-atom (:user-id r) :credits-refresh) inc)
+                (tel/log! {:level :info :id ::wayl-credited
+                           :data {:reference-id reference-id :amount (:amount r)
+                                  :user-id (:user-id r)}}
+                  "Wayl payment credited"))
+              (json-response 200 {:success true}))
+
+            (#{"Cancelled" "Rejected" "Returned"} status)
+            (do (db/fail-credit-order! reference-id)
+                (json-response 200 {:success true}))
+
+            :else
+            (json-response 200 {:success true})))
+        (catch Exception e
+          (tel/error! {:id ::wayl-webhook} e)
+          (json-response 500 {:success false :error "Webhook processing failed"}))))))
+
 (defn api-routes [request]
   (let [uri (:uri request)
         method (:request-method request)]
@@ -600,6 +674,12 @@
 
       (and (= uri "/api/save-page-text") (= method :post))
       (save-page-text-handler request)
+
+      (and (= uri "/api/credits/checkout") (= method :post))
+      (credits-checkout-handler request)
+
+      (and (= uri "/api/wayl/webhook") (= method :post))
+      (wayl-webhook-handler request)
 
       (and (= uri "/login") (= method :get))
       (login-handler request)

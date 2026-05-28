@@ -3,6 +3,7 @@
   (:require
    [freememo.db :as db]
    [freememo.settings :as settings]
+   [freememo.credits :as credits]
    [wkok.openai-clojure.api :as api]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
@@ -133,13 +134,18 @@
         _ (when (empty? content) (throw (ex-info "No content provided" {})))
         card-count (or card-count (settings/get-card-count user-id))
         model (or model (settings/get-model user-id))
+        _ (let [gate (credits/check-balance! user-id model)]
+            (when-not (:ok gate)
+              (throw (ex-info (:error gate) {:type ::insufficient-credits}))))
+        max-retries (settings/get-card-gen-max-retries user-id)
         reasoning (settings/get-reasoning user-id)
         verbosity (settings/get-verbosity user-id)
         has-context? (not (empty? context))
         prompt (prompt-builder-fn card-count has-context? pre-prompt user-id)
         _ (when-not prompt (throw (ex-info "Failed to load prompt templates" {})))
         content-text (if has-context? (pr-str {:content content :context context}) content)]
-    (loop [attempt 1]
+    (loop [attempt 1
+           attempts-tokens []]
       (let [t-start (System/nanoTime)
             response (api/create-chat-completion
                        {:model model
@@ -165,24 +171,29 @@
                                 :attempt attempt}}
                 "OpenAI completion")
             cards (parse-edn-response raw-text)
-            actual-count (count cards)]
+            actual-count (count cards)
+            attempts-tokens' (conj attempts-tokens (credits/usage->tokens usage))]
         (cond
           (= actual-count card-count)
-          {:success true :cards cards}
+          ;; Success — bill all attempts (§5.4.5). Billing errors must not
+          ;; discard generated cards: log and return them.
+          (do (try (credits/record-charge! user-id endpoint-tag model attempts-tokens')
+                (catch Exception e (tel/error! {:id ::cards-charge-failed} e)))
+            {:success true :cards cards})
 
-          (>= attempt 3)
+          (>= attempt max-retries)
           (do (tel/log! {:level :error :id ::generate-cards-count-mismatch
-                         :data {:expected card-count :got actual-count}}
-                "Count mismatch after 3 attempts")
+                         :data {:expected card-count :got actual-count :attempts attempt}}
+                "Count mismatch after max retries")
             {:success false
              :error (str "LLM returned " actual-count " cards instead of "
-                      card-count " after 3 attempts")})
+                      card-count " after " attempt " attempts")})
 
           :else
           (do (tel/log! {:level :warn :id ::generate-cards-retry
                          :data {:attempt attempt :expected card-count :got actual-count}}
                 "Card count mismatch, retrying")
-            (recur (inc attempt))))))))
+            (recur (inc attempt) attempts-tokens')))))))
 
 (defn generate-basic-cards
   "Generate basic Q&A flashcards using OpenAI API.
