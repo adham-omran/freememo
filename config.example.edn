@@ -31,10 +31,11 @@
   :signup-grant nil
   :grandfather-grant nil}
 
- ;; Deployment flags — also accept env vars CREDITS_ENABLED, WAYL_ENV.
+ ;; Deployment flags — env vars CREDITS_ENABLED, WAYL_HOST, WAYL_LINK_ENV win.
  :deployment
  {:credits-enabled? false   ;; true = official (platform key + billing); false = self-host (BYO key)
-  :wayl-env "test"}         ;; "test" routes to staging; "live" to prod
+  :wayl-host "live"         ;; "live" = api.thewayl.com, "test" = api.thewayl-staging.com (staging cert may be a placeholder)
+  :wayl-link-env "test"}    ;; per-link env sent to Wayl: "test" = sandbox / no real charge; "live" = real money
 
  ;; Secrets — also accept env vars WAYL_MERCHANT_TOKEN, WAYL_WEBHOOK_SECRET, PLATFORM_OPENAI_API_KEY.
  :secrets

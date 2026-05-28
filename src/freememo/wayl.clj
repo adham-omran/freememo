@@ -14,9 +14,9 @@
    [java.security MessageDigest]))
 
 (defn- base-url []
-  (if (= "live" (config/wayl-env))
-    "https://api.thewayl.com"
-    "https://api.thewayl-staging.com"))
+  (if (= "test" (config/wayl-host))
+    "https://api.thewayl-staging.com"
+    "https://api.thewayl.com"))
 
 (defn create-link!
   "Create a Wayl payment link for an order.
@@ -31,7 +31,7 @@
           secret (config/wayl-webhook-secret)]
       (when-not token (throw (ex-info "WAYL_MERCHANT_TOKEN not set" {})))
       (when-not secret (throw (ex-info "WAYL_WEBHOOK_SECRET not set" {})))
-      (let [body {:env (config/wayl-env)
+      (let [body {:env (config/wayl-link-env)
                   :referenceId reference-id
                   :total amount-iqd
                   :currency "IQD"
@@ -57,6 +57,29 @@
               {:ok false :error (or (get-in resp [:body :message]) "Payment provider error")}))))
     (catch Exception e
       (tel/error! {:id ::create-link :data {:reference-id reference-id}} e)
+      {:ok false :error "Could not reach payment provider"})))
+
+(defn get-link-status
+  "Query Wayl for the current state of an existing link.
+   Used by the post-redirect reconciliation path (5.10.2) when a webhook is
+   missed or unreachable (e.g. in dev when Wayl can't reach localhost).
+   Returns {:ok true :status \"...\"} or {:ok false :error msg}."
+  [reference-id]
+  (try
+    (let [token (config/wayl-merchant-token)]
+      (when-not token (throw (ex-info "WAYL_MERCHANT_TOKEN not set" {})))
+      (let [resp (http/get (str (base-url) "/api/v1/links/" reference-id)
+                   {:headers {"X-WAYL-AUTHENTICATION" token}
+                    :as :json
+                    :throw-exceptions false
+                    :socket-timeout 15000
+                    :connection-timeout 15000})
+            data (get-in resp [:body :data])]
+        (if (and (<= 200 (:status resp) 299) data)
+          {:ok true :status (:status data)}
+          {:ok false :error (or (get-in resp [:body :message]) "Wayl lookup failed")})))
+    (catch Exception e
+      (tel/error! {:id ::get-link-status :data {:reference-id reference-id}} e)
       {:ok false :error "Could not reach payment provider"})))
 
 (defn- hmac-sha256-hex
