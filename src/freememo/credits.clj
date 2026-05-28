@@ -131,6 +131,30 @@
           (do (db/fail-credit-order! reference-id)
               {:ok false :error (:error r)}))))))
 
+;; ── Reconciliation (§5.10.2) — webhook miss / dev fallback ──
+
+(defn reconcile-order!
+  "Look up an order's state at Wayl and credit idempotently if Wayl reports it
+   paid and our order is still pending. Lets the return page recover when the
+   webhook can't reach us (dev/localhost) or was dropped in prod.
+   Returns the same shape as `db/complete-credit-order!` plus {:ok bool}."
+  [reference-id]
+  (let [w (wayl/get-link-status reference-id)]
+    (if-not (:ok w)
+      {:ok false :error (:error w)}
+      (let [s (:status w)]
+        (cond
+          (#{"Complete" "Delivered"} s)
+          (let [r (db/complete-credit-order! reference-id)]
+            (assoc r :ok true :wayl-status s))
+
+          (#{"Cancelled" "Rejected" "Returned"} s)
+          (do (db/fail-credit-order! reference-id)
+              {:ok true :credited false :wayl-status s})
+
+          :else
+          {:ok true :credited false :wayl-status s})))))
+
 ;; ── Cost-estimate table (§5.8.3) ──
 
 (def ^:private estimate-basis

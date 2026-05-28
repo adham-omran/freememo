@@ -7,6 +7,7 @@
             [freememo.home-page :refer [HomePage]]
             [freememo.settings-page :refer [SettingsPage]]
             [freememo.library-page :refer [LibraryPage]]
+            [freememo.credits-return-page :refer [CreditsReturnPage]]
             [freememo.import-page :refer [ImportPage]]
             [freememo.learn-page :refer [LearnPage]]
             [freememo.learn-session :refer [LearnSession]]
@@ -277,6 +278,7 @@
                       (SearchPage user-id navigate!)))
                   (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
                   (when (= active-tab :settings) (SettingsPage user-id username enc-key))
+                  (when (= active-tab :credits) (CreditsReturnPage user-id navigate!))
                   (when (= active-tab :learn) (LearnPage user-id navigate! nil))
                   (when (= active-tab :viewer)
                     (ViewerContent user-id enc-key navigate! llm-enabled?))))))

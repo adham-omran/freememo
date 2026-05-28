@@ -39,11 +39,20 @@
     (or (true? v)
         (= "true" (some-> v str str/lower-case str/trim)))))
 
-(defn wayl-env
-  "\"live\" | \"test\". Defaults to \"test\" so a misconfigured deployment
-   cannot charge real money."
+(defn wayl-host
+  "Which Wayl API host to call: \"live\" → api.thewayl.com, \"test\" →
+   api.thewayl-staging.com. Defaults to \"live\" because Wayl's staging host
+   currently serves a placeholder cert. Sandbox vs real charging is controlled
+   independently by `wayl-link-env`, NOT by which host you hit."
   []
-  (or (env-or-config "WAYL_ENV" [:deployment :wayl-env]) "test"))
+  (or (env-or-config "WAYL_HOST" [:deployment :wayl-host]) "live"))
+
+(defn wayl-link-env
+  "Per-link environment sent to Wayl as the `env` field: \"test\" = sandbox
+   (no real charge), \"live\" = real payment. Defaults to \"test\" so a
+   misconfigured deployment cannot charge real money."
+  []
+  (or (env-or-config "WAYL_LINK_ENV" [:deployment :wayl-link-env]) "test"))
 
 (defn platform-openai-api-key []
   (env-or-config "PLATFORM_OPENAI_API_KEY" [:secrets :platform-openai-api-key]))

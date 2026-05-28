@@ -575,6 +575,20 @@
 
 ;; ── Credits: checkout + Wayl webhook (§5.5 / §5.6) ──────────────────
 
+(defn- request-base-url
+  "Public origin for this request — used as the base for Wayl's webhook and
+   redirection URLs so dev (localhost) and prod (freememo.net) both work
+   without a config knob. Honors X-Forwarded-Proto when a reverse proxy is
+   in front, else falls back to the connection scheme + Host header."
+  [request]
+  (let [scheme (or (some-> (get-in request [:headers "x-forwarded-proto"]) str/trim not-empty)
+                   (name (or (:scheme request) :http)))
+        host (or (get-in request [:headers "host"])
+                 (str (:server-name request)
+                   (when-let [port (:server-port request)]
+                     (str ":" port))))]
+    (str scheme "://" host)))
+
 (defn credits-checkout-handler
   "POST /api/credits/checkout — {amount_iqd}. Creates a Wayl top-up link.
    Pre:  authenticated; credits enabled; amount is a configured preset.
@@ -584,7 +598,7 @@
   (if-let [user-id (require-auth request)]
     (try
       (let [amount (some-> (get-in request [:params "amount_iqd"]) parse-long)
-            r (credits/start-checkout! user-id amount settings/app-base-url)]
+            r (credits/start-checkout! user-id amount (request-base-url request))]
         (if (:ok r)
           (json-response 200 {:success true :url (:url r)})
           (json-response 400 {:success false :error (:error r)})))
