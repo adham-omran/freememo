@@ -15,6 +15,7 @@
       (apply [_ _]
         (case k
           :refresh          (atom 0)
+          :credits-refresh  (atom 0)
           :meta-refresh     (atom 0)
           :settings-refresh (atom 0)
           :card-mutations   (atom 0)

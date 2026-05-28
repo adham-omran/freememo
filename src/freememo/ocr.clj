@@ -2,6 +2,7 @@
   "OCR text extraction using OpenAI Vision API."
   (:require
    [freememo.settings :as settings]
+   [freememo.credits :as credits]
    [freememo.html-cleaner :as cleaner]
    [wkok.openai-clojure.api :as api]
    [taoensso.telemere :as tel])
@@ -73,6 +74,9 @@
            _ (when (empty? api-key)
                (throw (ex-info "OpenAI API key not configured" {})))
            model (settings/get-model user-id)
+           _ (let [gate (credits/check-balance! user-id model)]
+               (when-not (:ok gate)
+                 (throw (ex-info (:error gate) {:type ::insufficient-credits}))))
            image (pdf-page->image pdf-bytes page-number dpi)
            base64-image (image->base64 image)
            prompt (settings/get-ocr-prompt user-id)
@@ -110,6 +114,10 @@
                   clojure.string/trim)
            ;; Vision output is untrusted — sanitize before persistence.
            cleaned (cleaner/clean-html text)]
+       ;; Bill the completed action (no-op in self-host). Billing errors must
+       ;; not discard a successful OCR result — log and return the text.
+       (try (credits/record-charge! user-id :ocr.extract model [(credits/usage->tokens usage)])
+         (catch Exception e (tel/error! {:id ::ocr-charge-failed} e)))
        {:success true :text cleaned})
      (catch Exception e
        (tel/error! {:id ::extract-text} e)

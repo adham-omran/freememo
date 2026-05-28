@@ -18,6 +18,7 @@ node_modules
 /resources/google_client.json
 /resources/openai.txt
 /.env
+/config.edn
 logs/
 /resources/public/freememo/js/
 /.calva/

@@ -7,7 +7,84 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.home-page :refer [get-api-key-status*]]
    #?(:clj [freememo.settings :as settings])
+   #?(:clj [freememo.config :as config])
+   #?(:clj [freememo.credits :as credits])
+   #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])))
+
+;; Defined on both platforms (per CLAUDE.md) so referencing them in e/defn
+;; bodies never causes a CLJ/CLJS frame-signal mismatch.
+#?(:cljs (defn navigate-external! [url] (when url (set! (.. js/window -location -href) url)))
+   :clj  (defn navigate-external! [_url] nil))
+
+#?(:clj (defn credit-balance*
+          "Reactive wrapper — _refresh forces a re-query on :credits-refresh bump."
+          [_refresh user-id]
+          (db/get-credit-balance user-id)))
+
+(e/defn CreditsSection
+  "Official-deployment credits panel: balance, top-up presets, cost estimates.
+   Rendered in place of the BYO-key block when CREDITS_ENABLED is set (§5.8)."
+  [user-id model]
+  (e/client
+    (let [credits-refresh (e/server (e/watch (us/get-atom user-id :credits-refresh)))
+          balance (e/server (credit-balance* credits-refresh user-id))
+          presets (e/server (vec (config/presets)))
+          estimates (e/server (credits/cost-estimates model))
+          !checkout-error (atom nil)
+          checkout-error (e/watch !checkout-error)]
+      (dom/div
+        (dom/props {:class "field"
+                    :style {:padding "14px" :background "var(--color-bg-subtle)"
+                            :border-radius "var(--radius-md)" :border "1px solid var(--color-bg-hover)"}})
+        (dom/div
+          (dom/props {:style {:display "flex" :align-items "center" :justify-content "space-between"
+                              :margin-bottom "10px"}})
+          (dom/span
+            (dom/props {:style {:font-size "13px" :font-weight "500" :color "var(--color-text-label)"}})
+            (dom/text "Credit Balance"))
+          (dom/span
+            (dom/props {:style {:font-size "16px" :font-weight "600"
+                                :color (if (and balance (> balance 0))
+                                         "var(--color-text-primary)" "var(--color-danger)")}})
+            (dom/text (str (or balance 0) " credits"))))
+
+        (dom/div (dom/props {:class "hint" :style {:margin-bottom "6px"}}) (dom/text "Top up:"))
+        (dom/div
+          (dom/props {:style {:display "flex" :gap "8px" :flex-wrap "wrap"}})
+          (e/for [amt (e/diff-by identity presets)]
+            (dom/button
+              (dom/props {:type "button" :class "btn btn-secondary"
+                          :style {:padding "6px 14px" :font-size "13px" :cursor "pointer"}})
+              (dom/text (str amt " credits"))
+              (let [ev (dom/On "click" identity nil)
+                    [t _] (e/Token ev)]
+                (when t
+                  (let [r (e/server (e/Offload #(credits/start-checkout! user-id amt settings/app-base-url)))]
+                    (case r
+                      (if (:ok r)
+                        (do (navigate-external! (:url r)) (t))
+                        (do (reset! !checkout-error (:error r)) (t (:error r)))))))))))
+
+        (when checkout-error
+          (dom/div
+            (dom/props {:style {:margin-top "8px" :font-size "13px" :color "var(--color-danger)"}})
+            (dom/text checkout-error)))
+
+        (when estimates
+          (dom/div
+            (dom/props {:style {:margin-top "12px"}})
+            (dom/div (dom/props {:class "hint" :style {:margin-bottom "4px"}})
+              (dom/text "Typical cost per action:"))
+            (dom/table
+              (dom/props {:style {:width "100%" :font-size "12px" :border-collapse "collapse"}})
+              (e/for [{:keys [label iqd]} (e/diff-by :label estimates)]
+                (dom/tr
+                  (dom/td (dom/props {:style {:padding "2px 0" :color "var(--color-text-secondary)"}})
+                    (dom/text label))
+                  (dom/td (dom/props {:style {:padding "2px 0" :text-align "right"
+                                              :color "var(--color-text-primary)"}})
+                    (dom/text (str "~" iqd " credits"))))))))))))
 
 (e/defn AIFeaturesSection [user-id enc-key]
   (e/client
@@ -17,6 +94,7 @@
           settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
           api-key-status (e/server (get-api-key-status* settings-refresh user-id enc-key))
           api-key-source (:source api-key-status)
+          credits-enabled? (e/server (config/credits-enabled?))
           !show-key-modal (atom false)
           show-key-modal (e/watch !show-key-modal)
           !draft-key (atom "")
@@ -42,7 +120,9 @@
           (dom/props {:style {:padding "12px 14px" :background "var(--color-info-bg)" :border-radius "var(--radius-md)"
                               :margin-bottom "var(--sp-4)" :font-size "13px" :line-height "1.5"
                               :color "var(--color-text-secondary)"}})
-          (dom/text "Incremental reading and Anki sync are always free. AI features (OCR and flashcard generation) use OpenAI and require your own API key -- bring your own key, pay only for what you use."))
+          (dom/text (if credits-enabled?
+                      "Incremental reading and Anki sync are always free. OCR and flashcard generation run on our OpenAI key and spend credits — top up below."
+                      "Incremental reading and Anki sync are always free. AI features (OCR and flashcard generation) use OpenAI and require your own API key -- bring your own key, pay only for what you use.")))
 
         ;; LLM toggle
         (dom/div
@@ -72,8 +152,10 @@
                 (dom/text "OCR text extraction and flashcard generation. Requires your own OpenAI API key.")))))
 
         (when llm-enabled
-          ;; API Key
-          (dom/div
+          ;; Credits panel (official, CREDITS_ENABLED) or BYO-key block (self-host)
+          (if credits-enabled?
+            (CreditsSection user-id model)
+            (dom/div
             (dom/props {:class "field"
                         :style {:padding "14px" :background "var(--color-bg-subtle)"
                                 :border-radius "var(--radius-md)" :border "1px solid var(--color-bg-hover)"}})
@@ -104,10 +186,10 @@
                   (reset! !draft-key "")
                   (reset! !key-save-error nil)
                   (reset! !show-key-modal true))
-                nil)))
+                nil))))
 
-          ;; API Key Modal
-          (when show-key-modal
+          ;; API Key Modal (self-host only)
+          (when (and (not credits-enabled?) show-key-modal)
             (dom/div
               (dom/props {:class "modal-backdrop" :tabindex "-1"})
               (dom/On "click" (fn [_] (reset! !show-key-modal false)) nil)
@@ -266,6 +348,29 @@
                         (if (:success r) (t) (t (:error r))))))))
               (dom/div (dom/props {:class "hint"})
                 (dom/text "Higher quality improves text recognition but increases processing time and API cost"))))
+
+          ;; Card Generation Retries — all attempts are billed (§5.4.5)
+          (let [server-retries (e/server (settings/get-card-gen-max-retries user-id))
+                !retries (atom (str server-retries))
+                retries (e/watch !retries)]
+            (dom/div
+              (dom/props {:class "field"})
+              (dom/label (dom/props {:class "label"}) (dom/text "Card Generation Retries"))
+              (dom/select
+                (dom/props {:value retries :class "select"})
+                (dom/option (dom/props {:value "1"}) (dom/text "1 (no retry)"))
+                (dom/option (dom/props {:value "2"}) (dom/text "2"))
+                (dom/option (dom/props {:value "3"}) (dom/text "3"))
+                (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                      [t ?error] (e/Token change-event)]
+                  (when (some? change-event)
+                    (reset! !retries change-event))
+                  (when t
+                    (let [r (e/server (e/Offload #(settings/save-card-gen-max-retries user-id change-event)))]
+                      (case r
+                        (if (:success r) (t) (t (:error r))))))))
+              (dom/div (dom/props {:class "hint"})
+                (dom/text "If the model returns the wrong number of cards, retry up to N times. Each attempt uses tokens and is billed."))))
 
           ;; ── Prompts (inside when llm-enabled) ──
           (let [default-sys (e/server (settings/get-default-system-prompt))
