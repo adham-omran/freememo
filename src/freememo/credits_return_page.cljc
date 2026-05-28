@@ -100,4 +100,8 @@
           (dom/props {:type "button" :class "btn btn-primary"
                       :style {:margin-top "20px" :padding "8px 20px"}})
           (dom/text "Back to Settings")
-          (dom/On "click" (fn [_] (navigate! :settings)) nil))))))
+          ;; Full navigation so SettingsPage's init-active-from-hash! runs and
+          ;; lands on the AI Features section (where credits live).
+          (dom/On "click"
+            (fn [_] #?(:cljs (set! (.. js/window -location -href) "/settings#settings-ai")))
+            nil))))))

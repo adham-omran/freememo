@@ -24,8 +24,11 @@
 
 (e/defn CreditsSection
   "Official-deployment credits panel: balance, top-up presets, cost estimates.
-   Rendered in place of the BYO-key block when CREDITS_ENABLED is set (§5.8)."
-  [user-id model]
+   Rendered in place of the BYO-key block when CREDITS_ENABLED is set (§5.8).
+   `base-url` is the public origin (derived from ring-request at Main) — used
+   for the Wayl webhook + redirection URLs so dev (localhost) and prod work
+   without a config knob."
+  [user-id model base-url]
   (e/client
     (let [credits-refresh (e/server (e/watch (us/get-atom user-id :credits-refresh)))
           balance (e/server (credit-balance* credits-refresh user-id))
@@ -60,7 +63,7 @@
               (let [ev (dom/On "click" identity nil)
                     [t _] (e/Token ev)]
                 (when t
-                  (let [r (e/server (e/Offload #(credits/start-checkout! user-id amt settings/app-base-url)))]
+                  (let [r (e/server (e/Offload #(credits/start-checkout! user-id amt base-url)))]
                     (case r
                       (if (:ok r)
                         (do (navigate-external! (:url r)) (t))
@@ -86,7 +89,7 @@
                                               :color "var(--color-text-primary)"}})
                     (dom/text (str "~" iqd " credits"))))))))))))
 
-(e/defn AIFeaturesSection [user-id enc-key]
+(e/defn AIFeaturesSection [user-id enc-key base-url]
   (e/client
     (let [server-llm-enabled (e/server (settings/get-llm-enabled user-id))
           !llm-enabled (atom server-llm-enabled)
@@ -154,7 +157,7 @@
         (when llm-enabled
           ;; Credits panel (official, CREDITS_ENABLED) or BYO-key block (self-host)
           (if credits-enabled?
-            (CreditsSection user-id model)
+            (CreditsSection user-id model base-url)
             (dom/div
             (dom/props {:class "field"
                         :style {:padding "14px" :background "var(--color-bg-subtle)"
