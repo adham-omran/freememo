@@ -12,7 +12,22 @@
    [freememo.config :as config]
    [freememo.db :as db]
    [freememo.wayl :as wayl]
-   [taoensso.telemere :as tel]))
+   [taoensso.telemere :as tel]
+   [clojure.string :as str]))
+
+(defn request-base-url
+  "Public origin for an incoming Ring request — `https://freememo.net` in prod,
+   `http://localhost:8080` in dev. Used for Wayl webhook + redirection URLs so
+   neither path needs a config knob. Honors X-Forwarded-Proto + Host when a
+   reverse proxy is in front; falls back to :scheme + :server-* otherwise."
+  [request]
+  (let [scheme (or (some-> (get-in request [:headers "x-forwarded-proto"]) str/trim not-empty)
+                   (name (or (:scheme request) :http)))
+        host (or (get-in request [:headers "host"])
+                 (str (:server-name request)
+                   (when-let [port (:server-port request)]
+                     (str ":" port))))]
+    (str scheme "://" host)))
 
 ;; ── Pure cost computation (§5.2) ──
 

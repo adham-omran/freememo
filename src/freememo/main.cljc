@@ -8,6 +8,7 @@
             [freememo.settings-page :refer [SettingsPage]]
             [freememo.library-page :refer [LibraryPage]]
             [freememo.credits-return-page :refer [CreditsReturnPage]]
+            #?(:clj [freememo.credits :as credits])
             [freememo.import-page :refer [ImportPage]]
             [freememo.learn-page :refer [LearnPage]]
             [freememo.learn-session :refer [LearnSession]]
@@ -148,6 +149,7 @@
             username (e/server (:username session-data))
             enc-key (e/server (:enc-key session-data))
             auth-error (e/server (get-in ring-request [:session :auth-error]))
+            base-url (e/server (credits/request-base-url ring-request))
             theme (e/server
                     (when user-id
                       (get-theme* (e/watch (us/get-atom user-id :settings-refresh))
@@ -277,7 +279,7 @@
                     (r/pop ; consume 'search from route; SearchPage reads remaining segments
                       (SearchPage user-id navigate!)))
                   (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
-                  (when (= active-tab :settings) (SettingsPage user-id username enc-key))
+                  (when (= active-tab :settings) (SettingsPage user-id username enc-key base-url))
                   (when (= active-tab :credits) (CreditsReturnPage user-id navigate!))
                   (when (= active-tab :learn) (LearnPage user-id navigate! nil))
                   (when (= active-tab :viewer)
