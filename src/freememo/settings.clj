@@ -104,8 +104,19 @@
     :else
     {:source :none :configured? false}))
 
-(defn get-model [user-id]
-  (or (db/get-setting user-id MODEL) "gpt-5.1"))
+(defn get-model
+  "Effective OpenAI model for OCR + card generation.
+   In credits-enabled deployments the model is pinned via
+   `freememo.config/!prod-model` (set by `src-prod/prod.cljc`) and any per-user
+   DB setting is ignored. Throws `{:type ::prod-model-missing}` when
+   `credits-enabled?` is on but the atom is nil — fail-closed, matching
+   `credits/require-rates!`."
+  [user-id]
+  (if (config/credits-enabled?)
+    (or @config/!prod-model
+        (throw (ex-info "Prod model not set — src-prod/prod.cljc must reset! freememo.config/!prod-model"
+                 {:type ::prod-model-missing})))
+    (or (db/get-setting user-id MODEL) "gpt-5.1")))
 
 (defn get-card-count [user-id]
   (try
