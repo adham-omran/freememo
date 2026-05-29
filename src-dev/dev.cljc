@@ -10,6 +10,7 @@
    #?(:clj [freememo.logging :as logging])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.api :as api])
+   #?(:clj [freememo.config :as config])
    #?(:clj [freememo.quota :as quota])
 
    #?(:clj [nrepl.server :as nrepl])
@@ -22,6 +23,10 @@
    #?(:clj [ring.middleware.session :refer [wrap-session]])
    #?(:clj [ring.middleware.session.cookie :refer [cookie-store]])
    #?(:clj [hyperfiddle.electric-ring-adapter3 :as electric-ring])))
+
+;; Mirror src-prod/prod.cljc so dev with `:credits-enabled? true` doesn't throw
+;; ::prod-model-missing on first LLM call. Bump together with src-prod.
+#?(:clj (reset! config/!prod-model "gpt-5.1"))
 
 (comment (-main)) ; repl entrypoint
 

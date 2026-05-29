@@ -22,7 +22,13 @@
    #?(:clj [freememo.logging :as logging])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.api :as api])
+   #?(:clj [freememo.config :as config])
    #?(:clj [freememo.quota :as quota])))
+
+;; Prod-pinned model. Must match a key in config.edn `:credits :models`,
+;; otherwise `credits/require-rates!` throws on the first debit. Bump both
+;; together when changing models.
+#?(:clj (reset! config/!prod-model "gpt-5.1"))
 
 (defmacro comptime-resource [filename] (some-> filename clojure.java.io/resource slurp clojure.edn/read-string))
 

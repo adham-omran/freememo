@@ -18,12 +18,9 @@
    :clj  (defn navigate-external! [_url] nil))
 
 #?(:clj (defn credit-balance*
-          "Reactive wrapper — _refresh forces a re-query on :credits-refresh bump.
-           Returns {:iqd :usd-str} so the UI can render the credits primary value
-           and the USD approximation aside in one server roundtrip."
+          "Reactive wrapper — _refresh forces a re-query on :credits-refresh bump."
           [_refresh user-id]
-          (let [iqd (db/get-credit-balance user-id)]
-            {:iqd iqd :usd-str (credits/iqd->usd-str iqd)})))
+          (db/get-credit-balance user-id)))
 
 (e/defn CreditsSection
   "Official-deployment credits panel: balance, top-up presets, cost estimates.
@@ -35,9 +32,7 @@
   [user-id model base-url client-country]
   (e/client
     (let [credits-refresh (e/server (e/watch (us/get-atom user-id :credits-refresh)))
-          balance-info (e/server (credit-balance* credits-refresh user-id))
-          balance (:iqd balance-info)
-          balance-usd (:usd-str balance-info)
+          balance (e/server (credit-balance* credits-refresh user-id))
           presets (e/server (mapv (fn [amt] {:iqd amt :usd-str (credits/iqd->usd-str amt)})
                               (config/presets)))
           estimates (e/server (credits/cost-estimates model))
@@ -57,8 +52,7 @@
             (dom/props {:style {:font-size "16px" :font-weight "600"
                                 :color (if (and balance (> balance 0))
                                          "var(--color-text-primary)" "var(--color-danger)")}})
-            (dom/text (str (or balance 0) " credits"
-                        (when balance-usd (str " (" balance-usd ")"))))))
+            (dom/text (str (or balance 0) " credits"))))
 
         (dom/div (dom/props {:class "hint" :style {:margin-bottom "6px"}}) (dom/text "Top up:"))
         (dom/div
@@ -94,14 +88,13 @@
               (dom/text "Typical cost per action:"))
             (dom/table
               (dom/props {:style {:width "100%" :font-size "12px" :border-collapse "collapse"}})
-              (e/for [{:keys [label iqd usd-str]} (e/diff-by :label estimates)]
+              (e/for [{:keys [label iqd]} (e/diff-by :label estimates)]
                 (dom/tr
                   (dom/td (dom/props {:style {:padding "2px 0" :color "var(--color-text-secondary)"}})
                     (dom/text label))
                   (dom/td (dom/props {:style {:padding "2px 0" :text-align "right"
                                               :color "var(--color-text-primary)"}})
-                    (dom/text (str "~" iqd " credits"
-                                (when usd-str (str " (" usd-str ")"))))))))))))))
+                    (dom/text (str "~" iqd " credits"))))))))))))
 
 (e/defn AIFeaturesSection [user-id enc-key base-url client-country]
   (e/client
@@ -285,23 +278,26 @@
                     (dom/text "Cancel")
                     (dom/On "click" (fn [_] (reset! !show-key-modal false)) nil))))))
 
-          ;; Model — drives both OCR and card generation. Single option for now.
-          (dom/div
-            (dom/props {:class "field"})
-            (dom/label (dom/props {:class "label"}) (dom/text "Model"))
-            (dom/select
-              (dom/props {:value model :class "select"})
-              (dom/option (dom/props {:value "gpt-5.1"}) (dom/text "gpt-5.1"))
-              (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                    [t _] (e/Token change-event)]
-                (when (some? change-event)
-                  (reset! !model change-event))
-                (when t
-                  (let [r (e/server (e/Offload #(settings/save-model user-id change-event)))]
-                    (case r
-                      (if (:success r) (t) (t (:error r))))))))
-            (dom/div (dom/props {:class "hint"})
-              (dom/text "OpenAI model used for OCR and flashcard generation.")))
+          ;; Model — drives both OCR and card generation. Hidden in prod
+          ;; (credits-enabled?) where the model is pinned via
+          ;; freememo.config/!prod-model in src-prod/prod.cljc.
+          (when-not credits-enabled?
+            (dom/div
+              (dom/props {:class "field"})
+              (dom/label (dom/props {:class "label"}) (dom/text "Model"))
+              (dom/select
+                (dom/props {:value model :class "select"})
+                (dom/option (dom/props {:value "gpt-5.1"}) (dom/text "gpt-5.1"))
+                (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                      [t _] (e/Token change-event)]
+                  (when (some? change-event)
+                    (reset! !model change-event))
+                  (when t
+                    (let [r (e/server (e/Offload #(settings/save-model user-id change-event)))]
+                      (case r
+                        (if (:success r) (t) (t (:error r))))))))
+              (dom/div (dom/props {:class "hint"})
+                (dom/text "OpenAI model used for OCR and flashcard generation."))))
 
           ;; Reasoning
           (dom/div

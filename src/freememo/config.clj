@@ -63,6 +63,17 @@
 (defn wayl-webhook-secret []
   (env-or-config "WAYL_WEBHOOK_SECRET" [:secrets :wayl-webhook-secret]))
 
+;; ── Prod-pinned model (set at boot by src-prod/prod.cljc) ──
+;;
+;; Credits-enabled deployments hardcode the OpenAI model. The constant lives
+;; in src-prod (only on the prod classpath); src-prod/prod.cljc reset!s this
+;; atom at namespace-load time, before any traffic. settings/get-model reads
+;; it and throws ::prod-model-missing if credits-enabled? but the atom is nil
+;; (fail closed). nil in dev/self-host — get-model falls back to per-user DB.
+
+(defonce ^{:doc "Set by src-prod/prod.cljc at boot. nil = self-host / dev."}
+  !prod-model (atom nil))
+
 ;; ── Economic tunables (config.edn) ──
 
 (defn- load-edn [source]

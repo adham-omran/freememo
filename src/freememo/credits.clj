@@ -203,11 +203,10 @@
    {:label "Generate cloze cards"  :model-key :cloze :prompt-tokens 15266 :cached-tokens 4887 :completion-tokens 94}])
 
 (defn cost-estimates
-  "Static per-action IQD + USD estimates for the given model, or nil when
-   pricing is unconfigured. Returns a vec of {:label :iqd :usd-str}."
+  "Static per-action IQD estimates for the given model, or nil when pricing is
+   unconfigured. Returns a vec of {:label :iqd}."
   [model]
   (when (and (config/model-rates model) (config/fx-iqd-per-usd) (config/markup))
     (mapv (fn [{:keys [label] :as basis}]
-            (let [iqd (charge-iqd model [basis])]
-              {:label label :iqd iqd :usd-str (iqd->usd-str iqd)}))
+            {:label label :iqd (charge-iqd model [basis])})
       estimate-basis)))
