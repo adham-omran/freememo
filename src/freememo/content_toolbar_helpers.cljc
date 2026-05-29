@@ -7,6 +7,7 @@
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.html-cleaner :as cleaner])
+   #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [missionary.core :as m]))
   #?(:clj (:import [missionary Cancelled])))
@@ -128,6 +129,12 @@
                 (do (swap! (us/get-atom uid :card-mutations) inc)
                   (log/log-info (str "Card gen complete topic=" tid)))
                 (do (log/log-info (str "Card gen failed topic=" tid " error=" (:error result)))
-                  (swap! !status update tid assoc :error (:error result))))))))
+                  (swap! !status update tid assoc :error (:error result))
+                  (toasts/push! uid
+                    {:level :error
+                     :message (:error result)
+                     :actions (if (= :insufficient-credits (:error-type result))
+                                [{:label "Top up credits" :nav :settings}]
+                                [])})))))))
       (fn [_] nil)
       (fn [e] (log/log-error (str "Card gen processor crashed: " e))))))

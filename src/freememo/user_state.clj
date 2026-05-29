@@ -25,4 +25,5 @@
           :card-gen-status  (atom {})
           :scanning-pages   (atom #{})
           :ocr-errors       (atom {})
-          :scan-cancellers  (atom {}))))))
+          :scan-cancellers  (atom {})
+          :toasts           (atom []))))))

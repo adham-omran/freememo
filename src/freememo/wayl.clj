@@ -7,6 +7,7 @@
    [freememo.config :as config]
    [clj-http.client :as http]
    [cheshire.core :as json]
+   [clojure.string :as str]
    [taoensso.telemere :as tel])
   (:import
    [javax.crypto Mac]
@@ -18,14 +19,23 @@
     "https://api.thewayl-staging.com"
     "https://api.thewayl.com"))
 
+(defn- append-currency-usd
+  "Append `currency=usd` to a URL using `?` if no query string, `&` otherwise.
+   Wayl checkout pages render the amount in USD when this param is present;
+   the contractual currency in the API body is unaffected."
+  [^String url]
+  (str url (if (str/includes? url "?") "&" "?") "currency=usd"))
+
 (defn create-link!
   "Create a Wayl payment link for an order.
    Pre:  amount-iqd is an integer (Wayl minimum 1000); reference-id unique;
          webhook-url/redirection-url absolute HTTPS; merchant token + webhook
          secret configured.
    Post: returns {:ok true :url u :code c :link-id id} or {:ok false :error msg};
-         no order state is mutated here (caller owns the credit_orders row)."
-  [{:keys [reference-id amount-iqd webhook-url redirection-url]}]
+         no order state is mutated here (caller owns the credit_orders row).
+         When `:currency-suffix?` is true, the returned :url has `currency=usd`
+         appended for non-IQ checkout-page display."
+  [{:keys [reference-id amount-iqd webhook-url redirection-url currency-suffix?]}]
   (try
     (let [token (config/wayl-merchant-token)
           secret (config/wayl-webhook-secret)]
@@ -50,7 +60,10 @@
                     :connection-timeout 15000})
             data (get-in resp [:body :data])]
         (if (and (<= 200 (:status resp) 299) data)
-          {:ok true :url (:url data) :code (:code data) :link-id (:id data)}
+          {:ok true
+           :url (cond-> (:url data) currency-suffix? append-currency-usd)
+           :code (:code data)
+           :link-id (:id data)}
           (do (tel/log! {:level :warn :id ::create-link-failed
                          :data {:status (:status resp) :reference-id reference-id}}
                 "Wayl link creation failed")

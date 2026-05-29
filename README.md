@@ -182,6 +182,34 @@ cat backup.sql | docker compose -f self-host.yml exec -T db psql -U cardmaker ca
 
 A remote-pull variant is in `scripts/backup.sh`.
 
+## Geo-IP Database
+
+The app uses [DB-IP Lite Country](https://db-ip.com/db/lite.php) to switch the
+Wayl checkout page between IQD and USD display based on the client's country.
+The MMDB file lives at `resources/geo/dbip-country-lite.mmdb` and ships inside
+the uberjar via `:paths ["src" "resources"]` in `deps.edn`.
+
+DB-IP refreshes the free database monthly. To pull the latest:
+
+```bash
+mkdir -p resources/geo && \
+  curl -L "https://download.db-ip.com/free/dbip-country-lite-$(date +%Y-%m).mmdb.gz" \
+  | gunzip > resources/geo/dbip-country-lite.mmdb
+```
+
+Then rebuild the uberjar.
+
+### Attribution
+
+The free IP to Country Lite database by DB-IP is licensed under a Creative
+Commons Attribution 4.0 International License. Use is permitted in this
+application provided DB-IP.com is credited for the data. The required link on
+any page that displays or uses results from the database:
+
+```html
+<a href='https://db-ip.com'>IP Geolocation by DB-IP</a>
+```
+
 ## License
 
 Electric v3 is free for bootstrappers and non-commercial use, and available commercially under a business source license. See [Electric v3 license](https://tana.pub/lQwRvGRaQ7hM/electric-v3-license-change).

@@ -122,10 +122,11 @@
 (defn start-checkout!
   "Create a pending order + Wayl top-up link for a preset amount.
    Pre:  credits enabled; amount-iqd is a configured preset; base-url is the
-         app's public HTTPS origin.
+         app's public HTTPS origin; country-code is ISO-3166 alpha-2 or nil.
    Post: a pending credit_orders row exists; returns {:ok true :url u} or
-         {:ok false :error msg} (order marked failed on provider error)."
-  [user-id amount-iqd base-url]
+         {:ok false :error msg} (order marked failed on provider error).
+         Non-IQ (incl. nil) country → URL has `currency=usd` appended."
+  [user-id amount-iqd base-url country-code]
   (cond
     (not (config/credits-enabled?))
     {:ok false :error "Credits are not enabled"}
@@ -134,12 +135,14 @@
     {:ok false :error "Invalid top-up amount"}
 
     :else
-    (let [reference-id (str "fm-" (random-uuid))]
+    (let [reference-id (str "fm-" (random-uuid))
+          usd? (not= "IQ" country-code)]
       (db/insert-credit-order! user-id reference-id amount-iqd)
       (let [r (wayl/create-link! {:reference-id reference-id
                                   :amount-iqd amount-iqd
                                   :webhook-url (str base-url "/api/wayl/webhook")
-                                  :redirection-url (str base-url "/credits/return")})]
+                                  :redirection-url (str base-url "/credits/return")
+                                  :currency-suffix? usd?})]
         (if (:ok r)
           (do (db/set-order-wayl-fields! reference-id (:code r) (:link-id r))
               {:ok true :url (:url r)})
@@ -170,6 +173,26 @@
           :else
           {:ok true :credited false :wayl-status s})))))
 
+;; ── USD display formatting ──
+
+(defn iqd->usd-str
+  "Format an IQD amount as a USD approximation string for in-app display only.
+   Pre: iqd is a non-negative number or nil.
+   Post: nil when iqd is nil or fx-iqd-per-usd is nil/0;
+         '~$0.00' when iqd is 0;
+         '<$0.01' when 0 < usd < 0.01;
+         '~$X.YY' otherwise.
+   The on-page disclaimer covers the 'approximate' framing."
+  [iqd]
+  (when iqd
+    (when-let [fx (config/fx-iqd-per-usd)]
+      (when (pos? fx)
+        (let [usd (/ iqd (double fx))]
+          (cond
+            (zero? iqd) "~$0.00"
+            (< usd 0.01) "<$0.01"
+            :else (format "~$%.2f" usd)))))))
+
 ;; ── Cost-estimate table (§5.8.3) ──
 
 (def ^:private estimate-basis
@@ -180,10 +203,11 @@
    {:label "Generate cloze cards"  :model-key :cloze :prompt-tokens 15266 :cached-tokens 4887 :completion-tokens 94}])
 
 (defn cost-estimates
-  "Static per-action IQD estimates for the given model, or nil when pricing is
-   unconfigured. Returns a vec of {:label :iqd}."
+  "Static per-action IQD + USD estimates for the given model, or nil when
+   pricing is unconfigured. Returns a vec of {:label :iqd :usd-str}."
   [model]
   (when (and (config/model-rates model) (config/fx-iqd-per-usd) (config/markup))
     (mapv (fn [{:keys [label] :as basis}]
-            {:label label :iqd (charge-iqd model [basis])})
+            (let [iqd (charge-iqd model [basis])]
+              {:label label :iqd iqd :usd-str (iqd->usd-str iqd)}))
       estimate-basis)))

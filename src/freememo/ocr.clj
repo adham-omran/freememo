@@ -121,12 +121,15 @@
        {:success true :text cleaned})
      (catch Exception e
        (tel/error! {:id ::extract-text} e)
-       {:success false :error (let [msg (.getMessage e)]
-                                (cond
-                                  (re-find #"(?i)API key not configured" (str msg))
-                                  "No API key configured. Set one in Settings."
-                                  (re-find #"(?i)401|unauthorized" (str msg))
-                                  "Invalid API key. Check your key in Settings."
-                                  (re-find #"(?i)429|rate.?limit" (str msg))
-                                  "Rate limit reached. Wait a moment and try again."
-                                  :else (str msg)))}))))
+       {:success false
+        :error (let [msg (.getMessage e)]
+                 (cond
+                   (re-find #"(?i)API key not configured" (str msg))
+                   "No API key configured. Set one in Settings."
+                   (re-find #"(?i)401|unauthorized" (str msg))
+                   "Invalid API key. Check your key in Settings."
+                   (re-find #"(?i)429|rate.?limit" (str msg))
+                   "Rate limit reached. Wait a moment and try again."
+                   :else (str msg)))
+        :error-type (when (= ::insufficient-credits (:type (ex-data e)))
+                      :insufficient-credits)}))))
