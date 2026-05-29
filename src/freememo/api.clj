@@ -20,6 +20,7 @@
    [freememo.settings :as settings]
    [freememo.credits :as credits]
    [freememo.wayl :as wayl]
+   [freememo.geo :as geo]
    [freememo.config :as config]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
@@ -61,8 +62,7 @@
    includes :remote-ip + :user-agent; merges branch-specific data."
   [id request data]
   (tel/log! {:level :warn :id id}
-    (merge {:remote-ip (or (get-in request [:headers "cf-connecting-ip"])
-                           (:remote-addr request))
+    (merge {:remote-ip (geo/client-ip request)
             :user-agent (get-in request [:headers "user-agent"])}
            data)))
 
@@ -578,16 +578,24 @@
 (defn credits-checkout-handler
   "POST /api/credits/checkout — {amount_iqd}. Creates a Wayl top-up link.
    Pre:  authenticated; credits enabled; amount is a configured preset.
-   Post: {:success true :url u} or {:success false :error msg}.
+   Post: {:success true :url u} or {:success false :error msg}. Wayl URL has
+         `currency=usd` appended when the client IP resolves to a non-IQ country
+         (or to unknown — fallback is USD).
    Blame: 401 unauth (caller); 400 bad amount / credits off / provider error."
   [request]
   (if-let [user-id (require-auth request)]
     (try
       (let [amount (some-> (get-in request [:params "amount_iqd"]) parse-long)
-            r (credits/start-checkout! user-id amount (credits/request-base-url request))]
-        (if (:ok r)
-          (json-response 200 {:success true :url (:url r)})
-          (json-response 400 {:success false :error (:error r)})))
+            ip (geo/client-ip request)
+            country (geo/country-of ip)]
+        (tel/log! {:level :debug :id ::credits-checkout-geo
+                   :data {:remote-ip ip :country country :usd? (not= "IQ" country)}}
+          "Geo-resolved checkout currency")
+        (let [r (credits/start-checkout! user-id amount
+                  (credits/request-base-url request) country)]
+          (if (:ok r)
+            (json-response 200 {:success true :url (:url r)})
+            (json-response 400 {:success false :error (:error r)}))))
       (catch Exception e
         (tel/error! {:id ::credits-checkout} e)
         (json-response 500 {:success false :error "Checkout failed. Please try again."})))

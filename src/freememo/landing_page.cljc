@@ -28,7 +28,7 @@
 
 (def faq-items
   [["What does it cost?"
-    "The app is free. Card generation and OCR uses the OpenAI API at the moment; you bring your own API key and pay OpenAI directly for the calls you make. Reading, reviewing, editing, and Anki sync never touch a paid API."]
+    "The app is free. Card generation and OCR use the OpenAI API — either via your own key (you pay OpenAI directly) or via hosted credits, depending on the deployment. Reading, reviewing, editing, and Anki sync never touch a paid API."]
    ["Where does my reading go?"
     "PDFs, EPUBs, and extracted text live on the FreeMemo server, tied to your account. Cards stay in your browser until you push them to your own Anki collection."]
    #_["What if FreeMemo shuts down?"

@@ -18,21 +18,28 @@
    :clj  (defn navigate-external! [_url] nil))
 
 #?(:clj (defn credit-balance*
-          "Reactive wrapper — _refresh forces a re-query on :credits-refresh bump."
+          "Reactive wrapper — _refresh forces a re-query on :credits-refresh bump.
+           Returns {:iqd :usd-str} so the UI can render the credits primary value
+           and the USD approximation aside in one server roundtrip."
           [_refresh user-id]
-          (db/get-credit-balance user-id)))
+          (let [iqd (db/get-credit-balance user-id)]
+            {:iqd iqd :usd-str (credits/iqd->usd-str iqd)})))
 
 (e/defn CreditsSection
   "Official-deployment credits panel: balance, top-up presets, cost estimates.
    Rendered in place of the BYO-key block when CREDITS_ENABLED is set (§5.8).
    `base-url` is the public origin (derived from ring-request at Main) — used
    for the Wayl webhook + redirection URLs so dev (localhost) and prod work
-   without a config knob."
-  [user-id model base-url]
+   without a config knob. `client-country` is the ISO-3166 alpha-2 code resolved
+   from the client IP at session boot (nil = unknown → USD)."
+  [user-id model base-url client-country]
   (e/client
     (let [credits-refresh (e/server (e/watch (us/get-atom user-id :credits-refresh)))
-          balance (e/server (credit-balance* credits-refresh user-id))
-          presets (e/server (vec (config/presets)))
+          balance-info (e/server (credit-balance* credits-refresh user-id))
+          balance (:iqd balance-info)
+          balance-usd (:usd-str balance-info)
+          presets (e/server (mapv (fn [amt] {:iqd amt :usd-str (credits/iqd->usd-str amt)})
+                              (config/presets)))
           estimates (e/server (credits/cost-estimates model))
           !checkout-error (atom nil)
           checkout-error (e/watch !checkout-error)]
@@ -50,24 +57,30 @@
             (dom/props {:style {:font-size "16px" :font-weight "600"
                                 :color (if (and balance (> balance 0))
                                          "var(--color-text-primary)" "var(--color-danger)")}})
-            (dom/text (str (or balance 0) " credits"))))
+            (dom/text (str (or balance 0) " credits"
+                        (when balance-usd (str " (" balance-usd ")"))))))
 
         (dom/div (dom/props {:class "hint" :style {:margin-bottom "6px"}}) (dom/text "Top up:"))
         (dom/div
           (dom/props {:style {:display "flex" :gap "8px" :flex-wrap "wrap"}})
-          (e/for [amt (e/diff-by identity presets)]
+          (e/for [{:keys [iqd usd-str]} (e/diff-by :iqd presets)]
             (dom/button
               (dom/props {:type "button" :class "btn btn-secondary"
                           :style {:padding "6px 14px" :font-size "13px" :cursor "pointer"}})
-              (dom/text (str amt " credits"))
+              (dom/text (str iqd " credits" (when usd-str (str " (" usd-str ")"))))
               (let [ev (dom/On "click" identity nil)
                     [t _] (e/Token ev)]
                 (when t
-                  (let [r (e/server (e/Offload #(credits/start-checkout! user-id amt base-url)))]
+                  (let [r (e/server (e/Offload #(credits/start-checkout! user-id iqd base-url client-country)))]
                     (case r
                       (if (:ok r)
                         (do (navigate-external! (:url r)) (t))
                         (do (reset! !checkout-error (:error r)) (t (:error r)))))))))))
+
+        (dom/div
+          (dom/props {:class "hint" :style {:margin-top "8px" :font-size "12px"
+                                            :color "var(--color-text-secondary)"}})
+          (dom/text "USD prices shown here are approximate and may be adjusted if we change AI models. The amount you pay is the credits amount shown."))
 
         (when checkout-error
           (dom/div
@@ -81,15 +94,16 @@
               (dom/text "Typical cost per action:"))
             (dom/table
               (dom/props {:style {:width "100%" :font-size "12px" :border-collapse "collapse"}})
-              (e/for [{:keys [label iqd]} (e/diff-by :label estimates)]
+              (e/for [{:keys [label iqd usd-str]} (e/diff-by :label estimates)]
                 (dom/tr
                   (dom/td (dom/props {:style {:padding "2px 0" :color "var(--color-text-secondary)"}})
                     (dom/text label))
                   (dom/td (dom/props {:style {:padding "2px 0" :text-align "right"
                                               :color "var(--color-text-primary)"}})
-                    (dom/text (str "~" iqd " credits"))))))))))))
+                    (dom/text (str "~" iqd " credits"
+                                (when usd-str (str " (" usd-str ")"))))))))))))))
 
-(e/defn AIFeaturesSection [user-id enc-key base-url]
+(e/defn AIFeaturesSection [user-id enc-key base-url client-country]
   (e/client
     (let [server-llm-enabled (e/server (settings/get-llm-enabled user-id))
           !llm-enabled (atom server-llm-enabled)
@@ -124,7 +138,7 @@
                               :margin-bottom "var(--sp-4)" :font-size "13px" :line-height "1.5"
                               :color "var(--color-text-secondary)"}})
           (dom/text (if credits-enabled?
-                      "Incremental reading and Anki sync are always free. OCR and flashcard generation run on our OpenAI key and spend credits — top up below."
+                      "Incremental reading and Anki sync are always free. OCR and flashcard generation spend credits — top up below."
                       "Incremental reading and Anki sync are always free. AI features (OCR and flashcard generation) use OpenAI and require your own API key -- bring your own key, pay only for what you use.")))
 
         ;; LLM toggle
@@ -152,12 +166,14 @@
                 (dom/text "Enable LLM features"))
               (dom/div
                 (dom/props {:class "hint"})
-                (dom/text "OCR text extraction and flashcard generation. Requires your own OpenAI API key.")))))
+                (dom/text (if credits-enabled?
+                            "OCR text extraction and flashcard generation. Uses platform credits — top up below."
+                            "OCR text extraction and flashcard generation. Requires your own OpenAI API key."))))))
 
         (when llm-enabled
           ;; Credits panel (official, CREDITS_ENABLED) or BYO-key block (self-host)
           (if credits-enabled?
-            (CreditsSection user-id model base-url)
+            (CreditsSection user-id model base-url client-country)
             (dom/div
             (dom/props {:class "field"
                         :style {:padding "14px" :background "var(--color-bg-subtle)"

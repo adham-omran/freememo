@@ -540,7 +540,7 @@
               (fn [e] (.preventDefault e) (set-active-tab! id))
               nil)))))))
 
-(e/defn SettingsPage [user-id username enc-key base-url]
+(e/defn SettingsPage [user-id username enc-key base-url client-country]
   (e/client
     (init-active-from-hash!)
     (let [active (e/watch !settings-active-section)]
@@ -694,7 +694,7 @@
           (dom/div
             (dom/props {:id "settings-ai"
                         :style (tab-style active "settings-ai")})
-            (AIFeaturesSection user-id enc-key base-url))
+            (AIFeaturesSection user-id enc-key base-url client-country))
 
       ;; ── Appearance section ──
           (let [server-font-size (e/server (settings/get-card-font-size user-id))

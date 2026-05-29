@@ -12,6 +12,7 @@
    [clojure.string :as str]
    #?(:cljs [freememo.editor-pin-menu :as pin-menu])
    #?(:clj [freememo.page-ocr :as page])
+   #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.web-import :as web-import])
@@ -66,13 +67,20 @@
                   (do (log/log-info (str "OCR scan complete topic-id=" doc " page=" page))
                     (swap! (us/get-atom uid :refresh) inc))
                   (do (log/log-info (str "OCR scan failed topic-id=" doc " page=" page " error=" (:error result)))
-                    (swap! (us/get-atom uid :ocr-errors) assoc [doc page] (:error result))))
+                    (swap! (us/get-atom uid :ocr-errors) assoc [doc page] (:error result))
+                    (toasts/push! uid
+                      {:level :error
+                       :message (:error result)
+                       :actions (if (= :insufficient-credits (:error-type result))
+                                  [{:label "Top up credits" :nav :settings}]
+                                  [])})))
                 (swap! (us/get-atom uid :scanning-pages) disj [doc page]))
               (fn [e]
                 (swap! (us/get-atom uid :scan-cancellers) dissoc [doc page])
                 (when-not (instance? Cancelled e)
                   (log/log-info (str "OCR scan error topic-id=" doc " page=" page " ex=" (.getMessage e)))
-                  (swap! (us/get-atom uid :ocr-errors) assoc [doc page] (.getMessage e)))
+                  (swap! (us/get-atom uid :ocr-errors) assoc [doc page] (.getMessage e))
+                  (toasts/push! uid {:level :error :message (.getMessage e)}))
                 (swap! (us/get-atom uid :scanning-pages) disj [doc page])))]
          (swap! (us/get-atom uid :scan-cancellers) assoc [doc page] cancel-fn))
        nil)

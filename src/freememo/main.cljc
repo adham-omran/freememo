@@ -9,6 +9,7 @@
             [freememo.library-page :refer [LibraryPage]]
             [freememo.credits-return-page :refer [CreditsReturnPage]]
             #?(:clj [freememo.credits :as credits])
+            #?(:clj [freememo.geo :as geo])
             [freememo.import-page :refer [ImportPage]]
             [freememo.learn-page :refer [LearnPage]]
             [freememo.learn-session :refer [LearnSession]]
@@ -16,6 +17,7 @@
             [freememo.search-page :refer [SearchPage]]
             [freememo.subset-review :refer [SubsetReviewSession]]
             [freememo.landing-page :refer [LandingPage]]
+            [freememo.toast-stack :refer [ToastStack]]
             [freememo.icons :as icons]
             [freememo.keyboard :as keyboard]
             #?(:clj [freememo.settings :as settings])
@@ -150,6 +152,7 @@
             enc-key (e/server (:enc-key session-data))
             auth-error (e/server (get-in ring-request [:session :auth-error]))
             base-url (e/server (credits/request-base-url ring-request))
+            client-country (e/server (-> ring-request geo/client-ip geo/country-of))
             theme (e/server
                     (when user-id
                       (get-theme* (e/watch (us/get-atom user-id :settings-refresh))
@@ -279,11 +282,14 @@
                     (r/pop ; consume 'search from route; SearchPage reads remaining segments
                       (SearchPage user-id navigate!)))
                   (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
-                  (when (= active-tab :settings) (SettingsPage user-id username enc-key base-url))
+                  (when (= active-tab :settings) (SettingsPage user-id username enc-key base-url client-country))
                   (when (= active-tab :credits) (CreditsReturnPage user-id navigate!))
                   (when (= active-tab :learn) (LearnPage user-id navigate! nil))
                   (when (= active-tab :viewer)
-                    (ViewerContent user-id enc-key navigate! llm-enabled?))))))
+                    (ViewerContent user-id enc-key navigate! llm-enabled?)))
+
+                ;; Project-wide toast overlay (fixed position; renders nothing when queue empty)
+                (ToastStack user-id navigate!))))
 
           ;; Not authenticated: render landing page
           (LandingPage auth-error))))))

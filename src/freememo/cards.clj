@@ -10,6 +10,18 @@
    [clojure.edn :as edn]
    [clojure.string :as str]))
 
+(defn- root-cause
+  "Walk an exception chain to the outermost-thrown cause (last in chain)."
+  [e]
+  (if-let [c (.getCause e)] (recur c) e))
+
+(defn- error-type
+  "Map the root cause's ex-data :type to a UI error-type keyword.
+   nil if not a recognized class. Walks the chain because tel/trace! wraps."
+  [e]
+  (when (= ::insufficient-credits (:type (ex-data (root-cause e))))
+    :insufficient-credits))
+
 (defn- humanize-error [msg]
   (cond
     (re-find #"(?i)API key not configured" (str msg))
@@ -211,7 +223,9 @@
       (generate-cards* opts build-basic-prompt :cards.basic))
     (catch Exception e
       (tel/error! {:id ::generate-basic-cards} e)
-      {:success false :error (humanize-error (.getMessage e))})))
+      {:success false
+       :error (humanize-error (.getMessage (root-cause e)))
+       :error-type (error-type e)})))
 
 (defn generate-cloze-cards
   "Generate cloze deletion flashcards using OpenAI API.
@@ -223,7 +237,9 @@
       (generate-cards* opts build-cloze-prompt :cards.cloze))
     (catch Exception e
       (tel/error! {:id ::generate-cloze-cards} e)
-      {:success false :error (humanize-error (.getMessage e))})))
+      {:success false
+       :error (humanize-error (.getMessage (root-cause e)))
+       :error-type (error-type e)})))
 
 ;; Card persistence
 

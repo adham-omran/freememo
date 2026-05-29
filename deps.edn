@@ -19,7 +19,8 @@
            com.vladsch.flexmark/flexmark {:mvn/version "0.64.8"}
            com.vladsch.flexmark/flexmark-ext-tables {:mvn/version "0.64.8"}
            com.vladsch.flexmark/flexmark-ext-gfm-strikethrough {:mvn/version "0.64.8"}
-           com.vladsch.flexmark/flexmark-ext-gfm-tasklist {:mvn/version "0.64.8"}}
+           com.vladsch.flexmark/flexmark-ext-gfm-tasklist {:mvn/version "0.64.8"}
+           com.maxmind.db/maxmind-db {:mvn/version "3.1.1"}}
  :paths   ["src" "resources"]
  :aliases {:dev {:extra-paths ["src-dev"] :extra-deps  {thheller/shadow-cljs {:mvn/version "2.26.2"}
                                                        nrepl/nrepl {:mvn/version "1.3.1"}
