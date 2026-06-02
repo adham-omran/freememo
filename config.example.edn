@@ -6,7 +6,7 @@
 ;;
 ;; Three sections:
 ;;   :credits     — economic tunables (rates, FX, markup, presets, grants).
-;;   :deployment  — deployment flags (CREDITS_ENABLED, WAYL_ENV).
+;;   :deployment  — deployment flags (CREDITS_ENABLED, WAYL_HOST, WAYL_LINK_ENV).
 ;;   :secrets     — credentials (Wayl token + webhook secret, platform OpenAI key).
 ;;
 ;; Env vars take precedence over :deployment / :secrets entries. Names map

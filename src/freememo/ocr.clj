@@ -114,10 +114,10 @@
                   clojure.string/trim)
            ;; Vision output is untrusted — sanitize before persistence.
            cleaned (cleaner/clean-html text)]
-       ;; Bill the completed action (no-op in self-host). Billing errors must
-       ;; not discard a successful OCR result — log and return the text.
-       (try (credits/record-charge! user-id :ocr.extract model [(credits/usage->tokens usage)])
-         (catch Exception e (tel/error! {:id ::ocr-charge-failed} e)))
+       ;; Bill the completed action (no-op in self-host). record-charge! is total:
+       ;; a billing failure logs ::credit-charge-failed and returns nil, never
+       ;; discarding a successful OCR result.
+       (credits/record-charge! user-id :ocr.extract model [(credits/usage->tokens usage)])
        {:success true :text cleaned})
      (catch Exception e
        (tel/error! {:id ::extract-text} e)
