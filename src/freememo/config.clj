@@ -3,7 +3,7 @@
 
    1. Secrets — env vars only, never committed (Wayl token, webhook secret,
       platform OpenAI key).
-   2. Deployment flags — env vars (CREDITS_ENABLED, WAYL_ENV).
+   2. Deployment flags — env vars (CREDITS_ENABLED, WAYL_HOST, WAYL_LINK_ENV).
    3. Economic tunables — config.edn (gitignored); config.example.edn committed.
 
    config.edn is read once at load from the working directory (or classpath

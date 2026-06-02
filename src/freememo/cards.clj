@@ -187,10 +187,10 @@
             attempts-tokens' (conj attempts-tokens (credits/usage->tokens usage))]
         (cond
           (= actual-count card-count)
-          ;; Success — bill all attempts (§5.4.5). Billing errors must not
-          ;; discard generated cards: log and return them.
-          (do (try (credits/record-charge! user-id endpoint-tag model attempts-tokens')
-                (catch Exception e (tel/error! {:id ::cards-charge-failed} e)))
+          ;; Success — bill all attempts (§5.4.5). record-charge! is total: a
+          ;; billing failure logs ::credit-charge-failed and returns nil, never
+          ;; discarding generated cards.
+          (do (credits/record-charge! user-id endpoint-tag model attempts-tokens')
             {:success true :cards cards})
 
           (>= attempt max-retries)

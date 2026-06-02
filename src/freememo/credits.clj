@@ -103,19 +103,30 @@
       :else {:ok true})))
 
 (defn record-charge!
-  "Debit credits for a completed action. No-op when credits are disabled.
-   `attempts` is a non-empty seq of usage-token maps (one per LLM attempt;
-   all attempts are billed per §5.4.5). Returns charged IQD (long) or nil."
+  "Debit credits for a completed action — total (never throws). No-op when credits
+   are disabled. `attempts` is a non-empty seq of usage-token maps (one per LLM
+   attempt; all attempts are billed per §5.4.5).
+   Returns charged IQD (long) on success, or nil when credits are disabled OR the
+   debit failed. A failed debit logs ::credit-charge-failed with the inputs needed
+   to recompute the charge via charge-iqd (user-id, endpoint, model, attempts), so a
+   silently-missed charge can be reconciled by hand — billing must never discard the
+   user's completed AI result."
   [user-id endpoint model attempts]
   (when (config/credits-enabled?)
-    (let [cost (charge-iqd model attempts)
-          new-bal (db/debit-credits! user-id cost
-                    {:endpoint (name endpoint) :model model :attempts attempts})]
-      (tel/log! {:level :info :id ::credit-debit
-                 :data {:user-id user-id :endpoint endpoint :model model
-                        :cost-iqd cost :balance-after new-bal :attempts (count attempts)}}
-        "Credit debit")
-      cost)))
+    (try
+      (let [cost (charge-iqd model attempts)
+            new-bal (db/debit-credits! user-id cost
+                      {:endpoint (name endpoint) :model model :attempts attempts})]
+        (tel/log! {:level :info :id ::credit-debit
+                   :data {:user-id user-id :endpoint endpoint :model model
+                          :cost-iqd cost :balance-after new-bal :attempts (count attempts)}}
+          "Credit debit")
+        cost)
+      (catch Exception e
+        (tel/error! {:id ::credit-charge-failed
+                     :data {:user-id user-id :endpoint endpoint :model model :attempts attempts}}
+          e)
+        nil))))
 
 ;; ── Purchase (§5.5) ──
 
