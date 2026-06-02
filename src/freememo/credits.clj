@@ -197,16 +197,22 @@
 
 (def ^:private estimate-basis
   "Mean observed tokens per action type (prod logs, 2026-03..05). Used to render
-   the static cost-estimate table. {:label endpoint :prompt :cached :completion}."
-  [{:label "OCR a page"            :model-key :ocr   :prompt-tokens 907   :cached-tokens 0    :completion-tokens 526}
-   {:label "Generate basic cards"  :model-key :basic :prompt-tokens 9345  :cached-tokens 577  :completion-tokens 68}
-   {:label "Generate cloze cards"  :model-key :cloze :prompt-tokens 15266 :cached-tokens 4887 :completion-tokens 94}])
+   the static cost table. Each row adds :unit (plural noun) + :units-per-action
+   (billable units one action yields — 1 page for OCR, card-count notes, default
+   2, for card generation) so the view can show per-unit cost and balance counts."
+  [{:label "OCR a page" :unit "pages"       :units-per-action 1 :model-key :ocr   :prompt-tokens 907   :cached-tokens 0    :completion-tokens 526}
+   {:label "Basic note" :unit "basic notes" :units-per-action 2 :model-key :basic :prompt-tokens 9345  :cached-tokens 577  :completion-tokens 68}
+   {:label "Cloze note" :unit "cloze notes" :units-per-action 2 :model-key :cloze :prompt-tokens 15266 :cached-tokens 4887 :completion-tokens 94}])
 
 (defn cost-estimates
-  "Static per-action IQD estimates for the given model, or nil when pricing is
-   unconfigured. Returns a vec of {:label :iqd}."
+  "Static cost estimates for the given model, or nil when pricing is unconfigured.
+   Returns a vec of {:label :unit :units-per-action :iqd :unit-cost}: :iqd is the
+   per-action charge; :unit-cost = round(:iqd / :units-per-action) for display; the
+   view derives balance counts as (quot balance :iqd) × :units-per-action."
   [model]
   (when (and (config/model-rates model) (config/fx-iqd-per-usd) (config/markup))
-    (mapv (fn [{:keys [label] :as basis}]
-            {:label label :iqd (charge-iqd model [basis])})
+    (mapv (fn [{:keys [label unit units-per-action] :as basis}]
+            (let [iqd (charge-iqd model [basis])]
+              {:label label :unit unit :units-per-action units-per-action
+               :iqd iqd :unit-cost (Math/round (/ (double iqd) units-per-action))}))
       estimate-basis)))
