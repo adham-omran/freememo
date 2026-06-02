@@ -5,6 +5,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [clojure.string :as str]
    [freememo.home-page :refer [get-api-key-status*]]
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.config :as config])
@@ -15,7 +16,7 @@
 ;; Defined on both platforms (per CLAUDE.md) so referencing them in e/defn
 ;; bodies never causes a CLJ/CLJS frame-signal mismatch.
 #?(:cljs (defn navigate-external! [url] (when url (set! (.. js/window -location -href) url)))
-   :clj  (defn navigate-external! [_url] nil))
+   :clj (defn navigate-external! [_url] nil))
 
 #?(:clj (defn credit-balance*
           "Reactive wrapper — _refresh forces a re-query on :credits-refresh bump."
@@ -85,16 +86,25 @@
           (dom/div
             (dom/props {:style {:margin-top "12px"}})
             (dom/div (dom/props {:class "hint" :style {:margin-bottom "4px"}})
-              (dom/text "Typical cost per action:"))
+              (dom/text "Typical cost:"))
             (dom/table
               (dom/props {:style {:width "100%" :font-size "12px" :border-collapse "collapse"}})
-              (e/for [{:keys [label iqd]} (e/diff-by :label estimates)]
+              (e/for [{:keys [label unit-cost]} (e/diff-by :label estimates)]
                 (dom/tr
                   (dom/td (dom/props {:style {:padding "2px 0" :color "var(--color-text-secondary)"}})
                     (dom/text label))
                   (dom/td (dom/props {:style {:padding "2px 0" :text-align "right"
                                               :color "var(--color-text-primary)"}})
-                    (dom/text (str "~" iqd " credits"))))))))))))
+                    (dom/text (str "~" unit-cost " credits"))))))
+            (when (pos? (or balance 0))
+              (dom/div
+                (dom/props {:class "hint" :style {:margin-top "8px"}})
+                (dom/text
+                  (str "Your " balance " credits ≈ "
+                    (str/join " or "
+                      (mapv (fn [{:keys [iqd units-per-action unit]}]
+                              (str "~" (* (quot balance iqd) units-per-action) " " unit))
+                        estimates))))))))))))
 
 (e/defn AIFeaturesSection [user-id enc-key base-url client-country]
   (e/client
@@ -168,37 +178,37 @@
           (if credits-enabled?
             (CreditsSection user-id model base-url client-country)
             (dom/div
-            (dom/props {:class "field"
-                        :style {:padding "14px" :background "var(--color-bg-subtle)"
-                                :border-radius "var(--radius-md)" :border "1px solid var(--color-bg-hover)"}})
-            (dom/div
-              (dom/props {:style {:display "flex" :align-items "center" :justify-content "space-between"
-                                  :margin-bottom "4px"}})
-              (dom/span
-                (dom/props {:style {:font-size "13px" :font-weight "500" :color "var(--color-text-label)"}})
-                (dom/text "OpenAI API Key"))
-              (dom/span
-                (dom/props {:class (case api-key-source
-                                     :user "badge badge-success"
-                                     :shared "badge badge-warning"
-                                     "badge badge-error")})
-                (dom/text (case api-key-source
-                            :user "Configured"
-                            :shared "Demo key"
-                            "Not set"))))
-            (dom/button
-              (dom/props {:type "button"
-                          :class "btn btn-secondary"
-                          :style {:margin-top "8px" :padding "6px 14px"
-                                  :font-size "13px" :color "var(--color-primary)"
-                                  :border "1px solid var(--color-primary)"}})
-              (dom/text (if (= api-key-source :user) "Update Key" "Set API Key"))
-              (dom/On "click"
-                (fn [_]
-                  (reset! !draft-key "")
-                  (reset! !key-save-error nil)
-                  (reset! !show-key-modal true))
-                nil))))
+              (dom/props {:class "field"
+                          :style {:padding "14px" :background "var(--color-bg-subtle)"
+                                  :border-radius "var(--radius-md)" :border "1px solid var(--color-bg-hover)"}})
+              (dom/div
+                (dom/props {:style {:display "flex" :align-items "center" :justify-content "space-between"
+                                    :margin-bottom "4px"}})
+                (dom/span
+                  (dom/props {:style {:font-size "13px" :font-weight "500" :color "var(--color-text-label)"}})
+                  (dom/text "OpenAI API Key"))
+                (dom/span
+                  (dom/props {:class (case api-key-source
+                                       :user "badge badge-success"
+                                       :shared "badge badge-warning"
+                                       "badge badge-error")})
+                  (dom/text (case api-key-source
+                              :user "Configured"
+                              :shared "Demo key"
+                              "Not set"))))
+              (dom/button
+                (dom/props {:type "button"
+                            :class "btn btn-secondary"
+                            :style {:margin-top "8px" :padding "6px 14px"
+                                    :font-size "13px" :color "var(--color-primary)"
+                                    :border "1px solid var(--color-primary)"}})
+                (dom/text (if (= api-key-source :user) "Update Key" "Set API Key"))
+                (dom/On "click"
+                  (fn [_]
+                    (reset! !draft-key "")
+                    (reset! !key-save-error nil)
+                    (reset! !show-key-modal true))
+                  nil))))
 
           ;; API Key Modal (self-host only)
           (when (and (not credits-enabled?) show-key-modal)
@@ -267,8 +277,8 @@
                               (do (e/on-unmount #(do (reset! !draft-key "")
                                                    (reset! !key-save-error nil)
                                                    (reset! !show-key-modal false)))
-                                  (case (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
-                                    (t)))
+                                (case (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                  (t)))
                               (let [err-msg (or (:error result) "Failed to save API key")]
                                 (reset! !key-save-error err-msg)
                                 (t err-msg))))))))
