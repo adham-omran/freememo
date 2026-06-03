@@ -31,49 +31,27 @@
        (.click a)
        (.revokeObjectURL js/URL url))))
 
-(defn cloze-max-n [text]
+(defn validate-cloze
+  "Validate cloze MARKER structure, not raw brace counts — card answers may
+   contain literal { } from code (e.g. a trailing }} that closes two Java
+   blocks). Counts {{cN::}} openers and how many are closed by a later }}
+   (non-greedy), then checks the numbering runs 1..max."
+  [text]
   #?(:cljs
-     (let [matches (re-seq #"\{\{c(\d+)::" (or text ""))]
-       (if (seq matches)
-         (apply max (map #(js/parseInt (second %) 10) matches))
-         0))
-     :clj 0))
-
-(defn validate-cloze [text]
-  #?(:cljs
-     (let [text (or text "")
-           open-count (count (re-seq #"\{\{" text))
-           close-count (count (re-seq #"\}\}" text))
-           nums (set (map #(js/parseInt (second %) 10) (re-seq #"\{\{c(\d+)::" text)))
-           max-n (if (seq nums) (apply max nums) 0)
+     (let [text     (or text "")
+           opens    (count (re-seq #"\{\{c\d+::" text))
+           closed   (count (re-seq #"\{\{c\d+::[\s\S]*?\}\}" text))
+           nums     (set (map #(js/parseInt (second %) 10) (re-seq #"\{\{c(\d+)::" text)))
+           max-n    (if (seq nums) (apply max nums) 0)
            expected (set (range 1 (inc max-n)))]
        (cond
-         (not= open-count close-count)
-         "Unbalanced braces: {{ and }} counts don't match"
-         (and (pos? max-n) (not= nums expected))
+         (zero? opens)
+         "No cloze deletion: select text and press the {+} button to add {{c1::...}}"
+         (not= opens closed)
+         "Unclosed cloze: a {{cN::...}} is missing its closing }}"
+         (not= nums expected)
          (str "Non-sequential cloze numbers: found " (sort nums) ", expected 1 to " max-n)
          :else nil))
-     :clj nil))
-
-(defn wrap-cloze! [!cloze !ta-ref n]
-  #?(:cljs
-     (when-let [ta @!ta-ref]
-       (let [start (.-selectionStart ta)
-             end (.-selectionEnd ta)
-             text (.-value ta)
-             selected (subs text start end)
-             prefix (str "{{c" n "::")
-             suffix "}}"
-             new-text (str (subs text 0 start) prefix selected suffix (subs text end))
-             cursor-pos (if (= start end)
-                          (+ start (count prefix))
-                          (+ start (count prefix) (count selected) (count suffix)))]
-         (reset! !cloze new-text)
-         (js/setTimeout
-           (fn []
-             (.focus ta)
-             (.setSelectionRange ta cursor-pos cursor-pos))
-           20)))
      :clj nil))
 
 ;; Export modal — Forms5 (Form! + Input!/Checkbox!).
@@ -314,7 +292,6 @@
           !question (atom init-q)
           !answer (atom init-a)
           !cloze (atom init-c)
-          !ta-ref (atom nil)
           !q-editor (atom nil)
           !a-editor (atom nil)
           !c-editor (atom nil)
@@ -404,7 +381,8 @@
                              :on-change (fn [html] (reset! !cloze html))
                              :placeholder "Cloze text with {{c1::deletion}}..."
                              :field-key [:edit-c card-id]
-                             :!editor-atom !c-editor}))
+                             :!editor-atom !c-editor
+                             :cloze? true}))
               (dom/label (dom/text "Back Extra:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
@@ -414,51 +392,53 @@
                              :field-key [:edit-be card-id]
                              :!editor-atom !a-editor}))))
           (dom/div
-            (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
-            (dom/button
-              (dom/props {:class "btn btn-primary" :style {:order "1"}})
-              (reset! !primary-btn dom/node)
-              (dom/text "Save")
-              ;; Force the syntax module to flush its hljs-* spans into the
-              ;; DOM, then read the post-flush innerHTML and reset! the
-              ;; matching atom directly. Quill 2.0.3's syntax module does
-              ;; NOT fire any observable text-change for its formatAt pass,
-              ;; so on-change cannot deliver the tokenized HTML; we MUST
-              ;; capture it via the flush return value here. Without this,
-              ;; cards persist as bare text and the Anki card back renders
-              ;; uncoloured.
-              (let [click-event (dom/On "click"
-                                  (fn [e]
-                                    (when-let [html (flush-syntax-tokens! @!q-editor)]
-                                      (reset! !question html))
-                                    (when-let [html (flush-syntax-tokens! @!a-editor)]
-                                      (reset! !answer html))
-                                    (when-let [html (flush-syntax-tokens! @!c-editor)]
-                                      (reset! !cloze html))
-                                    e)
-                                  nil)
-                    [t ?error] (e/Token click-event)]
-                (when ?error
-                  (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-2)"}})
-                    (dom/text "Error: " ?error)))
-                (when t
-                  (let [validation-error (when (= kind "cloze") (validate-cloze cloze))]
-                    (if validation-error
-                      (t validation-error)
-                      (let [clean-q (e/server (sanitize-card-field question))
-                            clean-a (e/server (sanitize-card-field answer))
-                            clean-c (e/server (sanitize-card-field cloze))
-                            fields (if (= kind "basic")
-                                     {:question clean-q :answer clean-a}
-                                     (cond-> {:cloze clean-c}
-                                       (and clean-a (not (str/blank? clean-a)))
-                                       (assoc :answer clean-a)))
-                            result (e/server (cards/update-card card-id fields))]
-                        (if (:success result)
-                          (do (e/on-unmount #(reset! !editing-card nil))
-                              (case (e/server (swap! (us/get-atom user-id :card-mutations) inc))
-                                (t)))
-                          (t (:error result)))))))))
+            (dom/props {:style {:display "flex" :justify-content "flex-end" :align-items "center" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
+            (let [click-event
+                  (dom/button
+                    (dom/props {:class "btn btn-primary" :style {:order "1"}})
+                    (reset! !primary-btn dom/node)
+                    (dom/text "Save")
+                    ;; Force the syntax module to flush its hljs-* spans into the
+                    ;; DOM, then read the post-flush innerHTML and reset! the
+                    ;; matching atom directly. Quill 2.0.3's syntax module does
+                    ;; NOT fire any observable text-change for its formatAt pass,
+                    ;; so on-change cannot deliver the tokenized HTML; we MUST
+                    ;; capture it via the flush return value here. dom/On is the
+                    ;; button's last form, so the button returns the click event
+                    ;; for the e/Token below — letting the error render beside the
+                    ;; buttons (not inside this blue one).
+                    (dom/On "click"
+                      (fn [e]
+                        (when-let [html (flush-syntax-tokens! @!q-editor)]
+                          (reset! !question html))
+                        (when-let [html (flush-syntax-tokens! @!a-editor)]
+                          (reset! !answer html))
+                        (when-let [html (flush-syntax-tokens! @!c-editor)]
+                          (reset! !cloze html))
+                        e)
+                      nil))
+                  [t ?error] (e/Token click-event)]
+              (when ?error
+                (dom/div (dom/props {:style {:order "-1" :margin-right "auto" :color "var(--color-danger)" :font-size "12px"}})
+                  (dom/text "Error: " ?error)))
+              (when t
+                (let [validation-error (when (= kind "cloze") (validate-cloze cloze))]
+                  (if validation-error
+                    (t validation-error)
+                    (let [clean-q (e/server (sanitize-card-field question))
+                          clean-a (e/server (sanitize-card-field answer))
+                          clean-c (e/server (sanitize-card-field cloze))
+                          fields (if (= kind "basic")
+                                   {:question clean-q :answer clean-a}
+                                   (cond-> {:cloze clean-c}
+                                     (and clean-a (not (str/blank? clean-a)))
+                                     (assoc :answer clean-a)))
+                          result (e/server (cards/update-card card-id fields))]
+                      (if (:success result)
+                        (do (e/on-unmount #(reset! !editing-card nil))
+                            (case (e/server (swap! (us/get-atom user-id :card-mutations) inc))
+                              (t)))
+                        (t (:error result))))))))
             (dom/button
               (dom/props {:class "btn btn-secondary"})
               (dom/text "Cancel")
@@ -485,7 +465,6 @@
           !question (atom init-q)
           !answer (atom "")
           !cloze (atom init-c)
-          !ta-ref (atom nil)
           !q-editor (atom nil)
           !a-editor (atom nil)
           !c-editor (atom nil)
@@ -591,7 +570,8 @@
                              :on-change (fn [html] (reset! !cloze html))
                              :placeholder "Cloze text with {{c1::deletion}}..."
                              :field-key [:add-c]
-                             :!editor-atom !c-editor}))
+                             :!editor-atom !c-editor
+                             :cloze? true}))
               (dom/label (dom/text "Back Extra:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
@@ -601,50 +581,52 @@
                              :field-key [:add-be]
                              :!editor-atom !a-editor}))))
           (dom/div
-            (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
-            (dom/button
-              (dom/props {:class "btn btn-primary" :style {:border-radius "var(--radius-sm)" :order "1"}})
-              (reset! !primary-btn dom/node)
-              (dom/text "Save")
-              ;; Mirror the EditCardModal Save: force-flush hljs spans and
-              ;; capture the post-flush innerHTML via the return value.
-              ;; The Quill 2.0.3 syntax module does not fire text-change for
-              ;; its formatAt pass, so on-change cannot deliver the
-              ;; tokenized HTML — we MUST reset! atoms directly here.
-              (let [click-event (dom/On "click"
-                                  (fn [e]
-                                    (when-let [html (flush-syntax-tokens! @!q-editor)]
-                                      (reset! !question html))
-                                    (when-let [html (flush-syntax-tokens! @!a-editor)]
-                                      (reset! !answer html))
-                                    (when-let [html (flush-syntax-tokens! @!c-editor)]
-                                      (reset! !cloze html))
-                                    e)
-                                  nil)
-                    [t ?error] (e/Token click-event)]
-                (when ?error
-                  (dom/div (dom/props {:style {:color "var(--color-danger)" :font-size "12px" :margin-top "var(--sp-2)"}})
-                    (dom/text "Error: " ?error)))
-                (when t
-                  (let [validation-error (when (= kind "cloze") (validate-cloze cloze))]
-                    (if validation-error
-                      (t validation-error)
-                      (let [clean-q (e/server (sanitize-card-field question))
-                            clean-a (e/server (sanitize-card-field answer))
-                            clean-c (e/server (sanitize-card-field cloze))
-                            card-data (if (= kind "basic")
-                                        [{:q clean-q :a clean-a}]
-                                        [(cond-> {:c clean-c}
-                                           (and clean-a (not (str/blank? clean-a)))
-                                           (assoc :a clean-a))])
-                            ;; Route through cards/save-cards so bake-card-html
-                            ;; appends pinned <img> tags before insert (P3d).
-                            result (e/server (cards/save-cards topic-id root-topic-id kind card-data))]
-                        (if (:success result)
-                          (do (e/on-unmount #(reset! !show-add false))
-                              (case (e/server (swap! (us/get-atom user-id :card-mutations) inc))
-                                (t)))
-                          (t (:error result)))))))))
+            (dom/props {:style {:display "flex" :justify-content "flex-end" :align-items "center" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
+            (let [click-event
+                  (dom/button
+                    (dom/props {:class "btn btn-primary" :style {:border-radius "var(--radius-sm)" :order "1"}})
+                    (reset! !primary-btn dom/node)
+                    (dom/text "Save")
+                    ;; Mirror the EditCardModal Save: force-flush hljs spans and
+                    ;; capture the post-flush innerHTML via the return value.
+                    ;; The Quill 2.0.3 syntax module does not fire text-change for
+                    ;; its formatAt pass, so on-change cannot deliver the
+                    ;; tokenized HTML — we MUST reset! atoms directly here.
+                    ;; dom/On is the button's last form → button returns the click.
+                    (dom/On "click"
+                      (fn [e]
+                        (when-let [html (flush-syntax-tokens! @!q-editor)]
+                          (reset! !question html))
+                        (when-let [html (flush-syntax-tokens! @!a-editor)]
+                          (reset! !answer html))
+                        (when-let [html (flush-syntax-tokens! @!c-editor)]
+                          (reset! !cloze html))
+                        e)
+                      nil))
+                  [t ?error] (e/Token click-event)]
+              (when ?error
+                (dom/div (dom/props {:style {:order "-1" :margin-right "auto" :color "var(--color-danger)" :font-size "12px"}})
+                  (dom/text "Error: " ?error)))
+              (when t
+                (let [validation-error (when (= kind "cloze") (validate-cloze cloze))]
+                  (if validation-error
+                    (t validation-error)
+                    (let [clean-q (e/server (sanitize-card-field question))
+                          clean-a (e/server (sanitize-card-field answer))
+                          clean-c (e/server (sanitize-card-field cloze))
+                          card-data (if (= kind "basic")
+                                      [{:q clean-q :a clean-a}]
+                                      [(cond-> {:c clean-c}
+                                         (and clean-a (not (str/blank? clean-a)))
+                                         (assoc :a clean-a))])
+                          ;; Route through cards/save-cards so bake-card-html
+                          ;; appends pinned <img> tags before insert (P3d).
+                          result (e/server (cards/save-cards topic-id root-topic-id kind card-data))]
+                      (if (:success result)
+                        (do (e/on-unmount #(reset! !show-add false))
+                            (case (e/server (swap! (us/get-atom user-id :card-mutations) inc))
+                              (t)))
+                        (t (:error result))))))))
             (dom/button
               (dom/props {:class "btn btn-secondary"})
               (dom/text "Cancel")
