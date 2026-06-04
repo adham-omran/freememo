@@ -620,7 +620,11 @@
   (let [raw (request-body-bytes request)
         sig (get-in request [:headers "x-wayl-signature-256"])]
     (if-not (wayl/verify-signature? raw sig)
-      (json-response 401 {:success false :error "Invalid signature"})
+      (do (tel/log! {:level :warn :id ::wayl-webhook-rejected
+                     :data {:sig-present? (some? sig)
+                            :remote-addr (:remote-addr request)}}
+            "Wayl webhook rejected: invalid signature")
+          (json-response 401 {:success false :error "Invalid signature"}))
       (try
         (let [payload (json/parse-string (String. raw "UTF-8") true)
               reference-id (:referenceId payload)

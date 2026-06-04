@@ -34,6 +34,55 @@
    (def ^:private format-alert-signal (tel/format-signal-fn {})))
 
 #?(:clj
+   (defn- alert-subject-fn
+     "Subject line for one alert class: \"[freememo] <tag>: <signal-id> user=N\"
+      (user suffix only when the signal carries :user-id)."
+     [subject-tag]
+     (fn [signal]
+       (let [user-id (get-in signal [:data :user-id])]
+         (str "[freememo] " subject-tag ": " (some-> (:id signal) name)
+           (when user-id (str " user=" user-id)))))))
+
+#?(:clj
+   (def ^:private alert-routes
+     "Per-class email alert routing — each row registers one postal handler.
+      Separate handlers = separate rate-cap pools, so a pipeline-failure storm
+      can never starve a payment alert. :limit absent = handler:postal defaults
+      (max 5/min, 10/15min, 15/h, 30/6h).
+      See plans/credit-charge-retry-alert.md for the original billing alert."
+     [{:handler-id :alert/money-failures
+       :subject-tag "MONEY"
+       :min-level :warn
+       :ids #{:freememo.credits/credit-charge-failed
+              :freememo.api/wayl-webhook
+              :freememo.api/wayl-webhook-rejected
+              :freememo.api/credits-checkout
+              :freememo.api/signup-grant
+              :freememo.wayl/create-link
+              :freememo.wayl/create-link-failed
+              :freememo.wayl/get-link-status}}
+      {:handler-id :alert/business-events
+       :subject-tag "event"
+       :min-level :info
+       :ids #{:freememo.api/wayl-credited
+              :freememo.google-oauth/user-signup
+              :freememo.db/signup-grant
+              :freememo.db/grandfather-grant}}
+      {:handler-id :alert/pipeline-failures
+       :subject-tag "pipeline"
+       :min-level :error
+       ;; Pipeline storms summarize, they don't narrate: max 2/10min, 6/6h.
+       :limit [[2 (* 10 60 1000)] [6 (* 6 60 60 1000)]]
+       :ids #{:freememo.ocr/extract-text
+              :freememo.ocr/extract-text-pdfbox
+              :freememo.cards/generate-basic-cards
+              :freememo.cards/generate-cloze-cards
+              :freememo.cards/save-cards
+              :freememo.cards/generate-cards-count-mismatch
+              :freememo.epub/process-epub
+              :freememo.pdf/save-pdf}}]))
+
+#?(:clj
    (defn- alert-email-body
      "Email-safe rendering of a Telemere signal. Replaces the '<<< error <<<'
       marker line with 'Error' and drops the closing '>>> error >>>' line;
@@ -46,6 +95,25 @@
        (str/replace #"(?m)\n?>>> error >>>$" "")
        (str/replace #"(?m)^[ \t]*>+"
          (fn [lead] (str/replace lead ">" "›"))))))
+
+#?(:clj
+   (defn- register-alert-route!
+     "Register one postal handler for an alert-routes row.
+      Pre: smtp is a complete config/smtp-config map; route is an alert-routes row.
+      Post: handler `(:handler-id route)` delivers exactly the signals matching
+      (:ids route) at >= (:min-level route), rate-capped per route."
+     [{:keys [host port user pass from to]}
+      {:keys [handler-id subject-tag min-level ids limit]}]
+     (tel/add-handler! handler-id
+       (tel-postal/handler:postal
+         {:conn-opts {:host host :port port :user user :pass pass :ssl true}
+          :msg-opts  {:from from :to to}
+          :subject-fn (alert-subject-fn subject-tag)
+          :body-fn alert-email-body})
+       (cond-> {:async {:mode :dropping :buffer-size 64 :n-threads 1}
+                :min-level min-level
+                :id-filter ids}
+         limit (assoc :limit limit)))))
 
 #?(:clj
    (defn init! []
@@ -71,29 +139,18 @@
            {:path "logs/app.log"
             :output-fn (tel/format-signal-fn {})})))
 
-     ;; Billing-failure alert email — fires ONLY for
-     ;; :freememo.credits/credit-charge-failed (a swallowed debit failure after
-     ;; a successful OpenAI call; see plans/credit-charge-retry-alert.md).
+     ;; Alert emails — only when SMTP is configured (config.edn :secrets or
+     ;; env). One postal handler per alert class (see alert-routes above).
      ;; Telemere's handler harness contains send failures (an alert path that
-     ;; can throw would re-create the swallowed-error problem one level up) and
-     ;; rate-limits via handler:postal's default :limit caps (max 5/min … 30/6h).
-     (if-let [{:keys [host port user pass from to]} (config/smtp-config)]
-       (do (tel/add-handler! :alert/postal
-             (tel-postal/handler:postal
-               {:conn-opts {:host host :port port :user user :pass pass :ssl true}
-                :msg-opts  {:from from :to to}
-                :subject-fn (fn [signal]
-                              (str "[freememo] credit charge failed user="
-                                (get-in signal [:data :user-id])))
-                :body-fn alert-email-body})
-             {:async {:mode :dropping :buffer-size 64 :n-threads 1}
-              :min-level :error
-              :id-filter :freememo.credits/credit-charge-failed})
+     ;; can throw would re-create the swallowed-error problem one level up).
+     (if-let [smtp (config/smtp-config)]
+       (do (run! #(register-alert-route! smtp %) alert-routes)
            (tel/log! {:level :info :id ::alert-email
-                      :data {:host host :to to}}
-             "Billing-failure alert email enabled"))
+                      :data {:host (:host smtp) :to (:to smtp)
+                             :routes (mapv :handler-id alert-routes)}}
+             "Alert email routes enabled"))
        (tel/log! {:level :info :id ::alert-email}
-         "Billing-failure alert email disabled (no SMTP config)"))
+         "Alert email disabled (no SMTP config)"))
 
      ;; Catch uncaught exceptions on any thread (e.g. Electric reactor, futures)
      (Thread/setDefaultUncaughtExceptionHandler

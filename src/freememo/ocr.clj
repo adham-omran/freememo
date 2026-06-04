@@ -120,7 +120,12 @@
        (credits/record-charge! user-id :ocr.extract model [(credits/usage->tokens usage)])
        {:success true :text cleaned})
      (catch Exception e
-       (tel/error! {:id ::extract-text} e)
+       ;; Out-of-credits refusal is a normal business outcome, not a pipeline
+       ;; failure — keep it off the :error channel (alert email noise).
+       (if (= ::insufficient-credits (:type (ex-data e)))
+         (tel/log! {:level :info :id ::spend-refused :data {:user-id user-id}}
+           "OCR refused: out of credits")
+         (tel/error! {:id ::extract-text} e))
        {:success false
         :error (let [msg (.getMessage e)]
                  (cond
