@@ -129,8 +129,8 @@
     {:theme "snow"
      :modules {:toolbar (if cloze?
                           {:container (conj base ["cloze-inc" "cloze-eq"])
-                           :handlers #?(:cljs {"cloze-inc" (fn [_] (this-as tb (insert-cloze! (.-quill tb) :inc)))
-                                               "cloze-eq"  (fn [_] (this-as tb (insert-cloze! (.-quill tb) :eq)))}
+                           :handlers #?(:cljs {"cloze-inc" (fn [_] (this-as ^js tb (insert-cloze! (.-quill tb) :inc)))
+                                               "cloze-eq"  (fn [_] (this-as ^js tb (insert-cloze! (.-quill tb) :eq)))}
                                         :clj {})}
                           base)
                ;; Syntax module — requires window.hljs + clojure pack (loaded in
