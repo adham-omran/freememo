@@ -7,7 +7,8 @@
 ;; Three sections:
 ;;   :credits     — economic tunables (rates, FX, markup, presets, grants).
 ;;   :deployment  — deployment flags (CREDITS_ENABLED, WAYL_HOST, WAYL_LINK_ENV).
-;;   :secrets     — credentials (Wayl token + webhook secret, platform OpenAI key).
+;;   :secrets     — credentials (Wayl token + webhook secret, platform OpenAI
+;;                  key, SMTP creds for the billing-failure alert email).
 ;;
 ;; Env vars take precedence over :deployment / :secrets entries. Names map
 ;; lowercased-kebab → SCREAMING_SNAKE (e.g. :credits-enabled? ↔ CREDITS_ENABLED).
@@ -37,8 +38,19 @@
   :wayl-host "live"         ;; "live" = api.thewayl.com, "test" = api.thewayl-staging.com (staging cert may be a placeholder)
   :wayl-link-env "test"}    ;; per-link env sent to Wayl: "test" = sandbox / no real charge; "live" = real money
 
- ;; Secrets — also accept env vars WAYL_MERCHANT_TOKEN, WAYL_WEBHOOK_SECRET, PLATFORM_OPENAI_API_KEY.
+ ;; Secrets — also accept env vars WAYL_MERCHANT_TOKEN, WAYL_WEBHOOK_SECRET,
+ ;; PLATFORM_OPENAI_API_KEY, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS,
+ ;; ALERT_FROM, ALERT_TO.
  :secrets
  {:wayl-merchant-token nil      ;; X-WAYL-AUTHENTICATION header for Wayl API
   :wayl-webhook-secret nil      ;; shared secret for HMAC-SHA256 webhook verification
-  :platform-openai-api-key nil}}
+  :platform-openai-api-key nil
+
+  ;; Billing-failure alert email (::credit-charge-failed → one email, rate-limited).
+  ;; Leave nil to disable (self-host default). Requires host+user+pass+alert-to.
+  :smtp-host nil                ;; e.g. "smtp.fastmail.com"
+  :smtp-port nil                ;; default 465 (implicit TLS)
+  :smtp-user nil                ;; SMTP login, also the default From
+  :smtp-pass nil                ;; app password — config.edn is gitignored
+  :alert-from nil               ;; optional; defaults to :smtp-user
+  :alert-to nil}}               ;; where billing-failure alerts go

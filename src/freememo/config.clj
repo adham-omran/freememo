@@ -63,6 +63,28 @@
 (defn wayl-webhook-secret []
   (env-or-config "WAYL_WEBHOOK_SECRET" [:secrets :wayl-webhook-secret]))
 
+(defn smtp-config
+  "SMTP settings for the billing-failure alert email, or nil when not configured.
+   Pre:  config.edn :secrets and/or SMTP_* / ALERT_* env vars (env wins per key).
+   Post: nil (alerting disabled — the self-host default), or a complete map
+         {:host :port :user :pass :from :to} with no nil values.
+   Requires host, user, pass and alert-to; :port defaults to 465 (implicit TLS),
+   :from defaults to :user."
+  []
+  (let [host (env-or-config "SMTP_HOST" [:secrets :smtp-host])
+        user (env-or-config "SMTP_USER" [:secrets :smtp-user])
+        pass (env-or-config "SMTP_PASS" [:secrets :smtp-pass])
+        to   (env-or-config "ALERT_TO"  [:secrets :alert-to])]
+    (when (and host user pass to)
+      {:host host
+       :port (or (let [p (env-or-config "SMTP_PORT" [:secrets :smtp-port])]
+                   (if (string? p) (parse-long p) p))
+                 465)
+       :user user
+       :pass pass
+       :from (or (env-or-config "ALERT_FROM" [:secrets :alert-from]) user)
+       :to   to})))
+
 ;; ── Prod-pinned model (set at boot by src-prod/prod.cljc) ──
 ;;
 ;; Credits-enabled deployments hardcode the OpenAI model. The constant lives
