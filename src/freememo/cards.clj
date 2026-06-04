@@ -222,7 +222,12 @@
     (tel/trace! {:id ::generate-basic}
       (generate-cards* opts build-basic-prompt :cards.basic))
     (catch Exception e
-      (tel/error! {:id ::generate-basic-cards} e)
+      ;; Out-of-credits refusal is a normal business outcome, not a pipeline
+      ;; failure — keep it off the :error channel (alert email noise).
+      (if (= :insufficient-credits (error-type e))
+        (tel/log! {:level :info :id ::spend-refused :data {:user-id (:user-id opts)}}
+          "Card generation refused: out of credits")
+        (tel/error! {:id ::generate-basic-cards} e))
       {:success false
        :error (humanize-error (.getMessage (root-cause e)))
        :error-type (error-type e)})))
@@ -236,7 +241,10 @@
     (tel/trace! {:id ::generate-cloze}
       (generate-cards* opts build-cloze-prompt :cards.cloze))
     (catch Exception e
-      (tel/error! {:id ::generate-cloze-cards} e)
+      (if (= :insufficient-credits (error-type e))
+        (tel/log! {:level :info :id ::spend-refused :data {:user-id (:user-id opts)}}
+          "Card generation refused: out of credits")
+        (tel/error! {:id ::generate-cloze-cards} e))
       {:success false
        :error (humanize-error (.getMessage (root-cause e)))
        :error-type (error-type e)})))
