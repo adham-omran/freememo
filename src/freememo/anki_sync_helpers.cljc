@@ -522,6 +522,15 @@
            (-> (merge-with into add-result update-result)
              (assoc :updated (count (:updated update-result)))))))))
 
+(defn ordered-field-values
+  "Field values of an Anki notesInfo :fields map, sorted by Anki's :order.
+   Shared by pull (field-update detection) and the library cards Anki
+   overlay (anki-modified diff) — one definition of 'Anki's field order'."
+  [fields-map]
+  (->> fields-map
+    (sort-by (fn [[_ v]] (or (:order v) 0)))
+    (mapv (fn [[_ v]] (:value v)))))
+
 #?(:cljs
    (defn do-anki-pull!
      "Pull edits from Anki for previously-synced cards. Returns Missionary task of updates + deleted IDs.
@@ -564,10 +573,7 @@
                                  acc
                                  (let [kind (:flashcards/kind card)
                                        basic? (= kind "basic")
-                                       fields-map (:fields anki-note)
-                                       ordered-vals (->> fields-map
-                                                      (sort-by (fn [[_ v]] (or (:order v) 0)))
-                                                      (mapv (fn [[_ v]] (:value v))))
+                                       ordered-vals (ordered-field-values (:fields anki-note))
                                        update-map
                                        (if basic?
                                          (let [q (strip-html (first ordered-vals))
