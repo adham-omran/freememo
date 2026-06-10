@@ -1620,6 +1620,34 @@
                  :where [:= :f.root_topic_id root-topic-id]
                  :order-by [[:f.created_at :desc]]})))
 
+(defn get-user-flashcards
+  "Get every flashcard owned by user-id, with topic/root context for the
+   Library cards view. Ownership is scoped by the ROOT topic's user_id —
+   root topics always carry user_id; child rows may not.
+   Returns flashcard columns plus :topic_title, :root_title, :page_number
+   (direct or via parent topic) and :formatted_date.
+   pgjdbc qualifies plain aliased columns by their base table (here both
+   titles → :topics/*), unlike expression columns — rename to the
+   unqualified keys this fn promises."
+  [user-id]
+  (mapv (fn [row]
+          (-> row
+            (assoc :topic_title (:topics/topic_title row)
+              :root_title (:topics/root_title row))
+            (dissoc :topics/topic_title :topics/root_title)))
+    (jdbc/execute! ds
+      (sql/format {:select [[:f.*]
+                            [[:coalesce :t.page_number :parent.page_number] :page_number]
+                            [:t.title :topic_title]
+                            [:root.title :root_title]
+                            [[:to_char :f.created_at [:inline "Mon DD"]] :formatted_date]]
+                   :from [[:flashcards :f]]
+                   :join [[:topics :t] [:= :f.topic_id :t.id]
+                          [:topics :root] [:= :f.root_topic_id :root.id]]
+                   :left-join [[:topics :parent] [:= :t.parent_id :parent.id]]
+                   :where [:= :root.user_id user-id]
+                   :order-by [[:f.created_at :desc]]}))))
+
 (defn delete-flashcard!
   "Delete a single flashcard by ID. Returns the deleted row."
   [card-id]

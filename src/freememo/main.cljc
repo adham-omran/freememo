@@ -90,6 +90,7 @@
        :topic (list 'viewer 'topic (:topic-id nav-map))
        :learn-session (list 'viewer 'learn-session)
        :subset-review (list 'viewer 'subset-review (:root-id nav-map))
+       :library-cards (list 'library 'cards)
        (list (symbol (name tab)))))))
 
 (e/defn NotFoundView []
@@ -276,8 +277,9 @@
                   (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :search} active-tab) "hidden" "auto")}})
                   (when (= active-tab :home) (HomePage navigate! user-id enc-key))
                   (when (= active-tab :library)
-                    (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))]
-                      (LibraryPage user-id navigate! refresh)))
+                    (r/pop ; consume 'library from route; LibraryPage reads the sub-view segment
+                      (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))]
+                        (LibraryPage user-id navigate! refresh))))
                   (when (= active-tab :search)
                     (r/pop ; consume 'search from route; SearchPage reads remaining segments
                       (SearchPage user-id navigate!)))
