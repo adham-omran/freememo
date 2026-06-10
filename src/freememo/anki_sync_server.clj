@@ -193,6 +193,84 @@
       (tel/error! {:id ::finalize-push!} e)
       {:success false :error (.getMessage e)})))
 
+;; ---------------------------------------------------------------------------
+;; Library cards Anki overlay (anki-modified / marked / suspended + F4 deletes)
+;; ---------------------------------------------------------------------------
+
+(defn- stripped=
+  "Compare a client-stripped Anki field value against local field HTML,
+   stripping the local side the same way. nil and \"\" are equal."
+  [anki-val local-html]
+  (= (or anki-val "")
+    (or (helpers/strip-html (or local-html "")) "")))
+
+(defn apply-anki-overlay!
+  "Diff live Anki note state against local cards; delete cards whose
+   notes no longer exist in Anki.
+
+   pre:  present-notes [{:note-id long
+                         :stripped-fields [str ...]   ; strip-html'd, Anki field order
+                         :tags [str ...]
+                         :suspended {:total n :suspended n}} ...]
+         absent-note-ids [long ...] — note ids notesInfo reported missing.
+         Both derive from ONE notesInfo batch on the client.
+   post: {:success true
+          :per-card {card-id {:anki-modified bool, :marked bool,
+                              :suspended {:total n :suspended n}}}  ; SPARSE — flagged cards only
+          :deleted-count n}
+   invariants: reads/deletes only user-id's cards; bumps :sync-mutations
+   iff deleted-count > 0 (loop prevention — a no-delete pass must not
+   re-trigger the overlay); idempotent for the same input (absent cards
+   already deleted produce a no-op second pass).
+   Deletion is unconditional by product decision: a successful notesInfo
+   reply from a wrong/empty collection (fresh install, other profile)
+   will wipe the pushed cards — that risk is on the user."
+  [user-id present-notes absent-note-ids]
+  (try
+    (let [note-ids (mapv :note-id present-notes)
+          local-by-note (into {}
+                          (map (juxt :flashcards/anki_note_id identity))
+                          (db/get-flashcards-by-anki-note-ids user-id note-ids))
+          per-card
+          (into {}
+            (keep (fn [{:keys [note-id stripped-fields tags suspended]}]
+                    (when-let [card (get local-by-note note-id)]
+                      (let [basic? (= "basic" (:flashcards/kind card))
+                            anki-modified?
+                            (if basic?
+                              (or (not (stripped= (first stripped-fields) (:flashcards/question card)))
+                                (not (stripped= (second stripped-fields) (:flashcards/answer card))))
+                              (not (stripped= (first stripped-fields) (:flashcards/cloze card))))
+                            marked? (boolean (some #{"marked"} tags))
+                            suspended-n (or (:suspended suspended) 0)
+                            flags (cond-> {}
+                                    anki-modified? (assoc :anki-modified true)
+                                    marked? (assoc :marked true)
+                                    (pos? suspended-n) (assoc :suspended suspended))]
+                        (when (seq flags)
+                          [(:flashcards/id card) flags])))))
+            present-notes)
+          ;; F4: delete locally what Anki no longer has.
+          absent-rows (db/get-flashcards-by-anki-note-ids user-id absent-note-ids)
+          deleted-count (do (doseq [r absent-rows]
+                              (db/delete-flashcard! (:flashcards/id r)))
+                          (count absent-rows))]
+      (when (pos? deleted-count)
+        (swap! (us/get-atom user-id :sync-mutations) inc))
+      (tel/log! {:level :debug
+                 :id ::apply-anki-overlay!
+                 :data {:user-id user-id
+                        :present (count present-notes)
+                        :flagged (count per-card)
+                        :deleted deleted-count}}
+        "anki overlay applied")
+      {:success true
+       :per-card per-card
+       :deleted-count deleted-count})
+    (catch Exception e
+      (tel/error! {:id ::apply-anki-overlay!} e)
+      {:success false :error (.getMessage e)})))
+
 (defn apply-pull-updates
   "After pull, update card content from Anki edits and delete locally cards removed from Anki.
    Bumps :sync-mutations so the client toolbar refreshes counts.

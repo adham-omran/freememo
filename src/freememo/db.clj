@@ -1648,6 +1648,21 @@
                    :where [:= :root.user_id user-id]
                    :order-by [[:f.created_at :desc]]}))))
 
+(defn get-flashcards-by-anki-note-ids
+  "Flashcards owned by user-id (via root topic) whose anki_note_id is in
+   note-ids. Returns id, kind, content fields, and anki_note_id — the diff
+   inputs for the Anki overlay. Empty note-ids → []."
+  [user-id note-ids]
+  (if (empty? note-ids)
+    []
+    (jdbc/execute! ds
+      (sql/format {:select [:f.id :f.kind :f.question :f.answer :f.cloze :f.anki_note_id]
+                   :from [[:flashcards :f]]
+                   :join [[:topics :root] [:= :f.root_topic_id :root.id]]
+                   :where [:and
+                           [:= :root.user_id user-id]
+                           [:in :f.anki_note_id (vec note-ids)]]}))))
+
 (defn delete-flashcard!
   "Delete a single flashcard by ID. Returns the deleted row."
   [card-id]
