@@ -57,6 +57,72 @@
        "web" "Web Article"
        "Item")))
 
+;; ── Paste-source detection ─────────────────────────────────────────
+;;
+;; The HTML pane accepts two kinds of paste:
+;;   rendered copy — the text/html flavor carries real markup; the browser's
+;;     default insertion renders it.
+;;   raw source — the HTML is literal text (copied from an editor or a code
+;;     block); without parsing it lands as escaped text and imports literally.
+;; Source is detected when the plain-text flavor reads as markup AND the
+;; text/html flavor is absent or is only code-block chrome around it.
+
+(defn- html-source?
+  "True iff `s` reads as raw HTML source: after leading whitespace it opens
+   with a tag (`<` + letter or `!`) and a closing tag appears later.
+   Mid-text fragments without a leading tag intentionally fail."
+  [s]
+  (boolean
+    (and s
+         (re-find #"^\s*<[a-zA-Z!]" s)
+         (str/includes? s "</"))))
+
+#?(:cljs
+   (defn- parse-inert
+     "Parse `html` into an inert Document — DOMParser documents have no
+      browsing context, so nothing executes and no resources load."
+     [html]
+     (.parseFromString (js/DOMParser.) html "text/html")))
+
+#?(:cljs
+   (defn- code-block-wrapper?
+     "True iff the text/html clipboard flavor contains no content elements —
+      only pre/code/span/div/br (code-block chrome wrapping escaped source).
+      A flavor with any real element (p, h1, ul, …) is a rendered copy."
+     [html]
+     (every? #(contains? #{"PRE" "CODE" "SPAN" "DIV" "BR"} (.-tagName ^js %))
+             (array-seq (.querySelectorAll (.-body (parse-inert html)) "*")))))
+
+#?(:cljs
+   (defn- strip-active-content
+     "Preview-grade sanitization of raw HTML source before it is assigned to
+      the pane's innerHTML: drops script/iframe/style elements, on* attributes,
+      and javascript: href/src values. Persistence-grade sanitization stays
+      server-side (freememo.html-cleaner/clean-html).
+      Post: the returned HTML assigns to innerHTML without executing anything."
+     [source]
+     (let [body (.-body (parse-inert source))]
+       (doseq [^js el (array-seq (.querySelectorAll body "script, iframe, style"))]
+         (.remove el))
+       (doseq [^js el (array-seq (.querySelectorAll body "*"))
+               ;; snapshot names first — removing while iterating the live
+               ;; NamedNodeMap skips entries
+               attr-name (mapv #(.-name ^js %) (array-seq (.-attributes el)))]
+         (when (or (str/starts-with? attr-name "on")
+                   (and (contains? #{"href" "src"} attr-name)
+                        (some-> (.getAttribute el attr-name)
+                          str/trim str/lower-case
+                          (str/starts-with? "javascript:"))))
+           (.removeAttribute el attr-name)))
+       (.-innerHTML body))))
+
+#?(:cljs
+   (defn- first-heading-text
+     "Text of the first h1 in `html`, else first h2, else first h3 — or nil."
+     [html]
+     (let [body (.-body (parse-inert html))]
+       (some #(some-> (.querySelector body %) .-textContent) ["h1" "h2" "h3"]))))
+
 ;; ── HTTP helpers ───────────────────────────────────────────────────
 
 #?(:cljs
@@ -294,7 +360,7 @@
       (dom/label
         (dom/props {:class "label" :style {:color "var(--color-text-secondary)"}})
         (case format
-          "html" (dom/text "Content (paste from browser with Ctrl+V)")
+          "html" (dom/text "Content — paste a rendered page or raw HTML source")
           "markdown" (dom/text "Markdown content")))
       (case format
         "html"
@@ -304,21 +370,40 @@
                               :padding "var(--sp-3)" :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"
                               :font-size "14px" :line-height "1.6" :margin-bottom "var(--sp-4)"
                               :background "var(--color-bg-subtle)"}})
+          ;; Invariant: once a paste settles, !html-text equals the pane's
+          ;; innerHTML. Rich/prose pastes keep the browser default insertion
+          ;; and the input listener captures it; raw-source pastes suppress
+          ;; the default (it would insert the tags as literal text), render
+          ;; the parsed source, and set !html-text by hand — programmatic
+          ;; innerHTML assignment fires no input event.
           (dom/On "paste"
             (fn [e]
-              (let [cd (.-clipboardData e)
-                    html-data (.getData cd "text/html")
-                    text-data (.getData cd "text/plain")
-                    content (if (seq html-data) html-data (str "<p>" text-data "</p>"))]
-                (reset! !html-text content)
-                #?(:cljs
-                   (when (empty? @!title)
-                     (let [tmp (js/document.createElement "div")]
-                       (set! (.-innerHTML tmp) content)
-                       (when-let [h (or (.querySelector tmp "h1")
-                                      (.querySelector tmp "h2")
-                                      (.querySelector tmp "h3"))]
-                         (reset! !title (.-textContent h))))))))
+              #?(:cljs
+                 (let [cd (.-clipboardData e)
+                       html-data (.getData cd "text/html")
+                       text-data (.getData cd "text/plain")
+                       ;; raw source travels in text/plain; with only a
+                       ;; text/html flavor, its text content is the source
+                       source-text (if (seq text-data)
+                                     text-data
+                                     (when (seq html-data)
+                                       (.-textContent (.-body (parse-inert html-data)))))
+                       source-paste? (and (html-source? source-text)
+                                          (or (empty? html-data)
+                                              (code-block-wrapper? html-data)))
+                       ;; effective markup of this paste on either path
+                       markup (cond
+                                source-paste? (strip-active-content source-text)
+                                (seq html-data) html-data
+                                :else nil)]
+                   (when source-paste?
+                     ;; replaces any prior pane content
+                     (.preventDefault e)
+                     (set! (.-innerHTML (.-currentTarget e)) markup)
+                     (reset! !html-text (.-innerHTML (.-currentTarget e))))
+                   (when (and (seq markup) (empty? @!title))
+                     (when-some [t (first-heading-text markup)]
+                       (reset! !title t))))))
             nil)
           (dom/On "input"
             (fn [e] (reset! !html-text (.-innerHTML (.-currentTarget e))))
