@@ -88,6 +88,20 @@
            :else
            (handler request))))))
 
+#?(:clj
+   (defn start-nrepl-on-free-port!
+     "Bind an nREPL server on the first free port in [base-port, base-port + attempts).
+      Concurrent worktree dev servers each claim the next free port."
+     [base-port attempts]
+     (loop [port base-port]
+       (when (>= port (+ base-port attempts))
+         (throw (ex-info "No free nREPL port" {:base-port base-port :attempts attempts})))
+       (if-let [server (try (nrepl/start-server :port port)
+                            (catch java.net.BindException _ nil))]
+         (do (log/info (str "nREPL server started on port " port))
+             server)
+         (recur (inc port))))))
+
 #?(:clj ; server entrypoint
    (defn -main [& args]
      (logging/init!)
@@ -96,8 +110,9 @@
      ;; Initialize database
      (db/setup-schema)
 
-     (def nrepl-server (nrepl/start-server :port 7888))
-     (log/info "nREPL server started on port 7888")
+     (def nrepl-server (start-nrepl-on-free-port! 7888 20))
+
+     (def http-port (Integer/parseInt (or (System/getenv "PORT") "8080")))
 
      (shadow-cljs-compiler-server/start!)
      (shadow-cljs-compiler/watch :dev)
@@ -120,13 +135,13 @@
                                                                                      (.digest (.getBytes secret "UTF-8")))]
                                                                           (java.util.Arrays/copyOf hash 16))})
                                     :cookie-attrs {:max-age 2592000 :same-site :lax :http-only true}})) ; 0. session middleware (outermost – runs first)
-                   {:host "0.0.0.0", :port 8080, :join? false
+                   {:host "0.0.0.0", :port http-port, :join? false
                     :ws-idle-timeout (* 60 1000) ; 60 seconds in milliseconds
                     :ws-max-binary-size (if (quota/unlimited? quota/per-file-max-bytes)
                                           Long/MAX_VALUE quota/per-file-max-bytes)
                     :ws-max-text-size   (if (quota/unlimited? quota/per-file-max-bytes)
                                           Long/MAX_VALUE quota/per-file-max-bytes)}))
-     (log/info "👉 http://0.0.0.0:8080")
+     (log/info (str "👉 http://0.0.0.0:" http-port))
 
      (dev-metadata/start!)))
 
