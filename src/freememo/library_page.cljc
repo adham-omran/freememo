@@ -1,6 +1,7 @@
 (ns freememo.library-page
   "Library tab — documents tree or all-cards view, toggled via URL sub-route.
-   /library = knowledge tree, /library/cards = LibraryCardsView."
+   /library/documents = knowledge tree, /library/cards = LibraryCardsView.
+   Bare /library is a legacy alias for the documents tree."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]

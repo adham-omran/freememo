@@ -12,9 +12,11 @@
    [freememo.navigation :as nav]
    [freememo.logging :as log]
    [freememo.anki-sync-helpers :as helpers]
-   [freememo.card-components :refer [card-row-html set-inner-html! DeleteCardButton]]
+   [freememo.card-components :refer [card-row-html set-inner-html! DeleteCardButton
+                                     try-delete-anki-notes!]]
    [freememo.card-modals :refer [EditCardModal]]
    #?(:clj [freememo.anki-sync-server :as sync-server])
+   #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])))
@@ -35,6 +37,107 @@
     (and updated_at anki_synced_at
       (pos? (compare (str updated_at) (str anki_synced_at)))) :modified
     :else :synced))
+
+;; ---------------------------------------------------------------------------
+;; Sync direction — one glyph combining DB state and live Anki overlay.
+;; :local-ahead is timestamp-based (can show when content happens to match);
+;; :anki-ahead is content-based (overlay diff). Both = :conflict.
+;; ---------------------------------------------------------------------------
+
+(defn anki-modified-ids
+  "Card ids the overlay marked as edited in Anki — the danger set for push
+   (push would clobber the Anki edit) and half of pull's conflict predicate."
+  [anki-overlay]
+  (set (keep (fn [[cid flags]] (when (:anki-modified flags) cid)) anki-overlay)))
+
+(defn card-sync-direction [sync-st anki-flags]
+  (let [local-ahead? (= :modified sync-st)
+        anki-ahead? (boolean (:anki-modified anki-flags))]
+    (cond
+      (= :unpushed sync-st) :unpushed
+      (and local-ahead? anki-ahead?) :conflict
+      local-ahead? :local-ahead
+      anki-ahead? :anki-ahead
+      :else :in-sync)))
+
+(defn direction-glyph [direction]
+  (case direction
+    :unpushed "○"
+    :local-ahead "▲"
+    :anki-ahead "▼"
+    :conflict "▲▼"
+    ""))
+
+(defn direction-color [direction]
+  (case direction
+    :conflict "var(--color-danger)"
+    :in-sync "var(--color-text-hint)"
+    "var(--color-warning)"))
+
+(defn direction-tooltip [direction]
+  (case direction
+    :unpushed "Not pushed to Anki — click for diff"
+    :local-ahead "Edited in FreeMemo — push pending. Click for diff"
+    :anki-ahead "Edited in Anki — pull pending. Click for diff"
+    :conflict "Edited on BOTH sides — conflict. Click for diff"
+    :in-sync "In sync — click for diff"
+    ""))
+
+;; ---------------------------------------------------------------------------
+;; Line diff — git-style :- :+ := ops via LCS. Inputs are stripped text;
+;; fields are card-sized, so the O(n·m) table is trivial.
+;; ---------------------------------------------------------------------------
+
+(defn diff-lines
+  "Line-level diff from old-text to new-text. Returns [[op line] ...]
+   with op ∈ :- (only in old) :+ (only in new) := (common)."
+  [old-text new-text]
+  (let [a (if (str/blank? old-text) [] (vec (str/split-lines old-text)))
+        b (if (str/blank? new-text) [] (vec (str/split-lines new-text)))
+        n (count a)
+        m (count b)
+        ;; lcs[i][j] = LCS length of a[i:] vs b[j:]
+        lcs (reduce
+              (fn [t i]
+                (reduce
+                  (fn [t j]
+                    (assoc-in t [i j]
+                      (if (= (a i) (b j))
+                        (inc (get-in t [(inc i) (inc j)]))
+                        (max (get-in t [(inc i) j]) (get-in t [i (inc j)])))))
+                  t
+                  (range (dec m) -1 -1)))
+              (vec (repeat (inc n) (vec (repeat (inc m) 0))))
+              (range (dec n) -1 -1))]
+    (loop [i 0 j 0 out []]
+      (cond
+        (and (< i n) (< j m) (= (a i) (b j)))
+        (recur (inc i) (inc j) (conj out [:= (a i)]))
+
+        (and (< i n) (or (= j m) (>= (get-in lcs [(inc i) j]) (get-in lcs [i (inc j)]))))
+        (recur (inc i) j (conj out [:- (a i)]))
+
+        (< j m)
+        (recur i (inc j) (conj out [:+ (b j)]))
+
+        :else out))))
+
+(defn diff-section-html
+  "One field's diff as HTML: label + −/+/context lines, − = FreeMemo side,
+   + = Anki side. Text is escaped; rendered via set-inner-html!."
+  [label local-text anki-text]
+  (str "<div style=\"font-weight:600;font-size:12px;margin:10px 0 4px;color:var(--color-text-primary)\">"
+    (helpers/html-escape label) "</div>"
+    (apply str
+      (map (fn [[op text]]
+             (let [[color prefix] (case op
+                                    :- ["var(--color-danger)" "− "]
+                                    :+ ["var(--color-success-dark, var(--color-success))" "+ "]
+                                    ["var(--color-text-secondary)" "  "])]
+               (str "<div style=\"color:" color
+                 ";font-family:monospace;font-size:12px;white-space:pre-wrap\">"
+                 prefix (helpers/html-escape text) "</div>")))
+        (diff-lines local-text anki-text)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Server-side filter/sort pipeline — runs on the full per-user card list,
@@ -99,6 +202,9 @@
          {:success true
           :cards sorted
           :count (count sorted)
+          ;; ids of the filtered+sorted set — drives the header select-all.
+          ;; Ints only; content stays server-side.
+          :filtered-ids (mapv :flashcards/id sorted)
           :unpushed (count (filterv #(= :unpushed (:sync-state %)) sorted))
           :modified (count (filterv #(= :modified (:sync-state %)) sorted))
           ;; Anki-overlay manifest — ALL pushed cards regardless of filters,
@@ -187,6 +293,127 @@
      :clj nil))
 
 ;; ---------------------------------------------------------------------------
+;; Diff modal fetch — one notesInfo for the card under inspection.
+;; ---------------------------------------------------------------------------
+
+(defonce !diff-fetch-gen (atom 0))
+
+(defn fetch-anki-note-fields!
+  "Fetch one note's stripped field values for the diff modal.
+   post (async): !result ← {:state :ready :fields [str ...]}
+                          | {:state :absent} | {:state :unavailable}."
+  [note-id !result]
+  #?(:cljs
+     (let [g (swap! !diff-fetch-gen inc)]
+       (reset! !result {:state :loading})
+       ((helpers/anki-call! "notesInfo" {:notes [note-id]})
+        (fn [notes]
+          (when (= g @!diff-fetch-gen)
+            (let [note (first (js->clj notes :keywordize-keys true))]
+              (reset! !result
+                (if (and (map? note) (:noteId note))
+                  {:state :ready
+                   :fields (mapv helpers/strip-html
+                             (helpers/ordered-field-values (:fields note)))}
+                  {:state :absent})))))
+        (fn [_err]
+          (when (= g @!diff-fetch-gen)
+            (reset! !result {:state :unavailable})))))
+     :clj nil))
+
+;; ---------------------------------------------------------------------------
+;; Bulk action runners — client async (AnkiConnect), writing phase atoms that
+;; the BulkActionRunner's reactive blocks observe. Generation-guarded.
+;; ---------------------------------------------------------------------------
+
+(defonce !bulk-run-gen (atom 0))
+
+(defn- bulk-skips-text [{:keys [unpushed conflicts errors skipped-local]}]
+  (let [parts (cond-> []
+                (pos? (or unpushed 0)) (conj (str unpushed " unpushed"))
+                (pos? (or conflicts 0)) (conj (str conflicts " conflicts"))
+                (pos? (or skipped-local 0)) (conj (str skipped-local " with local edits"))
+                (pos? (or errors 0)) (conj (str errors " errors")))]
+    (when (seq parts) (str " · skipped: " (str/join ", " parts)))))
+
+(defn run-bulk-push!
+  "Execute the update-push for each per-root bundle, sequentially.
+   pre:  bundles-resp = success result of get-bulk-push-bundles; skips holds
+   the client-side conflict-exclusion count.
+   post (async): !bulk-pairs ← all pairs and !bulk-phase ← :recording-push,
+   or (nothing pushed / failure) !action-result set and !bulk-phase ← nil.
+   Stored field orderings can be empty (never pushed via modal with that
+   model) — falls back to live modelFieldNames per model."
+  [bundles-resp skips !bulk-pairs !bulk-skips !bulk-phase !action-result]
+  #?(:cljs
+     (let [g (swap! !bulk-run-gen inc)
+           bundles (:bundles bundles-resp)
+           skips (assoc skips :unpushed (:skipped-unpushed bundles-resp 0))]
+       ((m/sp
+          (let [results
+                (m/? (m/reduce conj []
+                       (m/ap
+                         (let [{:keys [cards settings]} (m/?> 1 (m/seed bundles))
+                               need-basic? (and (some #(= "basic" (:flashcards/kind %)) cards)
+                                             (empty? (:basic-fields settings)))
+                               need-cloze? (and (some #(= "cloze" (:flashcards/kind %)) cards)
+                                             (empty? (:cloze-fields settings)))
+                               basic-fields (if need-basic?
+                                              (vec (js->clj (m/? (helpers/anki-call! "modelFieldNames"
+                                                                   {:modelName (:basic-model settings)}))))
+                                              (:basic-fields settings))
+                               cloze-fields (if need-cloze?
+                                              (vec (js->clj (m/? (helpers/anki-call! "modelFieldNames"
+                                                                   {:modelName (:cloze-model settings)}))))
+                                              (:cloze-fields settings))]
+                           (m/? (helpers/do-anki-push! cards
+                                  (assoc settings
+                                    :basic-fields basic-fields
+                                    :cloze-fields cloze-fields)))))))]
+            {:pairs (vec (mapcat :pairs results))
+             :errors (vec (mapcat :errors results))}))
+        (fn [{:keys [pairs errors]}]
+          (when (= g @!bulk-run-gen)
+            (let [skips (assoc skips :errors (count errors))]
+              (reset! !bulk-skips skips)
+              (if (seq pairs)
+                (do (reset! !bulk-pairs (vec pairs))
+                  (reset! !bulk-phase :recording-push))
+                (do (reset! !action-result (str "Pushed 0" (bulk-skips-text skips)))
+                  (reset! !bulk-phase nil))))))
+        (fn [err]
+          (when (= g @!bulk-run-gen)
+            (reset! !action-result (str "Push failed: " (.-message err)))
+            (reset! !bulk-phase nil)))))
+     :clj nil))
+
+(defn run-bulk-pull!
+  "Pull Anki content for the eligible cards (do-anki-pull! comparison).
+   post (async): !bulk-updates ← {:updates :deleted :skipped-conflicts} and
+   !bulk-phase ← :recording-pull, or already-in-sync/failure result text
+   and !bulk-phase ← nil."
+  [cards skipped-conflicts !bulk-updates !bulk-phase !action-result]
+  #?(:cljs
+     (let [g (swap! !bulk-run-gen inc)]
+       ((helpers/do-anki-pull! cards)
+        (fn [{:keys [updates deleted]}]
+          (when (= g @!bulk-run-gen)
+            (if (and (empty? updates) (empty? deleted))
+              (do (reset! !action-result
+                    (str "Pull: already in sync"
+                      (bulk-skips-text {:conflicts skipped-conflicts})))
+                (reset! !bulk-phase nil))
+              (do (reset! !bulk-updates {:updates (vec updates)
+                                         :deleted (vec deleted)
+                                         :skipped-conflicts skipped-conflicts})
+                (reset! !bulk-phase :recording-pull)))))
+        (fn [err]
+          (when (= g @!bulk-run-gen)
+            (reset! !action-result (str "Pull failed: " (.-message err)))
+            (reset! !bulk-phase nil)))))
+     :clj nil))
+
+;; ---------------------------------------------------------------------------
 ;; View toggle — shared by LibraryPage (tree header) and LibraryCardsView.
 ;; Navigation is URL-backed: /library = documents tree, /library/cards = cards.
 ;; ---------------------------------------------------------------------------
@@ -210,24 +437,7 @@
 ;; contract); document cell click navigates to the card's topic instead.
 ;; ---------------------------------------------------------------------------
 
-(defn sync-state-glyph [sync-st]
-  (case sync-st
-    :unpushed "○"
-    "●"))
-
-(defn sync-state-color [sync-st]
-  (case sync-st
-    :synced "var(--color-success)"
-    "var(--color-warning)"))
-
-(defn sync-state-tooltip [sync-st]
-  (case sync-st
-    :unpushed "Not pushed to Anki"
-    :modified "Edited in FreeMemo since last sync"
-    :synced "Synced to Anki"
-    ""))
-
-(e/defn LibraryCardRow [card navigate! !editing-card user-id i anki-overlay]
+(e/defn LibraryCardRow [card navigate! !editing-card !diff-card !selected selected user-id i anki-overlay]
   (e/client
     (let [id (e/server (:flashcards/id card))
           kind (e/server (:flashcards/kind card))
@@ -235,6 +445,7 @@
           answer (e/server (:flashcards/answer card))
           cloze (e/server (:flashcards/cloze card))
           topic-id (e/server (:flashcards/topic_id card))
+          note-id (e/server (:flashcards/anki_note_id card))
           root-title (e/server (:root_title card))
           added (e/server (:formatted_date card))
           sync-st (e/server (:sync-state card))
@@ -248,32 +459,43 @@
           (fn [_] (reset! !editing-card {:id id :kind kind :question question
                                          :answer answer :cloze cloze}))
           nil)
-        ;; Status dot
+        ;; Selection checkbox
         (dom/td
-          (dom/props {:style (merge cell-style {:justify-content "center" :padding-inline "4px"
-                                                :font-size "10px"
-                                                :color (sync-state-color sync-st)})
-                      :data-tooltip (sync-state-tooltip sync-st)})
-          (dom/text (sync-state-glyph sync-st)))
-        ;; Anki cell — live overlay flags; empty when clean or Anki unavailable
+          (dom/props {:style (merge cell-style {:justify-content "center" :padding-inline "4px"})})
+          (dom/input
+            (dom/props {:type "checkbox" :style {:cursor "pointer"}})
+            (set! (.-checked dom/node) (contains? selected id))
+            (dom/On "click"
+              (fn [e]
+                (.stopPropagation e)
+                (swap! !selected #(if (contains? % id) (disj % id) (conj % id))))
+              nil)))
+        ;; Diff cell — direction glyph + secondary Anki state icons; click → diff modal
         (let [flags (get anki-overlay id)
+              direction (card-sync-direction sync-st flags)
               susp (:suspended flags)]
           (dom/td
             (dom/props {:style (merge cell-style {:justify-content "center" :gap "3px"
-                                                  :padding-inline "4px" :font-size "11px"})})
-            (when (:anki-modified flags)
-              (dom/span
-                (dom/props {:style {:color "var(--color-warning)"}
-                            :data-tooltip "Edited in Anki since last sync"})
-                (dom/text "◆")))
+                                                  :padding-inline "4px" :font-size "11px"
+                                                  :cursor "pointer"})
+                        :data-tooltip (direction-tooltip direction)})
+            (dom/On "click"
+              (fn [e]
+                (.stopPropagation e)
+                (reset! !diff-card {:id id :kind kind :question question :answer answer
+                                    :cloze cloze :note-id note-id}))
+              nil)
+            (dom/span
+              (dom/props {:style {:color (direction-color direction)}})
+              (dom/text (direction-glyph direction)))
             (when (:marked flags)
               (dom/span
-                (dom/props {:style {:color "var(--color-primary)"}
+                (dom/props {:style {:color "var(--color-primary)" :font-size "9px"}
                             :data-tooltip "Marked in Anki"})
                 (dom/text "★")))
             (when (and susp (pos? (:suspended susp)))
               (dom/span
-                (dom/props {:style {:color "var(--color-text-secondary)"
+                (dom/props {:style {:color "var(--color-text-secondary)" :font-size "9px"
                                     ;; I3 tri-state: solid = all suspended, dimmed = partial
                                     :opacity (if (= (:suspended susp) (:total susp)) "1" "0.45")}
                             :data-tooltip (str (:suspended susp) " of " (:total susp)
@@ -334,7 +556,269 @@
 ;; Main view
 ;; ---------------------------------------------------------------------------
 
-(def ^:private grid-cols "36px 56px 64px 1fr 1fr 200px 80px 44px")
+(def ^:private grid-cols "32px 44px 64px 1fr 1fr 200px 80px 44px")
+
+;; ---------------------------------------------------------------------------
+;; Diff modal — read-only git-style view of FreeMemo (−) vs Anki (+).
+;; ---------------------------------------------------------------------------
+
+(e/defn CardDiffModal [!diff-card]
+  (e/client
+    (let [dc (e/watch !diff-card)]
+      (when dc
+        (let [{:keys [id kind question answer cloze note-id]} dc
+              cloze? (= kind "cloze")
+              local-front (helpers/strip-html (or (if cloze? cloze question) ""))
+              local-back (helpers/strip-html (or answer ""))
+              !anki-result (atom nil)
+              anki-result (e/watch !anki-result)]
+          (when note-id
+            (fetch-anki-note-fields! note-id !anki-result))
+          (dom/div
+            (dom/props {:class "modal-backdrop"})
+            (dom/On "click" (fn [_] (reset! !diff-card nil)) nil)
+            (dom/div
+              (dom/props {:class "modal-content modal-sm"
+                          :style {:max-width "640px" :width "90%"}})
+              (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+              (dom/h3
+                (dom/props {:style {:margin "0 0 4px 0" :font-size "15px"}})
+                (dom/text (str (if cloze? "Cloze" "Basic") " card — FreeMemo vs Anki")))
+              (dom/div
+                (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)"
+                                    :margin-bottom "8px"}})
+                (dom/text "− FreeMemo · + Anki"))
+              (let [anki-fields (cond
+                                  (nil? note-id) ["" ""]
+                                  (= :ready (:state anki-result)) (:fields anki-result)
+                                  :else nil)
+                    status-text (cond
+                                  (nil? note-id) "Not pushed to Anki — all content is local-only."
+                                  (= :loading (:state anki-result)) "Checking Anki…"
+                                  (= :unavailable (:state anki-result)) "Anki not connected."
+                                  (= :absent (:state anki-result)) "Note deleted in Anki — this card will be removed on the next check."
+                                  :else nil)]
+                (when status-text
+                  (dom/p
+                    (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
+                    (dom/text status-text)))
+                (when anki-fields
+                  (let [sections (if cloze?
+                                   [["Cloze" local-front (nth anki-fields 0 "")]]
+                                   [["Front" local-front (nth anki-fields 0 "")]
+                                    ["Back" local-back (nth anki-fields 1 "")]])
+                        html (apply str (map (fn [[label a b]] (diff-section-html label a b))
+                                          sections))]
+                    (e/for-by identity [_k [(str "diff-" id)]]
+                      (dom/div
+                        (dom/props {:style {:max-height "50vh" :overflow-y "auto"
+                                            :border "1px solid var(--color-border)"
+                                            :border-radius "var(--radius-sm)"
+                                            :padding "8px 10px"}})
+                        (set-inner-html! dom/node html))))))
+              (dom/div
+                (dom/props {:style {:display "flex" :justify-content "flex-end" :margin-top "12px"}})
+                (dom/button
+                  (dom/props {:class "btn btn-secondary"})
+                  (dom/text "Close")
+                  (dom/On "click" (fn [_] (reset! !diff-card nil)) nil))))))))))
+
+;; ---------------------------------------------------------------------------
+;; Bulk delete confirm — destructive over the whole selection.
+;; ---------------------------------------------------------------------------
+
+(e/defn BulkDeleteConfirmModal [user-id !confirm-bulk-delete !selected !action-result]
+  (e/client
+    (let [n (count (e/watch !selected))]
+      (dom/div
+        (dom/props {:class "modal-backdrop"})
+        (dom/On "click" (fn [_] (reset! !confirm-bulk-delete false)) nil)
+        (dom/div
+          (dom/props {:class "modal-content modal-sm"})
+          (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+          (dom/div
+            (dom/props {:class "confirm-modal-body"})
+            (dom/p (dom/text (str "Delete " n " selected card" (when (not= n 1) "s")
+                               "? Their Anki notes will also be deleted."))))
+          (dom/div
+            (dom/props {:class "confirm-modal-actions"})
+            (dom/button
+              (dom/props {:class "btn btn-secondary"})
+              (dom/text "Cancel")
+              (dom/On "click" (fn [_] (reset! !confirm-bulk-delete false)) nil))
+            (dom/button
+              (dom/props {:class "btn btn-danger-fill"})
+              (dom/text "Delete")
+              (let [event (dom/On "click" (fn [_] (vec @!selected)) nil)
+                    [t ?error] (e/Token event)]
+                (when ?error
+                  (dom/div
+                    (dom/props {:style {:color "var(--color-danger)" :font-size "11px"}})
+                    (dom/text ?error)))
+                (when t
+                  (let [r (e/server (e/Offload #(cards/delete-cards! user-id event)))]
+                    (when (map? r)
+                      (if (:success r)
+                        (case (e/client (try-delete-anki-notes! (:anki-note-ids r)))
+                          (case (e/client
+                                  (do (swap! !selected #(reduce disj % event))
+                                    (reset! !action-result (str "Deleted " (:deleted r) " card"
+                                                             (when (not= 1 (:deleted r)) "s")))
+                                    (reset! !confirm-bulk-delete false)))
+                            (t)))
+                        (t (:error r))))))))))))))
+
+;; ---------------------------------------------------------------------------
+;; Bulk action state machine — :pushing → :recording-push, :pulling →
+;; :recording-pull. Server prep crosses only ids/settings; AnkiConnect work
+;; happens in the client runners; recording is token-gated.
+;; ---------------------------------------------------------------------------
+
+(e/defn BulkActionRunner [user-id !bulk-phase !bulk-args !bulk-pairs !bulk-updates !bulk-skips !action-result]
+  (e/client
+    (let [bulk-phase (e/watch !bulk-phase)]
+
+      (when (= bulk-phase :pushing)
+        (let [args (e/watch !bulk-args)
+              ids (:ids args)
+              resp (e/server (e/Offload #(sync-server/get-bulk-push-bundles user-id ids)))]
+          (when (map? resp)
+            (if (:success resp)
+              (run-bulk-push! resp @!bulk-skips !bulk-pairs !bulk-skips !bulk-phase !action-result)
+              (do (reset! !action-result (str "Push failed: " (:error resp)))
+                (reset! !bulk-phase nil))))))
+
+      (when (= bulk-phase :recording-push)
+        (let [pairs (e/watch !bulk-pairs)
+              [?t _] (e/Token pairs)]
+          (when-some [t ?t]
+            (let [r (e/server (e/Offload #(sync-server/finalize-bulk-push! user-id pairs)))]
+              (when (map? r)
+                (case (e/client
+                        (do (reset! !action-result
+                              (if (:success r)
+                                (str "Pushed " (:count r) (bulk-skips-text @!bulk-skips))
+                                (str "Push record failed: " (:error r))))
+                          (reset! !bulk-phase nil)))
+                  (t)))))))
+
+      (when (= bulk-phase :pulling)
+        (let [args (e/watch !bulk-args)
+              ids (:ids args)
+              include? (boolean (:include? args))
+              anki-mod-ids (vec (:anki-modified-ids args))
+              resp (e/server (e/Offload #(sync-server/get-cards-for-bulk-pull
+                                           user-id ids include? anki-mod-ids)))]
+          (when (map? resp)
+            (if (:success resp)
+              (run-bulk-pull! (vec (:cards resp)) (:skipped-conflicts resp)
+                !bulk-updates !bulk-phase !action-result)
+              (do (reset! !action-result (str "Pull failed: " (:error resp)))
+                (reset! !bulk-phase nil))))))
+
+      (when (= bulk-phase :recording-pull)
+        (let [uv (e/watch !bulk-updates)
+              [?t _] (e/Token uv)]
+          (when-some [t ?t]
+            (let [r (e/server (e/Offload #(sync-server/apply-pull-updates user-id
+                                            (:updates uv) (:deleted uv))))]
+              (when (map? r)
+                (case (e/client
+                        (do (reset! !action-result
+                              (if (:success r)
+                                (str "Pulled " (:count r) " updated, " (:deleted r) " deleted"
+                                  (bulk-skips-text {:conflicts (:skipped-conflicts uv)}))
+                                (str "Pull apply failed: " (:error r))))
+                          (reset! !bulk-phase nil)))
+                  (t))))))))))
+
+;; ---------------------------------------------------------------------------
+;; Action bar — appears when the selection is non-empty.
+;; Push skips Anki-side-edited cards (client overlay knowledge) and pull
+;; skips locally-edited cards (server knowledge) unless include-conflicts.
+;; ---------------------------------------------------------------------------
+
+(e/defn BulkActionBar [anki-overlay ov-status busy?
+                       !selected !include-conflicts !action-result
+                       !bulk-args !bulk-skips !bulk-phase !confirm-bulk-delete]
+  (e/client
+    (let [selected (e/watch !selected)
+          include-conflicts (e/watch !include-conflicts)
+          action-result (e/watch !action-result)
+          anki-ready? (= ov-status :ready)
+          none-selected? (zero? (count selected))]
+      (dom/div
+        (dom/props {:style {:display "flex" :align-items "center" :gap "10px"
+                            :padding "4px 12px 8px" :flex-wrap "wrap" :flex-shrink "0"
+                            :font-size "12px"}})
+        (dom/span
+          (dom/props {:style {:font-weight "600"}})
+          (dom/text (str (count selected) " selected")))
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-primary"
+                      :disabled (or none-selected? busy? (not anki-ready?))
+                      :data-tooltip (cond
+                                      none-selected? "Select cards first"
+                                      (not anki-ready?) "Requires Anki connection"
+                                      :else "Update the Anki notes of selected pushed cards")})
+          (dom/text "Push updates")
+          (dom/On "click"
+            (fn [_]
+              (let [sel (vec @!selected)
+                    include? @!include-conflicts
+                    danger-ids (if include? #{} (anki-modified-ids anki-overlay))
+                    ids (vec (remove danger-ids sel))]
+                (reset! !bulk-skips {:conflicts (count (filter danger-ids sel))})
+                (reset! !action-result nil)
+                (reset! !bulk-args {:ids ids})
+                (reset! !bulk-phase :pushing)))
+            nil))
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-secondary"
+                      :disabled (or none-selected? busy? (not anki-ready?))
+                      :data-tooltip (cond
+                                      none-selected? "Select cards first"
+                                      (not anki-ready?) "Requires Anki connection"
+                                      :else "Apply Anki's content to selected cards")})
+          (dom/text "Pull")
+          (dom/On "click"
+            (fn [_]
+              (reset! !bulk-skips nil)
+              (reset! !action-result nil)
+              ;; conflict = locally-edited AND in this set; the server joins
+              ;; the two halves (it owns the timestamp half)
+              (reset! !bulk-args {:ids (vec @!selected)
+                                  :include? @!include-conflicts
+                                  :anki-modified-ids (vec (anki-modified-ids anki-overlay))})
+              (reset! !bulk-phase :pulling))
+            nil))
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-danger-fill"
+                      :disabled (or none-selected? busy?)})
+          (dom/text "Delete")
+          (dom/On "click" (fn [_] (reset! !confirm-bulk-delete true)) nil))
+        (dom/label
+          (dom/props {:style {:display "flex" :align-items "center" :gap "4px"
+                              :cursor "pointer" :user-select "none"}
+                      :data-tooltip "Conflicted cards (edited on both sides) are skipped unless checked"})
+          (dom/input
+            (dom/props {:type "checkbox"})
+            (set! (.-checked dom/node) (boolean include-conflicts))
+            (dom/On "change" (fn [e] (reset! !include-conflicts (-> e .-target .-checked))) nil))
+          (dom/text "include conflicts"))
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-secondary"
+                      :disabled none-selected?})
+          (dom/text "Clear")
+          (dom/On "click" (fn [_] (reset! !selected #{})) nil))
+        (when busy?
+          (dom/span
+            (dom/props {:style {:color "var(--color-text-hint)"}})
+            (dom/text "Working…")))
+        (when action-result
+          (dom/span
+            (dom/props {:style {:color "var(--color-text-secondary)"}})
+            (dom/text action-result)))))))
 
 (e/defn LibraryCardsView [user-id navigate! refresh]
   (e/client
@@ -369,13 +853,29 @@
           !ov-payload (atom nil) ov-payload (e/watch !ov-payload)
           !check-tick (atom 0) check-tick (e/watch !check-tick)
           sync-rev (e/server (e/watch (us/get-atom user-id :sync-mutations)))
+          card-rev (e/server (e/watch (us/get-atom user-id :card-mutations)))
           manifest (e/server (vec (:pushed-manifest result)))
           overlay-resp (when (some? ov-payload)
                          (let [present (:present ov-payload)
-                               absent (:absent ov-payload)]
+                               absent (:absent ov-payload)
+                               ;; local edits must recompute the diff even when
+                               ;; the Anki payload is byte-identical
+                               overlay-rev (+ sync-rev card-rev)]
                            (e/server
-                             (e/Offload #(sync-server/apply-anki-overlay! user-id present absent)))))
-          anki-overlay (or (:per-card overlay-resp) {})]
+                             (e/Offload #(sync-server/apply-anki-overlay! overlay-rev user-id present absent)))))
+          anki-overlay (or (:per-card overlay-resp) {})
+
+          ;; Phase 3: selection + diff modal + bulk action state
+          !selected (atom #{}) selected (e/watch !selected)
+          !diff-card (atom nil) diff-card (e/watch !diff-card)
+          !include-conflicts (atom false)
+          !action-result (atom nil)
+          !bulk-phase (atom nil) bulk-phase (e/watch !bulk-phase)
+          !bulk-args (atom nil)
+          !bulk-pairs (atom nil)
+          !bulk-updates (atom nil)
+          !bulk-skips (atom nil)
+          !confirm-bulk-delete (atom false) confirm-bulk-delete (e/watch !confirm-bulk-delete)]
 
       ;; Fetch trigger: view mount, :sync-mutations change (in-app push/pull/
       ;; deletion), manifest change, or Check Anki click. Work-skipping on
@@ -385,6 +885,15 @@
 
       (when editing-card
         (EditCardModal !editing-card user-id))
+
+      (when diff-card
+        (CardDiffModal !diff-card))
+
+      (when confirm-bulk-delete
+        (BulkDeleteConfirmModal user-id !confirm-bulk-delete !selected !action-result))
+
+      (BulkActionRunner user-id !bulk-phase !bulk-args !bulk-pairs !bulk-updates
+        !bulk-skips !action-result)
 
       ;; Header row: toggle + filters
       (dom/div
@@ -422,7 +931,8 @@
         (let [cards-vec (e/server (vec (:cards result)))
               card-count (e/server (or (:count result) 0))
               unpushed-count (e/server (or (:unpushed result) 0))
-              modified-count (e/server (or (:modified result) 0))]
+              modified-count (e/server (or (:modified result) 0))
+              filtered-ids (e/server (vec (:filtered-ids result)))]
 
           ;; Count summary
           (dom/div
@@ -432,6 +942,11 @@
                         (when (or (pos? unpushed-count) (pos? modified-count))
                           (str " (" unpushed-count " unpushed, " modified-count " modified)"))
                         (when (= ov-status :unavailable) " · Anki not connected"))))
+
+          ;; Bulk action bar — always visible; buttons disabled at 0 selection
+          (BulkActionBar anki-overlay ov-status (some? bulk-phase)
+            !selected !include-conflicts !action-result
+            !bulk-args !bulk-skips !bulk-phase !confirm-bulk-delete)
 
           ;; Fixed header
           (dom/table
@@ -448,14 +963,23 @@
                       arrow (fn [col] (when (= sort-col col)
                                         (if (= sort-dir :asc) " ▲" " ▼")))]
                   (dom/th
-                    (dom/props {:style (merge th-style {:text-align "center" :cursor "pointer"})
-                                :data-tooltip "Sync status"})
-                    (dom/text (str "⇄" (arrow :status)))
-                    (dom/On "click" (sort-click :status :asc) nil))
+                    (dom/props {:style (merge th-style {:text-align "center" :padding "8px 4px"})})
+                    (dom/input
+                      (dom/props {:type "checkbox" :style {:cursor "pointer"}
+                                  :data-tooltip "Select all filtered"})
+                      (set! (.-checked dom/node)
+                        (boolean (and (seq filtered-ids) (every? selected filtered-ids))))
+                      (dom/On "click"
+                        (fn [_]
+                          (if (and (seq filtered-ids) (every? @!selected filtered-ids))
+                            (swap! !selected #(reduce disj % filtered-ids))
+                            (swap! !selected into filtered-ids)))
+                        nil)))
                   (dom/th
-                    (dom/props {:style (merge th-style {:text-align "center"})
-                                :data-tooltip "Live Anki state: edited / marked / suspended"})
-                    (dom/text "Anki"))
+                    (dom/props {:style (merge th-style {:text-align "center" :cursor "pointer"})
+                                :data-tooltip "Sync direction (▲ push pending · ▼ pull pending · ▲▼ conflict · ○ unpushed) — sorts by DB state"})
+                    (dom/text (str "Δ" (arrow :status)))
+                    (dom/On "click" (sort-click :status :asc) nil))
                   (dom/th
                     (dom/props {:style th-style})
                     (dom/text "Kind"))
@@ -493,7 +1017,8 @@
                   (e/for [i (Tape offset limit)]
                     (let [card (e/server (nth cards-vec i nil))]
                       (when card
-                        (LibraryCardRow card navigate! !editing-card user-id i anki-overlay))))
+                        (LibraryCardRow card navigate! !editing-card !diff-card !selected
+                          selected user-id i anki-overlay))))
                   (dom/tr
                     (dom/td
                       (dom/props {:style {:grid-column "1 / -1" :text-align "center"

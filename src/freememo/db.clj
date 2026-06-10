@@ -1648,6 +1648,38 @@
                    :where [:= :root.user_id user-id]
                    :order-by [[:f.created_at :desc]]}))))
 
+(defn get-flashcards-by-ids
+  "Flashcards owned by user-id (via root topic) with ids in card-ids.
+   Full rows plus :page_number — the inputs for bulk push (build-update-fields
+   reads page_number for the source anchor) and bulk pull. Empty ids → []."
+  [user-id card-ids]
+  (if (empty? card-ids)
+    []
+    (jdbc/execute! ds
+      (sql/format {:select [[:f.*]
+                            [[:coalesce :t.page_number :parent.page_number] :page_number]]
+                   :from [[:flashcards :f]]
+                   :join [[:topics :t] [:= :f.topic_id :t.id]
+                          [:topics :root] [:= :f.root_topic_id :root.id]]
+                   :left-join [[:topics :parent] [:= :t.parent_id :parent.id]]
+                   :where [:and
+                           [:= :root.user_id user-id]
+                           [:in :f.id (vec card-ids)]]}))))
+
+(defn delete-user-flashcards!
+  "Bulk delete of user-id's flashcards. Ownership enforced via the root
+   topic join. Returns the deleted rows' [{:flashcards/id :flashcards/anki_note_id}]."
+  [user-id card-ids]
+  (if (empty? card-ids)
+    []
+    (jdbc/execute! ds
+      (into [(str "DELETE FROM flashcards f USING topics root
+                   WHERE f.root_topic_id = root.id AND root.user_id = ?
+                     AND f.id IN (" (str/join "," (repeat (count card-ids) "?")) ")
+                   RETURNING f.id, f.anki_note_id")
+             user-id]
+        card-ids))))
+
 (defn get-flashcards-by-anki-note-ids
   "Flashcards owned by user-id (via root topic) whose anki_note_id is in
    note-ids. Returns id, kind, content fields, and anki_note_id — the diff

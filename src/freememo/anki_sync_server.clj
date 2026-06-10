@@ -224,8 +224,11 @@
    already deleted produce a no-op second pass).
    Deletion is unconditional by product decision: a successful notesInfo
    reply from a wrong/empty collection (fresh install, other profile)
-   will wipe the pushed cards — that risk is on the user."
-  [user-id present-notes absent-note-ids]
+   will wipe the pushed cards — that risk is on the user.
+   _rev is unused — callers pass a mutation revision so Electric re-runs
+   the diff when LOCAL content changes under an unchanged Anki payload
+   (work-skipping would otherwise hold stale flags)."
+  [_rev user-id present-notes absent-note-ids]
   (try
     (let [note-ids (mapv :note-id present-notes)
           local-by-note (into {}
@@ -269,6 +272,114 @@
        :deleted-count deleted-count})
     (catch Exception e
       (tel/error! {:id ::apply-anki-overlay!} e)
+      {:success false :error (.getMessage e)})))
+
+;; ---------------------------------------------------------------------------
+;; Library cards bulk actions (selection-based push / pull)
+;; ---------------------------------------------------------------------------
+
+(defn get-bulk-push-bundles
+  "Group the user's selected, already-pushed cards by root topic and resolve
+   each root's push settings — the per-root preset wins over user-level
+   prefs, mirroring what the sync modal would use for that document.
+   pre:  card-ids — the selection; ownership enforced in the lookup.
+   post: {:success true
+          :bundles [{:root-topic-id N :cards [...] :settings {...}}]
+          :skipped-unpushed n}
+   Settings carry everything build-update-fields reads (fields, header,
+   source/bibliography/image modes, topic title/kind, app-base-url) plus
+   :tags and the model names (client falls back to modelFieldNames when a
+   stored field ordering is empty). Deck is omitted — updateNote does not
+   move cards between decks."
+  [user-id card-ids]
+  (try
+    (let [global (:prefs (load-anki-preferences user-id))
+          rows (db/get-flashcards-by-ids user-id card-ids)
+          pushed (filterv :flashcards/anki_note_id rows)
+          by-root (group-by :flashcards/root_topic_id pushed)
+          bundles
+          (mapv
+            (fn [[root-id cards]]
+              (let [preset (or (load-item-preset user-id root-id) {})
+                    pick (fn [k] (let [v (get preset k)] (if (some? v) v (get global k))))
+                    root-topic (db/get-topic-for-user user-id root-id)
+                    source (when-let [sid (:topics/source_id root-topic)]
+                             (db/get-source sid))
+                    bib-html (helpers/format-bibliography-html (:sources/csl source))]
+                {:root-topic-id root-id
+                 :cards (vec cards)
+                 :settings {:basic-model (pick :basic-model)
+                            :cloze-model (pick :cloze-model)
+                            :basic-fields (vec (resolve-preferred-fields user-id root-id :basic))
+                            :cloze-fields (vec (resolve-preferred-fields user-id root-id :cloze))
+                            :use-header (pick :use-header)
+                            :header-text (pick :header-text)
+                            :tags (vec (or (pick :tags) []))
+                            :source-display-mode (settings/get-source-display-mode user-id)
+                            :source-field (settings/get-anki-source-field user-id)
+                            :bibliography-display-mode (settings/get-bibliography-display-mode user-id)
+                            :bibliography-field-name (settings/get-bibliography-field-name user-id)
+                            :bibliography-html bib-html
+                            :images-front-field (settings/get-anki-images-front-field user-id)
+                            :images-back-field (settings/get-anki-images-back-field user-id)
+                            :image-display-mode (settings/get-image-display-mode user-id)
+                            :topic-title (:topics/title root-topic)
+                            :topic-kind (:topics/kind root-topic)
+                            :root-topic-id root-id
+                            :app-base-url settings/app-base-url}}))
+            by-root)]
+      {:success true
+       :bundles bundles
+       :skipped-unpushed (- (count rows) (count pushed))})
+    (catch Exception e
+      (tel/error! {:id ::get-bulk-push-bundles} e)
+      {:success false :error (.getMessage e)})))
+
+(defn get-cards-for-bulk-pull
+  "Selected cards eligible for a bulk pull.
+   pre:  card-ids — the selection; anki-modified-ids — card ids the client
+   overlay marked as edited in Anki.
+   include-conflicts? false skips only TRUE conflicts (edited on both
+   sides). A card edited only in FreeMemo pulls bare — pulling it is an
+   explicit discard of the local edit in favor of Anki's version.
+   post: {:success true :cards [...] :skipped-conflicts n}; cards without
+   an anki_note_id are dropped silently (nothing to pull)."
+  [user-id card-ids include-conflicts? anki-modified-ids]
+  (try
+    (let [anki-mod (set anki-modified-ids)
+          rows (db/get-flashcards-by-ids user-id card-ids)
+          pushed (filterv :flashcards/anki_note_id rows)
+          local-edit? (fn [c]
+                        (let [u (:flashcards/updated_at c)
+                              s (:flashcards/anki_synced_at c)]
+                          (and u s (pos? (compare (str u) (str s))))))
+          conflict? (fn [c]
+                      (and (local-edit? c)
+                        (contains? anki-mod (:flashcards/id c))))
+          eligible (if include-conflicts?
+                     pushed
+                     (filterv (complement conflict?) pushed))]
+      {:success true
+       :cards eligible
+       :skipped-conflicts (- (count pushed) (count eligible))})
+    (catch Exception e
+      (tel/error! {:id ::get-cards-for-bulk-pull} e)
+      {:success false :error (.getMessage e)})))
+
+(defn finalize-bulk-push!
+  "Record a bulk push: refresh anki_note_id + anki_synced_at for pairs and
+   bump :sync-mutations ONCE. Unlike finalize-push!, deliberately does NOT
+   save global last-used prefs or per-item presets — a bulk update is not a
+   preference-setting event.
+   pairs: [{:card-id N :anki-note-id M} ...]"
+  [user-id pairs]
+  (try
+    (db/set-anki-note-ids
+      (mapv (fn [{:keys [card-id anki-note-id]}] [card-id anki-note-id]) pairs))
+    (swap! (us/get-atom user-id :sync-mutations) inc)
+    {:success true :count (count pairs)}
+    (catch Exception e
+      (tel/error! {:id ::finalize-bulk-push!} e)
       {:success false :error (.getMessage e)})))
 
 (defn apply-pull-updates
