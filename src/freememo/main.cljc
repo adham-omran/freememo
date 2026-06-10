@@ -85,6 +85,7 @@
      (case tab
        :home nil
        :viewer (list 'viewer) ; empty viewer
+       :library (list 'library 'documents) ; documents tree is an explicit sub-route
        (list (symbol (name tab))))
      (case (:type nav-map)
        :topic (list 'viewer 'topic (:topic-id nav-map))

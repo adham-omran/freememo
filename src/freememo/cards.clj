@@ -4,6 +4,7 @@
    [freememo.db :as db]
    [freememo.settings :as settings]
    [freememo.credits :as credits]
+   [freememo.user-state :as us]
    [wkok.openai-clojure.api :as api]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
@@ -364,6 +365,23 @@
       {:success true :anki-note-id note-id})
     (catch Exception e
       (tel/error! {:id ::delete-card} e)
+      {:success false :error (.getMessage e)})))
+
+(defn delete-cards!
+  "Bulk delete of user-id's cards (Library cards view selection).
+   pre:  card-ids from the user's selection; ownership re-checked in SQL.
+   post: {:success true :deleted n :anki-note-ids [...]} — note ids of
+   deleted cards that were pushed, for the client's fire-and-forget Anki
+   note deletion. Bumps :card-mutations once iff anything was deleted."
+  [user-id card-ids]
+  (try
+    (let [deleted (db/delete-user-flashcards! user-id card-ids)
+          note-ids (into [] (keep :flashcards/anki_note_id) deleted)]
+      (when (seq deleted)
+        (swap! (us/get-atom user-id :card-mutations) inc))
+      {:success true :deleted (count deleted) :anki-note-ids note-ids})
+    (catch Exception e
+      (tel/error! {:id ::delete-cards!} e)
       {:success false :error (.getMessage e)})))
 
 (defn update-card
