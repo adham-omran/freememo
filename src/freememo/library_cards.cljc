@@ -883,8 +883,13 @@
                       (str " (" unpushed-count " unpushed, " modified-count " modified)"))
                     (when (= ov-status :unavailable) " · Anki not connected")))))))
 
-;; Header row: view toggle + text/kind/status filters + Check Anki
-(e/defn CardsFilterBar [navigate! ov-status manifest !text !kind !status !check-tick]
+;; Header row: view toggle + text/kind/status filters + Check Anki.
+;; Mounted inside LibraryCardsView's one-batch gate — see the `when` there.
+;; Any sibling that mounts solo while the cards query is in flight gets
+;; removed by the runtime when the result's children arrive (Electric v3
+;; mount bug, observed on the documents→cards branch switch); nothing in
+;; this view may mount before the query result exists.
+(e/defn CardsFilterBar [navigate! ov-status !text !kind !status !check-tick]
   (e/client
     (dom/div
       (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
@@ -909,7 +914,7 @@
         (dom/On "change" (fn [e] (reset! !status (-> e .-target .-value))) nil))
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary"
-                    :disabled (or (= ov-status :checking) (empty? manifest))
+                    :disabled (= ov-status :checking)
                     :data-tooltip "Re-check Anki for edits, marks, suspensions and deletions"})
         (dom/text (if (= ov-status :checking) "Checking…" "Check Anki"))
         (dom/On "click" (fn [_] (swap! !check-tick inc)) nil)))))
@@ -1096,14 +1101,14 @@
                 (e/watch (us/get-atom user-id :tree-mutations)))]
       (e/Offload #(query-user-cards* rev user-id opts)))))
 
-;; Everything downstream of the query result: filter bar (needs ov-status +
-;; manifest), edit modal, error branch, selection region.
-(e/defn CardsQueryRegion [user-id navigate! refresh opts filters-active?
-                          !text !kind !status !sort-col !sort-dir !editing-card
-                          !ov-status !ov-payload !check-tick]
+;; Everything downstream of the query result: edit modal, error branch,
+;; selection region. Takes `result` from LibraryCardsView's gate — the query
+;; runs there so the whole view mounts in one batch (see CardsFilterBar).
+(e/defn CardsResultRegion [user-id navigate! result filters-active?
+                           !sort-col !sort-dir !editing-card
+                           !ov-status !ov-payload !check-tick]
   (e/client
-    (let [result (CardsQuery user-id refresh opts)
-          success? (e/server (:success result))
+    (let [success? (e/server (:success result))
           font-sz (or (e/server (settings/get-card-font-size user-id)) 13)
           row-height (+ font-sz 41)
           ov-status (e/watch !ov-status)
@@ -1113,8 +1118,6 @@
 
       (when (e/watch !editing-card)
         (EditCardModal !editing-card user-id))
-
-      (CardsFilterBar navigate! ov-status manifest !text !kind !status !check-tick)
 
       (if (= false success?)
         (dom/div
@@ -1131,12 +1134,23 @@
           !sort-col (atom :added) sort-col (e/watch !sort-col)
           !sort-dir (atom :desc) sort-dir (e/watch !sort-dir)
           !editing-card (atom nil)
-          !ov-status (atom :idle)
+          !ov-status (atom :idle) ov-status (e/watch !ov-status)
           !ov-payload (atom nil)
           !check-tick (atom 0)
           opts {:text text :kind kind :status status
                 :sort-col sort-col :sort-dir sort-dir}
-          filters-active? (or (not (str/blank? text)) (not= kind "all") (not= status "all"))]
-      (CardsQueryRegion user-id navigate! refresh opts filters-active?
-        !text !kind !status !sort-col !sort-dir !editing-card
-        !ov-status !ov-payload !check-tick))))
+          filters-active? (or (not (str/blank? text)) (not= kind "all") (not= status "all"))
+          result (CardsQuery user-id refresh opts)
+          success? (e/server (:success result))]
+      ;; One-batch gate: nothing mounts until the query result exists.
+      ;; A solo-mounted sibling (e.g. the filter bar during the in-flight
+      ;; window) is removed by the runtime when the result's children
+      ;; arrive — Electric v3 mount bug, triggered by the documents→cards
+      ;; branch switch. e/Offload latches the previous result across
+      ;; re-queries, so the gate only blanks on first mount, not on
+      ;; filter changes.
+      (when (some? success?)
+        (CardsFilterBar navigate! ov-status !text !kind !status !check-tick)
+        (CardsResultRegion user-id navigate! result filters-active?
+          !sort-col !sort-dir !editing-card
+          !ov-status !ov-payload !check-tick)))))
