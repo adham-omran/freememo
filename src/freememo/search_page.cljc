@@ -122,10 +122,9 @@
             (set! (.-innerHTML dom/node) (or snippet ""))
             (snippet-center! dom/node)))))))
 
-(e/defn SearchResultsTable [results navigate!]
+(e/defn SearchResultsTable [results row-count navigate!]
   (e/client
-    (let [row-count (count results)
-          row-height 36
+    (let [row-height 36
           grid-cols "minmax(160px, 1fr) minmax(120px, 0.7fr) 2.5fr"]
       (dom/div
         (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0"}})
@@ -154,7 +153,7 @@
             (dom/table
               (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
               (e/for [i (Tape offset limit)]
-                (let [row (nth results i nil)]
+                (let [row (e/server (nth results i nil))]
                   (when row
                     (ResultRow row i row-height navigate!)))))
             (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))))
@@ -174,9 +173,6 @@
           !kind (atom initial-kind)
           kind (e/watch !kind)
 
-          !last-results (atom [])
-          last-results (e/watch !last-results)
-
           ;; URL sync — side effect during binding evaluation
           url-synced (do (update-url! mode kind query) true)
 
@@ -184,21 +180,24 @@
           q-trimmed (str/trim (or query ""))
           valid? (>= (count q-trimmed) 2)
 
-          ;; Server search (e/Offload latest-wins cancel)
-          results (when valid?
-                    (e/server (e/Offload #(run-search* user-id q-trimmed mode kind))))
+          ;; Server search — form binding, sited-by-use: the result rows stay
+          ;; server-side and only the table's window rows + count cross.
+          ;; The previous !last-results client atom held the FULL result set
+          ;; (up to 10k rows with snippets) client-side; e/Offload already
+          ;; latches the previous value across re-queries, which provides the
+          ;; stale-while-revalidate display on its own.
+          ;; The validity gate MUST sit INSIDE the e/server form: a client-side
+          ;; (when valid? (e/server ...)) sites the conditional's VALUE on the
+          ;; client and materializes the whole result set there (measured:
+          ;; 155 KB frame). (e/server (when valid? ...)) keeps it server-side.
+          results (e/server (when valid?
+                              (e/Offload #(run-search* user-id q-trimmed mode kind))))
+          result-count (e/server (when valid? (count results)))
 
-          loading? (and valid? (nil? results))
+          loading? (and valid? (nil? result-count))]
 
-          ;; Stale-while-revalidate: only update !last-results on non-nil results
-          swr-state (cond
-                      (not valid?) (do (reset! !last-results []) :cleared)
-                      (some? results) (do (reset! !last-results results) :updated)
-                      :else :pending)]
-
-      ;; Reference bindings so Electric doesn't optimize their side effects away
+      ;; Reference binding so Electric doesn't optimize its side effect away
       (when url-synced nil)
-      (when swr-state nil)
 
       (dom/div
         (dom/props {:class "page-container"
@@ -244,11 +243,11 @@
                                 :color "var(--color-text-secondary)" :font-size "13px"}})
             (dom/text "Type at least 2 characters to search"))
 
-          (and (empty? last-results) (not loading?))
+          (and (= 0 result-count) (not loading?))
           (dom/div
             (dom/props {:style {:flex "1" :display "flex" :align-items "center" :justify-content "center"
                                 :color "var(--color-text-secondary)" :font-size "13px"}})
             (dom/text (str "No matches for \"" q-trimmed "\"")))
 
           :else
-          (SearchResultsTable last-results navigate!))))))
+          (SearchResultsTable results result-count navigate!))))))
