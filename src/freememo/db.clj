@@ -1998,7 +1998,7 @@
   [user-id]
   (try
     (jdbc/execute! ds
-      ["SELECT t.id, t.parent_id, t.kind, t.title, t.content, t.priority,
+      ["SELECT t.id, t.parent_id, t.kind, t.title, t.priority,
               t.next_review_at, t.interval_days, t.a_factor,
               t.status,
               s.url, s.title, s.csl_type, s.container_title
