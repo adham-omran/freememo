@@ -51,8 +51,12 @@
                pdf-root-id (cond
                              (= kind "pdf") topic-id
                              (and (= kind "page") (= root-kind "pdf")) root-id
-                             :else nil)
-               parent (when parent-id (db/get-topic parent-id))]
+                             :else nil)]
+           ;; Scalars only — TopicPage destructures this map client-side, so
+           ;; every key crosses the wire on each :refresh tick. Content bodies
+           ;; are fetched separately: get-topic-content* (gated off for PDFs)
+           ;; and content-toolbar-generate/get-parent-content* (server-side
+           ;; at the point of use).
            {:kind kind
             :parent-id parent-id
             :page-number page-number
@@ -60,14 +64,21 @@
             :root-topic-id root-id
             :title (:topics/title topic)
             :root-title (or (:topics/title root) (:topics/title topic))
-            :content (or (:topics/content topic) "")
-            :status (or (:topics/status topic) "active")
-            :parent-content (or (:topics/content parent) "")})))
+            :status (or (:topics/status topic) "active")})))
+     :cljs nil))
+
+(defn get-topic-content*
+  "Topic's own content body. Separate from get-topic-overview* so the
+   client-destructured overview stays scalar-sized; PDF topics never fetch
+   this (their pane content comes from get-page-text*)."
+  [_refresh topic-id]
+  #?(:clj (when topic-id
+            (or (:topics/content (db/get-topic topic-id)) ""))
      :cljs nil))
 
 (defn get-page-info*
   "For a PDF root and 1-indexed page number, returns
-     {:topic-id <page-topic-id> :done <int> :total <int> :remaining <vec int>}.
+     {:topic-id <page-topic-id> :done <int> :total <int> :remaining-tooltip <str>}.
    Re-runs on :refresh and :meta-refresh."
   [_refresh _meta-refresh pdf-root-id page-number]
   #?(:clj
@@ -79,7 +90,16 @@
          {:topic-id (:topics/id current-page)
           :done (- (count pages) (count remaining))
           :total (count pages)
-          :remaining remaining}))
+          ;; Tooltip built server-side — the client only ever displayed this
+          ;; string; shipping the raw page-number vec was wire waste.
+          :remaining-tooltip
+          (cond
+            (empty? remaining) "All pages done!"
+            (<= (count remaining) 20)
+            (str "Remaining: " (str/join ", " remaining))
+            :else
+            (str "Remaining: " (str/join ", " (take 20 remaining))
+              " ... and " (- (count remaining) 20) " more"))}))
      :cljs nil))
 
 (defn get-page-text*
@@ -232,27 +252,20 @@
 
         ;; Page-stats badge (X / Y) — folio-style chip with tabular numerals
         (when (and page-info (pos? (:total page-info)))
-          (let [remaining (:remaining page-info)]
-            (dom/span
-              (dom/props {:class "tooltip-right"
-                          :style {:color "var(--color-text-primary)"
-                                  :font-size "11px"
-                                  :font-family "ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
-                                  :font-variant-numeric "tabular-nums"
-                                  :letter-spacing "0.04em"
-                                  :white-space "nowrap" :flex-shrink "0"
-                                  :padding "3px 8px"
-                                  :background "var(--color-bg-card)"
-                                  :border "1px solid var(--color-border)"
-                                  :border-radius "10px"}
-                          :data-tooltip (cond
-                                          (empty? remaining) "All pages done!"
-                                          (<= (count remaining) 20)
-                                          (str "Remaining: " (str/join ", " remaining))
-                                          :else
-                                          (str "Remaining: " (str/join ", " (take 20 remaining))
-                                            " ... and " (- (count remaining) 20) " more"))})
-              (dom/text (:done page-info) "/" (:total page-info)))))))))
+          (dom/span
+            (dom/props {:class "tooltip-right"
+                        :style {:color "var(--color-text-primary)"
+                                :font-size "11px"
+                                :font-family "ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
+                                :font-variant-numeric "tabular-nums"
+                                :letter-spacing "0.04em"
+                                :white-space "nowrap" :flex-shrink "0"
+                                :padding "3px 8px"
+                                :background "var(--color-bg-card)"
+                                :border "1px solid var(--color-border)"
+                                :border-radius "10px"}
+                        :data-tooltip (:remaining-tooltip page-info)})
+            (dom/text (:done page-info) "/" (:total page-info))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; TopicPage shell
@@ -288,9 +301,12 @@
               pdf-root-id (:pdf-root-id overview)
               is-pdf? (some? pdf-root-id)
               root-topic-id (:root-topic-id overview)
-              static-content (:content overview)
+              ;; Content body fetched separately and gated: PDF panes get
+              ;; their text from get-page-text*, so fetching the topic's
+              ;; stored content for them was a dead transfer.
+              static-content (e/server (when-not is-pdf?
+                                         (get-topic-content* refresh topic-id)))
               extract-status (:status overview)
-              parent-content (:parent-content overview)
               initial-page (e/server
                              (when is-pdf?
                                (cond
@@ -518,7 +534,6 @@
                    :root-topic-id (or pdf-root-id root-topic-id)
                    :page-number (when is-pdf? current-page)
                    :static-content effective-content
-                   :parent-content (when-not is-pdf? parent-content)
                    :context-mode (if is-pdf? :page :extract)
                    :context-tooltip (if is-pdf?
                                       "Include context for better cards. With a selection: current page + N previous pages. Without: N previous pages."
