@@ -104,7 +104,9 @@
           idx (e/watch !queue-idx)
           refresh (e/server (e/watch (us/get-atom user-id :refresh)))
           queue-vec (e/server (get-subset-queue* refresh user-id root-id))
-          total (count queue-vec)]
+          ;; queue-vec is server-sited (form binding) — consume only inside
+          ;; (e/server ...) so the subtree never crosses; one row per step.
+          total (e/server (count queue-vec))]
       (dom/div
         (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
 
@@ -129,11 +131,11 @@
               (dom/On "click" (fn [_] (on-exit!)) nil)))
 
           ;; Active topic
-          (let [item (nth queue-vec idx nil)
+          (let [item (e/server (nth queue-vec idx nil))
                 topic-id (:topics/id item)
                 outstanding? (:outstanding? item)
                 ;; Count remaining outstanding items (from current idx onward)
-                outstanding-remaining (count (filter :outstanding? (subvec queue-vec idx)))]
+                outstanding-remaining (e/server (count (filter :outstanding? (subvec queue-vec idx))))]
             (when item
               ;; Header
               (SubsetSessionHeader item !queue-idx idx total outstanding-remaining root-name on-exit!)
