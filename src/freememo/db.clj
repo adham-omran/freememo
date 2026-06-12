@@ -2315,9 +2315,13 @@
                                  (= today (.. la toInstant (atZone (java.time.ZoneId/systemDefault)) toLocalDate))))
                        active))
           ordered (tree-order-items filtered)]
+      ;; Slim to the fields the review session reads — get-subtree SELECTs
+      ;; t.* (content + content_text included); shipping those for every
+      ;; subtree topic is pure wire waste (TopicPage fetches content by id).
       (mapv (fn [item]
               (let [nra (:topics/next_review_at item)]
-                (assoc item :outstanding?
-                  (or (nil? nra)
-                    (.before nra now)))))
+                (assoc (select-keys item [:topics/id :topics/parent_id :topics/kind
+                                          :topics/title :topics/status :topics/page_number])
+                  :outstanding? (or (nil? nra)
+                                  (.before nra now)))))
         ordered))))
