@@ -95,8 +95,9 @@
        (filterv #(= (completion-status %) (keyword status-filter)) roots))))
 
 ;; Flatten tree into a linear list respecting expand state.
-;; Returns [{:depth N :topic <map> :has-children bool :is-root bool}]
-(defn flatten-tree [roots children-map expanded-set]
+;; `expanded?` is a predicate over topic-id (a set works).
+;; Returns [{:depth N :topic <map> :has-children bool :is-root bool :expanded? bool}]
+(defn flatten-tree [roots children-map expanded?]
   (loop [stack (mapv (fn [r] {:depth 0 :topic r :is-root true}) (reverse roots))
          result []]
     (if (empty? stack)
@@ -115,15 +116,38 @@
                               raw-children))
                        raw-children)
             has-children (boolean (seq children))
-            expanded? (contains? expanded-set id)
-            new-stack (if (and expanded? has-children)
+            is-expanded (boolean (expanded? id))
+            new-stack (if (and is-expanded has-children)
                         (into rest-stack
                           (mapv (fn [c] {:depth (inc depth) :topic c :is-root false})
                             (reverse children)))
                         rest-stack)]
         (recur new-stack
           (conj result {:depth depth :topic topic
-                        :has-children has-children :is-root is-root}))))))
+                        :has-children has-children :is-root is-root
+                        :expanded? is-expanded}))))))
+
+;; Server-side tree pipeline — query → stats → filter → sort → flatten.
+;; The full collection never crosses the wire: the client receives
+;; row-count and the virtual-scroll window rows only (B1).
+;; `expansion` is client state {:mode :all|:set :ids #{id}} — in :all mode
+;; ids are collapsed exceptions, in :set mode ids are the expanded nodes —
+;; so Expand All never enumerates ids client-side (bounded payload at scale).
+(defn build-tree-rows* [_rev user-id filter-text kind-filter status-filter sort-col sort-dir expansion]
+  #?(:clj
+     (let [all-items (vec (db/get-knowledge-tree user-id))
+           stats-map (get-root-stats* 0 user-id)
+           roots (-> (extract-roots all-items)
+                   (attach-stats stats-map)
+                   (filter-root-topics filter-text)
+                   (filter-by-kind kind-filter)
+                   (filter-by-status status-filter)
+                   (sort-root-topics sort-col sort-dir))
+           children-map (group-by :topics/parent_id all-items)
+           ids (set (:ids expansion))
+           expanded? (if (= :all (:mode expansion)) (complement ids) ids)]
+       (flatten-tree roots children-map expanded?))
+     :cljs nil))
 
 ;; Badge helper — delegated to bibliography-form/topic-badge so wiki sources
 ;; render as "Wikipedia" via container-title even when topic.kind='web'.
@@ -135,16 +159,15 @@
 ;; ---------------------------------------------------------------------------
 
 (e/defn DocumentRow [user-id navigate! row i row-height
-                     expanded-set editing-id
-                     !expanded-set !editing-id !show-confirm !scroll-node]
+                     editing-id
+                     !expansion !editing-id !show-confirm !scroll-node]
   (e/client
-    (let [{:keys [depth topic has-children is-root]} row
+    (let [{:keys [depth topic has-children is-root expanded?]} row
           id (:topics/id topic)
           title (or (:topics/title topic) "(empty)")
           kind (or (:topics/kind topic) "basic")
           source-container (:sources/container_title topic)
           topic-status (or (:topics/status topic) "active")
-          expanded? (contains? expanded-set id)
           [badge-text badge-color] (bibform/topic-badge kind source-container)]
       (dom/tr
         (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)"
@@ -175,7 +198,11 @@
                   (.stopPropagation e)
                   (let [sn @!scroll-node
                         st (when sn (.-scrollTop sn))]
-                    (swap! !expanded-set (fn [s] (if (contains? s id) (disj s id) (conj s id))))
+                    ;; toggling id flips expansion in either mode: it is an
+                    ;; exception in :all mode, an expansion in :set mode
+                    (swap! !expansion
+                      (fn [{:keys [ids] :as ex}]
+                        (assoc ex :ids (if (contains? ids id) (disj ids id) (conj ids id)))))
                     (when st
                       (js/requestAnimationFrame (fn [] (set! (.-scrollTop sn) st))))))
                 nil))
@@ -365,41 +392,31 @@
 ;; rename, delete, document import) so the library tree refreshes on either.
 (e/defn DocumentTreeView [user-id navigate! refresh filter-text sort-col sort-dir kind-filter status-filter tree-expanded !sort-cmd]
   (e/client
-    (e/server
-      (let [tree-mutations (e/watch (us/get-atom user-id :tree-mutations))
-            rev (+ refresh tree-mutations)
-            all-items (get-tree-items* rev user-id)
-            stats-map (get-root-stats* rev user-id)
-            all-roots (extract-roots all-items)
-            roots (-> all-roots
-                    (attach-stats stats-map)
-                    (filter-root-topics filter-text)
-                    (filter-by-kind kind-filter)
-                    (filter-by-status status-filter)
-                    (sort-root-topics sort-col sort-dir))
-            ;; Strip page topics to structural keys only — cuts ~70% of WebSocket payload
-            slim-items (mapv (fn [item]
-                               (if (= "page" (:topics/kind item))
-                                 (select-keys item [:topics/id :topics/parent_id :topics/kind])
-                                 item))
-                         all-items)]
-        (e/client
-          (let [children-map (group-by :topics/parent_id slim-items)
-                !expanded-set (atom #{})
-                expand-cmd (if tree-expanded
-                             (reset! !expanded-set (disj (set (keys children-map)) nil))
-                             (reset! !expanded-set #{}))
-                expanded-set (do expand-cmd (e/watch !expanded-set))
-                !show-confirm (atom nil)
-                show-confirm (e/watch !show-confirm)
-                !editing-id (atom nil)
-                editing-id (e/watch !editing-id)
-                flat-rows (flatten-tree roots children-map expanded-set)
-                row-count (count flat-rows)
-                phone? (e/watch viewport/!phone?)
-                row-height (if phone? 80 36)
-                grid-cols (if phone? "1fr" "1fr 70px 80px 80px 110px")
-                !scroll-node (atom nil)]
+    (let [!expansion (atom {:mode :set :ids #{}})
+          ;; Expand All / Collapse All from the parent toggle — switches the
+          ;; mode; per-row arrows then toggle ids (exceptions in :all mode).
+          expand-cmd (if tree-expanded
+                       (reset! !expansion {:mode :all :ids #{}})
+                       (reset! !expansion {:mode :set :ids #{}}))
+          expansion (do expand-cmd (e/watch !expansion))
+          ;; Flattening is sited server-side: only row-count and the window
+          ;; rows cross the wire (see build-tree-rows*). Previously the whole
+          ;; slimmed topic list (~2x doc count items) shipped to the client
+          ;; on every mount and tree mutation.
+          flat-rows (e/server
+                      (let [tree-mutations (e/watch (us/get-atom user-id :tree-mutations))
+                            rev (+ refresh tree-mutations)]
+                        (build-tree-rows* rev user-id filter-text kind-filter
+                          status-filter sort-col sort-dir expansion)))
+          row-count (e/server (count flat-rows))
+          !show-confirm (atom nil)
+          show-confirm (e/watch !show-confirm)
+          !editing-id (atom nil)
+          editing-id (e/watch !editing-id)
+          phone? (e/watch viewport/!phone?)
+          row-height (if phone? 80 36)
+          grid-cols (if phone? "1fr" "1fr 70px 80px 80px 110px")
+          !scroll-node (atom nil)]
             (dom/div
               (dom/props {:style {:display "flex" :flex-direction "column" :min-height "0" :flex "1"}})
 
@@ -448,11 +465,11 @@
                                 :style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
                     (if (pos? row-count)
                       (e/for [i (Tape offset limit)]
-                        (let [row (nth flat-rows i nil)]
+                        (let [row (e/server (nth flat-rows i nil))]
                           (when row
                             (DocumentRow user-id navigate! row i row-height
-                              expanded-set editing-id
-                              !expanded-set !editing-id !show-confirm !scroll-node))))
+                              editing-id
+                              !expansion !editing-id !show-confirm !scroll-node))))
                       (dom/tr
                         (dom/td
                           (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
@@ -460,7 +477,7 @@
                           (dom/text "No content yet. Import content from the Import tab.")))))
                   (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))
 
-              (DeleteConfirmModal user-id show-confirm !show-confirm))))))))
+              (DeleteConfirmModal user-id show-confirm !show-confirm)))))
 
 
 ;; Legacy ContentsPage — no longer routed, kept for reference

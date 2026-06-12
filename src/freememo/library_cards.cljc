@@ -1092,15 +1092,6 @@
         anki-overlay selected !selected !sort-col !sort-dir
         !editing-card !diff-card))))
 
-;; Server query — _rev watches make the result reactive to mutations.
-(e/defn CardsQuery [user-id refresh opts]
-  (e/server
-    (let [rev (+ refresh
-                (e/watch (us/get-atom user-id :card-mutations))
-                (e/watch (us/get-atom user-id :sync-mutations))
-                (e/watch (us/get-atom user-id :tree-mutations)))]
-      (e/Offload #(query-user-cards* rev user-id opts)))))
-
 ;; Everything downstream of the query result: edit modal, error branch,
 ;; selection region. Takes `result` from LibraryCardsView's gate — the query
 ;; runs there so the whole view mounts in one batch (see CardsFilterBar).
@@ -1140,7 +1131,18 @@
           opts {:text text :kind kind :status status
                 :sort-col sort-col :sort-dir sort-dir}
           filters-active? (or (not (str/blank? text)) (not= kind "all") (not= status "all"))
-          result (CardsQuery user-id refresh opts)
+          ;; Server-FORM binding, deliberately not an e/defn call: an e/defn's
+          ;; return value materializes at the (client) call site, which shipped
+          ;; the entire result map — every card row — to the browser on each
+          ;; view entry (~1 MB at 3k cards). A bare (e/server ...) form is
+          ;; sited-by-use: only the fields the client actually reads cross
+          ;; the wire (counts, filtered-ids, manifest, window rows).
+          result (e/server
+                   (let [rev (+ refresh
+                               (e/watch (us/get-atom user-id :card-mutations))
+                               (e/watch (us/get-atom user-id :sync-mutations))
+                               (e/watch (us/get-atom user-id :tree-mutations)))]
+                     (e/Offload #(query-user-cards* rev user-id opts))))
           success? (e/server (:success result))]
       ;; One-batch gate: nothing mounts until the query result exists.
       ;; A solo-mounted sibling (e.g. the filter bar during the in-flight
