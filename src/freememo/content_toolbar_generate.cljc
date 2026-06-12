@@ -10,12 +10,23 @@
    [freememo.content-toolbar-helpers :as helpers]
    [freememo.icons :as icons]
    [freememo.keyboard :as keyboard]
+   #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])))
+
+(defn get-parent-content*
+  "Parent topic's content for extract-mode generation context. Fetched
+   server-side at the point of use — threading it down from TopicPage's
+   overview shipped the parent's full HTML to the client and back for a
+   value only ever read inside e/server blocks."
+  [topic-id]
+  #?(:clj (when-let [pid (:topics/parent_id (db/get-topic topic-id))]
+            (or (:topics/content (db/get-topic pid)) ""))
+     :cljs nil))
 
 (e/defn ToolbarGenerate [cfg]
   (e/client
     (let [{:keys [user-id enc-key topic-id root-topic-id page-number
-                  content-text parent-content context-mode mod-key
+                  content-text context-mode mod-key
                   llm-enabled?
                   card-type card-count-val use-context context-window
                   gen-active? gen-pending gen-error]} cfg
@@ -117,7 +128,7 @@
                   (let [sel-text (:selection-text gen-click)
                         context (when use-context
                                   (case context-mode
-                                    :extract (if sel-text content-text parent-content)
+                                    :extract (if sel-text content-text (or (get-parent-content* topic-id) ""))
                                     :page (let [prev (helpers/get-context-pages* root-topic-id page-number context-window)]
                                             (if sel-text
                                               (if prev (str prev "\n\n---\n\n" content-text) content-text)
@@ -155,7 +166,7 @@
                         sel-text selection
                         context (when use-context
                                   (case context-mode
-                                    :extract (if sel-text content-text parent-content)
+                                    :extract (if sel-text content-text (or (get-parent-content* topic-id) ""))
                                     :page (let [prev (helpers/get-context-pages* root-topic-id page-number context-window)]
                                             (if sel-text
                                               (if prev (str prev "\n\n---\n\n" content-text) content-text)

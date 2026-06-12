@@ -16,7 +16,6 @@
    props keys:
      :user-id :enc-key :topic-id :root-topic-id :page-number
      :static-content       string fallback shown when editor has no dirty html for this topic
-     :parent-content       optional context content (extract mode only)
      :context-mode         :page or :extract
      :context-tooltip      string
      :llm-enabled?         bool
@@ -29,7 +28,7 @@
      :card-font-size       int
    refresh: combined card-refresh value (refresh + sync-mutations + card-mutations)."
   [{:keys [user-id enc-key topic-id root-topic-id page-number
-           static-content parent-content
+           static-content
            context-mode context-tooltip llm-enabled?
            extract-status navigate! origin on-done! card-font-size]} refresh]
   (e/client
@@ -53,7 +52,6 @@
                                    :context-mode context-mode
                                    :context-tooltip context-tooltip
                                    :llm-enabled? llm-enabled?}
-                            parent-content (assoc :parent-content parent-content)
                             extract-status (assoc :extract-status extract-status)
                             navigate! (assoc :navigate! navigate!)
                             origin (assoc :origin origin)

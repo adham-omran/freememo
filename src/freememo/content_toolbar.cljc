@@ -29,8 +29,8 @@
 ;;  :root-topic-id — the root topic for scoping (PDF root, standalone root, etc.)
 ;;  :page-number   — current page number (for page-level context queries, nil for non-PDF)
 ;;  :content-text  — full text (page text for :page mode, extract text for :extract mode)
-;;  :parent-content — parent topic's content (for extract context, nil for page mode)
-;;  :context-mode  — :page or :extract
+;;  :context-mode  — :page or :extract (extract context fetches the parent
+;;                   topic's content server-side at the generate site)
 ;;  :context-tooltip — string for the Context checkbox title attribute
 ;;  :llm-enabled?  — whether LLM features are enabled
 ;; }
@@ -92,7 +92,7 @@
   (e/client
     (let [mod-key (if (mac-platform?) "Cmd" "Ctrl")
           {:keys [user-id enc-key topic-id root-topic-id page-number content-text
-                  parent-content context-mode context-tooltip llm-enabled?
+                  context-mode context-tooltip llm-enabled?
                   extract-status navigate! origin on-done!]} state
           ;; Unsynced card count — uses refresh value for reactivity
           unsynced-count (e/server (helpers/get-unsynced-count* refresh topic-id))
