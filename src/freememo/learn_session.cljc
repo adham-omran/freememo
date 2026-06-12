@@ -148,7 +148,10 @@
 (e/defn LearnSession [user-id enc-key queue-vec !queue-idx navigate! llm-enabled?]
   (e/client
     (let [idx (e/watch !queue-idx)
-          total (count queue-vec)]
+          ;; queue-vec is a server-sited value (form binding in ViewerContent)
+          ;; — consume it only inside (e/server ...) so the full queue never
+          ;; crosses the wire; one row crosses per review step.
+          total (e/server (count queue-vec))]
       (dom/div
         (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
 
@@ -175,7 +178,7 @@
                   (case (t) (navigate! :learn))))))
 
           ;; Active topic
-          (let [item (nth queue-vec idx nil)
+          (let [item (e/server (nth queue-vec idx nil))
                 kind (:topics/kind item)
                 topic-id (:topics/id item)
                 is-pdf? (= kind "pdf")
