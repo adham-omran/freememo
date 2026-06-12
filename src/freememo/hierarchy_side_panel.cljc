@@ -25,21 +25,25 @@
    (defn- slim-topic [t]
      (dissoc t :topics/content :topics/content_text)))
 
-(defn get-hierarchy-data*
-  "Server fetch — single subtree query rooted at the document root (topmost
-   ancestor) of the current page topic. Strips :content / :content_text to
-   keep the WebSocket payload small.
+(declare build-rows)
+
+(defn build-hierarchy-rows*
+  "Server pipeline — subtree query + group-by + depth-first flatten, all
+   sited here so the full topic list never crosses the wire; the client
+   reads row-count and the virtual-scroll window rows only.
+   `expanded-set` is the client's manually-expanded node ids (bounded).
    `_tree-rev` is the watched value of (us/get-atom user-id :tree-mutations);
-   bumping it re-runs this query."
-  [_tree-rev user-id page-topic-id]
+   bumping it re-runs this query. Returns a row vec or nil when the topic
+   has no resolvable root."
+  [_tree-rev user-id page-topic-id expanded-set]
   #?(:clj
      (when (and user-id page-topic-id)
        (when-let [root-id (db/get-root-topic-id page-topic-id)]
          (when-let [scope-root (db/get-topic root-id)]
-           (let [items (mapv slim-topic (db/get-subtree user-id root-id))]
-             {:scope-root (slim-topic scope-root)
-              :current-id page-topic-id
-              :items      items}))))
+           (let [items (mapv slim-topic (db/get-subtree user-id root-id))
+                 children-map (group-by :topics/parent_id items)]
+             (build-rows (slim-topic scope-root) page-topic-id
+               children-map (set expanded-set) items)))))
      :cljs nil))
 
 (defn side-panel-badge
@@ -56,7 +60,10 @@
 
 (defn build-rows
   "Pure: depth-first flatten of the subtree rooted at scope-root.
-   Returns a vec of {:depth :topic :has-children :current?} rows.
+   Returns a vec of {:depth :topic :has-children :current? :expanded-display?}
+   rows. :expanded-display? mirrors the arrow-glyph rule the panel renders
+   (current row or manually expanded), which intentionally differs from the
+   walk's descend rule (root / path-to-current / manually expanded).
 
    A node's children are rendered when the node is on the path from
    scope-root to current-id, or when the user explicitly expanded it.
@@ -74,7 +81,9 @@
                     row  {:depth depth
                           :topic node
                           :has-children has?
-                          :current? (= id current-id)}
+                          :current? (= id current-id)
+                          :expanded-display? (or (= id current-id)
+                                               (contains? expanded-set id))}
                     expanded? (or (zero? depth)
                                 (contains? path-set id)
                                 (contains? expanded-set id))]
@@ -136,16 +145,15 @@
                 (dom/text "No page selected."))
 
               (let [tree-rev   (e/server (e/watch (us/get-atom user-id :tree-mutations)))
-                    data       (e/server (get-hierarchy-data* tree-rev user-id page-topic-id))
-                    scope-root (:scope-root data)
-                    current-id (:current-id data)
-                    items      (vec (:items data))]
-                (when scope-root
-                  (let [children-map (group-by :topics/parent_id items)
-                        !expanded-set (atom #{})
-                        expanded-set (e/watch !expanded-set)
-                        rows (build-rows scope-root current-id children-map expanded-set items)
-                        row-count (count rows)
+                    !expanded-set (atom #{})
+                    expanded-set (e/watch !expanded-set)
+                    ;; Server-form binding (sited-by-use): the subtree rows
+                    ;; stay server-side; only row-count and the window rows
+                    ;; cross. expanded-set crosses upward (bounded).
+                    rows (e/server (build-hierarchy-rows* tree-rev user-id
+                                     page-topic-id expanded-set))]
+                (when (e/server (some? rows))
+                  (let [row-count (e/server (count rows))
                         row-height 36
                         !scroll-node (atom nil)]
 
@@ -164,9 +172,9 @@
                                         :font-size "13px"}})
                     (if (pos? row-count)
                       (e/for [i (Tape offset limit)]
-                        (let [row (nth rows i nil)]
+                        (let [row (e/server (nth rows i nil))]
                           (when row
-                            (let [{:keys [depth topic has-children current?]} row
+                            (let [{:keys [depth topic has-children current? expanded-display?]} row
                                   id (:topics/id topic)
                                   title (or (:topics/title topic) "(empty)")
                                   kind (or (:topics/kind topic) "basic")
@@ -174,8 +182,7 @@
                                   page-num (:topics/page_number topic)
                                   topic-status (or (:topics/status topic) "active")
                                   done? (= topic-status "done")
-                                  expanded? (or (= id current-id)
-                                              (contains? expanded-set id))
+                                  expanded? expanded-display?
                                   badge (side-panel-badge kind)]
                               (dom/tr
                                 (dom/props {:style {:--order (inc i)}})
@@ -215,7 +222,7 @@
                                       (dom/On "click"
                                         (fn [e]
                                           (.stopPropagation e)
-                                          (when-not (= id current-id)
+                                          (when-not current?
                                             (let [sn @!scroll-node
                                                   st (when sn (.-scrollTop sn))]
                                               (swap! !expanded-set
