@@ -10,6 +10,12 @@
             [taoensso.telemere :as tel]))
 
 (def ^:private result-limit 10000)
+;; Fuzzy-mode rerank cap. word_similarity ranking over full content_text is
+;; O(matched-bytes) — 92% of query time on a non-selective match (a term
+;; present in most docs). We retrieve the N shortest matching docs cheaply,
+;; then rank only those. Distinct from result-limit: fuzzy output is capped
+;; here, not at result-limit.
+(def ^:private candidate-limit 200)
 (def ^:private min-query-len 2)
 (def ^:private snippet-window 25)
 
@@ -74,13 +80,22 @@
    LEFT JOIN topics p2 ON p2.id = p1.parent_id")
 
 (defn search-content
-  "Search topics.content_text for user-id. Returns at most result-limit rows.
+  "Search topics.content_text for user-id.
    - query: string. Trimmed. If shorter than min-query-len returns [].
-   - mode: :fuzzy (ILIKE substring, ordered by word_similarity DESC) or
-           :exact (whole-word case-insensitive regex, ordered by created_at DESC).
+   - mode: :fuzzy or :exact (whole-word case-insensitive regex, newest first,
+           up to result-limit rows).
    - kind-filter: friendly label string (see kind-clause).
    Returns vec of {:id :title :kind :parent-id :page-number :snippet
-                    :source-title :created-at}."
+                    :source-title :created-at}.
+
+   Fuzzy mode is a two-phase retrieve-then-rerank: it ILIKE-matches, takes the
+   candidate-limit (200) SHORTEST matching documents, then ranks only those by
+   word_similarity. So fuzzy results are the similarity-ranked top of the 200
+   shortest matches — not the global top-by-similarity. Shortest-first is the
+   candidate proxy because a substring match fills a larger fraction of a short
+   document, which tends to score higher on word_similarity. This trades exact
+   global ranking for bounded latency on non-selective queries; selective
+   queries (< 200 matches) are unaffected — the cap never binds."
   [user-id query mode kind-filter]
   (try
     (let [q (when query (str/trim query))]
@@ -99,16 +114,20 @@
                    " ORDER BY t.created_at DESC LIMIT ?")
                  [user-id (str "\\m" (regex-escape q) "\\M") result-limit]]
 
-                ;; default :fuzzy
-                [(str "SELECT " select-cols ",
-                              word_similarity(?, t.content_text) AS rank
-                       FROM topics t " source-joins "
-                       WHERE t.user_id = ?
-                         AND t.content_text IS NOT NULL
-                         AND t.content_text ILIKE '%' || ? || '%'"
+                ;; default :fuzzy — retrieve-then-rerank. Inner query takes the
+                ;; candidate-limit shortest ILIKE matches WITHOUT computing
+                ;; word_similarity; outer query ranks only those candidates.
+                [(str "SELECT cand.*,
+                              word_similarity(?, cand.content_text) AS rank
+                       FROM (SELECT " select-cols "
+                             FROM topics t " source-joins "
+                             WHERE t.user_id = ?
+                               AND t.content_text IS NOT NULL
+                               AND t.content_text ILIKE '%' || ? || '%'"
                    kind-sql
-                   " ORDER BY rank DESC, t.created_at DESC LIMIT ?")
-                 [q user-id q result-limit]])
+                   "             ORDER BY length(t.content_text) ASC LIMIT ?) cand
+                       ORDER BY rank DESC, cand.created_at DESC")
+                 [q user-id q candidate-limit]])
               rows (jdbc/execute! db/ds
                      (into [sql] params)
                      {:builder-fn rs/as-unqualified-maps})]
