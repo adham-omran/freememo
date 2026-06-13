@@ -122,9 +122,24 @@
             (set! (.-innerHTML dom/node) (or snippet ""))
             (snippet-center! dom/node)))))))
 
+;; Always-mounted: SearchPage renders this unconditionally, never gated by a
+;; cond branch. row-count drives the Tape window; 0 → an empty (but mounted)
+;; differential. Two regressions drove this shape:
+;;  - Unmounting the whole table (Scroll-window + Tape + per-row server flows)
+;;    when the validity gate flipped <2 chars raced the cancelled query's
+;;    e/Offload teardown and crashed the WS (:diff-corruption). Keeping the
+;;    frame permanently mounted removes that teardown.
+;;  - Windowing as one server slice keyed on `offset` jittered on scroll:
+;;    client `offset` (CSS row position) updates instantly while the slice
+;;    lagged a round trip, so rows from the wrong range flashed in. Per-row
+;;    (e/server (nth results i)) keys each slot on a stable `i` against the
+;;    offset-independent `results`, so work-skipping holds rows steady.
+;; The empty-state message is a sibling overlay in SearchPage, never a branch
+;; that swaps this table out.
 (e/defn SearchResultsTable [results row-count navigate!]
   (e/client
-    (let [row-height 36
+    (let [rc (or row-count 0)
+          row-height 36
           grid-cols "minmax(160px, 1fr) minmax(120px, 0.7fr) 2.5fr"]
       (dom/div
         (dom/props {:style {:flex "1" :display "flex" :flex-direction "column" :min-height "0"}})
@@ -143,32 +158,17 @@
                 (dom/th (dom/props {:style th-style}) (dom/text "Source"))
                 (dom/th (dom/props {:style th-style}) (dom/text "Snippet"))))))
 
-        ;; Scrollable body
+        ;; Scrollable body — permanently mounted; empties to 0 rows, never unmounts
         (dom/div
           (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
-          (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 1})
-                occluded-height (clamp-left (* row-height (- row-count limit)) 0)
-                ;; Visible window as ONE server-computed slice, not a per-row
-                ;; server read inside the e/for. A server round-trip inside the
-                ;; differential loop corrupts Electric's incseq diff when the
-                ;; table unmounts mid-flight (validity gate flipping <2 chars):
-                ;; the per-row flows tear down while the cancelled query's flow
-                ;; also tears down, crashing the WS (:diff-corruption). One
-                ;; slice binding tears down as a single unit — the loop body
-                ;; stays purely client-side. `results` flows through as a
-                ;; server-sited arg, so only the slice crosses the wire.
-                window (e/server
-                         (let [v (vec results)
-                               n (count v)
-                               start (min offset n)
-                               end (min n (+ offset limit))]
-                           (subvec v start end)))]
+          (let [[offset limit] (Scroll-window row-height rc dom/node {:overquery-factor 1})
+                occluded-height (clamp-left (* row-height (- rc limit)) 0)]
             (dom/props {:class "tape-scroll"
                         :style {:--offset offset :--row-height (str row-height "px")}})
             (dom/table
               (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
               (e/for [i (Tape offset limit)]
-                (let [row (nth window (- i offset) nil)]
+                (let [row (e/server (nth results i nil))]
                   (when row
                     (ResultRow row i row-height navigate!)))))
             (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))))
@@ -250,19 +250,21 @@
               (dom/span (dom/props {:class "spinner"}))
               (dom/text "Searching..."))))
 
-        ;; Results area
-        (cond
-          (not valid?)
-          (dom/div
-            (dom/props {:style {:flex "1" :display "flex" :align-items "center" :justify-content "center"
-                                :color "var(--color-text-secondary)" :font-size "13px"}})
-            (dom/text "Type at least 2 characters to search"))
-
-          (and (= 0 result-count) (not loading?))
-          (dom/div
-            (dom/props {:style {:flex "1" :display "flex" :align-items "center" :justify-content "center"
-                                :color "var(--color-text-secondary)" :font-size "13px"}})
-            (dom/text (str "No matches for \"" q-trimmed "\"")))
-
-          :else
-          (SearchResultsTable results result-count navigate!))))))
+        ;; Results area — the table is ALWAYS mounted (its differential never
+        ;; tears down across validity changes; that teardown was the WS crash).
+        ;; State messages are a sibling overlay, never a branch that unmounts
+        ;; the table.
+        (dom/div
+          (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
+                              :min-height "0" :position "relative"}})
+          (SearchResultsTable results (or result-count 0) navigate!)
+          (when (or (not valid?)
+                  (and valid? (not loading?) (= 0 result-count)))
+            (dom/div
+              (dom/props {:style {:position "absolute" :inset "0"
+                                  :display "flex" :align-items "center" :justify-content "center"
+                                  :color "var(--color-text-secondary)" :font-size "13px"
+                                  :pointer-events "none"}})
+              (dom/text (if (not valid?)
+                          "Type at least 2 characters to search"
+                          (str "No matches for \"" q-trimmed "\""))))))))))
