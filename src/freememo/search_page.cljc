@@ -147,13 +147,28 @@
         (dom/div
           (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
           (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 1})
-                occluded-height (clamp-left (* row-height (- row-count limit)) 0)]
+                occluded-height (clamp-left (* row-height (- row-count limit)) 0)
+                ;; Visible window as ONE server-computed slice, not a per-row
+                ;; server read inside the e/for. A server round-trip inside the
+                ;; differential loop corrupts Electric's incseq diff when the
+                ;; table unmounts mid-flight (validity gate flipping <2 chars):
+                ;; the per-row flows tear down while the cancelled query's flow
+                ;; also tears down, crashing the WS (:diff-corruption). One
+                ;; slice binding tears down as a single unit — the loop body
+                ;; stays purely client-side. `results` flows through as a
+                ;; server-sited arg, so only the slice crosses the wire.
+                window (e/server
+                         (let [v (vec results)
+                               n (count v)
+                               start (min offset n)
+                               end (min n (+ offset limit))]
+                           (subvec v start end)))]
             (dom/props {:class "tape-scroll"
                         :style {:--offset offset :--row-height (str row-height "px")}})
             (dom/table
               (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
               (e/for [i (Tape offset limit)]
-                (let [row (e/server (nth results i nil))]
+                (let [row (nth window (- i offset) nil)]
                   (when row
                     (ResultRow row i row-height navigate!)))))
             (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))))
