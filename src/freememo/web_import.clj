@@ -10,7 +10,8 @@
 
    Both fns return the canonical `{:ok true …}` / `{:ok false :error …}`
    shape expected by Forms5 services."
-  (:require [freememo.biblio-import :as biblio-import]
+  (:require [freememo.audio :as audio]
+            [freememo.biblio-import :as biblio-import]
             [freememo.db :as db]
             [freememo.epub :as epub]
             [freememo.import-staging :as staging]
@@ -108,6 +109,12 @@
                 (swap! (us/get-atom user-id :tree-mutations) inc)
                 (attach-biblio-best-effort! user-id topic-id web-biblio)
                 {:ok true :topic-id topic-id})))
+
+          :audio
+          (let [result (audio/save-audio! user-id filename bytes (audio/filename->mime filename))]
+            (if (:success result)
+              {:ok true :topic-id (:id result)}
+              {:ok false :error (:error result)}))
 
           {:ok false :error (str "Unknown flow: " flow)}))
       {:ok false :error "Upload not found or expired"})

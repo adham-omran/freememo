@@ -91,7 +91,7 @@
 ;; ---------------------------------------------------------------------------
 
 (e/defn EditorPane
-  [{:keys [user-id enc-key topic-id is-pdf-page? root-topic-id page-number
+  [{:keys [user-id enc-key topic-id audio-topic-id is-pdf-page? root-topic-id page-number
            scan-dpi llm-enabled? enable-ai? enable-pdfbox? enable-pdfjs?
            static-content scanning-pages ocr-errors
            on-imported-navigate!]}]
@@ -146,6 +146,19 @@
                         (:topic-id result) on-imported-navigate!)
                     (case (on-imported-navigate! (:topic-id result)) (t))
                     (t)))))))
+
+        ;; -----------------------------------------------------------------------
+        ;; Audio player (audio topics) — sits on top of the editor; the
+        ;; Transcribe action lives in the ContentToolbar below.
+        ;; -----------------------------------------------------------------------
+        (when audio-topic-id
+          (dom/div
+            (dom/props {:style {:padding "var(--sp-2)" :flex-shrink "0"
+                                :border-bottom "1px solid var(--color-border)"}})
+            (dom/element "audio"
+              (dom/props {:controls true
+                          :src (str "/api/audio/" audio-topic-id)
+                          :style {:width "100%"}}))))
 
         ;; -----------------------------------------------------------------------
         ;; Page header (PDF mode only)

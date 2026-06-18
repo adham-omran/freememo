@@ -56,6 +56,7 @@
     "epub"       ["EPUB"    "var(--color-badge-epub)"]
     ("web" "wikipedia") ["Web" "var(--color-badge-web)"]
     "markdown"   ["MD"      "var(--color-badge-web)"]
+    "audio"      ["Audio"   "var(--color-badge-web)"]
     "basic"      ["E"       "var(--color-badge-epub)"]
     nil))
 

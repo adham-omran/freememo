@@ -18,7 +18,7 @@
 (defn stage!
   "Stage bytes under a fresh upload-id for the user.
    Pre:  user-id non-nil; bytes is byte[]; filename non-blank string;
-         flow is :pdf|:epub|:html|:markdown. `extra` (5-arity) is an
+         flow is :pdf|:epub|:html|:markdown|:audio. `extra` (5-arity) is an
          arbitrary map carried alongside the bytes through claim!.
    Post: returns the new upload-id (string); subsequent (claim! user-id id)
          returns the entry exactly once.

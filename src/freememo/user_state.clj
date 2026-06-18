@@ -24,6 +24,7 @@
           :pin-mutations    (atom 0)
           :card-gen-status  (atom {})
           :scanning-pages   (atom #{})
+          :transcribing-topics (atom #{})
           :ocr-errors       (atom {})
           :scan-cancellers  (atom {})
           :toasts           (atom []))))))

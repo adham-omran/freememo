@@ -27,7 +27,7 @@
                            !queue-idx in /learn and subset-review
      :card-font-size       int
    refresh: combined card-refresh value (refresh + sync-mutations + card-mutations)."
-  [{:keys [user-id enc-key topic-id root-topic-id page-number
+  [{:keys [user-id enc-key topic-id audio? root-topic-id page-number
            static-content
            context-mode context-tooltip llm-enabled?
            extract-status navigate! origin on-done! card-font-size]} refresh]
@@ -46,6 +46,7 @@
             toolbar-props (cond-> {:user-id user-id
                                    :enc-key enc-key
                                    :topic-id topic-id
+                                   :audio? audio?
                                    :root-topic-id root-topic-id
                                    :page-number page-number
                                    :content-text live-content

@@ -31,6 +31,7 @@
     "epub" ["EPUB" "var(--color-badge-epub)"]
     ("web" "wikipedia") ["Web" "var(--color-badge-web)"]
     "markdown" ["MD" "var(--color-badge-web)"]
+    "audio" ["Audio" "var(--color-badge-web)"]
     ["Topic" "var(--color-badge-epub)"]))
 
 (defn encode-query [q]

@@ -116,9 +116,11 @@
   "Pre:  filename and content-type are strings (possibly nil); bytes is a byte
          array of the multipart-uploaded file.
    Post: returns [:pdf nil] | [:epub nil] | [:html nil] | [:markdown nil] |
-         [:reject <msg>]. Magic bytes win over extension wins over content-type.
-         EPUB magic check is structural (ZIP header); EPUB-specific validation
-         is deferred to the handler via `epub/epub-magic-bytes?`."
+         [:audio nil] | [:reject <msg>]. Magic bytes win over extension wins
+         over content-type. EPUB magic check is structural (ZIP header);
+         EPUB-specific validation is deferred to the handler via
+         `epub/epub-magic-bytes?`. Audio has no reliable cross-container magic,
+         so it resolves by extension/content-type only."
   [filename content-type ^bytes bytes]
   (let [lower-name (when filename (str/lower-case filename))
         ext (cond
@@ -129,6 +131,8 @@
               (str/ends-with? lower-name ".htm") :html
               (str/ends-with? lower-name ".md") :markdown
               (str/ends-with? lower-name ".markdown") :markdown
+              (some #(str/ends-with? lower-name %)
+                    [".mp3" ".m4a" ".mp4" ".wav" ".webm" ".ogg" ".oga" ".flac" ".mpeg" ".mpga"]) :audio
               :else nil)
         ct (strip-params content-type)
         ct-kind (cond
@@ -136,6 +140,7 @@
                   (= ct "application/epub+zip") :epub
                   (or (= ct "text/html") (= ct "application/xhtml+xml")) :html
                   (or (= ct "text/markdown") (= ct "text/x-markdown")) :markdown
+                  (and ct (str/starts-with? ct "audio/")) :audio
                   :else nil)
         magic-kind (cond
                      (pdf-magic? bytes) :pdf
@@ -155,5 +160,8 @@
       (= kind :markdown)
       [:markdown nil]
 
+      (= kind :audio)
+      [:audio nil]
+
       :else
-      [:reject "Unsupported file type. Supported: PDF, EPUB, HTML, Markdown."])))
+      [:reject "Unsupported file type. Supported: PDF, EPUB, HTML, Markdown, audio."])))

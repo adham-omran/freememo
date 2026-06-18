@@ -16,6 +16,7 @@
    [freememo.toolbar-sync-dropdown :refer [SyncDropdown]]
    [freememo.bibliography-button :as bib-btn :refer [BibliographyButton]]
    [freememo.auto-extract-button :refer [AutoExtractButton]]
+   [freememo.transcribe-button :refer [TranscribeButton]]
    #?(:clj [freememo.settings :as user-settings])
    #?(:clj [freememo.user-state :as us])
    [freememo.icons :as icons]
@@ -91,7 +92,7 @@
 (e/defn ContentToolbar [state refresh]
   (e/client
     (let [mod-key (if (mac-platform?) "Cmd" "Ctrl")
-          {:keys [user-id enc-key topic-id root-topic-id page-number content-text
+          {:keys [user-id enc-key topic-id audio? root-topic-id page-number content-text
                   context-mode context-tooltip llm-enabled?
                   extract-status navigate! origin on-done!]} state
           ;; Unsynced card count — uses refresh value for reactivity
@@ -282,6 +283,8 @@
           ;; only the cluster (and siblings after it) to the right.
               (dom/div
                 (dom/props {:class "toolbar-doc-context-group toolbar-collapse-bib"})
+                (when audio?
+                  (TranscribeButton user-id topic-id enc-key))
                 (BibliographyButton user-id biblio-target-id has-source? nil)
                 (AutoExtractButton))
 

@@ -131,6 +131,7 @@
     (= kind "epub")                  ["EPUB"      "var(--color-badge-epub)"]
     (#{"web" "wikipedia"} kind)      ["Web"       "var(--color-badge-web)"]
     (= kind "markdown")              ["MD"        "var(--color-badge-web)"]
+    (= kind "audio")                 ["Audio"     "var(--color-badge-web)"]
     :else                            ["Topic"     "var(--color-badge-epub)"]))
 
 ;; ---------------------------------------------------------------------------
