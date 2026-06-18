@@ -37,6 +37,16 @@
            (handler request)))))
 
 #?(:clj
+   (defn wrap-no-store
+     "Dev only: mark static-asset responses uncacheable so CSS/JS/HTML edits
+      show on a normal reload (no hard-refresh needed). Wrap ONLY the static
+      stack — prod serves hashed assets and never uses this."
+     [handler]
+     (fn [request]
+       (some-> (handler request)
+         (update :headers assoc "Cache-Control" "no-store")))))
+
+#?(:clj
    (def upload-routes #{"/api/upload-pdf" "/api/upload-epub"}))
 
 #?(:clj
@@ -124,6 +134,7 @@
                            (ring-response/content-type "text/html")))
                      (wrap-resource "public") ; 5. serve assets from disk.
                      (wrap-content-type) ; 4. boilerplate – to server assets with correct mime/type.
+                     (wrap-no-store) ; 4b. dev: never cache static assets (so CSS/HTML edits show on reload)
                      (electric-ring/wrap-electric-websocket ; 3. install Electric server.
                        (fn [ring-request] (freememo.main/electric-boot ring-request))) ; boot server-side Electric process
                      (wrap-api-routes) ; 2. API routes
