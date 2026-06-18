@@ -16,6 +16,7 @@
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
    [freememo.navigation :as nav]
+   [freememo.util :as util]
    [freememo.viewport :as viewport]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])
@@ -108,15 +109,27 @@
             open?           (e/watch !open?)
             !save           (atom nil)
             save-val        (e/watch !save)
-            [?save-token _] (e/Token save-val)]
+            [?save-token _] (e/Token save-val)
+            persisted-width (e/server (settings/get-hierarchy-width user-id root-topic-id))
+            !width-px       (atom persisted-width)
+            width-px        (e/watch !width-px)
+            !width-save     (atom nil)
+            width-save      (e/watch !width-save)
+            [?width-token _] (e/Token width-save)]
 
         (when-some [token ?save-token]
           (e/server (settings/save-hierarchy-open user-id root-topic-id save-val))
           (token))
 
+        (when-some [token ?width-token]
+          (e/server (settings/save-hierarchy-width user-id root-topic-id width-save))
+          (token))
+
         (dom/div
           (dom/props {:class (str "hierarchy-side-panel"
-                               (when-not open? " hierarchy-side-panel--collapsed"))})
+                               (when-not open? " hierarchy-side-panel--collapsed"))
+                      :style (merge {:position "relative"}
+                               (when open? {:width (str width-px "px")}))})
 
           ;; Header row — toggle (always visible) + title (only when open).
           ;; The row renders even when collapsed so the 32px gutter still
@@ -136,6 +149,20 @@
               (dom/span
                 (dom/props {:class "side-panel__title"})
                 (dom/text "Hierarchy"))))
+
+          ;; Resize handle on the inner (right) edge; only when open.
+          (when open?
+            (dom/div
+              (dom/props {:class "side-panel__resize side-panel__resize--right"
+                          :title "Drag to resize"})
+              (dom/On "pointerdown"
+                (fn [e]
+                  (util/start-drag-px! e !width-px
+                    {:min 180
+                     :max (max 180 (util/panel-resize-max (.-currentTarget e) :after 320))
+                     :invert? false
+                     :on-commit #(reset! !width-save %)}))
+                nil)))
 
           (when open?
             (if (nil? page-topic-id)

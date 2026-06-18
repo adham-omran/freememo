@@ -11,6 +11,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
+   [freememo.util :as util]
    [freememo.viewport :as viewport]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])
@@ -115,16 +116,29 @@
             open? (e/watch !open?)
             !save (atom nil)
             save-val (e/watch !save)
-            [t _] (e/Token save-val)]
+            [t _] (e/Token save-val)
+            persisted-width (e/server (settings/get-pins-width user-id root-topic-id))
+            !width-px (atom persisted-width)
+            width-px (e/watch !width-px)
+            !width-save (atom nil)
+            width-save (e/watch !width-save)
+            [tw _] (e/Token width-save)]
 
         (when t
           (let [r (e/server (e/Offload #(settings/save-pins-open user-id root-topic-id save-val)))]
             (case r
               (if (:success r) (t) (t (:error r))))))
 
+        (when tw
+          (let [r (e/server (e/Offload #(settings/save-pins-width user-id root-topic-id width-save)))]
+            (case r
+              (if (:success r) (tw) (tw (:error r))))))
+
         (dom/div
           (dom/props {:class (str "pin-side-panel"
-                               (when-not open? " pin-side-panel--collapsed"))})
+                               (when-not open? " pin-side-panel--collapsed"))
+                      :style (merge {:position "relative"}
+                               (when open? {:width (str width-px "px")}))})
 
           ;; Header row — toggle (always visible) + title (only when open).
           ;; CSS flips this row's direction so the toggle anchors to the
@@ -144,6 +158,20 @@
               (dom/span
                 (dom/props {:class "side-panel__title"})
                 (dom/text "Pins"))))
+
+          ;; Resize handle on the inner (left) edge; only when open.
+          (when open?
+            (dom/div
+              (dom/props {:class "side-panel__resize side-panel__resize--left"
+                          :title "Drag to resize"})
+              (dom/On "pointerdown"
+                (fn [e]
+                  (util/start-drag-px! e !width-px
+                    {:min 120
+                     :max (max 120 (util/panel-resize-max (.-currentTarget e) :before 320))
+                     :invert? true
+                     :on-commit #(reset! !width-save %)}))
+                nil)))
 
           (when open?
             (dom/div
