@@ -9,6 +9,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
+   [freememo.modal-shell :as modal]
    #?(:clj [freememo.db :as db])))
 
 ;; Server bridge — same-namespace wrapper keeps `e/server` codepaths short
@@ -20,21 +21,6 @@
 (defn get-next* [_refresh topic-id]
   #?(:clj (db/get-topic-next-review topic-id)
      :cljs nil))
-
-;; Document-level Escape listener. Kept as a plain (defn) so
-;; addEventListener fires exactly once per modal open/close cycle —
-;; Electric re-evaluates dom-body let-bindings unpredictably, so an
-;; (.addEventListener ...) inside the reactive graph would attach
-;; duplicates on every tick. Returns a 0-arg cleanup fn to pass to
-;; e/on-unmount.
-(defn install-escape-listener! [!open?]
-  #?(:cljs
-     (let [on-key (fn [e]
-                    (when (= (.-key e) "Escape")
-                      (reset! !open? false)))]
-       (.addEventListener js/document "keydown" on-key)
-       (fn [] (.removeEventListener js/document "keydown" on-key)))
-     :clj (fn [] nil)))
 
 ;; -- Formatters --------------------------------------------------------------
 ;; Cross-platform (CLJ + CLJS) so Electric's dual compiler can resolve every
@@ -227,10 +213,9 @@
               rows (e/server (get-history* refresh topic-id))
               row-count (count rows)]
           (dom/div
-            (dom/props {:class "modal-backdrop"})
+            (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
+            (modal/ModalEscape (fn [] (reset! !open? false)))
             (dom/On "click" (fn [_] (reset! !open? false)) nil)
-            (let [cleanup (install-escape-listener! !open?)]
-              (e/on-unmount cleanup))
             (dom/div
               (dom/props {:class "modal-content"
                           :style {:width "min(680px, 95vw)"

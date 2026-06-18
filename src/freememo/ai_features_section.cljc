@@ -36,7 +36,7 @@
           balance (e/server (credit-balance* credits-refresh user-id))
           presets (e/server (mapv (fn [amt] {:iqd amt :usd-str (credits/iqd->usd-str amt)})
                               (config/presets)))
-          estimates (e/server (credits/cost-estimates model))
+          estimates (e/server (credits/cost-estimates user-id model))
           !checkout-error (atom nil)
           checkout-error (e/watch !checkout-error)]
       (dom/div

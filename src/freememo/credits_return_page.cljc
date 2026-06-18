@@ -7,9 +7,15 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   #?(:clj [missionary.core :as m])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.credits :as credits])
    #?(:clj [freememo.user-state :as us])))
+
+;; Auto-reconcile cadence: hide webhook latency by polling Wayl a few times
+;; before falling back to the manual button.
+(def ^:private retry-max-attempts 3)
+(def ^:private retry-delay-ms 3000)
 
 ;; Defined on both platforms so referencing in e/defn bodies doesn't shift
 ;; frame signal counts between CLJ and CLJS.
@@ -28,6 +34,23 @@
               {:status (:credit_orders/status o)
                :amount (:credit_orders/amount_iqd o)
                :user-id (:credit_orders/user_id o)}))))
+
+#?(:clj
+   (defn auto-reconcile-flow
+     "Flow of attempt numbers: up to `retry-max-attempts` reconcile attempts,
+      `retry-delay-ms` apart. Each attempt reconciles the order at Wayl then bumps
+      :credits-refresh so the page re-queries. A completing/failing attempt flips
+      the page off the pending branch, which unmounts the consumer and cancels this
+      flow — including any in-flight sleep. Idempotent: complete-credit-order! is
+      row-locked, so racing the webhook never double-credits."
+     [user-id reference-id]
+     (m/ap
+       (loop [n 1]
+         (m/? (m/sleep retry-delay-ms))
+         (m/? (m/via m/blk (credits/reconcile-order! reference-id)))
+         (swap! (us/get-atom user-id :credits-refresh) inc)
+         (m/amb n
+           (if (< n retry-max-attempts) (recur (inc n)) (m/amb)))))))
 
 (e/defn CreditsReturnPage [user-id navigate!]
   (e/client
@@ -65,6 +88,11 @@
           :else
           (dom/div
             (dom/h2 (dom/props {:style {:margin-top "0"}}) (dom/text "Confirming payment…"))
+            ;; Auto-reconcile while pending — mounted only in this branch, so it
+            ;; cancels the moment the order completes/fails and the branch switches.
+            (e/server
+              (e/for [_ (e/input (auto-reconcile-flow user-id reference-id))]
+                (e/amb)))
             (dom/p (dom/props {:class "hint"})
               (dom/text "This usually takes a few seconds. If it lingers, the payment provider's confirmation may have been missed — use Check status to reconcile."))
             (dom/button

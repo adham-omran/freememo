@@ -1858,7 +1858,9 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     opacity: 0;
     visibility: hidden;
     transition: opacity 0.15s ease, visibility 0.15s ease;
-    z-index: 1000;
+    /* Above .modal-backdrop (1000) so a tooltip on a button inside a modal
+       is never painted under the backdrop. */
+    z-index: 1100;
 }
 [data-tooltip]:hover::after {
     opacity: 1;
@@ -1868,6 +1870,28 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     left: auto;
     right: 0;
     transform: translateY(4px);
+}
+
+/* Modern browsers: anchor the tooltip to its trigger and let the engine flip
+   it (above / opposite side) when the default below-centered placement would
+   overflow the viewport, so it never overruns an edge or covers the buttons
+   below it. Non-supporting browsers keep the static below-centered rules above. */
+@supports (position-area: bottom) {
+    [data-tooltip]::after {
+        position: fixed;
+        position-area: bottom;
+        position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+        position-try-order: most-height;
+        top: auto;
+        left: auto;
+        right: auto;
+        bottom: auto;
+        margin: 4px;
+        transform: none;
+    }
+    [data-tooltip].tooltip-right::after {
+        position-area: bottom span-left;
+    }
 }
 
 /* ── Pin Context Menu (right-click on <img> in editor) ──────────── */
@@ -2055,7 +2079,6 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 }
 
 .card-row-html {
-    max-height: 28px;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
@@ -2239,7 +2262,7 @@ form[aria-busy="true"] {
 /* Project-wide toast stack — top-right fixed overlay, newest at top. */
 .toast-stack {
     position: fixed;
-    top: 16px;
+    top: 52px;
     right: 16px;
     z-index: 9999;
     display: flex;
@@ -2253,7 +2276,6 @@ form[aria-busy="true"] {
     pointer-events: auto;
     background: var(--color-bg-card);
     border: 1px solid var(--color-border);
-    border-left-width: 4px;
     border-radius: var(--radius-md, 6px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
     padding: 10px 12px;
@@ -2270,7 +2292,23 @@ form[aria-busy="true"] {
     to   { opacity: 1; transform: translateX(0); }
 }
 
+.toast-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+/* Level icon — color set inline per level; aligns with the first message line. */
+.toast-icon {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    height: 18px;
+}
+
 .toast-message {
+    flex: 1;
+    min-width: 0;
     line-height: 1.4;
     word-wrap: break-word;
 }

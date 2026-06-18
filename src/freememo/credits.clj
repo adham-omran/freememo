@@ -31,12 +31,20 @@
 
 ;; ── Pure cost computation (§5.2) ──
 
+(defn resolve-markup
+  "Effective markup multiplier for a user: their DB override, else the config
+   default (nil when neither is set). No floor — an admin-set override is trusted
+   as-is, including promotional below-cost values."
+  [user-id]
+  (or (db/get-user-markup user-id) (config/markup)))
+
 (defn- require-rates!
-  "Resolve [rates fx markup] for a model or throw, failing closed (§5.2.4)."
-  [model]
+  "Resolve [rates fx markup] for a user+model or throw, failing closed (§5.2.4).
+   markup is the user's effective rate (override or config default)."
+  [user-id model]
   (let [rates (config/model-rates model)
         fx (config/fx-iqd-per-usd)
-        markup (config/markup)]
+        markup (resolve-markup user-id)]
     (when (nil? rates)
       (throw (ex-info (str "No credit rate configured for model: " model)
                {:type ::unpriced-model :model model})))
@@ -61,12 +69,12 @@
 (defn charge-iqd
   "IQD to debit for one user action = ceil(Σ attempts USD × fx × markup).
    Pre:  model priced; attempts non-empty seq of {:prompt-tokens :cached-tokens
-         :completion-tokens} (non-negative).
+         :completion-tokens} (non-negative); user-id for per-user markup.
    Post: non-negative long; a cached-heavy call costs strictly less than the
          same totals with no cache.
    Throws (fails closed) when model/fx/markup are unconfigured."
-  [model attempts]
-  (let [[rates fx markup] (require-rates! model)
+  [user-id model attempts]
+  (let [[rates fx markup] (require-rates! user-id model)
         usd (reduce + 0.0 (map #(attempt-cost-usd rates %) attempts))]
     (long (Math/ceil (* usd fx markup)))))
 
@@ -94,7 +102,7 @@
     (cond
       (or (nil? (config/model-rates model))
           (nil? (config/fx-iqd-per-usd))
-          (nil? (config/markup)))
+          (nil? (resolve-markup user-id)))
       {:ok false :error (str "Credit pricing is not configured for \"" model "\".")}
 
       (<= (db/get-credit-balance user-id) 0)
@@ -123,7 +131,7 @@
   [user-id endpoint model attempts]
   (when (config/credits-enabled?)
     (try
-      (let [cost (charge-iqd model attempts)
+      (let [cost (charge-iqd user-id model attempts)
             max-attempts (inc (count debit-retry-sleeps-ms))]
         (loop [attempt 1]
           (let [result (try
@@ -244,11 +252,12 @@
   "Static cost estimates for the given model, or nil when pricing is unconfigured.
    Returns a vec of {:label :unit :units-per-action :iqd :unit-cost}: :iqd is the
    per-action charge; :unit-cost = round(:iqd / :units-per-action) for display; the
-   view derives balance counts as (quot balance :iqd) × :units-per-action."
-  [model]
-  (when (and (config/model-rates model) (config/fx-iqd-per-usd) (config/markup))
+   view derives balance counts as (quot balance :iqd) × :units-per-action.
+   Reflects the user's effective markup (override or config default)."
+  [user-id model]
+  (when (and (config/model-rates model) (config/fx-iqd-per-usd) (resolve-markup user-id))
     (mapv (fn [{:keys [label unit units-per-action] :as basis}]
-            (let [iqd (charge-iqd model [basis])]
+            (let [iqd (charge-iqd user-id model [basis])]
               {:label label :unit unit :units-per-action units-per-action
                :iqd iqd :unit-cost (Math/round (/ (double iqd) units-per-action))}))
       estimate-basis)))

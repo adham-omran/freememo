@@ -57,12 +57,13 @@
 
 (e/defn ToastCard [{:keys [id level message actions sticky?]} user-id navigate!]
   (e/client
-    (let [level-color (case level
-                        :error   "var(--color-danger)"
-                        :warning "var(--color-warning)"
-                        :success "var(--color-success)"
-                        :info    "var(--color-primary)"
-                        "var(--color-text-secondary)")
+    (let [[glyph level-color]
+          (case level
+            :success [:circle-check   "var(--color-success)"]
+            :warning [:triangle-alert "var(--color-warning)"]
+            :error   [:circle-alert   "var(--color-danger)"]
+            :info    [:info           "var(--color-primary)"]
+            [:info "var(--color-text-secondary)"])
           ;; Per-toast trigger atom for auto-dismiss.
           !timer-fired (atom false)
           timer-fired? (e/watch !timer-fired)]
@@ -75,13 +76,17 @@
 
       (dom/div
         (dom/props {:class "toast-card"
-                    :role "alert"
-                    :style {:border-left (str "4px solid " level-color)}})
+                    :role "alert"})
 
-        ;; Message body
+        ;; Level icon + message
         (dom/div
-          (dom/props {:class "toast-message"})
-          (dom/text message))
+          (dom/props {:class "toast-header"})
+          (dom/span
+            (dom/props {:class "toast-icon" :style {:color level-color}})
+            (icons/Icon glyph :size 16))
+          (dom/div
+            (dom/props {:class "toast-message"})
+            (dom/text message)))
 
         ;; Action buttons + close button row
         (dom/div

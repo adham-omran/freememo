@@ -45,7 +45,10 @@
                                                                    (str (:flashcards/anki_synced_at %))))))
                                                 (:cards cards-result))))
               font-sz (or card-font-size 13)
-              row-height (+ font-sz 41)]
+              ;; Fixed row height: 12px padding + 28px content line + 1px border.
+              ;; font-sz drives the text line within this budget, not the row height
+              ;; (adding it left an empty band below every row).
+              row-height 41]
           (dom/div
             (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
             (when (pos? card-count)

@@ -364,7 +364,8 @@
                              :on-change (fn [html] (reset! !question html))
                              :placeholder "Question..."
                              :field-key [:edit-q card-id]
-                             :!editor-atom !q-editor}))
+                             :!editor-atom !q-editor
+                             :autofocus? true}))
               (dom/label (dom/text "Answer:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
@@ -382,7 +383,8 @@
                              :placeholder "Cloze text with {{c1::deletion}}..."
                              :field-key [:edit-c card-id]
                              :!editor-atom !c-editor
-                             :cloze? true}))
+                             :cloze? true
+                             :autofocus? true}))
               (dom/label (dom/text "Back Extra:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
@@ -553,7 +555,8 @@
                              :on-change (fn [html] (reset! !question html))
                              :placeholder "Question..."
                              :field-key [:add-q]
-                             :!editor-atom !q-editor}))
+                             :!editor-atom !q-editor
+                             :autofocus? true}))
               (dom/label (dom/text "Answer:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
@@ -571,7 +574,8 @@
                              :placeholder "Cloze text with {{c1::deletion}}..."
                              :field-key [:add-c]
                              :!editor-atom !c-editor
-                             :cloze? true}))
+                             :cloze? true
+                             :autofocus? true}))
               (dom/label (dom/text "Back Extra:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
