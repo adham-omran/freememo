@@ -364,7 +364,7 @@
 ;;       Delete click or Cmd/Ctrl+Enter → run delete sequence, then close.
 ;; Invariant: Delete button receives focus on mount (via RAF, after DOM attach)
 ;;            so Tab cycles between Delete↔Cancel and the keydown shortcut works.
-(e/defn DeleteConfirmModal [user-id show-confirm !show-confirm]
+(e/defn DeleteConfirmModal [user-id show-confirm !show-confirm !scroll-node]
   (e/client
     (when (some? show-confirm)
       (let [!delete-btn (atom nil)]
@@ -402,16 +402,24 @@
                 (reset! !delete-btn dom/node)
                 (focus-on-mount! dom/node)
                 (dom/text "Delete")
-                (let [event (dom/On "click" (fn [_] show-confirm) nil)
+                ;; Thread the pre-delete scrollTop through the confirm event so
+                ;; it's captured in the click callback (not the reactive body).
+                (let [event (dom/On "click"
+                              (fn [_] {:topic show-confirm
+                                       :st (some-> @!scroll-node .-scrollTop)})
+                              nil)
                       [t _] (e/Token event)]
                   (when t
-                    (let [topic-to-delete event
+                    (let [topic-to-delete (:topic event)
                           r (e/server (e/Offload #(staged-delete/stage-deletion! user-id topic-to-delete true)))]
                       (case r
-                        (case (e/client (card-components/try-delete-anki-notes! (:note-ids r)))
-                          (case (e/client (pdf-cache/cache-delete topic-to-delete))
-                            (case (e/client (reset! !show-confirm nil))
-                              (t))))))))))))))))
+                        ;; Anchor scroll across the :tree-mutations re-render —
+                        ;; same reset as expand (util/restore-scroll-after-render!).
+                        (case (e/client (util/restore-scroll-after-render! @!scroll-node (:st event)))
+                          (case (e/client (card-components/try-delete-anki-notes! (:note-ids r)))
+                            (case (e/client (pdf-cache/cache-delete topic-to-delete))
+                              (case (e/client (reset! !show-confirm nil))
+                                (t)))))))))))))))))
 
 ;; Document tree view — used by LibraryPage
 ;; Flatten + virtual scroll for performance
@@ -505,7 +513,7 @@
                           (dom/text "No content yet. Import content from the Import tab.")))))
                   (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))
 
-              (DeleteConfirmModal user-id show-confirm !show-confirm)))))
+              (DeleteConfirmModal user-id show-confirm !show-confirm !scroll-node)))))
 
 
 ;; Legacy ContentsPage — no longer routed, kept for reference
