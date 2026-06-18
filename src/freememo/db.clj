@@ -995,6 +995,18 @@
                          :where [:and [:= :id id] [:is :staged_delete_id nil]]}))
     :topics/priority))
 
+(defn get-topic-titles
+  "Map {topic-id title} for `ids`, INCLUDING staged-for-deletion topics so
+   undo-log sources still resolve. Missing/hard-deleted ids are simply absent."
+  [ids]
+  (if (empty? ids)
+    {}
+    (into {}
+      (map (juxt :id :title))
+      (jdbc/execute! ds
+        (sql/format {:select [:id :title] :from [:topics] :where [:in :id (vec ids)]})
+        {:builder-fn rs/as-unqualified-maps}))))
+
 (defn get-topic-for-user
   "Get a topic by ID, scoped to a user. Excludes topics staged for deletion."
   [user-id id]

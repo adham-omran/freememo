@@ -35,23 +35,55 @@
          (.atZone (.toInstant ts) (java.time.ZoneId/systemDefault))))))
 
 #?(:clj
+   (defn- entry-source-ids
+     "Topic ids whose titles source this entry: the root topics of deleted cards,
+      or the deleted document itself. nil for non-card/doc actions (no source)."
+     [e]
+     (case (:entity_type e)
+       "flashcard" (vec (distinct (keep :root_topic_id (:snapshot e))))
+       "document"  (vec (:entity_refs e))
+       nil)))
+
+#?(:clj
+   (defn- entry-card-count [e]
+     (case (:entity_type e)
+       "flashcard" (count (:snapshot e))
+       "document"  (count (:cards (:snapshot e)))
+       nil)))
+
+#?(:clj
+   (defn- source-cell
+     "Source string for a row: first document title (+N more for additional
+      distinct documents) followed by the card count. nil when no source."
+     [titles src-ids cnt]
+     (when (seq src-ids)
+       (let [names (distinct (map #(get titles % "—") src-ids))
+             extra (dec (count names))
+             head  (str (first names) (when (pos? extra) (str " +" extra " more")))]
+         (if cnt (str head " · " cnt " card" (when (not= 1 cnt) "s")) head)))))
+
+#?(:clj
    (defn- annotate-views
-     "Project DB entries (newest-first) to slim, wire-friendly view rows,
-      flagging each as superseded when a newer entry touched the same target."
+     "Project DB entries (newest-first) to slim, wire-friendly view rows:
+      label, time, superseded flag, and a source string (deleted cards' document
+      or the deleted document) with card count. All source titles resolve in one
+      staged-inclusive query."
      [entries]
-     (:rows
-      (reduce
-        (fn [{:keys [seen rows]} e]
-          (let [et   (:entity_type e)
-                refs (set (:entity_refs e))
-                sup? (boolean (some (get seen et #{}) refs))]
-            {:seen (update seen et (fnil into #{}) refs)
-             :rows (conj rows {:id (:id e)
-                               :label (action-label (:action_type e) (:entity_refs e))
-                               :time-str (format-ts (:occurred_at e))
-                               :superseded? sup?})}))
-        {:seen {} :rows []}
-        entries))))
+     (let [titles (db/get-topic-titles (into #{} (mapcat entry-source-ids) entries))]
+       (:rows
+        (reduce
+          (fn [{:keys [seen rows]} e]
+            (let [et   (:entity_type e)
+                  refs (set (:entity_refs e))
+                  sup? (boolean (some (get seen et #{}) refs))]
+              {:seen (update seen et (fnil into #{}) refs)
+               :rows (conj rows {:id (:id e)
+                                 :label (action-label (:action_type e) (:entity_refs e))
+                                 :time-str (format-ts (:occurred_at e))
+                                 :source (source-cell titles (entry-source-ids e) (entry-card-count e))
+                                 :superseded? sup?})}))
+          {:seen {} :rows []}
+          entries)))))
 
 (defn get-undo-views* [_refresh user-id]
   #?(:clj (annotate-views (db/get-undo-entries user-id))
@@ -123,6 +155,12 @@
                             :border-bottom "0.5px solid var(--color-border-light)"}})
         (dom/text (:label row)))
       (dom/td
+        (dom/props {:style {:padding "8px 12px" :color "var(--color-text-secondary)"
+                            :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
+                            :border-bottom "0.5px solid var(--color-border-light)"}
+                    :data-tooltip (or (:source row) "")})
+        (dom/text (or (:source row) "")))
+      (dom/td
         (dom/props {:style {:padding "8px 12px" :text-align "right"
                             :border-bottom "0.5px solid var(--color-border-light)"}})
         (if (:superseded? row)
@@ -154,7 +192,7 @@
             (e/on-unmount cleanup))
           (dom/div
             (dom/props {:class "modal-content"
-                        :style {:width "min(560px, 95vw)" :max-height "85vh"
+                        :style {:width "min(680px, 95vw)" :max-height "85vh"
                                 :overflow "hidden" :display "flex"
                                 :flex-direction "column" :padding "0"}})
             (dom/On "click" (fn [e] (.stopPropagation e)) nil)
@@ -183,7 +221,7 @@
               (if (pos? n)
                 (dom/table
                   (dom/props {:style {:width "100%" :display "grid"
-                                      :grid-template-columns "120px 1fr 110px"
+                                      :grid-template-columns "110px 1fr 1.4fr 100px"
                                       :font-size "13px"}})
                   (e/for [row (e/diff-by :id rows)]
                     (UndoRow row user-id)))
