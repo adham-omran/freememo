@@ -12,6 +12,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [clojure.string :as str]
+   [freememo.modal-shell :as modal]
    [freememo.navigation :as nav]
    #?(:clj [freememo.quota :as quota])
    #?(:clj [freememo.web-import :as web-import])))
@@ -752,7 +753,8 @@
                   :new-topic "New Topic"
                   "Import")]
       (dom/div
-        (dom/props {:class "modal-backdrop"})
+        (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
+        (modal/ModalEscape (fn [] (reset! !show false)))
         (dom/On "click" (fn [e]
                           (when (= (.-target e) (.-currentTarget e))
                             (reset! !show false)))

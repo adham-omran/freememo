@@ -6,6 +6,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
+   [freememo.modal-shell :as modal]
    [clojure.string :as str]
    [freememo.icons :as icons]
    #?(:clj [freememo.db :as db])
@@ -419,7 +420,8 @@
     (e/for-by identity [_k [topic-id]]
       (let [server-data (e/server (e/Offload #(load-source-for-topic* 0 user-id topic-id)))]
         (dom/div
-          (dom/props {:class "modal-backdrop"})
+          (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
+          (modal/ModalEscape (fn [] (reset! !show false)))
           (dom/On "click"
             (fn [e]
               (when (= (.-target e) (.-currentTarget e))

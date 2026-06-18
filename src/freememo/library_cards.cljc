@@ -8,6 +8,7 @@
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
+   [freememo.modal-shell :as modal]
    [missionary.core :as m]
    [freememo.navigation :as nav]
    [freememo.logging :as log]
@@ -622,7 +623,8 @@
           (when note-id
             (fetch-anki-note-fields! note-id !anki-result))
           (dom/div
-            (dom/props {:class "modal-backdrop"})
+            (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
+            (modal/ModalEscape (fn [] (reset! !diff-card nil)))
             (dom/On "click" (fn [_] (reset! !diff-card nil)) nil)
             (dom/div
               (dom/props {:class "modal-content modal-sm"
@@ -675,7 +677,8 @@
   (e/client
     (let [n (count (e/watch !selected))]
       (dom/div
-        (dom/props {:class "modal-backdrop"})
+        (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
+        (modal/ModalEscape (fn [] (reset! !confirm-bulk-delete false)))
         (dom/On "click" (fn [_] (reset! !confirm-bulk-delete false)) nil)
         (dom/div
           (dom/props {:class "modal-content modal-sm"})
@@ -1101,7 +1104,9 @@
   (e/client
     (let [success? (e/server (:success result))
           font-sz (or (e/server (settings/get-card-font-size user-id)) 13)
-          row-height (+ font-sz 41)
+          ;; Fixed row height (see content_card_table): 12px padding + 28px line + 1px
+          ;; border. font-sz sizes the text within the row, not the row itself.
+          row-height 41
           ov-status (e/watch !ov-status)
           manifest (e/server (vec (:pushed-manifest result)))
           anki-overlay (AnkiOverlay user-id manifest

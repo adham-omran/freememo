@@ -21,6 +21,7 @@
 (declare migrate-to-topics!)
 (declare backfill-content-text!)
 (declare backfill-sources!)
+(declare backfill-pdf-sources!)
 (declare run-grandfather-migration!)
 (declare start-purge-scheduler!)
 
@@ -306,6 +307,10 @@
   ;; on rows where source_url IS NOT NULL AND source_id IS NULL).
   (backfill-sources!)
 
+  ;; Backfill document sources for legacy PDF root topics with no source row
+  ;; (idempotent — only touches kind='pdf' rows where source_id IS NULL).
+  (backfill-pdf-sources!)
+
   ;; Drop the legacy topics.source_url column. All bibliography lives in
   ;; `sources` now; topics reference via source_id. Runs after backfill so
   ;; existing URL data is migrated, not lost.
@@ -337,6 +342,9 @@
   ;; + Wayl order tracking (reference_id UNIQUE = webhook idempotency).
   ;; See plans/credits-wayl-payment-system.md §5.1.
   (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS credit_balance_iqd BIGINT NOT NULL DEFAULT 0"])
+  ;; Per-user markup override (nullable). NULL = use the config default markup;
+  ;; a value replaces it for this user's billing (see freememo.credits/resolve-markup).
+  (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS markup_override DECIMAL"])
 
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS credit_orders (
@@ -717,6 +725,21 @@
          (jdbc/execute-one! connectable
            ["SELECT credit_balance_iqd FROM users WHERE id = ?" user-id]))
      0)))
+
+(defn get-user-markup
+  "Per-user markup override, or nil when unset (caller falls back to config).
+   Returns a BigDecimal (Postgres DECIMAL)."
+  [user-id]
+  (:users/markup_override
+    (jdbc/execute-one! ds
+      ["SELECT markup_override FROM users WHERE id = ?" user-id])))
+
+(defn set-user-markup!
+  "Set or clear a user's markup override (REPL/SQL admin path — no UI yet).
+   Pass nil to clear and fall back to the config default."
+  [user-id markup]
+  (jdbc/execute! ds
+    ["UPDATE users SET markup_override = ? WHERE id = ?" markup user-id]))
 
 (defn- sum-tokens [maps k] (reduce + 0 (map #(or (k %) 0) maps)))
 
@@ -1318,6 +1341,35 @@
                sid user_id source_url])))
         (tel/log! {:level :info :id ::backfill-sources :data {:count (count groups)}}
           (str "Backfilled " (count groups) " source(s) from topics.source_url"))))))
+
+(defn backfill-pdf-sources!
+  "Legacy PDF root topics created before create-pdf-topic! attached a sources row
+   have source_id IS NULL, which leaves 'Refetch bibliography' disabled. Create a
+   document source mirroring create-pdf-topic! (csl_type 'document', title from the
+   topic) and link it. Idempotent: only touches kind='pdf' rows with source_id IS NULL."
+  []
+  (let [pdfs (jdbc/execute! ds
+               ["SELECT id, user_id, title FROM topics
+                 WHERE kind = 'pdf' AND source_id IS NULL"]
+               {:builder-fn rs/as-unqualified-maps})]
+    (when (seq pdfs)
+      (jdbc/with-transaction [tx ds]
+        (doseq [{:keys [id user_id title]} pdfs]
+          (let [csl {:type "document" :title title
+                     :accessed {:date-parts (now-date-parts)}}
+                src (jdbc/execute-one! tx
+                      (sql/format {:insert-into :sources
+                                   :values [{:user_id user_id
+                                             :csl_type "document"
+                                             :csl (->jsonb csl)
+                                             :title title}]
+                                   :returning [:id]}))
+                sid (:sources/id src)]
+            (jdbc/execute! tx
+              ["UPDATE topics SET source_id = ? WHERE id = ? AND source_id IS NULL"
+               sid id])))
+        (tel/log! {:level :info :id ::backfill-pdf-sources :data {:count (count pdfs)}}
+          (str "Backfilled " (count pdfs) " PDF source(s)"))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Compound creation helpers

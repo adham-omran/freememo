@@ -329,12 +329,16 @@
    Wrapper exists so the reader conditional lives in a plain defn — keeps
    CLJ/CLJS signal counts identical inside the e/defn reactive body
    (CLAUDE.md frame-mismatch rule)."
-  [!ed-state container value-string placeholder on-change !editor-atom cloze?]
+  [!ed-state container value-string placeholder on-change !editor-atom cloze? autofocus?]
   #?(:cljs (js/setTimeout
              (fn []
                (let [ed (init-quill-field! container value-string placeholder on-change cloze?)]
                  (reset! !ed-state ed)
-                 (when !editor-atom (reset! !editor-atom ed))))
+                 (when !editor-atom (reset! !editor-atom ed))
+                 ;; Focus after construction — Quill has no autofocus option and
+                 ;; is built on this deferred tick, so the modal can't focus it at
+                 ;; mount. Focusing here lands the cursor in the editor on open.
+                 (when (and autofocus? ed) (.focus ^js ed))))
              0)
      :clj nil))
 
@@ -390,13 +394,15 @@
                              cloze-deletion buttons (c+ / c=) wired to
                              insert-cloze!. Used by the card modals' cloze
                              field only.
+     :autofocus?    bool    OPTIONAL. When true, focus the editor once it is
+                             constructed (cursor lands in the field on open).
 
    Usage:
      (QuillField {:value-string (or (:question card) \"\")
                   :on-change    (fn [html] (reset! !question html))
                   :placeholder  \"Question...\"
                   :field-key    [:question card-id]})"
-  [{:keys [value-string on-change placeholder field-key !editor-atom cloze?]}]
+  [{:keys [value-string on-change placeholder field-key !editor-atom cloze? autofocus?]}]
   (e/client
     ;; e/for-by provides frame isolation: Quill remounts when field-key changes.
     (e/for-by identity [_k [(or field-key :quill-field)]]
@@ -405,7 +411,7 @@
         (let [!ed-state (atom nil)]
           ;; Schedule init via plain defn — reader conditional lives there,
           ;; not in this reactive body (avoids CLJ/CLJS signal-count mismatch).
-          (schedule-quill-init! !ed-state dom/node value-string placeholder on-change !editor-atom cloze?)
+          (schedule-quill-init! !ed-state dom/node value-string placeholder on-change !editor-atom cloze? autofocus?)
           (e/on-unmount
             (fn []
               (destroy-quill-field! @!ed-state)

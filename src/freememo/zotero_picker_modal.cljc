@@ -16,6 +16,7 @@
   (:require
    [clojure.string :as str]
    [contrib.data :refer [clamp-left]]
+   [freememo.modal-shell :as modal]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
@@ -390,7 +391,8 @@
           (t)))
 
       (dom/div
-        (dom/props {:class "modal-backdrop"})
+        (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
+        (modal/ModalEscape close-modal!)
         (dom/On "click"
           (fn [e] (when (= (.-target e) (.-currentTarget e)) (close-modal!)))
           nil)
