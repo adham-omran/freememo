@@ -5,6 +5,7 @@
    [freememo.crypto :as crypto]
    [freememo.config :as config]
    [freememo.input-check :as input]
+   [freememo.toasts :as toasts]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
    [clojure.string :as str]))
@@ -750,9 +751,23 @@ IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return
       (tel/error! {:id ::save-ocr-prompt} e)
       {:success false :error "Failed to save OCR prompt"})))
 
+(defn- reset-prompt!
+  "Delete a prompt setting, snapshotting the prior custom value for undo with
+   an Undo toast. No undo entry when the prompt was already at default (nil)."
+  [user-id setting-key label]
+  (let [old (db/get-setting user-id setting-key)]
+    (db/delete-setting user-id setting-key)
+    (when (some? old)
+      (let [undo-id (db/insert-undo-entry! user-id "reset-prompt" "setting"
+                      [setting-key] [{:key setting-key :value old}])]
+        (toasts/push! user-id {:level :success
+                               :message (str label " reset")
+                               :dedup? false
+                               :actions [{:label "Undo" :undo-id undo-id}]})))))
+
 (defn reset-system-prompt [user-id]
   (try
-    (db/delete-setting user-id PROMPT_SYSTEM)
+    (reset-prompt! user-id PROMPT_SYSTEM "System prompt")
     {:success true}
     (catch Exception e
       (tel/error! {:id ::reset-system-prompt} e)
@@ -760,7 +775,7 @@ IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return
 
 (defn reset-ocr-prompt [user-id]
   (try
-    (db/delete-setting user-id PROMPT_OCR)
+    (reset-prompt! user-id PROMPT_OCR "OCR prompt")
     {:success true}
     (catch Exception e
       (tel/error! {:id ::reset-ocr-prompt} e)

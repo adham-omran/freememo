@@ -72,7 +72,7 @@
             (dom/props {:style {:color "var(--color-danger)" :font-size "11px"}})
             (dom/text ?error)))
         (when t
-          (let [result (e/server (e/Offload #(cards/delete-card click-event)))]
+          (let [result (e/server (e/Offload #(cards/delete-card user-id click-event)))]
             (when (some? result)
               (if (:success result)
                 (case (e/server (swap! (us/get-atom user-id :card-mutations) inc))

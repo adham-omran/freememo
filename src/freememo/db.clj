@@ -22,6 +22,7 @@
 (declare backfill-content-text!)
 (declare backfill-sources!)
 (declare run-grandfather-migration!)
+(declare start-purge-scheduler!)
 
 ;; ---------------------------------------------------------------------------
 ;; Connection configuration
@@ -373,8 +374,48 @@
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_credit_transactions_user
                       ON credit_transactions(user_id, created_at DESC)"])
 
+  ;; Undo log — bounded per-user action history for the Undo feature.
+  ;; entity_refs/snapshot are JSONB; occurred_at drives the 12h window,
+  ;; undone_at IS NULL marks an entry still reversible. Hard-capped to the
+  ;; most recent 100 live-or-not rows per user by prune-undo-log!.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS undo_log (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      action_type TEXT NOT NULL CHECK (action_type IN
+        ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document')),
+      entity_type TEXT NOT NULL CHECK (entity_type IN ('flashcard','pin','setting','document')),
+      entity_refs JSONB NOT NULL,
+      snapshot JSONB NOT NULL,
+      occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      undone_at TIMESTAMPTZ
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_undo_log_user
+                      ON undo_log(user_id, occurred_at DESC)"])
+  ;; Widen the CHECK lists on installs created before 'delete-document'/'document'
+  ;; (CREATE TABLE IF NOT EXISTS won't alter a live constraint).
+  (jdbc/execute! ds ["ALTER TABLE undo_log DROP CONSTRAINT IF EXISTS undo_log_action_type_check"])
+  (jdbc/execute! ds ["ALTER TABLE undo_log ADD CONSTRAINT undo_log_action_type_check
+                      CHECK (action_type IN
+                        ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document'))"])
+  (jdbc/execute! ds ["ALTER TABLE undo_log DROP CONSTRAINT IF EXISTS undo_log_entity_type_check"])
+  (jdbc/execute! ds ["ALTER TABLE undo_log ADD CONSTRAINT undo_log_entity_type_check
+                      CHECK (entity_type IN ('flashcard','pin','setting','document'))"])
+
+  ;; Staged-delete marker: a topic (and its whole subtree) hidden pending the
+  ;; 12h undo window points at the undo_log entry that staged it. ON DELETE
+  ;; SET NULL — see prune/purge: only the time-based purge removes a
+  ;; delete-document entry, and it hard-deletes the topics first.
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS staged_delete_id BIGINT
+                      REFERENCES undo_log(id) ON DELETE SET NULL"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_staged_delete
+                      ON topics(staged_delete_id) WHERE staged_delete_id IS NOT NULL"])
+
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
   (run-grandfather-migration!)
+
+  ;; Hourly purge of staged documents whose undo window has elapsed.
+  (start-purge-scheduler!)
 
   (tel/log! :info "Database ready"))
 
@@ -914,20 +955,20 @@
                    :returning [:*]}))))
 
 (defn get-topic
-  "Get a topic by ID."
+  "Get a topic by ID. Excludes topics staged for deletion (hidden)."
   [id]
   (jdbc/execute-one! ds
     (sql/format {:select [:*]
                  :from [:topics]
-                 :where [:= :id id]})))
+                 :where [:and [:= :id id] [:is :staged_delete_id nil]]})))
 
 (defn get-topic-for-user
-  "Get a topic by ID, scoped to a user (checks user_id on the root)."
+  "Get a topic by ID, scoped to a user. Excludes topics staged for deletion."
   [user-id id]
   (jdbc/execute-one! ds
     (sql/format {:select [:*]
                  :from [:topics]
-                 :where [:and [:= :id id] [:= :user_id user-id]]})))
+                 :where [:and [:= :id id] [:= :user_id user-id] [:is :staged_delete_id nil]]})))
 
 (defn get-root-topics
   "Get all root topics for a user (parent_id IS NULL). Replaces get-documents.
@@ -942,7 +983,8 @@
                               :from [[:topics :t]]
                               :left-join [[:topic_files :tf] [:= :t/id :tf/topic_id]
                                           [:sources :s] [:= :t/source_id :s/id]]
-                              :where [:and [:= :t/user_id user-id] [:= :t/parent_id nil]]
+                              :where [:and [:= :t/user_id user-id] [:= :t/parent_id nil]
+                                      [:is :t/staged_delete_id nil]]
                               :order-by [[:t/created_at :desc]]}))]
     (mapv (fn [t]
             (let [size (or (:topic_files/file_size t)
@@ -959,7 +1001,7 @@
   (jdbc/execute! ds
     (sql/format {:select [:*]
                  :from [:topics]
-                 :where [:= :parent_id parent-id]
+                 :where [:and [:= :parent_id parent-id] [:is :staged_delete_id nil]]
                  :order-by [[:page_number :asc-nulls-last] [:created_at :asc]]})))
 
 (defn update-topic-content!
@@ -1578,7 +1620,8 @@
   (jdbc/execute! ds
     (sql/format {:select [:*]
                  :from [:topics]
-                 :where [:and [:= :parent_id parent-id] [:= :kind "page"]]
+                 :where [:and [:= :parent_id parent-id] [:= :kind "page"]
+                         [:is :staged_delete_id nil]]
                  :order-by [[:page_number :asc]]})))
 
 (defn get-page-done-status
@@ -1706,7 +1749,8 @@
 
 (defn delete-user-flashcards!
   "Bulk delete of user-id's flashcards. Ownership enforced via the root
-   topic join. Returns the deleted rows' [{:flashcards/id :flashcards/anki_note_id}]."
+   topic join. Returns the full deleted rows (RETURNING f.*) so callers can
+   both read :flashcards/anki_note_id and snapshot the rows for undo."
   [user-id card-ids]
   (if (empty? card-ids)
     []
@@ -1714,7 +1758,7 @@
       (into [(str "DELETE FROM flashcards f USING topics root
                    WHERE f.root_topic_id = root.id AND root.user_id = ?
                      AND f.id IN (" (str/join "," (repeat (count card-ids) "?")) ")
-                   RETURNING f.id, f.anki_note_id")
+                   RETURNING f.*")
              user-id]
         card-ids))))
 
@@ -1734,10 +1778,11 @@
                            [:in :f.anki_note_id (vec note-ids)]]}))))
 
 (defn delete-flashcard!
-  "Delete a single flashcard by ID. Returns the deleted row."
+  "Delete a single flashcard by ID. Returns the full deleted row (RETURNING *)
+   so callers can read :flashcards/anki_note_id and snapshot it for undo."
   [card-id]
   (jdbc/execute-one! ds
-    ["DELETE FROM flashcards WHERE id = ? RETURNING id, anki_note_id" card-id]))
+    ["DELETE FROM flashcards WHERE id = ? RETURNING *" card-id]))
 
 (defn update-flashcard!
   "Update flashcard content fields. Sets updated_at for sync tracking."
@@ -1863,7 +1908,7 @@
         FROM flashcards f
         WHERE f.root_topic_id = t.id
       ) cs ON true
-      WHERE t.user_id = ? AND t.parent_id IS NULL
+      WHERE t.user_id = ? AND t.parent_id IS NULL AND t.staged_delete_id IS NULL
       ORDER BY t.created_at DESC"
      user-id]))
 
@@ -2044,6 +2089,7 @@
        LEFT JOIN sources s ON s.id = t.source_id
        WHERE t.user_id = ?
          AND t.kind != 'page'
+         AND t.staged_delete_id IS NULL
          AND (t.next_review_at::date <= CURRENT_DATE OR t.next_review_at IS NULL)
          AND (t.status = 'active' OR t.status IS NULL)
        ORDER BY t.priority ASC, t.next_review_at ASC NULLS FIRST, t.id ASC" user-id])
@@ -2058,6 +2104,7 @@
                  ["SELECT COUNT(*) AS total FROM topics
                    WHERE user_id = ?
                      AND kind != 'page'
+                     AND staged_delete_id IS NULL
                      AND (next_review_at::date <= CURRENT_DATE OR next_review_at IS NULL)
                      AND (status = 'active' OR status IS NULL)"
                   user-id])]
@@ -2070,6 +2117,7 @@
                  ["SELECT COUNT(*) AS total FROM topics
                    WHERE user_id = ?
                      AND kind != 'page'
+                     AND staged_delete_id IS NULL
                      AND (status = 'active' OR status IS NULL)"
                   user-id])]
     (or (:total result) 0)))
@@ -2086,7 +2134,7 @@
               s.url, s.title, s.csl_type, s.container_title
        FROM topics t
        LEFT JOIN sources s ON s.id = t.source_id
-       WHERE t.user_id = ? AND t.kind != 'page'
+       WHERE t.user_id = ? AND t.kind != 'page' AND t.staged_delete_id IS NULL
        ORDER BY CASE WHEN t.status = 'active' OR t.status IS NULL THEN 0
                      WHEN t.status = 'done' THEN 1 ELSE 2 END,
                 t.priority ASC, t.next_review_at ASC NULLS FIRST, t.id ASC" user-id])
@@ -2108,7 +2156,7 @@
                                              AND (next_review_at IS NULL
                                                   OR next_review_at <= CURRENT_TIMESTAMP + INTERVAL '7 days')) AS due_week
                     FROM topics
-                    WHERE user_id = ? AND kind != 'page'" user-id])]
+                    WHERE user_id = ? AND kind != 'page' AND staged_delete_id IS NULL" user-id])]
       {:total (or (:total result) 0)
        :inactive (or (:inactive result) 0)
        :due-today (or (:due_today result) 0)
@@ -2125,6 +2173,7 @@
       FROM topics
       WHERE user_id = ?
         AND kind != 'page'
+        AND staged_delete_id IS NULL
         AND next_review_at BETWEEN NOW() AND NOW() + ? * INTERVAL '1 day'
         AND (status = 'active' OR status IS NULL)
       GROUP BY DATE(next_review_at)
@@ -2140,6 +2189,7 @@
        FROM topics
        WHERE user_id = ?
          AND kind != 'page'
+         AND staged_delete_id IS NULL
          AND status IN ('dismissed', 'done')
        ORDER BY created_at DESC" user-id])
     (catch Exception e
@@ -2166,7 +2216,7 @@
                  :from [[:topics :t]]
                  :left-join [[:topic_files :tf] [:= :tf.topic_id :t.id]
                              [:sources :s] [:= :t.source_id :s.id]]
-                 :where [:= :t.user_id user-id]
+                 :where [:and [:= :t.user_id user-id] [:is :t.staged_delete_id nil]]
                  :order-by [[:t.parent_id :asc-nulls-first] [:t.page_number :asc-nulls-first] [:t.created_at :asc]]})))
 
 (defn get-root-topic-id
@@ -2197,7 +2247,8 @@
       )
       SELECT t.* FROM topics t
       JOIN subtree s ON t.id = s.id
-      WHERE t.user_id = ? OR t.user_id IS NULL
+      WHERE (t.user_id = ? OR t.user_id IS NULL)
+        AND t.staged_delete_id IS NULL
       ORDER BY t.parent_id ASC NULLS FIRST, t.page_number ASC NULLS LAST, t.id ASC"
      root-id user-id]))
 
@@ -2286,11 +2337,13 @@
         :topic_pins/id))))
 
 (defn remove-pin!
-  "Delete a pin row by id."
+  "Delete a pin row by id. Returns the full deleted row (RETURNING *) so the
+   caller can snapshot it for undo."
   [pin-id]
   (jdbc/execute-one! ds
     (sql/format {:delete-from :topic_pins
-                 :where [:= :id pin-id]})))
+                 :where [:= :id pin-id]
+                 :returning [:*]})))
 
 (defn update-pin-placement!
   "Update a pin's placement. Throws on invalid value."
@@ -2363,3 +2416,269 @@
                   :outstanding? (or (nil? nra)
                                   (.before nra now)))))
         ordered))))
+
+;; ---------------------------------------------------------------------------
+;; Undo log — bounded per-user action history (12h window, ≤100 entries).
+;; Forward (log) writes happen at delete time; reverse (restore) replays a
+;; snapshot. Restores are idempotent via ON CONFLICT (id) DO NOTHING, so a
+;; double-undo cannot resurrect a row twice.
+;; ---------------------------------------------------------------------------
+
+(defn- unqualify-row
+  "Strip the table namespace from a next.jdbc row's keys (:flashcards/id → :id)
+   so a stored snapshot is portable across the wire and back into an INSERT."
+  [row]
+  (update-keys row (comp keyword name)))
+
+(def ^:private flashcard-ts-cols
+  "Timestamp columns that arrive as ISO strings after a JSONB round-trip and
+   must be CAST back to timestamp on restore."
+  #{:created_at :updated_at :anki_synced_at})
+
+(defn- cast-timestamps
+  "Wrap present, non-nil timestamp values as CAST(? AS timestamp) for honeysql."
+  [row ts-cols]
+  (reduce (fn [m k]
+            (if (some? (get m k))
+              (update m k (fn [v] [:cast v :timestamp]))
+              m))
+    row ts-cols))
+
+(defn prune-undo-log!
+  "Drop user-id's undo entries older than 12h or beyond the 100 most recent.
+   Idempotent; called after every insert to keep the log bounded.
+   Excludes 'delete-document' entries entirely: removing one would SET NULL its
+   topics' staged_delete_id and resurface a document whose cards are already
+   gone. Those entries are removed only by purge-staged-documents! (which
+   hard-deletes the topics first)."
+  [conn user-id]
+  (jdbc/execute! conn
+    ["DELETE FROM undo_log
+      WHERE user_id = ?
+        AND action_type <> 'delete-document'
+        AND (occurred_at < now() - interval '12 hours'
+             OR id IN (SELECT id FROM undo_log
+                       WHERE user_id = ?
+                         AND action_type <> 'delete-document'
+                       ORDER BY occurred_at DESC
+                       OFFSET 100))"
+     user-id user-id]))
+
+(defn insert-undo-entry-raw!
+  "Insert an undo entry with an already-shaped snapshot value (vector OR map),
+   on the given connectable (joins a caller's transaction). Returns the id.
+   Does NOT prune — the caller prunes once its mutation is committed."
+  [conn user-id action-type entity-type entity-refs snapshot]
+  (-> (jdbc/execute-one! conn
+        (sql/format {:insert-into :undo_log
+                     :values [{:user_id user-id
+                               :action_type action-type
+                               :entity_type entity-type
+                               :entity_refs (->jsonb (vec entity-refs))
+                               :snapshot (->jsonb snapshot)}]
+                     :returning [:id]}))
+    :undo_log/id))
+
+(defn insert-undo-entry!
+  "Append an undo entry and prune the user's log. snapshot-rows is a seq of
+   maps (next.jdbc rows or plain maps) restored verbatim on undo; their keys
+   are unqualified before storage. Returns the new entry id.
+   Not transactional with the caller's mutation: a failure here loses
+   undoability for that action but never corrupts data."
+  [user-id action-type entity-type entity-refs snapshot-rows]
+  (let [id (insert-undo-entry-raw! ds user-id action-type entity-type entity-refs
+             (mapv unqualify-row snapshot-rows))]
+    (prune-undo-log! ds user-id)
+    id))
+
+(defn- parse-undo-row
+  "Decode a raw undo_log row: keywordized unqualified keys with :entity_refs
+   and :snapshot parsed back from JSONB."
+  [row]
+  (-> row
+    (update :entity_refs pgobject->clj)
+    (update :snapshot pgobject->clj)))
+
+(defn get-undo-entries
+  "Live (not-yet-undone) undo entries for user-id within the 12h window,
+   newest first, capped at 100."
+  [user-id]
+  (mapv parse-undo-row
+    (jdbc/execute! ds
+      (sql/format {:select [:*]
+                   :from [:undo_log]
+                   :where [:and
+                           [:= :user_id user-id]
+                           [:is :undone_at nil]
+                           [:> :occurred_at [:raw "now() - interval '12 hours'"]]]
+                   :order-by [[:occurred_at :desc]]
+                   :limit 100})
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn get-undo-entry
+  "Single undo entry by id, or nil."
+  [entry-id]
+  (some-> (jdbc/execute-one! ds
+            (sql/format {:select [:*] :from [:undo_log] :where [:= :id entry-id]})
+            {:builder-fn rs/as-unqualified-maps})
+    parse-undo-row))
+
+(defn mark-undone!
+  "Stamp undone_at on a live entry. Idempotent: a no-op if already undone.
+   Returns the jdbc update count (0 when already undone)."
+  [entry-id]
+  (::jdbc/update-count
+   (jdbc/execute-one! ds
+     (sql/format {:update :undo_log
+                  :set {:undone_at [:now]}
+                  :where [:and [:= :id entry-id] [:is :undone_at nil]]}))))
+
+(defn restore-flashcards-tx!
+  "Re-insert deleted flashcards on the given connectable, preserving original
+   ids. ON CONFLICT (id) DO NOTHING — a card still present is left untouched."
+  [conn snapshot-rows]
+  (when (seq snapshot-rows)
+    (jdbc/execute! conn
+      (sql/format {:insert-into :flashcards
+                   :values (mapv #(cast-timestamps % flashcard-ts-cols) snapshot-rows)
+                   :on-conflict [:id]
+                   :do-nothing true}))))
+
+(defn restore-flashcards!
+  "Re-insert deleted flashcards from a snapshot (non-transactional)."
+  [snapshot-rows]
+  (restore-flashcards-tx! ds snapshot-rows))
+
+(defn restore-pin!
+  "Re-insert a removed pin from its snapshot, preserving the original id.
+   ON CONFLICT (id) DO NOTHING. Bypasses the ≤2 cap (set-pin!): undo restores
+   exactly what was removed, so the cap cannot be exceeded."
+  [snapshot-row]
+  (when snapshot-row
+    (jdbc/execute! ds
+      (sql/format {:insert-into :topic_pins
+                   :values [snapshot-row]
+                   :on-conflict [:id]
+                   :do-nothing true}))))
+
+;; ---------------------------------------------------------------------------
+;; Staged document deletion — soft-hide a topic subtree + its binary, hard-
+;; delete its cards (snapshotted), reversible for 12h as one undo_log entry.
+;; A background scheduler hard-deletes staged subtrees once the window elapses.
+;; ---------------------------------------------------------------------------
+
+(defn- subtree-topic-ids
+  "Ids of root-id and all its descendants (via parent_id)."
+  [conn root-id]
+  (mapv :id
+    (jdbc/execute! conn
+      ["WITH RECURSIVE subtree(id) AS (
+          SELECT id FROM topics WHERE id = ?
+          UNION ALL
+          SELECT c.id FROM topics c JOIN subtree s ON c.parent_id = s.id)
+        SELECT id FROM subtree" root-id]
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn- subtree-owner
+  "user_id of the root document above topic-id (root carries the owner;
+   children may have NULL user_id). Returns nil if not found."
+  [conn topic-id]
+  (:user_id
+   (jdbc/execute-one! conn
+     ["WITH RECURSIVE anc(id, parent_id, user_id) AS (
+         SELECT id, parent_id, user_id FROM topics WHERE id = ?
+         UNION ALL
+         SELECT t.id, t.parent_id, t.user_id FROM topics t JOIN anc a ON t.id = a.parent_id)
+       SELECT user_id FROM anc WHERE parent_id IS NULL" topic-id]
+     {:builder-fn rs/as-unqualified-maps})))
+
+(defn- over-quota?
+  "True when the user's usage now exceeds an explicit quota (nil quota ⇒ unlimited)."
+  [conn user-id]
+  (let [{:keys [usage_bytes quota_bytes]}
+        (jdbc/execute-one! conn
+          ["SELECT usage_bytes, quota_bytes FROM users WHERE id = ?" user-id]
+          {:builder-fn rs/as-unqualified-maps})]
+    (boolean (and quota_bytes usage_bytes (> usage_bytes quota_bytes)))))
+
+(defn stage-topic-for-deletion!
+  "Hide topic-id + its whole subtree (set staged_delete_id) and hard-delete the
+   subtree's flashcards (snapshotted into one 'delete-document' undo entry).
+   Frees usage_bytes immediately. Pre: caller passes a topic the user owns.
+   Returns {:entry-id :card-count :note-ids :parent-id :freed-bytes}, or nil
+   when the topic is not owned by user-id (caller bug / stale client)."
+  [user-id topic-id]
+  (jdbc/with-transaction [tx ds]
+    (when (= user-id (subtree-owner tx topic-id))
+      (let [ids (subtree-topic-ids tx topic-id)
+            parent-id (:parent_id
+                       (jdbc/execute-one! tx
+                         ["SELECT parent_id FROM topics WHERE id = ?" topic-id]
+                         {:builder-fn rs/as-unqualified-maps}))
+            deleted (jdbc/execute! tx
+                      (sql/format {:delete-from :flashcards
+                                   :where [:in :topic_id ids]
+                                   :returning [:*]}))
+            note-ids (into [] (keep :flashcards/anki_note_id) deleted)
+            entry-id (insert-undo-entry-raw! tx user-id "delete-document" "document"
+                       [topic-id] {:cards (mapv unqualify-row deleted)})
+            freed (subtree-file-bytes tx topic-id)]
+        (jdbc/execute! tx
+          (sql/format {:update :topics
+                       :set {:staged_delete_id entry-id}
+                       :where [:in :id ids]}))
+        (when (pos? freed) (bump-user-usage! tx user-id (- freed)))
+        (prune-undo-log! tx user-id)
+        {:entry-id entry-id :card-count (count deleted)
+         :note-ids note-ids :parent-id parent-id :freed-bytes freed}))))
+
+(defn restore-staged-document!
+  "Reverse a staged deletion: re-insert the cards, clear staged_delete_id on the
+   subtree, re-add the freed usage_bytes. `entry` is a parsed undo_log row
+   (:id, :entity_refs [topic-id], :snapshot {:cards [...]}).
+   Returns {:over-quota? bool :card-count n}."
+  [user-id entry]
+  (jdbc/with-transaction [tx ds]
+    (let [cards (:cards (:snapshot entry))
+          topic-id (first (:entity_refs entry))]
+      (restore-flashcards-tx! tx cards)
+      (jdbc/execute! tx
+        (sql/format {:update :topics
+                     :set {:staged_delete_id nil}
+                     :where [:= :staged_delete_id (:id entry)]}))
+      (let [bytes (subtree-file-bytes tx topic-id)]
+        (when (pos? bytes) (bump-user-usage! tx user-id bytes))
+        {:over-quota? (over-quota? tx user-id) :card-count (count cards)}))))
+
+(defn purge-staged-documents!
+  "Hard-delete topic subtrees whose staging entry has aged past the 12h window,
+   then drop those entries. CASCADE clears the binary + remaining rows.
+   usage_bytes is untouched (already freed at stage time). Returns topics deleted."
+  []
+  (jdbc/with-transaction [tx ds]
+    (let [deleted (jdbc/execute! tx
+                    ["DELETE FROM topics
+                      WHERE staged_delete_id IN
+                        (SELECT id FROM undo_log
+                         WHERE action_type = 'delete-document'
+                           AND occurred_at < now() - interval '12 hours')"])
+          n (or (some-> deleted first ::jdbc/update-count) 0)]
+      (jdbc/execute! tx
+        ["DELETE FROM undo_log
+          WHERE action_type = 'delete-document'
+            AND occurred_at < now() - interval '12 hours'"])
+      n)))
+
+(defonce ^:private purge-scheduler (atom nil))
+
+(defn start-purge-scheduler!
+  "Start the hourly staged-document purge. Idempotent — once per process."
+  []
+  (when-not @purge-scheduler
+    (let [exec (java.util.concurrent.Executors/newSingleThreadScheduledExecutor)]
+      (.scheduleAtFixedRate exec
+        (fn [] (try (purge-staged-documents!)
+                 (catch Throwable t (tel/error! {:id ::purge-staged-documents} t))))
+        1 60 java.util.concurrent.TimeUnit/MINUTES)
+      (reset! purge-scheduler exec)
+      (tel/log! :info "Staged-document purge scheduler started"))))

@@ -13,7 +13,39 @@
    [freememo.icons :as icons]
    [freememo.viewport :as viewport]
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.staged-delete :as staged-delete])
    #?(:clj [freememo.user-state :as us])))
+
+;; Frame-safe focus-on-mount. HTML :autofocus does NOT fire on dynamically
+;; inserted elements, so a modal opened on click never receives focus from it;
+;; rAF schedules .focus after DOM attach + layout. Top-level platform-split
+;; defn called uniformly from the reactive body — no #?(:cljs …) in the e/defn
+;; body (which would diverge CLJ/CLJS frame slot counts).
+#?(:cljs
+   (defn focus-on-mount! [node]
+     (when node (.requestAnimationFrame js/window (fn [] (.focus node))))))
+#?(:clj (defn focus-on-mount! [_node] nil))
+
+;; Trap Tab within `container` so focus cycles the modal's focusable elements
+;; instead of escaping to the page behind it. Call from a keydown handler on
+;; the modal container; top-level platform-split defn keeps it frame-safe.
+#?(:cljs
+   (defn trap-tab! [container e]
+     (when (= (.-key e) "Tab")
+       (let [els (.querySelectorAll container
+                   "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])")
+             n (.-length els)]
+         (when (pos? n)
+           (let [first-el (.item els 0)
+                 last-el (.item els (dec n))
+                 active (.-activeElement js/document)]
+             (cond
+               (and (.-shiftKey e) (or (= active first-el) (= active container)))
+               (do (.preventDefault e) (.focus last-el))
+
+               (and (not (.-shiftKey e)) (= active last-el))
+               (do (.preventDefault e) (.focus first-el)))))))))
+#?(:clj (defn trap-tab! [_container _e] nil))
 
 ;; Server wrapper — _refresh param creates Electric reactive dependency
 (defn get-tree-items* [_refresh user-id]
@@ -338,22 +370,24 @@
           (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil)
           (dom/On "keydown"
             (fn [e]
-              #?(:cljs
-                 (cond
-                   (= (.-key e) "Escape")
-                   (reset! !show-confirm nil)
+              (cond
+                (= (.-key e) "Escape")
+                (reset! !show-confirm nil)
 
-                   (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
-                   (when-some [btn @!delete-btn]
-                     (.preventDefault e)
-                     (.click btn)))))
+                (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
+                (when-some [btn @!delete-btn]
+                  (.preventDefault e)
+                  (.click btn))
+
+                (= (.-key e) "Tab")
+                (trap-tab! (.-currentTarget e) e)))
             nil)
           (dom/div
             (dom/props {:class "modal-content modal-sm"})
             (dom/On "click" (fn [e] (.stopPropagation e)) nil)
             (dom/div
               (dom/props {:class "confirm-modal-body"})
-              (dom/p (dom/text "Delete this topic? All children, extracts, and cards will be permanently removed.")))
+              (dom/p (dom/text "Delete this topic? It and its cards are removed; you can undo for 12 hours.")))
             (dom/div
               (dom/props {:class "confirm-modal-actions"})
               (dom/button
@@ -363,27 +397,18 @@
               (dom/button
                 (dom/props {:class "btn btn-danger-fill"})
                 (reset! !delete-btn dom/node)
-                ;; RAF-deferred focus — HTML autofocus doesn't fire on
-                ;; dynamically inserted elements; synchronous .focus races
-                ;; with DOM attach. RAF schedules after attach + layout.
-                ((fn []
-                   #?(:cljs (.requestAnimationFrame js/window
-                              (fn [] (.focus dom/node))))))
+                (focus-on-mount! dom/node)
                 (dom/text "Delete")
                 (let [event (dom/On "click" (fn [_] show-confirm) nil)
                       [t _] (e/Token event)]
                   (when t
                     (let [topic-to-delete event
-                          note-ids (e/server (e/Offload #(vec (db/get-all-anki-note-ids topic-to-delete))))]
-                      (case note-ids
-                        (let [r (e/server (e/Offload #(do (db/delete-topic-for-user! user-id topic-to-delete) :ok)))]
-                          (case r
-                            (case (e/server (swap! (us/get-atom user-id :refresh) inc))
-                              (case (e/server (swap! (us/get-atom user-id :tree-mutations) inc))
-                                (case (e/client (card-components/try-delete-anki-notes! note-ids))
-                                  (case (e/client (pdf-cache/cache-delete topic-to-delete))
-                                    (case (e/client (reset! !show-confirm nil))
-                                      (t))))))))))))))))))))
+                          r (e/server (e/Offload #(staged-delete/stage-deletion! user-id topic-to-delete true)))]
+                      (case r
+                        (case (e/client (card-components/try-delete-anki-notes! (:note-ids r)))
+                          (case (e/client (pdf-cache/cache-delete topic-to-delete))
+                            (case (e/client (reset! !show-confirm nil))
+                              (t))))))))))))))))
 
 ;; Document tree view — used by LibraryPage
 ;; Flatten + virtual scroll for performance

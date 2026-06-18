@@ -1,7 +1,8 @@
 (ns freememo.toasts
   "Project-wide toast queue. Per-user atom of vector<toast>.
    Pre: caller knows user-id. Post: queue mutated atomically.
-   Invariant: at most one entry per [level message] (dedup K).
+   Invariant: at most one entry per [level message], UNLESS pushed with
+   :dedup? false (undo toasts opt out so each action stacks separately).
    :created-at is epoch millis (long) — serializable across the Electric wire."
   (:require [freememo.user-state :as us])
   (:import [java.util UUID]))
@@ -27,22 +28,26 @@
 (defn push!
   "Push a toast for user-id. Returns the toast :id (preserves an existing
    id if dedup hits — see dedup-merge).
-   Required keys in `toast`: :level :message. Optional: :actions :sticky?.
-   :sticky? defaults to (= :level :error)."
-  [user-id {:keys [level message actions sticky?]
-            :or {actions []}}]
+   Required keys in `toast`: :level :message. Optional: :actions :sticky? :dedup?.
+   :sticky? defaults to (= :level :error). :dedup? defaults to true; pass false
+   to always append a fresh entry (e.g. undo toasts that must stack)."
+  [user-id {:keys [level message actions sticky? dedup?]
+            :or {actions [] dedup? true}}]
   (let [sticky? (if (nil? sticky?) (= level :error) sticky?)
         record  {:id         (new-id)
                  :level      level
                  :message    (str message)
                  :actions    (vec actions)
                  :created-at (System/currentTimeMillis)
-                 :sticky?    (boolean sticky?)}
-        new-queue (swap! (us/get-atom user-id :toasts) dedup-merge record)
-        stored    (some (fn [t] (when (= [level (str message)]
-                                        [(:level t) (:message t)]) t))
-                    new-queue)]
-    (:id stored)))
+                 :sticky?    (boolean sticky?)}]
+    (if dedup?
+      (let [new-queue (swap! (us/get-atom user-id :toasts) dedup-merge record)
+            stored    (some (fn [t] (when (= [level (str message)]
+                                            [(:level t) (:message t)]) t))
+                        new-queue)]
+        (:id stored))
+      (do (swap! (us/get-atom user-id :toasts) conj record)
+          (:id record)))))
 
 (defn dismiss!
   "Remove the toast with `toast-id` from user's queue. Idempotent."

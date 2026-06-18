@@ -18,6 +18,7 @@
             [freememo.subset-review :refer [SubsetReviewSession]]
             [freememo.landing-page :refer [LandingPage]]
             [freememo.toast-stack :refer [ToastStack]]
+            [freememo.undo-history-modal :refer [ActionsNavButton UndoHistoryModal UndoNewestTrigger]]
             [freememo.icons :as icons]
             [freememo.keyboard :as keyboard]
             #?(:clj [freememo.settings :as settings])
@@ -169,6 +170,9 @@
               (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
                     llm-enabled? (e/server (get-llm-enabled* settings-refresh user-id))
 
+                    ;; Undo/Actions modal open-state (shared by nav button + modal)
+                    !undo-modal-open? (atom false)
+
                     ;; Navigation bridge: children call navigate!, reactive graph calls Navigate!
                     !nav-cmd (atom nil)
                     nav-cmd (e/watch !nav-cmd)
@@ -249,7 +253,11 @@
                     (dom/props {:class "nav-tab" :style (tab-style :settings)})
                     (icons/Icon :settings :size 18)
                     (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Settings"))
-                    (dom/On "click" (fn [_] (navigate! :settings)) nil)))
+                    (dom/On "click" (fn [_] (navigate! :settings)) nil))
+
+                  ;; Actions/undo history — pushed to the right edge of the bar.
+                  (dom/div (dom/props {:style {:margin-left "auto"}})
+                    (ActionsNavButton !undo-modal-open?)))
 
                 ;; Storage warning banner — appears when usage exceeds 80%.
                 (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
@@ -292,7 +300,11 @@
                     (ViewerContent user-id enc-key navigate! llm-enabled?)))
 
                 ;; Project-wide toast overlay (fixed position; renders nothing when queue empty)
-                (ToastStack user-id navigate!))))
+                (ToastStack user-id navigate!)
+
+                ;; Undo: hidden Cmd-Shift-Z trigger + the Actions history modal
+                (UndoNewestTrigger user-id)
+                (UndoHistoryModal user-id !undo-modal-open?))))
 
           ;; Not authenticated: render landing page
           (LandingPage auth-error))))))
