@@ -255,9 +255,10 @@
                                                   st (when sn (.-scrollTop sn))]
                                               (swap! !expanded-set
                                                 (fn [s] (if (contains? s id) (disj s id) (conj s id))))
-                                              (when st
-                                                (js/requestAnimationFrame
-                                                  (fn [] (set! (.-scrollTop sn) st)))))))
+                                              ;; Anchor scroll across the async re-render (see
+                                              ;; util/restore-scroll-after-render!): a single rAF
+                                              ;; resets scrollTop to 0; re-apply over a few frames.
+                                              (util/restore-scroll-after-render! sn st))))
                                         nil))
                                     (dom/span
                                       (dom/props {:style {:width "14px" :flex-shrink "0"}})))
