@@ -376,6 +376,11 @@ html, body {
     display: none !important;
 }
 
+/* Priority inline hides at tier ≥2 — first cluster to go (mirrors Context) */
+.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .toolbar-collapse-priority {
+    display: none !important;
+}
+
 /* Card-type selector hides at tier ≥3 */
 .toolbar-container:is(.collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .toolbar-collapse-card-type {
     display: none !important;
@@ -403,6 +408,9 @@ html, body {
 
 /* Proxy reveal — mirror the inline collapse, but only when dropdown is open. */
 .toolbar-container.overflow-open .toolbar-overflow-keep { display: flex; }
+.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7).overflow-open .toolbar-overflow-priority {
+    display: flex;
+}
 .toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7).overflow-open .toolbar-overflow-first {
     display: flex;
 }

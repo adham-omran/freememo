@@ -6,6 +6,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.card-components :as card-components]
    [freememo.history-modal :refer [HistoryModal]]
+   [freememo.priority-control :refer [PriorityControl get-topic-priority*]]
    [freememo.icons :as icons]
    [freememo.keyboard :as keyboard]
    [freememo.navigation :as nav]
@@ -63,6 +64,13 @@
       ;; Modal mounted unconditionally — its body is gated on `@!history-open?`,
       ;; so an unopened modal is a cheap no-op in the reactive graph.
       (HistoryModal history-topic-id !history-open? history-refresh)
+
+      ;; Priority control — sits beside History. First cluster to collapse into
+      ;; the overflow panel when space is tight (tier 2, see .toolbar-collapse-priority).
+      ;; Targets the viewed topic-id; reads reactively on :refresh (history-refresh).
+      (dom/div
+        (dom/props {:class "toolbar-collapse-priority"})
+        (PriorityControl user-id topic-id (e/server (get-topic-priority* history-refresh topic-id))))
 
       ;; Done/Restore button — only for extract topics (not PDF pages).
       ;; `busy` holds the active branch open during the queue-advance transition:

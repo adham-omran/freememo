@@ -12,6 +12,7 @@
    [freememo.content-toolbar-settings :as settings]
    [freememo.content-toolbar-actions :as actions]
    [freememo.content-toolbar-extract :refer [ExtractActions]]
+   [freememo.priority-control :refer [PriorityControl get-topic-priority*]]
    [freememo.toolbar-generate-dropdown :refer [GenerateDropdown]]
    [freememo.toolbar-sync-dropdown :refer [SyncDropdown]]
    [freememo.bibliography-button :as bib-btn :refer [BibliographyButton]]
@@ -167,6 +168,13 @@
           ;; Always mounted so settings e/Token handlers stay active.
               (dom/div
                 (dom/props {:class "toolbar-overflow-panel"})
+
+            ;; Priority proxy (.toolbar-overflow-priority, reveals T2+) — mirrors
+            ;; the inline control beside History; the DB value (via :refresh) is
+            ;; the shared source of truth across both mounts.
+                (dom/div
+                  (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-priority"})
+                  (PriorityControl user-id topic-id (e/server (get-topic-priority* refresh topic-id))))
 
             ;; Context proxy (.toolbar-overflow-first, reveals T2+).
             ;; Two mounts bind to the same atoms; atoms are the source of truth.
