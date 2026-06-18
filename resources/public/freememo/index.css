@@ -792,6 +792,34 @@ html, body {
 .split-divider-v:hover,
 .split-divider-v:active { background: light-dark(#90caf9, #2563eb); }
 
+/* Side-panel resize handle — absolutely positioned on the panel's inner edge.
+   Mirrors the split-divider hit-target widening and coarse-pointer bump. */
+.side-panel__resize {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 6px;
+    cursor: col-resize;
+    touch-action: none;
+    user-select: none;
+    z-index: 1;
+    transition: background 0.15s;
+}
+.side-panel__resize--right { right: 0; }
+.side-panel__resize--left { left: 0; }
+.side-panel__resize::before {
+    content: '';
+    position: absolute;
+    top: 0; bottom: 0;
+    left: -4px; right: -4px;
+}
+.side-panel__resize:hover,
+.side-panel__resize:active { background: light-dark(#90caf9, #2563eb); }
+@media (pointer: coarse) {
+    .side-panel__resize { width: 16px; }
+    .side-panel__resize::before { left: -8px; right: -8px; }
+}
+
 /* ── Virtual Scroll ────────────────────────────────────────────── */
 .tape-scroll table {
     display: grid;

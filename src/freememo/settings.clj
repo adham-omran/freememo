@@ -507,6 +507,35 @@
       (tel/error! {:id ::save-pins-open} e)
       {:success false})))
 
+;; Per-document pane widths in pixels. Keys: "hierarchy_width_<root-id>",
+;; "pins_width_<root-id>", scoped like the open/closed state above. Missing or
+;; unparseable value → panel default.
+(defn- get-pane-width [user-id topic-id key-prefix default-px]
+  (try
+    (let [v (db/get-setting user-id (str key-prefix (pane-scope-id topic-id)))]
+      (if v (Long/parseLong v) default-px))
+    (catch Exception _ default-px)))
+
+(defn- save-pane-width [user-id topic-id key-prefix px error-id]
+  (try
+    (db/set-setting user-id (str key-prefix (pane-scope-id topic-id)) (str (long px)))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id error-id} e)
+      {:success false})))
+
+(defn get-hierarchy-width [user-id topic-id]
+  (get-pane-width user-id topic-id "hierarchy_width_" 280))
+
+(defn save-hierarchy-width [user-id topic-id px]
+  (save-pane-width user-id topic-id "hierarchy_width_" px ::save-hierarchy-width))
+
+(defn get-pins-width [user-id topic-id]
+  (get-pane-width user-id topic-id "pins_width_" 180))
+
+(defn save-pins-width [user-id topic-id px]
+  (save-pane-width user-id topic-id "pins_width_" px ::save-pins-width))
+
 (defn add-to-history [history new-prompt]
   (->> (cons new-prompt history)
     (distinct)

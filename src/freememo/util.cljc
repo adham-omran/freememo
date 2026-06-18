@@ -63,6 +63,58 @@
          (.addEventListener target "pointermove" on-move)
          (.addEventListener target "pointerup" on-up)))))
 
+;; Pixel-width drag for side panels (PointerEvent API — mouse, touch, stylus).
+;; Distinct from start-drag! (which is %-of-parent for split panes): here the
+;; panel has a fixed pixel width, so the helper drives a px atom directly and
+;; never reads parent size — `min`/`max` are resolved by the caller.
+(defn start-drag-px!
+  "Begin a panel-width drag. Call from a pointerdown handler.
+   Resets `!width-px` live during the drag, clamped to [min max].
+   `invert?` true when the handle is on the panel's left edge (pins): dragging
+   right shrinks the panel. `on-commit` (optional) is called with the final
+   width on pointerup, for persistence."
+  [e !width-px {:keys [min max invert? on-commit]}]
+  #?(:clj nil
+     :cljs
+     (do
+       (.preventDefault e)
+       (let [target (.-currentTarget e)
+             start-pos (.-clientX e)
+             start-w @!width-px
+             on-move (fn [me]
+                       (let [delta (- (.-clientX me) start-pos)
+                             signed (if invert? (- delta) delta)
+                             new-w (-> (+ start-w signed)
+                                     (cljs.core/max min)
+                                     (cljs.core/min max))]
+                         (reset! !width-px new-w)))
+             on-up (fn self [ue]
+                     (.releasePointerCapture target (.-pointerId ue))
+                     (.removeEventListener target "pointermove" on-move)
+                     (.removeEventListener target "pointerup" self)
+                     (when on-commit (on-commit @!width-px)))]
+         (.setPointerCapture target (.-pointerId e))
+         (.addEventListener target "pointermove" on-move)
+         (.addEventListener target "pointerup" on-up)))))
+
+(defn panel-resize-max
+  "Max px this side panel may grow to without shrinking the flex content
+   column below `content-floor`. The only reclaimable space is the content
+   column's width above the floor; the opposite panel is flex-shrink:0 and
+   never yields. `handle-node` is the resize handle (its parent is the panel
+   root). `content-side` is :after (content is the next sibling, left/hierarchy
+   panel) or :before (previous sibling, right/pins panel)."
+  [handle-node content-side content-floor]
+  #?(:clj content-floor
+     :cljs
+     (let [panel (.-parentElement handle-node)
+           content (case content-side
+                     :after (.-nextElementSibling panel)
+                     :before (.-previousElementSibling panel))
+           panel-w (.-offsetWidth panel)
+           content-w (if content (.-offsetWidth content) 0)]
+       (cljs.core/max panel-w (- (+ panel-w content-w) content-floor)))))
+
 (defn format-bytes [n]
   #?(:clj (cond
             (nil? n) "0 B"
