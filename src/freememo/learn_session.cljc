@@ -12,10 +12,6 @@
   #?(:clj (db/advance-topic! id)
      :cljs nil))
 
-(defn update-topic-priority* [id priority]
-  #?(:clj (db/update-topic-priority! id priority)
-     :cljs nil))
-
 (defn postpone-topic* [id days]
   #?(:clj (db/postpone-topic! id days)
      :cljs nil))
@@ -92,59 +88,6 @@
                   (case (e/client (log/log-debug (str "Session advancing idx=" (inc @!queue-idx))))
                     (t)))))))))))
 
-;; Session header bar
-(e/defn SessionHeader [item !queue-idx navigate! idx total]
-  (e/client
-    (let [topic-id (:topics/id item)
-          kind (:topics/kind item)
-          source-container (:sources/container_title item)
-          parent-id (:topics/parent_id item)
-          title (or (:topics/title item) "-")
-          priority (or (:topics/priority item) 50)
-          is-root (nil? parent-id)
-          ;; For child items, fetch root topic's title and kind
-          root-topic (when parent-id
-                       (e/server
-                         (let [root-id (db/get-root-topic-id topic-id)]
-                           (db/get-topic root-id))))
-          root-title (when root-topic (:topics/title root-topic))
-          [type-label type-color] (bibform/topic-badge kind source-container)]
-
-      (dom/div
-        (dom/props {:class "header-bar" :style {:gap "6px" :padding "2px var(--sp-3)"}})
-
-        ;; Title (no source-click — the side panel handles tree navigation)
-        (dom/span
-          (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px"}})
-          (dom/text (or root-title title)))
-
-        ;; Type badge
-        (dom/span
-          (dom/props {:class "type-badge" :style {:padding "2px 8px" :background type-color}})
-          (dom/text type-label))
-
-        ;; Priority — inline input (e/for-by isolates the frame)
-        (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :font-size "12px" :color "var(--color-text-secondary)"}
-                      :title "Priority (0=highest, 100=lowest)"})
-          (dom/text "Priority")
-          (e/for-by identity [_k [topic-id]]
-            (dom/input
-              (dom/props {:type "number" :min "0" :max "100"
-                          :style {:width "48px" :font-size "12px" :padding "2px 4px"
-                                  :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)" :text-align "center"}})
-              (set! (.-value dom/node) (str priority))
-              (let [change-event (dom/On "change" #(-> % .-target .-value js/parseInt) nil)
-                    [t _] (e/Token change-event)]
-                (when t
-                  (case (e/server (e/Offload #(do (update-topic-priority* topic-id change-event) :ok)))
-                    (t)))))))
-
-        ;; Counter
-        (dom/span
-          (dom/props {:style {:margin-left "auto" :color "var(--color-text-secondary)" :font-size "13px"}})
-          (dom/text (str (inc idx) " / " total)))))))
-
 (e/defn LearnSession [user-id enc-key queue-vec !queue-idx navigate! llm-enabled?]
   (e/client
     (let [idx (e/watch !queue-idx)
@@ -182,16 +125,10 @@
                 kind (:topics/kind item)
                 topic-id (:topics/id item)
                 is-pdf? (= kind "pdf")
-                queue-pos (str (inc idx) " / " total)
-                item-priority (or (:topics/priority item) 50)
                 ;; Queue context only for non-PDFs (per design decision §3.2 = Y).
                 ;; For PDFs, the title bar's hamburger + page-stats already crowd the row.
                 queue-ctx (when-not is-pdf?
-                            {:queue-position queue-pos
-                             :priority item-priority
-                             :on-priority-change! (fn [new-val]
-                                                    (update-topic-priority* topic-id new-val))
-                             :origin :learn
+                            {:origin :learn
                              :on-done! #(swap! !queue-idx inc)})]
 
             (when item

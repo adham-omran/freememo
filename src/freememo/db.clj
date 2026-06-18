@@ -985,6 +985,16 @@
                  :from [:topics]
                  :where [:and [:= :id id] [:is :staged_delete_id nil]]})))
 
+(defn get-topic-priority
+  "Current review priority for a topic (0=highest…100=lowest). Returns nil for
+   a missing or staged-for-deletion topic; callers default to 50."
+  [id]
+  (some-> (jdbc/execute-one! ds
+            (sql/format {:select [:priority]
+                         :from [:topics]
+                         :where [:and [:= :id id] [:is :staged_delete_id nil]]}))
+    :topics/priority))
+
 (defn get-topic-for-user
   "Get a topic by ID, scoped to a user. Excludes topics staged for deletion."
   [user-id id]
