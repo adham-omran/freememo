@@ -15,6 +15,7 @@
    [freememo.viewport :as viewport]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])
+   #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])))
 
 ;; ---------------------------------------------------------------------------
@@ -31,10 +32,18 @@
      :cljs nil))
 
 (defn remove-pin!*
-  "Delete a topic_pins row by id, then bump :pin-mutations on behalf of the caller."
+  "Delete a topic_pins row by id, snapshot it for undo with an Undo toast,
+   then bump :pin-mutations on behalf of the caller."
   [user-id pin-id]
   #?(:clj
-     (do (db/remove-pin! pin-id)
+     (let [removed (db/remove-pin! pin-id)]
+       (when removed
+         (let [undo-id (db/insert-undo-entry! user-id "remove-pin" "pin"
+                         [pin-id] [removed])]
+           (toasts/push! user-id {:level :success
+                                  :message "Pin removed"
+                                  :dedup? false
+                                  :actions [{:label "Undo" :undo-id undo-id}]})))
        (swap! (us/get-atom user-id :pin-mutations) inc)
        :ok)
      :cljs nil))

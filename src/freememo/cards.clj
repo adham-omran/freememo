@@ -5,6 +5,7 @@
    [freememo.settings :as settings]
    [freememo.credits :as credits]
    [freememo.user-state :as us]
+   [freememo.toasts :as toasts]
    [wkok.openai-clojure.api :as api]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
@@ -357,12 +358,22 @@
       {:success false :error (.getMessage e)})))
 
 (defn delete-card
-  "Delete a single flashcard by ID. Returns {:success true :anki-note-id N} if the card was synced."
-  [card-id]
+  "Delete a single flashcard, snapshotting it for undo and pushing an
+   Undo toast. Returns {:success true :anki-note-id N :undo-id L}; :undo-id
+   is the undo_log entry id (nil if the card did not exist)."
+  [user-id card-id]
   (try
     (let [deleted (db/delete-flashcard! card-id)
-          note-id (:flashcards/anki_note_id deleted)]
-      {:success true :anki-note-id note-id})
+          note-id (:flashcards/anki_note_id deleted)
+          undo-id (when deleted
+                    (db/insert-undo-entry! user-id "delete-card" "flashcard"
+                      [card-id] [deleted]))]
+      (when undo-id
+        (toasts/push! user-id {:level :success
+                               :message "Card deleted"
+                               :dedup? false
+                               :actions [{:label "Undo" :undo-id undo-id}]}))
+      {:success true :anki-note-id note-id :undo-id undo-id})
     (catch Exception e
       (tel/error! {:id ::delete-card} e)
       {:success false :error (.getMessage e)})))
@@ -378,7 +389,14 @@
     (let [deleted (db/delete-user-flashcards! user-id card-ids)
           note-ids (into [] (keep :flashcards/anki_note_id) deleted)]
       (when (seq deleted)
-        (swap! (us/get-atom user-id :card-mutations) inc))
+        (swap! (us/get-atom user-id :card-mutations) inc)
+        (let [n (count deleted)
+              undo-id (db/insert-undo-entry! user-id "bulk-delete-cards" "flashcard"
+                        (mapv :flashcards/id deleted) deleted)]
+          (toasts/push! user-id {:level :success
+                                 :message (str "Deleted " n " card" (when (not= 1 n) "s"))
+                                 :dedup? false
+                                 :actions [{:label "Undo" :undo-id undo-id}]})))
       {:success true :deleted (count deleted) :anki-note-ids note-ids})
     (catch Exception e
       (tel/error! {:id ::delete-cards!} e)

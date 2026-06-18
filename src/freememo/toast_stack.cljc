@@ -7,6 +7,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
    #?(:clj [freememo.toasts :as toasts])
+   #?(:clj [freememo.undo :as undo])
    #?(:clj [freememo.user-state :as us])))
 
 ;; ---------------------------------------------------------------------------
@@ -46,6 +47,10 @@
   #?(:clj (toasts/dismiss! user-id toast-id)
      :cljs nil))
 
+(defn undo-from-toast!* [user-id undo-id]
+  #?(:clj (do (undo/undo-entry! user-id undo-id) nil)
+     :cljs nil))
+
 ;; ---------------------------------------------------------------------------
 ;; Components
 ;; ---------------------------------------------------------------------------
@@ -81,7 +86,7 @@
         ;; Action buttons + close button row
         (dom/div
           (dom/props {:class "toast-actions"})
-          (e/for [{:keys [label nav]} (e/diff-by :label actions)]
+          (e/for [{:keys [label nav undo-id]} (e/diff-by :label actions)]
             (dom/button
               (dom/props {:class "toast-action-btn" :type "button"})
               (dom/text label)
@@ -89,7 +94,9 @@
                     [t _] (e/Token click)]
                 (when t
                   (case (e/server (dismiss!* user-id id))
-                    (do (when nav
+                    (do (when undo-id
+                          (case (e/server (undo-from-toast!* user-id undo-id)) nil))
+                        (when nav
                           (if (vector? nav)
                             (apply navigate! nav)
                             (navigate! nav)))

@@ -108,6 +108,7 @@
                 [(str "SELECT " select-cols "
                        FROM topics t " source-joins "
                        WHERE t.user_id = ?
+                         AND t.staged_delete_id IS NULL
                          AND t.content_text IS NOT NULL
                          AND t.content_text ~* ?"
                    kind-sql
@@ -122,6 +123,7 @@
                        FROM (SELECT " select-cols "
                              FROM topics t " source-joins "
                              WHERE t.user_id = ?
+                               AND t.staged_delete_id IS NULL
                                AND t.content_text IS NOT NULL
                                AND t.content_text ILIKE '%' || ? || '%'"
                    kind-sql

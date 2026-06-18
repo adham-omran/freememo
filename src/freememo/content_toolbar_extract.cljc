@@ -9,29 +9,24 @@
    [freememo.icons :as icons]
    [freememo.keyboard :as keyboard]
    [freememo.navigation :as nav]
-   #?(:clj [taoensso.telemere :as tel])
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.staged-delete :as staged-delete])
    #?(:clj [freememo.user-state :as us])))
 
 (defn delete-topic-with-parent!
-  "Server-only: snapshot parent_id + anki note ids, delete the topic, bump
-   :tree-mutations, and return {:parent-id _ :note-ids _}. Returns parent_id
-   captured BEFORE deletion so the client can navigate up.
+  "Server-only: stage the topic (subtree + cards) for deletion, returning
+   {:parent-id _ :note-ids _ :entry-id _} for the client's navigate-up + Anki
+   cleanup. Reversible for 12h via the undo log.
 
-   Intentionally does NOT bump :refresh — TopicPage watches :refresh, and
-   bumping it during the same WS tick as this fn's return propagates an
-   overview re-query that unmounts the toolbar subtree before the client-side
-   handler can call navigate!, stranding the user on the now-deleted topic's
-   URL. :tree-mutations is watched only by HierarchySidePanel and
-   DocumentTreeView (per CLAUDE.md), so bumping it is safe."
+   Stages via freememo.staged-delete/stage-deletion! with refresh? false:
+   TopicPage watches :refresh, and bumping it during the same WS tick as this
+   fn's return propagates an overview re-query that unmounts the toolbar
+   subtree before the client handler can call navigate!, stranding the user on
+   the now-hidden topic's URL. :tree-mutations (bumped inside stage-deletion!)
+   is watched only by HierarchySidePanel and DocumentTreeView, so it is safe."
   [user-id topic-id]
-  #?(:clj
-     (let [pid (:topics/parent_id (db/get-topic topic-id))
-           note-ids (vec (db/get-anki-note-ids topic-id))]
-       (db/delete-topic! topic-id)
-       (swap! (us/get-atom user-id :tree-mutations) inc)
-       (tel/log! :info (str "Topic deleted topic-id=" topic-id " parent-id=" pid))
-       {:parent-id pid :note-ids note-ids})
+  #?(:clj (or (staged-delete/stage-deletion! user-id topic-id false)
+            {:parent-id nil :note-ids []})
      :cljs nil))
 
 (e/defn ExtractActions [cfg]
@@ -171,7 +166,7 @@
                 (dom/On "click" (fn [e] (.stopPropagation e)) nil)
                 (dom/div
                   (dom/props {:class "confirm-modal-body"})
-                  (dom/p (dom/text "Delete this extract and all its cards?")))
+                  (dom/p (dom/text "Delete this extract and all its cards? You can undo for 12 hours.")))
                 (dom/div
                   (dom/props {:class "confirm-modal-actions"})
                   (dom/button
