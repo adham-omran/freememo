@@ -45,6 +45,7 @@
     "wikipedia" "webpage"
     "web"       "webpage"
     "markdown"  "document"
+    "audio"     "song"
     "webpage"))
 
 (defn- non-empty-biblio?

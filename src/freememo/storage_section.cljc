@@ -62,4 +62,4 @@
                                 :transition "width 0.2s"}})))
         (dom/div
           (dom/props {:class "hint"})
-          (dom/text "Storage is consumed by uploaded PDFs and EPUBs. Delete documents from the Library to free space."))))))
+          (dom/text "Storage is consumed by uploaded PDFs, EPUBs, and audio files. Delete documents from the Library to free space."))))))

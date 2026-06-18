@@ -1208,6 +1208,7 @@
   (case kind
     "pdf" "document"
     "epub" "book"
+    "audio" "song"
     "webpage"))
 
 (defn- ts->date-parts
@@ -1320,6 +1321,43 @@
                 ON CONFLICT (parent_id, page_number) WHERE page_number IS NOT NULL
                 DO NOTHING"
                user-id topic-id (str "Page " n) n])))
+        topic))))
+
+(defn create-audio-topic!
+  "Create an audio root topic with file data and a `sources` row.
+   Atomically checks quota and increments users.usage_bytes by file-size.
+   Throws `quota/quota-error` on cap violation — caller's tx aborts.
+   Sets content to \"\" (not NULL) so the editor mounts and can receive a
+   transcript instead of showing a permanent loading spinner.
+   Returns the result with :topics/id."
+  [user-id filename file-bytes file-size mime-type]
+  (let [clean-name (input/prettify-title (input/sanitize-filename filename))]
+    (input/check-length! :title clean-name input/title-max)
+    (jdbc/with-transaction [tx ds]
+      (quota/check-and-bump! tx user-id file-size)
+      (let [csl {:type "song" :title clean-name
+                 :accessed {:date-parts (now-date-parts)}}
+            source (jdbc/execute-one! tx
+                     (sql/format {:insert-into :sources
+                                  :values [{:user_id user-id
+                                            :csl_type "song"
+                                            :csl (->jsonb csl)
+                                            :title clean-name}]
+                                  :returning [:id]}))
+            source-id (:sources/id source)
+            topic (jdbc/execute-one! tx
+                    (sql/format {:insert-into :topics
+                                 :values [{:user_id user-id
+                                           :kind "audio"
+                                           :title clean-name
+                                           :content ""
+                                           :source_id source-id}]
+                                 :returning [:id]}))
+            topic-id (:topics/id topic)]
+        (jdbc/execute! tx
+          ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
+            VALUES (?, ?, ?, ?)"
+           topic-id file-bytes file-size mime-type])
         topic))))
 
 (defn find-web-topic-by-title

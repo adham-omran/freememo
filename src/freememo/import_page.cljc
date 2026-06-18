@@ -53,6 +53,12 @@
           (when show-upload
             (ImportModal !show-upload user-id :file navigate!)))
 
+        (let [!show-audio (atom false)
+              show-audio (e/watch !show-audio)]
+          (ImportCard :mic "Audio" "Upload an audio file to transcribe" !show-audio)
+          (when show-audio
+            (ImportModal !show-audio user-id :audio navigate!)))
+
         (let [!show-paste (atom false)
               show-paste (e/watch !show-paste)]
           (ImportCard :clipboard "Paste" "Paste HTML or Markdown content" !show-paste)

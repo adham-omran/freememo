@@ -2,6 +2,7 @@
   "REST API handlers for file upload, page text save, and authentication."
   (:require
    [freememo.pdf :as pdf]
+   [freememo.audio :as audio]
    [freememo.epub :as epub]
    [freememo.page-ocr :as page]
    [freememo.db :as db]
@@ -169,6 +170,17 @@
                                       :content content
                                       :default_title default-title
                                       :filename filename}))
+
+                :audio
+                (if (> size audio/max-bytes)
+                  (do (log-upload-failure! ::upload-file-audio-too-large request
+                        {:user-id user-id :filename filename :file-size size :limit audio/max-bytes})
+                      (json-response 413 {:success false
+                                          :error (str "Audio exceeds " audio/max-bytes " bytes (25 MB Whisper limit)")
+                                          :code "file-too-large" :limit audio/max-bytes :incoming size}))
+                  (let [upload-id (staging/stage! user-id bytes filename :audio)]
+                    (json-response 200 {:success true :upload_id upload-id :flow "audio"
+                                        :filename filename :size size})))
 
                 :reject
                 (json-response 400 {:success false :error reject-msg
@@ -478,6 +490,29 @@
      :headers {"Location" "/"}
      :body ""}))
 
+(defn get-audio-handler [request]
+  "Serve an audio topic's file by topic ID. Unlike PDF, the Content-Type is read
+   from topic_files.mime_type since audio formats vary."
+  (if-let [user-id (require-auth request)]
+    (try
+      (let [uri (:uri request)
+            topic-id (-> uri (clojure.string/split #"/") last parse-long)
+            topic (db/get-topic topic-id)]
+        (if (and topic (= (:topics/user_id topic) user-id))
+          (if-let [file-row (db/get-topic-file topic-id)]
+            {:status 200
+             :headers {"Content-Type" (or (:topic_files/mime_type file-row) "audio/mpeg")
+                       "Content-Disposition" (str "inline; filename=\"" (:topics/title topic) "\"")}
+             :body (io/input-stream (:topic_files/file_data file-row))}
+            {:status 404 :body "Audio not found"})
+          {:status 404 :body "Audio not found"}))
+      (catch Exception e
+        (tel/error! {:id ::get-audio-handler} e)
+        {:status 500 :body "Internal server error"}))
+    {:status 302
+     :headers {"Location" "/"}
+     :body ""}))
+
 (defn google-auth-handler [_request]
   (if-not (google-oauth/configured?)
     {:status 503
@@ -677,6 +712,9 @@
 
       (and (re-matches #"/api/pdf/\d+" uri) (= method :get))
       (get-pdf-handler request)
+
+      (and (re-matches #"/api/audio/\d+" uri) (= method :get))
+      (get-audio-handler request)
 
       (and (= uri "/api/upload-media") (= method :post))
       (upload-media-handler request)

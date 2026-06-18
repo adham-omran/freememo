@@ -505,6 +505,7 @@
                     {:user-id user-id
                      :enc-key enc-key
                      :topic-id page-topic-id
+                     :audio-topic-id (when (= kind "audio") page-topic-id)
                      :is-pdf-page? is-pdf?
                      :root-topic-id (or pdf-root-id root-topic-id)
                      :page-number (when is-pdf? current-page)
@@ -531,6 +532,7 @@
                   {:user-id user-id
                    :enc-key enc-key
                    :topic-id page-topic-id
+                   :audio? (= kind "audio")
                    :root-topic-id (or pdf-root-id root-topic-id)
                    :page-number (when is-pdf? current-page)
                    :static-content effective-content

@@ -55,6 +55,7 @@
        "html" "HTML"
        "markdown" "Markdown"
        "web" "Web Article"
+       "audio" "Audio"
        "Item")))
 
 ;; ── Paste-source detection ─────────────────────────────────────────
@@ -287,15 +288,12 @@
                             (str "Unexpected flow: " (:flow r))) (token)))
                   (case (url-set-error! !error !quota-error? !stage (:error r)) (token)))))))))))
 
-(e/defn FilePicker [!file !file-input on-file cap-bytes]
+(e/defn FilePicker [!file !file-input on-file accept blurb]
   (e/client
-    (let [file (e/watch !file)
-          cap-label (when (pos? cap-bytes) (format-mb cap-bytes))]
+    (let [file (e/watch !file)]
       (dom/p
         (dom/props {:style {:margin "0 0 12px 0" :font-size "13px" :color "var(--color-text-secondary)"}})
-        (dom/text (if cap-label
-                    (str "PDF, EPUB, HTML, or Markdown — file extension picks the flow. Maximum " cap-label ".")
-                    "PDF, EPUB, HTML, or Markdown — file extension picks the flow.")))
+        (dom/text blurb))
       (dom/div
         (dom/props {:style {:border "2px dashed var(--color-border)" :border-radius "var(--radius-md)"
                             :padding "32px" :text-align "center" :cursor "pointer"
@@ -318,7 +316,7 @@
             (dom/text "Drop a file here or click to browse"))))
       (dom/input
         (dom/props {:type "file"
-                    :accept ".pdf,.epub,.html,.htm,.md,.markdown"
+                    :accept accept
                     :style {:display "none"}})
         (reset! !file-input dom/node)
         (dom/On "change" (fn [e] (when-some [f (-> e .-target .-files (aget 0))]
@@ -749,6 +747,7 @@
           title (case source
                   :url "Import from URL"
                   :file "Upload"
+                  :audio "Upload Audio"
                   :paste "Paste"
                   :new-topic "New Topic"
                   "Import")]
@@ -787,7 +786,15 @@
             (case source
               :url (UrlInput user-id navigate-to-viewer!
                              !stage !staged !flow !error !quota-error?)
-              :file (FilePicker !file !file-input handle-file cap-bytes)
+              :file (let [cap-label (when (pos? cap-bytes) (format-mb cap-bytes))]
+                      (FilePicker !file !file-input handle-file
+                                  ".pdf,.epub,.html,.htm,.md,.markdown"
+                                  (if cap-label
+                                    (str "PDF, EPUB, HTML, or Markdown — file extension picks the flow. Maximum " cap-label ".")
+                                    "PDF, EPUB, HTML, or Markdown — file extension picks the flow.")))
+              :audio (FilePicker !file !file-input handle-file
+                                 ".mp3,.m4a,.mp4,.wav,.webm,.ogg,.oga,.flac,.mpeg,.mpga"
+                                 "Audio file (mp3, m4a, wav, webm, ogg, flac). Maximum 25 MB.")
               :paste (PasteEditor !format !title !paste-url !html-text !md-text
                                   on-paste-import)
               :new-topic (NewTopicInput on-new-topic)
