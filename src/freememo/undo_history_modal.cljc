@@ -156,9 +156,8 @@
         (dom/text (:label row)))
       (dom/td
         (dom/props {:style {:padding "8px 12px" :color "var(--color-text-secondary)"
-                            :overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
-                            :border-bottom "0.5px solid var(--color-border-light)"}
-                    :data-tooltip (or (:source row) "")})
+                            :word-break "break-word"
+                            :border-bottom "0.5px solid var(--color-border-light)"}})
         (dom/text (or (:source row) "")))
       (dom/td
         (dom/props {:style {:padding "8px 12px" :text-align "right"
