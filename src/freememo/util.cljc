@@ -136,3 +136,19 @@
                   ldt (LocalDateTime/ofInstant inst (ZoneId/systemDefault))]
               (.format ldt (DateTimeFormatter/ofPattern "MMM d"))))
      :cljs nil))
+
+#?(:cljs
+   (defn restore-scroll-after-render!
+     "Hold `node`'s scrollTop at `target` across an async, data-driven re-render
+      (expand/collapse of a server-sited virtual list). A single rAF fires
+      before the new rows arrive and the re-render resets scrollTop to 0, so
+      re-apply across a short burst of frames until the position sticks. rAF
+      runs before paint, so each painted frame keeps the anchored row in place."
+     [node target]
+     (when (and node target)
+       (let [tries (atom 0)]
+         (letfn [(step []
+                   (set! (.-scrollTop node) target)
+                   (when (< (swap! tries inc) 20)
+                     (js/requestAnimationFrame step)))]
+           (js/requestAnimationFrame step))))))

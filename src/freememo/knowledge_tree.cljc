@@ -12,6 +12,7 @@
    [freememo.bibliography-form :as bibform]
    [freememo.icons :as icons]
    [freememo.viewport :as viewport]
+   [freememo.util :as util]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.staged-delete :as staged-delete])
    #?(:clj [freememo.user-state :as us])))
@@ -235,8 +236,10 @@
                     (swap! !expansion
                       (fn [{:keys [ids] :as ex}]
                         (assoc ex :ids (if (contains? ids id) (disj ids id) (conj ids id)))))
-                    (when st
-                      (js/requestAnimationFrame (fn [] (set! (.-scrollTop sn) st))))))
+                    ;; Anchor scroll across the async server re-render: a single
+                    ;; rAF fires before the new rows land and scrollTop resets to
+                    ;; 0; re-apply over a few frames so the toggled row stays put.
+                    (util/restore-scroll-after-render! sn st)))
                 nil))
             (dom/span (dom/props {:style {:width "16px" :flex-shrink "0"}})))
           (dom/span
