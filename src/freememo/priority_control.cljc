@@ -18,8 +18,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.number-stepper :refer [NumberStepper]]
-   #?(:clj [freememo.db :as db])
-   #?(:clj [freememo.user-state :as us])))
+   #?(:clj [freememo.db :as db])))
 
 ;; Server bridges — plain defns with reader conditionals so both peers see the
 ;; var (CLJS gets a no-op) while the DB call only runs on CLJ.
@@ -42,10 +41,16 @@
    changes after the write lands (no clobber). Gap: a failed write would leave
    the mirror ahead of the DB, matching the control's existing no-error-surface
    behavior."
-  [user-id topic-id priority]
+  [_user-id topic-id priority]
   (e/client
     (let [!mirror (atom priority)
           mirror-val (e/watch !mirror)]
+      ;; Reconcile is keyed on the (topic-id, priority) pair so it re-seeds when
+      ;; a new topic's value settles. Save must NOT bump :refresh: that would
+      ;; re-read this topic's server priority on our own write, and each
+      ;; in-flight echo (49,48,…) would re-fire this reset! and snap the mirror
+      ;; backward mid-burst. Without the self-bump the query only re-reads when
+      ;; topic-id changes, so within a topic the optimistic mirror is the truth.
       (e/for-by identity [_pair [[topic-id priority]]]
         (let [v (reset! !mirror priority)] (when v nil)))
       (NumberStepper
@@ -53,5 +58,4 @@
          :mount-key topic-id :label "Priority"}
         !mirror
         (e/fn [nv]
-          (case (e/server (e/Offload #(update-priority!* topic-id nv)))
-            (e/server (swap! (us/get-atom user-id :refresh) inc))))))))
+          (e/server (e/Offload #(update-priority!* topic-id nv))))))))
