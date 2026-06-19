@@ -290,7 +290,7 @@
           ;; sit stranded on the left while the cluster's auto-margin pushed
           ;; only the cluster (and siblings after it) to the right.
               (dom/div
-                (dom/props {:class "toolbar-doc-context-group toolbar-collapse-bib"})
+                (dom/props {:class "toolbar-cluster toolbar-doc-context-group toolbar-collapse-bib"})
                 (when audio?
                   (TranscribeButton user-id topic-id enc-key))
                 (BibliographyButton user-id biblio-target-id has-source? nil)
@@ -301,7 +301,7 @@
           ;; so users read the action first, then the parameters that shape it.
           ;; Context is the FIRST to collapse (tier 1, .toolbar-collapse-first).
               (dom/div
-                (dom/props {:class "toolbar-generate-cluster"})
+                (dom/props {:class "toolbar-cluster toolbar-generate-cluster"})
 
             ;; Generate dropdown — consolidates Generate + Generate-with-Prompt
             ;; into one trigger. ToolbarGenerate is mounted hidden inside the
@@ -335,19 +335,13 @@
                        :use-context use-context :context-window context-window}
                       !use-context !context-window))))
 
-          ;; Group boundary: Generate cluster → topic actions.
-              (dom/span (dom/props {:class "toolbar-group-divider"}))
-
-          ;; Extract + Add new (IR Tools group). Export/Pull/AnkiSync now live
-          ;; in the Sync dropdown below.
-              (actions/ToolbarActions
-                {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
-                 :context-mode context-mode :mod-key mod-key
-                 :card-type card-type})
-
-          ;; Group boundary: IR Tools → Sync dropdown. Hides with the dropdown at T7
-          ;; so we don't leave a stranded divider when Sync collapses.
-              (dom/span (dom/props {:class "toolbar-group-divider toolbar-collapse-sync"}))
+          ;; Extract + Add new (IR Tools) — boxed cluster.
+              (dom/div
+                (dom/props {:class "toolbar-cluster"})
+                (actions/ToolbarActions
+                  {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
+                   :context-mode context-mode :mod-key mod-key
+                   :card-type card-type}))
 
           ;; Sync dropdown — consolidates Export + Pull from Anki + Anki Sync.
           ;; Source buttons mount hidden inside the dropdown component so their
@@ -361,16 +355,13 @@
                  :page-number page-number :card-type card-type
                  :unsynced-count unsynced-count :mod-key mod-key})
 
-          ;; Group boundary: topic actions → lifecycle (Done/Delete).
-          ;; Wrapped with extract-status guard so the divider only appears when
-          ;; ExtractActions is mounted.
-              (when (some? extract-status)
-                (dom/span (dom/props {:class "toolbar-group-divider"})))
-
-          ;; Done/Restore + Delete — extract topics only (separate e/defn for bytecode limit)
-              (ExtractActions {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
-                               :extract-status extract-status
-                               :navigate! navigate! :origin origin :on-done! on-done!})
+          ;; History / Priority / Done / Delete — boxed cluster. History +
+          ;; Priority are always present; Done/Delete only for extract topics.
+              (dom/div
+                (dom/props {:class "toolbar-cluster"})
+                (ExtractActions {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
+                                 :extract-status extract-status
+                                 :navigate! navigate! :origin origin :on-done! on-done!}))
 
           ;; Overflow trigger — visible only on mobile/tablet via CSS
               (dom/div

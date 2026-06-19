@@ -465,6 +465,21 @@ html, body {
    thanks to flex sibling chaining) to the right edge of the toolbar. Inner
    `gap: 8px` matches the toolbar's own `gap: var(--sp-2)`, so the two
    buttons look like normal toolbar siblings — not visibly nested. */
+/* Boxed toolbar group — visually distinct cluster (border + card bg).
+   Shared by the doc-context, generate, IR-tools, and lifecycle groups so they
+   read as deliberate groups. Sync stays unboxed (lone dropdown trigger). */
+.toolbar-cluster {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 10px;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+/* Never render an empty bordered box if a group's contents fully collapse. */
+.toolbar-cluster:empty { display: none; }
+
 .toolbar-doc-context-group {
     display: flex;
     align-items: center;
