@@ -171,11 +171,14 @@
               (dom/div (dom/props {:class "toolbar-overflow-panel"})
 
             ;; Priority proxy (.toolbar-overflow-priority, reveals T2+) — mirrors
-            ;; the inline control beside History; the DB value (via :refresh) is
-            ;; the shared source of truth across both mounts.
+            ;; the inline control beside History. Targets the review-unit topic
+            ;; (PDF root for pages), same rule as ExtractActions, so it edits the
+            ;; priority the queue orders by. biblio-target-id is NOT equivalent —
+            ;; it would scope extracts to their root instead of themselves.
                 (dom/div
                   (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-priority"})
-                  (PriorityControl user-id topic-id (e/server (get-topic-priority* refresh topic-id))))
+                  (let [review-topic-id (if extract-status topic-id (or root-topic-id topic-id))]
+                    (PriorityControl user-id review-topic-id (e/server (get-topic-priority* refresh review-topic-id)))))
 
             ;; Context proxy (.toolbar-overflow-first, reveals T2+).
             ;; Two mounts bind to the same atoms; atoms are the source of truth.
