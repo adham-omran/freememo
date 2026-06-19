@@ -28,11 +28,17 @@
      :navigate!            optional fn (extract mode only)
      :origin               keyword tab (extract mode only)
      :on-done!             optional 0-arg fn (queue contexts only)
-   refresh: combined card-refresh value (refresh + sync-mutations + card-mutations)."
+     :citation             bibliography citation string-or-nil (DocumentMetaGroup)
+     :page-info            page-progress {:done :total :remaining-tooltip}-or-nil
+     :pdf-root?            true at a PDF root (gates Mark-PDF-Done)
+     :pdf-status           PDF root status string-or-nil
+   refresh: combined card-refresh value (refresh + sync-mutations + card-mutations).
+   !show-bib: modal-open atom (positional — atoms cannot ride in a props map)."
   [{:keys [user-id enc-key topic-id audio? root-topic-id page-number
            static-content
            context-mode context-tooltip llm-enabled?
-           extract-status navigate! origin on-done!]} refresh]
+           extract-status navigate! origin on-done!
+           citation page-info pdf-root? pdf-status]} refresh !show-bib]
   (e/client
     (let [dirty (e/watch editor/!dirty-html)
           live-content (if (and dirty (= (:topic-id dirty) topic-id))
@@ -47,12 +53,16 @@
                                  :content-text live-content
                                  :context-mode context-mode
                                  :context-tooltip context-tooltip
-                                 :llm-enabled? llm-enabled?}
+                                 :llm-enabled? llm-enabled?
+                                 :citation citation
+                                 :page-info page-info
+                                 :pdf-root? pdf-root?
+                                 :pdf-status pdf-status}
                           extract-status (assoc :extract-status extract-status)
                           navigate! (assoc :navigate! navigate!)
                           origin (assoc :origin origin)
                           on-done! (assoc :on-done! on-done!))]
-      (ContentToolbar toolbar-props refresh))))
+      (ContentToolbar toolbar-props refresh !show-bib))))
 
 (e/defn BottomPanel
   "Bottom card-table region for both PDF-page and extract topic views.
