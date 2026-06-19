@@ -74,6 +74,39 @@
       (tel/error! {:id ::save-pdfjs-text!} e)
       {:success false :error (str "Failed to save text: " (.getMessage e))})))
 
+(defn preview-pdfbox-html
+  "Extract a page's text via PDFBox → normalized paragraph HTML, WITHOUT saving.
+   For the Copy-text compare modal (Remote/B). Returns {:success true :text html}
+   or {:success false :error ...} (e.g. scanned page, no text layer)."
+  [topic-id page-number]
+  (try
+    (let [file-row (db/get-topic-file topic-id)]
+      (if-not file-row
+        {:success false :error "Document not found"}
+        (let [result (ocr/extract-text-pdfbox (:topic_files/file_data file-row) page-number)]
+          (if-not (:success result)
+            result
+            (let [html (-> (:text result) text/normalize-extracted-text text/text->paragraph-html)]
+              (if (clojure.string/blank? html)
+                {:success false :error empty-text-message}
+                {:success true :text html}))))))
+    (catch Exception e
+      (tel/error! {:id ::preview-pdfbox-html} e)
+      {:success false :error (str "Failed to extract text: " (.getMessage e))})))
+
+(defn preview-pdfjs-html
+  "Normalize PDF.js raw text (extracted client-side) → paragraph HTML, WITHOUT
+   saving. For the Copy-text compare modal (Client/A). Same shape as above."
+  [raw-text]
+  (try
+    (let [html (-> (or raw-text "") text/normalize-extracted-text text/text->paragraph-html)]
+      (if (clojure.string/blank? html)
+        {:success false :error empty-text-message}
+        {:success true :text html}))
+    (catch Exception e
+      (tel/error! {:id ::preview-pdfjs-html} e)
+      {:success false :error (str "Failed to normalize text: " (.getMessage e))})))
+
 (defn get-page-text
   "Retrieve saved OCR text for a page."
   [parent-id page-number]

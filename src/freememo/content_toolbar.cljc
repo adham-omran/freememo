@@ -17,6 +17,7 @@
    [freememo.toolbar-sync-dropdown :refer [SyncDropdown]]
    [freememo.bibliography-button :as bib-btn :refer [BibliographyButton]]
    [freememo.bibliography-toolbar :refer [DocumentMetaGroup]]
+   [freememo.document-options :refer [DocumentOptionsButton]]
    [freememo.auto-extract-button :refer [AutoExtractButton]]
    [freememo.transcribe-button :refer [TranscribeButton]]
    #?(:clj [freememo.settings :as user-settings])
@@ -109,6 +110,9 @@
           ;; pdf-root-id root-topic-id)`. The state map's :root-topic-id is
           ;; already that value, so refetch always targets the document root.
           biblio-target-id (or root-topic-id topic-id)
+          ;; PDF (root or page) → :page context; extract/web/epub → :extract.
+          ;; Document-options shows the extraction-style select only for PDFs.
+          is-pdf? (= context-mode :page)
           has-source? (e/server (bib-btn/has-source?* refresh user-id biblio-target-id))
           ;; Load settings from server
           server-context-enabled (e/server (user-settings/get-context-enabled user-id))
@@ -225,6 +229,11 @@
                                 :disabled true})
                     (icons/Icon :scan-text :size 16)
                     (dom/span (dom/props {:class "icon-label"}) (dom/text "Auto-extract"))))
+
+            ;; Document-options proxy (.toolbar-overflow-bib, reveals T5+).
+                (dom/div
+                  (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-bib"})
+                  (DocumentOptionsButton user-id topic-id is-pdf? biblio-target-id))
 
             ;; DocumentMeta proxy (.toolbar-overflow-docmeta, reveals T2+) —
             ;; actions only (Edit-Bibliography + Mark-PDF-Done); citation and
@@ -379,7 +388,8 @@
                 (when audio?
                   (TranscribeButton user-id topic-id enc-key))
                 (BibliographyButton user-id biblio-target-id has-source? nil)
-                (AutoExtractButton))
+                (AutoExtractButton)
+                (DocumentOptionsButton user-id topic-id is-pdf? biblio-target-id))
 
           ;; Divider hides with the document-meta group at tier 2.
               (dom/div (dom/props {:class "toolbar-group-divider toolbar-collapse-docmeta"}))

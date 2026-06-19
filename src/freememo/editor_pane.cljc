@@ -8,6 +8,7 @@
    [freememo.rich-text-editor :as editor]
    [freememo.rich-text-editor-component :refer [RichTextEditorComponent]]
    [freememo.keyboard :as keyboard]
+   [freememo.copy-text :as copy]
    [freememo.navigation :as nav]
    [clojure.string :as str]
    #?(:cljs [freememo.editor-pin-menu :as pin-menu])
@@ -92,7 +93,7 @@
 
 (e/defn EditorPane
   [{:keys [user-id enc-key topic-id audio-topic-id is-pdf-page? root-topic-id page-number
-           scan-dpi llm-enabled? enable-ai? enable-pdfbox? enable-pdfjs?
+           scan-dpi llm-enabled?
            static-content scanning-pages ocr-errors
            on-imported-navigate!]}]
   (e/client
@@ -192,8 +193,8 @@
                           (t)))))))
               (dom/text (str "Mark page " page-number " as done")))
 
-            ;; Scan Page button (AI OCR)
-            (when (and llm-enabled? enable-ai?)
+            ;; Scan Page button (AI OCR) — shown whenever LLM features are on.
+            (when llm-enabled?
               (let [scanning? (contains? scanning-pages [root-topic-id page-number])
                     disabled? scanning?]
                 (dom/button
@@ -220,102 +221,12 @@
                                   (start-ocr-scan! uid doc pg ek scan-dpi))))
                         (t)))))))
 
-            ;; Extract (PDFBox) button
-            (when enable-pdfbox?
-              (let [scanning? (contains? scanning-pages [root-topic-id page-number])
-                    disabled? scanning?]
-                (dom/button
-                  (dom/props {:class "btn btn-sm"
-                              :style {:padding "4px 12px" :font-size "14px"
-                                      :background (if disabled? "var(--color-border)" "var(--color-bg-card)")
-                                      :border "1px solid var(--color-border)"
-                                      :color "var(--color-text-primary)"
-                                      :cursor (if disabled? "not-allowed" "pointer")}
-                              :disabled disabled?
-                              :data-tooltip "Extract text directly from the PDF (no AI)"})
-                  (dom/text (if disabled? "Extracting..." "Extract (PDFBox)"))
-                  (let [click-event (dom/On "click"
-                                      (fn [_] {:id (str (random-uuid)) :page page-number})
-                                      nil)
-                        [t _] (e/Token click-event)]
-                    (when t
-                      (let [pg (:page click-event)
-                            result (e/server
-                                     (let [doc root-topic-id
-                                           uid user-id
-                                           p pg]
-                                       (e/Offload
-                                         #(do
-                                            (swap! (us/get-atom uid :scanning-pages) conj [doc p])
-                                            (swap! (us/get-atom uid :ocr-errors) dissoc [doc p])
-                                            (try
-                                              (let [r (page/extract-page-text-pdfbox doc p)]
-                                                (if (:success r)
-                                                  (swap! (us/get-atom uid :refresh) inc)
-                                                  (swap! (us/get-atom uid :ocr-errors) assoc [doc p] (:error r)))
-                                                r)
-                                              (finally
-                                                (swap! (us/get-atom uid :scanning-pages) disj [doc p])))))))]
-                        (case result (t))))))))
-
-            ;; Extract (PDF.js) button
-            (when enable-pdfjs?
-              (let [scanning? (contains? scanning-pages [root-topic-id page-number])
-                    disabled? scanning?
-                    !pdfjs-result (atom nil)
-                    pdfjs-result (e/watch !pdfjs-result)]
-                (dom/button
-                  (dom/props {:class "btn btn-sm"
-                              :style {:padding "4px 12px" :font-size "14px"
-                                      :background (if disabled? "var(--color-border)" "var(--color-bg-card)")
-                                      :border "1px solid var(--color-border)"
-                                      :color "var(--color-text-primary)"
-                                      :cursor (if disabled? "not-allowed" "pointer")}
-                              :disabled disabled?
-                              :data-tooltip "Extract text using the PDF.js text layer (no AI)"})
-                  (dom/text (if disabled? "Extracting..." "Extract (PDF.js)"))
-                  (dom/On "click"
-                    (fn [_]
-                      #?(:cljs
-                         (let [pg page-number
-                               doc root-topic-id]
-                           (-> (freememo.pdf-viewer/get-page-text-content! pg)
-                             (.then (fn [text]
-                                      (reset! !pdfjs-result {:id (str (random-uuid))
-                                                             :page pg
-                                                             :doc doc
-                                                             :text text})))
-                             (.catch (fn [err]
-                                       (reset! !pdfjs-result {:id (str (random-uuid))
-                                                              :page pg
-                                                              :doc doc
-                                                              :error (str err)})))))
-                         :clj nil))
-                    nil))
-
-                ;; Persist PDF.js extraction result server-side
-                (let [[t _] (e/Token pdfjs-result)]
-                  (when t
-                    (e/on-unmount #(reset! !pdfjs-result nil))
-                    (let [{:keys [page doc text error]} pdfjs-result
-                          result (e/server
-                                   (e/Offload
-                                     #(do
-                                        (swap! (us/get-atom user-id :scanning-pages) conj [doc page])
-                                        (swap! (us/get-atom user-id :ocr-errors) dissoc [doc page])
-                                        (try
-                                          (cond
-                                            error (do
-                                                    (swap! (us/get-atom user-id :ocr-errors) assoc [doc page] error)
-                                                    {:success false :error error})
-                                            :else (let [r (page/save-pdfjs-text! doc page text)]
-                                                    (if (:success r)
-                                                      (swap! (us/get-atom user-id :refresh) inc)
-                                                      (swap! (us/get-atom user-id :ocr-errors) assoc [doc page] (:error r)))
-                                                    r))
-                                          (finally
-                                            (swap! (us/get-atom user-id :scanning-pages) disj [doc page]))))))]
-                      (case result (t)))))))
+            ;; Copy text — single native-extract button. Reads the per-PDF
+            ;; extraction style (reactive on :settings-refresh): set → run that
+            ;; engine and save silently; unset → run both + compare modal.
+            (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
+                  extract-style (e/server (copy/get-extract-style* settings-refresh user-id root-topic-id))]
+              (copy/CopyTextButton user-id root-topic-id page-number extract-style))
 
             ;; OCR error display — auto-dismiss after 3 seconds
             (when-let [ocr-err (get ocr-errors [root-topic-id page-number])]
