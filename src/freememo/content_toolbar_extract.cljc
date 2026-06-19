@@ -87,7 +87,7 @@
             (let [!done-click (atom nil)
                   done-click (e/watch !done-click)]
               (dom/button
-                (dom/props {:class "btn btn-sm btn-secondary"
+                (dom/props {:class "btn btn-sm btn-secondary toolbar-done-btn"
                             :style {:color "var(--color-success-dark)" :border "1px solid var(--color-success-dark)"
                                     :font-weight "500"}
                             :disabled busy
@@ -125,7 +125,7 @@
           (let [!restore-click (atom nil)
                 restore-click (e/watch !restore-click)]
             (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary"
+              (dom/props {:class "btn btn-sm btn-secondary toolbar-restore-btn"
                           :style {:color "var(--color-primary)" :border "1px solid var(--color-primary)"
                                   :font-weight "500"}
                           :aria-label "Restore"

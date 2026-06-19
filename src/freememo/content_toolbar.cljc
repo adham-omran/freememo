@@ -279,27 +279,34 @@
                                         (.click btn))
                                       (reset! !overflow-open false)) nil))))
 
-          ;; Toolbar groups (boxed clusters), left-to-right:
+          ;; Toolbar groups (flat runs + dividers), left-to-right:
           ;; 1 Extract/Add · 2 Generate · 3 Sync · 4 History/Priority/Done/Delete
           ;; · 5 Transcribe/Bibliography-refetch/Auto-extract.
-          ;; Collapse tiers are by CSS class (not position), so reordering the
-          ;; render leaves the overflow behavior intact.
+          ;; Collapse tiers are by CSS class (not position). Dividers between
+          ;; groups carry the collapse class of the neighbor that disappears so
+          ;; they hide in lockstep (no dangling separator): the Sync→lifecycle
+          ;; divider hides with Sync (.toolbar-collapse-sync, tier 7); the
+          ;; lifecycle→doc-context divider hides with doc-context
+          ;; (.toolbar-collapse-bib, tier 5). Groups 1/2 always show their main
+          ;; button, so D1/D2 never dangle.
 
           ;; 1. Extract + Add new (IR Tools).
               (dom/div
-                (dom/props {:class "toolbar-cluster"})
+                (dom/props {:class "toolbar-group"})
                 (actions/ToolbarActions
                   {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
                    :context-mode context-mode :mod-key mod-key
                    :card-type card-type}))
 
-          ;; 2. Generate cluster — Generate dropdown + parameters in one box.
+              (dom/div (dom/props {:class "toolbar-group-divider"}))
+
+          ;; 2. Generate group — Generate dropdown + parameters together.
           ;; ToolbarGenerate mounts hidden inside the dropdown so its e/Token
           ;; paths, PromptDialog, and button refs stay live; generate/prompt
           ;; atoms stay LOCAL to it (avoids reactive loops). Context is the
           ;; first to collapse (.toolbar-collapse-first).
               (dom/div
-                (dom/props {:class "toolbar-cluster toolbar-generate-cluster"})
+                (dom/props {:class "toolbar-group toolbar-generate-cluster"})
                 (GenerateDropdown
                   (assoc state
                     :mod-key mod-key
@@ -326,6 +333,8 @@
                        :use-context use-context :context-window context-window}
                       !use-context !context-window))))
 
+              (dom/div (dom/props {:class "toolbar-group-divider"}))
+
           ;; 3. Sync dropdown (unboxed, lone trigger) — Export + Pull + Anki Sync.
           ;; Source buttons mount hidden inside so refs/modals/e/Token paths stay
           ;; live; .toolbar-collapse-sync sits on the visible trigger inside.
@@ -334,17 +343,23 @@
                  :page-number page-number :card-type card-type
                  :unsynced-count unsynced-count :mod-key mod-key})
 
+          ;; Divider hides with Sync at tier 7 (no dangling separator).
+              (dom/div (dom/props {:class "toolbar-group-divider toolbar-collapse-sync"}))
+
           ;; 4. History / Priority / Done / Delete. History + Priority always
           ;; present; Done/Delete only for extract topics.
               (dom/div
-                (dom/props {:class "toolbar-cluster"})
+                (dom/props {:class "toolbar-group"})
                 (ExtractActions {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
                                  :extract-status extract-status
                                  :navigate! navigate! :origin origin :on-done! on-done!}))
 
+          ;; Divider hides with the doc-context group at tier 5.
+              (dom/div (dom/props {:class "toolbar-group-divider toolbar-collapse-bib"}))
+
           ;; 5. Transcribe (audio) + Bibliography-refetch + Auto-extract.
               (dom/div
-                (dom/props {:class "toolbar-cluster toolbar-doc-context-group toolbar-collapse-bib"})
+                (dom/props {:class "toolbar-group toolbar-doc-context-group toolbar-collapse-bib"})
                 (when audio?
                   (TranscribeButton user-id topic-id enc-key))
                 (BibliographyButton user-id biblio-target-id has-source? nil)

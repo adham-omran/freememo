@@ -14,6 +14,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.number-stepper :refer [NumberStepper]]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])))
 
@@ -28,30 +29,17 @@
      :cljs nil))
 
 (e/defn PriorityControl
-  "Inline `Priority [n]` number input for a topic, styled like the Context-pages
-   spinner. `priority` is the current value (read reactively by the caller)."
+  "Inline `Priority [−] N [+]` stepper for a topic. `priority` is the current
+   value (read reactively by the caller). No client mirror atom: Save writes the
+   DB and bumps :refresh, so every mount re-reads the DB value (single source of
+   truth across the inline + overflow-proxy + History-modal mounts). mount-key
+   is topic-id so the input remounts when the viewed topic changes."
   [user-id topic-id priority]
   (e/client
-    (dom/label
-      (dom/props {:class "priority-control"
-                  :style {:display "flex" :align-items "center" :gap "4px"
-                          :font-size "13px" :color "var(--color-text-secondary)"}
-                  :title "Review priority (0 = highest, 100 = lowest)"})
-      (dom/text "Priority")
-      ;; e/for-by frame-isolates the input (CLAUDE.md inline-number pattern);
-      ;; imperative set! avoids the reactive :value prop flickering on the
-      ;; server-fetched snapshot. Remounts when the topic changes.
-      (e/for-by identity [_k [topic-id]]
-        (dom/input
-          (dom/props {:type "number" :min "0" :max "100"
-                      :style {:padding "2px 4px" :font-size "13px" :width "48px"}})
-          (set! (.-value dom/node) (str priority))
-          (let [ev (dom/On "change"
-                     (fn [e] (let [v (-> e .-target .-value)]
-                               (when (seq v) (js/parseInt v))))
-                     nil)
-                [t _] (e/Token ev)]
-            (when t
-              (case (e/server (e/Offload #(update-priority!* topic-id ev)))
-                (case (e/server (swap! (us/get-atom user-id :refresh) inc))
-                  (t))))))))))
+    (NumberStepper
+      {:value priority :min-val 0 :max-val 100
+       :mount-key topic-id :label "Priority"}
+      nil
+      (e/fn [nv]
+        (case (e/server (e/Offload #(update-priority!* topic-id nv)))
+          (e/server (swap! (us/get-atom user-id :refresh) inc)))))))

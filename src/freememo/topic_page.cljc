@@ -20,7 +20,7 @@
    [freememo.pin-side-panel :refer [PinSidePanel]]
    [freememo.pdf-pane :refer [PdfPane]]
    [freememo.editor-pane :refer [EditorPane]]
-   [freememo.bottom-panel :refer [BottomPanel]]
+   [freememo.bottom-panel :refer [ToolbarBar BottomPanel]]
    [freememo.bibliography-form :as bibform :refer [BibliographyForm]]
    [freememo.keyboard :as keyboard]
    [freememo.navigation :as nav]
@@ -383,6 +383,29 @@
             (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
                                 :min-height "0" :overflow "hidden"}})
 
+            ;; TOP TOOLBAR (full width): command bar directly under the global
+            ;; nav, above the bibliography header and content — like a Word/Excel
+            ;; ribbon. Its actions target the topic/document, not the card table,
+            ;; so it sits above everything. The card table stays at the bottom.
+            (ToolbarBar
+              {:user-id user-id
+               :enc-key enc-key
+               :topic-id page-topic-id
+               :audio? (= kind "audio")
+               :root-topic-id (or pdf-root-id root-topic-id)
+               :page-number (when is-pdf? current-page)
+               :static-content effective-content
+               :context-mode (if is-pdf? :page :extract)
+               :context-tooltip (if is-pdf?
+                                  "Include context for better cards. With a selection: current page + N previous pages. Without: N previous pages."
+                                  "Include context for better cards. With a selection: extract text. Without: original page text.")
+               :llm-enabled? llm-enabled?
+               :extract-status (when-not is-pdf? extract-status)
+               :navigate! navigate!
+               :origin (:origin queue-ctx)
+               :on-done! (:on-done! queue-ctx)}
+              card-refresh)
+
             ;; Bibliography header — single line in both modes:
             ;; PDF:     [Bibliography] [Mark PDF Done?] citation? title [stats]
             ;; non-PDF: [Bibliography] citation
@@ -431,9 +454,9 @@
               (BibliographyForm !show-bib user-id bib-topic-id))
 
             ;; TOP REGION (sized to top-pct%): hierarchy | content | pins.
-            ;; The toolbar + card table render as a FULL-WIDTH bottom bar below
-            ;; (siblings), so they span the whole width instead of the middle
-            ;; column; the side panels are confined to this top region.
+            ;; The card table renders as a FULL-WIDTH bottom bar below (sibling),
+            ;; so it spans the whole width; the side panels are confined to this
+            ;; top region.
             (dom/div
               (dom/props {:style {:height (str top-pct "%") :display "flex" :flex-direction "row"
                                   :min-height "0" :overflow "hidden"}})
@@ -532,23 +555,9 @@
               (dom/props {:class "split-divider-v" :title "Drag to resize panels"})
               (dom/On "pointerdown" (fn [e] (util/start-drag! e :y !top-pct)) nil))
 
-            ;; BOTTOM BAR (full width): shared toolbar + card table.
+            ;; BOTTOM BAR (full width): the card table.
             (BottomPanel
               {:user-id user-id
-               :enc-key enc-key
                :topic-id page-topic-id
-               :audio? (= kind "audio")
-               :root-topic-id (or pdf-root-id root-topic-id)
-               :page-number (when is-pdf? current-page)
-               :static-content effective-content
-               :context-mode (if is-pdf? :page :extract)
-               :context-tooltip (if is-pdf?
-                                  "Include context for better cards. With a selection: current page + N previous pages. Without: N previous pages."
-                                  "Include context for better cards. With a selection: extract text. Without: original page text.")
-               :llm-enabled? llm-enabled?
-               :extract-status (when-not is-pdf? extract-status)
-               :navigate! navigate!
-               :origin (:origin queue-ctx)
-               :on-done! (:on-done! queue-ctx)
                :card-font-size card-font-size}
               card-refresh)))))))
