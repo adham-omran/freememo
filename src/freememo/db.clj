@@ -1331,6 +1331,7 @@
                             (ARRAY_AGG(title ORDER BY created_at))[1] AS canonical_title
                      FROM topics
                      WHERE source_url IS NOT NULL AND source_id IS NULL
+                       AND user_id IS NOT NULL
                      GROUP BY user_id, source_url"]
                    {:builder-fn rs/as-unqualified-maps})
                  ;; If the column was already dropped (post-T4 reboot), this
@@ -1371,8 +1372,10 @@
    topic) and link it. Idempotent: only touches kind='pdf' rows with source_id IS NULL."
   []
   (let [pdfs (jdbc/execute! ds
+               ;; Skip orphaned topics (user deleted → user_id SET NULL); a
+               ;; sources row requires a non-null user_id and they have no owner.
                ["SELECT id, user_id, title FROM topics
-                 WHERE kind = 'pdf' AND source_id IS NULL"]
+                 WHERE kind = 'pdf' AND source_id IS NULL AND user_id IS NOT NULL"]
                {:builder-fn rs/as-unqualified-maps})]
     (when (seq pdfs)
       (jdbc/with-transaction [tx ds]
