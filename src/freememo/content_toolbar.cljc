@@ -16,6 +16,7 @@
    [freememo.toolbar-generate-dropdown :refer [GenerateDropdown]]
    [freememo.toolbar-sync-dropdown :refer [SyncDropdown]]
    [freememo.bibliography-button :as bib-btn :refer [BibliographyButton]]
+   [freememo.bibliography-toolbar :refer [DocumentMetaGroup]]
    [freememo.auto-extract-button :refer [AutoExtractButton]]
    [freememo.transcribe-button :refer [TranscribeButton]]
    #?(:clj [freememo.settings :as user-settings])
@@ -90,12 +91,13 @@
          (.disconnect mut-obs)))
      :clj (fn [] nil)))
 
-(e/defn ContentToolbar [state refresh]
+(e/defn ContentToolbar [state refresh !show-bib]
   (e/client
     (let [mod-key (if (mac-platform?) "Cmd" "Ctrl")
           {:keys [user-id enc-key topic-id audio? root-topic-id page-number content-text
                   context-mode context-tooltip llm-enabled?
-                  extract-status navigate! origin on-done!]} state
+                  extract-status navigate! origin on-done!
+                  citation page-info pdf-root? pdf-status]} state
           ;; Unsynced card count — uses refresh value for reactivity
           unsynced-count (e/server (helpers/get-unsynced-count* refresh topic-id))
           ;; Whether the document's root topic has a sources row attached.
@@ -220,6 +222,17 @@
                                 :disabled true})
                     (icons/Icon :scan-text :size 16)
                     (dom/span (dom/props {:class "icon-label"}) (dom/text "Auto-extract"))))
+
+            ;; DocumentMeta proxy (.toolbar-overflow-docmeta, reveals T2+) —
+            ;; actions only (Edit-Bibliography + Mark-PDF-Done); citation and
+            ;; progress are informational and drop when collapsed.
+                (dom/div
+                  (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-docmeta"
+                              :style {:flex-direction "column" :gap "6px"}})
+                  (DocumentMetaGroup
+                    {:user-id user-id :bib-topic-id biblio-target-id
+                     :pdf-root? pdf-root? :pdf-status pdf-status :variant :overflow}
+                    !show-bib))
 
             ;; Separator between settings/context group and action buttons
                 (dom/div (dom/props {:class "toolbar-overflow-panel-separator"}))
@@ -364,6 +377,20 @@
                   (TranscribeButton user-id topic-id enc-key))
                 (BibliographyButton user-id biblio-target-id has-source? nil)
                 (AutoExtractButton))
+
+          ;; Divider hides with the document-meta group at tier 2.
+              (dom/div (dom/props {:class "toolbar-group-divider toolbar-collapse-docmeta"}))
+
+          ;; 6. Document meta (last group, first to collapse): Edit-Bibliography
+          ;; + Mark-PDF-Done + citation + progress. Citation collapses at tier 1,
+          ;; the rest at tier 2 (.toolbar-collapse-docmeta on the group).
+              (dom/div
+                (dom/props {:class "toolbar-group toolbar-collapse-docmeta"})
+                (DocumentMetaGroup
+                  {:user-id user-id :bib-topic-id biblio-target-id
+                   :citation citation :page-info page-info
+                   :pdf-root? pdf-root? :pdf-status pdf-status :variant :inline}
+                  !show-bib))
 
           ;; Overflow trigger — visible only on mobile/tablet via CSS
               (dom/div

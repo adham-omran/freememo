@@ -2,11 +2,12 @@
   "Unified viewer for any topic — PDF root, PDF page, basic/wiki/web/epub.
 
    Resolves topic kind server-side; composes:
-     - TitleBar (PDF only) — doc title + rename + page-stats
+     - ToolbarBar (always) — ContentToolbar; hosts DocumentMetaGroup
+       (Edit-Bibliography + citation + page-progress + Mark-PDF-Done)
      - HierarchySidePanel (always; owns its own open/collapsed state)
      - PdfPane (PDF only)
      - EditorPane (always)
-     - BottomPanel (always) — ContentToolbar + ContentCardTable
+     - BottomPanel (always) — ContentCardTable
      - PinSidePanel (always; owns its own open/collapsed state)
 
    Routing collapses /viewer/browse-pdf/<root>/<page> and /viewer/browse-topic/<id>
@@ -109,163 +110,15 @@
             (page/get-page-text pdf-root-id page-number))
      :cljs nil))
 
-(defn get-topic-title*
-  "Latest title for a topic id (re-fetches on :refresh / :tree-mutations)."
-  [_refresh topic-id]
-  #?(:clj (when topic-id (:topics/title (db/get-topic topic-id)))
-     :cljs nil))
-
 (defn get-topic-status*
   "Latest status for a topic id. Re-fetches on :meta-refresh."
   [_meta-refresh topic-id]
   #?(:clj (when topic-id (or (:topics/status (db/get-topic topic-id)) "active"))
      :cljs nil))
 
-(defn rename-and-bump!
-  "Atomic rename + bump both :refresh (for doc lists) and :tree-mutations
-   (for side panel + library tree)."
-  [user-id id new-title]
-  #?(:clj (do (db/rename-topic! id new-title)
-            (swap! (us/get-atom user-id :refresh) inc)
-            (swap! (us/get-atom user-id :tree-mutations) inc)
-            :ok)
-     :cljs nil))
-
 (defn default-split-pct []
   #?(:cljs (if (< (.-innerHeight js/window) 900) 50 75)
      :clj 75))
-
-;; ---------------------------------------------------------------------------
-;; TitleBar — PDF-only header with doc title + rename + page-stats
-;; (The hierarchy hamburger lives inside HierarchySidePanel itself.)
-;; ---------------------------------------------------------------------------
-
-(e/defn TitleBar [user-id pdf-root-id refresh page-info !show-bib citation pdf-root? pdf-status]
-  (e/client
-    (let [current-title (e/server (get-topic-title* refresh pdf-root-id))
-          !editing-title (atom false)
-          editing-title (e/watch !editing-title)
-          done? (= pdf-status "done")]
-      (dom/div
-        (dom/props {:class "title-bar"
-                    :style {:display "flex" :align-items "baseline" :gap "14px"
-                            :padding "10px 16px" :flex-shrink "0"
-                            :background "var(--color-bg-subtle)"
-                            :border-bottom "1px solid var(--color-border)"}})
-
-        ;; Bibliography — matches the app's standard btn-secondary used in
-        ;; the bottom-panel toolbar, so the bar's affordance reads as part
-        ;; of the same system rather than a one-off custom pill.
-        (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary"
-                      :style {:flex-shrink "0"}
-                      :data-tooltip "Edit bibliography"})
-          (dom/text "Bibliography")
-          (dom/On "click" (fn [_] (reset! !show-bib true)) nil))
-
-        ;; PDF Done toggle — visible only at the PDF root (not on child pages).
-        ;; Flips topics.status between "active" and "done"; bumps :meta-refresh
-        ;; so the label updates without a page reload. Pages keep their own
-        ;; status independently (no cascade).
-        (when pdf-root?
-          (dom/button
-            (dom/props {:class "btn btn-sm btn-secondary"
-                        :style {:flex-shrink "0"}
-                        :data-tooltip (if done?
-                                        "Restore this PDF to the active queue"
-                                        "Mark this PDF as completed")})
-            (dom/text (if done? "Restore PDF" "Mark PDF Done"))
-            (let [event (dom/On "click" (fn [_] (str (random-uuid))) nil)
-                  [t ?error] (e/Token event)]
-              (when t
-                (case (e/server (if done?
-                                  (db/restore-topic! pdf-root-id)
-                                  (db/done-topic! pdf-root-id)))
-                  (case (e/server (swap! (us/get-atom user-id :meta-refresh) inc))
-                    (t)))))))
-
-        ;; Citation — italic caption framed by separator dots
-        (when citation
-          (dom/span
-            (dom/props {:style {:font-size "12px"
-                                :font-style "italic"
-                                :color "var(--color-text-hint)"
-                                :flex-shrink "0"
-                                :max-width "32%"
-                                :overflow "hidden"
-                                :text-overflow "ellipsis"
-                                :white-space "nowrap"}
-                        :data-tooltip citation})
-            (dom/text citation)))
-
-        ;; Title — editable in place
-        (if editing-title
-          (e/for-by identity [_k [pdf-root-id]]
-            (dom/input
-              (dom/props {:type "text" :placeholder "Title" :maxlength "500"
-                          :style {:flex "1" :padding "4px 8px" :font-size "13px"
-                                  :color "var(--color-text-primary)"
-                                  :border "1px solid var(--color-border)"
-                                  :border-radius "3px"
-                                  :background "var(--color-bg-card)"}})
-              (set! (.-value dom/node) (or current-title ""))
-              (let [n dom/node]
-                (js/setTimeout
-                  (fn []
-                    (.focus n)
-                    (when (pos? (count (.-value n))) (.select n)))
-                  0))
-              (dom/On "keydown"
-                (fn [ev]
-                  (when (= (.-key ev) "Escape")
-                    (.preventDefault ev)
-                    (set! (.-value (.-target ev)) (or current-title ""))
-                    (.blur (.-target ev))
-                    (reset! !editing-title false)))
-                nil)
-              (let [event (dom/On "change" #(-> % .-target .-value) nil)
-                    [t _] (e/Token event)]
-                (when t
-                  (e/on-unmount #(reset! !editing-title false))
-                  (let [trimmed (str/trim event)]
-                    (if (str/blank? trimmed)
-                      (t)
-                      (let [ok (e/server (e/Offload #(rename-and-bump! user-id pdf-root-id trimmed)))]
-                        (when (some? ok)
-                          (case ok (t))))))))))
-          ;; Outer span owns the tooltip + click; inner span clips with
-          ;; ellipsis. Splitting prevents overflow:hidden from clipping the
-          ;; tooltip ::after popup (it would inherit the outer's clip).
-          (dom/span
-            (dom/props {:style {:flex "1" :min-width "0" :cursor "pointer"
-                                :display "block"}
-                        :data-tooltip "Click to edit"})
-            (dom/On "click" (fn [_] (reset! !editing-title true)) nil)
-            (dom/span
-              (dom/props {:style {:display "block"
-                                  :font-size "15px" :font-weight "700"
-                                  :color "var(--color-text-primary)"
-                                  :overflow "hidden"
-                                  :text-overflow "ellipsis"
-                                  :white-space "nowrap"}})
-              (dom/text (or current-title "")))))
-
-        ;; Page-stats badge (X / Y) — folio-style chip with tabular numerals
-        (when (and page-info (pos? (:total page-info)))
-          (dom/span
-            (dom/props {:class "tooltip-right"
-                        :style {:color "var(--color-text-primary)"
-                                :font-size "11px"
-                                :font-family "ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
-                                :font-variant-numeric "tabular-nums"
-                                :letter-spacing "0.04em"
-                                :white-space "nowrap" :flex-shrink "0"
-                                :padding "3px 8px"
-                                :background "var(--color-bg-card)"
-                                :border "1px solid var(--color-border)"
-                                :border-radius "10px"}
-                        :data-tooltip (:remaining-tooltip page-info)})
-            (dom/text (:done page-info) "/" (:total page-info))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; TopicPage shell
@@ -352,6 +205,13 @@
               !show-bib (atom false)
               show-bib? (e/watch !show-bib)
               bib-topic-id (or pdf-root-id root-topic-id)
+              ;; Document-meta inputs for the toolbar's DocumentMetaGroup
+              ;; (formerly the bibliography bar). Computed here so they reach the
+              ;; toolbar, which mounts above the content.
+              pdf-root? (and is-pdf? (= kind "pdf"))
+              citation (e/server (bibform/get-topic-citation* refresh user-id bib-topic-id))
+              pdf-status (e/server (when pdf-root?
+                                     (get-topic-status* meta-refresh pdf-root-id)))
               !top-pct (atom (default-split-pct))
               top-pct (e/watch !top-pct)
 
@@ -403,39 +263,13 @@
                :extract-status (when-not is-pdf? extract-status)
                :navigate! navigate!
                :origin (:origin queue-ctx)
-               :on-done! (:on-done! queue-ctx)}
-              card-refresh)
-
-            ;; Bibliography header — single line in both modes:
-            ;; PDF:     [Bibliography] [Mark PDF Done?] citation? title [stats]
-            ;; non-PDF: [Bibliography] citation
-            (let [citation (e/server (bibform/get-topic-citation* refresh user-id bib-topic-id))
-                  pdf-root? (and is-pdf? (= kind "pdf"))
-                  pdf-status (e/server (when pdf-root?
-                                         (get-topic-status* meta-refresh pdf-root-id)))]
-              (if is-pdf?
-                (TitleBar user-id pdf-root-id refresh page-info !show-bib citation pdf-root? pdf-status)
-                (dom/div
-                  (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
-                                      :padding "6px 12px" :flex-shrink "0"
-                                      :border-bottom "1px solid var(--color-border)"
-                                      :background "var(--color-bg-subtle)"}})
-                  (dom/button
-                    (dom/props {:class "btn btn-sm btn-secondary"
-                                :style {:padding "2px 8px" :font-size "13px" :line-height "1"
-                                        :flex-shrink "0"}
-                                :data-tooltip "Edit bibliography"})
-                    (dom/text "Bibliography")
-                    (dom/On "click" (fn [_] (reset! !show-bib true)) nil))
-                  (dom/span
-                    (dom/props {:style {:flex "1" :min-width "0"
-                                        :font-size "12px"
-                                        :color "var(--color-text-secondary)"
-                                        :overflow "hidden"
-                                        :text-overflow "ellipsis"
-                                        :white-space "nowrap"}
-                                :data-tooltip (or citation "")})
-                    (dom/text (or citation ""))))))
+               :on-done! (:on-done! queue-ctx)
+               :citation citation
+               :page-info page-info
+               :pdf-root? pdf-root?
+               :pdf-status pdf-status}
+              card-refresh
+              !show-bib)
 
             ;; Auto-open biblio modal once on first mount after a fresh
             ;; import. claim-pending-biblio-show?* returns true (and clears the

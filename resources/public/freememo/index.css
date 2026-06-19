@@ -371,8 +371,18 @@ html, body {
     display: none;
 }
 
+/* Citation hides at tier ≥1 — first thing to collapse (variable width) */
+.toolbar-container:is(.collapse-1, .collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .toolbar-collapse-citation {
+    display: none !important;
+}
+
 /* Context inline hides at tier ≥2 */
 .toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .toolbar-collapse-first {
+    display: none !important;
+}
+
+/* Document-meta group (Edit-Bib + progress + Mark-PDF-Done) hides at tier ≥2 */
+.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .toolbar-collapse-docmeta {
     display: none !important;
 }
 
@@ -421,6 +431,9 @@ html, body {
     display: flex;
 }
 .toolbar-container:is(.collapse-5, .collapse-6, .collapse-7).overflow-open .toolbar-overflow-bib {
+    display: flex;
+}
+.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7).overflow-open .toolbar-overflow-docmeta {
     display: flex;
 }
 .toolbar-container:is(.collapse-6, .collapse-7).overflow-open .toolbar-overflow-default {
