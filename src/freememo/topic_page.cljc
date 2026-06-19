@@ -430,9 +430,12 @@
             (when show-bib?
               (BibliographyForm !show-bib user-id bib-topic-id))
 
-            ;; Body row: side panel | content column
+            ;; TOP REGION (sized to top-pct%): hierarchy | content | pins.
+            ;; The toolbar + card table render as a FULL-WIDTH bottom bar below
+            ;; (siblings), so they span the whole width instead of the middle
+            ;; column; the side panels are confined to this top region.
             (dom/div
-              (dom/props {:style {:flex "1" :display "flex" :flex-direction "row"
+              (dom/props {:style {:height (str top-pct "%") :display "flex" :flex-direction "row"
                                   :min-height "0" :overflow "hidden"}})
 
               ;; Clear nav-target after deriving target-page, so the viewer can
@@ -447,17 +450,16 @@
               (HierarchySidePanel user-id page-topic-id root-topic-id navigate!
                 (when is-pdf? !nav-target))
 
-              ;; RIGHT: content column
+              ;; MIDDLE: content column — PdfPane | EditorPane, fills the row.
               (dom/div
                 (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
                                     :min-width "0" :min-height "0" :overflow "hidden"}})
 
-                ;; TOP REGION:
                 ;;   PDF mode left-right: [PdfPane | drag | EditorPane]
                 ;;   PDF mode top-bottom: [PdfPane / drag / EditorPane]
                 ;;   Non-PDF: just EditorPane
                 (dom/div
-                  (dom/props {:style {:height (str top-pct "%") :display "flex"
+                  (dom/props {:style {:flex "1" :display "flex"
                                       :flex-direction (if (and is-pdf? top-bottom?)
                                                         "column"
                                                         "row")
@@ -520,33 +522,33 @@
                      :on-imported-navigate!
                      (fn [tid]
                        (when navigate!
-                         (navigate! :viewer (nav/nav-topic tid nil))))}))
+                         (navigate! :viewer (nav/nav-topic tid nil))))})))
 
-                ;; Vertical drag handle
-                (dom/div
-                  (dom/props {:class "split-divider-v" :title "Drag to resize panels"})
-                  (dom/On "pointerdown" (fn [e] (util/start-drag! e :y !top-pct)) nil))
+              ;; RIGHT: pin side panel (collapsible).
+              (PinSidePanel page-topic-id root-topic-id user-id))
 
-                ;; BOTTOM: shared toolbar + card table
-                (BottomPanel
-                  {:user-id user-id
-                   :enc-key enc-key
-                   :topic-id page-topic-id
-                   :audio? (= kind "audio")
-                   :root-topic-id (or pdf-root-id root-topic-id)
-                   :page-number (when is-pdf? current-page)
-                   :static-content effective-content
-                   :context-mode (if is-pdf? :page :extract)
-                   :context-tooltip (if is-pdf?
-                                      "Include context for better cards. With a selection: current page + N previous pages. Without: N previous pages."
-                                      "Include context for better cards. With a selection: extract text. Without: original page text.")
-                   :llm-enabled? llm-enabled?
-                   :extract-status (when-not is-pdf? extract-status)
-                   :navigate! navigate!
-                   :origin (:origin queue-ctx)
-                   :on-done! (:on-done! queue-ctx)
-                   :card-font-size card-font-size}
-                  card-refresh))
+            ;; Vertical drag handle: resizes the top region ↕ the bottom bar.
+            (dom/div
+              (dom/props {:class "split-divider-v" :title "Drag to resize panels"})
+              (dom/On "pointerdown" (fn [e] (util/start-drag! e :y !top-pct)) nil))
 
-              ;; PIN SIDE PANEL: collapsible right-side pins for current topic
-              (PinSidePanel page-topic-id root-topic-id user-id))))))))
+            ;; BOTTOM BAR (full width): shared toolbar + card table.
+            (BottomPanel
+              {:user-id user-id
+               :enc-key enc-key
+               :topic-id page-topic-id
+               :audio? (= kind "audio")
+               :root-topic-id (or pdf-root-id root-topic-id)
+               :page-number (when is-pdf? current-page)
+               :static-content effective-content
+               :context-mode (if is-pdf? :page :extract)
+               :context-tooltip (if is-pdf?
+                                  "Include context for better cards. With a selection: current page + N previous pages. Without: N previous pages."
+                                  "Include context for better cards. With a selection: extract text. Without: original page text.")
+               :llm-enabled? llm-enabled?
+               :extract-status (when-not is-pdf? extract-status)
+               :navigate! navigate!
+               :origin (:origin queue-ctx)
+               :on-done! (:on-done! queue-ctx)
+               :card-font-size card-font-size}
+              card-refresh)))))))
