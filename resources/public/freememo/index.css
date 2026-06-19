@@ -330,7 +330,9 @@ html, body {
     display: flex;
     flex-direction: column;
     position: absolute;
-    bottom: 100%;
+    /* Opens downward — the toolbar is a top bar (was bottom-anchored before the
+       ribbon move, when this opened upward via bottom:100%). */
+    top: 100%;
     right: 0;
     z-index: 100;
     background: var(--color-bg-card);
