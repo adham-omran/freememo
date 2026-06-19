@@ -166,8 +166,7 @@
           ;; Overflow panel — display:contents on desktop (items flow inline),
           ;; dropdown on mobile (toggled via .overflow-open on container).
           ;; Always mounted so settings e/Token handlers stay active.
-              (dom/div
-                (dom/props {:class "toolbar-overflow-panel"})
+              (dom/div (dom/props {:class "toolbar-overflow-panel"})
 
             ;; Priority proxy (.toolbar-overflow-priority, reveals T2+) — mirrors
             ;; the inline control beside History; the DB value (via :refresh) is
@@ -280,35 +279,27 @@
                                         (.click btn))
                                       (reset! !overflow-open false)) nil))))
 
-          ;; Document-context group: Bibliography + Auto-extract (visual only).
-          ;; Renders BEFORE the Generate cluster per the F6 spec. No separator
-          ;; between this group and the Generate cluster — adjacent groups
-          ;; intentionally share visual space. Wrapped in
-          ;; `.toolbar-doc-context-group`, which carries `margin-left: auto`
-          ;; (delegated from the cluster) so both groups slide together to the
-          ;; right edge of the toolbar; without the wrapper the buttons would
-          ;; sit stranded on the left while the cluster's auto-margin pushed
-          ;; only the cluster (and siblings after it) to the right.
-              (dom/div
-                (dom/props {:class "toolbar-cluster toolbar-doc-context-group toolbar-collapse-bib"})
-                (when audio?
-                  (TranscribeButton user-id topic-id enc-key))
-                (BibliographyButton user-id biblio-target-id has-source? nil)
-                (AutoExtractButton))
+          ;; Toolbar groups (boxed clusters), left-to-right:
+          ;; 1 Extract/Add · 2 Generate · 3 Sync · 4 History/Priority/Done/Delete
+          ;; · 5 Transcribe/Bibliography-refetch/Auto-extract.
+          ;; Collapse tiers are by CSS class (not position), so reordering the
+          ;; render leaves the overflow behavior intact.
 
-          ;; Generate cluster — Generate dropdown + parameters share one visual
-          ;; group container. Action-first ordering: Generate sits on the LEFT
-          ;; so users read the action first, then the parameters that shape it.
-          ;; Context is the FIRST to collapse (tier 1, .toolbar-collapse-first).
+          ;; 1. Extract + Add new (IR Tools).
+              (dom/div
+                (dom/props {:class "toolbar-cluster"})
+                (actions/ToolbarActions
+                  {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
+                   :context-mode context-mode :mod-key mod-key
+                   :card-type card-type}))
+
+          ;; 2. Generate cluster — Generate dropdown + parameters in one box.
+          ;; ToolbarGenerate mounts hidden inside the dropdown so its e/Token
+          ;; paths, PromptDialog, and button refs stay live; generate/prompt
+          ;; atoms stay LOCAL to it (avoids reactive loops). Context is the
+          ;; first to collapse (.toolbar-collapse-first).
               (dom/div
                 (dom/props {:class "toolbar-cluster toolbar-generate-cluster"})
-
-            ;; Generate dropdown — consolidates Generate + Generate-with-Prompt
-            ;; into one trigger. ToolbarGenerate is mounted hidden inside the
-            ;; dropdown so its e/Token paths, PromptDialog, and button refs
-            ;; (consumed by .click() from menu items and overflow proxies)
-            ;; stay live. All generate/prompt atoms remain LOCAL to
-            ;; ToolbarGenerate to avoid reactive loops from map reconstruction.
                 (GenerateDropdown
                   (assoc state
                     :mod-key mod-key
@@ -335,33 +326,29 @@
                        :use-context use-context :context-window context-window}
                       !use-context !context-window))))
 
-          ;; Extract + Add new (IR Tools) — boxed cluster.
-              (dom/div
-                (dom/props {:class "toolbar-cluster"})
-                (actions/ToolbarActions
-                  {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
-                   :context-mode context-mode :mod-key mod-key
-                   :card-type card-type}))
-
-          ;; Sync dropdown — consolidates Export + Pull from Anki + Anki Sync.
-          ;; Source buttons mount hidden inside the dropdown component so their
-          ;; refs / modals / e/Token paths (push/pull phases) stay live; menu
-          ;; items dispatch via .click() on those refs. The `.toolbar-collapse-sync`
-          ;; tier class is applied on the visible trigger element inside
-          ;; SyncDropdown — wrapping the whole component would also hide the
-          ;; source buttons' modals on T7.
+          ;; 3. Sync dropdown (unboxed, lone trigger) — Export + Pull + Anki Sync.
+          ;; Source buttons mount hidden inside so refs/modals/e/Token paths stay
+          ;; live; .toolbar-collapse-sync sits on the visible trigger inside.
               (SyncDropdown
                 {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
                  :page-number page-number :card-type card-type
                  :unsynced-count unsynced-count :mod-key mod-key})
 
-          ;; History / Priority / Done / Delete — boxed cluster. History +
-          ;; Priority are always present; Done/Delete only for extract topics.
+          ;; 4. History / Priority / Done / Delete. History + Priority always
+          ;; present; Done/Delete only for extract topics.
               (dom/div
                 (dom/props {:class "toolbar-cluster"})
                 (ExtractActions {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
                                  :extract-status extract-status
                                  :navigate! navigate! :origin origin :on-done! on-done!}))
+
+          ;; 5. Transcribe (audio) + Bibliography-refetch + Auto-extract.
+              (dom/div
+                (dom/props {:class "toolbar-cluster toolbar-doc-context-group toolbar-collapse-bib"})
+                (when audio?
+                  (TranscribeButton user-id topic-id enc-key))
+                (BibliographyButton user-id biblio-target-id has-source? nil)
+                (AutoExtractButton))
 
           ;; Overflow trigger — visible only on mobile/tablet via CSS
               (dom/div
