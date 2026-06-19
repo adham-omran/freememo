@@ -136,8 +136,7 @@
       (dom/button
         (dom/props {:class (str "nav-action-btn" (when open? " is-open"))
                     :aria-label "Actions"
-                    :aria-pressed (str (boolean open?))
-                    :data-tooltip "Undo history (⇧⌘Z to undo)"})
+                    :aria-pressed (str (boolean open?))})
         (icons/Icon :rotate-ccw :size 16)
         (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Actions"))
         (dom/On "click" (fn [_] (swap! !open? not)) nil)))))
