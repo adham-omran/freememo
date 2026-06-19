@@ -1,16 +1,19 @@
 (ns freememo.priority-control
   "Manual review-priority control for a topic.
 
-   An inline number input (matching the toolbar's Context-pages spinner) that
-   writes via db/update-topic-priority! (which logs a priority-change event) and
-   bumps :refresh so every mount — the inline control beside History, the
-   overflow-panel proxy, and the History modal — re-reads.
+   A `[−] N [+]` stepper (NumberStepper) with an OPTIMISTIC client mirror, like
+   CardCount: −/+ and typed edits update the displayed number instantly, then the
+   DB write (db/update-topic-priority!, which logs a priority-change event) + a
+   :refresh bump persist in the background.
+
+   Unlike CardCount (one per-user value), priority is per-topic, so the mirror is
+   reconciled to the server value whenever (topic-id, server-priority) changes —
+   on topic switch or after the write lands — keeping it correct across topics.
 
    Priority: 0 = highest … 100 = lowest. Reads default to 50.
 
-   Mounted twice (inline + overflow proxy); both read get-topic-priority* and
-   write through the DB, so the DB value (via :refresh) is the single source of
-   truth — no shared client atom needed."
+   Mounted twice (inline beside History + overflow proxy); they are never
+   co-visible, so each owns its own mirror and reconciles to the DB via :refresh."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -29,17 +32,26 @@
      :cljs nil))
 
 (e/defn PriorityControl
-  "Inline `Priority [−] N [+]` stepper for a topic. `priority` is the current
-   value (read reactively by the caller). No client mirror atom: Save writes the
-   DB and bumps :refresh, so every mount re-reads the DB value (single source of
-   truth across the inline + overflow-proxy + History-modal mounts). mount-key
-   is topic-id so the input remounts when the viewed topic changes."
+  "Inline `Priority [−] N [+]` stepper for a topic. `priority` is the server
+   value (read reactively by the caller). `!mirror` is the optimistic client
+   source — NumberStepper resets it on edit (instant display); Save persists.
+
+   Reconcile: re-seed `!mirror` from the server value whenever (topic-id,
+   priority) changes — key on the PAIR so a same-priority switch between topics
+   still re-seeds. Pre: in-flight optimistic edits hold because `priority` only
+   changes after the write lands (no clobber). Gap: a failed write would leave
+   the mirror ahead of the DB, matching the control's existing no-error-surface
+   behavior."
   [user-id topic-id priority]
   (e/client
-    (NumberStepper
-      {:value priority :min-val 0 :max-val 100
-       :mount-key topic-id :label "Priority"}
-      nil
-      (e/fn [nv]
-        (case (e/server (e/Offload #(update-priority!* topic-id nv)))
-          (e/server (swap! (us/get-atom user-id :refresh) inc)))))))
+    (let [!mirror (atom priority)
+          mirror-val (e/watch !mirror)]
+      (e/for-by identity [_pair [[topic-id priority]]]
+        (let [v (reset! !mirror priority)] (when v nil)))
+      (NumberStepper
+        {:value mirror-val :min-val 0 :max-val 100
+         :mount-key topic-id :label "Priority"}
+        !mirror
+        (e/fn [nv]
+          (case (e/server (e/Offload #(update-priority!* topic-id nv)))
+            (e/server (swap! (us/get-atom user-id :refresh) inc))))))))
