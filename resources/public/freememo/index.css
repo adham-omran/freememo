@@ -457,14 +457,8 @@ html, body {
 .radio-dot--checked { color: var(--color-primary); }
 .toolbar-generate-group { margin-left: auto; }
 
-/* Document-context group: Bibliography + Auto-extract buttons. Sits
-   immediately to the left of the Generate cluster (no separator — the F6
-   spec treats them as adjacent groups that intentionally share visual
-   space). `margin-left: auto` is delegated here from the Generate cluster
-   so this group pushes itself (and the cluster + everything after it,
-   thanks to flex sibling chaining) to the right edge of the toolbar. Inner
-   `gap: 8px` matches the toolbar's own `gap: var(--sp-2)`, so the two
-   buttons look like normal toolbar siblings — not visibly nested. */
+/* Document-context group: Transcribe + Bibliography-refetch + Auto-extract.
+   First boxed cluster in the toolbar; flows from the left like the rest. */
 /* Boxed toolbar group — visually distinct cluster (border + card bg).
    Shared by the doc-context, generate, IR-tools, and lifecycle groups so they
    read as deliberate groups. Sync stays unboxed (lone dropdown trigger). */
@@ -480,11 +474,12 @@ html, body {
 /* Never render an empty bordered box if a group's contents fully collapse. */
 .toolbar-cluster:empty { display: none; }
 
+/* Box + flow handled by .toolbar-cluster; no right-pin — the full-width
+   bottom bar flows left-to-right. */
 .toolbar-doc-context-group {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-left: auto;
 }
 
 /* Generate cluster — wraps card-count stepper + Generate buttons so the
