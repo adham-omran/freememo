@@ -457,48 +457,116 @@ html, body {
 .radio-dot--checked { color: var(--color-primary); }
 .toolbar-generate-group { margin-left: auto; }
 
-/* Document-context group: Transcribe + Bibliography-refetch + Auto-extract.
-   First boxed cluster in the toolbar; flows from the left like the rest. */
-/* Boxed toolbar group — visually distinct cluster (border + card bg).
-   Shared by the doc-context, generate, IR-tools, and lifecycle groups so they
-   read as deliberate groups. Sync stays unboxed (lone dropdown trigger). */
-.toolbar-cluster {
+/* Toolbar groups — flat flex runs separated by .toolbar-group-divider
+   (Excel/Sheets model). No box: the bar's own tint is the only fill layer. */
+.toolbar-group {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 3px 10px;
-    background: var(--color-bg-card);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
 }
-/* Never render an empty bordered box if a group's contents fully collapse. */
-.toolbar-cluster:empty { display: none; }
+.toolbar-group:empty { display: none; }
 
-/* Box + flow handled by .toolbar-cluster; no right-pin — the full-width
-   bottom bar flows left-to-right. */
 .toolbar-doc-context-group {
     display: flex;
     align-items: center;
     gap: 8px;
 }
 
-/* Generate cluster — wraps card-count stepper + Generate buttons so the
-   parameter visually groups with the action that consumes it. Subtle
-   background + tight inner spacing signal "one unit"; outer margin-left:auto
-   on the inner .toolbar-generate-group is neutralized inside the cluster.
-   The cluster no longer carries `margin-left: auto` — that role moved to
-   `.toolbar-doc-context-group` which renders directly before it. */
+/* Generate group — keeps card-count stepper + Generate buttons together so the
+   parameter clusters with the action that consumes it. Flat (no box); the
+   inner .toolbar-generate-group's margin-left:auto is neutralized here. */
 .toolbar-generate-cluster {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 3px 10px;
-    background: var(--color-bg-card);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
 }
 .toolbar-generate-cluster .toolbar-generate-group { margin-left: 0; }
-.toolbar-generate-cluster .card-count-control { gap: 2px; }
+
+/* ── Ghost toolbar buttons ─────────────────────────────────────────
+   Flat (transparent, no border) at rest; square radius-md tinted background on
+   hover. Excludes overflow-panel proxies (their own dropdown styling owns them)
+   since those live outside .toolbar-group. */
+.toolbar-group .btn-secondary,
+.toolbar-sync-trigger.btn-secondary {
+    background: transparent;
+    border-color: transparent;
+}
+.toolbar-group .btn-secondary:not(:disabled):hover,
+.toolbar-sync-trigger.btn-secondary:not(:disabled):hover {
+    background: var(--color-bg-subtle);
+    border-color: transparent;
+}
+.toolbar-group .btn-danger {
+    background: transparent;
+    border-color: transparent;
+}
+.toolbar-group .btn-danger:not(:disabled):hover {
+    background: light-dark(#fef2f2, #35181a);
+}
+
+/* Done / Restore keep a persistent colored border (state signal — exception to
+   ghost); hover shows a colored fill tint matching the border color. */
+.toolbar-done-btn:not(:disabled):hover { background: light-dark(#ecfdf3, #16271d); }
+.toolbar-restore-btn:not(:disabled):hover { background: light-dark(#eff6ff, #16223a); }
+
+/* Unified control height — every toolbar button + stepper is a fixed 28px so
+   borderless and bordered buttons line up exactly (a 1px border would otherwise
+   add 2px in content-box). line-height:1 keeps icon+label vertically centered. */
+.toolbar-group .btn,
+.toolbar-sync-trigger,
+.toolbar-generate-trigger,
+.number-stepper-btn,
+.number-stepper-input {
+    height: 28px;
+    box-sizing: border-box;
+    line-height: 1;
+}
+
+/* ── Shared number stepper: label [−] N [+] suffix ─────────────────
+   Borderless −/+ buttons flanking an editable number; native spinner hidden. */
+.number-stepper {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    font-size: 13px;
+    color: var(--color-text-secondary);
+}
+.number-stepper-label { margin-right: 4px; }
+.number-stepper-suffix { margin-left: 4px; font-size: 11px; color: var(--color-text-hint); }
+.number-stepper-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: var(--radius-md);
+    transition: background 120ms ease, color 120ms ease;
+}
+.number-stepper-btn:not(:disabled):hover {
+    background: var(--color-bg-subtle);
+    color: var(--color-text-primary);
+}
+.number-stepper-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.number-stepper-input {
+    width: 34px;
+    text-align: center;
+    border: none;
+    background: transparent;
+    font-size: 13px;
+    color: var(--color-text-primary);
+    padding: 0;
+    -moz-appearance: textfield;
+}
+.number-stepper-input::-webkit-inner-spin-button,
+.number-stepper-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.number-stepper-input:disabled { color: var(--color-text-secondary); }
 
 /* Group-boundary divider — taller, more deliberate than .toolbar-sep `|`
    characters. Used between every visual group in the toolbar: cluster →
@@ -773,20 +841,6 @@ html, body {
     .split-divider-v::before { top: -8px; bottom: -8px; }
 }
 
-/* Card count stepper — +/- buttons always visible, native spinner hidden */
-.card-count-btn {
-    display: flex !important;
-}
-.card-count-input {
-    width: 36px;
-    text-align: center;
-    -moz-appearance: textfield;
-}
-.card-count-input::-webkit-inner-spin-button,
-.card-count-input::-webkit-outer-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
-}
 .split-divider-h:hover,
 .split-divider-h:active { background: light-dark(#90caf9, #2563eb); }
 
@@ -950,7 +1004,7 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
     color: var(--color-text-secondary);
     background: transparent;
     border: 1px solid var(--color-border);
-    border-radius: 999px;
+    border-radius: var(--radius-md);
     cursor: pointer;
     transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 }

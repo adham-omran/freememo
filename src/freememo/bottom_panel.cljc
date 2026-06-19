@@ -1,8 +1,11 @@
 (ns freememo.bottom-panel
-  "ContentToolbar + ContentCardTable composed under the editor / PDF area.
+  "Two split regions of a topic view:
+     ToolbarBar  — the full-width command toolbar, rendered ABOVE the content.
+     BottomPanel — the ContentCardTable, rendered BELOW the content.
 
-   Owns its own derivation of live-content from editor/!dirty-html so the
-   caller doesn't need to thread dirty state through props."
+   ToolbarBar owns the live-content derivation from editor/!dirty-html (only the
+   toolbar consumes it for card-gen context), so the caller doesn't thread dirty
+   state through props."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -10,8 +13,10 @@
    [freememo.content-toolbar :refer [ContentToolbar]]
    [freememo.content-card-table :refer [ContentCardTable]]))
 
-(e/defn BottomPanel
-  "Shared bottom region for both PDF-page and extract topic views.
+(e/defn ToolbarBar
+  "Full-width command toolbar, rendered as a top bar above the content.
+   Derives live-content from the editor's dirty html (only the toolbar consumes
+   it for card-gen context).
 
    props keys:
      :user-id :enc-key :topic-id :root-topic-id :page-number
@@ -22,43 +27,45 @@
      :extract-status       string (extract mode only)
      :navigate!            optional fn (extract mode only)
      :origin               keyword tab (extract mode only)
-     :on-done!             optional 0-arg fn (queue contexts only); invoked
-                           after Done's server mutation completes — advances
-                           !queue-idx in /learn and subset-review
-     :card-font-size       int
+     :on-done!             optional 0-arg fn (queue contexts only)
    refresh: combined card-refresh value (refresh + sync-mutations + card-mutations)."
   [{:keys [user-id enc-key topic-id audio? root-topic-id page-number
            static-content
            context-mode context-tooltip llm-enabled?
-           extract-status navigate! origin on-done! card-font-size]} refresh]
+           extract-status navigate! origin on-done!]} refresh]
+  (e/client
+    (let [dirty (e/watch editor/!dirty-html)
+          live-content (if (and dirty (= (:topic-id dirty) topic-id))
+                         (:html dirty)
+                         static-content)
+          toolbar-props (cond-> {:user-id user-id
+                                 :enc-key enc-key
+                                 :topic-id topic-id
+                                 :audio? audio?
+                                 :root-topic-id root-topic-id
+                                 :page-number page-number
+                                 :content-text live-content
+                                 :context-mode context-mode
+                                 :context-tooltip context-tooltip
+                                 :llm-enabled? llm-enabled?}
+                          extract-status (assoc :extract-status extract-status)
+                          navigate! (assoc :navigate! navigate!)
+                          origin (assoc :origin origin)
+                          on-done! (assoc :on-done! on-done!))]
+      (ContentToolbar toolbar-props refresh))))
+
+(e/defn BottomPanel
+  "Bottom card-table region for both PDF-page and extract topic views.
+
+   props keys: :user-id :topic-id :card-font-size
+   refresh: combined card-refresh value."
+  [{:keys [user-id topic-id card-font-size]} refresh]
   (e/client
     (dom/div
       ;; min-width: 0 lets this flex item shrink below its intrinsic content
-      ;; width — required so the toolbar's container reports a clientWidth that
-      ;; reflects the visible pane width (not the natural content width).
+      ;; width (keeps the card table from forcing the column wider).
       (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
                           :min-width "0" :min-height "0"}})
-
-      (let [dirty (e/watch editor/!dirty-html)
-            live-content (if (and dirty (= (:topic-id dirty) topic-id))
-                           (:html dirty)
-                           static-content)
-            toolbar-props (cond-> {:user-id user-id
-                                   :enc-key enc-key
-                                   :topic-id topic-id
-                                   :audio? audio?
-                                   :root-topic-id root-topic-id
-                                   :page-number page-number
-                                   :content-text live-content
-                                   :context-mode context-mode
-                                   :context-tooltip context-tooltip
-                                   :llm-enabled? llm-enabled?}
-                            extract-status (assoc :extract-status extract-status)
-                            navigate! (assoc :navigate! navigate!)
-                            origin (assoc :origin origin)
-                            on-done! (assoc :on-done! on-done!))]
-        (ContentToolbar toolbar-props refresh))
-
       (ContentCardTable {:topic-id topic-id
                          :card-font-size card-font-size
                          :user-id user-id}
