@@ -97,8 +97,7 @@
         ;; × remove button
         (dom/button
           (dom/props {:class "pin-thumb__remove"
-                      :aria-label "Remove pin"
-                      :data-tooltip "Remove pin"})
+                      :aria-label "Remove pin"})
           (icons/Icon :x :size 14 :title "Remove pin")
           (let [click-ev (dom/On "click" identity nil)
                 [t _] (e/Token click-ev)]

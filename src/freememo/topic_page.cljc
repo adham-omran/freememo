@@ -144,9 +144,6 @@
               ;; User settings — fetched once at mount
               card-font-size (e/server (settings/get-card-font-size user-id))
               scan-dpi (e/server (settings/get-scan-dpi user-id))
-              enable-ai? (e/server (settings/get-enable-ai-scan-button user-id))
-              enable-pdfbox? (e/server (settings/get-enable-pdfbox-button user-id))
-              enable-pdfjs? (e/server (settings/get-enable-pdfjs-button user-id))
 
               ;; Topic resolution
               overview (e/server (get-topic-overview* refresh topic-id))
@@ -370,9 +367,6 @@
                      :page-number (when is-pdf? current-page)
                      :scan-dpi scan-dpi
                      :llm-enabled? llm-enabled?
-                     :enable-ai? enable-ai?
-                     :enable-pdfbox? enable-pdfbox?
-                     :enable-pdfjs? enable-pdfjs?
                      :static-content effective-content
                      :scanning-pages scanning-pages
                      :ocr-errors ocr-errors

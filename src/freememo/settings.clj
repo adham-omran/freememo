@@ -54,9 +54,6 @@
 (def PROMPT_OCR "prompt_ocr")
 (def EMAIL_UPDATES "email_updates")
 (def THEME "theme")
-(def ENABLE_AI_SCAN_BUTTON "enable_ai_scan_button")
-(def ENABLE_PDFBOX_BUTTON "enable_pdfbox_button")
-(def ENABLE_PDFJS_BUTTON "enable_pdfjs_button")
 (def ZOTERO_ENABLED "zotero_enabled")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
 
@@ -468,6 +465,19 @@
       (tel/error! {:id ::save-pdf-layout} e)
       {:success false})))
 
+;; Per-PDF quick-text-extraction engine: "client" (PDF.js) | "remote" (PDFBox).
+;; nil = unset → Copy-text runs both and shows the compare modal.
+(defn get-extract-style [user-id doc-id]
+  (db/get-setting user-id (str "extract_style_" doc-id)))
+
+(defn save-extract-style [user-id doc-id style]
+  (try
+    (db/set-setting user-id (str "extract_style_" doc-id) style)
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-extract-style} e)
+      {:success false :error "Failed to save extraction style"})))
+
 ;; Per-document pane open/closed state. Keys: "hierarchy_open_<root-id>",
 ;; "pins_open_<root-id>". State is shared across every topic in the same
 ;; document tree (PDF root + pages + extracts) so collapsing the panel on
@@ -622,41 +632,6 @@
       {:success false :error "Failed to save theme"})))
 
 ;; Extraction button visibility toggles.
-;; AI defaults on (preserves existing behaviour); native extractors default off (additive).
-(defn get-enable-ai-scan-button [user-id]
-  (let [v (db/get-setting user-id ENABLE_AI_SCAN_BUTTON)]
-    (or (nil? v) (= "true" v))))
-
-(defn save-enable-ai-scan-button [user-id value]
-  (try
-    (db/set-setting user-id ENABLE_AI_SCAN_BUTTON (str (boolean value)))
-    {:success true}
-    (catch Exception e
-      (tel/error! {:id ::save-enable-ai-scan-button} e)
-      {:success false :error "Failed to save AI scan button setting"})))
-
-(defn get-enable-pdfbox-button [user-id]
-  (= "true" (db/get-setting user-id ENABLE_PDFBOX_BUTTON)))
-
-(defn save-enable-pdfbox-button [user-id value]
-  (try
-    (db/set-setting user-id ENABLE_PDFBOX_BUTTON (str (boolean value)))
-    {:success true}
-    (catch Exception e
-      (tel/error! {:id ::save-enable-pdfbox-button} e)
-      {:success false :error "Failed to save PDFBox button setting"})))
-
-(defn get-enable-pdfjs-button [user-id]
-  (= "true" (db/get-setting user-id ENABLE_PDFJS_BUTTON)))
-
-(defn save-enable-pdfjs-button [user-id value]
-  (try
-    (db/set-setting user-id ENABLE_PDFJS_BUTTON (str (boolean value)))
-    {:success true}
-    (catch Exception e
-      (tel/error! {:id ::save-enable-pdfjs-button} e)
-      {:success false :error "Failed to save PDF.js button setting"})))
-
 (defn save-anki-sync-settings [user-id {:keys [scope deck basic-model cloze-model allow-dupes use-header header-text use-tags tags]}]
   (try
     (when scope (db/set-setting user-id ANKI_SCOPE scope))
