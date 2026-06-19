@@ -2609,12 +2609,18 @@
 
 (defn restore-flashcards-tx!
   "Re-insert deleted flashcards on the given connectable, preserving original
-   ids. ON CONFLICT (id) DO NOTHING — a card still present is left untouched."
+   ids. ON CONFLICT (id) DO NOTHING — a card still present is left untouched.
+   Clears each card's Anki association (anki_note_id, anki_synced_at): the delete
+   path removed the Anki notes, so a restored card must come back UNSYNCED rather
+   than falsely rendering as pushed/synced."
   [conn snapshot-rows]
   (when (seq snapshot-rows)
     (jdbc/execute! conn
       (sql/format {:insert-into :flashcards
-                   :values (mapv #(cast-timestamps % flashcard-ts-cols) snapshot-rows)
+                   :values (mapv #(-> %
+                                    (assoc :anki_note_id nil :anki_synced_at nil)
+                                    (cast-timestamps flashcard-ts-cols))
+                                  snapshot-rows)
                    :on-conflict [:id]
                    :do-nothing true}))))
 
