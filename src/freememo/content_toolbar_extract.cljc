@@ -40,13 +40,14 @@
           ;; mutations (advance/touch/postpone/done/restore/priority-change all
           ;; bump :refresh, so the table updates immediately after each event).
           history-refresh (e/server (e/watch (us/get-atom user-id :refresh)))
-          ;; History scopes to the document, not the page. In PDF context
-          ;; (extract-status nil per content_toolbar.cljc's pass-through),
-          ;; :root-topic-id is the PDF root (topic_page.cljc:518 passes
-          ;; `(or pdf-root-id root-topic-id)`). For extract/wiki/epub topics
-          ;; (extract-status non-nil), each topic has its own rep schedule —
-          ;; show its own history.
-          history-topic-id (if extract-status topic-id (or root-topic-id topic-id))]
+          ;; Review-unit topic: the entity History AND Priority act on. In PDF
+          ;; context (extract-status nil per content_toolbar.cljc's pass-through),
+          ;; :root-topic-id is the PDF root (topic_page.cljc passes
+          ;; `(or pdf-root-id root-topic-id)`), so both scope to the document,
+          ;; not the page — matching get-learning-queue, which excludes
+          ;; kind 'page'. For extract/wiki/epub (extract-status non-nil), each
+          ;; topic is its own review unit.
+          review-topic-id (if extract-status topic-id (or root-topic-id topic-id))]
 
       ;; History button — visible for all topic kinds (per spec §8.1). Sits
       ;; immediately before Done/Restore so when extract-status is set the
@@ -63,14 +64,15 @@
 
       ;; Modal mounted unconditionally — its body is gated on `@!history-open?`,
       ;; so an unopened modal is a cheap no-op in the reactive graph.
-      (HistoryModal history-topic-id !history-open? history-refresh)
+      (HistoryModal review-topic-id !history-open? history-refresh)
 
       ;; Priority control — sits beside History. First cluster to collapse into
       ;; the overflow panel when space is tight (tier 2, see .toolbar-collapse-priority).
-      ;; Targets the viewed topic-id; reads reactively on :refresh (history-refresh).
+      ;; Targets the review-unit topic (PDF root for pages), so it edits the same
+      ;; priority the queue orders by; reads reactively on :refresh.
       (dom/div
         (dom/props {:class "toolbar-collapse-priority"})
-        (PriorityControl user-id topic-id (e/server (get-topic-priority* history-refresh topic-id))))
+        (PriorityControl user-id review-topic-id (e/server (get-topic-priority* history-refresh review-topic-id))))
 
       ;; Done/Restore button — only for extract topics (not PDF pages).
       ;; `busy` holds the active branch open during the queue-advance transition:
