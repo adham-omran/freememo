@@ -1966,6 +1966,24 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     }
 }
 
+/* Toolbar tooltips: plain absolute positioning relative to the button (which is
+   position:relative via [data-tooltip]). top:100% is always the button's bottom
+   edge, so the tooltip sits directly BELOW — the anchor-positioning engine was
+   resolving `position-area:bottom` to an overlapping spot here. Placed after the
+   @supports block and higher-specificity so it wins in every browser. */
+.toolbar [data-tooltip]::after,
+.toolbar [data-tooltip].tooltip-right::after {
+    position: absolute;
+    position-area: none;
+    position-try-fallbacks: none;
+    top: 100%;
+    left: 0;
+    right: auto;
+    bottom: auto;
+    margin: 6px 0 0 0;
+    transform: none;
+}
+
 /* ── Pin Context Menu (right-click on <img> in editor) ──────────── */
 .pin-context-menu {
     position: fixed;
