@@ -6,6 +6,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.anki-sync-form :as form]
+   [freememo.modal-shell :as modal-shell]
    [freememo.logging :as log]
    #?(:clj [freememo.anki-sync-server :as sync])
    #?(:clj [freememo.settings :as settings])
@@ -294,7 +295,7 @@
             (dom/text "Using saved settings for this document")))
 
         (form/AnkiSyncForm user-id conn form)
-        (form/AnkiSyncStatus sync !show-modal)))))
+        (form/AnkiSyncStatus sync !show-modal conn)))))
 
 (e/defn AnkiSyncModalDom
   "Modal overlay + inner dialog; delegates to error/connected/connecting panels.
@@ -306,11 +307,18 @@
       (dom/div
         (dom/props {:class "modal-backdrop" :style {:background "rgba(0,0,0,0.5)"}
                     :tabindex "-1"})
+        (modal-shell/focus-on-mount! dom/node)
         (dom/On "click" (fn [_] (when-not sync-phase (reset! !show-modal false))) nil)
         (dom/On "keydown"
           (fn [e]
-            (when (and (helpers/escape-key? e) (not sync-phase))
-              (reset! !show-modal false)))
+            (cond
+              (and (helpers/escape-key? e) (not sync-phase))
+              (reset! !show-modal false)
+
+              (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
+              (when-let [btn @(:!push-btn sync)]
+                (.preventDefault e)
+                (.click btn))))
           nil)
         (dom/div
           (dom/props {:class "modal-content modal-lg" :style {:width "620px" :max-height "80vh" :overflow-y "auto"}})
@@ -338,10 +346,12 @@
           !sync-result (atom nil)
           !sync-error (atom nil)
           !push-pairs (atom nil)
+          !push-btn (atom nil)
           sync {:!phase !sync-phase
                 :!result !sync-result
                 :!error !sync-error
-                :!push-pairs !push-pairs}
+                :!push-pairs !push-pairs
+                :!push-btn !push-btn}
           conn-status (e/watch (:!status conn))
           basic-model (e/watch (:!basic-model conn))
           cloze-model (e/watch (:!cloze-model conn))

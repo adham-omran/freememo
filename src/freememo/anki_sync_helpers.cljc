@@ -718,3 +718,17 @@
   [e]
   #?(:cljs (= (.-key e) "Escape")
      :clj false))
+
+(defn pushable?
+  "Gate for enabling Push / cmd-Enter: a deck and both note-type models selected."
+  [deck basic-model cloze-model]
+  (boolean (and (not (str/blank? deck))
+             (not (str/blank? basic-model))
+             (not (str/blank? cloze-model)))))
+
+(defn schedule-close!
+  "Close the modal after ms — js/setTimeout kept out of the e/defn body per the
+   file's platform-split rule. Token-guarded by the caller so it schedules once."
+  [!show-modal ms]
+  #?(:cljs (do (js/setTimeout (fn [] (reset! !show-modal false)) ms) nil)
+     :clj nil))

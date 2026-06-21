@@ -907,6 +907,31 @@ html, body {
     .side-panel__resize::before { left: -8px; right: -8px; }
 }
 
+/* ── Table frames ──────────────────────────────────────────────
+   Rounded 1px border distinguishing each table from the page background.
+   .table-frame wraps header+body as one box (Learn, Library Documents).
+   The -head/-body endcaps border Cards' header table and scroll div
+   separately (no shared wrapper there); box-sizing:border-box keeps their
+   100%-width side borders aligned into one continuous edge. The header's
+   existing th border-bottom:2px is the internal header/body divider. */
+.table-frame {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+.table-frame-head {
+    border-top: 1px solid var(--color-border);
+    border-left: 1px solid var(--color-border);
+    border-right: 1px solid var(--color-border);
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+.table-frame-body {
+    border-left: 1px solid var(--color-border);
+    border-right: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--color-border);
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+}
+
 /* ── Virtual Scroll ────────────────────────────────────────────── */
 .tape-scroll table {
     display: grid;

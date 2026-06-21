@@ -5,6 +5,7 @@
    [clojure.string :as string]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.anki-sync-helpers :as helpers]
    [freememo.typeahead :refer [Typeahead]]
    #?(:clj [freememo.settings :as settings])))
 
@@ -240,13 +241,23 @@
 
 (e/defn AnkiSyncStatus
   "Sync status display and Push/Cancel buttons. Pull lives in the toolbar.
-   sync = {:!phase :!result :!error :!push-pairs}"
-  [sync !show-modal]
+   sync = {:!phase :!result :!error :!push-pairs :!push-btn}
+   conn = {:!selected-deck :!basic-model :!cloze-model ...} — for the push gate."
+  [sync !show-modal conn]
   (e/client
     (let [sync-phase (e/watch (:!phase sync))
           sync-result (e/watch (:!result sync))
           sync-error (e/watch (:!error sync))
-          {:keys [!phase !result !error !push-pairs]} sync]
+          can-push? (helpers/pushable? (e/watch (:!selected-deck conn))
+                      (e/watch (:!basic-model conn))
+                      (e/watch (:!cloze-model conn)))
+          {:keys [!phase !result !error !push-pairs !push-btn]} sync]
+
+      ;; Auto-close after a brief "Pushed to Anki" confirmation. Token-guarded
+      ;; so the timer schedules exactly once on the :done transition.
+      (when (= sync-phase :done)
+        (let [[t _] (e/Token :anki-autoclose)]
+          (when t (helpers/schedule-close! !show-modal 1500))))
       ;; Status display
       (when sync-phase
         (dom/div
@@ -280,8 +291,11 @@
             nil))
         (when-not (#{:pushing :recording} sync-phase)
           (dom/button
-            (dom/props {:class "btn btn-primary" :style {:font-size "15px"}})
+            (dom/props {:class "btn btn-primary" :style {:font-size "15px"}
+                        :disabled (not can-push?)})
             (dom/text "Push to Anki")
+            (reset! !push-btn dom/node)
+            (e/on-unmount (fn [] (reset! !push-btn nil)))
             (dom/On "click"
               (fn [_]
                 (reset! !phase :pushing)

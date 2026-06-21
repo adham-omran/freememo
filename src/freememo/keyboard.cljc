@@ -15,6 +15,12 @@
 ;; newest live action; see freememo.undo-history-modal/UndoNewestTrigger.
 (defonce !undo-newest-btn-ref (atom nil))
 
+;; Hidden trigger for background Quick Sync (Cmd-Shift-Opt-X). Clicking it
+;; runs an Anki push using last-used settings without opening the modal;
+;; see freememo.quick-sync/QuickSyncButton. Proxy mounts only in the toolbar,
+;; so the shortcut no-ops when no document is open (on-shortcut nil-ref check).
+(defonce !quick-sync-btn-ref (atom nil))
+
 ;; Overflow menu proxy refs (toolbar buttons hidden on mobile, clicked via ⋮ menu)
 (defonce !gen-prompt-btn-ref (atom nil))
 (defonce !add-new-btn-ref (atom nil))
@@ -29,7 +35,8 @@
       "scan" !scan-btn-ref
       "anki-sync" !anki-sync-btn-ref
       "done" !done-btn-ref
-      "undo-newest" !undo-newest-btn-ref}))
+      "undo-newest" !undo-newest-btn-ref
+      "quick-sync" !quick-sync-btn-ref}))
 
 #?(:cljs
    (defn- in-quill-editor?
@@ -62,5 +69,6 @@
        (.registerShortcut h "anki-sync" "meta+shift+x")
        (.registerShortcut h "done" "meta+shift+d")
        (.registerShortcut h "undo-newest" "meta+shift+z")
+       (.registerShortcut h "quick-sync" "meta+shift+alt+x")
        (gevents/listen h "shortcut" on-shortcut)
        h)))

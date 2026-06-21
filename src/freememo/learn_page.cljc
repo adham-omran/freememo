@@ -107,7 +107,8 @@
               row-height 36
               visible-rows 10]
           (dom/div
-            (dom/props {:style {:display "flex" :flex-direction "column" :min-height "0"}})
+            (dom/props {:class "table-frame"
+                        :style {:display "flex" :flex-direction "column" :min-height "0"}})
 
             ;; Fixed header
             (dom/table
