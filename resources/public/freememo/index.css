@@ -922,7 +922,30 @@ html, body {
 .tape-scroll table td:has([data-tooltip]:hover) {
     overflow: visible;
 }
-.tape-scroll table tr:hover td { background: light-dark(#f5f7fa, #263040); }
+/* Zebra striping (opt-in via .row-alt on the tr; tr has display:contents so the
+   stripe must paint on the td). Placed before :hover so hover wins on equal
+   specificity. */
+.tape-scroll table tr.row-alt td { background: light-dark(#eef2f7, #243044); }
+.tape-scroll table tr:hover td { background: light-dark(#e2e8f0, #2f3d52); }
+
+/* Always-visible scrollbar indicator on all virtual-scroll tables.
+   Defining ::-webkit-scrollbar width opts the element out of macOS overlay
+   rendering, so the thumb persists when idle. The standard scrollbar-width/
+   scrollbar-color props are intentionally NOT set here: in Chrome 121+ they
+   disable ::-webkit-scrollbar styling and defer to the OS overlay (auto-hide),
+   which is exactly the no-indicator bug. Firefox falls back to its default. */
+.tape-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.tape-scroll::-webkit-scrollbar-track { background: transparent; }
+.tape-scroll::-webkit-scrollbar-thumb {
+    background: var(--color-text-hint);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+.tape-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--color-text-secondary);
+    background-clip: content-box;
+}
 table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
 
 /* ── Library Card Layout (phone) ─────────────────────────────────

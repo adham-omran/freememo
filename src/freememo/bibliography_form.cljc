@@ -26,27 +26,25 @@
 ;; CSL <-> form translation
 ;; ---------------------------------------------------------------------------
 
-(defn- format-date-parts
-  "Render a CSL date-parts vector as YYYY-MM-DD / YYYY-MM / YYYY."
-  [dp]
-  #?(:clj
+#?(:clj
+   (defn- format-date-parts
+     "Render a CSL date-parts vector as YYYY-MM-DD / YYYY-MM / YYYY."
+     [dp]
      (when (and (sequential? dp) (sequential? (first dp)))
        (let [[y m d] (first dp)]
          (cond
            (and y m d) (format "%04d-%02d-%02d" (int y) (int m) (int d))
            (and y m)   (format "%04d-%02d" (int y) (int m))
-           y           (str y))))
-     :cljs nil))
+           y           (str y))))))
 
-(defn- parse-date-parts
-  "Parse YYYY-MM-DD / YYYY-MM / YYYY into [[Y M D]] CSL date-parts; nil if blank."
-  [s]
-  #?(:clj
+#?(:clj
+   (defn- parse-date-parts
+     "Parse YYYY-MM-DD / YYYY-MM / YYYY into [[Y M D]] CSL date-parts; nil if blank."
+     [s]
      (when (and s (seq (str/trim s)))
        (let [parts (str/split (str/trim s) #"-")
              ints  (vec (keep #(try (Integer/parseInt %) (catch Exception _ nil)) parts))]
-         (when (seq ints) [ints])))
-     :cljs nil))
+         (when (seq ints) [ints])))))
 
 (defn- pad-date-string
   "Pad partial date strings to YYYY-MM-DD for the native HTML date picker.
@@ -91,30 +89,32 @@
     :else
     {:family "" :given ""}))
 
-(defn- csl->form
-  "CSL map → form-shaped map of strings + authors vector."
-  [csl]
-  {:csl-type        (or (:type csl) "webpage")
-   :title           (or (:title csl) "")
-   :url             (or (:URL csl) "")
-   :container-title (or (:container-title csl) "")
-   :page            (or (:page csl) "")
-   :accessed        (or (format-date-parts (get-in csl [:accessed :date-parts])) "")
-   :issued          (or (format-date-parts (get-in csl [:issued :date-parts])) "")
-   :authors         (mapv csl-author->form (or (:author csl) []))})
+#?(:clj
+   (defn- csl->form
+     "CSL map → form-shaped map of strings + authors vector."
+     [csl]
+     {:csl-type        (or (:type csl) "webpage")
+      :title           (or (:title csl) "")
+      :url             (or (:URL csl) "")
+      :container-title (or (:container-title csl) "")
+      :page            (or (:page csl) "")
+      :accessed        (or (format-date-parts (get-in csl [:accessed :date-parts])) "")
+      :issued          (or (format-date-parts (get-in csl [:issued :date-parts])) "")
+      :authors         (mapv csl-author->form (or (:author csl) []))}))
 
-(defn- form->csl
-  "Form map → CSL-JSON map, dropping blank fields."
-  [{:keys [csl-type title url container-title page accessed issued authors]}]
-  (let [named-authors (filterv (fn [a] (or (seq (:family a)) (seq (:given a))))
-                        (or authors []))]
-    (cond-> {:type csl-type :title title}
-      (seq url)             (assoc :URL url)
-      (seq container-title) (assoc :container-title container-title)
-      (seq page)            (assoc :page page)
-      (parse-date-parts accessed) (assoc :accessed {:date-parts (parse-date-parts accessed)})
-      (parse-date-parts issued)   (assoc :issued   {:date-parts (parse-date-parts issued)})
-      (seq named-authors)         (assoc :author named-authors))))
+#?(:clj
+   (defn- form->csl
+     "Form map → CSL-JSON map, dropping blank fields."
+     [{:keys [csl-type title url container-title page accessed issued authors]}]
+     (let [named-authors (filterv (fn [a] (or (seq (:family a)) (seq (:given a))))
+                           (or authors []))]
+       (cond-> {:type csl-type :title title}
+         (seq url)             (assoc :URL url)
+         (seq container-title) (assoc :container-title container-title)
+         (seq page)            (assoc :page page)
+         (parse-date-parts accessed) (assoc :accessed {:date-parts (parse-date-parts accessed)})
+         (parse-date-parts issued)   (assoc :issued   {:date-parts (parse-date-parts issued)})
+         (seq named-authors)         (assoc :author named-authors)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Topic badge — driven by bibliography (container) + topic.kind
@@ -139,11 +139,11 @@
 ;; Citation rendering (cljc — server formats, client displays)
 ;; ---------------------------------------------------------------------------
 
-(defn format-citation
-  "Assemble a single-line citation from a CSL map. nil/blank → nil.
-   Shape: 'Title — Author (Year)' with parts dropped when absent."
-  [csl]
-  #?(:clj
+#?(:clj
+   (defn format-citation
+     "Assemble a single-line citation from a CSL map. nil/blank → nil.
+      Shape: 'Title — Author (Year)' with parts dropped when absent."
+     [csl]
      (when (map? csl)
        (let [title       (some-> (:title csl) str/trim not-empty)
              first-author (first (:author csl))
@@ -154,8 +154,7 @@
              author-part (or author-name "")
              year-part   (when year (str (when author-name " ") "(" year ")"))
              out (str (or title "") dash author-part year-part)]
-         (when (seq (str/trim out)) out)))
-     :cljs nil))
+         (when (seq (str/trim out)) out)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Server fns

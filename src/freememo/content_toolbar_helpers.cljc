@@ -19,9 +19,9 @@
 
 ;; Save generated cards to DB. Routes through cards/save-cards so bake-card-html
 ;; runs and topic pins land in :q / :a (basic) or :c (cloze) per P3d.
-(defn save-cards-for-topic [topic-id root-topic-id kind generated-cards]
-  #?(:clj (cards/save-cards topic-id root-topic-id kind generated-cards)
-     :cljs nil))
+#?(:clj
+   (defn save-cards-for-topic [topic-id root-topic-id kind generated-cards]
+     (cards/save-cards topic-id root-topic-id kind generated-cards)))
 
 ;; Get context from previous pages (for page-mode card generation)
 (defn get-context-pages* [root-topic-id page-number context-window]
@@ -68,8 +68,8 @@
 ;; card-gen-status is per-user via (us/get-atom user-id :card-gen-status)
 ;; Shape: {topic-id {:active-id nil, :error nil, :pending 0}}
 
-(defn generate-and-save! [item]
-  #?(:clj
+#?(:clj
+   (defn generate-and-save! [item]
      (try
        (let [{:keys [content context card-type card-count user-id enc-key
                      topic-id root-topic-id pre-prompt]} item
@@ -86,8 +86,7 @@
            gen-result
            (save-cards-for-topic topic-id root-topic-id card-type (:cards gen-result))))
        (catch Exception e
-         {:success false :error (.getMessage e)}))
-     :cljs nil))
+         {:success false :error (.getMessage e)}))))
 
 (defn enqueue-card-gen! [item]
   #?(:clj

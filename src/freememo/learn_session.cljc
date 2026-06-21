@@ -8,13 +8,13 @@
    [freememo.bibliography-form :as bibform]
    #?(:clj [freememo.db :as db])))
 
-(defn advance-topic* [id]
-  #?(:clj (db/advance-topic! id)
-     :cljs nil))
+#?(:clj
+   (defn advance-topic* [id]
+     (db/advance-topic! id)))
 
-(defn postpone-topic* [id days]
-  #?(:clj (db/postpone-topic! id days)
-     :cljs nil))
+#?(:clj
+   (defn postpone-topic* [id days]
+     (db/postpone-topic! id days)))
 
 ;; Shared bottom bar with Postpone + Next
 (e/defn BottomBar [topic-id !queue-idx]
