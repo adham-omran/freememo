@@ -454,7 +454,8 @@
           grid-cols (if phone? "1fr" "1fr 70px 80px 80px 110px")
           !scroll-node (atom nil)]
             (dom/div
-              (dom/props {:style {:display "flex" :flex-direction "column" :min-height "0" :flex "1"}})
+              (dom/props {:class "table-frame"
+                          :style {:display "flex" :flex-direction "column" :min-height "0" :flex "1"}})
 
               ;; Fixed header
               (dom/table

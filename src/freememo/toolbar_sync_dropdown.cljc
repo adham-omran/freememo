@@ -16,6 +16,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.anki-sync :refer [AnkiSyncButton]]
+   [freememo.quick-sync :refer [QuickSyncButton]]
    [freememo.anki-pull-button :refer [PullFromAnkiButton]]
    [freememo.export-button :refer [ExportButton]]
    [freememo.icons :as icons]
@@ -63,7 +64,10 @@
         (dom/props {:class "toolbar-dropdown-sources"})
         (ExportButton user-id topic-id root-topic-id unsynced-count)
         (PullFromAnkiButton user-id root-topic-id)
-        (AnkiSyncButton user-id root-topic-id page-number card-type unsynced-count))
+        (AnkiSyncButton user-id root-topic-id page-number card-type unsynced-count)
+        ;; Hidden proxy for background Quick Sync (Cmd-Shift-Opt-X). No menu
+        ;; item — keyboard-only; the executor runs without opening the modal.
+        (QuickSyncButton user-id root-topic-id page-number card-type unsynced-count))
 
       ;; Visible dropdown. `toolbar-collapse-sync` participates in the tier
       ;; ladder — hidden at viewport-tier 7 so only the trigger collapses;

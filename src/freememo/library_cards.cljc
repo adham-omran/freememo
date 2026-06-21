@@ -934,7 +934,7 @@
                            (do (reset! !sort-col col)
                              (reset! !sort-dir default-dir)))))]
       (dom/table
-        (dom/props {:class "cards-table-header"
+        (dom/props {:class "cards-table-header table-frame-head"
                     :style {:width "100%" :display "grid" :grid-template-columns grid-cols
                             :flex-shrink "0"}})
         (dom/thead
@@ -995,7 +995,7 @@
                           :scrollbar-gutter "stable"}})
       (let [[offset limit] (Scroll-window row-height card-count dom/node {:overquery-factor 1})
             occluded-height (clamp-left (* row-height (- card-count limit)) 0)]
-        (dom/props {:class "tape-scroll"
+        (dom/props {:class "tape-scroll table-frame-body"
                     :style {:--offset offset :--row-height (str row-height "px")}})
         (dom/table
           (dom/props {:class "cards-table-body"
