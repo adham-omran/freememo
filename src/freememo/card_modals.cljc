@@ -447,13 +447,13 @@
               (dom/On "click" (fn [_] (reset! !editing-card nil)) nil))))))))
 
 
-(defn insert-flashcards-safe! [rows]
-  #?(:clj (try
-            (db/insert-flashcards! rows)
-            {:success true}
-            (catch Exception e
-              {:success false :error (.getMessage e)}))
-     :cljs nil))
+#?(:clj
+   (defn insert-flashcards-safe! [rows]
+     (try
+       (db/insert-flashcards! rows)
+       {:success true}
+       (catch Exception e
+         {:success false :error (.getMessage e)}))))
 
 ;; Add card modal — uses topic-id and root-topic-id instead of doc-id + page-number
 (e/defn AddCardModal [!show-add !card-kind !captured-selection topic-id root-topic-id user-id]

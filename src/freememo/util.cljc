@@ -115,27 +115,27 @@
            content-w (if content (.-offsetWidth content) 0)]
        (cljs.core/max panel-w (- (+ panel-w content-w) content-floor)))))
 
-(defn format-bytes [n]
-  #?(:clj (cond
-            (nil? n) "0 B"
-            (< n 1024) (str n " B")
-            (< n (* 1024 1024)) (format "%.1f KB" (/ (double n) 1024))
-            :else (format "%.1f MB" (/ (double n) (* 1024 1024))))
-     :cljs nil))
+#?(:clj
+   (defn format-bytes [n]
+     (cond
+       (nil? n) "0 B"
+       (< n 1024) (str n " B")
+       (< n (* 1024 1024)) (format "%.1f KB" (/ (double n) 1024))
+       :else (format "%.1f MB" (/ (double n) (* 1024 1024))))))
 
-(defn format-timestamp [ts]
-  #?(:clj (when ts
-            (let [inst (.toInstant ts)
-                  ldt (LocalDateTime/ofInstant inst (ZoneId/systemDefault))]
-              (.format ldt (DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm"))))
-     :cljs nil))
+#?(:clj
+   (defn format-timestamp [ts]
+     (when ts
+       (let [inst (.toInstant ts)
+             ldt (LocalDateTime/ofInstant inst (ZoneId/systemDefault))]
+         (.format ldt (DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm"))))))
 
-(defn format-date-short [ts]
-  #?(:clj (when ts
-            (let [inst (.toInstant ts)
-                  ldt (LocalDateTime/ofInstant inst (ZoneId/systemDefault))]
-              (.format ldt (DateTimeFormatter/ofPattern "MMM d"))))
-     :cljs nil))
+#?(:clj
+   (defn format-date-short [ts]
+     (when ts
+       (let [inst (.toInstant ts)
+             ldt (LocalDateTime/ofInstant inst (ZoneId/systemDefault))]
+         (.format ldt (DateTimeFormatter/ofPattern "MMM d"))))))
 
 #?(:cljs
    (defn restore-scroll-after-render!

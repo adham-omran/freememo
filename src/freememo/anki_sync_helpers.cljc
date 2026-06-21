@@ -63,15 +63,15 @@
 
 (declare html-escape)
 
-(defn format-bibliography-html
-  "Render a CSL map as the bibliography body HTML — title link + author + year.
-   Returns nil for a blank citation. No presentation wrapper, no
-   \"Bibliography: \" prefix — callers add those when appending. Mirrors the
-   source/append-source split: field mode writes the raw body, append mode
-   wraps it. Server-side only — title/author/URL are HTML-escaped here, so
-   callers must NOT double-escape."
-  [csl]
-  #?(:clj
+#?(:clj
+   (defn format-bibliography-html
+     "Render a CSL map as the bibliography body HTML — title link + author + year.
+      Returns nil for a blank citation. No presentation wrapper, no
+      \"Bibliography: \" prefix — callers add those when appending. Mirrors the
+      source/append-source split: field mode writes the raw body, append mode
+      wraps it. Server-side only — title/author/URL are HTML-escaped here, so
+      callers must NOT double-escape."
+     [csl]
      (when (map? csl)
        (let [title (some-> (:title csl) str/trim not-empty)
              url (some-> (:URL csl) str/trim not-empty)
@@ -91,8 +91,7 @@
                     (or dash "")
                     (or author-html "")
                     (or year-html ""))]
-         (when (seq body) body)))
-     :cljs nil))
+         (when (seq body) body)))))
 
 (defn append-bibliography
   "Append bibliography body to card content when bibliography-display-mode is

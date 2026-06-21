@@ -13,13 +13,22 @@
 
 ;; Queue data helpers
 
-(defn- ts->local-date [ts]
-  #?(:clj (when ts
-            (.toLocalDate (java.time.LocalDateTime/ofInstant (.toInstant ts) (java.time.ZoneId/systemDefault))))
-     :cljs nil))
+#?(:clj
+   (defn- ts->local-date [ts]
+     (when ts
+       (.toLocalDate (java.time.LocalDateTime/ofInstant (.toInstant ts) (java.time.ZoneId/systemDefault))))))
 
-(defn format-due [next-review-at status]
-  #?(:clj
+#?(:clj
+   (defn format-due-date
+     "Absolute review date for the Learn-tab Date column, e.g. \"Jun 21, 2026\".
+      nil when there is no scheduled date (new/done) — caller renders an em dash."
+     [next-review-at]
+     (when next-review-at
+       (.format (ts->local-date next-review-at)
+                (java.time.format.DateTimeFormatter/ofPattern "MMM d, yyyy")))))
+
+#?(:clj
+   (defn format-due [next-review-at status]
      (cond
        (= status "done") "done"
        (nil? next-review-at) "new"
@@ -27,11 +36,11 @@
                    due (ts->local-date next-review-at)
                    days (.between java.time.temporal.ChronoUnit/DAYS now due)]
                (cond
-                 (<= days 0) "today"
+                 (neg? days) (str (- days) "d ago")
+                 (zero? days) "today"
                  (= days 1) "tomorrow"
                  (<= days 30) (str "in " days "d")
-                 :else (.format due (java.time.format.DateTimeFormatter/ofPattern "MMM d")))))
-     :cljs nil))
+                 :else (.format due (java.time.format.DateTimeFormatter/ofPattern "MMM d")))))))
 
 (defn prepare-queue-rows [user-id]
   #?(:clj
@@ -50,6 +59,7 @@
                       :kind kind
                       :display-title display-title
                       :due-label (format-due (:topics/next_review_at row) (or (:topics/status row) "active"))
+                      :due-date (format-due-date (:topics/next_review_at row))
                       :status (or (:topics/status row) "active")
                       :source-container (:sources/container_title row)
                       :source-title (:sources/title row)}))
@@ -93,7 +103,7 @@
                         (:total summary) " total, "
                         (:inactive summary) " inactive"))))
 
-        (let [grid-cols "1fr 80px"
+        (let [grid-cols "1fr 90px 120px"
               row-height 36
               visible-rows 10]
           (dom/div
@@ -108,7 +118,8 @@
                   (dom/tr
                     (dom/props {:style {:display "contents"}})
                     (dom/th (dom/props {:style (merge th-base {:text-align "left" :padding "8px 10px"})}) (dom/text "Document"))
-                    (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Due"))))))
+                    (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Due"))
+                    (dom/th (dom/props {:style (merge th-base {:text-align "right" :padding "8px 10px"})}) (dom/text "Date"))))))
 
             ;; Scrollable body
             (dom/div
@@ -127,12 +138,14 @@
                                 inactive? (not= item-status "active")
                                 kind (:kind item)
                                 due-label (:due-label item)
+                                due-date (:due-date item)
                                 display-title (or (:display-title item) "")
                                 id (:id item)
                                 source-container (:source-container item)
                                 [badge-text badge-color] (bibform/topic-badge kind source-container)]
                             (dom/tr
-                              (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)" :height (str row-height "px")
+                              (dom/props {:class (when (even? i) "row-alt")
+                                          :style {:border-bottom "1px solid var(--color-bg-subtle)" :height (str row-height "px")
                                                   :opacity (if inactive? "0.6" "1")
                                                   :cursor "pointer" :--order (inc i)}})
                               (dom/On "click"
@@ -147,14 +160,18 @@
                                   (dom/props {:class "type-badge" :style {:background badge-color :flex-shrink "0"}})
                                   (dom/text badge-text))
                                 (dom/span
-                                  (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}
-                                              :data-tooltip display-title})
+                                  (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
                                   (dom/text display-title)))
-                              ;; Due
+                              ;; Due (relative label)
                               (dom/td
                                 (dom/props {:style {:padding "4px 6px" :text-align "center" :font-size "12px"
                                                     :color (case due-label "done" "var(--color-success-dark)" "var(--color-text-secondary)")}})
-                                (dom/text due-label)))))))
+                                (dom/text due-label))
+                              ;; Date (absolute next-review date; em dash when unscheduled)
+                              (dom/td
+                                (dom/props {:style {:padding "4px 10px" :text-align "right" :font-size "12px"
+                                                    :color "var(--color-text-secondary)"}})
+                                (dom/text (or due-date "—"))))))))
                     (dom/tr
                       (dom/td
                         (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"

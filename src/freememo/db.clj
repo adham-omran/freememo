@@ -2214,7 +2214,7 @@
        WHERE t.user_id = ? AND t.kind != 'page' AND t.staged_delete_id IS NULL
        ORDER BY CASE WHEN t.status = 'active' OR t.status IS NULL THEN 0
                      WHEN t.status = 'done' THEN 1 ELSE 2 END,
-                t.priority ASC, t.next_review_at ASC NULLS FIRST, t.id ASC" user-id])
+                t.next_review_at ASC NULLS FIRST, t.priority ASC, t.id ASC" user-id])
     (catch Exception e
       (tel/error! {:id ::get-full-queue} e)
       [])))
