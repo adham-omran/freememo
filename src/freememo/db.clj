@@ -2267,6 +2267,83 @@
       ORDER BY review_date"
      user-id days]))
 
+(defn get-study-calendar
+  "Distinct topics advanced per day over the last 14 days (incl. today).
+   Keys: :d (YYYY-MM-DD string, server zone), :c (distinct topic count)."
+  [user-id]
+  (try
+    (jdbc/execute! ds
+      ["SELECT TO_CHAR(DATE(event_at), 'YYYY-MM-DD') AS d,
+               COUNT(DISTINCT topic_id) AS c
+        FROM topic_repetitions
+        WHERE user_id = ?
+          AND event_type = 'advance'
+          AND event_at >= CURRENT_DATE - INTERVAL '13 days'
+        GROUP BY DATE(event_at)
+        ORDER BY d"
+       user-id])
+    (catch Exception e
+      (tel/error! {:id ::get-study-calendar} e)
+      [])))
+
+(defn get-study-streak
+  "Consecutive calendar days with >=1 advance, Anki-style.
+   Anchor = today if studied today, else yesterday; counts backward from anchor.
+   A zero-advance today does not break the streak until the day fully passes."
+  [user-id]
+  (try
+    (let [rows (jdbc/execute! ds
+                 ["SELECT DISTINCT DATE(event_at) AS d
+                   FROM topic_repetitions
+                   WHERE user_id = ? AND event_type = 'advance'" user-id])
+          dayset (set (map #(java.time.LocalDate/parse (str (:d %))) rows))
+          today (java.time.LocalDate/now)
+          yday (.minusDays today 1)
+          anchor (cond (contains? dayset today) today
+                       (contains? dayset yday) yday
+                       :else nil)]
+      (if (nil? anchor)
+        0
+        (loop [d anchor n 0]
+          (if (contains? dayset d)
+            (recur (.minusDays d 1) (inc n))
+            n))))
+    (catch Exception e
+      (tel/error! {:id ::get-study-streak} e)
+      0)))
+
+(defn get-review-counts
+  "Advance-event counts. :all-time = all advances; :this-week = rolling 7 days."
+  [user-id]
+  (try
+    (let [r (jdbc/execute-one! ds
+              ["SELECT COUNT(*) AS all_time,
+                       COUNT(*) FILTER (WHERE event_at >= NOW() - INTERVAL '7 days') AS this_week
+                FROM topic_repetitions
+                WHERE user_id = ? AND event_type = 'advance'" user-id])]
+      {:all-time (or (:all_time r) 0)
+       :this-week (or (:this_week r) 0)})
+    (catch Exception e
+      (tel/error! {:id ::get-review-counts} e)
+      {:all-time 0 :this-week 0})))
+
+(defn get-status-breakdown
+  "Topic counts by status, same scope as get-queue-summary."
+  [user-id]
+  (try
+    (let [r (jdbc/execute-one! ds
+              ["SELECT COUNT(*) FILTER (WHERE status = 'active' OR status IS NULL) AS active,
+                       COUNT(*) FILTER (WHERE status = 'done') AS done,
+                       COUNT(*) FILTER (WHERE status = 'dismissed') AS dismissed
+                FROM topics
+                WHERE user_id = ? AND kind != 'page' AND staged_delete_id IS NULL" user-id])]
+      {:active (or (:active r) 0)
+       :done (or (:done r) 0)
+       :dismissed (or (:dismissed r) 0)})
+    (catch Exception e
+      (tel/error! {:id ::get-status-breakdown} e)
+      {:active 0 :done 0 :dismissed 0})))
+
 (defn get-inactive-topics
   "Get all non-active (done) topics for a user."
   [user-id]

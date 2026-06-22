@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [hyperfiddle.electric-svg3 :as svg]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
    [freememo.navigation :as nav]
@@ -70,6 +71,138 @@
   #?(:clj (db/get-queue-summary user-id)
      :cljs {:total 0 :inactive 0 :due-today 0 :due-week 0}))
 
+;; Dashboard data — zero-filled 14-day series + scalar stats, server-sited.
+
+#?(:clj
+   (defn- weekday-letter [^java.time.LocalDate d]
+     (subs (.getDisplayName (.getDayOfWeek d)
+                            java.time.format.TextStyle/SHORT java.util.Locale/ENGLISH)
+           0 1)))
+
+#?(:clj
+   (defn- fill-series
+     "14 maps (oldest→newest) {:label :count :today :date}, gaps zero-filled."
+     [start-offset counts-map]
+     (let [today (java.time.LocalDate/now)]
+       (mapv (fn [i]
+               (let [d (.plusDays today (+ start-offset i))
+                     iso (.toString d)]
+                 {:label (weekday-letter d)
+                  :count (long (get counts-map iso 0))
+                  :today (= d today)
+                  :date iso}))
+             (range 14)))))
+
+(defn dashboard-data* [_refresh user-id]
+  #?(:clj
+     (let [studied-map (into {} (map (juxt :d :c) (db/get-study-calendar user-id)))
+           due-map (into {} (map (fn [r] [(str (:review_date r)) (:count r)])
+                                 (db/get-review-calendar user-id 14)))]
+       {:studied (fill-series -13 studied-map)
+        :due (fill-series 0 due-map)
+        :streak (db/get-study-streak user-id)
+        :reviews (db/get-review-counts user-id)
+        :status (db/get-status-breakdown user-id)})
+     :cljs {:studied [] :due [] :streak 0
+            :reviews {:all-time 0 :this-week 0}
+            :status {:active 0 :done 0 :dismissed 0}}))
+
+;; Dashboard UI
+
+(e/defn Bar-chart [data]
+  (e/client
+    (let [w 300 top 6 plot-h 100 base (+ top plot-h)
+          n (max 1 (count data))
+          slot (/ w n)
+          bw (* slot 0.62)
+          maxc (max 1 (reduce max 0 (map :count data)))
+          bars (vec (map-indexed
+                      (fn [i d]
+                        (let [c (:count d)
+                              bh (if (zero? c) 2 (* plot-h (/ c maxc)))
+                              x (+ (* i slot) (/ (- slot bw) 2))]
+                          (assoc d :i i :x x :bh bh :y (- base bh))))
+                      data))]
+      (svg/svg
+        (dom/props {:viewBox (str "0 0 " w " " (+ base 16)) :width "100%"
+                    :style {:display "block"}})
+        (e/for [bar (e/diff-by :date bars)]
+          (svg/g
+            (svg/title (dom/text (str (:count bar)
+                                      (if (= 1 (:count bar)) " topic · " " topics · ")
+                                      (:date bar))))
+            (svg/rect
+              (dom/props {:x (:x bar) :y (:y bar) :width bw :height (:bh bar) :rx 2
+                          :style {:fill (if (:today bar) "var(--color-success)" "var(--color-primary)")
+                                  :opacity (if (zero? (:count bar)) "0.4" "1")}}))
+            (svg/text
+              (dom/props {:x (+ (:x bar) (/ bw 2)) :y (+ base 12) :text-anchor "middle"
+                          :style {:fill (if (:today bar)
+                                          "var(--color-success-dark)"
+                                          "var(--color-text-secondary)")
+                                  :font-size "9px"
+                                  :font-weight (if (:today bar) "700" "400")}})
+              (dom/text (:label bar)))))))))
+
+(e/defn Chart-card [title data]
+  (e/client
+    (dom/div (dom/props {:class "dash-card"})
+      (dom/div (dom/props {:class "dash-cap"}) (dom/text title))
+      (Bar-chart data))))
+
+(e/defn Kpi-tile [icon value label]
+  (e/client
+    (dom/div (dom/props {:class "kpi-tile"})
+      (dom/div (dom/props {:class "kpi-value"})
+        (when icon (dom/span (dom/props {:class "kpi-icon"}) (dom/text icon)))
+        (dom/text value))
+      (dom/div (dom/props {:class "kpi-label"}) (dom/text label)))))
+
+(e/defn Legend-item [cls label n]
+  (e/client
+    (dom/span (dom/props {:class "legend-item"})
+      (dom/span (dom/props {:class (str "legend-dot " cls)}))
+      (dom/text (str label " " n)))))
+
+(e/defn Status-bar [status]
+  (e/client
+    (let [{:keys [active done dismissed]} status
+          total (max 1 (+ active done dismissed))
+          pct (fn [x] (str (* 100.0 (/ x total)) "%"))]
+      (dom/div (dom/props {:class "dash-card"})
+        (dom/div (dom/props {:class "dash-cap"}) (dom/text "Topics"))
+        (dom/div (dom/props {:class "stat-bar"})
+          (dom/div (dom/props {:class "stat-seg seg-active" :style {:width (pct active)}}))
+          (dom/div (dom/props {:class "stat-seg seg-done" :style {:width (pct done)}}))
+          (dom/div (dom/props {:class "stat-seg seg-dismissed" :style {:width (pct dismissed)}})))
+        (dom/div (dom/props {:class "stat-legend"})
+          (Legend-item "seg-active" "Active" active)
+          (Legend-item "seg-done" "Done" done)
+          (Legend-item "seg-dismissed" "Dismissed" dismissed))))))
+
+(e/defn Teaser-card [title promise]
+  (e/client
+    (dom/div (dom/props {:class "dash-card teaser-card"})
+      (dom/div (dom/props {:class "teaser-head"})
+        (dom/span (dom/props {:class "teaser-title"}) (dom/text title))
+        (dom/span (dom/props {:class "soon-badge"}) (dom/text "Soon")))
+      (dom/div (dom/props {:class "teaser-promise"}) (dom/text promise)))))
+
+(e/defn Dashboard [dash]
+  (e/client
+    (dom/div (dom/props {:class "learn-dashboard"})
+      (dom/div (dom/props {:class "kpi-strip"})
+        (Kpi-tile "🔥" (str (:streak dash)) "day streak")
+        (Kpi-tile nil (str (:this-week (:reviews dash))) "reviews this week")
+        (Kpi-tile nil (str (:all-time (:reviews dash))) "reviews all-time"))
+      (dom/div (dom/props {:class "dash-charts"})
+        (Chart-card "Studied · last 14 days" (:studied dash))
+        (Chart-card "Due · next 14 days" (:due dash)))
+      (Status-bar (:status dash))
+      (dom/div (dom/props {:class "dash-teasers"})
+        (Teaser-card "Total study time" "See how long you actually study.")
+        (Teaser-card "Expected study time" "Know how long your queue will take.")))))
+
 (e/defn LearnOverview [user-id navigate! viewer-nav]
   (e/client
     (dom/div
@@ -80,6 +213,7 @@
             summary (e/server (get-queue-summary* refresh user-id))
             items-vec (e/server (prepare-queue-rows user-id))
             item-count (e/server (count items-vec))
+            dash (e/server (dashboard-data* refresh user-id))
             due-today (:due-today summary)]
 
         ;; Header: Start Learning + stats
@@ -105,7 +239,7 @@
 
         (let [grid-cols "1fr 90px 120px"
               row-height 36
-              visible-rows 10]
+              visible-rows 6]
           (dom/div
             (dom/props {:class "table-frame"
                         :style {:display "flex" :flex-direction "column" :min-height "0"}})
@@ -178,7 +312,9 @@
                         (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
                                             :color "var(--color-text-secondary)" :font-size "13px"}})
                         (dom/text "No topics yet. Import a document from the Import tab to start learning.")))))
-                (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))))))
+                (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))
+
+        (Dashboard dash)))))
 
 (e/defn LearnPage [user-id navigate! viewer-nav]
   (LearnOverview user-id navigate! viewer-nav))
