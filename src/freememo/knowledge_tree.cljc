@@ -203,7 +203,8 @@
           topic-status (or (:topics/status topic) "active")
           [badge-text badge-color] (bibform/topic-badge kind source-container)]
       (dom/tr
-        (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)"
+        (dom/props {:class (when (even? i) "row-alt")
+                    :style {:border-bottom "1px solid var(--color-bg-subtle)"
                             :height (str row-height "px")
                             :opacity (case topic-status "done" "0.6" "1")
                             :cursor "pointer"
