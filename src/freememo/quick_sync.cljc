@@ -32,20 +32,38 @@
      :cljs nil))
 
 ;; --- headless executor ---
+;;
+;; The run is split across three sub-executors so each compiles to its own JVM
+;; method, staying under the 64KB bytecode cap (see CLAUDE.md / electric-skill
+;; "Method code too large"). QuickSyncExecutor is a thin parent that mounts all
+;; three plus panels/AnkiSyncExecutor; the groups are reactively independent so
+;; mount order does not matter.
 
-(e/defn QuickSyncExecutor
-  "Drives one background push per `!trigger` increment: connect → apply prefs →
-   resolve fields → (barrier) start push → reuse AnkiSyncExecutor → toast outcome.
-   Run-scoped flags (!trigger/!running?/!prefs-applied?/!busy-bump) are owned by
-   QuickSyncButton so the click handler can reset them at start."
-  [user-id selected-doc current-pdf-page conn form sync
-   !trigger !running? !prefs-applied? !busy-bump]
+(e/defn QuickSyncStartToasts
+  "Start/busy toasts. One start toast per `!trigger` increment; one busy toast
+   per `!busy-bump` increment (re-trigger while a run is in flight)."
+  [user-id !trigger !busy-bump]
   (e/client
     (let [trigger (e/watch !trigger)
-          busy-bump (e/watch !busy-bump)
+          busy-bump (e/watch !busy-bump)]
+      (when (pos? trigger)
+        (let [[t _] (e/Token [:qs-start trigger])]
+          (when t
+            (case (e/server (push-toast!* user-id :info "Syncing to Anki…")) (t)))))
+      (when (pos? busy-bump)
+        (let [[t _] (e/Token [:qs-busy busy-bump])]
+          (when t
+            (case (e/server (push-toast!* user-id :info "Sync already in progress")) (t))))))))
+
+(e/defn QuickSyncConnectAndPush
+  "Steps a–d: connect → apply prefs → resolve fields → (barrier) start push.
+   Sets (:!phase sync) :pushing once fields resolve, handing off to
+   panels/AnkiSyncExecutor."
+  [user-id selected-doc conn form sync !trigger !prefs-applied?]
+  (e/client
+    (let [trigger (e/watch !trigger)
           prefs-applied? (e/watch !prefs-applied?)
           conn-status (e/watch (:!status conn))
-          conn-error (e/watch (:!error conn))
           decks (e/watch (:!decks conn))
           models (e/watch (:!models conn))
           basic-model (e/watch (:!basic-model conn))
@@ -53,25 +71,11 @@
           basic-fields (e/watch (:!basic-fields form))
           cloze-fields (e/watch (:!cloze-fields form))
           sync-phase (e/watch (:!phase sync))
-          sync-result (e/watch (:!result sync))
-          sync-error (e/watch (:!error sync))
           root-id (e/server (panels/get-root-topic-id* selected-doc))
           auto-load-mode (e/server (panels/get-anki-auto-load-mode* user-id))
           prefs (e/server (load-prefs* user-id root-id auto-load-mode))
           preferred-basic-fields (e/server (panels/resolve-preferred-fields* user-id root-id :basic))
           preferred-cloze-fields (e/server (panels/resolve-preferred-fields* user-id root-id :cloze))]
-
-      ;; Start toast — once per trigger increment.
-      (when (pos? trigger)
-        (let [[t _] (e/Token [:qs-start trigger])]
-          (when t
-            (case (e/server (push-toast!* user-id :info "Syncing to Anki…")) (t)))))
-
-      ;; Re-trigger while a run is in flight — info toast, no second run.
-      (when (pos? busy-bump)
-        (let [[t _] (e/Token [:qs-busy busy-bump])]
-          (when t
-            (case (e/server (push-toast!* user-id :info "Sync already in progress")) (t)))))
 
       ;; (a) Connect — fetch decks/models/tags once per trigger.
       (when (pos? trigger)
@@ -109,12 +113,19 @@
         (let [[t _] (e/Token [:qs-push trigger])]
           (when t
             (reset! (:!phase sync) :pushing)
-            (t))))
+            (t)))))))
 
-      ;; (e) Reuse the modal's DOM-free phase machine: fetch cards → push → finalize.
-      (panels/AnkiSyncExecutor user-id selected-doc current-pdf-page conn form sync)
-
-      ;; (f) Outcome toasts.
+(e/defn QuickSyncOutcome
+  "Steps f–g: success/error outcome toasts and connection-failure toast. Each
+   clears !running? so the next shortcut press can start a fresh run."
+  [user-id conn sync !trigger !running?]
+  (e/client
+    (let [trigger (e/watch !trigger)
+          conn-status (e/watch (:!status conn))
+          conn-error (e/watch (:!error conn))
+          sync-phase (e/watch (:!phase sync))
+          sync-result (e/watch (:!result sync))
+          sync-error (e/watch (:!error sync))]
       (when (= sync-phase :done)
         (let [[t _] (e/Token [:qs-done trigger])]
           (when t
@@ -127,13 +138,27 @@
           (when t
             (case (e/server (push-toast!* user-id :error (str "Anki sync failed: " sync-error)))
               (do (reset! !running? false) (t))))))
-
-      ;; (g) Connection failure (Anki not running / AnkiConnect unreachable) — loud.
       (when (= conn-status :error)
         (let [[t _] (e/Token [:qs-conn-error trigger])]
           (when t
             (case (e/server (push-toast!* user-id :error (str "Cannot connect to Anki: " conn-error)))
               (do (reset! !running? false) (t)))))))))
+
+(e/defn QuickSyncExecutor
+  "Drives one background push per `!trigger` increment by mounting three
+   sub-executors plus the shared phase machine (step e):
+   start toasts → connect/apply-prefs/resolve-fields/start-push →
+   panels/AnkiSyncExecutor → outcome toasts.
+   Run-scoped flags (!trigger/!running?/!prefs-applied?/!busy-bump) are owned by
+   QuickSyncButton so the click handler can reset them at start."
+  [user-id selected-doc current-pdf-page conn form sync
+   !trigger !running? !prefs-applied? !busy-bump]
+  (e/client
+    (QuickSyncStartToasts user-id !trigger !busy-bump)
+    (QuickSyncConnectAndPush user-id selected-doc conn form sync !trigger !prefs-applied?)
+    ;; (e) Reuse the modal's DOM-free phase machine: fetch cards → push → finalize.
+    (panels/AnkiSyncExecutor user-id selected-doc current-pdf-page conn form sync)
+    (QuickSyncOutcome user-id conn sync !trigger !running?)))
 
 (e/defn QuickSyncButton
   "Hidden proxy button registered as keyboard/!quick-sync-btn-ref. Clicking it
