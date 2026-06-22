@@ -2237,7 +2237,9 @@
       {:total 0 :inactive 0 :due-today 0 :due-week 0})))
 
 (defn get-review-calendar
-  "Topic counts per day for the next N days."
+  "Topic counts per calendar day from today (inclusive) through +N days.
+   Date-bucketed (not timestamp), so today's already-past items count at day 0
+   rather than leaking into the overdue backlog (see get-overdue-count)."
   [user-id days]
   (jdbc/execute! ds
     ["SELECT DATE(next_review_at) AS review_date, COUNT(*) AS count
@@ -2245,11 +2247,26 @@
       WHERE user_id = ?
         AND kind != 'page'
         AND staged_delete_id IS NULL
-        AND next_review_at BETWEEN NOW() AND NOW() + ? * INTERVAL '1 day'
+        AND next_review_at::date BETWEEN CURRENT_DATE AND CURRENT_DATE + ?::int
         AND (status = 'active' OR status IS NULL)
       GROUP BY DATE(next_review_at)
       ORDER BY review_date"
      user-id days]))
+
+(defn get-overdue-count
+  "Backlog: active topics whose review date is before today (overdue).
+   Charted as the single backlog bar in the Future Due chart."
+  [user-id]
+  (let [r (jdbc/execute-one! ds
+            ["SELECT COUNT(*) AS n
+              FROM topics
+              WHERE user_id = ?
+                AND kind != 'page'
+                AND staged_delete_id IS NULL
+                AND next_review_at::date < CURRENT_DATE
+                AND (status = 'active' OR status IS NULL)"
+             user-id])]
+    (or (:n r) 0)))
 
 (defn get-study-calendar
   "Distinct topics advanced per day over the last 14 days (incl. today).
@@ -2317,16 +2334,14 @@
   (try
     (let [r (jdbc/execute-one! ds
               ["SELECT COUNT(*) FILTER (WHERE status = 'active' OR status IS NULL) AS active,
-                       COUNT(*) FILTER (WHERE status = 'done') AS done,
-                       COUNT(*) FILTER (WHERE status = 'dismissed') AS dismissed
+                       COUNT(*) FILTER (WHERE status = 'done') AS done
                 FROM topics
                 WHERE user_id = ? AND kind != 'page' AND staged_delete_id IS NULL" user-id])]
       {:active (or (:active r) 0)
-       :done (or (:done r) 0)
-       :dismissed (or (:dismissed r) 0)})
+       :done (or (:done r) 0)})
     (catch Exception e
       (tel/error! {:id ::get-status-breakdown} e)
-      {:active 0 :done 0 :dismissed 0})))
+      {:active 0 :done 0})))
 
 (defn get-inactive-topics
   "Get all non-active (done) topics for a user."

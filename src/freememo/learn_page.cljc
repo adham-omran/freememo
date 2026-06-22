@@ -81,8 +81,9 @@
 
 #?(:clj
    (defn- fill-series
-     "14 maps (oldest→newest) {:label :count :today :date}, gaps zero-filled."
-     [start-offset counts-map]
+     "n maps (oldest→newest) {:label :count :today :date}, gaps zero-filled.
+      Day i = today + start-offset + i."
+     [start-offset n counts-map]
      (let [today (java.time.LocalDate/now)]
        (mapv (fn [i]
                (let [d (.plusDays today (+ start-offset i))
@@ -91,27 +92,32 @@
                   :count (long (get counts-map iso 0))
                   :today (= d today)
                   :date iso}))
-         (range 14)))))
+         (range n)))))
 
 (defn dashboard-data* [_refresh user-id]
   #?(:clj
      (let [studied-map (into {} (map (juxt :d :c) (db/get-study-calendar user-id)))
            due-map (into {} (map (fn [r] [(str (:review_date r)) (:count r)])
-                              (db/get-review-calendar user-id 14)))]
-       {:studied (fill-series -13 studied-map)
-        :due (fill-series 0 due-map)
+                              (db/get-review-calendar user-id 30)))
+           today-iso (.toString (java.time.LocalDate/now))]
+       ;; Studied = 14 days ending yesterday (today excluded → "studied today" KPI).
+       ;; Future Due (Anki-style) = backlog (overdue) + today (day 0) + next 30 days.
+       {:studied (fill-series -14 14 studied-map)
+        :future-due {:backlog (db/get-overdue-count user-id)
+                     :days (fill-series 0 31 due-map)}
+        :studied-today (long (get studied-map today-iso 0))
         :streak (db/get-study-streak user-id)
         :reviews (db/get-review-counts user-id)
         :status (db/get-status-breakdown user-id)})
-     :cljs {:studied [] :due [] :streak 0
+     :cljs {:studied [] :future-due {:backlog 0 :days []} :studied-today 0 :streak 0
             :reviews {:all-time 0 :this-week 0}
-            :status {:active 0 :done 0 :dismissed 0}}))
+            :status {:active 0 :done 0}}))
 
 ;; Dashboard UI
 
 (e/defn Bar-chart [data]
   (e/client
-    (let [w 300 top 6 plot-h 100 base (+ top plot-h)
+    (let [w 300 top 16 plot-h 100 base (+ top plot-h)
           n (max 1 (count data))
           slot (/ w n)
           bw (* slot 0.62)
@@ -135,6 +141,16 @@
               (dom/props {:x (:x bar) :y (:y bar) :width bw :height (:bh bar) :rx 2
                           :style {:fill (if (:today bar) "var(--color-success)" "var(--color-primary)")
                                   :opacity (if (zero? (:count bar)) "0.4" "1")}}))
+            ;; Count above each non-zero bar (zeros omitted to avoid clutter).
+            (when (pos? (:count bar))
+              (svg/text
+                (dom/props {:x (+ (:x bar) (/ bw 2)) :y (- (:y bar) 3) :text-anchor "middle"
+                            :style {:fill (if (:today bar)
+                                            "var(--color-success-dark)"
+                                            "var(--color-text-secondary)")
+                                    :font-size "8px"
+                                    :font-weight (if (:today bar) "700" "500")}})
+                (dom/text (str (:count bar)))))
             (svg/text
               (dom/props {:x (+ (:x bar) (/ bw 2)) :y (+ base 12) :text-anchor "middle"
                           :style {:fill (if (:today bar)
@@ -149,6 +165,68 @@
     (dom/div (dom/props {:class "dash-card"})
       (dom/div (dom/props {:class "dash-cap"}) (dom/text title))
       (Bar-chart data))))
+
+;; Anki-style Future Due: one backlog bar (overdue), today at day 0, then
+;; forward days; a cumulative line (running total) overlays on the right.
+(e/defn Future-due-chart [future-due]
+  (e/client
+    (let [backlog (:backlog future-due)
+          days (:days future-due)
+          ;; Backlog bar (offset -1) prepended to the day series.
+          raw (into [{:label "" :count backlog :backlog true :date "overdue"}] days)
+          n (max 1 (count raw))
+          w 340 top 16 plot-h 100 base (+ top plot-h)
+          slot (/ w n) bw (* slot 0.62)
+          maxc (max 1 (reduce max 0 (map :count raw)))
+          total (max 1 (reduce + 0 (map :count raw)))
+          cums (vec (reductions + (map :count raw)))
+          bars (vec (map-indexed
+                      (fn [i d]
+                        (let [c (:count d)
+                              bh (if (zero? c) 2 (* plot-h (/ c maxc)))
+                              x (+ (* i slot) (/ (- slot bw) 2))
+                              cum (nth cums i)]
+                          (assoc d :i i :x x :bh bh :y (- base bh)
+                                 :cx (+ x (/ bw 2))
+                                 :cy (- base (* plot-h (/ cum total)))
+                                 :offset (- i 1))))
+                      raw))
+          line-pts (apply str (interpose " " (map (fn [b] (str (:cx b) "," (:cy b))) bars)))]
+      (svg/svg
+        (dom/props {:viewBox (str "0 0 " w " " (+ base 16)) :width "100%"
+                    :style {:display "block"}})
+        (e/for [bar (e/diff-by :date bars)]
+          (svg/g
+            (svg/title (dom/text (if (:backlog bar)
+                                   (str (:count bar) " overdue (backlog)")
+                                   (str (:count bar)
+                                        (if (= 1 (:count bar)) " topic · " " topics · ")
+                                        (:date bar)))))
+            (svg/rect
+              (dom/props {:x (:x bar) :y (:y bar) :width bw :height (:bh bar) :rx 2
+                          :style {:fill (cond (:backlog bar) "var(--color-warning, #d97706)"
+                                              (:today bar) "var(--color-success)"
+                                              :else "var(--color-primary)")
+                                  :opacity (if (zero? (:count bar)) "0.35" "1")}}))
+            (when (or (:backlog bar) (zero? (mod (:offset bar) 5)))
+              (svg/text
+                (dom/props {:x (+ (:x bar) (/ bw 2)) :y (+ base 12) :text-anchor "middle"
+                            :style {:fill (if (:today bar)
+                                            "var(--color-success-dark)"
+                                            "var(--color-text-secondary)")
+                                    :font-size "9px"
+                                    :font-weight (if (:today bar) "700" "400")}})
+                (dom/text (if (:backlog bar) "‹" (str (:offset bar))))))))
+        ;; Cumulative running-total line.
+        (svg/polyline
+          (dom/props {:points line-pts :fill "none"
+                      :style {:stroke "var(--color-text-secondary)"
+                              :stroke-width "1.5" :opacity "0.7"}}))
+        ;; Cumulative total, top-right.
+        (svg/text
+          (dom/props {:x w :y (+ top 2) :text-anchor "end"
+                      :style {:fill "var(--color-text-secondary)" :font-size "9px"}})
+          (dom/text (str "Σ " total)))))))
 
 (e/defn Kpi-tile [icon value label]
   (e/client
@@ -166,19 +244,17 @@
 
 (e/defn Status-bar [status]
   (e/client
-    (let [{:keys [active done dismissed]} status
-          total (max 1 (+ active done dismissed))
+    (let [{:keys [active done]} status
+          total (max 1 (+ active done))
           pct (fn [x] (str (* 100.0 (/ x total)) "%"))]
       (dom/div (dom/props {:class "dash-card"})
         (dom/div (dom/props {:class "dash-cap"}) (dom/text "Topics"))
         (dom/div (dom/props {:class "stat-bar"})
           (dom/div (dom/props {:class "stat-seg seg-active" :style {:width (pct active)}}))
-          (dom/div (dom/props {:class "stat-seg seg-done" :style {:width (pct done)}}))
-          (dom/div (dom/props {:class "stat-seg seg-dismissed" :style {:width (pct dismissed)}})))
+          (dom/div (dom/props {:class "stat-seg seg-done" :style {:width (pct done)}})))
         (dom/div (dom/props {:class "stat-legend"})
           (Legend-item "seg-active" "Active" active)
-          (Legend-item "seg-done" "Done" done)
-          (Legend-item "seg-dismissed" "Dismissed" dismissed))))))
+          (Legend-item "seg-done" "Done" done))))))
 
 (e/defn Teaser-card [title promise]
   (e/client
@@ -188,16 +264,21 @@
         (dom/span (dom/props {:class "soon-badge"}) (dom/text "Soon")))
       (dom/div (dom/props {:class "teaser-promise"}) (dom/text promise)))))
 
-(e/defn Dashboard [dash]
+(e/defn Dashboard [dash due-today due-week]
   (e/client
     (dom/div (dom/props {:class "learn-dashboard"})
       (dom/div (dom/props {:class "kpi-strip"})
-        (Kpi-tile "🔥" (str (:streak dash)) "day streak")
+        (Kpi-tile nil (str due-today) "due today")
+        (Kpi-tile nil (str (:studied-today dash)) "studied today")
+        (Kpi-tile nil (str due-week) "due over 7 days")
+        (Kpi-tile nil (str (:streak dash)) "day streak")
         (Kpi-tile nil (str (:this-week (:reviews dash))) "reviews this week")
         (Kpi-tile nil (str (:all-time (:reviews dash))) "reviews all-time"))
       (dom/div (dom/props {:class "dash-charts"})
         (Chart-card "Studied · last 14 days" (:studied dash))
-        (Chart-card "Due · next 14 days" (:due dash)))
+        (dom/div (dom/props {:class "dash-card"})
+          (dom/div (dom/props {:class "dash-cap"}) (dom/text "Future due · backlog + 30 days"))
+          (Future-due-chart (:future-due dash))))
       (Status-bar (:status dash))
       (dom/div (dom/props {:class "dash-teasers"})
         (Teaser-card "Total study time" "See how long you actually study.")
@@ -217,30 +298,25 @@
             dash (e/server (dashboard-data* refresh user-id))
             due-today (:due-today summary)]
 
-        ;; Header: Start Learning + stats
-        (dom/div
-          (dom/props {:style {:display "flex" :align-items "center" :gap "16px" :margin-bottom "16px" :flex-shrink "0"}})
-          (when (pos? due-today)
-            (let [session-active? (= :learn-session (:type viewer-nav))]
-              (dom/button
-                (dom/props {:class "btn btn-primary" :style {:padding "8px 24px" :font-size "15px" :font-weight "600"}})
-                (dom/text (if session-active? "Resume Learning" "Start Learning"))
-                (dom/On "click"
-                  (fn [_]
-                    (if session-active?
-                      (navigate! :viewer)
-                      (navigate! :viewer (nav/nav-learn-session))))
-                  nil))))
-          (dom/span
-            (dom/props {:style {:color "var(--color-text-secondary)" :font-size "14px"}})
-            (dom/text (str (:due-today summary) " due today, "
-                        (:due-week summary) " this week, "
-                        (:total summary) " total, "
-                        (:inactive summary) " inactive"))))
+        ;; Header: full-width Start Learning (only when something is due;
+        ;; stats now live in the dashboard's KPI tiles below).
+        (when (pos? due-today)
+          (let [session-active? (= :learn-session (:type viewer-nav))]
+            (dom/button
+              (dom/props {:class "btn btn-primary"
+                          :style {:width "100%" :padding "12px 24px" :font-size "16px"
+                                  :font-weight "600" :margin-bottom "16px" :flex-shrink "0"}})
+              (dom/text (if session-active? "Resume Learning" "Start Learning"))
+              (dom/On "click"
+                (fn [_]
+                  (if session-active?
+                    (navigate! :viewer)
+                    (navigate! :viewer (nav/nav-learn-session))))
+                nil))))
 
         (let [grid-cols "1fr 90px 120px"
               row-height 36
-              visible-rows 6]
+              visible-rows 12]
           (dom/div
             (dom/props {:class "table-frame"
                         :style {:display "flex" :flex-direction "column" :min-height "0"}})
@@ -317,7 +393,7 @@
                                     "No topics yet. Import a document from the Import tab to start learning."))))))
                 (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))
 
-        (Dashboard dash)))))
+        (Dashboard dash due-today (:due-week summary))))))
 
 (e/defn LearnPage [user-id navigate! viewer-nav]
   (LearnOverview user-id navigate! viewer-nav))
