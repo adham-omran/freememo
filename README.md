@@ -15,6 +15,7 @@ Built with [Hyperfiddle Electric v3](https://github.com/hyperfiddle/electric) (C
 - **Anki sync** — Push/pull cards directly to your Anki collection via AnkiConnect
 - **Zotero import** — Pull PDFs (with citation metadata) straight from your local Zotero library via the [FreeMemo for Zotero](./freememo-zotero-plugin/) plugin
 - **PDF viewer** — In-browser rendering via PDF.js with zoom and navigation
+- **Learn queue** — Priority-first spaced-review ordering (SuperMemo model): due date gates the queue, priority orders it, ties shuffle daily ([details](./docs/learn-queue-ordering.md))
 - **Subset review** — Review a chosen subset of cards from any topic
 - **Search** — Full-text search across topics and cards
 - **Library** — Browse imported documents

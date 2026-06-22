@@ -2153,6 +2153,11 @@
 
 (defn get-learning-queue
   "Due topics for incremental reading. Single query, no UNION.
+   Ordering (SuperMemo outstanding-queue model): date gates membership only;
+   priority orders the queue; a per-day hash of the id breaks ties within a
+   priority band, so equal-priority topics shuffle daily (stable within a day,
+   immune to mid-session :refresh) rather than ordering by due date. See
+   docs/learn-queue-ordering.md.
    Joins `sources` to surface bibliography fields (source_url, source_title,
    source_csl_type, source_container); NULL when the topic has no source_id."
   [user-id]
@@ -2169,7 +2174,7 @@
          AND t.staged_delete_id IS NULL
          AND (t.next_review_at::date <= CURRENT_DATE OR t.next_review_at IS NULL)
          AND (t.status = 'active' OR t.status IS NULL)
-       ORDER BY t.priority ASC, t.next_review_at ASC NULLS FIRST, t.id ASC" user-id])
+       ORDER BY t.priority ASC, md5(t.id::text || CURRENT_DATE::text) ASC, t.id ASC" user-id])
     (catch Exception e
       (tel/error! {:id ::get-learning-queue} e)
       [])))
@@ -2200,7 +2205,12 @@
     (or (:total result) 0)))
 
 (defn get-full-queue
-  "All topics with scheduling info. No date filter.
+  "All topics with scheduling info. No date filter (Learn overview table).
+   Ordering shares get-learning-queue's priority-first contract: active before
+   done, then priority ASC, then next_review_at as a deterministic tie-break
+   (the table stays scannable; the session uses a per-day random tie-break, so
+   equal-priority rows may differ in order between the two views). See
+   docs/learn-queue-ordering.md.
    Joins `sources` to surface bibliography fields (source_url, source_title,
    source_csl_type, source_container); NULL when the topic has no source_id."
   [user-id]
@@ -2214,7 +2224,7 @@
        WHERE t.user_id = ? AND t.kind != 'page' AND t.staged_delete_id IS NULL
        ORDER BY CASE WHEN t.status = 'active' OR t.status IS NULL THEN 0
                      WHEN t.status = 'done' THEN 1 ELSE 2 END,
-                t.next_review_at ASC NULLS FIRST, t.priority ASC, t.id ASC" user-id])
+                t.priority ASC, t.next_review_at ASC NULLS FIRST, t.id ASC" user-id])
     (catch Exception e
       (tel/error! {:id ::get-full-queue} e)
       [])))
