@@ -540,7 +540,8 @@
                       :display "flex" :align-items "center"
                       :border-bottom "1px solid var(--color-bg-subtle)"}]
       (dom/tr
-        (dom/props {:style {:--order (inc i) :cursor "pointer"}})
+        (dom/props {:class (when (even? i) "row-alt")
+                    :style {:--order (inc i) :cursor "pointer"}})
         (dom/On "click"
           (fn [_] (reset! !editing-card {:id id :kind kind :question question
                                          :answer answer :cloze cloze}))
