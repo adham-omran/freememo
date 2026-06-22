@@ -2036,10 +2036,15 @@
   (jdbc/with-transaction [tx ds]
     (when-let [before (snapshot-topic-row tx id)]
       (insert-repetition! tx id "advance" before)
+      ;; Floor the interval to >= 1 day before multiplying. COALESCE guards NULL
+      ;; but not 0/negatives, and 0 is a multiplication fixed point (0*a_factor=0
+      ;; → next_review_at = NOW() → topic stays due forever). GREATEST(...,1.0)
+      ;; enforces the "interval >= 1 day" invariant so every advance pushes the
+      ;; review strictly into the future.
       (jdbc/execute-one! tx
         ["UPDATE topics
-          SET interval_days = COALESCE(interval_days, 1.0) * COALESCE(a_factor, 2.0),
-              next_review_at = NOW() + (COALESCE(interval_days, 1.0) * COALESCE(a_factor, 2.0)) * INTERVAL '1 day',
+          SET interval_days = GREATEST(COALESCE(interval_days, 1.0), 1.0) * COALESCE(a_factor, 2.0),
+              next_review_at = NOW() + (GREATEST(COALESCE(interval_days, 1.0), 1.0) * COALESCE(a_factor, 2.0)) * INTERVAL '1 day',
               last_review_at = NOW()
           WHERE id = ?"
          id]))))
@@ -2153,11 +2158,15 @@
 
 (defn get-learning-queue
   "Due topics for incremental reading. Single query, no UNION.
+   Feeds BOTH the Start Learning session and the Learn overview list, so the
+   list IS the queue: the top row is the topic the session opens.
    Ordering (SuperMemo outstanding-queue model): date gates membership only;
    priority orders the queue; a per-day hash of the id breaks ties within a
    priority band, so equal-priority topics shuffle daily (stable within a day,
    immune to mid-session :refresh) rather than ordering by due date. See
    docs/learn-queue-ordering.md.
+   Selects `t.content` for the overview's preview titles; the session reads it
+   per-row via nth, so it stays server-side until a row is accessed.
    Joins `sources` to surface bibliography fields (source_url, source_title,
    source_csl_type, source_container); NULL when the topic has no source_id."
   [user-id]
@@ -2165,7 +2174,7 @@
     (jdbc/execute! ds
       ["SELECT t.id, t.parent_id, t.kind, t.title, t.priority,
               t.next_review_at, t.interval_days, t.a_factor,
-              t.status,
+              t.status, t.content,
               s.url, s.title, s.csl_type, s.container_title
        FROM topics t
        LEFT JOIN sources s ON s.id = t.source_id
@@ -2203,31 +2212,6 @@
                      AND (status = 'active' OR status IS NULL)"
                   user-id])]
     (or (:total result) 0)))
-
-(defn get-full-queue
-  "All topics with scheduling info. No date filter (Learn overview table).
-   Ordering shares get-learning-queue's priority-first contract: active before
-   done, then priority ASC, then next_review_at as a deterministic tie-break
-   (the table stays scannable; the session uses a per-day random tie-break, so
-   equal-priority rows may differ in order between the two views). See
-   docs/learn-queue-ordering.md.
-   Joins `sources` to surface bibliography fields (source_url, source_title,
-   source_csl_type, source_container); NULL when the topic has no source_id."
-  [user-id]
-  (try
-    (jdbc/execute! ds
-      ["SELECT t.id, t.parent_id, t.kind, t.title, t.priority, t.next_review_at,
-              t.interval_days, t.status, t.content,
-              s.url, s.title, s.csl_type, s.container_title
-       FROM topics t
-       LEFT JOIN sources s ON s.id = t.source_id
-       WHERE t.user_id = ? AND t.kind != 'page' AND t.staged_delete_id IS NULL
-       ORDER BY CASE WHEN t.status = 'active' OR t.status IS NULL THEN 0
-                     WHEN t.status = 'done' THEN 1 ELSE 2 END,
-                t.priority ASC, t.next_review_at ASC NULLS FIRST, t.id ASC" user-id])
-    (catch Exception e
-      (tel/error! {:id ::get-full-queue} e)
-      [])))
 
 (defn get-queue-summary
   "Aggregate queue stats in a single SQL query."

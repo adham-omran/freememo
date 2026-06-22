@@ -26,7 +26,7 @@
      [next-review-at]
      (when next-review-at
        (.format (ts->local-date next-review-at)
-                (java.time.format.DateTimeFormatter/ofPattern "MMM d, yyyy")))))
+         (java.time.format.DateTimeFormatter/ofPattern "MMM d, yyyy")))))
 
 #?(:clj
    (defn format-due [next-review-at status]
@@ -43,9 +43,9 @@
                  (<= days 30) (str "in " days "d")
                  :else (.format due (java.time.format.DateTimeFormatter/ofPattern "MMM d")))))))
 
-(defn prepare-queue-rows [user-id]
+(defn prepare-queue-rows [_refresh user-id]
   #?(:clj
-     (let [raw (db/get-full-queue user-id)]
+     (let [raw (db/get-learning-queue user-id)]
        (vec (map (fn [row]
                    (let [kind (:topics/kind row)
                          parent-id (:topics/parent_id row)
@@ -76,8 +76,8 @@
 #?(:clj
    (defn- weekday-letter [^java.time.LocalDate d]
      (subs (.getDisplayName (.getDayOfWeek d)
-                            java.time.format.TextStyle/SHORT java.util.Locale/ENGLISH)
-           0 1)))
+             java.time.format.TextStyle/SHORT java.util.Locale/ENGLISH)
+       0 1)))
 
 #?(:clj
    (defn- fill-series
@@ -91,13 +91,13 @@
                   :count (long (get counts-map iso 0))
                   :today (= d today)
                   :date iso}))
-             (range 14)))))
+         (range 14)))))
 
 (defn dashboard-data* [_refresh user-id]
   #?(:clj
      (let [studied-map (into {} (map (juxt :d :c) (db/get-study-calendar user-id)))
            due-map (into {} (map (fn [r] [(str (:review_date r)) (:count r)])
-                                 (db/get-review-calendar user-id 14)))]
+                              (db/get-review-calendar user-id 14)))]
        {:studied (fill-series -13 studied-map)
         :due (fill-series 0 due-map)
         :streak (db/get-study-streak user-id)
@@ -129,8 +129,8 @@
         (e/for [bar (e/diff-by :date bars)]
           (svg/g
             (svg/title (dom/text (str (:count bar)
-                                      (if (= 1 (:count bar)) " topic · " " topics · ")
-                                      (:date bar))))
+                                   (if (= 1 (:count bar)) " topic · " " topics · ")
+                                   (:date bar))))
             (svg/rect
               (dom/props {:x (:x bar) :y (:y bar) :width bw :height (:bh bar) :rx 2
                           :style {:fill (if (:today bar) "var(--color-success)" "var(--color-primary)")
@@ -209,9 +209,10 @@
       (dom/props {:class "page-container"
                   :style {:height "100%" :display "flex" :flex-direction "column"}})
 
-      (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
+      (let [refresh (e/server (+ (e/watch (us/get-atom user-id :refresh))
+                                (e/watch (us/get-atom user-id :queue-mutations))))
             summary (e/server (get-queue-summary* refresh user-id))
-            items-vec (e/server (prepare-queue-rows user-id))
+            items-vec (e/server (prepare-queue-rows refresh user-id))
             item-count (e/server (count items-vec))
             dash (e/server (dashboard-data* refresh user-id))
             due-today (:due-today summary)]
@@ -311,7 +312,9 @@
                       (dom/td
                         (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
                                             :color "var(--color-text-secondary)" :font-size "13px"}})
-                        (dom/text "No topics yet. Import a document from the Import tab to start learning.")))))
+                        (dom/text (if (pos? (:total summary))
+                                    "Nothing due — you're all caught up."
+                                    "No topics yet. Import a document from the Import tab to start learning."))))))
                 (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))
 
         (Dashboard dash)))))

@@ -21,6 +21,7 @@
           :card-mutations   (atom 0)
           :sync-mutations   (atom 0)
           :tree-mutations   (atom 0)
+          :queue-mutations  (atom 0)
           :pin-mutations    (atom 0)
           :undo-mutations   (atom 0)
           :card-gen-status  (atom {})
