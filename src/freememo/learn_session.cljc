@@ -6,18 +6,21 @@
    [freememo.logging :as log]
    [freememo.topic-page :refer [TopicPage]]
    [freememo.bibliography-form :as bibform]
+   #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])))
 
 #?(:clj
-   (defn advance-topic* [id]
-     (db/advance-topic! id)))
+   (defn advance-topic* [user-id id]
+     (db/advance-topic! id)
+     (swap! (us/get-atom user-id :queue-mutations) inc)))
 
 #?(:clj
-   (defn postpone-topic* [id days]
-     (db/postpone-topic! id days)))
+   (defn postpone-topic* [user-id id days]
+     (db/postpone-topic! id days)
+     (swap! (us/get-atom user-id :queue-mutations) inc)))
 
 ;; Shared bottom bar with Postpone + Next
-(e/defn BottomBar [topic-id !queue-idx]
+(e/defn BottomBar [user-id topic-id !queue-idx]
   (e/client
     (let [!show-postpone (atom false)
           show-postpone (e/watch !show-postpone)
@@ -54,7 +57,7 @@
                   (e/on-unmount #(swap! !queue-idx inc))
                   (let [days (:days event)]
                     (case (e/server (when (and days (pos? days))
-                                      (postpone-topic* topic-id days)))
+                                      (postpone-topic* user-id topic-id days)))
                       (case (e/client (reset! !show-postpone false))
                         (t)))))))
             (dom/button
@@ -84,7 +87,7 @@
                 (e/on-unmount #(do (swap! !queue-idx inc)
                                  (js/setTimeout (fn [] (reset! !busy false)) 500)))
                 (reset! !busy true)
-                (case (e/server (advance-topic* topic-id))
+                (case (e/server (advance-topic* user-id topic-id))
                   (case (e/client (log/log-debug (str "Session advancing idx=" (inc @!queue-idx))))
                     (t)))))))))))
 
@@ -140,4 +143,4 @@
                     navigate!
                     llm-enabled?
                     queue-ctx))
-                (BottomBar topic-id !queue-idx)))))))))
+                (BottomBar user-id topic-id !queue-idx)))))))))
