@@ -257,7 +257,7 @@
       ;; so the timer schedules exactly once on the :done transition.
       (when (= sync-phase :done)
         (let [[t _] (e/Token :anki-autoclose)]
-          (when t (helpers/schedule-close! !show-modal 1500))))
+          (when t (helpers/schedule-close! !show-modal 500))))
       ;; Status display
       (when sync-phase
         (dom/div
