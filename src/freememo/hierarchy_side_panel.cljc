@@ -69,16 +69,31 @@
 
    A node's children are rendered when the node is on the path from
    scope-root to current-id, or when the user explicitly expanded it.
-   scope-root is always treated as expanded."
+   scope-root is always treated as expanded.
+
+   Page nodes are flattened away at the root: for a pdf/epub/web/wikipedia
+   scope-root, each `page` child is replaced by that page's own children (the
+   extracts), so pages are not rendered and extracts appear directly under the
+   root. Mirrors DocumentTreeView (knowledge_tree.cljc)."
   [scope-root current-id children-map expanded-set items]
   (let [id->parent (into {} (map (juxt :topics/id :topics/parent_id)) items)
         path-set   (loop [id current-id acc (transient #{})]
                      (if (or (nil? id) (contains? acc id))
                        (persistent! acc)
                        (recur (get id->parent id) (conj! acc id))))]
-    (letfn [(walk [node depth]
+    (letfn [(child-nodes [node depth]
+              (let [raw (vec (get children-map (:topics/id node)))]
+                (if (and (zero? depth)
+                      (#{"pdf" "epub" "web" "wikipedia"} (:topics/kind node)))
+                  (vec (mapcat (fn [c]
+                                 (if (= "page" (:topics/kind c))
+                                   (get children-map (:topics/id c))
+                                   [c]))
+                         raw))
+                  raw)))
+            (walk [node depth]
               (let [id   (:topics/id node)
-                    kids (vec (get children-map id))
+                    kids (child-nodes node depth)
                     has? (boolean (seq kids))
                     row  {:depth depth
                           :topic node
