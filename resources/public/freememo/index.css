@@ -2601,6 +2601,14 @@ form[aria-busy="true"] {
 
 .teaser-card { background: var(--color-bg-subtle); }
 
+/* Dashboard responsive: on phones the flex strips overflow, so reflow the
+   KPI tiles into a 3-col grid and stack the chart/teaser pairs. */
+@media (max-width: 600px) {
+    .kpi-strip { display: grid; grid-template-columns: repeat(3, 1fr); }
+    .dash-charts { flex-direction: column; }
+    .dash-teasers { flex-direction: column; }
+}
+
 .teaser-head {
     display: flex;
     align-items: center;

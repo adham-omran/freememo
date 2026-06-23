@@ -37,7 +37,8 @@
         (EditCardModal !editing-card user-id))
 
       (if (:success cards-result)
-        (let [cards-vec (e/server (vec (:cards cards-result)))
+        (let [cards-vec (e/server (e/Tap-diffs (fn [d] (prn :tap/cards-vec d))
+                                    (vec (:cards cards-result))))
               card-count (e/server (count cards-vec))
               unsynced-count (e/server (count (filter #(or (nil? (:flashcards/anki_synced_at %))
                                                          (and (:flashcards/updated_at %)

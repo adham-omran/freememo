@@ -11,8 +11,13 @@
 ;; Track the loaded PDFDocumentProxy so we can destroy it on cleanup
 (defonce !pdf-doc (atom nil))
 
-;; Init generation — incremented in init-viewer!; stale async callbacks check & skip
+;; Init generation — incremented in init-viewer!/set-document!; stale async callbacks check & skip
 (defonce !init-gen (atom 0))
+
+;; doc-id currently displayed by the mounted viewer (nil = none loaded). The
+;; persistent PdfViewerComponent reads this to decide init-viewer! vs in-place
+;; set-document! on a document-id change.
+(defonce !loaded-doc-id (atom nil))
 
 
 (defn destroy-viewer!
@@ -27,6 +32,7 @@
        (when-let [^js doc @!pdf-doc]
          (try (.destroy doc) (catch :default _)))
        (reset! !pdf-doc nil)
+       (reset! !loaded-doc-id nil)
        (reset! !viewer-state nil))))
 
 ;; Copy-to-clipboard helper — registered once globally
@@ -61,27 +67,63 @@
          true)
        true)))
 
+#?(:cljs
+   (defn- start-load!
+     "Fetch pdf-url (cache-first) and `.setDocument` onto the viewer currently in
+      `!viewer-state`, guarded by my-gen so stale loads skip. Shared by
+      init-viewer! (fresh viewer) and set-document! (existing viewer, in-place
+      swap). Destroys the previously-loaded PDFDocumentProxy before replacing."
+     [pdf-url my-gen on-ready]
+     (when-let [{:keys [^js viewer ^js event-bus ^js link-service]} @!viewer-state]
+       (let [^js pdfjs (.-pdfjsLib js/window)
+             doc-id (-> pdf-url (.split "/") (.pop) js/parseInt)
+             use-pdf (fn [^js pdf]
+                       (if (= my-gen @!init-gen)
+                         (do
+                           (js/console.log "[PDF] document loaded, gen=" my-gen "numPages=" (.-numPages pdf))
+                           (when-let [^js old @!pdf-doc] (try (.destroy old) (catch :default _)))
+                           (reset! !pdf-doc pdf)
+                           (reset! !loaded-doc-id doc-id)
+                           (.setDocument viewer pdf)
+                           (.setDocument link-service pdf nil)
+                           (.on event-bus "pagesloaded"
+                             (fn [] (set! (.-currentScaleValue viewer) "page-width"))
+                             (clj->js {:once true}))
+                           (when on-ready (on-ready pdf viewer)))
+                         (js/console.log "[PDF] SKIPPING stale load, gen=" my-gen "current=" @!init-gen)))]
+         (-> (pdf-cache/cache-get doc-id)
+           (.then (fn [cached]
+                    (if cached
+                      (-> (.getDocument pdfjs (clj->js {:data (.slice cached)})) (.-promise))
+                      (do (js/console.log "[PDF] cache MISS, fetching doc-id=" doc-id)
+                        (-> (js/fetch pdf-url)
+                          (.then (fn [^js resp]
+                                   (when-not (.-ok resp)
+                                     (throw (js/Error. (str "PDF fetch failed: " (.-status resp)))))
+                                   (.arrayBuffer resp)))
+                          (.then (fn [^js buf]
+                                   (pdf-cache/cache-put doc-id buf)
+                                   (-> (.getDocument pdfjs (clj->js {:data (.slice buf)})) (.-promise)))))))))
+           (.then use-pdf)
+           (.catch (fn [err] (js/console.error "PDF load error:" err))))))))
+
 (defn init-viewer!
-  "Initialize PDF.js viewer with given container and PDF URL.
-   Destroys any previous viewer first.
-   Calls on-ready callback when PDF is loaded with (pdf viewer) args."
+  "Create the PDF.js viewer ONCE in the given container and load pdf-url.
+   Destroys any previous viewer first. For swapping the document on an
+   already-created viewer (no recreate), use set-document! instead.
+   Calls on-ready when the PDF is loaded with (pdf viewer) args."
   [container viewer-div pdf-url on-ready]
   #?(:clj nil
      :cljs
      (when (and container viewer-div (.-pdfjsLib js/window) (.-pdfjsViewer js/window))
-       ;; Increment generation FIRST — this is a plain defn, not Electric reactive,
-       ;; so swap! always increments correctly. Any previous init's async callbacks
-       ;; will see a stale generation and skip.
+       ;; Increment generation FIRST — plain defn, so swap! always increments.
+       ;; Any previous init's async callbacks see a stale gen and skip.
        (let [my-gen (swap! !init-gen inc)]
          (js/console.log "[PDF] init-viewer!" "gen=" my-gen "url=" pdf-url)
-         ;; Destroy previous viewer to release memory and detach event listeners
          (destroy-viewer!)
-         ;; Clear any residual DOM from old viewer
          (set! (.-innerHTML viewer-div) "")
          (set! (.-scrollTop container) 0)
-
-         (let [^js pdfjs (.-pdfjsLib js/window)
-               ^js viewer-ns (.-pdfjsViewer js/window)
+         (let [^js viewer-ns (.-pdfjsViewer js/window)
                ^js event-bus (new (.-EventBus viewer-ns))
                ^js link-service (new (.-PDFLinkService viewer-ns) (clj->js {:eventBus event-bus}))
                ^js viewer (new (.-PDFViewer viewer-ns)
@@ -95,45 +137,20 @@
            (reset! !viewer-state {:viewer viewer
                                   :event-bus event-bus
                                   :link-service link-service})
+           (start-load! pdf-url my-gen on-ready))))))
 
-           ;; Load PDF document — cache-first via IndexedDB
-           (let [doc-id (-> pdf-url (.split "/") (.pop) js/parseInt)
-                 use-pdf (fn [^js pdf]
-                           (if (= my-gen @!init-gen)
-                             (do
-                               (js/console.log "[PDF] document loaded, gen=" my-gen "numPages=" (.-numPages pdf))
-                               (reset! !pdf-doc pdf)
-                               (.setDocument viewer pdf)
-                               (.setDocument link-service pdf nil)
-                               (.on event-bus "pagesloaded"
-                                 (fn []
-                                   (js/console.log "[PDF] pagesloaded: scale=" (.-currentScale viewer)
-                                     "scrollH=" (.-scrollHeight container)
-                                     "pages=" (.-pagesCount viewer))
-                                   (set! (.-currentScaleValue viewer) "page-width")
-                                   (js/console.log "[PDF] after page-width: scale=" (.-currentScale viewer)
-                                     "scrollH=" (.-scrollHeight container)))
-                                 (clj->js {:once true}))
-                               (when on-ready (on-ready pdf viewer)))
-                             (js/console.log "[PDF] SKIPPING stale init, gen=" my-gen "current=" @!init-gen)))]
-             (-> (pdf-cache/cache-get doc-id)
-               (.then (fn [cached]
-                        (if cached
-                          (do (js/console.log "[PDF] cache HIT, doc-id=" doc-id "bytes=" (.-byteLength cached))
-                            (-> (.getDocument pdfjs (clj->js {:data (.slice cached)}))
-                              (.-promise)))
-                          (do (js/console.log "[PDF] cache MISS, fetching doc-id=" doc-id)
-                            (-> (js/fetch pdf-url)
-                              (.then (fn [^js resp]
-                                       (when-not (.-ok resp)
-                                         (throw (js/Error. (str "PDF fetch failed: " (.-status resp)))))
-                                       (.arrayBuffer resp)))
-                              (.then (fn [^js buf]
-                                       (pdf-cache/cache-put doc-id buf)
-                                       (-> (.getDocument pdfjs (clj->js {:data (.slice buf)}))
-                                         (.-promise)))))))))
-               (.then use-pdf)
-               (.catch (fn [err] (js/console.error "PDF load error:" err))))))))))
+(defn set-document!
+  "Swap the displayed PDF on the EXISTING viewer (no destroy/recreate). Used when
+   the topic advances to a different PDF while the viewer stays mounted, avoiding
+   the frame-churn that corrupts the Electric incseq diff. No-op if no viewer is
+   mounted (caller should init-viewer! first)."
+  [pdf-url on-ready]
+  #?(:clj nil
+     :cljs
+     (when (some? @!viewer-state)
+       (let [my-gen (swap! !init-gen inc)]
+         (js/console.log "[PDF] set-document!" "gen=" my-gen "url=" pdf-url)
+         (start-load! pdf-url my-gen on-ready)))))
 
 (defn go-to-page!
   "Navigate to specific page number (1-indexed)."
