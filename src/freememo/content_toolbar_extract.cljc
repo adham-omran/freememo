@@ -120,7 +120,8 @@
                     (reset! !busy true)
                     (e/on-unmount (fn [] (reset! !busy false) (on-done!))))
                   (case (e/server (e/Offload #(do (db/done-topic! topic-id) :ok)))
-                    (case (e/server (swap! (us/get-atom user-id :refresh) inc))
+                    (case (e/server (do (swap! (us/get-atom user-id :refresh) inc)
+                                      (swap! (us/get-atom user-id :meta-refresh) inc)))
                       (t))))))
 
           ;; Done status: show Restore button
@@ -140,7 +141,8 @@
             (let [[t _] (e/Token restore-click)]
               (when t
                 (case (e/server (e/Offload #(do (db/restore-topic! topic-id) :ok)))
-                  (case (e/server (swap! (us/get-atom user-id :refresh) inc))
+                  (case (e/server (do (swap! (us/get-atom user-id :refresh) inc)
+                                    (swap! (us/get-atom user-id :meta-refresh) inc)))
                     (if (and navigate! origin)
                       (case (navigate! origin) (t))
                       (t))))))))))
