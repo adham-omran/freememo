@@ -146,9 +146,7 @@
               scan-dpi (e/server (settings/get-scan-dpi user-id))
 
               ;; Topic resolution
-              ;; DEBUG (diff-corruption hunt): :tap/overview to SERVER log.
-              overview (e/server (e/Tap-diffs (fn [d] (prn :tap/overview d))
-                                   (get-topic-overview* refresh topic-id)))
+              overview (e/server (get-topic-overview* refresh topic-id))
               kind (:kind overview)
               pdf-root-id (:pdf-root-id overview)
               is-pdf? (some? pdf-root-id)

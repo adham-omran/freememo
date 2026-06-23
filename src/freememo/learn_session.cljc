@@ -97,11 +97,8 @@
           ;; queue-vec is a server-sited value (form binding in ViewerContent)
           ;; — consume it only inside (e/server ...) so the full queue never
           ;; crosses the wire; one row crosses per review step.
-          ;; DEBUG (diff-corruption hunt): :tap/total prints to SERVER log on
-          ;; every queue-vec resize; :tap/branch-done? prints to BROWSER console
-          ;; when the all-done/active if flips. Remove once confirmed.
-          total (e/server (e/Tap-diffs (fn [d] (prn :tap/total d)) (count queue-vec)))
-          branch-done? (e/Tap-diffs (fn [d] (prn :tap/branch-done? d)) (>= idx total))]
+          total (e/server (count queue-vec))
+          branch-done? (>= idx total)]
       (dom/div
         (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
 
@@ -129,10 +126,7 @@
 
           ;; Active topic
           (let [item (e/server (nth queue-vec idx nil))
-                ;; DEBUG (diff-corruption hunt): :tap/item-present? prints to
-                ;; BROWSER console when the active item ↔ nil (queue shrank past
-                ;; idx). Remove once confirmed.
-                item-present? (e/Tap-diffs (fn [d] (prn :tap/item-present? d)) (some? item))
+                item-present? (some? item)
                 kind (:topics/kind item)
                 topic-id (:topics/id item)
                 is-pdf? (= kind "pdf")

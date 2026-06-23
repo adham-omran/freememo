@@ -178,15 +178,8 @@
                     ;; Server-form binding (sited-by-use): the subtree rows
                     ;; stay server-side; only row-count and the window rows
                     ;; cross. expanded-set crosses upward (bounded).
-                    ;; DEBUG (diff-corruption hunt): :tap/hierarchy-rows prints
-                    ;; the rows incseq diffs to the SERVER log. If it emits a
-                    ;; corrupt-shaped diff coincident with :diff-corruption on a
-                    ;; cross-document learn-session advance, this Tape (torn down
-                    ;; by the e/for-by [root-topic-id] remount) is the source.
-                    ;; Remove once the fix is confirmed.
-                    rows (e/server (e/Tap-diffs (fn [d] (prn :tap/hierarchy-rows d))
-                                     (build-hierarchy-rows* tree-rev user-id
-                                       page-topic-id expanded-set)))]
+                    rows (e/server (build-hierarchy-rows* tree-rev user-id
+                                     page-topic-id expanded-set))]
                 (when (e/server (some? rows))
                   (let [row-count (e/server (count rows))
                         row-height 36
