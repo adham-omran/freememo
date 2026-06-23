@@ -11,8 +11,10 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
    [freememo.pdf-viewer :as pdfviewer]
+   #?(:clj [freememo.db :as db])
    #?(:clj [freememo.page-ocr :as page])
    #?(:clj [freememo.settings :as settings])
+   #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])))
 
 ;; ── Server bridges (plain defns; CLJS gets a no-op) ────────────────────────
@@ -51,6 +53,51 @@
   #?(:clj (let [r (settings/save-extract-style user-id root style)]
             (swap! (us/get-atom user-id :settings-refresh) inc)
             r)
+     :cljs nil))
+
+(defn push-toast!*
+  "Push a toast to the user's queue. Errors auto-sticky (toasts/push! default)."
+  [user-id level message]
+  #?(:clj (do (toasts/push! user-id {:level level :message message}) nil)
+     :cljs nil))
+
+(defn- summarize [results]
+  (let [ok (count (filter :success results))
+        failed (count (remove :success results))]
+    {:ok ok :failed failed}))
+
+(defn remote-extract-all!*
+  "Extract+saves text via PDFBox for every page under `root`. Overwrites
+   existing page text. Bumps :refresh once. Returns {:ok n :failed m}."
+  [user-id root]
+  #?(:clj (let [pages (db/list-pages root)
+                results (doall
+                          (for [p pages
+                                :let [tid (:topics/id p)
+                                      pn (:topics/page_number p)]]
+                            (page/extract-page-text-pdfbox tid pn)))]
+            (swap! (us/get-atom user-id :refresh) inc)
+            (summarize results))
+     :cljs nil))
+
+(defn client-save-all!*
+  "Save client-extracted raw text for a batch of pages. `page->raw` maps
+   page-number (Long) -> raw String. Looks up the topic id for each page
+   under `root`, overwrites existing text, bumps :refresh once. Returns
+   {:ok n :failed m}."
+  [user-id root page->raw]
+  #?(:clj (let [idx (into {}
+                      (keep (fn [p]
+                              (when-let [pn (:topics/page_number p)]
+                                [pn (:topics/id p)])))
+                      (db/list-pages root))
+                results (doall
+                          (for [[pn raw] page->raw
+                                :let [tid (get idx pn)]
+                                :when tid]
+                            (page/save-pdfjs-text! tid pn raw)))]
+            (swap! (us/get-atom user-id :refresh) inc)
+            (summarize results))
      :cljs nil))
 
 ;; ── Compare modal ──────────────────────────────────────────────────────────
@@ -208,3 +255,119 @@
       ;; Compare path (style unset): run both previews in a modal.
       (when compare
         (CompareModal user-id root-topic-id compare !compare)))))
+
+;; ── Copy-all button ───────────────────────────────────────────────────────
+
+(def ^:private client-batch-limit 50)
+
+(defn- kick-client-all!
+  "Extract text from a range of pages client-side via PDF.js and stash the
+   {page-number -> raw-text} map into `!sink`. Range is [start, end] inclusive,
+   capped at the document's numPages; never wraps. Errors resolve to \"\".
+   `id` is a correlation key. No-op on the server."
+  [!sink id start]
+  #?(:cljs (let [doc @pdfviewer/!pdf-doc]
+             (if-not doc
+               (reset! !sink {:id id :results {}})
+               (let [num-pages (.-numPages doc)
+                     end (min (+ start client-batch-limit -1) num-pages)
+                     pages (range start (inc end))]
+                 (-> (.all js/Promise
+                       (mapv #(pdfviewer/get-page-text-content! %) pages))
+                   (.then (fn [texts]
+                            (reset! !sink {:id id
+                                           :results (zipmap pages texts)})))
+                   (.catch (fn [_]
+                             (reset! !sink {:id id :results {}})))))))
+     :clj nil))
+
+(e/defn CopyAllTextButton
+  "Copy the PDF's own text for ALL pages. Dispatches on `extract-style`
+   (the per-PDF setting):
+     \"remote\" → extract+saves every page server-side via PDFBox.
+     \"client\" → extract up to 50 pages client-side via PDF.js, starting at
+                 `page-number` and never wrapping; toasts the cap up front.
+     \"ask\"/nil → toasts a warning asking the user to set a default method
+                  first (via Copy text's compare modal or Document options)."
+  [user-id root-topic-id page-number extract-style]
+  (e/client
+    (let [!remote-run (atom nil) remote-run (e/watch !remote-run)
+          !client-all (atom nil) client-all (e/watch !client-all)
+          !warned (atom nil) warned (e/watch !warned)
+          busy? (or (some? remote-run) (some? client-all))]
+      (dom/button
+        (dom/props {:class "btn btn-sm btn-secondary"
+                    :aria-label "Copy text for all pages"
+                    :data-tooltip "Copy the PDF's own text for all pages (no AI)"
+                    :disabled busy?})
+        (icons/Icon :library :size 16)
+        (dom/span (dom/props {:class "icon-label"})
+          (dom/text (if busy? "Copying…" "Copy all text")))
+        (dom/On "click"
+          (fn [_]
+            (let [id (str (random-uuid)) style extract-style]
+              (case style
+                "remote" (reset! !remote-run {:id id})
+                "client" (do
+                           (reset! !warned {:id id :page page-number})
+                           (kick-client-all! !client-all id page-number))
+                (reset! !warned {:id id :ask? true}))))
+          nil))
+
+      ;; No preferred method → warn the user once per click.
+      (when warned
+        (let [[t _] (e/Token warned)]
+          (when t
+            (e/on-unmount #(reset! !warned nil))
+            (case (e/server
+                    (e/Offload
+                      (fn []
+                        (if (:ask? warned)
+                          (push-toast!*
+                            user-id :warning
+                            (str "Set a default text-extraction method first — "
+                              "click 'Copy text' on a single page and pick one "
+                              "(or choose one in Document options)."))
+                          (push-toast!*
+                            user-id :info
+                            (str "Copying text for up to " client-batch-limit
+                              " pages starting at page " (:page warned)
+                              " (client/PDF.js batch limit)."))))))
+              (t)))))
+
+      ;; Remote batch path: extract+saves every page on the server, then toast.
+      (when remote-run
+        (let [[t _] (e/Token remote-run)]
+          (when t
+            (e/on-unmount #(reset! !remote-run nil))
+            (let [summary (e/server (e/Offload #(remote-extract-all!* user-id root-topic-id)))]
+              (case (e/server
+                      (e/Offload
+                        (fn []
+                          (push-toast!*
+                            user-id
+                            (if (pos? (:failed summary)) :warning :success)
+                            (str "Copied text for " (:ok summary) " page(s)"
+                              (when (pos? (:failed summary))
+                                (str " (" (:failed summary) " failed)"))
+                              ".")))))
+                (t))))))
+
+      ;; Client batch path: save the client-extracted raw text per page, then toast.
+      (when client-all
+        (let [[t _] (e/Token client-all)]
+          (when t
+            (e/on-unmount #(reset! !client-all nil))
+            (let [results (:results client-all)
+                  summary (e/server (e/Offload #(client-save-all!* user-id root-topic-id results)))]
+              (case (e/server
+                      (e/Offload
+                        (fn []
+                          (push-toast!*
+                            user-id
+                            (if (pos? (:failed summary)) :warning :success)
+                            (str "Copied text for " (:ok summary) " page(s) (client)"
+                              (when (pos? (:failed summary))
+                                (str " (" (:failed summary) " failed)"))
+                              ".")))))
+                (t)))))))))
