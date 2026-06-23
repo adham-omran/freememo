@@ -2396,6 +2396,22 @@
                   topic-id])]
     (:id result)))
 
+(defn get-extract-source-page
+  "For an extract whose immediate parent is a PDF page, return
+   {:root <pdf-root-id> :page <page-number>}; nil otherwise (e.g. a web/epub
+   extract, or a page/root topic). Used by the 'Go to page' toolbar button."
+  [extract-id]
+  (when extract-id
+    (let [ext    (get-topic extract-id)
+          parent (when (:topics/parent_id ext) (get-topic (:topics/parent_id ext)))]
+      (when (and parent
+              (= "page" (:topics/kind parent))
+              (:topics/page_number parent))
+        (let [root-id (get-root-topic-id extract-id)
+              root    (when root-id (get-topic root-id))]
+          (when (= "pdf" (:topics/kind root))
+            {:root root-id :page (:topics/page_number parent)}))))))
+
 (defn get-subtree
   "Get a topic and all its descendants via recursive CTE.
    Selects from topics directly (not the CTE alias) so JDBC metadata

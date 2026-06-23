@@ -4,6 +4,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string]
+   [freememo.navigation :as nav]
    [freememo.pdf-viewer :as viewer]))
 
 (e/defn PdfViewerComponent
@@ -247,7 +248,15 @@
                                (viewer/on-page-change! (fn [page-num]
                                                          (reset! !page page-num)
                                                          (when on-navigate! (on-navigate! page-num))))
-                               (let [resume-page (or initial-page 1)]
+                               ;; A PDF-page extract's "Go to page" button primes
+                               ;; nav/!pending-page-jump then navigates here; consume
+                               ;; it post-load (go-to-page is reliable only after
+                               ;; pagesloaded). Overrides the last-page resume.
+                               (let [pending @nav/!pending-page-jump
+                                     jump (when (and pending (= (:root pending) document-id))
+                                            (:page pending))
+                                     resume-page (or jump initial-page 1)]
+                                 (when jump (reset! nav/!pending-page-jump nil))
                                  (when (> resume-page 1)
                                    (viewer/go-to-page-after-load! resume-page)))
                                (viewer/setup-pinch-zoom! @!container))]

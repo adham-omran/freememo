@@ -262,7 +262,7 @@
    fetches are in flight at once. A failed chunk resolves its pages to \"\" and
    the run continues. `id` is a correlation key. No-op on the server."
   [!sink id]
-  #?(:cljs (let [doc @pdfviewer/!pdf-doc]
+  #?(:cljs (let [^js doc @pdfviewer/!pdf-doc]
              (if-not doc
                (do (js/console.log "[PDF copy-all] no doc loaded; nothing to extract")
                    (reset! !sink {:id id :results {}}))
