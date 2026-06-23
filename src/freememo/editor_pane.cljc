@@ -227,7 +227,7 @@
             (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
                   extract-style (e/server (copy/get-extract-style* settings-refresh user-id root-topic-id))]
               (copy/CopyTextButton user-id root-topic-id page-number extract-style)
-              (copy/CopyAllTextButton user-id root-topic-id page-number extract-style))
+              (copy/CopyAllTextButton user-id root-topic-id extract-style))
 
             ;; OCR error display — auto-dismiss after 3 seconds
             (when-let [ocr-err (get ocr-errors [root-topic-id page-number])]

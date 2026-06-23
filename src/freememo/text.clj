@@ -118,14 +118,23 @@
     (str/replace ">" "&gt;")
     (str/replace "\"" "&quot;")))
 
+(defn strip-control-chars
+  "Remove C0 control characters that are invalid in HTML/XML text — including
+   NUL (0x00), which Postgres rejects in a UTF8 column. Preserves tab (0x09),
+   newline (0x0A), and carriage return (0x0D)."
+  [s]
+  (str/replace s #"[\x00-\x08\x0B\x0C\x0E-\x1F]" ""))
+
 (defn text->paragraph-html
   "Convert plain text (e.g., from PDFBox or PDF.js) into paragraph HTML.
-   Splits on blank lines, escapes HTML, wraps each non-empty block in <p>.
-   Returns an empty string when no non-blank blocks remain."
+   Strips HTML-invalid control chars (incl. NUL), splits on blank lines,
+   escapes HTML, wraps each non-empty block in <p>. Returns an empty string
+   when no non-blank blocks remain."
   [text]
   (if (or (nil? text) (str/blank? text))
     ""
     (let [normalized (-> text
+                       strip-control-chars
                        (str/replace "\r\n" "\n")
                        (str/replace "\r" "\n"))
           blocks (->> (str/split normalized #"\n[ \t]*\n+")
