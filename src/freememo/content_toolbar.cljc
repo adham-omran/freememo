@@ -20,6 +20,7 @@
    [freememo.document-options :refer [DocumentOptionsButton]]
    [freememo.auto-extract-button :refer [AutoExtractButton]]
    [freememo.transcribe-button :refer [TranscribeButton]]
+   [freememo.jump-to-source-button :refer [JumpToSourcePageButton]]
    #?(:clj [freememo.settings :as user-settings])
    #?(:clj [freememo.user-state :as us])
    [freememo.icons :as icons]
@@ -387,6 +388,8 @@
                 (dom/props {:class "toolbar-group toolbar-doc-context-group toolbar-collapse-bib"})
                 (when audio?
                   (TranscribeButton user-id topic-id enc-key))
+                (when (= context-mode :extract)
+                  (JumpToSourcePageButton topic-id navigate!))
                 (BibliographyButton user-id biblio-target-id has-source? nil)
                 (AutoExtractButton)
                 (DocumentOptionsButton user-id topic-id is-pdf? biblio-target-id))

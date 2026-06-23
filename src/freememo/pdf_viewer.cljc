@@ -68,6 +68,12 @@
        true)))
 
 #?(:cljs
+   (defn- pdf-url->doc-id
+     "Parse the integer doc-id from a /api/pdf/<id> url."
+     [pdf-url]
+     (-> pdf-url (.split "/") (.pop) js/parseInt)))
+
+#?(:cljs
    (defn- start-load!
      "Fetch pdf-url (cache-first) and `.setDocument` onto the viewer currently in
       `!viewer-state`, guarded by my-gen so stale loads skip. Shared by
@@ -76,9 +82,16 @@
      [pdf-url my-gen on-ready]
      (when-let [{:keys [^js viewer ^js event-bus ^js link-service]} @!viewer-state]
        (let [^js pdfjs (.-pdfjsLib js/window)
-             doc-id (-> pdf-url (.split "/") (.pop) js/parseInt)
+             doc-id (pdf-url->doc-id pdf-url)
              use-pdf (fn [^js pdf]
-                       (if (= my-gen @!init-gen)
+                       (cond
+                         (not= my-gen @!init-gen)
+                         (js/console.log "[PDF] SKIPPING stale load, gen=" my-gen "current=" @!init-gen)
+                         ;; Already showing this doc — re-running .setDocument would
+                         ;; null-deref in PDF.js AnnotationEditorUIManager.destroy.
+                         (= doc-id @!loaded-doc-id)
+                         (js/console.log "[PDF] SKIPPING redundant load, doc-id=" doc-id "already loaded")
+                         :else
                          (do
                            (js/console.log "[PDF] document loaded, gen=" my-gen "numPages=" (.-numPages pdf))
                            (when-let [^js old @!pdf-doc] (try (.destroy old) (catch :default _)))
@@ -89,8 +102,7 @@
                            (.on event-bus "pagesloaded"
                              (fn [] (set! (.-currentScaleValue viewer) "page-width"))
                              (clj->js {:once true}))
-                           (when on-ready (on-ready pdf viewer)))
-                         (js/console.log "[PDF] SKIPPING stale load, gen=" my-gen "current=" @!init-gen)))]
+                           (when on-ready (on-ready pdf viewer)))))]
          (-> (pdf-cache/cache-get doc-id)
            (.then (fn [cached]
                     (if cached
@@ -147,7 +159,8 @@
   [pdf-url on-ready]
   #?(:clj nil
      :cljs
-     (when (some? @!viewer-state)
+     (when (and (some? @!viewer-state)
+             (not= (pdf-url->doc-id pdf-url) @!loaded-doc-id))
        (let [my-gen (swap! !init-gen inc)]
          (js/console.log "[PDF] set-document!" "gen=" my-gen "url=" pdf-url)
          (start-load! pdf-url my-gen on-ready)))))
