@@ -3,7 +3,8 @@
    the current page topic, plus the current page's extract children. User can
    expand other siblings to see their extracts.
 
-   Reactivity: subscribes to the per-user :tree-mutations atom (NOT :refresh).
+   Reactivity: subscribes to the per-user :tree-mutations atom (tree shape) and
+   :meta-refresh (done-status, which drives the strike-through) — NOT :refresh.
    :tree-mutations is bumped only when the topic tree shape changes (extract
    create/delete, rename, document import). Decoupling from :refresh keeps the
    rich-text editor's `topic` re-fetch out of the side-panel update path so
@@ -187,7 +188,10 @@
                                     :color "var(--color-text-secondary)"}})
                 (dom/text "No page selected."))
 
-              (let [tree-rev   (e/server (e/watch (us/get-atom user-id :tree-mutations)))
+              ;; :tree-mutations = tree shape; :meta-refresh = done-status (drives
+              ;; the strike-through). Both re-run the rows query.
+              (let [tree-rev   (e/server (+ (e/watch (us/get-atom user-id :tree-mutations))
+                                           (e/watch (us/get-atom user-id :meta-refresh))))
                     !expanded-set (atom #{})
                     expanded-set (e/watch !expanded-set)
                     ;; Server-form binding (sited-by-use): the subtree rows
@@ -235,10 +239,7 @@
                                                       :padding-right "8px"
                                                       :cursor (if current? "default" "pointer")
                                                       :background (when current? "var(--color-bg-card)")
-                                                      :border-left (if done?
-                                                                     "3px solid var(--color-success-lighter)"
-                                                                     "3px solid transparent")
-                                                      :opacity (when done? "0.6")
+                                                      :border-left "3px solid transparent"
                                                       :outline (when current? "2px solid var(--color-primary)")
                                                       :outline-offset (when current? "-2px")
                                                       :font-weight (if current? "600" "400")}})
@@ -297,7 +298,8 @@
                                                         :text-overflow "ellipsis"
                                                         :white-space "nowrap"
                                                         :flex "1" :min-width "0"
-                                                        :color "var(--color-text-primary)"}})
+                                                        :color "var(--color-text-primary)"
+                                                        :text-decoration (when done? "line-through")}})
                                     (dom/text title))))))))
                       (dom/tr
                         (dom/props {:style {:--order 1}})
