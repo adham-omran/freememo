@@ -261,40 +261,45 @@
 (def ^:private client-batch-limit 50)
 
 (defn- kick-client-all!
-  "Extract text from a range of pages client-side via PDF.js and stash the
-   {page-number -> raw-text} map into `!sink`. Range is [start, end] inclusive,
-   capped at the document's numPages; never wraps. Errors resolve to \"\".
-   `id` is a correlation key. No-op on the server."
-  [!sink id start]
+  "Extract text for EVERY page (1..numPages) client-side via PDF.js and stash
+   the {page-number -> raw-text} map into `!sink`. Pages are processed in
+   sequential chunks of `client-batch-limit`, so no more than that many PDF.js
+   fetches are in flight at once. A failed chunk resolves its pages to \"\" and
+   the run continues. `id` is a correlation key. No-op on the server."
+  [!sink id]
   #?(:cljs (let [doc @pdfviewer/!pdf-doc]
              (if-not doc
                (reset! !sink {:id id :results {}})
                (let [num-pages (.-numPages doc)
-                     end (min (+ start client-batch-limit -1) num-pages)
-                     pages (range start (inc end))]
-                 (-> (.all js/Promise
-                       (mapv #(pdfviewer/get-page-text-content! %) pages))
-                   (.then (fn [texts]
-                            (reset! !sink {:id id
-                                           :results (zipmap pages texts)})))
-                   (.catch (fn [_]
-                             (reset! !sink {:id id :results {}})))))))
+                     chunks (partition-all client-batch-limit (range 1 (inc num-pages)))]
+                 (-> (reduce
+                       (fn [p chunk]
+                         (.then p
+                           (fn [acc]
+                             (-> (.all js/Promise
+                                   (mapv #(pdfviewer/get-page-text-content! %) chunk))
+                               (.then (fn [texts] (merge acc (zipmap chunk texts))))
+                               (.catch (fn [_] (merge acc (zipmap chunk (repeat "")))))))))
+                       (.resolve js/Promise {})
+                       chunks)
+                   (.then (fn [results] (reset! !sink {:id id :results results})))))))
      :clj nil))
 
 (e/defn CopyAllTextButton
   "Copy the PDF's own text for ALL pages. Dispatches on `extract-style`
    (the per-PDF setting):
      \"remote\" → extract+saves every page server-side via PDFBox.
-     \"client\" → extract up to 50 pages client-side via PDF.js, starting at
-                 `page-number` and never wrapping; toasts the cap up front.
+     \"client\" → extract every page client-side via PDF.js, in sequential
+                 chunks of `client-batch-limit`.
      \"ask\"/nil → toasts a warning asking the user to set a default method
                   first (via Copy text's compare modal or Document options)."
-  [user-id root-topic-id page-number extract-style]
+  [user-id root-topic-id extract-style]
   (e/client
     (let [!remote-run (atom nil) remote-run (e/watch !remote-run)
+          !client-run (atom nil) client-run (e/watch !client-run)
           !client-all (atom nil) client-all (e/watch !client-all)
           !warned (atom nil) warned (e/watch !warned)
-          busy? (or (some? remote-run) (some? client-all))]
+          busy? (or (some? remote-run) (some? client-run) (some? client-all))]
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary"
                     :aria-label "Copy text for all pages"
@@ -309,9 +314,9 @@
               (case style
                 "remote" (reset! !remote-run {:id id})
                 "client" (do
-                           (reset! !warned {:id id :page page-number})
-                           (kick-client-all! !client-all id page-number))
-                (reset! !warned {:id id :ask? true}))))
+                           (reset! !client-run {:id id})
+                           (kick-client-all! !client-all id))
+                (reset! !warned {:id id}))))
           nil))
 
       ;; No preferred method → warn the user once per click.
@@ -322,17 +327,11 @@
             (case (e/server
                     (e/Offload
                       (fn []
-                        (if (:ask? warned)
-                          (push-toast!*
-                            user-id :warning
-                            (str "Set a default text-extraction method first — "
-                              "click 'Copy text' on a single page and pick one "
-                              "(or choose one in Document options)."))
-                          (push-toast!*
-                            user-id :info
-                            (str "Copying text for up to " client-batch-limit
-                              " pages starting at page " (:page warned)
-                              " (client/PDF.js batch limit)."))))))
+                        (push-toast!*
+                          user-id :warning
+                          (str "Set a default text-extraction method first — "
+                            "click 'Copy text' on a single page and pick one "
+                            "(or choose one in Document options).")))))
               (t)))))
 
       ;; Remote batch path: extract+saves every page on the server, then toast.
@@ -357,7 +356,7 @@
       (when client-all
         (let [[t _] (e/Token client-all)]
           (when t
-            (e/on-unmount #(reset! !client-all nil))
+            (e/on-unmount #(do (reset! !client-run nil) (reset! !client-all nil)))
             (let [results (:results client-all)
                   summary (e/server (e/Offload #(client-save-all!* user-id root-topic-id results)))]
               (case (e/server
