@@ -73,29 +73,24 @@
   #?(:clj (let [pages (db/list-pages root)
                 results (doall
                           (for [p pages
-                                :let [tid (:topics/id p)
-                                      pn (:topics/page_number p)]]
-                            (page/extract-page-text-pdfbox tid pn)))]
+                                :let [pn (:topics/page_number p)]]
+                            (page/extract-page-text-pdfbox root pn)))]
             (swap! (us/get-atom user-id :refresh) inc)
             (summarize results))
      :cljs nil))
 
 (defn client-save-all!*
   "Save client-extracted raw text for a batch of pages. `page->raw` maps
-   page-number (Long) -> raw String. Looks up the topic id for each page
-   under `root`, overwrites existing text, bumps :refresh once. Returns
-   {:ok n :failed m}."
+   page-number (Long) -> raw String. Overwrites the existing page row under
+   `root` for each page-number that exists under `root` (save-page-text!
+   keys on (root, page-number)); unknown page-numbers are skipped. Bumps
+   :refresh once. Returns {:ok n :failed m}."
   [user-id root page->raw]
-  #?(:clj (let [idx (into {}
-                      (keep (fn [p]
-                              (when-let [pn (:topics/page_number p)]
-                                [pn (:topics/id p)])))
-                      (db/list-pages root))
+  #?(:clj (let [valid (into #{} (keep :topics/page_number) (db/list-pages root))
                 results (doall
                           (for [[pn raw] page->raw
-                                :let [tid (get idx pn)]
-                                :when tid]
-                            (page/save-pdfjs-text! tid pn raw)))]
+                                :when (contains? valid pn)]
+                            (page/save-pdfjs-text! root pn raw)))]
             (swap! (us/get-atom user-id :refresh) inc)
             (summarize results))
      :cljs nil))
@@ -269,20 +264,32 @@
   [!sink id]
   #?(:cljs (let [doc @pdfviewer/!pdf-doc]
              (if-not doc
-               (reset! !sink {:id id :results {}})
+               (do (js/console.log "[PDF copy-all] no doc loaded; nothing to extract")
+                   (reset! !sink {:id id :results {}}))
                (let [num-pages (.-numPages doc)
-                     chunks (partition-all client-batch-limit (range 1 (inc num-pages)))]
+                     chunks (vec (partition-all client-batch-limit (range 1 (inc num-pages))))
+                     nchunks (count chunks)]
+                 ;; DEBUG (hung-vs-slow hunt): logs each chunk as it begins and on
+                 ;; completion. Stall at "chunk k" = a getTextContent never settling;
+                 ;; reaching "extraction complete" while the button stays "Copying…"
+                 ;; = the stall is server-side (client-save-all!*). Remove once confirmed.
+                 (js/console.log "[PDF copy-all] start; pages=" num-pages "chunks=" nchunks)
                  (-> (reduce
-                       (fn [p chunk]
+                       (fn [p [i chunk]]
                          (.then p
                            (fn [acc]
+                             (js/console.log "[PDF copy-all] chunk" (inc i) "/" nchunks
+                               "pages" (first chunk) ".." (last chunk))
                              (-> (.all js/Promise
                                    (mapv #(pdfviewer/get-page-text-content! %) chunk))
                                (.then (fn [texts] (merge acc (zipmap chunk texts))))
                                (.catch (fn [_] (merge acc (zipmap chunk (repeat "")))))))))
                        (.resolve js/Promise {})
-                       chunks)
-                   (.then (fn [results] (reset! !sink {:id id :results results})))))))
+                       (map-indexed vector chunks))
+                   (.then (fn [results]
+                            (js/console.log "[PDF copy-all] extraction complete;"
+                              (count results) "pages; handing to server save")
+                            (reset! !sink {:id id :results results})))))))
      :clj nil))
 
 (e/defn CopyAllTextButton
