@@ -25,6 +25,10 @@
           !viewer-div (atom nil)
           !input-val (atom (str seed-page))
           !inp-focused (atom false)
+          ;; Per-mount stable refs: !timer-id for unmount clearTimeout;
+          ;; !requested-doc-id dedupes init/swap to fire once per document-id.
+          !timer-id (atom nil)
+          !requested-doc-id (atom nil)
           page (e/watch !page)
           total (e/watch !total)
           input-val (e/watch !input-val)
@@ -209,7 +213,11 @@
           (dom/props {:style {:flex "1"
                               :position "relative"}})
 
-          ;; Viewer container (must be absolutely positioned for PDF.js)
+          ;; Viewer container — created ONCE (init-viewer!) and the document is
+          ;; swapped IN-PLACE (set-document!) when document-id changes; never
+          ;; remounted per topic. Mirrors the persistent Quill editor
+          ;; (rich_text_editor_component) and fixes the :diff-corruption WS crash
+          ;; that the previous per-document e/for-by remount caused.
           (dom/div
             (dom/props {:class "pdf-viewer-container"
                         :style {:position "absolute"
@@ -223,42 +231,38 @@
             (e/on-unmount
               (fn []
                 (js/console.log "[PDF-COMP] unmount")
+                (when-let [t @!timer-id] (js/clearTimeout t))
                 (viewer/destroy-viewer!)))
 
             (dom/div
               (dom/props {:class "pdfViewer"})
               (reset! !viewer-div dom/node)
 
-              ;; Initialize PDF.js viewer after DOM elements exist.
-              ;; CRITICAL: document-id and initial-page must ONLY appear inside fn closures.
-              ;; Electric treats fn bodies as opaque (no reactive tracking).
-              ;;
-              ;; It doesn't matter if this setTimeout fires multiple times —
-              ;; init-viewer! has its own generation guard that skips stale async
-              ;; callbacks. Only the latest init-viewer! call's promise proceeds.
-              (js/setTimeout
-                (fn []
-                  (js/console.log "[PDF-COMP] setTimeout fired")
-                  (viewer/init-viewer!
-                    @!container
-                    @!viewer-div
-                    (str "/api/pdf/" document-id)
-                    (fn [^js pdf _]
-                      (js/console.log "[PDF-COMP] on-ready, numPages=" (.-numPages pdf))
-                      (reset! !total (.-numPages pdf))
-                      (viewer/on-page-change! (fn [page-num]
-                                                (reset! !page page-num)
-                                                (when on-navigate! (on-navigate! page-num))))
-                      ;; Read @!page (viewer's last-known page) not the static
-                      ;; initial-page prop — Electric re-fires this setTimeout on
-                      ;; closure-identity churn, and using initial-page here
-                      ;; would snap the user back to their starting page after
-                      ;; any sibling-page jump.
-                      (let [resume-page (or @!page initial-page 1)]
-                        (when (> resume-page 1)
-                          (viewer/go-to-page-after-load! resume-page)))
-                      (viewer/setup-pinch-zoom! @!container))))
-                100)))))
+              ;; document-id and initial-page appear ONLY inside fn closures
+              ;; (Electric treats fn bodies as opaque). !requested-doc-id dedupes
+              ;; so this fires exactly once per document-id change.
+              (let [pdf-url (str "/api/pdf/" document-id)
+                    on-ready (fn [^js pdf _]
+                               (reset! !total (.-numPages pdf))
+                               (viewer/on-page-change! (fn [page-num]
+                                                         (reset! !page page-num)
+                                                         (when on-navigate! (on-navigate! page-num))))
+                               (let [resume-page (or initial-page 1)]
+                                 (when (> resume-page 1)
+                                   (viewer/go-to-page-after-load! resume-page)))
+                               (viewer/setup-pinch-zoom! @!container))]
+                (when (not= document-id @!requested-doc-id)
+                  (reset! !requested-doc-id document-id)
+                  (if (nil? @viewer/!viewer-state)
+                    ;; No viewer yet → create once, deferred so DOM nodes exist.
+                    (reset! !timer-id
+                      (js/setTimeout
+                        (fn []
+                          (reset! !timer-id nil)
+                          (viewer/init-viewer! @!container @!viewer-div pdf-url on-ready))
+                        100))
+                    ;; Viewer exists, different doc → swap in place (no remount).
+                    (viewer/set-document! pdf-url on-ready))))))))
 
       ;; Return current page number for OCR integration
       page)))

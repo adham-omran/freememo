@@ -44,19 +44,21 @@
         (dom/props {:style {:height "100%" :width "100%"
                             :min-width "0" :min-height "0" :overflow "hidden"}})
 
-        ;; Frame isolation — remounts cleanly when pdf-root-id changes
-        (e/for-by identity [_k [pdf-root-id]]
-          (reset! !current-page
-            (PdfViewerComponent
-              {:document-id pdf-root-id
-               :initial-page initial-page
-               :target-page target-page
-               :on-navigate! (fn [p]
-                               (reset! !page-to-save p)
-                               (when on-page-change! (on-page-change! p)))
-               :layout layout
-               :on-layout-toggle! (fn []
-                                    (when on-layout-toggle!
-                                      (on-layout-toggle!)))}))))
+        ;; No e/for-by: the viewer persists across pdf-root-id changes and swaps
+        ;; the document in-place (PdfViewerComponent → viewer/set-document!).
+        ;; Remounting here caused the :diff-corruption WS crash on learn-session
+        ;; advance.
+        (reset! !current-page
+          (PdfViewerComponent
+            {:document-id pdf-root-id
+             :initial-page initial-page
+             :target-page target-page
+             :on-navigate! (fn [p]
+                             (reset! !page-to-save p)
+                             (when on-page-change! (on-page-change! p)))
+             :layout layout
+             :on-layout-toggle! (fn []
+                                  (when on-layout-toggle!
+                                    (on-layout-toggle!)))})))
 
       current-page)))
