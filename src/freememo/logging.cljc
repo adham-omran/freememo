@@ -8,27 +8,26 @@
 ;; Plain defn wrappers safe for use inside e/defn bodies in .cljc files.
 ;; Telemere macros (tel/log!, tel/error!) expand to platform-specific code
 ;; that Electric's dual-compiler can't handle inside e/defn. These wrappers
-;; are plain fns visible on both CLJ and CLJS.
+;; are plain fns visible on both CLJ and CLJS, and route through Telemere on
+;; BOTH peers — so CLJS log calls obey Telemere's min-levels instead of
+;; printing unconditionally to the browser console.
 
-(defn log-info [msg]
-  #?(:clj (tel/log! :info msg)
-     :cljs (js/console.log "[INFO]" msg)))
+(defn log-info  [msg] (tel/log! :info  msg))
+(defn log-debug [msg] (tel/log! :debug msg))
+(defn log-warn  [msg] (tel/log! :warn  msg))
+(defn log-error [msg] (tel/log! :error msg))
+(defn log-trace [msg] (tel/log! :trace msg))
 
-(defn log-debug [msg]
-  #?(:clj (tel/log! :debug msg)
-     :cljs (when js/goog.DEBUG (js/console.log "[DEBUG]" msg))))
-
-(defn log-warn [msg]
-  #?(:clj (tel/log! :warn msg)
-     :cljs (js/console.warn "[WARN]" msg)))
-
-(defn log-error [msg]
-  #?(:clj (tel/log! :error msg)
-     :cljs (js/console.error "[ERROR]" msg)))
-
-(defn log-trace [msg]
-  #?(:clj (tel/log! :trace msg)
-     :cljs nil))
+#?(:cljs
+   (defn init-client!
+     "Client log init — call once from the client entrypoint.
+      Lowers the runtime min-level to :debug in dev only (`goog.DEBUG`); prod
+      keeps Telemere's :info default so :debug stays silent. Prod *builds*
+      additionally elide :debug calls at compile time via the
+      `taoensso.telemere.ct-min-level` JVM property set on the build alias."
+     []
+     (when ^boolean js/goog.DEBUG
+       (tel/set-min-level! :debug))))
 
 #?(:clj
    (def ^:private format-alert-signal (tel/format-signal-fn {})))

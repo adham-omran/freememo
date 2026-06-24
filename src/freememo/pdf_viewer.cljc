@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [taoensso.telemere :as tel]
    [freememo.pdf-cache :as pdf-cache]))
 
 ;; Global viewer state (similar to electric-fiddle reference)
@@ -26,7 +27,7 @@
   #?(:clj nil
      :cljs
      (do
-       (js/console.log "[PDF] destroy-viewer!" "has-viewer?" (some? @!viewer-state) "has-doc?" (some? @!pdf-doc))
+       (tel/log! {:level :debug :id ::destroy :data {:has-viewer? (some? @!viewer-state) :has-doc? (some? @!pdf-doc)}} "destroy-viewer!")
        (when-let [{:keys [viewer]} @!viewer-state]
          (try (.cleanup ^js viewer) (catch :default _)))
        (when-let [^js doc @!pdf-doc]
@@ -50,7 +51,7 @@
                                       ".pdfViewer")))]
                (when (and in-pdf? (seq text))
                  (-> (js/navigator.clipboard.writeText text)
-                   (.catch (fn [err] (js/console.warn "Clipboard write failed:" err))))
+                   (.catch (fn [err] (tel/log! {:level :warn :id ::clipboard-write :error err} "clipboard write failed"))))
                  true)))]
        ;; Cmd+C / Ctrl+C
        (.addEventListener js/document "keydown"
@@ -86,14 +87,14 @@
              use-pdf (fn [^js pdf]
                        (cond
                          (not= my-gen @!init-gen)
-                         (js/console.log "[PDF] SKIPPING stale load, gen=" my-gen "current=" @!init-gen)
+                         (tel/log! {:level :debug :id ::skip-stale :data {:gen my-gen :current @!init-gen}} "skipping stale load")
                          ;; Already showing this doc — re-running .setDocument would
                          ;; null-deref in PDF.js AnnotationEditorUIManager.destroy.
                          (= doc-id @!loaded-doc-id)
-                         (js/console.log "[PDF] SKIPPING redundant load, doc-id=" doc-id "already loaded")
+                         (tel/log! {:level :debug :id ::skip-redundant :data {:doc-id doc-id}} "skipping redundant load")
                          :else
                          (do
-                           (js/console.log "[PDF] document loaded, gen=" my-gen "numPages=" (.-numPages pdf))
+                           (tel/log! {:level :debug :id ::doc-loaded :data {:gen my-gen :pages (.-numPages pdf)}} "document loaded")
                            (when-let [^js old @!pdf-doc] (try (.destroy old) (catch :default _)))
                            (reset! !pdf-doc pdf)
                            (reset! !loaded-doc-id doc-id)
@@ -107,7 +108,7 @@
            (.then (fn [cached]
                     (if cached
                       (-> (.getDocument pdfjs (clj->js {:data (.slice cached)})) (.-promise))
-                      (do (js/console.log "[PDF] cache MISS, fetching doc-id=" doc-id)
+                      (do (tel/log! {:level :debug :id ::cache-miss :data {:doc-id doc-id}} "cache miss, fetching")
                         (-> (js/fetch pdf-url)
                           (.then (fn [^js resp]
                                    (when-not (.-ok resp)
@@ -117,7 +118,7 @@
                                    (pdf-cache/cache-put doc-id buf)
                                    (-> (.getDocument pdfjs (clj->js {:data (.slice buf)})) (.-promise)))))))))
            (.then use-pdf)
-           (.catch (fn [err] (js/console.error "PDF load error:" err))))))))
+           (.catch (fn [err] (tel/log! {:level :error :id ::pdf-load :error err} "PDF load error"))))))))
 
 (defn init-viewer!
   "Create the PDF.js viewer ONCE in the given container and load pdf-url.
@@ -131,7 +132,7 @@
        ;; Increment generation FIRST — plain defn, so swap! always increments.
        ;; Any previous init's async callbacks see a stale gen and skip.
        (let [my-gen (swap! !init-gen inc)]
-         (js/console.log "[PDF] init-viewer!" "gen=" my-gen "url=" pdf-url)
+         (tel/log! {:level :debug :id ::init :data {:gen my-gen :url pdf-url}} "init-viewer!")
          (destroy-viewer!)
          (set! (.-innerHTML viewer-div) "")
          (set! (.-scrollTop container) 0)
@@ -162,7 +163,7 @@
      (when (and (some? @!viewer-state)
              (not= (pdf-url->doc-id pdf-url) @!loaded-doc-id))
        (let [my-gen (swap! !init-gen inc)]
-         (js/console.log "[PDF] set-document!" "gen=" my-gen "url=" pdf-url)
+         (tel/log! {:level :debug :id ::set-document :data {:gen my-gen :url pdf-url}} "set-document!")
          (start-load! pdf-url my-gen on-ready)))))
 
 (defn go-to-page!
@@ -262,7 +263,7 @@
                           (recur (inc i)))))
                     (.join parts ""))))
          (.catch (fn [err]
-                   (js/console.error "[PDF] getTextContent error:" err)
+                   (tel/log! {:level :error :id ::get-text-content :error err} "getTextContent error")
                    "")))
        (js/Promise.resolve ""))))
 

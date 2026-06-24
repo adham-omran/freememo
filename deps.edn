@@ -32,7 +32,9 @@
            :build ; use `clj -X:prod:build build-client`, NOT -T!
            {:extra-paths ["src-build"]
             :ns-default  build
-            :jvm-opts    ["-Xss4m"]
+            ;; Elide CLJS :debug log calls in release builds (this JVM compiles
+            ;; cljs; the prod CLJ server runs in a separate process unaffected).
+            :jvm-opts    ["-Xss4m" "-Dtaoensso.telemere.ct-min-level=:info"]
             :extra-deps  {thheller/shadow-cljs          {:mvn/version "2.26.2"}
                           io.github.clojure/tools.build {:mvn/version "0.10.8"}}}
            :jetty9 {:override-deps {ring/ring {:mvn/version "1.9.6"}}
