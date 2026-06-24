@@ -15,6 +15,7 @@
    [freememo.biblio-import :as biblio-import]
    [freememo.content-type :as ct]
    [freememo.import-staging :as staging]
+   [freememo.live-doc :as live-doc]
    [freememo.markdown :as md]
    [freememo.url-validate :as url]
    [freememo.csl :as csl]
@@ -398,6 +399,74 @@
      :headers {"Content-Type" "application/json"}
      :body (json/generate-string {:success false :error "Not authenticated"})}))
 
+(defn create-live-doc-handler
+  "POST /api/create-live-doc — create an empty Live Document.
+   Pre:  authenticated.
+   Post: {:success true :doc_id N} for a kind='pdf', is_live=true topic with no
+         blob yet, or error JSON."
+  [request]
+  (if-let [user-id (require-auth request)]
+    (try
+      (let [topic (db/create-live-doc! user-id)
+            topic-id (:topics/id topic)]
+        (swap! (us/get-atom user-id :refresh) inc)
+        (swap! (us/get-atom user-id :tree-mutations) inc)
+        (json-response 200 {:success true :doc_id topic-id}))
+      (catch Exception e
+        (tel/error! {:id ::create-live-doc-handler} e)
+        (json-response 500 {:success false :error "Failed to create Live Document. Please try again."})))
+    (json-response 401 {:success false :error "Not authenticated"})))
+
+(defn append-images-handler
+  "POST /api/append-images — multipart {doc_id, images (1..N image parts)}.
+   Pre:  authenticated; doc_id is a kind='pdf', is_live=true topic owned by caller;
+         every part is image/*; combined size within the per-file cap.
+   Post: each image appended as an A4 page → {:success true :pages_added K :doc_id N}."
+  [request]
+  (if-let [user-id (require-auth request)]
+    (try
+      (let [doc-id (some-> (get-in request [:params "doc_id"]) parse-long)
+            raw (get-in request [:params "images"])
+            parts (cond (nil? raw) [] (sequential? raw) raw :else [raw])
+            topic (when doc-id (db/get-topic-for-user user-id doc-id))]
+        (cond
+          (nil? doc-id)
+          (json-response 400 {:success false :error "Missing doc_id"})
+
+          (nil? topic)
+          (json-response 404 {:success false :error "Document not found"})
+
+          (not (and (= (:topics/kind topic) "pdf") (:topics/is_live topic)))
+          (json-response 400 {:success false :error "Not a Live Document"})
+
+          (empty? parts)
+          (json-response 400 {:success false :error "No images provided"})
+
+          (some #(not (re-find #"^image/" (or (:content-type %) ""))) parts)
+          (json-response 400 {:success false :error "Only image uploads are supported"})
+
+          :else
+          (let [images (mapv #(read-multipart-bytes (:tempfile %)) parts)
+                total (reduce + (map alength images))
+                cap (upload-byte-cap)]
+            (if (and cap (> total cap))
+              (do (log-upload-failure! ::append-images-too-large request
+                    {:user-id user-id :doc-id doc-id :batch-size total :limit cap})
+                  (json-response 413 {:success false :error (str "Batch exceeds " cap " bytes")
+                                      :code "file-too-large" :limit cap :incoming total}))
+              (let [r (live-doc/append-images! user-id doc-id images)]
+                (if (:success r)
+                  (json-response 200 {:success true :pages_added (:pages-added r) :doc_id doc-id})
+                  (json-response (error-status (:code r))
+                    (cond-> {:success false :error (:error r)}
+                      (:code r) (assoc :code (:code r))
+                      (:used r) (assoc :used (:used r))
+                      (:limit r) (assoc :limit (:limit r))))))))))
+      (catch Exception e
+        (tel/error! {:id ::append-images-handler} e)
+        (json-response 500 {:success false :error "Append failed. Please try again."})))
+    (json-response 401 {:success false :error "Not authenticated"})))
+
 (defn upload-media-handler
   "Accept a multipart image upload, dedup by (user, sha256), return media id."
   [request]
@@ -709,6 +778,12 @@
 
       (and (= uri "/api/create-topic") (= method :post))
       (create-topic-handler request)
+
+      (and (= uri "/api/create-live-doc") (= method :post))
+      (create-live-doc-handler request)
+
+      (and (= uri "/api/append-images") (= method :post))
+      (append-images-handler request)
 
       (and (re-matches #"/api/pdf/\d+" uri) (= method :get))
       (get-pdf-handler request)

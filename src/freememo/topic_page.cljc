@@ -52,7 +52,10 @@
                pdf-root-id (cond
                              (= kind "pdf") topic-id
                              (and (= kind "page") (= root-kind "pdf")) root-id
-                             :else nil)]
+                             :else nil)
+               pdf-root-topic (cond (= kind "pdf") topic
+                                    (and (= kind "page") (= root-kind "pdf")) (or root topic)
+                                    :else nil)]
            ;; Scalars only — TopicPage destructures this map client-side, so
            ;; every key crosses the wire on each :refresh tick. Content bodies
            ;; are fetched separately: get-topic-content* (gated off for PDFs)
@@ -62,6 +65,11 @@
             :parent-id parent-id
             :page-number page-number
             :pdf-root-id pdf-root-id
+            ;; Live Document: drives the viewer's add-photos affordance,
+            ;; empty-state, and (via page count) post-append reload.
+            :is-live? (boolean (:topics/is_live pdf-root-topic))
+            :pdf-has-file? (boolean (and pdf-root-id (db/topic-file-exists? pdf-root-id)))
+            :pdf-page-count (when pdf-root-id (db/count-pages pdf-root-id))
             :root-topic-id root-id
             :title (:topics/title topic)
             :root-title (or (:topics/title root) (:topics/title topic))
@@ -150,6 +158,9 @@
               kind (:kind overview)
               pdf-root-id (:pdf-root-id overview)
               is-pdf? (some? pdf-root-id)
+              is-live? (:is-live? overview)
+              pdf-has-file? (:pdf-has-file? overview)
+              pdf-page-count (:pdf-page-count overview)
               root-topic-id (:root-topic-id overview)
               ;; Content body fetched separately and gated: PDF panes get
               ;; their text from get-page-text*, so fetching the topic's
@@ -343,6 +354,9 @@
                                     :initial-page initial-page
                                     :target-page target-page
                                     :layout layout
+                                    :is-live? is-live?
+                                    :has-file? pdf-has-file?
+                                    :reload-nonce pdf-page-count
                                     :on-page-change! (fn [p] (reset! !current-page p))
                                     :on-layout-toggle! toggle-layout!})))
 

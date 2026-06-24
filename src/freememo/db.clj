@@ -167,6 +167,11 @@
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_repetitions_topic_time
                       ON topic_repetitions(topic_id, event_at DESC)"])
 
+  ;; Live Document flag — a kind='pdf' root that the user keeps appending
+  ;; camera/upload image pages to. Stays a first-class PDF everywhere; this
+  ;; boolean only drives the viewer's add-photos affordance and empty-state.
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS is_live BOOLEAN NOT NULL DEFAULT false"])
+
   ;; Search: plain-text column derived from HTML content, trigram GIN index
   (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS content_text text"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_content_text_trgm
@@ -1191,6 +1196,26 @@
                  :from [:topic_files]
                  :where [:= :topic_id topic-id]})))
 
+(defn topic-file-exists?
+  "True iff a topic has a stored binary file blob."
+  [topic-id]
+  (some? (jdbc/execute-one! ds
+           (sql/format {:select [[[:inline 1] :x]]
+                        :from [:topic_files]
+                        :where [:= :topic_id topic-id]}))))
+
+(defn count-pages
+  "Number of kind='page' child topics under `parent-id` (excludes staged
+   deletes). Drives the live-doc viewer's reload trigger."
+  [parent-id]
+  (or (:c (jdbc/execute-one! ds
+            (sql/format {:select [[[:count :*] :c]]
+                         :from [:topics]
+                         :where [:and [:= :parent_id parent-id] [:= :kind "page"]
+                                 [:is :staged_delete_id nil]]})
+            {:builder-fn rs/as-unqualified-maps}))
+    0))
+
 (defn save-topic-file!
   "Store binary file for a topic. Upserts."
   [topic-id file-bytes file-size mime-type]
@@ -1478,6 +1503,64 @@
             VALUES (?, ?, ?, ?)"
            topic-id file-bytes file-size mime-type])
         topic))))
+
+(defn create-live-doc!
+  "Create an empty Live Document: a kind='pdf', is_live=true root topic with a
+   bibliography `sources` row and NO file blob or page stubs. The backing PDF is
+   created lazily on the first appended image batch (see commit-live-append!).
+   Returns the topic with :topics/id."
+  [user-id]
+  (let [title (str "Live Document " (java.time.LocalDate/now))]
+    (input/check-length! :title title input/title-max)
+    (jdbc/with-transaction [tx ds]
+      (let [csl {:type "document" :title title
+                 :accessed {:date-parts (now-date-parts)}}
+            source (jdbc/execute-one! tx
+                     (sql/format {:insert-into :sources
+                                  :values [{:user_id user-id
+                                            :csl_type "document"
+                                            :csl (->jsonb csl)
+                                            :title title}]
+                                  :returning [:id]}))
+            source-id (:sources/id source)]
+        (jdbc/execute-one! tx
+          (sql/format {:insert-into :topics
+                       :values [{:user_id user-id
+                                 :kind "pdf"
+                                 :title title
+                                 :is_live true
+                                 :source_id source-id}]
+                       :returning [:id]}))))))
+
+(defn commit-live-append!
+  "Atomically persist an appended PDF blob for a Live Document.
+   Pre:  topic-id is a kind='pdf', is_live=true topic owned by user-id (the HTTP
+         handler enforces ownership); new-bytes is the full rebuilt PDF;
+         new-total is its page count; prev-total the count before this batch;
+         delta-bytes >= 0 is the blob growth to charge against quota.
+   Post: blob replaced, users.usage_bytes bumped by delta-bytes, page stubs
+         created for page numbers (prev-total+1 .. new-total). A quota violation
+         throws quota/quota-error and aborts the whole tx — nothing persists.
+   Returns {:pages-added (- new-total prev-total)}."
+  [user-id topic-id ^bytes new-bytes new-size delta-bytes prev-total new-total]
+  (jdbc/with-transaction [tx ds]
+    (when (pos? delta-bytes)
+      (quota/check-and-bump! tx user-id delta-bytes))
+    (jdbc/execute! tx
+      ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
+        VALUES (?, ?, ?, 'application/pdf')
+        ON CONFLICT (topic_id)
+        DO UPDATE SET file_data = excluded.file_data, file_size = excluded.file_size,
+                      mime_type = excluded.mime_type"
+       topic-id new-bytes new-size])
+    (doseq [n (range (inc prev-total) (inc new-total))]
+      (jdbc/execute! tx
+        ["INSERT INTO topics (user_id, parent_id, kind, title, page_number)
+          VALUES (?, ?, 'page', ?, ?)
+          ON CONFLICT (parent_id, page_number) WHERE page_number IS NOT NULL
+          DO NOTHING"
+         user-id topic-id (str "Page " n) n]))
+    {:pages-added (- new-total prev-total)}))
 
 (defn find-web-topic-by-title
   "Find an existing root-level web topic by title (case-insensitive).

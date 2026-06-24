@@ -26,6 +26,7 @@
 
    Returns the current page number (int)."
   [{:keys [user-id pdf-root-id initial-page layout target-page
+           is-live? has-file? reload-nonce
            on-page-change! on-layout-toggle!]}]
   (e/client
     (let [!current-page   (atom (or initial-page 1))
@@ -53,6 +54,9 @@
             {:document-id pdf-root-id
              :initial-page initial-page
              :target-page target-page
+             :is-live? is-live?
+             :has-file? has-file?
+             :reload-nonce reload-nonce
              :on-navigate! (fn [p]
                              (reset! !page-to-save p)
                              (when on-page-change! (on-page-change! p)))

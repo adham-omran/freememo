@@ -8,13 +8,72 @@
    [freememo.navigation :as nav]
    [freememo.pdf-viewer :as viewer]))
 
+;; LiveDocAddPhotos — Upload / Take-photo buttons backed by two hidden file
+;; inputs. A selected batch POSTs to /api/append-images; on success the server
+;; bumps :refresh, which re-derives the page count and reloads the viewer (no
+;; explicit reload call needed here). `compact?` shrinks it for the toolbar.
+(e/defn LiveDocAddPhotos [{:keys [document-id compact?]}]
+  (e/client
+    (let [!upload-input (atom nil)
+          !camera-input (atom nil)
+          !busy (atom false)
+          busy (e/watch !busy)
+          send! (fn [files]
+                  (when (and (seq files) (not @!busy))
+                    (reset! !busy true)
+                    (let [fd (js/FormData.)]
+                      (.append fd "doc_id" (str document-id))
+                      (doseq [f files] (.append fd "images" f))
+                      (-> (js/fetch "/api/append-images" (clj->js {:method "POST" :body fd}))
+                        (.then (fn [r] (.json r)))
+                        (.then (fn [^js d]
+                                 (reset! !busy false)
+                                 (when-not (.-success d)
+                                   (js/alert (or (.-error d) "Append failed")))))
+                        (.catch (fn [e]
+                                  (reset! !busy false)
+                                  (js/console.error "Append failed:" e)
+                                  (js/alert "Append failed — please try again.")))))))
+          btn-style {:padding (if compact? "6px 10px" "10px 16px")
+                     :cursor (if busy "wait" "pointer")
+                     :background "var(--color-bg-card)"
+                     :border "1px solid var(--color-border)"
+                     :border-radius "3px" :font-size "14px"}]
+      (dom/button
+        (dom/props {:title "Upload images" :disabled busy :style btn-style})
+        (dom/text (if compact? "＋ Photos" (if busy "Adding…" "Upload images")))
+        (dom/On "click" (fn [_] (when-some [inp @!upload-input] (.click inp))) nil))
+      (dom/button
+        (dom/props {:title "Take a photo" :disabled busy
+                    :style (assoc btn-style :margin-left "4px")})
+        (dom/text (if compact? "📷" "Take photo"))
+        (dom/On "click" (fn [_] (when-some [inp @!camera-input] (.click inp))) nil))
+      ;; Hidden inputs: upload (multi) + camera (capture rear camera on mobile).
+      (dom/input
+        (dom/props {:type "file" :accept "image/*" :multiple true :style {:display "none"}})
+        (reset! !upload-input dom/node)
+        (dom/On "change"
+          (fn [e] (send! (array-seq (-> e .-target .-files)))
+            (set! (-> e .-target .-value) "")) nil))
+      (dom/input
+        (dom/props {:type "file" :accept "image/*" :capture "environment" :style {:display "none"}})
+        (reset! !camera-input dom/node)
+        (dom/On "change"
+          (fn [e] (send! (array-seq (-> e .-target .-files)))
+            (set! (-> e .-target .-value) "")) nil)))))
+
 (e/defn PdfViewerComponent
   "Renders a PDF viewer for the given document ID and exposes current page number.
    Props: {:document-id <int>, :initial-page <int>, :on-navigate! <fn>,
-           :layout <str>, :on-layout-toggle! <fn>}
+           :layout <str>, :on-layout-toggle! <fn>,
+           :is-live? <bool>, :has-file? <bool>, :reload-nonce <any>}
+   For a Live Document with no blob yet (is-live? ∧ ¬has-file?) it shows an
+   add-photos empty-state instead of initializing PDF.js. `reload-nonce` (the
+   page count) changing forces a reload of the same document.
    Returns: The current page number (for OCR integration)."
   [{:keys [document-id initial-page on-navigate!
-           layout on-layout-toggle! target-page]}]
+           layout on-layout-toggle! target-page
+           is-live? has-file? reload-nonce]}]
   (e/client
     ;; e/snapshot seeds the atoms ONCE at first mount. Without it, Electric
     ;; re-evaluates (atom …) on subsequent reactive cycles when callers
@@ -31,6 +90,10 @@
           ;; !requested-doc-id dedupes init/swap to fire once per document-id.
           !timer-id (atom nil)
           !requested-doc-id (atom nil)
+          ;; Tracks the reload-nonce already applied to the mounted doc, so a
+          ;; nonce bump (new live-doc pages) reloads exactly once.
+          !requested-reload (atom nil)
+          show-empty? (and is-live? (not has-file?))
           page (e/watch !page)
           total (e/watch !total)
           input-val (e/watch !input-val)
@@ -47,6 +110,17 @@
       ;; Sync page → input-val when not typing
       (when (and (not inp-focused) (not= input-val (str page)))
         (reset! !input-val (str page)))
+
+      ;; Live-doc reload: after the viewer is initialized for this doc, a
+      ;; reload-nonce (page count) change means pages were appended — force a
+      ;; re-fetch. Guarded on init-done so it never races the initial load.
+      (when (and is-live? has-file?
+                 (= document-id @!requested-doc-id)
+                 (some? @viewer/!viewer-state)
+                 (not= reload-nonce @!requested-reload))
+        (reset! !requested-reload reload-nonce)
+        (viewer/reload-document! (str "/api/pdf/" document-id)
+          (fn [^js pdf _] (reset! !total (.-numPages pdf)))))
 
       (dom/div
         (dom/props {:style {:height "100%"
@@ -66,6 +140,14 @@
                               :align-items "center"
                               :gap "12px"
                               :flex-wrap "wrap"}})
+
+          ;; Live Document: add-photos controls, first in the toolbar.
+          (when is-live?
+            (dom/div
+              (dom/props {:style {:display "flex" :align-items "center" :gap "4px"
+                                  :padding-right "12px"
+                                  :border-right "1px solid var(--color-border)"}})
+              (LiveDocAddPhotos {:document-id document-id :compact? true})))
 
           ;; Page navigation section
           (dom/div
@@ -215,6 +297,25 @@
           (dom/props {:style {:flex "1"
                               :position "relative"}})
 
+          ;; Blob-less Live Document: invite the first batch. Rendered as an
+          ;; overlay; the viewer container below stays un-initialized (the init
+          ;; block is gated on (not show-empty?)) so PDF.js never fetches a 404.
+          (when show-empty?
+            (dom/div
+              (dom/props {:style {:position "absolute" :inset "0" :z-index "1"
+                                  :display "flex" :flex-direction "column"
+                                  :align-items "center" :justify-content "center"
+                                  :gap "16px" :padding "24px" :text-align "center"
+                                  :background "var(--color-pdf-bg)"
+                                  :color "var(--color-text-secondary)"}})
+              (dom/div (dom/props {:style {:font-size "15px" :font-weight "600"
+                                           :color "var(--color-text-primary)"}})
+                (dom/text "Empty Live Document"))
+              (dom/div (dom/props {:style {:font-size "13px" :max-width "320px"}})
+                (dom/text "Take photos or upload images of your material — each becomes a page you can keep adding to."))
+              (dom/div (dom/props {:style {:display "flex" :gap "8px"}})
+                (LiveDocAddPhotos {:document-id document-id :compact? false}))))
+
           ;; Viewer container — created ONCE (init-viewer!) and the document is
           ;; swapped IN-PLACE (set-document!) when document-id changes; never
           ;; remounted per topic. Mirrors the persistent Quill editor
@@ -261,8 +362,11 @@
                                  (when (> resume-page 1)
                                    (viewer/go-to-page-after-load! resume-page)))
                                (viewer/setup-pinch-zoom! @!container))]
-                (when (not= document-id @!requested-doc-id)
+                (when (and (not show-empty?) (not= document-id @!requested-doc-id))
                   (reset! !requested-doc-id document-id)
+                  ;; Mark this nonce applied so the reload effect doesn't fire
+                  ;; redundantly right after the initial load.
+                  (reset! !requested-reload reload-nonce)
                   (if (nil? @viewer/!viewer-state)
                     ;; No viewer yet → create once, deferred so DOM nodes exist.
                     (reset! !timer-id
