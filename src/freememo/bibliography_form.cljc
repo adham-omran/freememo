@@ -7,6 +7,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.modal-shell :as modal]
+   [freememo.loading :as loading]
    [clojure.string :as str]
    [freememo.icons :as icons]
    #?(:clj [freememo.db :as db])
@@ -417,24 +418,21 @@
 (e/defn BibliographyForm [!show user-id topic-id]
   (e/client
     (e/for-by identity [_k [topic-id]]
-      (let [server-data (e/server (e/Offload #(load-source-for-topic* 0 user-id topic-id)))]
+      (dom/div
+        (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
+        (modal/ModalEscape (fn [] (reset! !show false)))
+        (dom/On "click"
+          (fn [e]
+            (when (= (.-target e) (.-currentTarget e))
+              (reset! !show false)))
+          nil)
         (dom/div
-          (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
-          (modal/ModalEscape (fn [] (reset! !show false)))
-          (dom/On "click"
-            (fn [e]
-              (when (= (.-target e) (.-currentTarget e))
-                (reset! !show false)))
-            nil)
-          (dom/div
-            (dom/props {:class "modal-content modal-lg"
-                        :style {:max-height "85vh" :overflow-y "auto"
-                                :display "flex" :flex-direction "column"}})
-            (dom/h3
-              (dom/props {:style {:margin "0 0 16px 0" :font-size "16px"}})
-              (dom/text "Bibliography"))
-            (if (nil? server-data)
-              (dom/div
-                (dom/props {:style {:padding "16px" :color "var(--color-text-secondary)"}})
-                (dom/text "Loading…"))
-              (BibliographyDialog !show user-id topic-id (:form server-data)))))))))
+          (dom/props {:class "modal-content modal-lg"
+                      :style {:max-height "85vh" :overflow-y "auto"
+                              :display "flex" :flex-direction "column"}})
+          (dom/h3
+            (dom/props {:style {:margin "0 0 16px 0" :font-size "16px"}})
+            (dom/text "Bibliography"))
+          (loading/WithLoading
+            (e/fn [] (e/server (e/Offload #(load-source-for-topic* 0 user-id topic-id))))
+            (e/fn [data] (BibliographyDialog !show user-id topic-id (:form data)))))))))

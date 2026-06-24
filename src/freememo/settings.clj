@@ -88,6 +88,15 @@
     (or (get-user-openai-api-key user-id enc-key)
         (get-shared-openai-api-key))))
 
+(defn get-openrouter-api-key
+  "Resolve the OpenRouter key for OCR (topology A1: all OCR routes through it).
+   The platform key serves both official and self-host — self-host operators set
+   :secrets :platform-openrouter-api-key (or env PLATFORM_OPENROUTER_API_KEY) in
+   their own config. `user-id` is accepted for a future per-user BYOK path.
+   Post: the key string, or nil when unconfigured (caller refuses the action)."
+  [_user-id]
+  (config/platform-openrouter-api-key))
+
 (defn get-openai-api-key-status
   "Status for the settings UI. :platform in official mode (key block hidden);
    :user / :shared / :none in self-host."
@@ -477,6 +486,32 @@
     (catch Exception e
       (tel/error! {:id ::save-extract-style} e)
       {:success false :error "Failed to save extraction style"})))
+
+;; Per-document OCR model for "Scan Page". Value is an :id from
+;; freememo.ocr-models/registry. nil = unset → use the global default (get-model).
+(defn get-ocr-model [user-id doc-id]
+  (db/get-setting user-id (str "ocr_model_" doc-id)))
+
+(defn save-ocr-model [user-id doc-id model-id]
+  (try
+    (db/set-setting user-id (str "ocr_model_" doc-id) model-id)
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-ocr-model} e)
+      {:success false :error "Failed to save OCR model"})))
+
+;; User's global default OCR model (an :id from freememo.ocr-models/registry),
+;; used when a document has no per-document selection. nil = unset → registry default.
+(defn get-ocr-model-default [user-id]
+  (db/get-setting user-id "ocr_model_default"))
+
+(defn save-ocr-model-default [user-id model-id]
+  (try
+    (db/set-setting user-id "ocr_model_default" model-id)
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-ocr-model-default} e)
+      {:success false :error "Failed to save default OCR model"})))
 
 ;; Per-document pane open/closed state. Keys: "hierarchy_open_<root-id>",
 ;; "pins_open_<root-id>". State is shared across every topic in the same

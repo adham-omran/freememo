@@ -9,6 +9,7 @@
    [freememo.rich-text-editor-component :refer [RichTextEditorComponent]]
    [freememo.keyboard :as keyboard]
    [freememo.copy-text :as copy]
+   [freememo.ocr-compare :as ocr-compare]
    [freememo.navigation :as nav]
    [clojure.string :as str]
    #?(:cljs [freememo.editor-pin-menu :as pin-menu])
@@ -220,6 +221,10 @@
                                   (log/log-info (str "OCR scan already in progress topic-id=" doc " page=" pg))
                                   (start-ocr-scan! uid doc pg ek scan-dpi))))
                         (t)))))))
+
+            ;; Compare OCR — run every allowed model on this page, side-by-side.
+            (when llm-enabled?
+              (ocr-compare/OcrCompareButton user-id root-topic-id page-number scan-dpi))
 
             ;; Copy text — single native-extract button. Reads the per-PDF
             ;; extraction style (reactive on :settings-refresh): set → run that

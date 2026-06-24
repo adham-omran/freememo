@@ -7,6 +7,8 @@
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
    [freememo.home-page :refer [get-api-key-status*]]
+   [freememo.ocr-models :as ocr-models]
+   #?(:clj [freememo.ocr :as ocr])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.config :as config])
    #?(:clj [freememo.credits :as credits])
@@ -373,6 +375,30 @@
                         (if (:success r) (t) (t (:error r))))))))
               (dom/div (dom/props {:class "hint"})
                 (dom/text "Higher quality improves text recognition but increases processing time and API cost"))))
+
+          ;; Default OCR Model (Scan Page) — a document may override it in Document options
+          (let [server-ocr-model (e/server (settings/get-ocr-model-default user-id))
+                allowed-ids (e/server (ocr/allowed-ocr-model-ids))
+                label-of (into {} (map (juxt :id :label)) ocr-models/registry)
+                !ocr-model (atom (or server-ocr-model ocr-models/default-id))
+                ocr-model (e/watch !ocr-model)]
+            (dom/div
+              (dom/props {:class "field"})
+              (dom/label (dom/props {:class "label"}) (dom/text "Default OCR Model"))
+              (dom/select
+                (dom/props {:value ocr-model :class "select"})
+                (e/for [id (e/diff-by identity allowed-ids)]
+                  (dom/option (dom/props {:value id}) (dom/text (get label-of id id))))
+                (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                      [t ?error] (e/Token change-event)]
+                  (when (some? change-event)
+                    (reset! !ocr-model change-event))
+                  (when t
+                    (let [r (e/server (e/Offload #(settings/save-ocr-model-default user-id change-event)))]
+                      (case r
+                        (if (:success r) (t) (t (:error r))))))))
+              (dom/div (dom/props {:class "hint"})
+                (dom/text "Used for Scan Page unless a document overrides it in Document options"))))
 
           ;; Card Generation Retries — all attempts are billed (§5.4.5)
           (let [server-retries (e/server (settings/get-card-gen-max-retries user-id))
