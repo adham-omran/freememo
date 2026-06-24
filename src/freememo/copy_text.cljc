@@ -9,6 +9,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [taoensso.telemere :as tel]
    [freememo.icons :as icons]
    [freememo.pdf-viewer :as pdfviewer]
    #?(:clj [freememo.db :as db])
@@ -264,7 +265,7 @@
   [!sink id]
   #?(:cljs (let [^js doc @pdfviewer/!pdf-doc]
              (if-not doc
-               (do (js/console.log "[PDF copy-all] no doc loaded; nothing to extract")
+               (do (tel/log! {:level :debug :id ::copy-all-no-doc} "no doc loaded; nothing to extract")
                    (reset! !sink {:id id :results {}}))
                (let [num-pages (.-numPages doc)
                      chunks (vec (partition-all client-batch-limit (range 1 (inc num-pages))))
@@ -273,13 +274,12 @@
                  ;; completion. Stall at "chunk k" = a getTextContent never settling;
                  ;; reaching "extraction complete" while the button stays "Copying…"
                  ;; = the stall is server-side (client-save-all!*). Remove once confirmed.
-                 (js/console.log "[PDF copy-all] start; pages=" num-pages "chunks=" nchunks)
+                 (tel/log! {:level :debug :id ::copy-all-start :data {:pages num-pages :chunks nchunks}} "start")
                  (-> (reduce
                        (fn [p [i chunk]]
                          (.then p
                            (fn [acc]
-                             (js/console.log "[PDF copy-all] chunk" (inc i) "/" nchunks
-                               "pages" (first chunk) ".." (last chunk))
+                             (tel/log! {:level :debug :id ::copy-all-chunk :data {:chunk (inc i) :of nchunks :from (first chunk) :to (last chunk)}} "chunk")
                              (-> (.all js/Promise
                                    (mapv #(pdfviewer/get-page-text-content! %) chunk))
                                (.then (fn [texts] (merge acc (zipmap chunk texts))))
@@ -287,8 +287,7 @@
                        (.resolve js/Promise {})
                        (map-indexed vector chunks))
                    (.then (fn [results]
-                            (js/console.log "[PDF copy-all] extraction complete;"
-                              (count results) "pages; handing to server save")
+                            (tel/log! {:level :debug :id ::copy-all-done :data {:pages (count results)}} "extraction complete; handing to server save")
                             (reset! !sink {:id id :results results})))))))
      :clj nil))
 

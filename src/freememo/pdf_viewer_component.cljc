@@ -4,6 +4,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string]
+   [freememo.logging :as log]
    [freememo.navigation :as nav]
    [freememo.pdf-viewer :as viewer]))
 
@@ -231,7 +232,7 @@
             (reset! !container dom/node)
             (e/on-unmount
               (fn []
-                (js/console.log "[PDF-COMP] unmount")
+                (log/log-debug "PDF-COMP unmount")
                 (when-let [t @!timer-id] (js/clearTimeout t))
                 (viewer/destroy-viewer!)))
 

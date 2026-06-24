@@ -1,13 +1,13 @@
 (ns dev ; jetty 10+ – the default
   (:require
    freememo.main
+   [freememo.logging :as logging]
    #?(:clj dev-metadata)
 
    #?(:clj [shadow.cljs.devtools.api :as shadow-cljs-compiler])
    #?(:clj [shadow.cljs.devtools.server :as shadow-cljs-compiler-server])
    #?(:clj [clojure.string])
    #?(:clj [clojure.tools.logging :as log])
-   #?(:clj [freememo.logging :as logging])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.api :as api])
    #?(:clj [freememo.config :as config])
@@ -159,6 +159,7 @@
 (declare browser-process)
 #?(:cljs ; client entrypoint
    (defn ^:dev/after-load ^:export -main []
+     (logging/init-client!) ; dev: lower client log level to :debug
      (set! browser-process
        ((freememo.main/electric-boot nil)))))  ; boot client-side Electric process
 
