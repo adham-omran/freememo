@@ -57,6 +57,12 @@
 (defn platform-openai-api-key []
   (env-or-config "PLATFORM_OPENAI_API_KEY" [:secrets :platform-openai-api-key]))
 
+(defn platform-openrouter-api-key
+  "OpenRouter key for the OCR model picker (topology A1: all OCR lanes route
+   through one OpenRouter key). nil when unconfigured."
+  []
+  (env-or-config "PLATFORM_OPENROUTER_API_KEY" [:secrets :platform-openrouter-api-key]))
+
 (defn wayl-merchant-token []
   (env-or-config "WAYL_MERCHANT_TOKEN" [:secrets :wayl-merchant-token]))
 
@@ -129,9 +135,21 @@
   (:fx-iqd-per-usd (credits-config)))
 
 (defn model-rates
-  "USD-per-1M-token rates {:input :cached-input :output} for a model, or nil."
+  "USD-per-1M-token rates {:input :cached-input :output} for a model, or nil.
+   Used by the token-billed lanes (card generation). OCR bills from OpenRouter's
+   returned per-call cost instead (× fx × markup) — see plans/ocr-multi-model-picker.md §6."
   [model]
   (get-in (credits-config) [:models model]))
+
+(defn ocr-model-allowlist
+  "OCR-model :ids (from freememo.ocr-models/registry) a credits-mode user may
+   pick — each carries its own OpenRouter cost (decision 4.2.1: allow-list, the
+   user chooses the OCR cost). Empty vector when unconfigured.
+   Post: a vector of id strings; empty ⇒ no picker for paying users (the pinned
+   default stands). Ignored in self-host (credits disabled), where all registry
+   models are offered."
+  []
+  (:ocr-model-allowlist (credits-config) []))
 
 (defn presets
   "Top-up amounts in IQD shown as buttons. Empty vector when unconfigured."

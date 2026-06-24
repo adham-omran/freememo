@@ -11,6 +11,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [taoensso.telemere :as tel]
    [freememo.icons :as icons]
+   [freememo.loading :as loading]
    [freememo.pdf-viewer :as pdfviewer]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.page-ocr :as page])
@@ -142,12 +143,6 @@
   [user-id root-topic-id state !compare]
   (e/client
     (let [{:keys [page raw]} state
-          a (e/server (preview-client* raw))
-          b (e/server (e/Offload #(preview-remote* root-topic-id page)))
-          a-ok (boolean (:success a))
-          b-ok (boolean (:success b))
-          both-done (and (some? a) (some? b))
-          both-fail (and both-done (not a-ok) (not b-ok))
           !remember (atom false)]
       (dom/div
         (dom/props {:class "modal-backdrop"})
@@ -160,32 +155,41 @@
           (dom/h3 (dom/props {:style {:margin "0" :font-size "16px" :font-weight "500"}})
             (dom/text (str "Copy text — page " page)))
 
-          (if both-fail
-            (dom/div
-              (dom/props {:style {:padding "20px 4px" :color "var(--color-text-secondary)" :font-size "13px"}})
-              (dom/text "No extractable text in this PDF — use Scan Page."))
-            (dom/div
-              (dom/props {:style {:display "flex" :flex-direction "column" :gap "12px"}})
-              ;; Two options side-by-side: each preview with its own pick button
-              ;; directly beneath. Labelled A/B (no engine jargon) so it reads
-              ;; clearly for non-technical users.
-              (dom/div
-                (dom/props {:style {:display "flex" :gap "12px" :align-items "stretch"}})
-                (dom/div
-                  (dom/props {:style {:flex "1" :min-width "0" :display "flex" :flex-direction "column" :gap "8px"}})
-                  (ResultPanel "Option A" a)
-                  (PickButton "Use A" user-id root-topic-id page (:text a) "client" a-ok !remember !compare))
-                (dom/div
-                  (dom/props {:style {:flex "1" :min-width "0" :display "flex" :flex-direction "column" :gap "8px"}})
-                  (ResultPanel "Option B" b)
-                  (PickButton "Use B" user-id root-topic-id page (:text b) "remote" b-ok !remember !compare)))
-              ;; Remember
-              (dom/label
-                (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "13px"}})
-                (dom/input
-                  (dom/props {:type "checkbox"})
-                  (dom/On "change" (fn [e] (reset! !remember (-> e .-target .-checked))) nil))
-                (dom/text "Remember for this PDF"))))
+          ;; Resolve both previews before rendering — the both-fail hint needs
+          ;; both results, and a pending e/server value is empty-amb (not nil),
+          ;; which would otherwise blank the body. WithLoading shows the spinner.
+          (loading/WithLoading
+            (e/fn [] (e/server (preview-client* raw)))
+            (e/fn [a]
+              (loading/WithLoading
+                (e/fn [] (e/server (e/Offload #(preview-remote* root-topic-id page))))
+                (e/fn [b]
+                  (let [a-ok (boolean (:success a))
+                        b-ok (boolean (:success b))]
+                    (if (and (not a-ok) (not b-ok))
+                      (dom/div
+                        (dom/props {:style {:padding "20px 4px" :color "var(--color-text-secondary)" :font-size "13px"}})
+                        (dom/text "No extractable text in this PDF — use Scan Page."))
+                      (dom/div
+                        (dom/props {:style {:display "flex" :flex-direction "column" :gap "12px"}})
+                        ;; Two options side-by-side: each preview with its own pick
+                        ;; button beneath. Labelled A/B (no engine jargon).
+                        (dom/div
+                          (dom/props {:style {:display "flex" :gap "12px" :align-items "stretch"}})
+                          (dom/div
+                            (dom/props {:style {:flex "1" :min-width "0" :display "flex" :flex-direction "column" :gap "8px"}})
+                            (ResultPanel "Option A" a)
+                            (PickButton "Use A" user-id root-topic-id page (:text a) "client" a-ok !remember !compare))
+                          (dom/div
+                            (dom/props {:style {:flex "1" :min-width "0" :display "flex" :flex-direction "column" :gap "8px"}})
+                            (ResultPanel "Option B" b)
+                            (PickButton "Use B" user-id root-topic-id page (:text b) "remote" b-ok !remember !compare)))
+                        (dom/label
+                          (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "13px"}})
+                          (dom/input
+                            (dom/props {:type "checkbox"})
+                            (dom/On "change" (fn [e] (reset! !remember (-> e .-target .-checked))) nil))
+                          (dom/text "Remember for this PDF")))))))))
 
           ;; Close
           (dom/div

@@ -21,7 +21,7 @@
        (if-not file-row
          {:success false :error "Document not found"}
          (let [pdf-bytes (:topic_files/file_data file-row)
-               result (ocr/extract-text user-id pdf-bytes (dec page-number) enc-key dpi)]
+               result (ocr/extract-text user-id topic-id pdf-bytes (dec page-number) enc-key dpi)]
            (if (:success result)
              (do
                (db/save-page-text! topic-id page-number (:text result))
@@ -30,6 +30,22 @@
      (catch Exception e
        (tel/error! {:id ::extract-page-text} e)
        {:success false :error (str "Failed to extract text: " (.getMessage e))}))))
+
+(defn ocr-preview-with-model
+  "Run OCR for a page with an explicit model-id and return the text WITHOUT
+   saving — for the OCR compare modal. Bills the call (like a normal scan).
+   topic-id is the root PDF topic ID; page-number is 1-based.
+   Returns {:success true :text html} or {:success false :error ...}."
+  [user-id topic-id model-id page-number dpi]
+  (try
+    (let [file-row (db/get-topic-file topic-id)]
+      (if-not file-row
+        {:success false :error "Document not found"}
+        (ocr/extract-text-with-model user-id model-id
+          (:topic_files/file_data file-row) (dec page-number) dpi)))
+    (catch Exception e
+      (tel/error! {:id ::ocr-preview-with-model} e)
+      {:success false :error (str "Failed to OCR: " (.getMessage e))})))
 
 (defn extract-page-text-pdfbox
   "Extract text from a page via PDFBox (no LLM). Wraps the result in <p> blocks

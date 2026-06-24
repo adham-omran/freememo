@@ -78,6 +78,19 @@
         usd (reduce + 0.0 (map #(attempt-cost-usd rates %) attempts))]
     (long (Math/ceil (* usd fx markup)))))
 
+(defn charge-iqd-from-usd
+  "IQD to debit for an action billed by a provider-reported USD cost (the OCR
+   lane — OpenRouter returns usage.cost). = ceil(usd × fx × markup).
+   Pre:  usd >= 0 (nil → 0); fx + markup configured for user.
+   Post: non-negative long. Throws (fails closed) when fx/markup unconfigured."
+  [user-id usd]
+  (let [fx (config/fx-iqd-per-usd)
+        markup (resolve-markup user-id)]
+    (when (or (nil? fx) (nil? markup))
+      (throw (ex-info "Credits misconfigured: missing fx-iqd-per-usd or markup"
+               {:type ::credits-misconfigured :fx fx :markup markup})))
+    (long (Math/ceil (* (max 0.0 (double (or usd 0))) fx markup)))))
+
 ;; ── Usage extraction ──
 
 (defn usage->tokens
@@ -110,56 +123,89 @@
 
       :else {:ok true})))
 
+(defn check-cost-billed-balance!
+  "Gate before an OCR action billed from a provider-reported USD cost.
+   Like check-balance! but with no per-model rate requirement — the cost comes
+   from OpenRouter's usage.cost, not the :models table.
+   Pre:  user-id. Post: {:ok true} to proceed, or {:ok false :error msg}.
+   Self-host (credits disabled) always proceeds."
+  [user-id]
+  (if-not (config/credits-enabled?)
+    {:ok true}
+    (cond
+      (or (nil? (config/fx-iqd-per-usd)) (nil? (resolve-markup user-id)))
+      {:ok false :error "Credit pricing is not configured."}
+
+      (<= (db/get-credit-balance user-id) 0)
+      {:ok false :error "Out of credits. Top up in Settings to keep using AI features."}
+
+      :else {:ok true})))
+
 (def ^:private debit-retry-sleeps-ms
   "Backoff before debit retries 2 and 3 — absorbs transient DB failures
    (user-row lock contention, pool blips) without holding the offload/worker
    thread for more than ~600ms total."
   [100 500])
 
+(defn- debit-with-retry!
+  "Debit a precomputed `cost` IQD — total (never throws). Retries the debit up to
+   3 attempts with short backoff, logging :warn ::credit-debit-retry per failure.
+   `ledger` is the db/debit-credits! annotation {:endpoint :model :attempts}.
+   Returns `cost` on success, or nil after exhaustion. Exhaustion logs
+   ::credit-charge-failed with `fail-data` (the inputs needed to reconcile the
+   charge by hand) and triggers the alert email when SMTP is configured.
+   Pre: cost >= 0. Post: balance debited by cost, or nil + alert on total failure."
+  [user-id endpoint model cost ledger fail-data]
+  (try
+    (let [max-attempts (inc (count debit-retry-sleeps-ms))]
+      (loop [attempt 1]
+        (let [result (try {:balance (db/debit-credits! user-id cost ledger)}
+                       (catch Exception e {:error e}))]
+          (if-let [e (:error result)]
+            (if (< attempt max-attempts)
+              (do (tel/log! {:level :warn :id ::credit-debit-retry
+                             :data {:user-id user-id :endpoint endpoint :model model
+                                    :attempt attempt :max-attempts max-attempts
+                                    :error (ex-message e)}}
+                    "Credit debit failed, retrying")
+                  (Thread/sleep (long (nth debit-retry-sleeps-ms (dec attempt))))
+                  (recur (inc attempt)))
+              (throw e)) ; outer catch logs ::credit-charge-failed
+            (let [new-bal (:balance result)]
+              (tel/log! {:level :info :id ::credit-debit
+                         :data {:user-id user-id :endpoint endpoint :model model
+                                :cost-iqd cost :balance-after new-bal :debit-attempt attempt}}
+                "Credit debit")
+              cost)))))
+    (catch Exception e
+      (tel/error! {:id ::credit-charge-failed :data fail-data} e)
+      nil)))
+
 (defn record-charge!
-  "Debit credits for a completed action — total (never throws). No-op when credits
-   are disabled. `attempts` is a non-empty seq of usage-token maps (one per LLM
-   attempt; all attempts are billed per §5.4.5).
-   Cost is computed once; the debit itself is retried up to 3 attempts with
-   short backoff, logging :warn ::credit-debit-retry per failed attempt.
-   Returns charged IQD (long) on success, or nil when credits are disabled OR all
-   debit attempts failed. Exhaustion logs ::credit-charge-failed with the inputs
-   needed to recompute the charge via charge-iqd (user-id, endpoint, model,
-   attempts), so a silently-missed charge can be reconciled by hand — billing must
-   never discard the user's completed AI result. ::credit-charge-failed also
-   triggers the alert email when SMTP is configured (see freememo.logging/init!)."
+  "Debit credits for a completed token-billed action — total (never throws).
+   No-op when credits are disabled. `attempts` is a non-empty seq of usage-token
+   maps (one per LLM attempt; all attempts billed per §5.4.5). Cost is computed
+   once via charge-iqd, then debited with retry. Returns charged IQD (long), or
+   nil when credits are disabled OR all debit attempts failed."
   [user-id endpoint model attempts]
   (when (config/credits-enabled?)
-    (try
-      (let [cost (charge-iqd user-id model attempts)
-            max-attempts (inc (count debit-retry-sleeps-ms))]
-        (loop [attempt 1]
-          (let [result (try
-                         {:balance (db/debit-credits! user-id cost
-                                     {:endpoint (name endpoint) :model model :attempts attempts})}
-                         (catch Exception e {:error e}))]
-            (if-let [e (:error result)]
-              (if (< attempt max-attempts)
-                (do (tel/log! {:level :warn :id ::credit-debit-retry
-                               :data {:user-id user-id :endpoint endpoint :model model
-                                      :attempt attempt :max-attempts max-attempts
-                                      :error (ex-message e)}}
-                      "Credit debit failed, retrying")
-                    (Thread/sleep (long (nth debit-retry-sleeps-ms (dec attempt))))
-                    (recur (inc attempt)))
-                (throw e)) ; outer catch logs ::credit-charge-failed
-              (let [new-bal (:balance result)]
-                (tel/log! {:level :info :id ::credit-debit
-                           :data {:user-id user-id :endpoint endpoint :model model
-                                  :cost-iqd cost :balance-after new-bal :attempts (count attempts)
-                                  :debit-attempt attempt}}
-                  "Credit debit")
-                cost)))))
-      (catch Exception e
-        (tel/error! {:id ::credit-charge-failed
-                     :data {:user-id user-id :endpoint endpoint :model model :attempts attempts}}
-          e)
-        nil))))
+    (debit-with-retry! user-id endpoint model
+      (charge-iqd user-id model attempts)
+      {:endpoint (name endpoint) :model model :attempts attempts}
+      {:user-id user-id :endpoint endpoint :model model :attempts attempts})))
+
+(defn record-cost-charge!
+  "Debit credits for a completed OCR action billed from a provider-reported USD
+   cost (OpenRouter usage.cost) — total (never throws). No-op when credits are
+   disabled. Cost is ceil(usd × fx × markup) via charge-iqd-from-usd, then
+   debited with retry. Returns charged IQD (long), or nil when disabled OR all
+   debit attempts failed. `model` is the registry id (for the ledger row)."
+  [user-id endpoint model usd]
+  (when (config/credits-enabled?)
+    (debit-with-retry! user-id endpoint model
+      (charge-iqd-from-usd user-id usd)
+      {:endpoint (name endpoint) :model model :attempts nil}
+      {:user-id user-id :endpoint endpoint :model model :usd usd})))
 
 ;; ── Purchase (§5.5) ──
 

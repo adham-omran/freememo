@@ -2,7 +2,12 @@
   "Plain-text extraction for indexing (search) and analysis."
   (:require [clojure.string :as str]
             [taoensso.telemere :as tel])
-  (:import [org.jsoup Jsoup]))
+  (:import [org.jsoup Jsoup]
+           [com.vladsch.flexmark.parser Parser]
+           [com.vladsch.flexmark.html HtmlRenderer]
+           [com.vladsch.flexmark.ext.tables TablesExtension]
+           [com.vladsch.flexmark.util.data MutableDataSet]
+           [java.util Collections]))
 
 ;; PUA codepoints used by Linux Libertine / Linux Biolinum to encode
 ;; ligatures, small caps, and stylistic alternates that have no real
@@ -144,3 +149,20 @@
         (map (fn [block]
                (str "<p>" (escape-html block) "</p>")))
         (str/join "\n")))))
+
+(def ^:private flexmark-options
+  (doto (MutableDataSet.)
+    (.set Parser/EXTENSIONS (Collections/singletonList (TablesExtension/create)))))
+
+(defn markdown->html
+  "Render Markdown to HTML via flexmark (GFM tables enabled). For the Mistral OCR
+   lane, whose parsed page text is Markdown while the app stores HTML.
+   Pre:  `md` is a string (nil/blank → empty string).
+   Post: an HTML fragment string; callers MUST still sanitize it (untrusted
+         model output) before persistence."
+  [md]
+  (if (or (nil? md) (str/blank? md))
+    ""
+    (let [parser (.build (Parser/builder flexmark-options))
+          renderer (.build (HtmlRenderer/builder flexmark-options))]
+      (.render renderer (.parse parser md)))))

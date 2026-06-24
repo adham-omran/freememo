@@ -10,8 +10,10 @@
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.icons :as icons]
    [freememo.copy-text :as copy]
+   [freememo.ocr-models :as ocr-models]
    [freememo.modal-shell :as modal]
-   #?(:clj [freememo.user-state :as us])))
+   #?(:clj [freememo.user-state :as us])
+   #?(:clj [freememo.settings :as settings])))
 
 (def ^:private style-options [["ask"    "Ask every time (compare A vs B)"]
                               ["client" "Client (PDF.js, in-browser)"]
@@ -33,6 +35,24 @@
           (dom/option (dom/props {:value v :selected (= v current)}) (dom/text label)))))
     (e/amb)))
 
+(e/defn OcrModelSelect
+  "Per-document OCR model for \"Scan Page\". \"\" = use my global default.
+   Atom is the truth; the Form's :Parse reads (e/watch !model)."
+  [!model]
+  (let [current (e/watch !model)
+        options (into [["" "Use my default"]]
+                  (map (juxt :id :label) ocr-models/registry))]
+    (dom/div
+      (dom/props {:style {:margin-bottom "var(--sp-3)"}})
+      (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
+        (dom/text "OCR model (Scan Page)"))
+      (dom/select
+        (dom/props {:class "input" :style {:width "100%"}})
+        (dom/On "change" (fn [e] (reset! !model (-> e .-target .-value))) nil)
+        (e/for [[v label] (e/diff-by first options)]
+          (dom/option (dom/props {:value v :selected (= v current)}) (dom/text label)))))
+    (e/amb)))
+
 (e/defn CustomPromptField
   "Disabled Custom Prompt placeholder — future feature, no typing."
   []
@@ -46,13 +66,16 @@
     (e/amb)))
 
 (e/defn DocumentOptionsDialog
-  "PDF: Forms5 Style select + disabled Custom Prompt + Submit (saves style)."
-  [user-id root-topic-id current-style !open]
+  "PDF: Forms5 Style select + OCR-model select + disabled Custom Prompt + Submit
+   (saves both the quick-extract style and the per-document OCR model)."
+  [user-id root-topic-id current-style current-ocr-model !open]
   (let [!style (atom (e/snapshot (or current-style "ask")))
+        !ocr-model (atom (e/snapshot (or current-ocr-model "")))
         commits (forms/Form! {}
                   (e/fn Fields [_fields]
                     (e/amb
                       (StyleSelect !style)
+                      (OcrModelSelect !ocr-model)
                       (CustomPromptField)
                       (dom/div
                         (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
@@ -63,12 +86,15 @@
                             (dom/text "Cancel")
                             (dom/On "click" (fn [_] (reset! !open false)) nil))))))
                   :Parse (e/fn [_merged _tempid]
-                           [`SaveStyle (e/watch !style)])
+                           [`SaveDocOptions {:style (e/watch !style)
+                                             :ocr-model (e/watch !ocr-model)}])
                   :type :command
                   :show-buttons false)]
     (e/for [[token cmd] (e/diff-by first (e/as-vec commits))]
-      (let [style (nth cmd 1)
-            r (e/server (e/Offload #(copy/save-style!* user-id root-topic-id style)))]
+      (let [{:keys [style ocr-model]} (nth cmd 1)
+            r (e/server (e/Offload #(do (copy/save-style!* user-id root-topic-id style)
+                                        (settings/save-ocr-model user-id root-topic-id ocr-model)
+                                        {:success true})))]
         (when (some? r)
           (if (:success r) (do (reset! !open false) (token)) (token (:error r))))))))
 
@@ -88,8 +114,9 @@
             (dom/text "Document options"))
           (if is-pdf?
             (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
-                  current (e/server (copy/get-extract-style* settings-refresh user-id root-topic-id))]
-              (DocumentOptionsDialog user-id root-topic-id current !open))
+                  current (e/server (copy/get-extract-style* settings-refresh user-id root-topic-id))
+                  current-ocr (e/server (do settings-refresh (settings/get-ocr-model user-id root-topic-id)))]
+              (DocumentOptionsDialog user-id root-topic-id current current-ocr !open))
             ;; non-PDF: only the disabled Custom Prompt; nothing to save.
             (e/amb
               (CustomPromptField)
