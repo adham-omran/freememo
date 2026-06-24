@@ -9,6 +9,9 @@
 (defonce !scan-btn-ref (atom nil))
 (defonce !anki-sync-btn-ref (atom nil))
 (defonce !done-btn-ref (atom nil))
+;; Restore (un-done) gets its OWN ref so it never hijacks the "done" shortcut.
+;; No shortcut targets it yet — Restore is a button-only action.
+(defonce !restore-btn-ref (atom nil))
 (defonce !postpone-btn-ref (atom nil))
 
 ;; Hidden trigger for global undo (Cmd-Shift-Z). Clicking it undoes the

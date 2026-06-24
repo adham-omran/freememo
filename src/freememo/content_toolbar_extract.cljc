@@ -9,6 +9,7 @@
    [freememo.priority-control :refer [PriorityControl get-topic-priority*]]
    [freememo.icons :as icons]
    [freememo.keyboard :as keyboard]
+   [freememo.logging :as log]
    [freememo.navigation :as nav]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.staged-delete :as staged-delete])
@@ -100,29 +101,22 @@
                 (reset! keyboard/!done-btn-ref dom/node)
                 (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
                 (dom/On "click" (fn [_] (when-not @!busy (reset! !done-click (str (random-uuid))))) nil))
-              ;; on-done! is set in queue contexts (/learn, subset-review) —
-              ;; advances !queue-idx so the next item loads after the server
-              ;; completes. Registered inside `(when t)` per CLAUDE.md "Local
-              ;; mutations that unmount the containing component MUST move
-              ;; into e/on-unmount". busy is set only when on-done! is present
-              ;; so doc-context never holds the branch.
-              ;;
-              ;; Electric stabilizes the `let [!busy ...]` binding across
-              ;; topic-id changes, so the same atom persists into the next
-              ;; queue item. Reset busy in the SAME on-unmount callback as
-              ;; on-done! — both writes settle before the next Electric tick,
-              ;; so the new topic renders with busy=false (button enabled).
-              ;; Splitting into two e/on-unmount calls would risk a frame
-              ;; where the new topic reads busy=true.
+              ;; on-done! (queue contexts /learn, subset-review) advances the
+              ;; queue and unmounts this component, so it is registered as
+              ;; e/on-unmount inside the SUCCESS frame: it fires only after
+              ;; done-topic! commits and (t) unmounts the frame.
+              ;; Do NOT reset !busy in the token body — that re-renders this
+              ;; branch, recreates the !done-click atom, and un-fires the token
+              ;; before done-topic! dispatches (verified: Done silently did
+              ;; nothing). !busy stays false; the button is brief enough that a
+              ;; disable flag is unnecessary.
               (let [[t _] (e/Token done-click)]
                 (when t
-                  (when on-done!
-                    (reset! !busy true)
-                    (e/on-unmount (fn [] (reset! !busy false) (on-done!))))
                   (case (e/server (e/Offload #(do (db/done-topic! topic-id) :ok)))
                     (case (e/server (do (swap! (us/get-atom user-id :refresh) inc)
                                       (swap! (us/get-atom user-id :meta-refresh) inc)))
-                      (t))))))
+                      (do (when on-done! (e/on-unmount (fn [] (on-done!))))
+                          (t)))))))
 
           ;; Done status: show Restore button
           (let [!restore-click (atom nil)
@@ -135,8 +129,8 @@
                           :data-tooltip "Restore to active review queue"})
               (icons/Icon :rotate-ccw :size 16)
               (dom/span (dom/props {:class "icon-label"}) (dom/text "Restore"))
-              (reset! keyboard/!done-btn-ref dom/node)
-              (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
+              (reset! keyboard/!restore-btn-ref dom/node)
+              (e/on-unmount (fn [] (reset! keyboard/!restore-btn-ref nil)))
               (dom/On "click" (fn [_] (reset! !restore-click (str (random-uuid)))) nil))
             (let [[t _] (e/Token restore-click)]
               (when t

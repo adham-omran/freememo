@@ -127,8 +127,13 @@
                     (TopicPage user-id enc-key topic-id navigate! llm-enabled? nil)))))
 
             learn-session
-            (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
-                  queue-vec (e/server (get-learning-queue* refresh user-id))
+            ;; Freeze the queue for the session: fetch once on mount, do NOT watch
+            ;; :refresh. Re-fetching mid-session reshuffled queue-vec, changed the
+            ;; reactive topic-id, and latest-wins-cancelled the in-flight
+            ;; done-topic!/advance Offload (Done appeared to advance but never
+            ;; committed). The per-day-stable order means a snapshot is the
+            ;; intended model. The overview (LearnOverview) re-queries separately.
+            (let [queue-vec (e/server (get-learning-queue* 0 user-id))
                   !queue-idx (atom 0)]
               (LearnSession user-id enc-key queue-vec !queue-idx navigate! llm-enabled?))
 
