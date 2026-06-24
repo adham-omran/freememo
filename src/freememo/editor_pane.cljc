@@ -7,20 +7,12 @@
    [freememo.logging :as log]
    [freememo.rich-text-editor :as editor]
    [freememo.rich-text-editor-component :refer [RichTextEditorComponent]]
-   [freememo.keyboard :as keyboard]
-   [freememo.copy-text :as copy]
-   [freememo.ocr-compare :as ocr-compare]
    [freememo.navigation :as nav]
    [clojure.string :as str]
    #?(:cljs [freememo.editor-pin-menu :as pin-menu])
-   #?(:clj [freememo.page-ocr :as page])
-   #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
-   #?(:clj [freememo.web-import :as web-import])
-   #?(:clj [missionary.core :as m]))
-  #?(:clj (:import [missionary Cancelled]
-                   [java.util.concurrent Executors])))
+   #?(:clj [freememo.web-import :as web-import])))
 
 ;; ---------------------------------------------------------------------------
 ;; Pin contextmenu helper — wraps CLJS-only install-contextmenu! so the
@@ -43,59 +35,16 @@
   #?(:clj (count (db/get-pins topic-id))
      :cljs 0))
 
-;; ---------------------------------------------------------------------------
-;; OCR scan infrastructure (moved from page_viewer.cljc)
-;; ---------------------------------------------------------------------------
-
-#?(:clj (defonce ocr-executor (Executors/newFixedThreadPool 3)))
-
-(defn start-ocr-scan!
-  "Submit an OCR scan as a Missionary task on the bounded executor.
-   Timeout after 30s. Cancel function stored in per-user :scan-cancellers."
-  [uid doc page ek dpi]
-  #?(:clj
-     (do
-       (swap! (us/get-atom uid :scanning-pages) conj [doc page])
-       (swap! (us/get-atom uid :ocr-errors) dissoc [doc page])
-       (log/log-info (str "OCR scan started topic-id=" doc " page=" page))
-       (let [cancel-fn
-             ((m/timeout
-                (m/via ocr-executor (page/extract-page-text uid doc page ek dpi))
-                30000
-                {:success false :error "Scan timed out after 30 seconds"})
-              (fn [result]
-                (swap! (us/get-atom uid :scan-cancellers) dissoc [doc page])
-                (if (:success result)
-                  (do (log/log-info (str "OCR scan complete topic-id=" doc " page=" page))
-                    (swap! (us/get-atom uid :refresh) inc))
-                  (do (log/log-info (str "OCR scan failed topic-id=" doc " page=" page " error=" (:error result)))
-                    (swap! (us/get-atom uid :ocr-errors) assoc [doc page] (:error result))
-                    (toasts/push! uid
-                      {:level :error
-                       :message (:error result)
-                       :actions (if (= :insufficient-credits (:error-type result))
-                                  [{:label "Top up credits" :nav :settings}]
-                                  [])})))
-                (swap! (us/get-atom uid :scanning-pages) disj [doc page]))
-              (fn [e]
-                (swap! (us/get-atom uid :scan-cancellers) dissoc [doc page])
-                (when-not (instance? Cancelled e)
-                  (log/log-info (str "OCR scan error topic-id=" doc " page=" page " ex=" (.getMessage e)))
-                  (swap! (us/get-atom uid :ocr-errors) assoc [doc page] (.getMessage e))
-                  (toasts/push! uid {:level :error :message (.getMessage e)}))
-                (swap! (us/get-atom uid :scanning-pages) disj [doc page])))]
-         (swap! (us/get-atom uid :scan-cancellers) assoc [doc page] cancel-fn))
-       nil)
-     :cljs nil))
+;; OCR scan infrastructure (start-ocr-scan! + ocr-executor) moved to
+;; freememo.pdf-toolbar, which now hosts the Scan Page button.
 
 ;; ---------------------------------------------------------------------------
 ;; EditorPane
 ;; ---------------------------------------------------------------------------
 
 (e/defn EditorPane
-  [{:keys [user-id enc-key topic-id audio-topic-id is-pdf-page? root-topic-id page-number
-           scan-dpi llm-enabled?
-           static-content scanning-pages ocr-errors
+  [{:keys [user-id topic-id audio-topic-id is-pdf-page?
+           static-content
            on-imported-navigate!]}]
   (e/client
     (dom/div
@@ -163,111 +112,27 @@
                           :style {:width "100%"}}))))
 
         ;; -----------------------------------------------------------------------
-        ;; Page header (PDF mode only)
+        ;; Save-status indicator (PDF mode). The page-header's other controls
+        ;; (done-checkbox, Scan, Compare-OCR, Copy text/all) moved to PdfToolbar;
+        ;; this lightweight save feedback stays with the editor.
         ;; -----------------------------------------------------------------------
-        (when is-pdf-page?
-          (dom/div
-            (dom/props {:style {:display "flex" :align-items "center"
-                                :gap "var(--sp-2)" :padding "var(--sp-1) var(--sp-2)"
-                                :flex-shrink "0"}})
-
-            ;; Done checkbox
-            (dom/label
-              (dom/props {:style {:display "flex" :align-items "center" :gap "3px" :font-size "12px" :cursor "pointer"}
-                          :title "Mark this page as completed to track your extraction progress"})
-              (e/for-by identity [_page [page-number]]
-                (dom/input
-                  (dom/props {:type "checkbox"})
-                  (let [is-done (e/server (when (and root-topic-id page-number)
-                                            (db/get-page-done-status root-topic-id page-number)))]
-                    (set! (.-checked dom/node) (boolean is-done)))
-                  (reset! keyboard/!done-btn-ref dom/node)
-                  (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
-                  (let [change-event (dom/On "change"
-                                       (fn [ev] {:checked (-> ev .-target .-checked)
-                                                 :page page-number})
-                                       nil)
-                        [t _] (e/Token change-event)]
-                    (when t
-                      (case (e/server (db/toggle-page-done! root-topic-id (:page change-event)))
-                        (case (e/server (swap! (us/get-atom user-id :meta-refresh) inc))
-                          (t)))))))
-              (dom/text (str "Mark page " page-number " as done")))
-
-            ;; Scan Page button (AI OCR) — shown whenever LLM features are on.
-            (when llm-enabled?
-              (let [scanning? (contains? scanning-pages [root-topic-id page-number])
-                    disabled? scanning?]
-                (dom/button
-                  (dom/props {:class "btn btn-sm btn-primary"
-                              :style {:padding "4px 12px" :font-size "14px"
-                                      :background (if disabled? "var(--color-border)" "var(--color-primary)")
-                                      :cursor (if disabled? "not-allowed" "pointer")}
-                              :disabled disabled?})
-                  (dom/text (if disabled? "Scanning..." "Scan Page"))
-                  (reset! keyboard/!scan-btn-ref dom/node)
-                  (e/on-unmount (fn [] (reset! keyboard/!scan-btn-ref nil)))
-                  (let [click-event (dom/On "click"
-                                      (fn [_] {:id (str (random-uuid)) :page page-number})
-                                      nil)
-                        [t _] (e/Token click-event)]
-                    (when t
-                      (case (e/server
-                              (let [pg (:page click-event)
-                                    doc root-topic-id
-                                    uid user-id
-                                    ek enc-key]
-                                (if (contains? @(us/get-atom uid :scanning-pages) [doc pg])
-                                  (log/log-info (str "OCR scan already in progress topic-id=" doc " page=" pg))
-                                  (start-ocr-scan! uid doc pg ek scan-dpi))))
-                        (t)))))))
-
-            ;; Compare OCR — run every allowed model on this page, side-by-side.
-            (when llm-enabled?
-              (ocr-compare/OcrCompareButton user-id root-topic-id page-number scan-dpi))
-
-            ;; Copy text — single native-extract button. Reads the per-PDF
-            ;; extraction style (reactive on :settings-refresh): set → run that
-            ;; engine and save silently; unset → run both + compare modal.
-            (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
-                  extract-style (e/server (copy/get-extract-style* settings-refresh user-id root-topic-id))]
-              (copy/CopyTextButton user-id root-topic-id page-number extract-style)
-              (copy/CopyAllTextButton user-id root-topic-id extract-style))
-
-            ;; OCR error display — auto-dismiss after 3 seconds
-            (when-let [ocr-err (get ocr-errors [root-topic-id page-number])]
-              (let [!show (atom true)
-                    show (e/watch !show)]
-                (dom/div
-                  (dom/props {:style {:padding "6px 10px"
-                                      :background "var(--color-danger-bg)"
-                                      :border "1px solid var(--color-danger-light)"
-                                      :border-radius "var(--radius-sm)"
-                                      :font-size "13px"
-                                      :color "var(--color-danger-dark)"
-                                      :margin-top "var(--sp-1)"
-                                      :opacity (if show "1" "0")
-                                      :transition "opacity 0.5s ease-out"}})
-                  (dom/text ocr-err)
+        (when (and is-pdf-page? (some? save-result))
+          (let [is-success (:success save-result)
+                message (if is-success "Saved" (str "Save error: " (:error save-result)))
+                !show (atom true)
+                show (e/watch !show)]
+            (dom/div
+              (dom/props {:style {:display "flex" :justify-content "flex-end"
+                                  :padding "var(--sp-1) var(--sp-2)" :flex-shrink "0"}})
+              (dom/span
+                (dom/props {:style {:font-size "12px"
+                                    :color (if is-success "var(--color-text-secondary)" "var(--color-danger)")
+                                    :opacity (if show "1" "0")
+                                    :transition "opacity 0.5s ease-out"}})
+                (dom/text message)
+                (when is-success
                   (e/client
-                    (js/setTimeout (fn [] (reset! !show false)) 3000)))))
-
-            ;; Save status indicator with fade-out (reuses save-result from auto-save above)
-            (when (some? save-result)
-              (let [is-success (:success save-result)
-                    message (if is-success "Saved" (str "Save error: " (:error save-result)))
-                    !show (atom true)
-                    show (e/watch !show)]
-                (dom/span
-                  (dom/props {:style {:margin-left "12px"
-                                      :font-size "12px"
-                                      :color (if is-success "var(--color-text-secondary)" "var(--color-danger)")
-                                      :opacity (if show "1" "0")
-                                      :transition "opacity 0.5s ease-out"}})
-                  (dom/text message)
-                  (when is-success
-                    (e/client
-                      (js/setTimeout (fn [] (reset! !show false)) 2000))))))))
+                    (js/setTimeout (fn [] (reset! !show false)) 2000)))))))
 
         ;; -----------------------------------------------------------------------
         ;; Pin-request atom — CLJS contextmenu callback fires into this atom;

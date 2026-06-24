@@ -1255,10 +1255,6 @@ textarea:hover {
         flex-wrap: wrap;
     }
 
-    /* PDF toolbar: progressive collapse at tablet width */
-    .pdf-collapse-md { display: none !important; }
-    .pdf-collapse-sm { display: none !important; }
-
     /* Content toolbar: keep desktop `overflow-x: clip; overflow-y: visible`
        at narrow widths too — the T7 tier ladder collapses the toolbar enough
        to fit any practical viewport (~220px min). A prior `overflow-x: auto`

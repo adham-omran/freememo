@@ -20,6 +20,7 @@
    [freememo.hierarchy-side-panel :refer [HierarchySidePanel]]
    [freememo.pin-side-panel :refer [PinSidePanel]]
    [freememo.pdf-pane :refer [PdfPane]]
+   [freememo.pdf-toolbar :refer [PdfToolbar]]
    [freememo.editor-pane :refer [EditorPane]]
    [freememo.bottom-panel :refer [ToolbarBar BottomPanel]]
    [freememo.bibliography-form :as bibform :refer [BibliographyForm]]
@@ -181,6 +182,10 @@
               ;; Current PDF page (mutated by PdfPane via callback)
               !current-page (atom initial-page)
               current-page (e/watch !current-page)
+              ;; PDF page count — surfaced by PdfViewerComponent via on-total!,
+              ;; consumed by PdfToolbar's "of N" + nav-button disabled states.
+              !total (atom 0)
+              total (e/watch !total)
 
               ;; Same-doc page-jump channel from HierarchySidePanel.
               ;; Hierarchy resets {:topic-id pdf-root-id :page n} on sibling-page
@@ -229,6 +234,16 @@
               !layout-save (atom nil)
               layout-save (e/watch !layout-save)
               [t-layout _] (e/Token layout-save)
+              ;; Layout toggle — hoisted to outer scope so both the PdfToolbar
+              ;; (above the content) and the PdfPane region can reference it.
+              toggle-layout! (fn []
+                               (let [new-l (if (= @!layout "left-right")
+                                             "top-bottom" "left-right")
+                                     new-top-pct (if (= new-l "top-bottom")
+                                                   80 (default-split-pct))]
+                                 (reset! !layout new-l)
+                                 (reset! !layout-save new-l)
+                                 (reset! !top-pct new-top-pct)))
               !left-pct (atom 50)
               left-pct (e/watch !left-pct)
               !top-split-pct (atom 50)
@@ -278,6 +293,25 @@
                :pdf-status pdf-status}
               card-refresh
               !show-bib)
+
+            ;; SECOND BAR (full width, PDF only): all PDF-scoped controls —
+            ;; page-nav, zoom, layout-toggle, done-checkbox, and the AI/extract
+            ;; action buttons. Shown only when a PDF item is in view.
+            (when is-pdf?
+              (PdfToolbar
+                {:user-id user-id
+                 :enc-key enc-key
+                 :pdf-root-id pdf-root-id
+                 :page-number current-page
+                 :total total
+                 :layout layout
+                 :is-live? is-live?
+                 :scan-dpi scan-dpi
+                 :llm-enabled? llm-enabled?
+                 :scanning-pages scanning-pages
+                 :ocr-errors ocr-errors
+                 :on-page-change! (fn [p] (reset! !current-page p))
+                 :on-layout-toggle! toggle-layout!}))
 
             ;; Auto-open biblio modal once on first mount after a fresh
             ;; import. claim-pending-biblio-show?* returns true (and clears the
@@ -335,17 +369,7 @@
                                       {:height (str top-split-pct "%")
                                        :min-height "0" :overflow "hidden"}
                                       {:width (str left-pct "%")
-                                       :min-width "0" :overflow "hidden"})
-                          toggle-layout! (fn []
-                                           (let [new-l (if (= @!layout "left-right")
-                                                         "top-bottom"
-                                                         "left-right")
-                                                 new-top-pct (if (= new-l "top-bottom")
-                                                               80
-                                                               (default-split-pct))]
-                                             (reset! !layout new-l)
-                                             (reset! !layout-save new-l)
-                                             (reset! !top-pct new-top-pct)))]
+                                       :min-width "0" :overflow "hidden"})]
                       (dom/div
                         (dom/props {:style pdf-style})
                         (reset! !current-page
@@ -353,12 +377,11 @@
                                     :pdf-root-id pdf-root-id
                                     :initial-page initial-page
                                     :target-page target-page
-                                    :layout layout
                                     :is-live? is-live?
                                     :has-file? pdf-has-file?
                                     :reload-nonce pdf-page-count
                                     :on-page-change! (fn [p] (reset! !current-page p))
-                                    :on-layout-toggle! toggle-layout!})))
+                                    :on-total! (fn [n] (reset! !total n))})))
 
                       ;; Drag handle BETWEEN PdfPane and EditorPane
                       (dom/div
@@ -373,17 +396,10 @@
 
                   (EditorPane
                     {:user-id user-id
-                     :enc-key enc-key
                      :topic-id page-topic-id
                      :audio-topic-id (when (= kind "audio") page-topic-id)
                      :is-pdf-page? is-pdf?
-                     :root-topic-id (or pdf-root-id root-topic-id)
-                     :page-number (when is-pdf? current-page)
-                     :scan-dpi scan-dpi
-                     :llm-enabled? llm-enabled?
                      :static-content effective-content
-                     :scanning-pages scanning-pages
-                     :ocr-errors ocr-errors
                      :on-imported-navigate!
                      (fn [tid]
                        (when navigate!
