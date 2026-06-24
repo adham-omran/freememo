@@ -166,6 +166,25 @@
          (tel/log! {:level :debug :id ::set-document :data {:gen my-gen :url pdf-url}} "set-document!")
          (start-load! pdf-url my-gen on-ready)))))
 
+(defn reload-document!
+  "Force-reload the SAME document on the existing viewer after its bytes changed
+   server-side (e.g. a Live Document gained pages). Unlike set-document!, this
+   bypasses the same-doc-id no-op guard: it evicts the stale IndexedDB cache
+   entry, clears !loaded-doc-id, then re-fetches. No-op if no viewer is mounted."
+  [pdf-url on-ready]
+  #?(:clj nil
+     :cljs
+     (when (some? @!viewer-state)
+       (let [doc-id (pdf-url->doc-id pdf-url)
+             my-gen (swap! !init-gen inc)]
+         (-> (pdf-cache/cache-delete doc-id)
+           (.then (fn [_]
+                    (reset! !loaded-doc-id nil)
+                    (start-load! pdf-url my-gen on-ready)))
+           (.catch (fn [_]
+                     (reset! !loaded-doc-id nil)
+                     (start-load! pdf-url my-gen on-ready))))))))
+
 (defn go-to-page!
   "Navigate to specific page number (1-indexed)."
   [page-num]
