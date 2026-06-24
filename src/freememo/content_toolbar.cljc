@@ -25,6 +25,7 @@
    #?(:clj [freememo.user-state :as us])
    [freememo.icons :as icons]
    [freememo.keyboard :as keyboard]
+   [freememo.toolbar-overflow :refer [install-overflow-detector!]]
    [freememo.util :refer [mac-platform?]]))
 
 ;; State map keys:
@@ -40,58 +41,8 @@
 ;;  :llm-enabled?  — whether LLM features are enabled
 ;; }
 
-;; Pre:  `container` is a mounted DOM element with class "toolbar-container";
-;;       `toolbar` is its child with class "toolbar". `!tier` and `!overflow-open`
-;;       are atoms whose values must reach the rendered className.
-;; Post: A ResizeObserver is installed on both nodes. On each observed size
-;;       change, the tier loop (0..5) writes `.toolbar-container collapse-N`
-;;       imperatively and emits the smallest fitting tier into `!tier`. Returns
-;;       a 0-arg cleanup fn that disconnects the observer.
-;; Invariant: kept as a plain (defn) outside any e/defn so its body is opaque
-;;            to Electric's analyzer — slot counts on the e/defn caller stay
-;;            identical between JVM and CLJS compile (the divergence-causing
-;;            #?(:cljs …) lives inside this fn, never inside Electric AST).
-(defn install-overflow-detector! [container toolbar !tier !overflow-open]
-  #?(:cljs
-     (let [classlist (.-classList container)
-           tier-classes #js ["collapse-0" "collapse-1" "collapse-2"
-                             "collapse-3" "collapse-4" "collapse-5"
-                             "collapse-6" "collapse-7"]
-           apply-tier!
-           (fn [t]
-             ;; classList ops touch only collapse-N; Electric's reactive
-             ;; class binding owns the rest of the className. No race.
-             (.apply (.-remove classlist) classlist tier-classes)
-             (.add classlist (aget tier-classes t)))
-           ;; Pure measure — CSS owns the trigger's space (see index.css
-           ;; `.toolbar-overflow-trigger` per-tier rules). At tier 1 the
-           ;; trigger is `display:flex; visibility:hidden` so its width is in
-           ;; `scrollWidth` even before it's visible: the algorithm naturally
-           ;; escalates to tier 2 when content + trigger slot can't fit.
-           recompute
-           (fn []
-             (loop [t 0]
-               (when (<= t 7)
-                 (apply-tier! t)
-                 (if (<= (.-scrollWidth toolbar) (+ (.-clientWidth toolbar) 1))
-                   (reset! !tier t)
-                   (recur (inc t))))))
-           resize-obs (js/ResizeObserver. recompute)
-           ;; ResizeObserver fires only on the observed element's own box
-           ;; changes (parent resize). Internal content growth (e.g. an
-           ;; Export label gaining "(2)" suffix) doesn't change the toolbar's
-           ;; box, so we ALSO observe DOM subtree mutations to catch text /
-           ;; child-list / attribute changes that may grow content width.
-           mut-obs (js/MutationObserver. recompute)]
-       (.observe resize-obs toolbar)
-       (.observe resize-obs container)
-       (.observe mut-obs toolbar
-         #js {:childList true :subtree true :characterData true :attributes true})
-       (recompute)
-       (fn []
-         (.disconnect resize-obs)
-         (.disconnect mut-obs)))
-     :clj (fn [] nil)))
+;; install-overflow-detector! lives in freememo.toolbar-overflow (shared with
+;; PdfToolbar). Required above.
 
 (e/defn ContentToolbar [state refresh !show-bib]
   (e/client

@@ -2,8 +2,8 @@
   "PDF viewer pane — wraps PdfViewerComponent + page-state + last-page persistence.
 
    Split layout (PDF vs Editor) is owned by the caller (TopicPage). PdfPane
-   fills 100% of its container. Layout toggle UI lives inside PdfViewerComponent;
-   PdfPane delegates the toggle to the caller via `on-layout-toggle!`."
+   fills 100% of its container. Page-nav, zoom, and the layout toggle live in
+   PdfToolbar (the second bar), not here."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -18,16 +18,13 @@
      :user-id         — identity used for last-page persistence
      :pdf-root-id     — root topic id for the PDF document
      :initial-page    — int page to start at
-     :layout          — \"left-right\" | \"top-bottom\" — controls PDF.js UI; the
-                        outer split is rendered by the caller
      :on-page-change! — fn called with current-page int when user navigates
-     :on-layout-toggle! — fn called (no args) when user clicks the layout toggle
-                          button inside PdfViewerComponent.
+     :on-total!       — fn called with the PDF page count when known/changed
 
    Returns the current page number (int)."
-  [{:keys [user-id pdf-root-id initial-page layout target-page
+  [{:keys [user-id pdf-root-id initial-page target-page
            is-live? has-file? reload-nonce
-           on-page-change! on-layout-toggle!]}]
+           on-page-change! on-total!]}]
   (e/client
     (let [!current-page   (atom (or initial-page 1))
           current-page    (e/watch !current-page)
@@ -60,9 +57,6 @@
              :on-navigate! (fn [p]
                              (reset! !page-to-save p)
                              (when on-page-change! (on-page-change! p)))
-             :layout layout
-             :on-layout-toggle! (fn []
-                                  (when on-layout-toggle!
-                                    (on-layout-toggle!)))})))
+             :on-total! (fn [n] (when on-total! (on-total! n)))})))
 
       current-page)))
