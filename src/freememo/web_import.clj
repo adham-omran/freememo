@@ -14,6 +14,7 @@
             [freememo.biblio-import :as biblio-import]
             [freememo.db :as db]
             [freememo.epub :as epub]
+            [freememo.image-rehost :as image-rehost]
             [freememo.import-staging :as staging]
             [freememo.logging :as log]
             [freememo.pdf :as pdf]
@@ -63,7 +64,9 @@
             {:ok true :flow :already-exists
              :topic-id (:topics/id existing-topic)
              :title (:topics/title existing-topic)}
-            (let [topic-id (db/create-web-topic! user-id (:title r) (:html r)
+            (let [html (:html (image-rehost/rehost-html-images!
+                                 {:html (:html r) :base-url (:url r) :user-id user-id}))
+                  topic-id (db/create-web-topic! user-id (:title r) html
                              {:url (:url r)
                               :source-type (:source-type r)
                               :issued-date-parts (:issued-date-parts r)})]
