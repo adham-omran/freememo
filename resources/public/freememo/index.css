@@ -2069,6 +2069,13 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     opacity: 1;
     visibility: visible;
 }
+/* Suppress the tooltip while the element's menu is open. The cursor is still
+   over the trigger after a click, so :hover stays true and the tooltip would
+   otherwise paint over the open menu. Specificity (0,3,1) beats the show rule. */
+[data-tooltip][aria-expanded="true"]:hover::after {
+    opacity: 0;
+    visibility: hidden;
+}
 [data-tooltip].tooltip-right::after {
     left: auto;
     right: 0;
