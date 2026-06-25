@@ -12,6 +12,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [clojure.string :as str]
+   [freememo.loading :as loading]
    [freememo.modal-shell :as modal]
    [freememo.navigation :as nav]
    #?(:clj [freememo.quota :as quota])
@@ -250,7 +251,7 @@
 ;;       via e/server, then either navigates (HTML topic) or transitions to
 ;;       :confirming (binary). Token spends after server returns.
 ;; Invariant: :required blocks submit on empty.
-(e/defn UrlInput [user-id navigate-to-viewer! !stage !staged !flow !error !quota-error?]
+(e/defn UrlInput [user-id navigate-to-viewer! !stage !staged !flow !error !quota-error? !busy-msg]
   (e/client
     (let [commits (forms/Form! {:url ""}
                     (e/fn Fields [{:keys [url]}]
@@ -277,17 +278,23 @@
                              [`Import-wiki-url (str/trim (or url ""))]))]
       (e/for [[token [_head url]] (e/diff-by first (e/as-vec commits))]
         (when token
-          (case (reset-error! !error !quota-error?)
-            (let [r (e/server (e/Offload #(web-import/import-url!* user-id url)))]
-              (case r
-                (if (:ok r)
-                  (case (:flow r)
-                    :imported       (case (navigate-to-viewer! (:topic-id r)) (token))
-                    :already-exists (case (navigate-to-viewer! (:topic-id r)) (token))
-                    :staged         (case (url-set-staged! !staged !flow !stage r) (token))
-                    (case (url-set-error! !error !quota-error? !stage
-                            (str "Unexpected flow: " (:flow r))) (token)))
-                  (case (url-set-error! !error !quota-error? !stage (:error r)) (token)))))))))))
+          ;; Busy overlay: set while this commit processes, clear when (token)
+          ;; spends. `case` forces the reset! to evaluate; e/on-unmount fires on
+          ;; spend. Both are siblings of the offload — never wrap it (that would
+          ;; unmount the in-flight e/Offload).
+          (e/on-unmount #(reset! !busy-msg nil))
+          (case (reset! !busy-msg "Fetching…")
+            (case (reset-error! !error !quota-error?)
+              (let [r (e/server (e/Offload #(web-import/import-url!* user-id url)))]
+                (case r
+                  (if (:ok r)
+                    (case (:flow r)
+                      :imported       (case (navigate-to-viewer! (:topic-id r)) (token))
+                      :already-exists (case (navigate-to-viewer! (:topic-id r)) (token))
+                      :staged         (case (url-set-staged! !staged !flow !stage r) (token))
+                      (case (url-set-error! !error !quota-error? !stage
+                              (str "Unexpected flow: " (:flow r))) (token)))
+                    (case (url-set-error! !error !quota-error? !stage (:error r)) (token))))))))))))
 
 (e/defn FilePicker [!file !file-input on-file accept blurb]
   (e/client
@@ -516,7 +523,7 @@
 ;;       web-import/confirm-staged-upload!* via e/server, navigates on success.
 ;; Cancel button: locally resets staged state without claiming the upload.
 (e/defn ConfirmingStage [user-id navigate-to-viewer! !stage !staged !flow
-                         !image-mode !advanced-open !error !quota-error?]
+                         !image-mode !advanced-open !error !quota-error? !busy-msg]
   (e/client
     (let [staged (e/watch !staged)
           flow (e/watch !flow)
@@ -594,20 +601,21 @@
             nil)))
       (e/for [[token [_head u-id i-mode]] (e/diff-by first (e/as-vec commits))]
         (when token
-          (case (reset-error! !error !quota-error?)
-            (let [r (e/server (e/Offload #(web-import/confirm-staged-upload!*
-                                            user-id u-id i-mode)))]
-              (case r
-                (if (:ok r)
-                  (case (navigate-to-viewer! (:topic-id r)) (token))
-                  (case (url-set-error! !error !quota-error? !stage (:error r)) (token)))))))))))
+          ;; Busy overlay while the staged upload commits (sibling of the
+          ;; offload; cleared on token spend via e/on-unmount).
+          (e/on-unmount #(reset! !busy-msg nil))
+          (case (reset! !busy-msg "Importing…")
+            (case (reset-error! !error !quota-error?)
+              (let [r (e/server (e/Offload #(web-import/confirm-staged-upload!*
+                                              user-id u-id i-mode)))]
+                (case r
+                  (if (:ok r)
+                    (case (navigate-to-viewer! (:topic-id r)) (token))
+                    (case (url-set-error! !error !quota-error? !stage (:error r)) (token))))))))))))
 
 (e/defn StatusStage [message]
   (e/client
-    (dom/div
-      (dom/props {:style {:padding "24px" :text-align "center"
-                          :color "var(--color-text-secondary)"}})
-      (dom/text message))))
+    (loading/Spinner message)))
 
 (e/defn ErrorStage [!error !quota-error? on-try-again on-manage-library]
   (e/client
@@ -653,6 +661,11 @@
           !paste-url (atom "")
           !image-mode (atom "reduce")
           !advanced-open (atom false)
+          ;; nil = idle; a string = an e/Offload import is in flight, shown as a
+          ;; spinner overlay. Set/cleared by UrlInput and ConfirmingStage (the
+          ;; two flows whose offload can't swap to StatusStage without being
+          ;; unmounted). HTTP paths use the :fetching/:importing StatusStage.
+          !busy-msg (atom nil)
           source (e/watch !source)
           stage (e/watch !stage)
           cap-bytes (e/server (upload-cap-bytes*))
@@ -763,9 +776,11 @@
           (dom/props {:class (case source
                                :paste "modal-content modal-lg"
                                "modal-content")
+                      ;; position:relative anchors the busy-overlay (inset:0).
                       :style (case source
-                               :paste {:max-height "85vh" :display "flex" :flex-direction "column"}
-                               {:width "500px" :max-width "90%"})})
+                               :paste {:max-height "85vh" :display "flex" :flex-direction "column"
+                                       :position "relative"}
+                               {:width "500px" :max-width "90%" :position "relative"})})
           (dom/On "dragover" (fn [e] (.preventDefault e)) nil)
           (dom/On "drop" on-modal-drop nil)
 
@@ -779,7 +794,7 @@
             :confirming (ConfirmingStage user-id navigate-to-viewer!
                                          !stage !staged !flow
                                          !image-mode !advanced-open
-                                         !error !quota-error?)
+                                         !error !quota-error? !busy-msg)
             :text-confirming (TextFileReviewStage !flow !filename !title
                                                   on-text-confirm on-cancel-text)
             :error (ErrorStage !error !quota-error? on-try-again on-manage-library)
@@ -787,7 +802,7 @@
             ;; :collecting (default)
             (case source
               :url (UrlInput user-id navigate-to-viewer!
-                             !stage !staged !flow !error !quota-error?)
+                             !stage !staged !flow !error !quota-error? !busy-msg)
               :file (let [cap-label (when (pos? cap-bytes) (format-mb cap-bytes))]
                       (FilePicker !file !file-input handle-file
                                   ".pdf,.epub,.html,.htm,.md,.markdown"
@@ -800,4 +815,16 @@
               :paste (PasteEditor !format !title !paste-url !html-text !md-text
                                   on-paste-import)
               :new-topic (NewTopicInput on-new-topic)
-              nil)))))))
+              nil))
+
+          ;; Busy overlay for the e/Offload flows (URL / staged-confirm): covers
+          ;; the still-mounted form with a centered spinner so the offload keeps
+          ;; running underneath. Cleared by the owning component on token spend.
+          (when-some [msg (e/watch !busy-msg)]
+            (dom/div
+              (dom/props {:style {:position "absolute" :inset "0"
+                                  :background "var(--color-bg-card)"
+                                  :border-radius "var(--radius-lg)"
+                                  :display "flex" :align-items "center" :justify-content "center"
+                                  :z-index "1"}})
+              (loading/Spinner msg))))))))

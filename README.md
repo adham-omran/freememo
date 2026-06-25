@@ -78,6 +78,42 @@ Why a plugin: Zotero's built-in API sends no CORS headers, returns `file://` red
 | Logging | Telemere (structured, CLJ + CLJS) |
 | AI | OpenAI GPT-5.1 (card generation) + Vision (OCR) |
 
+### Loading indicators
+
+Loading state lives in `freememo.loading` (`Spinner`, `WithLoading`) plus the
+`.spinner` CSS class (`index.css`, `@keyframes spin`).
+
+`WithLoading` exists because of an Electric subtlety: a pending `e/Offload` (or
+any unresolved `e/server` value) latches to an **empty `e/amb`, not `nil`**, so
+the naive `(if (nil? v) loading loaded)` never shows the loading branch.
+`WithLoading` captures the resolved value into a client atom via a one-shot
+`e/Token`, giving a real `nil → value` transition the UI can branch on.
+
+Two consumption shapes:
+
+- **Value render** — `(loading/WithLoading Thunk Loaded)` renders the spinner
+  until `Thunk`'s server value resolves, then `(Loaded value)`. Re-fetch =
+  remount (key the call site). See `ocr_compare`, `copy_text`, `bibliography_form`.
+- **Token-commit flow** — when a Forms5 commit runs an `e/Offload` whose result
+  drives navigation/branching, you can't swap the view to a loading screen: that
+  unmounts the `e/for` token body and cancels the in-flight offload. Instead set
+  a busy atom inside `(when token …)` (as a `case` test so it evaluates) and
+  clear it with `e/on-unmount`; render a spinner overlay from that atom while the
+  form stays mounted. See `import_modal`'s `!busy-msg` overlay.
+
+### Tooltips
+
+Tooltips are driven by the `data-tooltip` attribute plus a CSS `:hover` rule
+(`index.css` ~line 2041) — no JS, instant on hover, unlike the browser's
+delayed `title`.
+
+Elements that open a menu suppress their tooltip while open via
+`[data-tooltip][aria-expanded="true"]:hover::after { visibility: hidden }`.
+Without it the cursor stays over the trigger after a click, `:hover` remains
+true, and the tooltip paints over the open menu. Menu triggers already set
+`aria-expanded` (e.g. `pdf_action_dropdowns.cljc`), so any new menu-button
+gets the fix for free by setting that attribute.
+
 ## Database
 
 PostgreSQL 16 via `docker-compose.yml`. Default connection: `cardmaker:dev@localhost:5432/cardmaker`.
