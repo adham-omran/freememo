@@ -12,6 +12,7 @@
    [freememo.copy-text :as copy]
    [freememo.ocr-models :as ocr-models]
    [freememo.modal-shell :as modal]
+   [freememo.priority-control :refer [PriorityControl get-topic-priority*]]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.settings :as settings])))
 
@@ -98,7 +99,7 @@
         (when (some? r)
           (if (:success r) (do (reset! !open false) (token)) (token (:error r))))))))
 
-(e/defn DocumentOptionsModal [user-id topic-id is-pdf? root-topic-id !open]
+(e/defn DocumentOptionsModal [user-id topic-id is-pdf? root-topic-id priority-topic-id !open]
   (e/client
     (when (e/watch !open)
       (dom/div
@@ -112,6 +113,17 @@
           (dom/On "click" (fn [e] (.stopPropagation e)) nil)
           (dom/h3 (dom/props {:style {:margin "0 0 16px 0" :font-size "16px"}})
             (dom/text "Document options"))
+
+          ;; Review priority (C5) — applies to all kinds; the stepper autosaves
+          ;; on change via update-priority!*, independent of the form's Save.
+          (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))]
+            (dom/div
+              (dom/props {:style {:margin-bottom "var(--sp-3)"}})
+              (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
+                (dom/text "Review priority"))
+              (PriorityControl user-id priority-topic-id
+                (e/server (get-topic-priority* refresh priority-topic-id)))))
+
           (if is-pdf?
             (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
                   current (e/server (copy/get-extract-style* settings-refresh user-id root-topic-id))
@@ -126,7 +138,7 @@
                   (dom/props {:class "btn btn-primary" :type "button" :disabled true})
                   (dom/text "Save"))))))))))
 
-(e/defn DocumentOptionsButton [user-id topic-id is-pdf? root-topic-id]
+(e/defn DocumentOptionsButton [user-id topic-id is-pdf? root-topic-id priority-topic-id]
   (e/client
     (let [!open (atom false)]
       (dom/button
@@ -136,4 +148,4 @@
         (icons/Icon :settings :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Document options"))
         (dom/On "click" (fn [_] (reset! !open true)) nil))
-      (DocumentOptionsModal user-id topic-id is-pdf? root-topic-id !open))))
+      (DocumentOptionsModal user-id topic-id is-pdf? root-topic-id priority-topic-id !open))))

@@ -12,10 +12,8 @@
    [freememo.content-toolbar-settings :as settings]
    [freememo.content-toolbar-actions :as actions]
    [freememo.content-toolbar-extract :refer [ExtractActions]]
-   [freememo.priority-control :refer [PriorityControl get-topic-priority*]]
    [freememo.toolbar-generate-dropdown :refer [GenerateDropdown]]
    [freememo.toolbar-sync-dropdown :refer [SyncDropdown]]
-   [freememo.bibliography-button :as bib-btn :refer [BibliographyButton]]
    [freememo.bibliography-toolbar :refer [DocumentMetaGroup]]
    [freememo.document-options :refer [DocumentOptionsButton]]
    [freememo.auto-extract-button :refer [AutoExtractButton]]
@@ -53,19 +51,19 @@
                   citation page-info pdf-root? pdf-status]} state
           ;; Unsynced card count — uses refresh value for reactivity
           unsynced-count (e/server (helpers/get-unsynced-count* refresh topic-id))
-          ;; Whether the document's root topic has a sources row attached.
-          ;; Gates the Refetch-bibliography button. Reactive on :refresh so
-          ;; attach/detach flips the button's enabled state without a reload.
-          ;;
-          ;; Source rows live on the document's root, not on PDF page children
-          ;; or extract children — see topic_page.cljc's `bib-topic-id (or
-          ;; pdf-root-id root-topic-id)`. The state map's :root-topic-id is
-          ;; already that value, so refetch always targets the document root.
+          ;; biblio-target-id: source rows live on the document's root, not on
+          ;; PDF page children or extract children — see topic_page.cljc's
+          ;; `bib-topic-id (or pdf-root-id root-topic-id)`. The Refetch action
+          ;; now lives inside the Edit-Bibliography modal (C4), which owns its
+          ;; own has-source? gate; the toolbar no longer renders it.
           biblio-target-id (or root-topic-id topic-id)
+          ;; Review-unit topic: PDF root for pages, the topic itself for
+          ;; extracts — the entity Priority/History act on. Document Options
+          ;; hosts the Priority field (C5); the inline stepper is gone.
+          review-topic-id (if extract-status topic-id (or root-topic-id topic-id))
           ;; PDF (root or page) → :page context; extract/web/epub → :extract.
           ;; Document-options shows the extraction-style select only for PDFs.
           is-pdf? (= context-mode :page)
-          has-source? (e/server (bib-btn/has-source?* refresh user-id biblio-target-id))
           ;; Load settings from server
           server-context-enabled (e/server (user-settings/get-context-enabled user-id))
           server-context-pages (e/server (user-settings/get-context-pages user-id))
@@ -87,9 +85,6 @@
           gen-pending (or (:pending card-gen-status) 0)
           gen-active? (or (some? (:active-id card-gen-status)) (pos? gen-pending))
           gen-error (:error card-gen-status)
-
-          ;; Unique radio group name
-          radio-name (if (= context-mode :extract) "extract-card-type" "card-type")
 
           ;; Overflow menu state
           !overflow-open (atom false)
@@ -126,35 +121,10 @@
           ;; Always mounted so settings e/Token handlers stay active.
               (dom/div (dom/props {:class "toolbar-overflow-panel"})
 
-            ;; Priority proxy (.toolbar-overflow-priority, reveals T2+) — mirrors
-            ;; the inline control beside History. Targets the review-unit topic
-            ;; (PDF root for pages), same rule as ExtractActions, so it edits the
-            ;; priority the queue orders by. biblio-target-id is NOT equivalent —
-            ;; it would scope extracts to their root instead of themselves.
-                (dom/div
-                  (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-priority"})
-                  (let [review-topic-id (if extract-status topic-id (or root-topic-id topic-id))]
-                    (PriorityControl user-id review-topic-id (e/server (get-topic-priority* refresh review-topic-id)))))
-
-            ;; Context proxy (.toolbar-overflow-first, reveals T2+).
-            ;; Two mounts bind to the same atoms; atoms are the source of truth.
-                (when llm-enabled?
-                  (dom/div
-                    (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-first"})
-                    (settings/ContextSettings
-                      {:user-id user-id :context-tooltip context-tooltip
-                       :llm-enabled? llm-enabled?
-                       :use-context use-context :context-window context-window}
-                      !use-context !context-window)))
-
-            ;; Basic/Cloze proxy (.toolbar-overflow-card-type, reveals T3+).
-                (when llm-enabled?
-                  (dom/div
-                    (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-card-type"})
-                    (settings/ToolbarSettings
-                      {:user-id user-id :radio-name radio-name :llm-enabled? llm-enabled?
-                       :card-type card-type}
-                      !use-context !context-window !card-type)))
+            ;; Priority / Context / Basic-Cloze proxies removed: Priority moved
+            ;; into the Document-Options modal (C5); card-type + Context moved
+            ;; into the Generate dropdown menu (C3), which is itself a dropdown
+            ;; and works on mobile, so no overflow proxy is needed.
 
             ;; CardCount proxy (.toolbar-overflow-cardcount, reveals T4+).
             ;; Same atom as inline stepper — instances stay in sync.
@@ -163,12 +133,8 @@
                     (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-cardcount"})
                     (settings/CardCountStepper user-id card-count-val !card-count)))
 
-            ;; Bibliography proxy (.toolbar-overflow-bib, reveals T5+).
-            ;; Passes !overflow-open so the dropdown closes only after the
-            ;; refetch token spends (success or error) — see BibliographyButton.
-                (dom/div
-                  (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-bib"})
-                  (BibliographyButton user-id biblio-target-id has-source? !overflow-open))
+            ;; Bibliography (Refetch) proxy removed — Refetch folded into the
+            ;; Edit-Bibliography modal (C4).
 
             ;; Auto-extract proxy (.toolbar-overflow-bib, reveals T5+).
             ;; Disabled pending release — tooltip surfaces the status.
@@ -183,9 +149,10 @@
                     (dom/span (dom/props {:class "icon-label"}) (dom/text "Auto-extract"))))
 
             ;; Document-options proxy (.toolbar-overflow-bib, reveals T5+).
+            ;; Hosts the Priority field (C5), so it targets review-topic-id.
                 (dom/div
                   (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-bib"})
-                  (DocumentOptionsButton user-id topic-id is-pdf? biblio-target-id))
+                  (DocumentOptionsButton user-id topic-id is-pdf? biblio-target-id review-topic-id))
 
             ;; DocumentMeta proxy (.toolbar-overflow-docmeta, reveals T2+) —
             ;; actions only (Edit-Bibliography + Mark-PDF-Done); citation and
@@ -289,26 +256,15 @@
                     :mod-key mod-key
                     :card-type card-type :card-count-val card-count-val
                     :use-context use-context :context-window context-window
-                    :gen-active? gen-active? :gen-pending gen-pending :gen-error gen-error))
+                    :gen-active? gen-active? :gen-pending gen-pending :gen-error gen-error)
+                  !use-context !context-window !card-type)
 
-                (dom/div
-                  (dom/props {:class "toolbar-collapse-card-type"})
-                  (settings/ToolbarSettings
-                    {:user-id user-id :radio-name radio-name :llm-enabled? llm-enabled?
-                     :card-type card-type}
-                    !use-context !context-window !card-type))
+                ;; Card-count stays inline (commonly changed). Card-type +
+                ;; Context moved into the Generate dropdown menu (C3).
                 (when llm-enabled?
                   (dom/div
                     (dom/props {:class "toolbar-collapse-cardcount"})
-                    (settings/CardCountStepper user-id card-count-val !card-count)))
-                (when llm-enabled?
-                  (dom/div
-                    (dom/props {:class "toolbar-collapse-first"})
-                    (settings/ContextSettings
-                      {:user-id user-id :context-tooltip context-tooltip
-                       :llm-enabled? llm-enabled?
-                       :use-context use-context :context-window context-window}
-                      !use-context !context-window))))
+                    (settings/CardCountStepper user-id card-count-val !card-count))))
 
               (dom/div (dom/props {:class "toolbar-group-divider"}))
 
@@ -334,16 +290,16 @@
           ;; Divider hides with the doc-context group at tier 5.
               (dom/div (dom/props {:class "toolbar-group-divider toolbar-collapse-bib"}))
 
-          ;; 5. Transcribe (audio) + Bibliography-refetch + Auto-extract.
+          ;; 5. Transcribe (audio) + Auto-extract + Document-options.
+          ;; Refetch-bibliography folded into the Edit-Bibliography modal (C4).
               (dom/div
                 (dom/props {:class "toolbar-group toolbar-doc-context-group toolbar-collapse-bib"})
                 (when audio?
                   (TranscribeButton user-id topic-id enc-key))
                 (when (= context-mode :extract)
                   (JumpToSourcePageButton topic-id navigate!))
-                (BibliographyButton user-id biblio-target-id has-source? nil)
                 (AutoExtractButton)
-                (DocumentOptionsButton user-id topic-id is-pdf? biblio-target-id))
+                (DocumentOptionsButton user-id topic-id is-pdf? biblio-target-id review-topic-id))
 
           ;; Divider hides with the document-meta group at tier 2.
               (dom/div (dom/props {:class "toolbar-group-divider toolbar-collapse-docmeta"}))

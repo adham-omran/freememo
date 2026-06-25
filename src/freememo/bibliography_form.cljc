@@ -10,6 +10,7 @@
    [freememo.loading :as loading]
    [clojure.string :as str]
    [freememo.icons :as icons]
+   [freememo.bibliography-button :as bib-btn]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.biblio-import :as biblio-import])))
@@ -430,9 +431,21 @@
           (dom/props {:class "modal-content modal-lg"
                       :style {:max-height "85vh" :overflow-y "auto"
                               :display "flex" :flex-direction "column"}})
-          (dom/h3
-            (dom/props {:style {:margin "0 0 16px 0" :font-size "16px"}})
-            (dom/text "Bibliography"))
+          ;; Header: title + Refetch (C4). Refetch re-runs identifier
+          ;; resolution for a topic that already has a source; gated on
+          ;; has-source?* (reactive on :refresh). Folds in the old toolbar
+          ;; Refetch button. Note: the open form is loaded once, so a refetch's
+          ;; new data shows on reopen.
+          (let [refresh     (e/server (e/watch (us/get-atom user-id :refresh)))
+                has-source? (e/server (bib-btn/has-source?* refresh user-id topic-id))]
+            (dom/div
+              (dom/props {:style {:display "flex" :align-items "center"
+                                  :justify-content "space-between" :gap "12px"
+                                  :margin "0 0 16px 0"}})
+              (dom/h3
+                (dom/props {:style {:margin "0" :font-size "16px"}})
+                (dom/text "Bibliography"))
+              (bib-btn/BibliographyButton user-id topic-id has-source? nil)))
           (loading/WithLoading
             (e/fn [] (e/server (e/Offload #(load-source-for-topic* 0 user-id topic-id))))
             (e/fn [data] (BibliographyDialog !show user-id topic-id (:form data)))))))))

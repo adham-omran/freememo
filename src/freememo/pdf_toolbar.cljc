@@ -2,94 +2,42 @@
   "Second command bar, rendered under the main ContentToolbar and shown only
    when a PDF item is in view. Hosts every PDF-scoped control that previously
    lived split across PdfViewerComponent (page-nav, zoom, layout-toggle) and
-   EditorPane's page-header (done-checkbox + Scan / Compare-OCR / Copy-text /
+   EditorPane's page-header (mark-page-done + Scan / Compare-OCR / Copy-text /
    Copy-all + the Live-Document add-photos affordance).
 
-   Collapse (C1): the four AI/extraction action buttons collapse to icon-only
-   under the same overflow mechanism as the main toolbar (.toolbar-container +
-   install-overflow-detector!; tier-1 hides .icon-label). Page-nav, zoom, and
-   the done-checkbox do NOT collapse — they carry no .icon-label."
+   Styling: every control is a ghost .btn-secondary inside a .toolbar-group, so
+   the main toolbar's transparent-at-rest / hover-fill rule applies — the whole
+   row matches the main ContentToolbar (S2).
+
+   Collapse (C1): the action buttons (mark-page-done, Scan, Compare-OCR, Copy)
+   carry .icon-label and collapse to icon-only under the same overflow mechanism
+   as the main toolbar (install-overflow-detector!; tier-1 hides .icon-label).
+   Page-nav and zoom glyphs carry no .icon-label, so they never collapse."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [freememo.logging :as log]
    [freememo.icons :as icons]
    [freememo.keyboard :as keyboard]
    [freememo.copy-text :as copy]
-   [freememo.ocr-compare :as ocr-compare]
+   [freememo.pdf-action-dropdowns :refer [ScanDropdown CopyDropdown]]
    [freememo.pdf-viewer :as viewer]
    [freememo.pdf-viewer-component :refer [LiveDocAddPhotos]]
    [freememo.toolbar-overflow :refer [install-overflow-detector!]]
-   #?(:clj [freememo.page-ocr :as page])
-   #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])
-   #?(:clj [freememo.db :as db])
-   #?(:clj [missionary.core :as m]))
-  #?(:clj (:import [missionary Cancelled]
-                   [java.util.concurrent Executors])))
+   #?(:clj [freememo.db :as db])))
 
 ;; ---------------------------------------------------------------------------
-;; OCR scan infrastructure (relocated from editor_pane.cljc — this is now the
-;; sole caller). Submits an OCR scan as a Missionary task on a bounded executor.
+;; Page-done status read. Wraps the DB call with a _refresh-first arg so the
+;; reactive call site re-queries when :meta-refresh bumps — the done button
+;; reflects a toggle immediately (a native checkbox got this free from the
+;; browser; a button must be driven by the reactive value).
 ;; ---------------------------------------------------------------------------
 
-#?(:clj (defonce ocr-executor (Executors/newFixedThreadPool 3)))
-
-(defn start-ocr-scan!
-  "Submit an OCR scan as a Missionary task on the bounded executor.
-   Timeout after 30s. Cancel function stored in per-user :scan-cancellers."
-  [uid doc page ek dpi]
-  #?(:clj
-     (do
-       (swap! (us/get-atom uid :scanning-pages) conj [doc page])
-       (swap! (us/get-atom uid :ocr-errors) dissoc [doc page])
-       (log/log-info (str "OCR scan started topic-id=" doc " page=" page))
-       (let [cancel-fn
-             ((m/timeout
-                (m/via ocr-executor (page/extract-page-text uid doc page ek dpi))
-                30000
-                {:success false :error "Scan timed out after 30 seconds"})
-              (fn [result]
-                (swap! (us/get-atom uid :scan-cancellers) dissoc [doc page])
-                (if (:success result)
-                  (do (log/log-info (str "OCR scan complete topic-id=" doc " page=" page))
-                    (swap! (us/get-atom uid :refresh) inc))
-                  (do (log/log-info (str "OCR scan failed topic-id=" doc " page=" page " error=" (:error result)))
-                    (swap! (us/get-atom uid :ocr-errors) assoc [doc page] (:error result))
-                    (toasts/push! uid
-                      {:level :error
-                       :message (:error result)
-                       :actions (if (= :insufficient-credits (:error-type result))
-                                  [{:label "Top up credits" :nav :settings}]
-                                  [])})))
-                (swap! (us/get-atom uid :scanning-pages) disj [doc page]))
-              (fn [e]
-                (swap! (us/get-atom uid :scan-cancellers) dissoc [doc page])
-                (when-not (instance? Cancelled e)
-                  (log/log-info (str "OCR scan error topic-id=" doc " page=" page " ex=" (.getMessage e)))
-                  (swap! (us/get-atom uid :ocr-errors) assoc [doc page] (.getMessage e))
-                  (toasts/push! uid {:level :error :message (.getMessage e)}))
-                (swap! (us/get-atom uid :scanning-pages) disj [doc page])))]
-         (swap! (us/get-atom uid :scan-cancellers) assoc [doc page] cancel-fn))
-       nil)
+(defn page-done?*
+  [_refresh pdf-root-id page-number]
+  #?(:clj (boolean (when (and pdf-root-id page-number)
+                     (db/get-page-done-status pdf-root-id page-number)))
      :cljs nil))
-
-;; ---------------------------------------------------------------------------
-;; Shared inline styles for the non-collapsing controls (no .btn class — these
-;; are compact viewer chrome, matching the prior PdfViewerComponent toolbar).
-;; ---------------------------------------------------------------------------
-
-(def ^:private btn-style
-  {:padding "6px 12px"
-   :cursor "pointer"
-   :background "var(--color-bg-card)"
-   :border "1px solid var(--color-border)"
-   :border-radius "3px"})
-
-(defn- disabled-btn-style [disabled?]
-  (assoc btn-style
-    :cursor (if disabled? "not-allowed" "pointer")
-    :background (if disabled? "var(--color-border)" "var(--color-bg-card)")))
 
 (e/defn PdfToolbar
   "props: {:user-id :enc-key :pdf-root-id :page-number :total :layout :is-live?
@@ -123,7 +71,11 @@
         (reset! !input-val (str page-number)))
 
       (dom/div
-        (dom/props {:class "toolbar-container"})
+        ;; pdf-toolbar-container: ranks this bar's stacking context below the
+        ;; main ContentToolbar (which hosts the History modal backdrop) and
+        ;; above EditorToolbar, so dropped tooltips and the modal backdrop layer
+        ;; correctly across the three stacked bars. See index.css.
+        (dom/props {:class "toolbar-container pdf-toolbar-container"})
         (let [container-node dom/node]
           (dom/div
             (dom/props {:class "toolbar pdf-toolbar-bar"})
@@ -134,11 +86,12 @@
 
               ;; ── Page navigation (no collapse) ───────────────────────────
               (dom/div
-                (dom/props {:style {:display "flex" :align-items "center" :gap "4px"}})
+                (dom/props {:class "toolbar-group"
+                            :style {:display "flex" :align-items "center" :gap "4px"}})
                 (let [prev-disabled? (or (= page-number 1) (= total 0))]
                   (dom/button
-                    (dom/props {:title "Previous Page" :disabled prev-disabled?
-                                :style (disabled-btn-style prev-disabled?)})
+                    (dom/props {:class "btn btn-sm btn-secondary"
+                                :title "Previous Page" :disabled prev-disabled?})
                     (dom/text "◀")
                     (dom/On "click"
                       (fn [_] (when (and (> page-number 1) (> total 0))
@@ -166,8 +119,8 @@
                   (dom/text "of " total))
                 (let [next-disabled? (or (>= page-number total) (= total 0))]
                   (dom/button
-                    (dom/props {:title "Next Page" :disabled next-disabled?
-                                :style (disabled-btn-style next-disabled?)})
+                    (dom/props {:class "btn btn-sm btn-secondary"
+                                :title "Next Page" :disabled next-disabled?})
                     (dom/text "▶")
                     (dom/On "click"
                       (fn [_] (when (and (< page-number total) (> total 0))
@@ -175,21 +128,23 @@
 
               ;; ── Zoom + layout toggle (no collapse) ──────────────────────
               (dom/div
-                (dom/props {:style {:display "flex" :align-items "center" :gap "4px"
+                (dom/props {:class "toolbar-group"
+                            :style {:display "flex" :align-items "center" :gap "4px"
                                     :padding-left "12px"
                                     :border-left "1px solid var(--color-border)"}})
                 (dom/button
-                  (dom/props {:title "Zoom Out" :style btn-style})
+                  (dom/props {:class "btn btn-sm btn-secondary" :title "Zoom Out"})
                   (dom/text "−")
                   (e/for [_ (dom/On-all "click")] (viewer/zoom! 0.9)))
                 (dom/button
-                  (dom/props {:title "Zoom In" :style btn-style})
+                  (dom/props {:class "btn btn-sm btn-secondary" :title "Zoom In"})
                   (dom/text "+")
                   (e/for [_ (dom/On-all "click")] (viewer/zoom! 1.1)))
                 (dom/select
                   (dom/props {:style {:padding "6px 8px" :cursor "pointer"
-                                      :background "var(--color-bg-card)"
-                                      :border "1px solid var(--color-border)"
+                                      :background "transparent"
+                                      :color "var(--color-text-label)"
+                                      :border "1px solid transparent"
                                       :border-radius "3px"}})
                   (dom/option (dom/props {:value "page-width"}) (dom/text "Page Width"))
                   (dom/option (dom/props {:value "page-fit"}) (dom/text "Page Fit"))
@@ -210,76 +165,62 @@
                     (t)))
                 (when on-layout-toggle!
                   (dom/button
-                    (dom/props {:style (assoc btn-style :font-size "14px")
+                    (dom/props {:class "btn btn-sm btn-secondary"
+                                :style {:font-size "14px"}
                                 :data-tooltip (if (= layout "top-bottom")
                                                 "Switch to side-by-side layout"
                                                 "Switch to stacked layout")})
                     (dom/text (if (= layout "top-bottom") "⇅" "⇄"))
                     (dom/On "click" (fn [_] (on-layout-toggle!)) nil))))
 
-              ;; ── Mark-page-done checkbox (no collapse) ───────────────────
-              (dom/label
-                (dom/props {:style {:display "flex" :align-items "center" :gap "3px"
-                                    :font-size "12px" :cursor "pointer"
-                                    :padding-left "12px"
-                                    :border-left "1px solid var(--color-border)"}
-                            :title "Mark this page as completed to track your extraction progress"})
-                (e/for-by identity [_page [page-number]]
-                  (dom/input
-                    (dom/props {:type "checkbox"})
-                    (let [is-done (e/server (when (and pdf-root-id page-number)
-                                              (db/get-page-done-status pdf-root-id page-number)))]
-                      (set! (.-checked dom/node) (boolean is-done)))
-                    (reset! keyboard/!done-btn-ref dom/node)
-                    (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
-                    (let [change-event (dom/On "change"
-                                         (fn [ev] {:checked (-> ev .-target .-checked)
-                                                   :page page-number})
-                                         nil)
-                          [t _] (e/Token change-event)]
-                      (when t
-                        (case (e/server (db/toggle-page-done! pdf-root-id (:page change-event)))
-                          (case (e/server (swap! (us/get-atom user-id :meta-refresh) inc))
-                            (t)))))))
-                (dom/text (str "Mark page " page-number " as done")))
-
-              ;; ── Scan Page (collapses; E2 sparkle, stays secondary) ──────
-              (when llm-enabled?
-                (let [scanning? (contains? scanning-pages [pdf-root-id page-number])]
+              ;; ── Mark-page-done button (no collapse) — matches Mark PDF
+              ;;    Done (bibliography_toolbar): plain ghost secondary button,
+              ;;    check/rotate icon, Done/Restore label. Keyboard ref drives
+              ;;    the Done shortcut via .click. ────────────────────────────
+              (dom/div
+                (dom/props {:class "toolbar-group"
+                            :style {:padding-left "12px"
+                                    :border-left "1px solid var(--color-border)"}})
+                (let [refresh    (e/server (e/watch (us/get-atom user-id :meta-refresh)))
+                      page-done? (e/server (page-done?* refresh pdf-root-id page-number))]
                   (dom/button
                     (dom/props {:class "btn btn-sm btn-secondary"
-                                :aria-label "Scan page"
-                                :data-tooltip "Extract this page's text with AI OCR (uses credits)"
-                                :disabled scanning?})
-                    (icons/Icon :sparkles :size 16)
+                                :aria-label (if page-done?
+                                              (str "Restore page " page-number)
+                                              (str "Mark page " page-number " as done"))
+                                :data-tooltip "Mark this page as completed to track your extraction progress"})
+                    (icons/Icon (if page-done? :rotate-ccw :check) :size 16)
                     (dom/span (dom/props {:class "icon-label"})
-                      (dom/text (if scanning? "Scanning…" "Scan Page")))
-                    (reset! keyboard/!scan-btn-ref dom/node)
-                    (e/on-unmount (fn [] (reset! keyboard/!scan-btn-ref nil)))
+                      (dom/text (if page-done?
+                                  (str "Restore page " page-number)
+                                  (str "Mark page " page-number " as done"))))
+                    (reset! keyboard/!done-btn-ref dom/node)
+                    (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
                     (let [click-event (dom/On "click"
                                         (fn [_] {:id (str (random-uuid)) :page page-number})
                                         nil)
                           [t _] (e/Token click-event)]
                       (when t
-                        (case (e/server
-                                (let [pg (:page click-event)
-                                      doc pdf-root-id
-                                      uid user-id
-                                      ek enc-key]
-                                  (if (contains? @(us/get-atom uid :scanning-pages) [doc pg])
-                                    (log/log-info (str "OCR scan already in progress topic-id=" doc " page=" pg))
-                                    (start-ocr-scan! uid doc pg ek scan-dpi))))
-                          (t)))))))
+                        (case (e/server (db/toggle-page-done! pdf-root-id (:page click-event)))
+                          (case (e/server (swap! (us/get-atom user-id :meta-refresh) inc))
+                            (t))))))))
 
-              ;; ── Compare OCR / Copy text / Copy all (collapse) ───────────
-              (when llm-enabled?
-                (ocr-compare/OcrCompareButton user-id pdf-root-id page-number scan-dpi))
-              (copy/CopyTextButton user-id pdf-root-id page-number extract-style)
-              (copy/CopyAllTextButton user-id pdf-root-id extract-style)
+              ;; ── Scan (+Compare OCR) / Copy (+Copy all) dropdowns (C1/C2) ─
+              ;;    Wrapped in .toolbar-group so the ghost-button rule reaches
+              ;;    the dropdown triggers — matches the main toolbar.
+              (dom/div
+                (dom/props {:class "toolbar-group"})
+                (when llm-enabled?
+                  (ScanDropdown {:user-id user-id :enc-key enc-key
+                                 :pdf-root-id pdf-root-id :page-number page-number
+                                 :scan-dpi scan-dpi
+                                 :scanning? (contains? scanning-pages [pdf-root-id page-number])}))
+                (CopyDropdown {:user-id user-id :pdf-root-id pdf-root-id
+                               :page-number page-number :extract-style extract-style})
 
-              ;; ── Live Document add-photos (only for live docs) ───────────
-              (when is-live?
-                (LiveDocAddPhotos {:document-id pdf-root-id :compact? true}))
+                ;; Live Document add-photos (only for live docs)
+                (when is-live?
+                  (LiveDocAddPhotos {:document-id pdf-root-id :compact? true})))
 
               ;; ── OCR error display — auto-dismiss after 3s ───────────────
               (when-let [ocr-err (get ocr-errors [pdf-root-id page-number])]
