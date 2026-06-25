@@ -240,6 +240,19 @@ html, body {
     z-index: 1000;
 }
 
+/* Contain PDF.js's internal stacking. Its .textLayer is `position:absolute;
+   z-index:2`, and none of its ancestors (.page/.pdf-viewer-container) form a
+   stacking context — so the text layer becomes a ROOT-level z-index:2 layer
+   that TIES .toolbar-container (z-index:2) and, being later in the DOM, paints
+   over the toolbar's dropdown menus and modal backdrops (they live inside
+   .toolbar-container, so their high z-indexes are capped at level 2). Modal
+   inputs then can't be clicked — selection lands on the PDF text instead.
+   `isolation: isolate` makes the pane its own stacking context at level 0, so
+   every PDF.js z-index stays trapped below the toolbar/overlays. */
+.pdf-viewer-container {
+    isolation: isolate;
+}
+
 .modal-content {
     background: var(--color-bg-card);
     border-radius: var(--radius-lg);
@@ -1358,7 +1371,10 @@ textarea:hover {
    is clipped by the PDF pane. Cap it to the container width and wrap its
    formats so it always fits — multi-row in a narrow pane, never clipped. */
 .ql-bubble .ql-tooltip {
-    max-width: calc(100% - 8px);
+    /* Cap to a compact box so the formats wrap into a squarish grid (~5/row)
+       instead of stretching to a full-width strip; still clamped to the pane
+       on narrow screens. */
+    max-width: min(232px, calc(100% - 8px));
     white-space: normal;
     z-index: 20;
 }
