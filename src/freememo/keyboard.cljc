@@ -31,6 +31,13 @@
 (defonce !delete-btn-ref (atom nil))
 (defonce !pull-anki-btn-ref (atom nil))
 
+;; PDF action-dropdown proxy refs (C1/C2): the Scan and Copy dropdowns dispatch
+;; their menu items by .click on these hidden source-button refs. No keyboard
+;; shortcuts target them (Scan keeps its own !scan-btn-ref above).
+(defonce !compare-ocr-btn-ref (atom nil))
+(defonce !copy-text-btn-ref (atom nil))
+(defonce !copy-all-btn-ref (atom nil))
+
 #?(:cljs
    (def ^:private shortcut->ref
      {"extract" !extract-btn-ref

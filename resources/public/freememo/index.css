@@ -106,6 +106,10 @@ html, body {
 
 /* ── Buttons ───────────────────────────────────────────────────── */
 .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
     border: none;
     border-radius: var(--radius-md);
     cursor: pointer;
@@ -265,6 +269,12 @@ html, body {
        the tooltip's z-index, since both live in the same stacking context. */
     z-index: 2;
 }
+/* PdfToolbar's container ranks one below the main ContentToolbar (2) and above
+   EditorToolbar (0), so the three stacked bars layer tooltips and the History
+   modal backdrop correctly. Still above non-positioned content. */
+.toolbar-container.pdf-toolbar-container {
+    z-index: 1;
+}
 /* `.toolbar` MUST be `flex-wrap: nowrap` for the content-aware ResizeObserver
    to work: with wrapping, items push to a new row instead of overflowing
    horizontally, and `scrollWidth ≤ clientWidth` would incorrectly report
@@ -358,11 +368,14 @@ html, body {
    is set imperatively by a ResizeObserver in content_toolbar.cljc that finds
    the smallest tier where inline content fits without overflow.
 
-   Tier ladder (cumulative; tier N also implies all of tier <N):
+   Tier ladder (cumulative; tier N also implies all of tier <N). Card-type +
+   Context moved into the Generate dropdown menu (C3) and Priority into the
+   Document-Options modal (C5), so their former inline tiers no longer hide
+   anything; tier 3 is now a reserved no-op the detector skips:
    - collapse-0: nothing hidden, all labels visible
-   - collapse-1: labels hidden (icon-only buttons)
-   - collapse-2: + Context inline hidden (.toolbar-collapse-first)
-   - collapse-3: + Card-type radio hidden (.toolbar-collapse-card-type)
+   - collapse-1: labels + citation hidden (icon-only buttons)
+   - collapse-2: + Document-meta group hidden (.toolbar-collapse-docmeta)
+   - collapse-3: (reserved — no additional inline element)
    - collapse-4: + CardCount stepper hidden (.toolbar-collapse-cardcount)
    - collapse-5: + Bibliography/AutoExtract group hidden (.toolbar-collapse-bib)
    - collapse-6: + remaining defaults hidden (.toolbar-overflow-item)
@@ -378,23 +391,8 @@ html, body {
     display: none !important;
 }
 
-/* Context inline hides at tier ≥2 */
-.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .toolbar-collapse-first {
-    display: none !important;
-}
-
 /* Document-meta group (Edit-Bib + progress + Mark-PDF-Done) hides at tier ≥2 */
 .toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .toolbar-collapse-docmeta {
-    display: none !important;
-}
-
-/* Priority inline hides at tier ≥2 — first cluster to go (mirrors Context) */
-.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .toolbar-collapse-priority {
-    display: none !important;
-}
-
-/* Card-type selector hides at tier ≥3 */
-.toolbar-container:is(.collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .toolbar-collapse-card-type {
     display: none !important;
 }
 
@@ -420,15 +418,6 @@ html, body {
 
 /* Proxy reveal — mirror the inline collapse, but only when dropdown is open. */
 .toolbar-container.overflow-open .toolbar-overflow-keep { display: flex; }
-.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7).overflow-open .toolbar-overflow-priority {
-    display: flex;
-}
-.toolbar-container:is(.collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7).overflow-open .toolbar-overflow-first {
-    display: flex;
-}
-.toolbar-container:is(.collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7).overflow-open .toolbar-overflow-card-type {
-    display: flex;
-}
 .toolbar-container:is(.collapse-4, .collapse-5, .collapse-6, .collapse-7).overflow-open .toolbar-overflow-cardcount {
     display: flex;
 }
@@ -627,9 +616,9 @@ html, body {
 }
 
 /* Icon-label combo buttons — icon + text side by side.
-   gap:6px handles icon↔label spacing; no extra rule needed for .btn-primary
-   as long as it carries .icon-label-btn. If it doesn't, the fallback below
-   (via flex on .btn) keeps things tidy. */
+   Base .btn now carries inline-flex + align-items:center + gap:6px, so every
+   button aligns its icon and label on one centered baseline. This class is
+   retained for non-.btn icon+text elements; on a .btn it is a redundant alias. */
 .icon-label-btn {
     display: inline-flex;
     align-items: center;
@@ -800,6 +789,26 @@ html, body {
     font-size: 11px;
     color: var(--color-text-hint);
     white-space: nowrap;
+}
+
+/* Generation settings block at the top of the Generate dropdown menu (C3):
+   card-type radios + Context toggle live here as live widgets above the
+   actions. Stacked, padded to align with the menu items below. */
+.toolbar-generate-menu-settings {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 12px;
+}
+.toolbar-generate-menu-settings .toolbar-settings-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.toolbar-dropdown-separator {
+    height: 1px;
+    background: var(--color-border);
+    margin: 4px 0;
 }
 
 .header-bar {
@@ -1310,26 +1319,69 @@ textarea:hover {
     border-bottom: 2px solid var(--color-border);
     border-color: var(--color-border) !important;
 }
+/* Unified top-bar slot hosting the document editor's relocated Quill toolbar.
+   The inner .ql-toolbar is moved here by init-editor!; this bar is empty until
+   then (min-height set inline reserves a row). The toolbar keeps its own
+   flex-wrap (E1 — no collapse system); we only flatten snow's box borders so it
+   reads as a flush bar matching ContentToolbar / PdfToolbar. */
+.editor-toolbar-bar {
+    flex-shrink: 0;
+    width: 100%;
+    /* Strict descending z-index across the three stacked top bars:
+       ContentToolbar (.toolbar-container, z-index 2 — hosts the History modal
+       backdrop) > PdfToolbar (.pdf-toolbar-container, 1) > EditorToolbar (0).
+       Upper bars' dropped tooltips and ContentToolbar's modal backdrop then
+       paint over the bars below. z-index 0 (positioned) still sits above the
+       non-positioned content area, so Quill picker dropdowns clear it. */
+    position: relative;
+    z-index: 0;
+}
+.editor-toolbar-bar .ql-toolbar.ql-snow {
+    border: none;
+    border-bottom: 1px solid var(--color-border);
+    border-radius: 0;
+    padding: var(--sp-1) var(--sp-2);
+}
 .ql-toolbar .ql-stroke { stroke: var(--color-text-secondary) !important; }
 .ql-toolbar .ql-fill { fill: var(--color-text-secondary) !important; }
 .ql-toolbar .ql-picker-label { color: var(--color-text-secondary) !important; }
 .ql-container.ql-snow { border-color: var(--color-border) !important; }
 .ql-toolbar.ql-snow { border-color: var(--color-border) !important; }
 .ql-editor.ql-blank::before { color: var(--color-text-hint) !important; }
-.ql-snow .ql-editor { text-align: start; }
+/* dir="auto" + text-align:start → RTL imports render right-aligned. Applies to
+   both themes: snow (card fields) and bubble (main doc editor). */
+.ql-editor { text-align: start; }
 
-/* Quill Snow tooltip — Import button for Wikipedia links */
-.ql-snow .ql-tooltip .ql-import {
+/* Bubble floating toolbar (main doc editor, E1). It is positioned absolute
+   inside .ql-container, which scrolls (overflow-y:auto → overflow-x computes to
+   auto too), so a wide single-row tooltip overflows the narrow editor pane and
+   is clipped by the PDF pane. Cap it to the container width and wrap its
+   formats so it always fits — multi-row in a narrow pane, never clipped. */
+.ql-bubble .ql-tooltip {
+    max-width: calc(100% - 8px);
+    white-space: normal;
+    z-index: 20;
+}
+.ql-bubble .ql-tooltip .ql-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    row-gap: 2px;
+}
+
+/* Quill tooltip — Import button for Wikipedia links. Theme-agnostic: the main
+   editor uses bubble (dark tooltip), so the button is light for contrast. */
+.ql-tooltip .ql-import {
     margin-left: 8px;
     padding-left: 8px;
-    border-left: 1px solid #ccc;
+    border-left: 1px solid rgba(255, 255, 255, 0.3);
     cursor: pointer;
-    color: var(--color-primary, #3b82f6);
+    color: #fff;
 }
-.ql-snow .ql-tooltip .ql-import:hover {
+.ql-tooltip .ql-import:hover {
     text-decoration: underline;
 }
-.ql-snow .ql-tooltip .ql-import.importing {
+.ql-tooltip .ql-import.importing {
     pointer-events: none;
     opacity: 0.6;
 }

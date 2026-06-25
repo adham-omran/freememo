@@ -11,6 +11,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [taoensso.telemere :as tel]
    [freememo.icons :as icons]
+   [freememo.keyboard :as keyboard]
    [freememo.loading :as loading]
    [freememo.pdf-viewer :as pdfviewer]
    #?(:clj [freememo.db :as db])
@@ -227,6 +228,8 @@
                     :disabled busy?})
         (icons/Icon :clipboard :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text (if busy? "Copying…" "Copy text")))
+        (reset! keyboard/!copy-text-btn-ref dom/node)
+        (e/on-unmount (fn [] (reset! keyboard/!copy-text-btn-ref nil)))
         (dom/On "click"
           (fn [_]
             (let [pg page-number id (str (random-uuid)) style extract-style]
@@ -318,6 +321,8 @@
         (icons/Icon :library :size 16)
         (dom/span (dom/props {:class "icon-label"})
           (dom/text (if busy? "Copying…" "Copy all text")))
+        (reset! keyboard/!copy-all-btn-ref dom/node)
+        (e/on-unmount (fn [] (reset! keyboard/!copy-all-btn-ref nil)))
         (dom/On "click"
           (fn [_]
             (let [id (str (random-uuid)) style extract-style]

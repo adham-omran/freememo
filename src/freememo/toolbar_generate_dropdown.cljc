@@ -17,6 +17,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.content-toolbar-generate :refer [ToolbarGenerate]]
+   [freememo.content-toolbar-settings :as settings]
    [freememo.icons :as icons]
    [freememo.keyboard :as keyboard]))
 
@@ -48,11 +49,15 @@
          (.removeEventListener js/document "mousedown" on-mouse)))
      :clj (fn [] nil)))
 
-(e/defn GenerateDropdown [cfg]
+;; !use-context / !context-window / !card-type are passed positionally (atoms
+;; cannot ride inside the serialized cfg map). They feed the settings widgets'
+;; own dom-event tokens — NOT cfg-derived values — so no reactive loop arises
+;; when cfg changes (e.g. gen-active? flips); see CLAUDE.md token-input rule.
+(e/defn GenerateDropdown [cfg !use-context !context-window !card-type]
   (e/client
-    (let [{:keys [llm-enabled? gen-active? gen-pending gen-error
+    (let [{:keys [user-id llm-enabled? gen-active? gen-pending gen-error
                   card-type card-count-val use-context context-window
-                  content-text mod-key]} cfg
+                  context-tooltip content-text mod-key]} cfg
           !open (atom false)
           open (e/watch !open)
           no-content? (empty? content-text)
@@ -129,6 +134,22 @@
               (dom/div
                 (dom/props {:class "toolbar-dropdown-menu toolbar-generate-menu"
                             :role "menu"})
+
+                ;; Generation settings (C3): card-type + Context live here as
+                ;; live widgets above the actions. Clicking them stays inside the
+                ;; menu (install-dropdown-listeners! keeps it open). Card-count
+                ;; deliberately stays inline in the toolbar — commonly changed.
+                (dom/div
+                  (dom/props {:class "toolbar-generate-menu-settings"})
+                  (settings/ToolbarSettings
+                    {:user-id user-id :llm-enabled? llm-enabled? :card-type card-type}
+                    !use-context !context-window !card-type)
+                  (settings/ContextSettings
+                    {:user-id user-id :context-tooltip context-tooltip
+                     :llm-enabled? llm-enabled?
+                     :use-context use-context :context-window context-window}
+                    !use-context !context-window))
+                (dom/div (dom/props {:class "toolbar-dropdown-separator"}))
 
                 ;; Generate
                 (dom/button

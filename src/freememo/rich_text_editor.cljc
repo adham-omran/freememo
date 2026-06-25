@@ -10,6 +10,12 @@
 ;; Global singleton — mirrors pdf_viewer.cljc pattern
 (defonce !editor-state (atom nil))
 
+;; Destination node for the relocated Quill toolbar, set by
+;; freememo.editor-toolbar/EditorToolbar (the unified top-bar slot). nil when
+;; that bar isn't mounted — init-editor! then leaves the toolbar in place.
+;; Defined on both peers (no reader conditional) — referenced in an e/defn body.
+(defonce !toolbar-node (atom nil))
+
 ;; Set by Import button click in Quill tooltip — picked up by e/Token in extract_page
 ;; Shape: {:url "https://en.wikipedia.org/wiki/..." :ts <timestamp>} or nil
 (defonce !import-url (atom nil))
@@ -51,9 +57,10 @@
   #?(:clj nil
      :cljs
      (do
-       (when-let [{:keys [editor container]} @!editor-state]
+       (when-let [{:keys [editor container toolbar]} @!editor-state]
          (let [^js ed editor
-               ^js ct container]
+               ^js ct container
+               ^js tb toolbar]
            ;; Tear down the table action bar (appended to document.body)
            ;; and its window scroll/resize listeners. Idempotent; safe
            ;; even if table-ui/init! never ran.
@@ -61,40 +68,16 @@
            (.off ed "text-change")
            (.off ed "selection-change")
            (remove-watch !import-status ::tooltip-btn)
+           ;; Remove Quill's generated toolbar. It was relocated into the
+           ;; unified top bar (!toolbar-node), so query by the stored ref, not
+           ;; from the container's parent. Guard on isConnected — EditorToolbar's
+           ;; own unmount may have already removed it with its host div.
+           (when (and tb (.-isConnected tb))
+             (.remove tb))
            (when ct
-             ;; Remove Quill's toolbar (sibling before container, created by snow theme)
-             (when-let [toolbar (.querySelector (.-parentNode ct) ".ql-toolbar")]
-               (.remove toolbar))
              (set! (.-innerHTML ct) "")))
          (reset! !editor-state nil)
          (reset! !last-selection nil)))))
-
-(defn- add-toolbar-tooltips!
-  "Add title attributes to Quill toolbar buttons for hover tooltips."
-  [editor]
-  #?(:cljs
-     (when-let [^js toolbar-el (some-> ^js editor .-container .-parentNode
-                                 (.querySelector ".ql-toolbar"))]
-       (doseq [[selector title] [[".ql-bold" "Bold"]
-                                 [".ql-italic" "Italic"]
-                                 [".ql-underline" "Underline"]
-                                 [".ql-strike" "Strikethrough"]
-                                 [".ql-header[value=\"1\"]" "Heading 1"]
-                                 [".ql-header[value=\"2\"]" "Heading 2"]
-                                 [".ql-header[value=\"3\"]" "Heading 3"]
-                                 [".ql-list[value=\"ordered\"]" "Numbered List"]
-                                 [".ql-list[value=\"bullet\"]" "Bullet List"]
-                                 [".ql-align .ql-picker-label" "Alignment"]
-                                 [".ql-color .ql-picker-label" "Text Color"]
-                                 [".ql-background .ql-picker-label" "Background Color"]
-                                 [".ql-size .ql-picker-label" "Font Size"]
-                                 [".ql-direction" "Text Direction (RTL)"]
-                                 [".ql-code" "Inline Code"]
-                                 [".ql-code-block" "Code Block"]
-                                 [".ql-clean" "Clear Formatting"]]]
-         (when-let [^js el (.querySelector toolbar-el selector)]
-           (.setAttribute el "title" title))))
-     :clj nil))
 
 (defn- wikipedia-url? [href]
   #?(:cljs (and (string? href)
@@ -112,19 +95,21 @@
            ^js theme (.-theme ed)]
        (when-let [^js tooltip (.-tooltip theme)]
          (let [^js root (.-root tooltip)
-               ^js import-btn (js/document.createElement "a")]
+               ^js import-btn (js/document.createElement "a")
+               ;; Bubble has no .ql-preview (snow's link editor); the link href
+               ;; is captured from the selection's DOM node in selection-change
+               ;; and stashed here for the click handler. Theme-agnostic.
+               !link-href (atom nil)]
            (set! (.-className import-btn) "ql-import")
            (set! (.-textContent import-btn) "Import")
            (.setAttribute import-btn "style" "display:none")
            (.appendChild root import-btn)
-           ;; Click handler: extract URL from tooltip preview, fire import
+           ;; Click handler: import the captured Wikipedia URL.
            (.addEventListener import-btn "click"
              (fn [e]
                (.preventDefault e)
-               (if (= @!import-status :importing)
-                 nil
-                 (let [^js preview (.querySelector root ".ql-preview")
-                       href (when preview (.getAttribute preview "href"))]
+               (when-not (= @!import-status :importing)
+                 (let [href @!link-href]
                    (when (wikipedia-url? href)
                      (reset! !import-status :importing)
                      (set! (.-textContent import-btn) "Importing...")
@@ -151,20 +136,22 @@
                  ;; :idle — reset
                  (do (set! (.-textContent import-btn) "Import")
                    (.remove (.-classList import-btn) "importing")))))
-           ;; Show/hide import button when tooltip appears on a link
+           ;; On selection change, detect a Wikipedia link at the selection,
+           ;; stash its href, and show the Import button in the bubble tooltip.
            (.on ed "selection-change"
              (fn [^js range _old-range _source]
-               (when range
-                 (let [idx (.-index range)
-                       ^js leaf-arr (.getLeaf ed idx)
-                       ^js leaf (when leaf-arr (aget leaf-arr 0))
-                       ^js parent (when leaf (.-parent leaf))
-                       ^js dom-node (when parent (.-domNode parent))
-                       tag (when dom-node (.-tagName dom-node))
-                       href (when (= "A" tag)
-                              (.getAttribute dom-node "href"))]
-                   (.setAttribute import-btn "style"
-                     (if (wikipedia-url? href) "" "display:none")))))))))
+               (let [href (when range
+                            (let [idx (.-index range)
+                                  ^js leaf-arr (.getLeaf ed idx)
+                                  ^js leaf (when leaf-arr (aget leaf-arr 0))
+                                  ^js parent (when leaf (.-parent leaf))
+                                  ^js dom-node (when parent (.-domNode parent))
+                                  tag (when dom-node (.-tagName dom-node))]
+                              (when (= "A" tag)
+                                (.getAttribute dom-node "href"))))]
+                 (reset! !link-href (when (wikipedia-url? href) href))
+                 (.setAttribute import-btn "style"
+                   (if (wikipedia-url? href) "" "display:none"))))))))
      :clj nil))
 
 (defn- setup-mobile-keyboard-suppression!
@@ -236,7 +223,17 @@
                             str/trim)
              t0 (when js/goog.DEBUG (js/performance.now))
              ^js editor (new Quill container
-                          (clj->js {:theme "snow"
+                          ;; bubble theme (E1): floating-on-selection toolbar
+                          ;; (Notion-style). The toolbar module config below is
+                          ;; still honored — bubble builds its tooltip buttons
+                          ;; from it. Card-field editors stay snow (quill_field).
+                          (clj->js {:theme "bubble"
+                                    ;; Clamp the floating tooltip to the editor
+                                    ;; container (the narrow pane), not the
+                                    ;; default wide ancestor — otherwise it is
+                                    ;; positioned past the pane edge and clipped
+                                    ;; by the PDF pane.
+                                    :bounds container
                                     :modules {:toolbar [["bold" "italic" "underline" "strike"]
                                                         [{"header" 1} {"header" 2} {"header" 3}]
                                                         [{"size" ["small" false "large" "huge"]}]
@@ -340,9 +337,11 @@
              (when (and range (> (.-length range) 0))
                (reset! !last-selection {:index (.-index range)
                                         :length (.-length range)}))))
+         ;; Bubble theme has no fixed `.ql-toolbar` to relocate — its formatting
+         ;; controls live in the floating tooltip shown on selection. So no
+         ;; toolbar node is stored (:toolbar nil; destroy-editor! skips removal).
          (reset! !editor-state {:editor editor :container container
-                                :topic-id topic-id})
-         (add-toolbar-tooltips! editor)
+                                :topic-id topic-id :toolbar nil})
          (setup-link-import-button! editor)
          (setup-mobile-keyboard-suppression! editor)
          (table-ui/init! editor)

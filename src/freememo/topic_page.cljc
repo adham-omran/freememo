@@ -313,6 +313,10 @@
                  :on-page-change! (fn [p] (reset! !current-page p))
                  :on-layout-toggle! toggle-layout!}))
 
+            ;; No third formatting bar (E1): the document editor uses Quill's
+            ;; bubble theme, whose formatting controls float on text selection
+            ;; instead of living in a fixed toolbar.
+
             ;; Auto-open biblio modal once on first mount after a fresh
             ;; import. claim-pending-biblio-show?* returns true (and clears the
             ;; mark) exactly once per (user-id, topic-id). The keyed e/for-by

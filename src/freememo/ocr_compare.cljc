@@ -8,6 +8,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
+   [freememo.keyboard :as keyboard]
    [freememo.loading :as loading]
    [freememo.ocr-models :as ocr-models]
    #?(:clj [freememo.ocr :as ocr])
@@ -165,6 +166,8 @@
                     :data-tooltip "Run every OCR model on this page and compare (uses credits)"})
         (icons/Icon :scan-text :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Compare OCR"))
+        (reset! keyboard/!compare-ocr-btn-ref dom/node)
+        (e/on-unmount (fn [] (reset! keyboard/!compare-ocr-btn-ref nil)))
         (dom/On "click" (fn [_] (reset! !open true)) nil))
       (when open
         (OcrCompareModal user-id root-topic-id page-number model-ids dpi !open)))))
