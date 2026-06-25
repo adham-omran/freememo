@@ -279,14 +279,18 @@ html, body {
     /* Establishes a stacking context so tooltips (and the overflow dropdown)
        paint over later DOM siblings such as .tape-scroll. Without this,
        sibling elements after .toolbar-container paint on top regardless of
-       the tooltip's z-index, since both live in the same stacking context. */
-    z-index: 2;
+       the tooltip's z-index, since both live in the same stacking context.
+       Stacking ladder (descending): main ContentToolbar 3 > PdfToolbar 2 >
+       pane resizers/.split-divider-h 1 > pane content 0. The toolbars MUST
+       outrank the resizers (z-index:1), else the resizers paint over the
+       toolbar's dropdown menus / OCR modal that drop over the panes. */
+    z-index: 3;
 }
-/* PdfToolbar's container ranks one below the main ContentToolbar (2) and above
-   EditorToolbar (0), so the three stacked bars layer tooltips and the History
-   modal backdrop correctly. Still above non-positioned content. */
+/* PdfToolbar's container ranks one below the main ContentToolbar (3) and above
+   the pane resizers (1), so its dropdown menus and the floating OCR-compare
+   modal paint over the split-divider / side-panel resize handles. */
 .toolbar-container.pdf-toolbar-container {
-    z-index: 1;
+    z-index: 2;
 }
 /* `.toolbar` MUST be `flex-wrap: nowrap` for the content-aware ResizeObserver
    to work: with wrapping, items push to a new row instead of overflowing
