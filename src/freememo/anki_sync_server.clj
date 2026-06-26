@@ -76,6 +76,42 @@
   [user-id root-topic-id preset-map]
   (settings/save-anki-preset user-id root-topic-id preset-map))
 
+(defn resolve-modal-prefs
+  "One-shot resolution of the modal's initial selection (deck / note types /
+   scope / dupes / tags), so the form paints once with correct values instead
+   of first-defaulting then overriding.
+
+   Precedence (the first list item is applied client-side, since deck/model
+   lists come from AnkiConnect and need validation there):
+     deck         : per-doc preset > last-used (skipped in 'none')
+     basic/cloze  : per-doc preset > Settings default
+     scope/dupes/tags : per-doc preset > global last-used
+   Settings note-type/field defaults always seed (even in 'none'); 'none' only
+   skips the per-doc preset and the last-used deck.
+
+   :preset? reports whether a per-doc preset was applied (drives the
+   'saved settings for this document' indicator). Field ordering is resolved
+   separately by resolve-preferred-fields."
+  [user-id root-topic-id]
+  (try
+    (let [mode   (settings/get-anki-auto-load-mode user-id)
+          preset (when (= mode "per-item")
+                   (settings/get-anki-preset user-id root-topic-id))
+          global (:prefs (load-anki-preferences user-id))]
+      {:mode        mode
+       :preset?     (some? preset)
+       :scope       (or (:scope preset) (:scope global))
+       :deck        (or (:deck preset)
+                      (when (not= mode "none") (:deck global)))
+       :basic-model (or (:basic-model preset) (:basic-model global))
+       :cloze-model (or (:cloze-model preset) (:cloze-model global))
+       :allow-dupes (if (some? (:allow-dupes preset)) (:allow-dupes preset) (:allow-dupes global))
+       :use-tags    (if (some? (:use-tags preset)) (:use-tags preset) (:use-tags global))
+       :tags        (or (:tags preset) (:tags global))})
+    (catch Exception e
+      (tel/error! {:id ::resolve-modal-prefs} e)
+      {:mode "global" :preset? false})))
+
 (defn resolve-preferred-fields
   "Resolve preferred field ordering for a doc. Lookup order:
      per-doc preset → user-level setting → empty.
