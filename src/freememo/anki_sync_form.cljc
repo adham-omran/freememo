@@ -7,11 +7,11 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.anki-sync-helpers :as helpers]
-   [freememo.select :as sel]
+   [freememo.typeahead :refer [Typeahead]]
    #?(:clj [freememo.settings :as settings])))
 
 (e/defn AnkiSyncModelSelect
-  "Reusable model dropdown with field mapping hint.
+  "Reusable model typeahead with field mapping hint.
    fields = :loading | [] | vector of field names. format-hint = fn from non-empty vector to string."
   [label !model models fields format-hint]
   (e/client
@@ -19,7 +19,7 @@
       (dom/props {:style {:margin-bottom "var(--sp-3)"}})
       (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
         (dom/text label))
-      (sel/AtomSelect !model models :placeholder "Select a note type…")
+      (Typeahead !model models "Start typing..." nil nil)
       (if (= fields :loading)
         (dom/div
           (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)" :margin-top "var(--sp-1)"}})
@@ -259,7 +259,7 @@
         (dom/props {:style {:margin-bottom "var(--sp-3)"}})
         (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
           (dom/text "Deck"))
-        (sel/AtomSelect (:!selected-deck conn) decks :placeholder "Select a deck…"))
+        (Typeahead (:!selected-deck conn) decks "Start typing deck name..." nil nil))
 
       ;; Note Type selectors
       (AnkiSyncModelSelect "Note Type (Basic)" (:!basic-model conn) models basic-fields

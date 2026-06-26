@@ -20,10 +20,13 @@
           search (e/watch !search)
           !active-idx (atom -1)
           active-idx (e/watch !active-idx)
+          ;; All matches (not capped) — on focus search is "" so this is every
+          ;; option; the dropdown scrolls (max-height below) so users can browse
+          ;; the full list instead of scrolling into a truncated 5.
           filtered (when (some? search)
-                     (vec (take 5 (filter #(string/includes? (string/lower-case %)
-                                             (string/lower-case search))
-                                    options))))]
+                     (vec (filter #(string/includes? (string/lower-case %)
+                                     (string/lower-case search))
+                            options)))]
       (dom/div
         (dom/props {:style {:position "relative"}})
         (dom/input
@@ -72,14 +75,17 @@
             (dom/props {:style {:position "absolute" :top "100%" :left "0" :right "0"
                                 :background "var(--color-bg-card)" :border "1px solid var(--color-border)"
                                 :border-radius "var(--radius-sm)" :z-index "100"
+                                :max-height "240px" :overflow-y "auto"
                                 :box-shadow "0 2px 4px rgba(0,0,0,0.15)"}})
             (e/for [[i item] (e/diff-by {} (map-indexed vector filtered))]
               (dom/div
                 (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "14px"
+                                    :white-space "nowrap" :overflow "hidden" :text-overflow "ellipsis"
                                     :background (cond
                                                   (= i active-idx) "var(--color-highlight)"
                                                   (odd? i) "var(--color-bg-subtle)"
                                                   :else "var(--color-bg-card)")}})
+                (dom/props {:title item})
                 (dom/text item)
                 (dom/On "mousemove" (fn [_] (reset! !active-idx i)) nil)
                 (dom/On "mousedown"

@@ -6,7 +6,7 @@
    [freememo.util :refer [mac-platform?]]
    [freememo.storage-section :refer [StorageSection]]
    [freememo.ai-features-section :refer [AIFeaturesSection]]
-   [freememo.select :as sel]
+   [freememo.typeahead :refer [Typeahead]]
    [freememo.anki-sync-helpers :as anki-helpers]
    [freememo.zotero-client :as zc]
    #?(:clj [freememo.settings :as settings])
@@ -163,7 +163,7 @@
 (e/defn AnkiBasicDefaults
   "Basic Note Type picker + Question/Answer slots. Owns its own model /
    committed / fields / q-field / a-field atoms; fetches saved values on
-   mount; auto-saves on model commit (AtomSelect) and on field-slot change
+   mount; auto-saves on model commit (Typeahead) and on field-slot change
    (FieldSlotSelect)."
   [user-id connected? models]
   (e/client
@@ -198,8 +198,8 @@
                                        :display "block"
                                        :margin-bottom "4px"}})
           (dom/text "Basic Note Type"))
-        (sel/AtomSelect !basic-model models
-          :placeholder "Select a note type…" :!committed !basic-model-committed)
+        (Typeahead !basic-model (vec models) "Start typing model name..."
+          !basic-model-committed nil)
         (cond
           (= basic-model-fields :loading)
           (dom/div
@@ -255,8 +255,8 @@
                                        :display "block"
                                        :margin-bottom "4px"}})
           (dom/text "Cloze Note Type"))
-        (sel/AtomSelect !cloze-model models
-          :placeholder "Select a note type…" :!committed !cloze-model-committed)
+        (Typeahead !cloze-model (vec models) "Start typing model name..."
+          !cloze-model-committed nil)
         (cond
           (= cloze-model-fields :loading)
           (dom/div
