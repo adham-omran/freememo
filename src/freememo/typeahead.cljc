@@ -18,15 +18,19 @@
     (let [value (e/watch !atom)
           !search (atom nil)
           search (e/watch !search)
+          !open? (atom false)
+          open? (e/watch !open?)
           !active-idx (atom -1)
           active-idx (e/watch !active-idx)
-          ;; All matches (not capped) — on focus search is "" so this is every
-          ;; option; the dropdown scrolls (max-height below) so users can browse
-          ;; the full list instead of scrolling into a truncated 5.
-          filtered (when (some? search)
-                     (vec (filter #(string/includes? (string/lower-case %)
-                                     (string/lower-case search))
-                            options)))]
+          ;; Dropdown contents while open: all options when not typing (browse),
+          ;; filtered when typing. Scrolls (max-height below). Keyed on open?,
+          ;; not on search, so focus keeps the value visible without clearing it.
+          filtered (when open?
+                     (if (some? search)
+                       (vec (filter #(string/includes? (string/lower-case %)
+                                       (string/lower-case search))
+                              options))
+                       (vec options)))]
       (dom/div
         (dom/props {:style {:position "relative"}})
         (dom/input
@@ -38,10 +42,12 @@
           (let [focus-node (when autofocus? dom/node)]
             (when focus-node
               (js/setTimeout (fn [] (.focus focus-node)) 50)))
-          (dom/On "focus" (fn [_] (reset! !atom nil)
-                            (reset! !search "")
+          ;; Focus opens the dropdown but keeps the value — search stays nil so
+          ;; the input shows the current value; Tab-through no longer loses it.
+          (dom/On "focus" (fn [_] (reset! !open? true)
                             (reset! !active-idx -1)) nil)
-          (dom/On "blur" (fn [_] (reset! !search nil)
+          (dom/On "blur" (fn [_] (reset! !open? false)
+                           (reset! !search nil)
                            (reset! !active-idx -1)) nil)
           (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
             (when (some? v)
@@ -65,9 +71,11 @@
                       (reset! !atom selected)
                       (when ?!committed (reset! ?!committed selected)))
                     (reset! !search nil)
+                    (reset! !open? false)
                     (reset! !active-idx -1))
                   (= key "Escape")
                   (do (reset! !search nil)
+                    (reset! !open? false)
                     (reset! !active-idx -1)))))
             nil))
         (when (seq filtered)
@@ -94,5 +102,6 @@
                     (reset! !atom item)
                     (when ?!committed (reset! ?!committed item))
                     (reset! !search nil)
+                    (reset! !open? false)
                     (reset! !active-idx -1))
                   nil)))))))))

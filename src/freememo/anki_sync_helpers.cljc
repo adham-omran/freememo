@@ -606,10 +606,9 @@
               (reset! !decks decks)
               (reset! !models models)
               (reset! !all-tags tags)
-              (when (seq decks) (reset! !selected-deck (first decks)))
-              (when (seq models)
-                (reset! !basic-model (first models))
-                (reset! !cloze-model (first models)))
+              ;; Deck/model selection is NOT defaulted here — apply-prefs!
+              ;; resolves it (preset/Settings/first) once, so the form never
+              ;; paints a wrong first value before the saved prefs load.
               (reset! !status :connected))
             (fn [err]
               (reset! !error (str "Cannot connect to Anki: " (.-message err)))

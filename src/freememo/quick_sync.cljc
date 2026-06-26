@@ -22,15 +22,11 @@
      :cljs nil))
 
 (defn load-prefs*
-  "Resolve last-used prefs the same way the modal's auto-load does:
-   per-item mode → per-doc preset, falling back to global; otherwise global."
-  [user-id root-topic-id auto-load-mode]
-  ;; Header is excluded — it's per-PDF and resolved server-side at push time by
-  ;; panels/AnkiSyncExecutor, not carried through these prefs.
-  #?(:clj (if (= auto-load-mode "per-item")
-            (or (sync/load-item-preset user-id root-topic-id)
-              (:prefs (sync/load-anki-preferences user-id)))
-            (:prefs (sync/load-anki-preferences user-id)))
+  "Resolve initial prefs the same way the modal does (preset/Settings/last-used);
+   apply-prefs! applies the first-list fallback. Header is excluded — it's
+   per-PDF and resolved server-side at push time by panels/AnkiSyncExecutor."
+  [user-id root-topic-id]
+  #?(:clj (sync/resolve-modal-prefs user-id root-topic-id)
      :cljs nil))
 
 ;; --- headless executor ---
@@ -74,8 +70,7 @@
           cloze-fields (e/watch (:!cloze-fields form))
           sync-phase (e/watch (:!phase sync))
           root-id (e/server (panels/get-root-topic-id* selected-doc))
-          auto-load-mode (e/server (panels/get-anki-auto-load-mode* user-id))
-          prefs (e/server (load-prefs* user-id root-id auto-load-mode))
+          prefs (e/server (load-prefs* user-id root-id))
           preferred-basic-fields (e/server (panels/resolve-preferred-fields* user-id root-id :basic))
           preferred-cloze-fields (e/server (panels/resolve-preferred-fields* user-id root-id :cloze))]
 
@@ -89,10 +84,11 @@
       (when (and (= conn-status :connected) (not prefs-applied?))
         (let [[t _] (e/Token [:qs-prefs trigger])]
           (when t
-            (panels/apply-prefs! (dissoc prefs :basic-fields :cloze-fields)
-              conn form decks models)
-            (reset! !prefs-applied? true)
-            (t))))
+            ;; Nested case sequences + forces each effect (bare statements in a
+            ;; do would be work-skipped by Electric).
+            (case (panels/apply-prefs! prefs conn form decks models)
+              (case (reset! !prefs-applied? true)
+                (t))))))
 
       ;; (c) Resolve field ordering against the (now final) models.
       (when (and prefs-applied? (= conn-status :connected) basic-model)

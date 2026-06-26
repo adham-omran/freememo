@@ -59,6 +59,10 @@
   #?(:clj (sync/resolve-preferred-fields user-id root-topic-id kind)
      :cljs nil))
 
+(defn resolve-modal-prefs* [user-id root-topic-id]
+  #?(:clj (sync/resolve-modal-prefs user-id root-topic-id)
+     :cljs nil))
+
 (e/defn AnkiSyncExecutor
   "Handles push execution and server recording. Pull is handled by the
    toolbar Pull button (content_toolbar_actions), not the modal.
@@ -204,10 +208,17 @@
           (dom/text "Cancel")
           (dom/On "click" (fn [_] (reset! !show-modal false)) nil))))))
 
+(defn pick
+  "The preferred value when it's a valid option, else the first option.
+   Owns the first-item fallback that run-fetch-config! used to do eagerly."
+  [preferred options]
+  (if (some #{preferred} options) preferred (first options)))
+
 (defn apply-prefs!
-  "Apply a preferences map to form/conn atoms, validating deck/model against available lists.
-   Source-field is no longer part of prefs — it lives on the settings page now;
-   any :source-field key in legacy presets is ignored.
+  "Apply a resolved preferences map to form/conn atoms. deck/basic-model/
+   cloze-model are set to the preferred value if valid against the available
+   lists, else the first list item (pick) — run-fetch-config! no longer defaults
+   them. Source-field lives on the settings page; any legacy key is ignored.
 
    :basic-fields/:cloze-fields are applied directly here only as a fallback for
    the rare case where the model picker hasn't triggered run-fetch-fields! yet.
@@ -215,15 +226,9 @@
    argument so the ordering is validated against the model's actual fields."
   [prefs conn form decks models]
   (when (:scope prefs) (reset! (:!scope form) (:scope prefs)))
-  (when (:deck prefs)
-    (when (some #{(:deck prefs)} decks)
-      (reset! (:!selected-deck conn) (:deck prefs))))
-  (when (:basic-model prefs)
-    (when (some #{(:basic-model prefs)} models)
-      (reset! (:!basic-model conn) (:basic-model prefs))))
-  (when (:cloze-model prefs)
-    (when (some #{(:cloze-model prefs)} models)
-      (reset! (:!cloze-model conn) (:cloze-model prefs))))
+  (reset! (:!selected-deck conn) (pick (:deck prefs) decks))
+  (reset! (:!basic-model conn) (pick (:basic-model prefs) models))
+  (reset! (:!cloze-model conn) (pick (:cloze-model prefs) models))
   (when (some? (:allow-dupes prefs))
     (reset! (:!allow-dupes form) (:allow-dupes prefs)))
   ;; Header is no longer a form atom — it's per-PDF, loaded/saved by
@@ -247,57 +252,37 @@
     (let [decks (e/watch (:!decks conn))
           models (e/watch (:!models conn))
           root-id (e/server (get-root-topic-id* selected-doc))
-          auto-load-mode (e/server (get-anki-auto-load-mode* user-id))
-          item-preset (e/server (sync/load-item-preset user-id root-id))
-          global-prefs (e/server (:prefs (sync/load-anki-preferences user-id)))
-          !applied-mode (atom nil)
-          applied-mode (e/watch !applied-mode)]
+          ;; One-shot resolved prefs (preset/Settings/last-used) — single read.
+          prefs (e/server (resolve-modal-prefs* user-id root-id))
+          !ready? (atom false)
+          ready? (e/watch !ready?)]
 
-      ;; First-render auto-load: branch on user's auto-load mode.
-      ;; Spec lookup order (per-doc → user-level → empty):
-      ;;   "per-item": apply per-doc preset; on miss, fall through to global.
-      ;;   "global":   apply global last-used (user-level layer).
-      ;;   "none":     skip.
-      (when (and (nil? applied-mode) (seq decks) (seq models))
-        (log/log-info (str "[anki-sync] auto-load fire mode=" auto-load-mode
-                        " root-id=" root-id
-                        " item-preset?=" (some? item-preset)
-                        " item-preset-keys=" (when item-preset (vec (keys item-preset)))
-                        " global-prefs-keys=" (when global-prefs (vec (keys global-prefs)))))
-        (case auto-load-mode
-          "per-item" (if item-preset
-                       (do (log/log-info (str "[anki-sync] applying per-item preset deck=" (:deck item-preset)
-                                           " basic-model=" (:basic-model item-preset)))
-                         (apply-prefs! item-preset conn form decks models)
-                         (reset! !applied-mode "per-item"))
-                       ;; No per-doc preset — FALL THROUGH to user-level
-                       ;; (global). Without this, user-level :basic-fields /
-                       ;; :cloze-fields (and other defaults) never load in
-                       ;; per-item mode. Applied-mode is "global" here, not
-                       ;; "per-item", so the doc-specific indicator stays off.
-                       (do (log/log-info (str "[anki-sync] per-item mode but no preset — falling through to global"
-                                           " deck=" (:deck global-prefs)
-                                           " basic-fields=" (:basic-fields global-prefs)
-                                           " cloze-fields=" (:cloze-fields global-prefs)))
-                         (apply-prefs! global-prefs conn form decks models)
-                         (reset! !applied-mode "global")))
-          "global" (do (log/log-info (str "[anki-sync] applying global prefs deck=" (:deck global-prefs)))
-                     (apply-prefs! global-prefs conn form decks models)
-                     (reset! !applied-mode "global"))
-          "none" (log/log-info "[anki-sync] none mode — skipping auto-load")
-          (log/log-info (str "[anki-sync] unknown auto-load-mode=" auto-load-mode))))
+      ;; Resolve once both lists (AnkiConnect) and prefs (server) are present;
+      ;; apply the resolved selection, then release the readiness gate. The
+      ;; `case` forces apply-prefs! to evaluate — as a bare non-last statement
+      ;; its discarded return value is work-skipped by Electric (CLAUDE.md).
+      (when (and (not ready?) (seq decks) (seq models))
+        (case (apply-prefs! prefs conn form decks models)
+          (reset! !ready? true)))
 
-      (dom/div
-        ;; Indicator only when per-item preset was auto-loaded
-        (when (= applied-mode "per-item")
-          (dom/div
-            (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
-                                :margin-bottom "var(--sp-2)" :font-style "italic"
-                                :animation "fade-in 0.3s ease-in"}})
-            (dom/text "Using saved settings for this document")))
+      (if-not ready?
+        ;; Whole-form spinner until the selection is resolved — never paint a
+        ;; wrong default first.
+        (dom/div
+          (dom/props {:style {:text-align "center" :padding "var(--sp-5)" :color "var(--color-text-secondary)"}})
+          (dom/span (dom/props {:class "spinner"}))
+          (dom/text "Loading…"))
+        (dom/div
+          ;; Indicator only when a per-doc preset was actually applied.
+          (when (and (= (:mode prefs) "per-item") (:preset? prefs))
+            (dom/div
+              (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
+                                  :margin-bottom "var(--sp-2)" :font-style "italic"
+                                  :animation "fade-in 0.3s ease-in"}})
+              (dom/text "Using saved settings for this document")))
 
-        (form/AnkiSyncForm user-id root-id conn form)
-        (form/AnkiSyncStatus sync !show-modal conn)))))
+          (form/AnkiSyncForm user-id root-id conn form)
+          (form/AnkiSyncStatus sync !show-modal conn))))))
 
 (e/defn AnkiSyncModalDom
   "Modal overlay + inner dialog; delegates to error/connected/connecting panels.
