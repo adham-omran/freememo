@@ -57,17 +57,19 @@
   #?(:clj nil
      :cljs
      (do
-       (when-let [{:keys [editor container toolbar]} @!editor-state]
+       (when-let [{:keys [editor container toolbar import-popover-teardown]} @!editor-state]
          (let [^js ed editor
                ^js ct container
                ^js tb toolbar]
+           ;; Tear down the wiki-link import popover (element + document/window
+           ;; listeners + status watch). Must run before innerHTML clear below.
+           (when import-popover-teardown (import-popover-teardown))
            ;; Tear down the table action bar (appended to document.body)
            ;; and its window scroll/resize listeners. Idempotent; safe
            ;; even if table-ui/init! never ran.
            (table-ui/teardown! ed)
            (.off ed "text-change")
            (.off ed "selection-change")
-           (remove-watch !import-status ::tooltip-btn)
            ;; Remove Quill's generated toolbar. It was relocated into the
            ;; unified top bar (!toolbar-node), so query by the stored ref, not
            ;; from the container's parent. Guard on isConnected — EditorToolbar's
@@ -85,73 +87,107 @@
                (.includes href "wikipedia.org/w/")))
      :clj false))
 
-(defn- setup-link-import-button!
-  "Inject an 'Import' button into Quill Snow tooltip for Wikipedia links.
-   On selection-change, show/hide the button based on whether the link is Wikipedia.
-   Watches !import-status to update button text during import."
+(defn- wiki-slug
+  "Human-readable article title decoded from a wikipedia /wiki/<slug> href."
+  [href]
+  #?(:cljs
+     (try
+       (if-let [m (re-find #"/wiki/([^#?]+)" (str href))]
+         (-> (second m) js/decodeURIComponent (str/replace "_" " "))
+         "")
+       (catch :default _ ""))
+     :clj ""))
+
+(defn- setup-link-import-popover!
+  "Standalone, link-anchored Import popover for Wikipedia links in the article.
+   A click on an internal wiki <a> shows a small popover anchored to the link;
+   clicking Import drives the existing !import-url pipeline. Decoupled from
+   Quill's bubble tooltip (which only appears on a text selection, so the old
+   tooltip-button affordance was invisible on a plain link click). Body-anchored
+   + position:fixed to avoid positioned-ancestor assumptions. Returns a teardown
+   fn that removes the element, document/window listeners, and the status watch."
   [editor]
   #?(:cljs
-     (let [^js ed editor
-           ^js theme (.-theme ed)]
-       (when-let [^js tooltip (.-tooltip theme)]
-         (let [^js root (.-root tooltip)
-               ^js import-btn (js/document.createElement "a")
-               ;; Bubble has no .ql-preview (snow's link editor); the link href
-               ;; is captured from the selection's DOM node in selection-change
-               ;; and stashed here for the click handler. Theme-agnostic.
-               !link-href (atom nil)]
-           (set! (.-className import-btn) "ql-import")
-           (set! (.-textContent import-btn) "Import")
-           (.setAttribute import-btn "style" "display:none")
-           (.appendChild root import-btn)
-           ;; Click handler: import the captured Wikipedia URL.
-           (.addEventListener import-btn "click"
-             (fn [e]
-               (.preventDefault e)
-               (when-not (= @!import-status :importing)
-                 (let [href @!link-href]
-                   (when (wikipedia-url? href)
-                     (reset! !import-status :importing)
-                     (set! (.-textContent import-btn) "Importing...")
-                     (.add (.-classList import-btn) "importing")
-                     (reset! !import-url {:url href :ts (js/Date.now)}))))))
-           ;; Watch import status to update button text
-           (add-watch !import-status ::tooltip-btn
-             (fn [_ _ _ new-status]
-               (case new-status
-                 :importing (do (set! (.-textContent import-btn) "Importing...")
-                              (.add (.-classList import-btn) "importing"))
-                 :done (do (set! (.-textContent import-btn) "Imported!")
-                         (.remove (.-classList import-btn) "importing")
-                         (js/setTimeout #(do (set! (.-textContent import-btn) "Import")
-                                           (reset! !import-status :idle)) 2000))
-                 :already-exists (do (set! (.-textContent import-btn) "Already imported")
-                                   (.remove (.-classList import-btn) "importing")
-                                   (js/setTimeout #(do (set! (.-textContent import-btn) "Import")
-                                                     (reset! !import-status :idle)) 2000))
-                 :error (do (set! (.-textContent import-btn) "Error")
-                          (.remove (.-classList import-btn) "importing")
-                          (js/setTimeout #(do (set! (.-textContent import-btn) "Import")
-                                            (reset! !import-status :idle)) 2000))
-                 ;; :idle — reset
-                 (do (set! (.-textContent import-btn) "Import")
-                   (.remove (.-classList import-btn) "importing")))))
-           ;; On selection change, detect a Wikipedia link at the selection,
-           ;; stash its href, and show the Import button in the bubble tooltip.
-           (.on ed "selection-change"
-             (fn [^js range _old-range _source]
-               (let [href (when range
-                            (let [idx (.-index range)
-                                  ^js leaf-arr (.getLeaf ed idx)
-                                  ^js leaf (when leaf-arr (aget leaf-arr 0))
-                                  ^js parent (when leaf (.-parent leaf))
-                                  ^js dom-node (when parent (.-domNode parent))
-                                  tag (when dom-node (.-tagName dom-node))]
-                              (when (= "A" tag)
-                                (.getAttribute dom-node "href"))))]
-                 (reset! !link-href (when (wikipedia-url? href) href))
-                 (.setAttribute import-btn "style"
-                   (if (wikipedia-url? href) "" "display:none"))))))))
+     (let [^js ed   editor
+           ^js root (.-root ed)                 ; the .ql-editor content element
+           ^js pop  (js/document.createElement "div")
+           ^js label (js/document.createElement "span")
+           ^js btn  (js/document.createElement "button")
+           !href    (atom nil)
+           visible? (fn [] (not= "none" (.. pop -style -display)))
+           hide!    (fn [] (set! (.. pop -style -display) "none"))
+           wiki-anchor (fn [^js target]
+                         (let [^js a (when (and target (.-closest target)) (.closest target "a"))]
+                           (when (and a (wikipedia-url? (.getAttribute a "href"))) a)))
+           show-at! (fn [^js a href]
+                      (reset! !href href)
+                      (set! (.-textContent label) (wiki-slug href))
+                      (set! (.-textContent btn) "Import")
+                      (.remove (.-classList btn) "importing")
+                      (let [r (.getBoundingClientRect a)]
+                        (set! (.. pop -style -top) (str (+ (.-bottom r) 4) "px"))
+                        (set! (.. pop -style -left) (str (.-left r) "px"))
+                        (set! (.. pop -style -display) "flex")))
+           on-link-click (fn [e]
+                           (when-let [^js a (wiki-anchor (.-target e))]
+                             (show-at! a (.getAttribute a "href"))))
+           on-doc-click (fn [e]
+                          (when (and (visible?)
+                                  (not (.contains pop (.-target e)))
+                                  (not (wiki-anchor (.-target e))))
+                            (hide!)))
+           on-key    (fn [e] (when (and (= "Escape" (.-key e)) (visible?)) (hide!)))
+           on-scroll (fn [_] (when (visible?) (hide!)))]
+       (set! (.-className pop) "wiki-import-popover")
+       (.setAttribute pop "style"
+         (str "position:fixed;display:none;z-index:1000;align-items:center;gap:8px;"
+           "padding:6px 8px;background:var(--color-bg-card);"
+           "border:1px solid var(--color-border);border-radius:var(--radius-sm);"
+           "box-shadow:0 2px 8px rgba(0,0,0,0.18);font-size:13px;max-width:320px;"))
+       (.setAttribute label "style"
+         "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;color:var(--color-text-secondary);")
+       (set! (.-className btn) "btn btn-sm btn-primary")
+       (set! (.-type btn) "button")
+       (set! (.-textContent btn) "Import")
+       (.appendChild pop label)
+       (.appendChild pop btn)
+       (.appendChild (.-body js/document) pop)
+       ;; Import → existing !import-url pipeline.
+       (.addEventListener btn "click"
+         (fn [e]
+           (.preventDefault e)
+           (when-not (= @!import-status :importing)
+             (let [href @!href]
+               (when (wikipedia-url? href)
+                 (reset! !import-status :importing)
+                 (set! (.-textContent btn) "Importing...")
+                 (.add (.-classList btn) "importing")
+                 (reset! !import-url {:url href :ts (js/Date.now)}))))))
+       ;; Status → button text (same states as the old tooltip button).
+       (add-watch !import-status ::import-popover-btn
+         (fn [_ _ _ st]
+           (case st
+             :importing      (do (set! (.-textContent btn) "Importing...") (.add (.-classList btn) "importing"))
+             :done           (do (set! (.-textContent btn) "Imported!") (.remove (.-classList btn) "importing")
+                                  (js/setTimeout (fn [] (hide!) (reset! !import-status :idle)) 1500))
+             :already-exists (do (set! (.-textContent btn) "Already imported") (.remove (.-classList btn) "importing")
+                                  (js/setTimeout (fn [] (hide!) (reset! !import-status :idle)) 1500))
+             :error          (do (set! (.-textContent btn) "Error") (.remove (.-classList btn) "importing")
+                                  (js/setTimeout (fn [] (reset! !import-status :idle)) 2000))
+             nil)))
+       (.addEventListener root "click" on-link-click)
+       (.addEventListener js/document "click" on-doc-click)
+       (.addEventListener js/document "keydown" on-key)
+       (.addEventListener js/document "scroll" on-scroll true) ; capture: catch editor-pane scroll
+       (.addEventListener js/window "resize" on-scroll)
+       (fn teardown []
+         (remove-watch !import-status ::import-popover-btn)
+         (.removeEventListener root "click" on-link-click)
+         (.removeEventListener js/document "click" on-doc-click)
+         (.removeEventListener js/document "keydown" on-key)
+         (.removeEventListener js/document "scroll" on-scroll true)
+         (.removeEventListener js/window "resize" on-scroll)
+         (when (.-parentNode pop) (.remove pop))))
      :clj nil))
 
 (defn- setup-mobile-keyboard-suppression!
@@ -341,8 +377,8 @@
          ;; controls live in the floating tooltip shown on selection. So no
          ;; toolbar node is stored (:toolbar nil; destroy-editor! skips removal).
          (reset! !editor-state {:editor editor :container container
-                                :topic-id topic-id :toolbar nil})
-         (setup-link-import-button! editor)
+                                :topic-id topic-id :toolbar nil
+                                :import-popover-teardown (setup-link-import-popover! editor)})
          (setup-mobile-keyboard-suppression! editor)
          (table-ui/init! editor)
          editor))))

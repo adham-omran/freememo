@@ -154,7 +154,8 @@
                                           Long/MAX_VALUE quota/per-file-max-bytes)}))
      (log/info (str "👉 http://0.0.0.0:" http-port))
 
-     (dev-metadata/start!)))
+     ;; Metadata navigator sits one port above the app (PORT+1).
+     (dev-metadata/start! (inc http-port))))
 
 (declare browser-process)
 #?(:cljs ; client entrypoint

@@ -81,7 +81,10 @@
 #?(:clj (defonce ^:private !server (atom nil)))
 
 #?(:clj
-   (defn start! []
+   (defn start!
+     "Boot the metadata navigator on `port` (caller passes PORT+1 so it sits one
+      above the app). Binds and logs the same port — no drift."
+     [port]
      (when-not @!server
        (reset! !server
          (ring/run-jetty
@@ -93,11 +96,11 @@
                (electric-ring/wrap-electric-websocket
                  (fn [ring-request] (electric-boot ring-request)))
                (wrap-params))
-           {:host "0.0.0.0", :port 8086, :join? false
+           {:host "0.0.0.0", :port port, :join? false
             :ws-idle-timeout (* 60 1000)
             :ws-max-binary-size (* 100 1024 1024)
             :ws-max-text-size (* 100 1024 1024)}))
-       (log/info "👉 http://0.0.0.0:8081 (project metadata)"))))
+       (log/info (str "👉 http://0.0.0.0:" port " (project metadata)")))))
 
 #?(:clj
    (defn stop! []

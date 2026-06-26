@@ -317,15 +317,19 @@
             ;; bubble theme, whose formatting controls float on text selection
             ;; instead of living in a fixed toolbar.
 
-            ;; Auto-open biblio modal once on first mount after a fresh
-            ;; import. claim-pending-biblio-show?* returns true (and clears the
-            ;; mark) exactly once per (user-id, topic-id). The keyed e/for-by
-            ;; frame mounts only when auto-show? is true, runs reset! once on
-            ;; mount, and never remounts thereafter (key is the stable topic-id).
-            (let [auto-show? (e/server
+            ;; Auto-open biblio modal once after a fresh import. The Offload
+            ;; returns the topic-id it CLAIMED (or nil) — so the e/for-by keys on
+            ;; the claimed topic, NOT the live bib-topic-id. This is immune to the
+            ;; latest-wins HOLD: during navigation the Offload holds the prior
+            ;; claimed-id, whose frame is already mounted (no spurious re-open);
+            ;; keying on the live bib-topic-id would remount on every nav while
+            ;; the held value is still true. claim-show? clears the mark, so it
+            ;; fires exactly once per imported (user, topic).
+            (let [claimed-id (e/server
                                (e/Offload
-                                 #(bibform/claim-pending-biblio-show?* user-id bib-topic-id)))]
-              (e/for-by identity [_k (when (true? auto-show?) [bib-topic-id])]
+                                 #(when (bibform/claim-pending-biblio-show?* user-id bib-topic-id)
+                                    bib-topic-id)))]
+              (e/for-by identity [_k (when claimed-id [claimed-id])]
                 (let [opened (reset! !show-bib true)]
                   (when opened nil))))
 
