@@ -25,6 +25,8 @@
   "Resolve last-used prefs the same way the modal's auto-load does:
    per-item mode → per-doc preset, falling back to global; otherwise global."
   [user-id root-topic-id auto-load-mode]
+  ;; Header is excluded — it's per-PDF and resolved server-side at push time by
+  ;; panels/AnkiSyncExecutor, not carried through these prefs.
   #?(:clj (if (= auto-load-mode "per-item")
             (or (sync/load-item-preset user-id root-topic-id)
               (:prefs (sync/load-anki-preferences user-id)))
@@ -169,7 +171,7 @@
                 :!models (atom []) :!selected-deck (atom nil)
                 :!basic-model (atom nil) :!cloze-model (atom nil) :!all-tags (atom [])}
           form {:!scope (atom "Current Page") :!allow-dupes (atom false)
-                :!use-header (atom false) :!header-text (atom "") :!use-tags (atom false)
+                :!use-tags (atom false)
                 :!tags (atom []) :!basic-fields (atom []) :!cloze-fields (atom [])}
           sync {:!phase (atom nil) :!result (atom nil) :!error (atom nil) :!push-pairs (atom nil)}
           !trigger (atom 0)

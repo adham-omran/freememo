@@ -17,8 +17,7 @@
   (e/client
     (let [form {:!scope (atom "Current Page")
                 :!allow-dupes (atom false)
-                :!use-header (atom false)
-                :!header-text (atom "")
+                ;; Custom header is per-PDF, owned by HeaderSettings (not here).
                 :!use-tags (atom false)
                 :!tags (atom [])
                 :!basic-fields (atom [])

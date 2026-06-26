@@ -63,7 +63,7 @@
   "Handles push execution and server recording. Pull is handled by the
    toolbar Pull button (content_toolbar_actions), not the modal.
    conn = {:!status :!decks :!models :!selected-deck :!basic-model :!cloze-model ...}
-   form = {:!scope :!allow-dupes :!use-header :!header-text :!use-tags :!tags :!basic-fields :!cloze-fields}
+   form = {:!scope :!allow-dupes :!use-tags :!tags :!basic-fields :!cloze-fields}
    sync = {:!phase :!result :!error :!push-pairs}"
   [user-id selected-doc current-pdf-page conn form sync]
   (let [{:keys [!phase !error !push-pairs]} sync
@@ -75,8 +75,6 @@
         basic-fields (e/watch (:!basic-fields form))
         cloze-fields (e/watch (:!cloze-fields form))
         allow-dupes (e/watch (:!allow-dupes form))
-        use-header (e/watch (:!use-header form))
-        header-text (e/watch (:!header-text form))
         use-tags (e/watch (:!use-tags form))
         tags (e/watch (:!tags form))
         source-display-mode (e/server (get-source-display-mode* user-id))
@@ -88,6 +86,11 @@
         images-back-field (e/server (get-anki-images-back-field* user-id))
         image-display-mode (e/server (get-image-display-mode* user-id))
         root-id (e/server (get-root-topic-id* selected-doc))
+        ;; Header is per-PDF, resolved server-side (override → global) — the
+        ;; authoritative source for push. Not read from form atoms (decoupled).
+        resolved-header (e/server (form/resolve-anki-header* user-id root-id))
+        use-header (boolean (:use-header resolved-header))
+        header-text (or (:header-text resolved-header) "")
         topic-info (e/server (when selected-doc
                                (let [t (db/get-topic-for-user user-id selected-doc)]
                                  {:kind (:topics/kind t)
@@ -113,10 +116,11 @@
                   :topic-title (:title topic-info)
                   :root-topic-id selected-doc
                   :app-base-url app-base-url}
+        ;; Header is NOT in prefs-map — it's per-PDF (own rows), never the
+        ;; global last-used or the per-item preset blob.
         prefs-map {:scope scope :deck selected-deck
                    :basic-model basic-model :cloze-model cloze-model
                    :allow-dupes allow-dupes
-                   :use-header use-header :header-text header-text
                    :use-tags use-tags :tags tags
                    :basic-fields (if (vector? basic-fields) basic-fields [])
                    :cloze-fields (if (vector? cloze-fields) cloze-fields [])}]
@@ -222,10 +226,8 @@
       (reset! (:!cloze-model conn) (:cloze-model prefs))))
   (when (some? (:allow-dupes prefs))
     (reset! (:!allow-dupes form) (:allow-dupes prefs)))
-  (when (some? (:use-header prefs))
-    (reset! (:!use-header form) (:use-header prefs)))
-  (when (:header-text prefs)
-    (reset! (:!header-text form) (:header-text prefs)))
+  ;; Header is no longer a form atom — it's per-PDF, loaded/saved by
+  ;; HeaderSettings directly. apply-prefs! no longer touches it.
   (when (some? (:use-tags prefs))
     (reset! (:!use-tags form) (:use-tags prefs)))
   (when (:tags prefs)
@@ -238,7 +240,7 @@
 (e/defn AnkiSyncConnectedPanel
   "Connected state: preset auto-load (per the user's auto-load mode), form, and status.
    conn = {:!decks :!models :!selected-deck :!basic-model :!cloze-model ...}
-   form = {:!scope :!allow-dupes :!use-header :!header-text :!use-tags :!tags ...}
+   form = {:!scope :!allow-dupes :!use-tags :!tags ...}
    sync = {:!phase :!result :!error :!push-pairs}"
   [user-id selected-doc conn form sync !show-modal]
   (e/client
@@ -294,7 +296,7 @@
                                 :animation "fade-in 0.3s ease-in"}})
             (dom/text "Using saved settings for this document")))
 
-        (form/AnkiSyncForm user-id conn form)
+        (form/AnkiSyncForm user-id root-id conn form)
         (form/AnkiSyncStatus sync !show-modal conn)))))
 
 (e/defn AnkiSyncModalDom

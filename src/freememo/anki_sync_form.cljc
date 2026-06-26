@@ -5,12 +5,13 @@
    [clojure.string :as string]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [hyperfiddle.electric-forms5 :as forms]
    [freememo.anki-sync-helpers :as helpers]
-   [freememo.typeahead :refer [Typeahead]]
+   [freememo.select :as sel]
    #?(:clj [freememo.settings :as settings])))
 
 (e/defn AnkiSyncModelSelect
-  "Reusable model typeahead with field mapping hint.
+  "Reusable model dropdown with field mapping hint.
    fields = :loading | [] | vector of field names. format-hint = fn from non-empty vector to string."
   [label !model models fields format-hint]
   (e/client
@@ -18,7 +19,7 @@
       (dom/props {:style {:margin-bottom "var(--sp-3)"}})
       (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
         (dom/text label))
-      (Typeahead !model models "Start typing..." nil nil)
+      (sel/AtomSelect !model models :placeholder "Select a note type…")
       (if (= fields :loading)
         (dom/div
           (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)" :margin-top "var(--sp-1)"}})
@@ -149,32 +150,62 @@
                     (add-tag! t))
                   nil)))))))))
 
+(defn resolve-anki-header*
+  "Effective header (per-PDF override → global). {:use-header bool :header-text str}."
+  [user-id root-topic-id]
+  #?(:clj (settings/resolve-anki-header user-id root-topic-id)
+     :cljs nil))
+
+(defn save-anki-header-for-topic!*
+  [user-id root-topic-id use-header header-text]
+  #?(:clj (settings/save-anki-header-for-topic! user-id root-topic-id use-header header-text)
+     :cljs nil))
+
+(e/defn HeaderSettings
+  "Per-PDF custom header: Forms5 standalone Checkbox! + Input!, auto-saving each
+   edit to the topic's header rows. Loaded value comes from a server query
+   (per-PDF override → global), seeded into local atoms via e/snapshot so the
+   managed widgets reflect it without depending on apply-prefs!. Decoupled from
+   the form map; push resolves the header server-side independently."
+  [user-id root-id]
+  (e/client
+    (let [loaded       (e/server (resolve-anki-header* user-id root-id))
+          !use-header  (atom (e/snapshot (boolean (:use-header loaded))))
+          !header-text (atom (e/snapshot (or (:header-text loaded) "")))
+          use-header   (e/watch !use-header)
+          header-text  (e/watch !header-text)
+          edits
+          (dom/div (dom/props {:style {:margin-bottom "var(--sp-3)"}})
+            (e/amb
+              (dom/label
+                (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-2)" :font-size "14px" :margin-bottom "var(--sp-2)"}})
+                (e/amb
+                  (forms/Checkbox! :use-header use-header)
+                  (do (dom/text "Add custom header to each card") (e/amb))))
+              (if use-header
+                (forms/Input! :header-text header-text
+                  :placeholder "e.g., Chapter 5: Accounting"
+                  :class "input input-full" :style {:font-size "15px"})
+                (e/amb))))]
+      ;; Save service: one branch per edit. Persist per-PDF, then update the
+      ;; local atom on token-spend (e/on-unmount) so the managed widget reflects
+      ;; the committed value without reverting. Disabling clears header-text.
+      (e/for [[t edit] (e/diff-by first (e/as-vec edits))]
+        (let [uh (if (contains? edit :use-header) (boolean (:use-header edit)) use-header)
+              ht (if uh
+                   (if (contains? edit :header-text) (:header-text edit) header-text)
+                   "")]
+          (e/on-unmount #(do (reset! !use-header uh) (reset! !header-text ht)))
+          (case (e/server (save-anki-header-for-topic!* user-id root-id uh ht))
+            (t)))))))
+
 (e/defn AnkiSyncOptions
-  "Custom header checkbox/input + allow-duplicates checkbox + tags.
-   conn = {:!all-tags ...}  form = {:!allow-dupes :!use-header :!header-text :!use-tags :!tags ...}"
-  [conn form]
+  "Custom header (per-PDF, Forms5) + allow-duplicates checkbox + tags.
+   conn = {:!all-tags ...}  form = {:!allow-dupes :!use-tags :!tags ...}"
+  [user-id root-id conn form]
   (e/client
     (let [all-tags (e/watch (:!all-tags conn))]
-      ;; Custom header
-      (dom/div
-        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-        (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-2)" :font-size "14px" :margin-bottom "var(--sp-2)"}})
-          (dom/input
-            (dom/props {:type "checkbox" :checked (e/watch (:!use-header form))})
-            (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
-              (when (some? v)
-                (reset! (:!use-header form) v)
-                (when-not v (reset! (:!header-text form) "")))))
-          (dom/text "Add custom header to each card"))
-        (when (e/watch (:!use-header form))
-          (dom/input
-            (dom/props {:type "text"
-                        :value (e/watch (:!header-text form))
-                        :placeholder "e.g., Chapter 5: Accounting"
-                        :class "input input-full" :style {:font-size "15px"}})
-            (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
-              (when (some? v) (reset! (:!header-text form) v))))))
+      (HeaderSettings user-id root-id)
       ;; Allow duplicates
       (dom/div
         (dom/props {:style {:margin-bottom "var(--sp-3)"}})
@@ -202,7 +233,7 @@
   "The connected-state form: scope, deck, model selection, field mapping, custom header, tags.
    conn = {:!decks :!models :!selected-deck :!basic-model :!cloze-model :!all-tags ...}
    form = {:!scope :!basic-fields :!cloze-fields ...}"
-  [user-id conn form]
+  [user-id root-id conn form]
   (e/client
     (let [scope (e/watch (:!scope form))
           decks (e/watch (:!decks conn))
@@ -228,7 +259,7 @@
         (dom/props {:style {:margin-bottom "var(--sp-3)"}})
         (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
           (dom/text "Deck"))
-        (Typeahead (:!selected-deck conn) decks "Start typing deck name..." nil nil))
+        (sel/AtomSelect (:!selected-deck conn) decks :placeholder "Select a deck…"))
 
       ;; Note Type selectors
       (AnkiSyncModelSelect "Note Type (Basic)" (:!basic-model conn) models basic-fields
@@ -237,7 +268,7 @@
         (fn [fs] (str "cloze \u2192 " (first fs))))
 
       ;; Options
-      (AnkiSyncOptions conn form))))
+      (AnkiSyncOptions user-id root-id conn form))))
 
 (e/defn AnkiSyncStatus
   "Sync status display and Push/Cancel buttons. Pull lives in the toolbar.
