@@ -667,15 +667,15 @@
       {:success false :error "Failed to save theme"})))
 
 ;; Extraction button visibility toggles.
-(defn save-anki-sync-settings [user-id {:keys [scope deck basic-model cloze-model allow-dupes use-header header-text use-tags tags]}]
+(defn save-anki-sync-settings [user-id {:keys [scope deck basic-model cloze-model allow-dupes use-tags tags]}]
   (try
     (when scope (db/set-setting user-id ANKI_SCOPE scope))
     (when deck (db/set-setting user-id ANKI_DECK deck))
     (when basic-model (db/set-setting user-id ANKI_BASIC_MODEL basic-model))
     (when cloze-model (db/set-setting user-id ANKI_CLOZE_MODEL cloze-model))
     (db/set-setting user-id ANKI_ALLOW_DUPES (str (boolean allow-dupes)))
-    (db/set-setting user-id ANKI_USE_HEADER (str (boolean use-header)))
-    (when (some? header-text) (db/set-setting user-id ANKI_HEADER_TEXT header-text))
+    ;; Header is a per-PDF setting (see save-anki-header-for-topic!), persisted
+    ;; on edit — NOT written here, so a push can't clobber the global fallback.
     (db/set-setting user-id ANKI_USE_TAGS (str (boolean use-tags)))
     (db/set-setting user-id ANKI_TAGS (pr-str (or tags [])))
     {:success true}
@@ -703,6 +703,49 @@
     (catch Exception e
       (tel/error! {:id ::save-anki-preset} e)
       {:success false :error "Failed to save item preset"})))
+
+;; ── Per-PDF Anki header override ──
+;;
+;; Header (use-header + header-text) persists per root topic in its own
+;; settings rows, independent of the per-item preset blob. An absent row means
+;; "no per-PDF override" (nil), so callers fall back to the global header.
+;; Saved on edit (blur/toggle), on modal close, and on push.
+
+(defn anki-use-header-key [root-topic-id]
+  (str "anki_use_header_" root-topic-id))
+
+(defn anki-header-text-key [root-topic-id]
+  (str "anki_header_text_" root-topic-id))
+
+(defn get-anki-header-for-topic
+  "Per-PDF header override for root-topic-id.
+   {:use-header bool-or-nil, :header-text string-or-nil}; nil for a field means
+   no override (caller falls back to the global header)."
+  [user-id root-topic-id]
+  (let [raw-use (db/get-setting user-id (anki-use-header-key root-topic-id))
+        raw-text (db/get-setting user-id (anki-header-text-key root-topic-id))]
+    {:use-header (when (some? raw-use) (= "true" raw-use))
+     :header-text raw-text}))
+
+(defn save-anki-header-for-topic!
+  "Persist the per-PDF header override. header-text is saved verbatim — an
+   explicit empty string is a valid override, NOT a fallback-to-global signal."
+  [user-id root-topic-id use-header header-text]
+  (try
+    (db/set-setting user-id (anki-use-header-key root-topic-id) (str (boolean use-header)))
+    (db/set-setting user-id (anki-header-text-key root-topic-id) (or header-text ""))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-anki-header-for-topic!} e)
+      {:success false :error "Failed to save per-PDF header"})))
+
+(defn resolve-anki-header
+  "Effective header for a topic: per-PDF override when set, else the global
+   header. Single source of truth for both the modal's display and push."
+  [user-id root-topic-id]
+  (let [pdf (get-anki-header-for-topic user-id root-topic-id)]
+    {:use-header  (if (some? (:use-header pdf))  (:use-header pdf)  (get-anki-use-header user-id))
+     :header-text (if (some? (:header-text pdf)) (:header-text pdf) (get-anki-header-text user-id))}))
 
 ;; ── Prompt overrides ──
 

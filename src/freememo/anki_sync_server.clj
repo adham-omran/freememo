@@ -178,6 +178,7 @@
     (tel/log! {:level :info :id ::finalize-push!.note-ids-saved} "anki note ids saved")
     (settings/save-anki-sync-settings user-id prefs-map)
     (tel/log! {:level :info :id ::finalize-push!.global-saved} "global last-used saved")
+    ;; Header is per-PDF, auto-saved on edit by HeaderSettings — not persisted here.
     (when (= auto-load-mode "per-item")
       (let [existing (or (settings/get-anki-preset user-id root-topic-id) {})
             new-preset (merge existing prefs-map)]
