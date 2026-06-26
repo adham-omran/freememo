@@ -2,9 +2,29 @@
   "Shared UI components."
   (:require
    [clojure.string :as string]
+   [contrib.data :refer [clamp-left]]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   ))
+   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]))
+
+(def ^:private row-height 30)
+
+(defn scroll-row-into-view!
+  "Imperatively scroll `node` so the row at `idx` (each `rh` px) is visible —
+   keyboard nav must keep the active row on screen in the virtualized dropdown.
+   CLJS-only body; the var exists on both peers so the e/defn dual-compiler is
+   satisfied. Returns nil."
+  [node idx rh]
+  #?(:cljs
+     (when (and node (>= idx 0))
+       (let [top (* idx rh)
+             vh  (.-clientHeight node)
+             cur (.-scrollTop node)]
+         (cond
+           (< top cur)                  (set! (.-scrollTop node) top)
+           (> (+ top rh) (+ cur vh))    (set! (.-scrollTop node) (- (+ top rh) vh)))
+         nil))
+     :clj nil))
 
 (e/defn Typeahead
   "Text input with filtered dropdown. Writes selected/typed value to !atom.
@@ -78,30 +98,46 @@
                     (reset! !open? false)
                     (reset! !active-idx -1)))))
             nil))
+        ;; Virtualized dropdown: only the visible window of rows renders
+        ;; (Scroll-window/Tape), so cost is bounded regardless of option count.
+        ;; Mouse hover highlight is CSS (.tape-scroll table tr:hover td); the
+        ;; keyboard-active row gets an inline background.
         (when (seq filtered)
-          (dom/div
-            (dom/props {:style {:position "absolute" :top "100%" :left "0" :right "0"
-                                :background "var(--color-bg-card)" :border "1px solid var(--color-border)"
-                                :border-radius "var(--radius-sm)" :z-index "100"
-                                :max-height "240px" :overflow-y "auto"
-                                :box-shadow "0 2px 4px rgba(0,0,0,0.15)"}})
-            (e/for [[i item] (e/diff-by {} (map-indexed vector filtered))]
-              (dom/div
-                (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "14px"
-                                    :white-space "nowrap" :overflow "hidden" :text-overflow "ellipsis"
-                                    :background (cond
-                                                  (= i active-idx) "var(--color-highlight)"
-                                                  (odd? i) "var(--color-bg-subtle)"
-                                                  :else "var(--color-bg-card)")}})
-                (dom/props {:title item})
-                (dom/text item)
-                (dom/On "mousemove" (fn [_] (reset! !active-idx i)) nil)
-                (dom/On "mousedown"
-                  (fn [e]
-                    (.preventDefault e)
-                    (reset! !atom item)
-                    (when ?!committed (reset! ?!committed item))
-                    (reset! !search nil)
-                    (reset! !open? false)
-                    (reset! !active-idx -1))
-                  nil)))))))))
+          (let [n (count filtered)]
+            (dom/div
+              (dom/props {:class "tape-scroll"
+                          :style {:position "absolute" :top "100%" :left "0" :right "0"
+                                  :background "var(--color-bg-card)" :border "1px solid var(--color-border)"
+                                  :border-radius "var(--radius-sm)" :z-index "100"
+                                  :max-height "240px" :overflow-y "auto"
+                                  :box-shadow "0 2px 4px rgba(0,0,0,0.15)"
+                                  :--row-height (str row-height "px")}})
+              (let [[offset limit] (Scroll-window row-height n dom/node {:overquery-factor 1})
+                    occluded (clamp-left (* row-height (- n limit)) 0)]
+                (dom/props {:style {:--offset offset}})
+                ;; Keep the keyboard-active row on screen (case forces the call —
+                ;; a bare unused-value statement would be work-skipped).
+                (case (scroll-row-into-view! dom/node active-idx row-height) nil)
+                (dom/table
+                  (dom/props {:style {:width "100%"}})
+                  (e/for [i (Tape offset limit)]
+                    (let [item (nth filtered i nil)]
+                      (when item
+                        (dom/tr
+                          (dom/td
+                            (dom/props {:title item
+                                        :style {:--order (inc i)
+                                                :padding "5px 8px" :cursor "pointer" :font-size "14px"
+                                                :white-space "nowrap" :overflow "hidden" :text-overflow "ellipsis"
+                                                :background (when (= i active-idx) "var(--color-highlight)")}})
+                            (dom/text item)
+                            (dom/On "mousedown"
+                              (fn [e]
+                                (.preventDefault e)
+                                (reset! !atom item)
+                                (when ?!committed (reset! ?!committed item))
+                                (reset! !search nil)
+                                (reset! !open? false)
+                                (reset! !active-idx -1))
+                              nil)))))))
+                (dom/div (dom/props {:style {:height (str occluded "px")}}))))))))))
