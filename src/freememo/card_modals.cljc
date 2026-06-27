@@ -8,6 +8,7 @@
    [freememo.typeahead :refer [Typeahead]]
    [freememo.quill-field :refer [QuillField flush-syntax-tokens!]]
    #?(:clj [freememo.user-state :as us])
+   #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.html-cleaner :as cleaner])
@@ -628,7 +629,12 @@
                           result (e/server (cards/save-cards topic-id root-topic-id kind card-data))]
                       (if (:success result)
                         (do (e/on-unmount #(reset! !show-add false))
-                            (case (e/server (swap! (us/get-atom user-id :card-mutations) inc))
+                            ;; Confirm the add — the card table is hidden in
+                            ;; mobile reading-mode (spec 2.5), so a toast is the
+                            ;; only feedback there; harmless elsewhere.
+                            (case (e/server
+                                    (toasts/push! user-id {:level :success :message "Card added"})
+                                    (swap! (us/get-atom user-id :card-mutations) inc))
                               (t)))
                         (t (:error result))))))))
             (dom/button

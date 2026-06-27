@@ -38,7 +38,7 @@
            static-content
            context-mode context-tooltip llm-enabled?
            extract-status navigate! origin on-done!
-           citation page-info pdf-root? pdf-status]} refresh !show-bib]
+           citation page-info pdf-root? pdf-status reading-mode?]} refresh !show-bib]
   (e/client
     (let [dirty (e/watch editor/!dirty-html)
           live-content (if (and dirty (= (:topic-id dirty) topic-id))
@@ -57,7 +57,8 @@
                                  :citation citation
                                  :page-info page-info
                                  :pdf-root? pdf-root?
-                                 :pdf-status pdf-status}
+                                 :pdf-status pdf-status
+                                 :reading-mode? reading-mode?}
                           extract-status (assoc :extract-status extract-status)
                           navigate! (assoc :navigate! navigate!)
                           origin (assoc :origin origin)

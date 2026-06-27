@@ -130,9 +130,13 @@
                 kind (:topics/kind item)
                 topic-id (:topics/id item)
                 is-pdf? (= kind "pdf")
-                ;; Queue context only for non-PDFs (per design decision §3.2 = Y).
-                ;; For PDFs, the title bar's hamburger + page-stats already crowd the row.
-                queue-ctx (when-not is-pdf?
+                ;; :origin :learn marks every learn topic so mobile reading-mode
+                ;; (TopicPage) can strip chrome on a phone — PDFs included, since
+                ;; a book PDF is the main thing read in a session. on-done!
+                ;; (auto-advance on extract-done) stays non-PDF only: PDFs have no
+                ;; extract Done button and advance manually via Next, as before.
+                queue-ctx (if is-pdf?
+                            {:origin :learn}
                             {:origin :learn
                              :on-done! #(swap! !queue-idx inc)})]
 

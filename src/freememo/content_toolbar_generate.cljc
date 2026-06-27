@@ -11,6 +11,7 @@
    [freememo.icons :as icons]
    [freememo.keyboard :as keyboard]
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.html-cleaner :as cleaner])
    #?(:clj [freememo.settings :as settings])))
 
 (defn get-parent-content*
@@ -96,10 +97,12 @@
               (e/on-unmount (fn [] (reset! keyboard/!generate-btn-ref nil)))
               (dom/On "click"
                 (fn [_]
-                  (let [sel (editor/get-selection!)]
+                  (let [sel (editor/get-selection-html!)]
                     (when sel
                       (editor/highlight-range! (:index sel) (:length sel) :color "var(--color-highlight-gold)"))
-                    (reset! !gen-click {:id (str (random-uuid)) :selection-text (when sel (:text sel))})))
+                    (reset! !gen-click {:id (str (random-uuid))
+                                        :selection-html (when (and sel (not (str/blank? (:text sel))))
+                                                          (:html sel))})))
                 nil)))
 
           ;; Generate with Prompt button
@@ -113,10 +116,11 @@
             (reset! keyboard/!gen-prompt-btn-ref dom/node)
             (e/on-unmount (fn [] (reset! keyboard/!gen-prompt-btn-ref nil)))
             (dom/On "click" (fn [_]
-                              (let [sel (editor/get-selection!)]
+                              (let [sel (editor/get-selection-html!)]
                                 (when sel
                                   (editor/highlight-range! (:index sel) (:length sel) :color "var(--color-highlight-gold)"))
-                                (reset! !captured-selection (when sel (:text sel))))
+                                (reset! !captured-selection (when (and sel (not (str/blank? (:text sel))))
+                                                              (:html sel))))
                               (reset! !prompt-dialog-kind card-type)
                               (reset! !show-prompt-dialog true))
               nil))))
@@ -125,17 +129,17 @@
       (let [[t _] (e/Token gen-click)]
         (when t
           (case (e/server
-                  (let [sel-text (:selection-text gen-click)
+                  (let [sel-html (cleaner/clean-html (:selection-html gen-click))
                         context (when use-context
                                   (case context-mode
-                                    :extract (if sel-text content-text (or (get-parent-content* topic-id) ""))
+                                    :extract (if sel-html content-text (or (get-parent-content* topic-id) ""))
                                     :page (let [prev (helpers/get-context-pages* root-topic-id page-number context-window)]
-                                            (if sel-text
+                                            (if sel-html
                                               (if prev (str prev "\n\n---\n\n" content-text) content-text)
                                               prev))))]
                     (helpers/enqueue-card-gen!
                       {:id (:id gen-click)
-                       :content (or sel-text content-text)
+                       :content (or sel-html content-text)
                        :context context
                        :card-type card-type
                        :card-count card-count-val
@@ -163,17 +167,17 @@
           (case (e/server
                   (let [{:keys [selection pre-prompt kind]} submit
                         ct (or kind card-type)
-                        sel-text selection
+                        sel-html (cleaner/clean-html selection)
                         context (when use-context
                                   (case context-mode
-                                    :extract (if sel-text content-text (or (get-parent-content* topic-id) ""))
+                                    :extract (if sel-html content-text (or (get-parent-content* topic-id) ""))
                                     :page (let [prev (helpers/get-context-pages* root-topic-id page-number context-window)]
-                                            (if sel-text
+                                            (if sel-html
                                               (if prev (str prev "\n\n---\n\n" content-text) content-text)
                                               prev))))]
                     (helpers/enqueue-card-gen!
                       {:id (str (random-uuid))
-                       :content (or sel-text content-text)
+                       :content (or sel-html content-text)
                        :context context
                        :card-type ct
                        :card-count card-count-val
