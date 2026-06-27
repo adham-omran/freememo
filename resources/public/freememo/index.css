@@ -381,6 +381,38 @@ html, body {
 }
 .toolbar-overflow-panel .toolbar-sep { display: none; }
 
+/* PdfToolbar phone overflow (C3): on a phone the PDF bar shows two primary
+   controls + a ⋮ trigger; the secondary controls drop into this dropdown,
+   stacked vertically with each .toolbar-group laid out as a horizontal row.
+   Rendered inside .toolbar (overflow-y: visible lets it escape downward) and
+   anchored to the position:relative .toolbar-container. */
+.pdf-overflow-panel {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 240px;
+    padding: var(--sp-2);
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-modal);
+}
+.pdf-overflow-panel .toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.pdf-overflow-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 99;
+}
+
 /* Tier classes — content-aware. The `.collapse-N` class on .toolbar-container
    is set imperatively by a ResizeObserver in content_toolbar.cljc that finds
    the smallest tier where inline content fits without overflow.

@@ -48,7 +48,7 @@
           {:keys [user-id enc-key topic-id audio? root-topic-id page-number content-text
                   context-mode context-tooltip llm-enabled?
                   extract-status navigate! origin on-done!
-                  citation page-info pdf-root? pdf-status]} state
+                  citation page-info pdf-root? pdf-status reading-mode?]} state
           ;; Unsynced card count — uses refresh value for reactivity
           unsynced-count (e/server (helpers/get-unsynced-count* refresh topic-id))
           ;; biblio-target-id: source rows live on the document's root, not on
@@ -101,7 +101,22 @@
           ;; updates fire downstream where tier matters reactively).
           _collapse-tier (e/watch !collapse-tier)]
 
-      (dom/div
+      (if reading-mode?
+        ;; Reading mode (mobile learn, A2): reduce to the IR verbs — Extract +
+        ;; Add-Card. Everything else (Generate, Sync, doc-meta, history, …) and
+        ;; the overflow machinery are dropped for a distraction-free read.
+        (dom/div
+          (dom/props {:class "toolbar-container"})
+          (dom/div
+            (dom/props {:class "toolbar"})
+            (dom/div
+              (dom/props {:class "toolbar-group"})
+              (actions/ToolbarActions
+                {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
+                 :context-mode context-mode :mod-key mod-key
+                 :card-type card-type}))))
+
+        (dom/div
         ;; Electric's reactive class binding owns base + overflow-open only.
         ;; collapse-N is mutated imperatively by install-overflow-detector!
         ;; via classList — non-overlapping ownership prevents races.
@@ -331,4 +346,4 @@
             (when overflow-open
               (dom/div
                 (dom/props {:class "toolbar-overflow-backdrop"})
-                (dom/On "click" (fn [_] (reset! !overflow-open false)) nil)))))))))
+                (dom/On "click" (fn [_] (reset! !overflow-open false)) nil))))))))))

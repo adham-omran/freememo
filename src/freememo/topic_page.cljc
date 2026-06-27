@@ -26,6 +26,7 @@
    [freememo.bibliography-form :as bibform :refer [BibliographyForm]]
    [freememo.keyboard :as keyboard]
    [freememo.navigation :as nav]
+   [freememo.viewport :as viewport]
    [freememo.util :as util]
    [clojure.string :as str]
    #?(:clj [freememo.user-state :as us])
@@ -252,7 +253,15 @@
 
               ;; PDF state watched at outer scope
               scanning-pages (e/server (e/watch (us/get-atom user-id :scanning-pages)))
-              ocr-errors (e/server (e/watch (us/get-atom user-id :ocr-errors)))]
+              ocr-errors (e/server (e/watch (us/get-atom user-id :ocr-errors)))
+
+              ;; Mobile layout (spec §0). reading-mode? = phone + learn origin:
+              ;; a distraction-free incremental-reading view that hides the
+              ;; hierarchy, pins, and card table and reduces the command bar to
+              ;; the IR verbs (Extract + Add-Card). phone? alone drives the
+              ;; PdfToolbar's compact C3 layout for every PDF on a phone.
+              phone? (e/watch viewport/!phone?)
+              reading-mode? (and phone? (= (:origin queue-ctx) :learn))]
 
           ;; Persist layout on toggle
           (when t-layout
@@ -290,7 +299,8 @@
                :citation citation
                :page-info page-info
                :pdf-root? pdf-root?
-               :pdf-status pdf-status}
+               :pdf-status pdf-status
+               :reading-mode? reading-mode?}
               card-refresh
               !show-bib)
 
@@ -310,6 +320,7 @@
                  :llm-enabled? llm-enabled?
                  :scanning-pages scanning-pages
                  :ocr-errors ocr-errors
+                 :phone? phone?
                  :on-page-change! (fn [p] (reset! !current-page p))
                  :on-layout-toggle! toggle-layout!}))
 
@@ -342,7 +353,10 @@
             ;; so it spans the whole width; the side panels are confined to this
             ;; top region.
             (dom/div
-              (dom/props {:style {:height (str top-pct "%") :display "flex" :flex-direction "row"
+              ;; reading-mode? hides the card table below, so the top region
+              ;; takes the full height instead of the split percentage.
+              (dom/props {:style {:height (if reading-mode? "100%" (str top-pct "%"))
+                                  :display "flex" :flex-direction "row"
                                   :min-height "0" :overflow "hidden"}})
 
               ;; Clear nav-target after deriving target-page, so the viewer can
@@ -354,8 +368,11 @@
               ;; only in that mode is the target-page derivation (which gates on
               ;; is-pdf?) able to consume an in-document page jump. Outside PDF
               ;; mode the side panel must fall through to (navigate! :viewer …).
-              (HierarchySidePanel user-id page-topic-id root-topic-id navigate!
-                (when is-pdf? !nav-target))
+              ;; reading-mode? (mobile learn) hides the hierarchy entirely —
+              ;; navigation is the linear queue (Next), not the tree.
+              (when-not reading-mode?
+                (HierarchySidePanel user-id page-topic-id root-topic-id navigate!
+                  (when is-pdf? !nav-target)))
 
               ;; MIDDLE: content column — PdfPane | EditorPane, fills the row.
               (dom/div
@@ -413,17 +430,22 @@
                        (when navigate!
                          (navigate! :viewer (nav/nav-topic tid nil))))})))
 
-              ;; RIGHT: pin side panel (collapsible).
-              (PinSidePanel page-topic-id root-topic-id user-id))
+              ;; RIGHT: pin side panel (collapsible). Hidden in reading-mode?.
+              (when-not reading-mode?
+                (PinSidePanel page-topic-id root-topic-id user-id)))
 
-            ;; Vertical drag handle: resizes the top region ↕ the bottom bar.
-            (dom/div
-              (dom/props {:class "split-divider-v" :title "Drag to resize panels"})
-              (dom/On "pointerdown" (fn [e] (util/start-drag! e :y !top-pct)) nil))
+            ;; Card table + its resize handle — hidden in reading-mode? (B1).
+            ;; Add-Card still works; success surfaces as a toast (card_modals).
+            (when-not reading-mode?
+              ;; Vertical drag handle: resizes the top region ↕ the bottom bar.
+              (dom/div
+                (dom/props {:class "split-divider-v" :title "Drag to resize panels"})
+                (dom/On "pointerdown" (fn [e] (util/start-drag! e :y !top-pct)) nil)))
 
             ;; BOTTOM BAR (full width): the card table.
-            (BottomPanel
-              {:user-id user-id
-               :topic-id page-topic-id
-               :card-font-size card-font-size}
-              card-refresh)))))))
+            (when-not reading-mode?
+              (BottomPanel
+                {:user-id user-id
+                 :topic-id page-topic-id
+                 :card-font-size card-font-size}
+                card-refresh))))))))
