@@ -41,7 +41,8 @@
            (handler request)))))
 
 #?(:clj
-   (def upload-routes #{"/api/upload-pdf" "/api/upload-epub"}))
+   (def upload-routes #{"/api/upload-pdf" "/api/upload-epub"
+                        "/api/append-images" "/api/heic-preview"}))
 
 #?(:clj
    (defn- parse-content-length

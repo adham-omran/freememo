@@ -14,8 +14,16 @@ COPY resources resources
 
 RUN clojure -X:prod:build uberjar :version "\"$VERSION\"" :build/jar-name "app.jar"
 
-FROM amazoncorretto:17 AS app
+FROM eclipse-temurin:17-jre AS app
 WORKDIR /app
+# ImageMagick + libheif provide HEIC/HEIF decode for Live Document photo
+# uploads — the JVM's ImageIO has no HEIC codec, so /api/heic-preview shells
+# out to `magick`. (Base switched from amazoncorretto:17 / Amazon Linux 2,
+# whose ImageMagick package lacks a reliable HEIF delegate.)
+# curl backs the compose healthcheck.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends imagemagick libheif1 curl \
+ && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/target/app.jar app.jar
 
 EXPOSE 8080
