@@ -1,4 +1,12 @@
 resources/public/electric_starter_app/js
+resources/public/freememo/js
 target/
 .cpcache
 .shadow-cljs
+.git
+node_modules
+.env
+logs
+.clj-kondo
+.lsp
+.DS_Store

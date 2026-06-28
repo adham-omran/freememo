@@ -28,7 +28,8 @@
    [clojure.java.io :as io]
    [clojure.string :as str]
    [cheshire.core :as json])
-  (:import [org.jsoup Jsoup]))
+  (:import [org.jsoup Jsoup]
+           [java.lang ProcessBuilder$Redirect]))
 
 (defn- error-status
   "Map a result :code to an HTTP status. Defaults to 500."
@@ -82,6 +83,43 @@
     (let [baos (java.io.ByteArrayOutputStream.)]
       (io/copy in baos)
       (.toByteArray baos))))
+
+;; ImageMagick CLI is `magick` on v7 (Homebrew) and `convert` on v6 (Debian/
+;; Ubuntu `apt install imagemagick`). Same argument order on both, so we just
+;; try the binaries in order and use whichever is present.
+(def ^:private imagemagick-bins ["magick" "convert"])
+
+(defn- run-imagemagick->jpeg
+  "Run `bin path -quality 85 jpeg:-`, returning JPEG bytes or nil.
+   nil distinguishes 'binary absent' (IOException) from 'ran but failed'
+   (non-zero exit / empty output)."
+  [^String bin ^String path]
+  (let [pb (doto (ProcessBuilder. [bin path "-quality" "85" "jpeg:-"])
+             (.redirectError ProcessBuilder$Redirect/DISCARD))
+        proc (.start pb)
+        ;; Drain stdout in this thread (readAllBytes blocks until EOF) so a JPEG
+        ;; larger than the OS pipe buffer can't deadlock the subprocess.
+        out (.readAllBytes (.getInputStream proc))
+        code (.waitFor proc)]
+    (when (and (zero? code) (pos? (alength out))) out)))
+
+(defn- magick-image->jpeg
+  "Convert the image file at `path` (HEIC/HEIF or any ImageMagick-readable
+   format) to JPEG bytes by shelling out to ImageMagick.
+   Pre:  an ImageMagick CLI (`magick` or `convert`) is on PATH — provisioned in
+         the runtime image.
+   Post: returns JPEG bytes on success, or nil if no binary is present, it exits
+         non-zero, or produces no output. Orientation is NOT auto-applied — the
+         client bakes any rotation in explicitly (image-orientation:none keeps
+         the thumbnail matching the server's ImageIO rendering)."
+  [^String path]
+  (some (fn [bin]
+          (try (run-imagemagick->jpeg bin path)
+               (catch java.io.IOException _ nil)            ; binary not found — try next
+               (catch Exception e
+                 (tel/error! {:id ::magick-image->jpeg :bin bin} e)
+                 nil)))
+    imagemagick-bins))
 
 (defn- quota-info->response [data]
   (case (:reason data)
@@ -428,6 +466,10 @@
       (let [doc-id (some-> (get-in request [:params "doc_id"]) parse-long)
             raw (get-in request [:params "images"])
             parts (cond (nil? raw) [] (sequential? raw) raw :else [raw])
+            rotations (some->> (get-in request [:params "rotations"])
+                        (#(try (json/parse-string %) (catch Exception _ nil)))
+                        (mapv #(let [d (mod (long (if (number? %) % 0)) 360)]
+                                 (if (zero? (mod d 90)) d 0))))
             topic (when doc-id (db/get-topic-for-user user-id doc-id))]
         (cond
           (nil? doc-id)
@@ -454,7 +496,7 @@
                     {:user-id user-id :doc-id doc-id :batch-size total :limit cap})
                   (json-response 413 {:success false :error (str "Batch exceeds " cap " bytes")
                                       :code "file-too-large" :limit cap :incoming total}))
-              (let [r (live-doc/append-images! user-id doc-id images)]
+              (let [r (live-doc/append-images! user-id doc-id images rotations)]
                 (if (:success r)
                   (json-response 200 {:success true :pages_added (:pages-added r) :doc_id doc-id})
                   (json-response (error-status (:code r))
@@ -465,6 +507,30 @@
       (catch Exception e
         (tel/error! {:id ::append-images-handler} e)
         (json-response 500 {:success false :error "Append failed. Please try again."})))
+    (json-response 401 {:success false :error "Not authenticated"})))
+
+(defn heic-preview-handler
+  "POST /api/heic-preview — multipart {image}. Convert one uploaded image
+   (HEIC/HEIF or any ImageMagick-readable format) to JPEG and return the raw
+   bytes. Stateless: nothing is persisted.
+   Pre:  authenticated; `image` part present.
+   Post: 200 image/jpeg body on success; 400 when missing/undecodable; 401/500
+         JSON otherwise."
+  [request]
+  (if-let [user-id (require-auth request)]
+    (try
+      (let [tempfile (get-in request [:params "image" :tempfile])]
+        (if (nil? tempfile)
+          (json-response 400 {:success false :error "No image provided"})
+          (if-let [jpeg (magick-image->jpeg (.getAbsolutePath ^java.io.File tempfile))]
+            {:status 200
+             :headers {"Content-Type" "image/jpeg"}
+             :body (java.io.ByteArrayInputStream. jpeg)}
+            (json-response 400 {:success false :error "Unreadable image"
+                                :code "invalid-file-type"}))))
+      (catch Exception e
+        (tel/error! {:id ::heic-preview-handler} e)
+        (json-response 500 {:success false :error "Conversion failed. Please try again."})))
     (json-response 401 {:success false :error "Not authenticated"})))
 
 (defn upload-media-handler
@@ -784,6 +850,9 @@
 
       (and (= uri "/api/append-images") (= method :post))
       (append-images-handler request)
+
+      (and (= uri "/api/heic-preview") (= method :post))
+      (heic-preview-handler request)
 
       (and (re-matches #"/api/pdf/\d+" uri) (= method :get))
       (get-pdf-handler request)

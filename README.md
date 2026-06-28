@@ -9,6 +9,7 @@ Built with [Hyperfiddle Electric v3](https://github.com/hyperfiddle/electric) (C
 ## Features
 
 - **Import** — PDFs, EPUBs, web articles (paste or Wikipedia lookup)
+- **Live Document** — append photos (camera or library) as PDF pages; HEIC auto-converted to JPEG, rotate before saving, oversized images compressed
 - **AI flashcard generation** — OpenAI extracts key concepts into basic and cloze cards
 - **OCR** — OpenAI Vision converts PDF pages to editable semantic HTML
 - **Rich text editor** — Quill-based editor with highlighting and selection-based card generation
@@ -30,6 +31,7 @@ Built with [Hyperfiddle Electric v3](https://github.com/hyperfiddle/electric) (C
 - **Clojure CLI** ([install guide](https://clojure.org/guides/install_clojure))
 - **Docker** (for PostgreSQL)
 - **Node.js** (for shadow-cljs)
+- **ImageMagick** (optional — only for HEIC photo uploads in Live Documents; conversion shells out to `magick`/`convert`)
 
 ### Run
 
@@ -146,38 +148,35 @@ Alternative to the three `GOOGLE_*` envs: drop the OAuth client JSON downloaded 
 
 ## Production
 
+### Docker (recommended)
+
+The DB lives in `docker-compose.yml`; the app is layered on via `docker-compose.prod.yml`,
+so both share one project/network and the app reuses the existing `pgdata` volume.
+
 ```bash
-# Build client
+cp .env.example .env       # then set ENC_KEY_SECRET (+ GOOGLE_*, OPENAI_DEMO_KEY if wanted)
+
+APP_VERSION=$(git describe --tags --long --always --dirty) \
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+`APP_VERSION` is required (it's baked into the build for client/server version matching).
+Override the published port with `APP_PORT` (default 8080).
+Storage caps default to **unlimited**; set `STORAGE_QUOTA_BYTES` / `STORAGE_PER_FILE_MAX_BYTES` in `.env`.
+
+### Non-Docker (run the jar on the host)
+
+Requires a reachable Postgres (e.g. `docker compose up` for just the DB) and ImageMagick on PATH
+(HEIC upload conversion shells out to `magick`).
+
+```bash
+# Build client + uberjar
 clj -X:build:prod build-client
-
-# Run production server
-clj -M:prod -m prod
-
-# Or build an uberjar
 clj -J-Xss4m -X:build:prod uberjar :build/jar-name '"app.jar"'
-java -jar target/app.jar
-```
 
-### Self-host with Docker Compose
-
-One-command bundle (app + Postgres):
-
-```bash
-cp .env.example .env       # then edit DB_PASSWORD, ENC_KEY_SECRET, GOOGLE_* (optional)
-docker compose -f self-host.yml up -d
-```
-
-Storage caps default to **unlimited** in the bundle. Set `STORAGE_QUOTA_BYTES` / `STORAGE_PER_FILE_MAX_BYTES` in `.env` to enforce them.
-
-Or build and run the app image manually:
-
-```bash
-docker build -t freememo:latest .
-docker run -d --name freememo -p 8080:8080 \
-  -e DB_HOST=your-db-host \
-  -e DB_PASSWORD=your-password \
-  -e ENC_KEY_SECRET=$(openssl rand -hex 32) \
-  freememo:latest
+# Run (DB_* default to localhost / cardmaker / dev)
+OPENAI_DEMO_KEY=key GOOGLE_REDIRECT_URI=url ENC_KEY_SECRET=secret PORT=9091 \
+  java -cp target/app.jar clojure.main -m prod
 ```
 
 ### Reverse Proxy
@@ -208,13 +207,13 @@ your-domain.com {
 Backup the database:
 
 ```bash
-docker compose -f self-host.yml exec db pg_dump -U cardmaker cardmaker > backup.sql
+docker compose exec postgres pg_dump -U cardmaker cardmaker > backup.sql
 ```
 
 Restore:
 
 ```bash
-cat backup.sql | docker compose -f self-host.yml exec -T db psql -U cardmaker cardmaker
+cat backup.sql | docker compose exec -T postgres psql -U cardmaker cardmaker
 ```
 
 A remote-pull variant is in `scripts/backup.sh`.

@@ -11,24 +11,69 @@
    [org.apache.pdfbox Loader]
    [org.apache.pdfbox.pdmodel PDDocument PDPage PDPageContentStream]
    [org.apache.pdfbox.pdmodel.common PDRectangle]
-   [org.apache.pdfbox.pdmodel.graphics.image LosslessFactory]
+   [org.apache.pdfbox.pdmodel.graphics.image LosslessFactory JPEGFactory]
+   [java.awt.image BufferedImage]
    [java.io ByteArrayInputStream ByteArrayOutputStream]
    [javax.imageio ImageIO]))
 
 ;; ~0.25in margin in PDF points (72 pt/in).
 (def ^:private page-margin 18.0)
 
+;; Above this source-byte size a page is embedded as JPEG (lossy, ~0.85) rather
+;; than lossless, to bound blob growth from large photos. Below it, behaviour is
+;; unchanged (lossless embed).
+(def ^:private compress-threshold-bytes (* 10 1024 1024))
+(def ^:private jpeg-quality (float 0.85))
+
+(defn- rotate-image
+  "Return `src` rotated clockwise by `deg` ∈ {0,90,180,270}.
+   Pre:  deg is a non-negative multiple of 90 (handler normalizes).
+   Post: deg=0 → src unchanged; 90/270 → dimensions swapped; result is an
+         opaque TYPE_INT_RGB image (alpha flattened onto the rotated canvas)."
+  ^BufferedImage [^BufferedImage src deg]
+  (let [d (mod (long deg) 360)]
+    (if (zero? d)
+      src
+      (let [w (.getWidth src) h (.getHeight src)
+            swap? (or (= d 90) (= d 270))
+            nw (if swap? h w) nh (if swap? w h)
+            dst (BufferedImage. nw nh BufferedImage/TYPE_INT_RGB)
+            g (.createGraphics dst)]
+        (.translate g (/ (- nw w) 2.0) (/ (- nh h) 2.0))
+        (.rotate g (Math/toRadians d) (/ w 2.0) (/ h 2.0))
+        (.drawImage g src 0 0 nil)
+        (.dispose g)
+        dst))))
+
+(defn- ->opaque-rgb
+  "Draw `src` onto a fresh opaque TYPE_INT_RGB image so JPEG embedding (which
+   has no alpha channel) never fails. No-op when `src` is already opaque RGB."
+  ^BufferedImage [^BufferedImage src]
+  (if (= (.getType src) BufferedImage/TYPE_INT_RGB)
+    src
+    (let [dst (BufferedImage. (.getWidth src) (.getHeight src) BufferedImage/TYPE_INT_RGB)
+          g (.createGraphics dst)]
+      (.drawImage g src 0 0 nil)
+      (.dispose g)
+      dst)))
+
 (defn- add-image-page!
-  "Append one A4 page to `doc` showing `img-bytes` scaled to fit within the
-   page margins, centered, aspect-ratio preserved.
+  "Append one A4 page to `doc` showing `img-bytes`, rotated clockwise by `deg`,
+   scaled to fit within the page margins, centered, aspect-ratio preserved.
+   Images whose source bytes exceed `compress-threshold-bytes` are embedded as
+   JPEG (lossy); smaller ones stay lossless.
    Throws ex-info {:reason :bad-image} when the bytes are not a decodable image."
-  [^PDDocument doc ^bytes img-bytes]
-  (let [bimg (ImageIO/read (ByteArrayInputStream. img-bytes))]
-    (when (nil? bimg)
+  [^PDDocument doc ^bytes img-bytes deg]
+  (let [decoded (ImageIO/read (ByteArrayInputStream. img-bytes))]
+    (when (nil? decoded)
       (throw (ex-info "Unreadable image" {:reason :bad-image})))
-    (let [page (PDPage. PDRectangle/A4)
+    (let [bimg (rotate-image decoded deg)
+          compress? (> (alength img-bytes) compress-threshold-bytes)
+          page (PDPage. PDRectangle/A4)
           _ (.addPage doc page)
-          pdimg (LosslessFactory/createFromImage doc bimg)
+          pdimg (if compress?
+                  (JPEGFactory/createFromImage doc (->opaque-rgb bimg) jpeg-quality)
+                  (LosslessFactory/createFromImage doc bimg))
           box (.getMediaBox page)
           pw (.getWidth box) ph (.getHeight box)
           max-w (- pw (* 2 page-margin))
@@ -49,9 +94,11 @@
    Post: on success the blob gains one A4 page per image, page stubs are created,
          and usage_bytes is bumped by the blob growth. A quota failure persists
          nothing (the db tx aborts).
+   `rotations` is a seq of clockwise degrees ∈ {0,90,180,270} index-aligned to
+   `images`; missing/short entries default to 0 (no rotation).
    Returns {:success true :pages-added K :doc_id id}
         or {:success false :error <msg> :code <code>}."
-  [user-id topic-id images]
+  [user-id topic-id images rotations]
   (try
     (let [existing (db/get-topic-file topic-id)
           ^PDDocument doc (if existing
@@ -59,8 +106,13 @@
                             (PDDocument.))]
       (try
         (let [prev-total (.getNumberOfPages doc)
-              prev-size (long (or (:topic_files/file_size existing) 0))]
-          (doseq [img images] (add-image-page! doc img))
+              prev-size (long (or (:topic_files/file_size existing) 0))
+              degs (concat (or rotations []) (repeat 0))]
+          (doseq [[idx img deg] (map vector (range) images degs)]
+            (try
+              (add-image-page! doc img deg)
+              (catch clojure.lang.ExceptionInfo e
+                (throw (ex-info (.getMessage e) (assoc (ex-data e) :image-index idx))))))
           (let [baos (ByteArrayOutputStream.)
                 _ (.save doc baos)
                 new-bytes (.toByteArray baos)
@@ -89,7 +141,10 @@
                          :used (:used data) :limit (:limit data) :incoming (:incoming data)})
 
           (= (:reason data) :bad-image)
-          {:success false :error "One of the files is not a readable image"
+          {:success false
+           :error (if-some [i (:image-index data)]
+                    (str "Image " (inc (long i)) " is not a readable image")
+                    "One of the files is not a readable image")
            :code "invalid-file-type"}
 
           :else

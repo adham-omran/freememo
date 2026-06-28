@@ -1,0 +1,51 @@
+# Prod app overlay — layered on top of docker-compose.yml (which defines the
+# `postgres` service + `pgdata` volume). Run prod with BOTH files so the app and
+# the existing DB share one project/network:
+#
+#   APP_VERSION=$(git describe --tags --long --always --dirty) \
+#     docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Reuses the existing `pgdata` volume — DB creds match docker-compose.yml's
+# init-time values (cardmaker / cardmaker / dev), which Postgres fixed at first
+# init and cannot be rotated via env.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: "${APP_VERSION:?APP_VERSION required — pass e.g. $(git describe --tags --long --always --dirty)}"
+    image: freememo:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    environment:
+      # Server
+      PORT: "8080"
+      PROD: "1"
+      # Database — host is the base file's service name; creds are pgdata's
+      # init-time values and must not change.
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: cardmaker
+      DB_USER: cardmaker
+      DB_PASSWORD: dev
+      # Secrets / config — sourced from .env (compose auto-loads it).
+      ENC_KEY_SECRET: "${ENC_KEY_SECRET:?ENC_KEY_SECRET required — generate: openssl rand -hex 32}"
+      OPENAI_DEMO_KEY: "${OPENAI_DEMO_KEY:-}"
+      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
+      GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
+      GOOGLE_REDIRECT_URI: "${GOOGLE_REDIRECT_URI:-}"
+      APP_BASE_URL: "${APP_BASE_URL:-http://localhost:8080}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      STORAGE_QUOTA_BYTES: "${STORAGE_QUOTA_BYTES:-0}"
+      STORAGE_PER_FILE_MAX_BYTES: "${STORAGE_PER_FILE_MAX_BYTES:-0}"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
