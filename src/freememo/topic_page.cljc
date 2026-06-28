@@ -23,6 +23,8 @@
    [freememo.pdf-toolbar :refer [PdfToolbar]]
    [freememo.editor-pane :refer [EditorPane]]
    [freememo.bottom-panel :refer [ToolbarBar BottomPanel]]
+   [freememo.document-view :refer [DocumentColumns DocumentToolbars]]
+   [freememo.document-body :refer [DocumentBody]]
    [freememo.bibliography-form :as bibform :refer [BibliographyForm]]
    [freememo.keyboard :as keyboard]
    [freememo.navigation :as nav]
@@ -131,9 +133,6 @@
      :clj 75))
 
 ;; ---------------------------------------------------------------------------
-;; TopicPage shell
-;; ---------------------------------------------------------------------------
-
 (e/defn TopicPage [user-id enc-key topic-id navigate! llm-enabled? queue-ctx]
   (e/client
     (dom/div
@@ -263,189 +262,12 @@
               phone? (e/watch viewport/!phone?)
               reading-mode? (and phone? (= (:origin queue-ctx) :learn))]
 
-          ;; Persist layout on toggle
-          (when t-layout
-            (if (and is-pdf? pdf-root-id)
-              (let [r (e/server (e/Offload #(settings/save-pdf-layout user-id pdf-root-id layout-save)))]
-                (when (some? r)
-                  (if (:success r) (case r (t-layout)) (t-layout (:error r)))))
-              (t-layout)))
-
-          (dom/div
-            (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
-                                :min-height "0" :overflow "hidden"}})
-
-            ;; TOP TOOLBAR (full width): command bar directly under the global
-            ;; nav, above the bibliography header and content — like a Word/Excel
-            ;; ribbon. Its actions target the topic/document, not the card table,
-            ;; so it sits above everything. The card table stays at the bottom.
-            (ToolbarBar
-              {:user-id user-id
-               :enc-key enc-key
-               :topic-id page-topic-id
-               :audio? (= kind "audio")
-               :root-topic-id (or pdf-root-id root-topic-id)
-               :page-number (when is-pdf? current-page)
-               :static-content effective-content
-               :context-mode (if is-pdf? :page :extract)
-               :context-tooltip (if is-pdf?
-                                  "Include context for better cards. With a selection: current page + N previous pages. Without: N previous pages."
-                                  "Include context for better cards. With a selection: extract text. Without: original page text.")
-               :llm-enabled? llm-enabled?
-               :extract-status (when-not is-pdf? extract-status)
-               :navigate! navigate!
-               :origin (:origin queue-ctx)
-               :on-done! (:on-done! queue-ctx)
-               :citation citation
-               :page-info page-info
-               :pdf-root? pdf-root?
-               :pdf-status pdf-status
-               :reading-mode? reading-mode?}
-              card-refresh
-              !show-bib)
-
-            ;; SECOND BAR (full width, PDF only): all PDF-scoped controls —
-            ;; page-nav, zoom, layout-toggle, done-checkbox, and the AI/extract
-            ;; action buttons. Shown only when a PDF item is in view.
-            (when is-pdf?
-              (PdfToolbar
-                {:user-id user-id
-                 :enc-key enc-key
-                 :pdf-root-id pdf-root-id
-                 :page-number current-page
-                 :total total
-                 :layout layout
-                 :is-live? is-live?
-                 :scan-dpi scan-dpi
-                 :llm-enabled? llm-enabled?
-                 :scanning-pages scanning-pages
-                 :ocr-errors ocr-errors
-                 :phone? phone?
-                 :on-page-change! (fn [p] (reset! !current-page p))
-                 :on-layout-toggle! toggle-layout!}))
-
-            ;; No third formatting bar (E1): the document editor uses Quill's
-            ;; bubble theme, whose formatting controls float on text selection
-            ;; instead of living in a fixed toolbar.
-
-            ;; Auto-open biblio modal once after a fresh import. The Offload
-            ;; returns the topic-id it CLAIMED (or nil) — so the e/for-by keys on
-            ;; the claimed topic, NOT the live bib-topic-id. This is immune to the
-            ;; latest-wins HOLD: during navigation the Offload holds the prior
-            ;; claimed-id, whose frame is already mounted (no spurious re-open);
-            ;; keying on the live bib-topic-id would remount on every nav while
-            ;; the held value is still true. claim-show? clears the mark, so it
-            ;; fires exactly once per imported (user, topic).
-            (let [claimed-id (e/server
-                               (e/Offload
-                                 #(when (bibform/claim-pending-biblio-show?* user-id bib-topic-id)
-                                    bib-topic-id)))]
-              (e/for-by identity [_k (when claimed-id [claimed-id])]
-                (let [opened (reset! !show-bib true)]
-                  (when opened nil))))
-
-            ;; Bibliography modal — overlays everything when shown
-            (when show-bib?
-              (BibliographyForm !show-bib user-id bib-topic-id))
-
-            ;; TOP REGION (sized to top-pct%): hierarchy | content | pins.
-            ;; The card table renders as a FULL-WIDTH bottom bar below (sibling),
-            ;; so it spans the whole width; the side panels are confined to this
-            ;; top region.
-            (dom/div
-              ;; reading-mode? hides the card table below, so the top region
-              ;; takes the full height instead of the split percentage.
-              (dom/props {:style {:height (if reading-mode? "100%" (str top-pct "%"))
-                                  :display "flex" :flex-direction "row"
-                                  :min-height "0" :overflow "hidden"}})
-
-              ;; Clear nav-target after deriving target-page, so the viewer can
-              ;; navigate away manually without being snapped back.
-              (when target-page (reset! !nav-target nil))
-
-              ;; LEFT: hierarchy side panel (manages its own open/collapsed state).
-              ;; Pass !nav-target only when this TopicPage hosts the PDF viewer —
-              ;; only in that mode is the target-page derivation (which gates on
-              ;; is-pdf?) able to consume an in-document page jump. Outside PDF
-              ;; mode the side panel must fall through to (navigate! :viewer …).
-              ;; reading-mode? (mobile learn) hides the hierarchy entirely —
-              ;; navigation is the linear queue (Next), not the tree.
-              (when-not reading-mode?
-                (HierarchySidePanel user-id page-topic-id root-topic-id navigate!
-                  (when is-pdf? !nav-target)))
-
-              ;; MIDDLE: content column — PdfPane | EditorPane, fills the row.
-              (dom/div
-                (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
-                                    :min-width "0" :min-height "0" :overflow "hidden"}})
-
-                ;;   PDF mode left-right: [PdfPane | drag | EditorPane]
-                ;;   PDF mode top-bottom: [PdfPane / drag / EditorPane]
-                ;;   Non-PDF: just EditorPane
-                (dom/div
-                  (dom/props {:style {:flex "1" :display "flex"
-                                      :flex-direction (if (and is-pdf? top-bottom?)
-                                                        "column"
-                                                        "row")
-                                      :min-height "0" :overflow "hidden"}})
-
-                  (when is-pdf?
-                    (let [pdf-style (if top-bottom?
-                                      {:height (str top-split-pct "%")
-                                       :min-height "0" :overflow "hidden"}
-                                      {:width (str left-pct "%")
-                                       :min-width "0" :overflow "hidden"})]
-                      (dom/div
-                        (dom/props {:style pdf-style})
-                        (reset! !current-page
-                          (PdfPane {:user-id user-id
-                                    :pdf-root-id pdf-root-id
-                                    :initial-page initial-page
-                                    :target-page target-page
-                                    :is-live? is-live?
-                                    :has-file? pdf-has-file?
-                                    :reload-nonce pdf-page-count
-                                    :on-page-change! (fn [p] (reset! !current-page p))
-                                    :on-total! (fn [n] (reset! !total n))})))
-
-                      ;; Drag handle BETWEEN PdfPane and EditorPane
-                      (dom/div
-                        (dom/props {:class (if top-bottom? "split-divider-v" "split-divider-h")
-                                    :title "Drag to resize panels"})
-                        (dom/On "pointerdown"
-                          (fn [e]
-                            (if top-bottom?
-                              (util/start-drag! e :y !top-split-pct)
-                              (util/start-drag! e :x !left-pct)))
-                          nil))))
-
-                  (EditorPane
-                    {:user-id user-id
-                     :topic-id page-topic-id
-                     :audio-topic-id (when (= kind "audio") page-topic-id)
-                     :is-pdf-page? is-pdf?
-                     :static-content effective-content
-                     :on-imported-navigate!
-                     (fn [tid]
-                       (when navigate!
-                         (navigate! :viewer (nav/nav-topic tid nil))))})))
-
-              ;; RIGHT: pin side panel (collapsible). Hidden in reading-mode?.
-              (when-not reading-mode?
-                (PinSidePanel page-topic-id root-topic-id user-id)))
-
-            ;; Card table + its resize handle — hidden in reading-mode? (B1).
-            ;; Add-Card still works; success surfaces as a toast (card_modals).
-            (when-not reading-mode?
-              ;; Vertical drag handle: resizes the top region ↕ the bottom bar.
-              (dom/div
-                (dom/props {:class "split-divider-v" :title "Drag to resize panels"})
-                (dom/On "pointerdown" (fn [e] (util/start-drag! e :y !top-pct)) nil)))
-
-            ;; BOTTOM BAR (full width): the card table.
-            (when-not reading-mode?
-              (BottomPanel
-                {:user-id user-id
-                 :topic-id page-topic-id
-                 :card-font-size card-font-size}
-                card-refresh))))))))
+          (DocumentBody
+            {:user-id user-id :enc-key enc-key :page-topic-id page-topic-id :kind kind :pdf-root-id pdf-root-id :root-topic-id root-topic-id
+             :is-pdf? is-pdf? :current-page current-page :effective-content effective-content :llm-enabled? llm-enabled? :extract-status extract-status :navigate! navigate!
+             :queue-ctx queue-ctx :citation citation :page-info page-info :pdf-root? pdf-root? :pdf-status pdf-status :reading-mode? reading-mode?
+             :card-refresh card-refresh :!show-bib !show-bib :show-bib? show-bib? :total total :layout layout :is-live? is-live?
+             :scan-dpi scan-dpi :scanning-pages scanning-pages :ocr-errors ocr-errors :phone? phone? :!current-page !current-page :toggle-layout! toggle-layout!
+             :bib-topic-id bib-topic-id :initial-page initial-page :target-page target-page :pdf-has-file? pdf-has-file? :pdf-page-count pdf-page-count :top-pct top-pct
+             :top-bottom? top-bottom? :top-split-pct top-split-pct :left-pct left-pct :!total !total :!nav-target !nav-target :!top-split-pct !top-split-pct
+             :!left-pct !left-pct :card-font-size card-font-size :t-layout t-layout :layout-save layout-save}))))))
