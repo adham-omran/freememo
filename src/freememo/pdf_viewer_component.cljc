@@ -6,6 +6,7 @@
    [clojure.string]
    [freememo.logging :as log]
    [freememo.navigation :as nav]
+   [freememo.pdf-cache :as pdf-cache]
    [freememo.pdf-viewer :as viewer]))
 
 ;; LiveDocAddPhotos — Upload / Take-photo buttons feeding a client-side staging
@@ -24,6 +25,12 @@
 ;; control; EXIF orientation is intentionally not auto-applied on either side.
 (def ^:private heic-name-rx #"(?i)\.hei[cf]$")
 (def ^:private heic-type-rx #"(?i)image/hei[cf]")
+
+;; Same-session append signal: {document-id <monotonic-int>}. commit! bumps a
+;; doc's entry after evicting its stale IndexedDB blob; PdfViewerComponent
+;; watches it to flip out of the empty-state and reload the viewer in place —
+;; a client→client path that does not wait on the server :refresh round-trip.
+(defonce !append-tick (atom {}))
 
 (e/defn LiveDocAddPhotos [{:keys [document-id compact?]}]
   (e/client
@@ -80,7 +87,13 @@
                                            (reset! !busy false)
                                            (if (.-success d)
                                              (do (doseq [it items] (when (:url it) (js/URL.revokeObjectURL (:url it))))
-                                                 (reset! !staged []))
+                                                 (reset! !staged [])
+                                                 ;; Evict the now-stale cached blob, THEN signal the
+                                                 ;; viewer. The tick drives both the empty→viewer flip
+                                                 ;; and the in-place reload, so it must fire only after
+                                                 ;; eviction resolves or the refetch could re-hit old bytes.
+                                                 (-> (pdf-cache/cache-delete document-id)
+                                                   (.finally (fn [] (swap! !append-tick update document-id (fnil inc 0))))))
                                              (reset! !commit-error (or (.-error d) "Upload failed")))))
                                   (.catch (fn [_]
                                             (reset! !busy false)
@@ -208,7 +221,14 @@
           ;; Tracks the reload-nonce already applied to the mounted doc, so a
           ;; nonce bump (new live-doc pages) reloads exactly once.
           !requested-reload (atom nil)
-          show-empty? (and is-live? (not has-file?))
+          ;; Same, for the local append tick (same-session upload) — the
+          ;; client-driven companion to reload-nonce.
+          !requested-tick (atom nil)
+          ;; A tick for this doc means the client just created/extended the blob;
+          ;; treat it as has-file? so the empty-state flips without waiting on the
+          ;; server :refresh chain (which may lag or, if broken, never arrive).
+          my-append-tick (get (e/watch !append-tick) document-id)
+          show-empty? (and is-live? (not (or has-file? (some? my-append-tick))))
           page (e/watch !page)
           total (e/watch !total)]
 
@@ -220,14 +240,19 @@
       (when (and target-page (pos? total) (not= target-page page))
         (viewer/go-to-page! target-page))
 
-      ;; Live-doc reload: after the viewer is initialized for this doc, a
-      ;; reload-nonce (page count) change means pages were appended — force a
-      ;; re-fetch. Guarded on init-done so it never races the initial load.
-      (when (and is-live? has-file?
-                 (= document-id @!requested-doc-id)
+      ;; Live-doc reload: once the viewer is initialized for this doc, re-fetch
+      ;; when its bytes change — signalled by the local append tick (same-session
+      ;; upload; commit! already evicted IndexedDB) or by reload-nonce (page
+      ;; count, for an other-session/device append via the server :refresh
+      ;; chain). NOT gated on the server is-live?/has-file? props, so a stalled
+      ;; :refresh chain can't block the same-session reload. Gated on init-done
+      ;; (requested-doc-id + live viewer) so it never races the initial load.
+      (when (and (= document-id @!requested-doc-id)
                  (some? @viewer/!viewer-state)
-                 (not= reload-nonce @!requested-reload))
+                 (or (not= reload-nonce @!requested-reload)
+                     (not= my-append-tick @!requested-tick)))
         (reset! !requested-reload reload-nonce)
+        (reset! !requested-tick my-append-tick)
         (viewer/reload-document! (str "/api/pdf/" document-id)
           (fn [^js pdf _]
             (let [n (.-numPages pdf)]
@@ -319,9 +344,11 @@
                                (viewer/setup-pinch-zoom! @!container))]
                 (when (and (not show-empty?) (not= document-id @!requested-doc-id))
                   (reset! !requested-doc-id document-id)
-                  ;; Mark this nonce applied so the reload effect doesn't fire
-                  ;; redundantly right after the initial load.
+                  ;; Mark this nonce + tick applied so the reload effect doesn't
+                  ;; fire redundantly right after the initial load (the first-
+                  ;; upload init is itself driven by the tick).
                   (reset! !requested-reload reload-nonce)
+                  (reset! !requested-tick my-append-tick)
                   (if (nil? @viewer/!viewer-state)
                     ;; No viewer yet → create once, deferred so DOM nodes exist.
                     (reset! !timer-id
