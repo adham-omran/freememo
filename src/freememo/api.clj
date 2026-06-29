@@ -610,7 +610,11 @@
                                   title
                                   (str title ".pdf"))]
               {:status 200
+               ;; Live Documents mutate the blob behind this stable URL on every
+               ;; append; the IndexedDB cache (pdf-cache) is the perf layer, so a
+               ;; second HTTP cache here would only be a stale source.
                :headers {"Content-Type" "application/pdf"
+                         "Cache-Control" "no-store"
                          "Content-Disposition" (str "inline; filename=\"" download-name "\"")}
                :body (io/input-stream (:topic_files/file_data file-row))})
             {:status 404
