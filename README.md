@@ -47,11 +47,18 @@ Open http://localhost:8080.
 
 ### Configuration
 
-Navigate to **Settings** in the UI and enter your OpenAI API key. All settings are persisted per-user in the database.
+**AI keys** — FreeMemo uses two AI providers:
 
-> **Note**: OCR and flashcard generation use a per-user OpenAI API key (BYOK) by default. Self-host operators MAY set the `OPENAI_DEMO_KEY` environment variable as a server-wide fallback; it is used only for users who have not set their own key in Settings.
+- **Card generation** uses OpenAI. Set `OPENAI_API_KEY` server-wide, or let each user enter their own key in **Settings** (per-user BYOK). When a server-wide key is set, the per-user field is hidden and a "Server key" badge is shown.
+- **OCR** (scanning PDF pages to text) uses **OpenRouter**, not OpenAI. Set `PLATFORM_OPENROUTER_API_KEY`. Without it, OCR is unavailable even if an OpenAI key is set.
 
-Sign-in uses Google OAuth. Self-host requires configuring `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` (or dropping a `resources/google_client.json` from Google Cloud Console). Without these, `/auth/google` returns 503.
+**Sign-in** — `AUTH_MODE` selects the login controls:
+
+- `password` (self-host default) — username/password only; no Google setup needed.
+- `google` — Google OAuth only; requires `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` (or a `resources/google_client.json` from Google Cloud Console).
+- `both` — show both.
+
+For password login, seed the first account with `ADMIN_USER` / `ADMIN_PASSWORD` (created at boot only if absent — see [Self-hosting](#self-hosting-with-docker)).
 
 ### Optional: Zotero import
 
@@ -130,39 +137,75 @@ Schema auto-creates on first startup (no migration framework). Configure via env
 | `DB_PORT` | `5432` | |
 | `DB_NAME` | `cardmaker` | |
 | `DB_USER` | `cardmaker` | |
-| `DB_PASSWORD` | `dev` | Override in production |
-| `ENC_KEY_SECRET` | _(none)_ | Session-cookie key derivation. **Required in production.** Generate: `openssl rand -hex 32` |
+| `DB_PASSWORD` | `dev` (dev) / **required** (prod) | Production boot fails if unset. Set before the first `up` — Postgres fixes it at init. |
+| `ENC_KEY_SECRET` | _(none)_ | Session-cookie key derivation. **Required in production** (boot fails if unset). Generate: `openssl rand -hex 32` |
+| `AUTH_MODE` | `google` (credits) / `password` (self-host) | Login controls: `password`, `google`, or `both`. |
+| `ADMIN_USER` | _(none)_ | Seed username, created at boot if absent. |
+| `ADMIN_PASSWORD` | _(none)_ | Seed password. Changing it later does **not** reset an existing account. |
+| `COOKIE_SECURE` | `true` | Session-cookie `Secure` attribute. **Set `false` to log in over plain HTTP** (localhost/LAN without TLS). |
+| `OPENAI_API_KEY` | _(none)_ | Server-wide OpenAI key for card generation. Falls back to `OPENAI_DEMO_KEY`. |
+| `PLATFORM_OPENROUTER_API_KEY` | _(none)_ | OpenRouter key for OCR. Required for document scanning. |
+| `OPENAI_DEMO_KEY` | _(none)_ | Backward-compatible alias for `OPENAI_API_KEY`. |
 | `LOG_LEVEL` | `info` (prod) / `debug` (dev) | `trace`, `debug`, `info`, `warn`, `error`, `fatal` |
 | `PORT` | `8080` | HTTP port |
 | `STORAGE_QUOTA_BYTES` | `1073741824` (1 GB) | Total per-user storage. `0` = unlimited. |
 | `STORAGE_PER_FILE_MAX_BYTES` | `104857600` (100 MB) | Per-file upload cap. `0` = unlimited. Also drives Jetty body + WebSocket size limits. |
 | `APP_BASE_URL` | `https://freememo.net` | Public base URL embedded in Anki card source anchors. Set to your domain when self-hosting. |
-| `GOOGLE_CLIENT_ID` | _(none)_ | Google OAuth client ID. Required for sign-in. |
+| `GOOGLE_CLIENT_ID` | _(none)_ | Google OAuth client ID. Required when `AUTH_MODE` is `google`/`both`. |
 | `GOOGLE_CLIENT_SECRET` | _(none)_ | Google OAuth client secret. |
 | `GOOGLE_REDIRECT_URI` | `http://localhost:8080/auth/google/callback` | Must match the URI registered in Google Cloud Console. |
-| `OPENAI_DEMO_KEY` | _(none)_ | Server-wide fallback OpenAI API key. Used only when a user has not set their own key in Settings. |
 
 Alternative to the three `GOOGLE_*` envs: drop the OAuth client JSON downloaded from Google Cloud Console at `resources/google_client.json` (gitignored).
 
-> Self-host requires Google OAuth. There is no username/password login route.
-
 ## Production
 
-### Docker (recommended)
+### Self-hosting with Docker
 
+Self-host on Linux or macOS with Docker — username/password login, no Google account required.
 The DB lives in `docker-compose.yml`; the app is layered on via `docker-compose.prod.yml`,
-so both share one project/network and the app reuses the existing `pgdata` volume.
+so both share one project/network.
+
+**1. Configure `.env`:**
 
 ```bash
-cp .env.example .env       # then set ENC_KEY_SECRET (+ GOOGLE_*, OPENAI_DEMO_KEY if wanted)
+cp .env.example .env
+```
 
+Edit `.env` and set, at minimum:
+
+```bash
+DB_PASSWORD=$(openssl rand -hex 32)       # set BEFORE first up (Postgres fixes it at init)
+ENC_KEY_SECRET=$(openssl rand -hex 32)    # session-cookie key
+AUTH_MODE=password                        # username/password login
+ADMIN_USER=admin
+ADMIN_PASSWORD=your-password-here
+COOKIE_SECURE=false                       # required to log in over plain HTTP (see security note)
+OPENAI_API_KEY=sk-...                     # card generation
+PLATFORM_OPENROUTER_API_KEY=sk-or-...     # OCR (document scanning)
+```
+
+**2. Start:**
+
+```bash
 APP_VERSION=$(git describe --tags --long --always --dirty) \
   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
-`APP_VERSION` is required (it's baked into the build for client/server version matching).
+`APP_VERSION` is required (baked into the build for client/server version matching).
+The app refuses to boot if `DB_PASSWORD` or `ENC_KEY_SECRET` is unset.
+
+**3. Log in** at http://localhost:8080 with your `ADMIN_USER` / `ADMIN_PASSWORD`.
+The account is created at boot only if it doesn't already exist — changing `ADMIN_PASSWORD`
+later will **not** reset it.
+
 Override the published port with `APP_PORT` (default 8080).
 Storage caps default to **unlimited**; set `STORAGE_QUOTA_BYTES` / `STORAGE_PER_FILE_MAX_BYTES` in `.env`.
+
+> **⚠️ Security — plain HTTP over a LAN.** `COOKIE_SECURE=false` is needed to log in
+> without HTTPS, but it means the login password and session cookie travel **unencrypted**.
+> The app binds `0.0.0.0`, so anything on your network can reach it. Use plain HTTP only on a
+> **trusted local network**. For any real or internet-facing deployment, put the app behind an
+> HTTPS reverse proxy (see [Reverse Proxy](#reverse-proxy)) and set `COOKIE_SECURE=true`.
 
 ### Non-Docker (run the jar on the host)
 
@@ -174,8 +217,11 @@ Requires a reachable Postgres (e.g. `docker compose up` for just the DB) and Ima
 clj -X:build:prod build-client
 clj -J-Xss4m -X:build:prod uberjar :build/jar-name '"app.jar"'
 
-# Run (DB_* default to localhost / cardmaker / dev)
-OPENAI_DEMO_KEY=key GOOGLE_REDIRECT_URI=url ENC_KEY_SECRET=secret PORT=9091 \
+# Run. DB_HOST/PORT/NAME/USER default to localhost / cardmaker; DB_PASSWORD and
+# ENC_KEY_SECRET are required (boot fails otherwise).
+DB_PASSWORD=secret ENC_KEY_SECRET=$(openssl rand -hex 32) \
+  AUTH_MODE=password ADMIN_USER=admin ADMIN_PASSWORD=pw COOKIE_SECURE=false \
+  OPENAI_API_KEY=sk-... PLATFORM_OPENROUTER_API_KEY=sk-or-... PORT=9091 \
   java -cp target/app.jar clojure.main -m prod
 ```
 

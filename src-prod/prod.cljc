@@ -22,6 +22,8 @@
    #?(:clj [freememo.logging :as logging])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.api :as api])
+   #?(:clj [freememo.auth :as auth])
+   #?(:clj [freememo.google-oauth :as google-oauth])
    #?(:clj [freememo.config :as config])
    #?(:clj [freememo.quota :as quota])))
 
@@ -33,6 +35,37 @@
 (defmacro comptime-resource [filename] (some-> filename clojure.java.io/resource slurp clojure.edn/read-string))
 
 (declare wrap-prod-index-page wrap-ensure-cache-bust-on-server-deployment)
+
+#?(:clj
+   (defn require-env!
+     "Hard-fail boot when a required secret is unset/blank (B2). Self-host must
+      not run on the dev fallback values. Throws ::missing-required-env."
+     [k]
+     (when (clojure.string/blank? (System/getenv k))
+       (throw (ex-info (str "Missing required environment variable: " k
+                         " — refusing to boot. Set it in your .env / compose file"
+                         " (generate secrets with: openssl rand -hex 32).")
+                {:type ::missing-required-env :var k})))))
+
+#?(:clj
+   (defn seed-admin-user!
+     "Seed ADMIN_USER/ADMIN_PASSWORD if both set (E1, seed-if-absent). No-op
+      when unset. Logs the disposition."
+     []
+     (let [u (System/getenv "ADMIN_USER")
+           p (System/getenv "ADMIN_PASSWORD")]
+       (when (and (not (clojure.string/blank? u))
+                  (not (clojure.string/blank? p)))
+         (log/info "Admin seed for" u "→" (name (auth/ensure-admin-user! u p)))))))
+
+#?(:clj
+   (defn warn-auth-mode-coherence!
+     "Warn when AUTH_MODE expects Google but OAuth is unconfigured (4.4)."
+     []
+     (when (and (contains? #{:google :both} (config/auth-mode))
+                (not (google-oauth/configured?)))
+       (log/warn "AUTH_MODE includes google but Google OAuth is not configured —"
+         "Google sign-in will not work. Set GOOGLE_CLIENT_ID/SECRET or use AUTH_MODE=password."))))
 
 #?(:clj
    (defn wrap-api-routes [handler]
@@ -94,6 +127,9 @@
 #?(:clj ; server entrypoint
    (defn -main [& {:strs [] :as args}] ; clojure.main entrypoint, args are strings
      (logging/init!)
+     ;; B2: refuse to boot on dev-fallback secrets.
+     (require-env! "ENC_KEY_SECRET")
+     (require-env! "DB_PASSWORD")
      (let [config
            ;; Client and server versions must match in prod (dev is not concerned)
            ;; `src-build/build.clj` will compute the common version and store it in `resources/electric-manifest.edn`
@@ -112,6 +148,10 @@
        ;; Initialize database
        (db/setup-schema)
 
+       ;; Self-host: seed admin from env (if absent) and sanity-check auth config.
+       (seed-admin-user!)
+       (warn-auth-mode-coherence!)
+
        (ring/run-jetty
          (-> (fn [ring-request] (-> (ring-response/not-found "Page not found") (ring-response/content-type "text/plain")))
            (wrap-prod-index-page config) ; defined below
@@ -129,7 +169,7 @@
                                                                       hash (-> (java.security.MessageDigest/getInstance "SHA-256")
                                                                              (.digest (.getBytes secret "UTF-8")))]
                                                                   (java.util.Arrays/copyOf hash 16))})
-                          :cookie-attrs {:max-age 2592000 :same-site :lax :secure true :http-only true}}))
+                          :cookie-attrs {:max-age 2592000 :same-site :lax :secure (config/cookie-secure?) :http-only true}}))
          {:host (:host config), :port (:port config), :join? false
           :ws-idle-timeout (* 60 1000)          ; 60 seconds in milliseconds
           :ws-max-binary-size (if (quota/unlimited? quota/per-file-max-bytes)

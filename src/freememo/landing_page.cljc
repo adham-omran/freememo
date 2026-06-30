@@ -44,19 +44,48 @@
    ["What does \"pre-production\" actually mean for me?"
     "You're an early user. That means direct access to the team and your feedback shapes the product. The flip side: no SLA, no uptime guarantee, no backup warranty. Export your cards regularly if they matter to you."]])
 
-(e/defn Header []
+(defn show-google?
+  "Whether to surface Google sign-in controls for the given AUTH_MODE keyword."
+  [auth-mode]
+  (or (= auth-mode :google) (= auth-mode :both)))
+
+(defn show-password?
+  "Whether to surface the username/password form for the given AUTH_MODE keyword."
+  [auth-mode]
+  (or (= auth-mode :password) (= auth-mode :both)))
+
+(e/defn LoginForm [variant]
+  ;; Native POST to /login: the session cookie is set on the HTTP response by
+  ;; Ring middleware and cannot be set over Electric's WebSocket (G-2). Browser
+  ;; submission navigates; no e/Token. Documented Forms5 exception.
+  (e/client
+    (dom/form
+      (dom/props {:method "post" :action "/login"
+                  :class (str "landing-login-form landing-login-" (name variant))})
+      (dom/input
+        (dom/props {:type "text" :name "user" :placeholder "Username"
+                    :class "input" :autocomplete "username" :required true}))
+      (dom/input
+        (dom/props {:type "password" :name "password" :placeholder "Password"
+                    :class "input" :autocomplete "current-password" :required true}))
+      (dom/button
+        (dom/props {:type "submit" :class "btn btn-primary landing-cta-primary"})
+        (dom/text "Sign in")))))
+
+(e/defn Header [auth-mode]
   (e/client
     (dom/header
       (dom/props {:class "landing-header"})
       (dom/span
         (dom/props {:class "landing-wordmark"})
         (dom/text "FreeMemo"))
-      (dom/a
-        (dom/props {:href "/auth/google"
-                    :class "btn btn-primary landing-signin"})
-        (dom/text "Sign in")))))
+      (when (show-google? auth-mode)
+        (dom/a
+          (dom/props {:href "/auth/google"
+                      :class "btn btn-primary landing-signin"})
+          (dom/text "Sign in"))))))
 
-(e/defn Hero [auth-error]
+(e/defn Hero [auth-error auth-mode]
   (e/client
     (dom/section
       (dom/props {:class "landing-hero"})
@@ -70,12 +99,15 @@
       (dom/p
         (dom/props {:class "landing-sub"})
         (dom/text "Turn PDFs, electronic books, and articles into Anki cards you'll actually remember."))
+      (when (show-password? auth-mode)
+        (LoginForm :hero))
       (dom/div
         (dom/props {:class "landing-cta-row"})
-        (dom/a
-          (dom/props {:href "/auth/google"
-                      :class "btn btn-primary landing-cta-primary"})
-          (dom/text "Get early access →"))
+        (when (show-google? auth-mode)
+          (dom/a
+            (dom/props {:href "/auth/google"
+                        :class "btn btn-primary landing-cta-primary"})
+            (dom/text "Get early access →")))
         (dom/a
           (dom/props {:href "#how-it-works"
                       :class "landing-cta-secondary"})
@@ -244,7 +276,7 @@
             (dom/props {:href "mailto:contact@adham-omran.com"})
             (dom/text "contact@adham-omran.com")))))))
 
-(e/defn Footer []
+(e/defn Footer [auth-mode]
   (e/client
     (dom/footer
       (dom/props {:class "landing-footer"})
@@ -255,20 +287,21 @@
         (dom/a (dom/props {:href "https://github.com/adham-omran/freememo"
                            :target "_blank" :rel "noopener"})
           (dom/text "Source"))
-        (dom/a (dom/props {:href "/auth/google"}) (dom/text "Sign in"))))))
+        (when (show-google? auth-mode)
+          (dom/a (dom/props {:href "/auth/google"}) (dom/text "Sign in")))))))
 
-(e/defn LandingPage [auth-error]
+(e/defn LandingPage [auth-error auth-mode]
   (e/client
     (dom/div
       (dom/props {:class "landing-layout"})
-      (Header)
+      (Header auth-mode)
       (dom/main
         (dom/props {:class "landing-main"})
-        (Hero auth-error)
+        (Hero auth-error auth-mode)
         (ProductShot)
         (HowItWorks)
         (Objection)
         (Features)
         (FAQ)
         (EarlyUserPact))
-      (Footer))))
+      (Footer auth-mode))))
