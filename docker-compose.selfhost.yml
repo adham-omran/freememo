@@ -1,0 +1,82 @@
+# Self-host profile — standalone Postgres + app in one file.
+#
+# Run with a single command (no overlay):
+#   cp .env.example .env   # then set DB_PASSWORD, ENC_KEY_SECRET, AUTH_MODE, ADMIN_*, keys
+#   APP_VERSION=$(git describe --tags --long --always --dirty 2>/dev/null || echo selfhost) \
+#     docker compose -f docker-compose.selfhost.yml up -d --build
+#
+# Distinct project name so this never touches the maintainer's official
+# docker-compose.yml / docker-compose.prod.yml stack or its pgdata volume.
+name: freememo-selfhost
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cardmaker
+      POSTGRES_USER: cardmaker
+      # Must be set BEFORE the first `up` — Postgres fixes it at init and cannot
+      # rotate it via env afterward. Same value feeds the app's DB_PASSWORD below.
+      POSTGRES_PASSWORD: "${DB_PASSWORD:?DB_PASSWORD required — set in .env (generate: openssl rand -hex 32)}"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cardmaker"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: "${APP_VERSION:-selfhost}"
+    image: freememo:selfhost
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    environment:
+      # Server
+      PORT: "8080"
+      PROD: "1"
+      # Database — host is the postgres service name; password matches it.
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: cardmaker
+      DB_USER: cardmaker
+      DB_PASSWORD: "${DB_PASSWORD:?DB_PASSWORD required — set in .env (generate: openssl rand -hex 32)}"
+      # Session cookie key.
+      ENC_KEY_SECRET: "${ENC_KEY_SECRET:?ENC_KEY_SECRET required — generate: openssl rand -hex 32}"
+      # Auth — AUTH_MODE: password | google | both (self-host default: password).
+      AUTH_MODE: "${AUTH_MODE:-password}"
+      # Seed an initial account at boot (created only if absent).
+      ADMIN_USER: "${ADMIN_USER:-}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
+      # Set false to log in over plain HTTP (localhost/LAN without TLS).
+      COOKIE_SECURE: "${COOKIE_SECURE:-true}"
+      # AI keys — OPENAI_API_KEY: card generation; PLATFORM_OPENROUTER_API_KEY: OCR.
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_DEMO_KEY: "${OPENAI_DEMO_KEY:-}"
+      PLATFORM_OPENROUTER_API_KEY: "${PLATFORM_OPENROUTER_API_KEY:-}"
+      # Google OAuth — only needed when AUTH_MODE is google or both.
+      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
+      GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
+      GOOGLE_REDIRECT_URI: "${GOOGLE_REDIRECT_URI:-}"
+      APP_BASE_URL: "${APP_BASE_URL:-http://localhost:8080}"
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      STORAGE_QUOTA_BYTES: "${STORAGE_QUOTA_BYTES:-0}"
+      STORAGE_PER_FILE_MAX_BYTES: "${STORAGE_PER_FILE_MAX_BYTES:-0}"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  pgdata:
