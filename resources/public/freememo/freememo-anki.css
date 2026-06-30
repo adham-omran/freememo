@@ -209,6 +209,7 @@ pre > code {
 .ql-code-block:not(:has(span.ql-token))[data-language="php"]        { color: #4f5d95; }
 .ql-code-block:not(:has(span.ql-token))[data-language="python"]     { color: #3572a5; }
 .ql-code-block:not(:has(span.ql-token))[data-language="ruby"]       { color: #b22222; }
+.ql-code-block:not(:has(span.ql-token))[data-language="rust"]       { color: #dea584; }
 .ql-code-block:not(:has(span.ql-token))[data-language="sql"]        { color: #a0522d; }
 
 /* ── .nightMode — Dark Palette (Anki convention) ─────────────── */
@@ -319,4 +320,5 @@ pre > code {
 .nightMode .ql-code-block:not(:has(span.ql-token))[data-language="php"]        { color: #c678dd; }
 .nightMode .ql-code-block:not(:has(span.ql-token))[data-language="python"]     { color: #61afef; }
 .nightMode .ql-code-block:not(:has(span.ql-token))[data-language="ruby"]       { color: #e06c75; }
+.nightMode .ql-code-block:not(:has(span.ql-token))[data-language="rust"]       { color: #dea584; }
 .nightMode .ql-code-block:not(:has(span.ql-token))[data-language="sql"]        { color: #d19a66; }

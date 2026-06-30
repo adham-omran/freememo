@@ -150,6 +150,7 @@
                                     {:key "php" :label "PHP"}
                                     {:key "python" :label "Python"}
                                     {:key "ruby" :label "Ruby"}
+                                    {:key "rust" :label "Rust"}
                                     {:key "sql" :label "SQL"}]}
                :table true}
      :placeholder (or placeholder "Enter text...")}))
