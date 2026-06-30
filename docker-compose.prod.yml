@@ -26,27 +26,23 @@ services:
       # Server
       PORT: "8080"
       PROD: "1"
-      # Database — host is the base file's service name. DB_PASSWORD must match
-      # the value Postgres was initialized with (set it before the first `up`).
+      # Database — host is the base file's service name; creds are pgdata's
+      # init-time values and must not change.
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_NAME: cardmaker
       DB_USER: cardmaker
-      DB_PASSWORD: "${DB_PASSWORD:?DB_PASSWORD required — set in .env before first up}"
+      DB_PASSWORD: dev
+      # Official billing deployment. CREDITS_ENABLED turns on the credits/platform
+      # path; the economic tunables (:markup, :models, rates, grants — no env
+      # fallback) + Wayl secrets + platform key come from the mounted config.edn
+      # below. Without that mount, credits fail closed (get-model throws).
+      CREDITS_ENABLED: "${CREDITS_ENABLED:-true}"
+      # Google OAuth sign-in for the hosted site (env wins over config.edn).
+      AUTH_MODE: "${AUTH_MODE:-google}"
       # Secrets / config — sourced from .env (compose auto-loads it).
       ENC_KEY_SECRET: "${ENC_KEY_SECRET:?ENC_KEY_SECRET required — generate: openssl rand -hex 32}"
-      # Auth — AUTH_MODE: password | google | both (default: password in self-host).
-      AUTH_MODE: "${AUTH_MODE:-password}"
-      # Seed an initial account at boot (created only if absent).
-      ADMIN_USER: "${ADMIN_USER:-}"
-      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
-      # Set false for plain-HTTP localhost/LAN; true (default) requires HTTPS.
-      COOKIE_SECURE: "${COOKIE_SECURE:-true}"
-      # AI keys — OPENAI_API_KEY powers card generation; PLATFORM_OPENROUTER_API_KEY
-      # powers OCR. Both are needed for full functionality.
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       OPENAI_DEMO_KEY: "${OPENAI_DEMO_KEY:-}"
-      PLATFORM_OPENROUTER_API_KEY: "${PLATFORM_OPENROUTER_API_KEY:-}"
       GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
       GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
       GOOGLE_REDIRECT_URI: "${GOOGLE_REDIRECT_URI:-}"
@@ -54,6 +50,11 @@ services:
       LOG_LEVEL: "${LOG_LEVEL:-info}"
       STORAGE_QUOTA_BYTES: "${STORAGE_QUOTA_BYTES:-0}"
       STORAGE_PER_FILE_MAX_BYTES: "${STORAGE_PER_FILE_MAX_BYTES:-0}"
+    volumes:
+      # Economic tunables + Wayl secrets + platform OpenAI/OpenRouter keys. Read
+      # from the working dir (/app) by freememo.config/load-config. Gitignored;
+      # must exist on the host at deploy time.
+      - ./config.edn:/app/config.edn:ro
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080"]
       interval: 30s

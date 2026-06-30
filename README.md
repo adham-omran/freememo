@@ -162,8 +162,7 @@ Alternative to the three `GOOGLE_*` envs: drop the OAuth client JSON downloaded 
 ### Self-hosting with Docker
 
 Self-host on Linux or macOS with Docker — username/password login, no Google account required.
-The DB lives in `docker-compose.yml`; the app is layered on via `docker-compose.prod.yml`,
-so both share one project/network.
+Everything (Postgres + app) is defined in a single file, `docker-compose.selfhost.yml`.
 
 **1. Configure `.env`:**
 
@@ -187,12 +186,13 @@ PLATFORM_OPENROUTER_API_KEY=sk-or-...     # OCR (document scanning)
 **2. Start:**
 
 ```bash
-APP_VERSION=$(git describe --tags --long --always --dirty) \
-  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+APP_VERSION=$(git describe --tags --long --always --dirty 2>/dev/null || echo selfhost) \
+  docker compose -f docker-compose.selfhost.yml up -d --build
 ```
 
-`APP_VERSION` is required (baked into the build for client/server version matching).
 The app refuses to boot if `DB_PASSWORD` or `ENC_KEY_SECRET` is unset.
+`APP_VERSION` is optional here (defaults to `selfhost`); it's baked into the build for
+client/server version matching, which holds because one build produces both.
 
 **3. Log in** at http://localhost:8080 with your `ADMIN_USER` / `ADMIN_PASSWORD`.
 The account is created at boot only if it doesn't already exist — changing `ADMIN_PASSWORD`
