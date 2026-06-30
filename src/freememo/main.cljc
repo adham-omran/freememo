@@ -25,6 +25,7 @@
             #?(:clj [freememo.quota :as quota])
             #?(:clj [freememo.user-state :as us])
             #?(:clj [freememo.db :as db])
+            #?(:clj [freememo.config :as config])
             #?(:clj [freememo.crypto :as crypto])))
 
 ;; Per-user refresh via user-state registry
@@ -312,7 +313,7 @@
                 (UndoHistoryModal user-id !undo-modal-open?))))
 
           ;; Not authenticated: render landing page
-          (LandingPage auth-error))))))
+          (LandingPage auth-error (e/server (config/auth-mode))))))))
 
 (defn electric-boot [ring-request]
   #?(:clj (e/boot-server {} Main (e/server ring-request))

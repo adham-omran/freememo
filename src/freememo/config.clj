@@ -54,6 +54,29 @@
   []
   (or (env-or-config "WAYL_LINK_ENV" [:deployment :wayl-link-env]) "test"))
 
+(defn auth-mode
+  "Which login controls the landing page surfaces: :password | :google | :both.
+   Source: AUTH_MODE env → [:deployment :auth-mode] config.edn → default
+   :google in official (credits) deployments, :password in self-host.
+   Post: one of :password :google :both (default applied on blank/unknown)."
+  []
+  (let [raw (some-> (env-or-config "AUTH_MODE" [:deployment :auth-mode])
+              str str/lower-case str/trim)]
+    (case raw
+      "password" :password
+      "google"   :google
+      "both"     :both
+      (if (credits-enabled?) :google :password))))
+
+(defn cookie-secure?
+  "Whether the session cookie carries the Secure attribute (HTTPS-only).
+   COOKIE_SECURE env, default true. Set false for plain-HTTP localhost/LAN.
+   Post: boolean — false only when explicitly set to \"false\"."
+  []
+  (let [v (env-or-config "COOKIE_SECURE" [:deployment :cookie-secure?])]
+    (not (or (false? v)
+             (= "false" (some-> v str str/lower-case str/trim))))))
+
 (defn platform-openai-api-key []
   (env-or-config "PLATFORM_OPENAI_API_KEY" [:secrets :platform-openai-api-key]))
 

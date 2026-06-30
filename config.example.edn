@@ -40,9 +40,12 @@
   :signup-grant nil
   :grandfather-grant nil}
 
- ;; Deployment flags — env vars CREDITS_ENABLED, WAYL_HOST, WAYL_LINK_ENV win.
+ ;; Deployment flags — env vars CREDITS_ENABLED, WAYL_HOST, WAYL_LINK_ENV,
+ ;; AUTH_MODE, COOKIE_SECURE win.
  :deployment
  {:credits-enabled? false   ;; true = official (platform key + billing); false = self-host (BYO key)
+  :auth-mode "password"     ;; login controls: "password" | "google" | "both" (default: google if credits, else password)
+  :cookie-secure? true      ;; session cookie Secure attr — set false for plain-HTTP localhost/LAN
   :wayl-host "live"         ;; "live" = api.thewayl.com, "test" = api.thewayl-staging.com (staging cert may be a placeholder)
   :wayl-link-env "test"}    ;; per-link env sent to Wayl: "test" = sandbox / no real charge; "live" = real money
 

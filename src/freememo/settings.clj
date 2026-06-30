@@ -75,7 +75,11 @@
     (when (seq k) k)))
 
 (defn- get-shared-openai-api-key []
-  (let [k (some-> (System/getenv "OPENAI_DEMO_KEY") str/trim)]
+  ;; OPENAI_API_KEY is the documented self-host name; OPENAI_DEMO_KEY kept as a
+  ;; backward-compatible alias.
+  (let [k (some-> (or (System/getenv "OPENAI_API_KEY")
+                      (System/getenv "OPENAI_DEMO_KEY"))
+            str/trim)]
     (when (seq k) k)))
 
 (defn get-openai-api-key

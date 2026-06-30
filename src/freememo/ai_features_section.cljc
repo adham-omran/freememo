@@ -196,24 +196,27 @@
                                        "badge badge-error")})
                   (dom/text (case api-key-source
                               :user "Configured"
-                              :shared "Demo key"
+                              :shared "Server key"
                               "Not set"))))
-              (dom/button
-                (dom/props {:type "button"
-                            :class "btn btn-secondary"
-                            :style {:margin-top "8px" :padding "6px 14px"
-                                    :font-size "13px" :color "var(--color-primary)"
-                                    :border "1px solid var(--color-primary)"}})
-                (dom/text (if (= api-key-source :user) "Update Key" "Set API Key"))
-                (dom/On "click"
-                  (fn [_]
-                    (reset! !draft-key "")
-                    (reset! !key-save-error nil)
-                    (reset! !show-key-modal true))
-                  nil))))
+              ;; Server-wide key set (OPENAI_API_KEY/OPENAI_DEMO_KEY): no per-user
+              ;; entry control — the key is fixed by the operator (S-2).
+              (when (not= api-key-source :shared)
+                (dom/button
+                  (dom/props {:type "button"
+                              :class "btn btn-secondary"
+                              :style {:margin-top "8px" :padding "6px 14px"
+                                      :font-size "13px" :color "var(--color-primary)"
+                                      :border "1px solid var(--color-primary)"}})
+                  (dom/text (if (= api-key-source :user) "Update Key" "Set API Key"))
+                  (dom/On "click"
+                    (fn [_]
+                      (reset! !draft-key "")
+                      (reset! !key-save-error nil)
+                      (reset! !show-key-modal true))
+                    nil)))))
 
-          ;; API Key Modal (self-host only)
-          (when (and (not credits-enabled?) show-key-modal)
+          ;; API Key Modal (self-host only; hidden when a server-wide key is set)
+          (when (and (not credits-enabled?) (not= api-key-source :shared) show-key-modal)
             (dom/div
               (dom/props {:class "modal-backdrop" :tabindex "-1"})
               (dom/On "click" (fn [_] (reset! !show-key-modal false)) nil)

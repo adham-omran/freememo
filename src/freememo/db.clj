@@ -908,6 +908,12 @@
                  :from [:users]
                  :where [:= :google_id google-id]})))
 
+(defn get-user-by-username [username]
+  (jdbc/execute-one! ds
+    (sql/format {:select [:id :username]
+                 :from [:users]
+                 :where [:= :username username]})))
+
 (defn upsert-google-user [google-id email username]
   (jdbc/execute-one! ds
     (sql/format {:insert-into :users

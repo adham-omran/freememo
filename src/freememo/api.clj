@@ -696,28 +696,42 @@
            :headers {"Location" "/"}
            :session {:auth-error "Google sign-in failed — please try again"}})))))
 
+(defn- authenticate->session-response
+  "Shared username/password auth → 302 redirect carrying the session.
+   Post: success → :session {:user-id N}; blank/failure → :session {:auth-error …}."
+  [username password]
+  (if (or (str/blank? username) (str/blank? password))
+    {:status 302
+     :headers {"Location" "/"}
+     :session {:auth-error "Missing user or password"}}
+    (let [result (auth/authenticate username password)]
+      (if (:success result)
+        {:status 302
+         :headers {"Location" "/"}
+         :session {:user-id (:user-id result)}}
+        {:status 302
+         :headers {"Location" "/"}
+         :session {:auth-error (:error result)}}))))
+
 (defn login-handler
   "GET /login?user=X&password=Y — dev-only username/password login.
    On success: 302 → / with :session {:user-id N}.
    On failure: 302 → / with :session {:auth-error ...}.
    Query-string credentials leak into server logs and browser history —
-   acceptable only for local Playwright-driven testing."
+   wired ONLY in the dev entrypoint (src-dev/dev.cljc); absent from the prod
+   build. Acceptable only for local Playwright-driven testing."
   [request]
-  (let [params (:params request)
-        username (get params "user")
-        password (get params "password")]
-    (if (or (str/blank? username) (str/blank? password))
-      {:status 302
-       :headers {"Location" "/"}
-       :session {:auth-error "Missing user or password"}}
-      (let [result (auth/authenticate username password)]
-        (if (:success result)
-          {:status 302
-           :headers {"Location" "/"}
-           :session {:user-id (:user-id result)}}
-          {:status 302
-           :headers {"Location" "/"}
-           :session {:auth-error (:error result)}})))))
+  (let [params (:params request)]
+    (authenticate->session-response (get params "user") (get params "password"))))
+
+(defn login-post-handler
+  "POST /login — production username/password login. Reads the urlencoded form
+   body (user, password), parsed into :params by wrap-params (no credentials in
+   the URL). On success: 302 → / with :session {:user-id N}; on failure:
+   302 → / with :session {:auth-error ...}."
+  [request]
+  (let [params (:params request)]
+    (authenticate->session-response (get params "user") (get params "password"))))
 
 (defn save-page-text-handler [request]
   (if-let [user-id (require-auth request)]
@@ -879,8 +893,8 @@
       (and (= uri "/api/wayl/webhook") (= method :post))
       (wayl-webhook-handler request)
 
-      (and (= uri "/login") (= method :get))
-      (login-handler request)
+      (and (= uri "/login") (= method :post))
+      (login-post-handler request)
 
       (and (= uri "/auth/google") (= method :get))
       (google-auth-handler request)

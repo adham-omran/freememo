@@ -26,16 +26,27 @@ services:
       # Server
       PORT: "8080"
       PROD: "1"
-      # Database — host is the base file's service name; creds are pgdata's
-      # init-time values and must not change.
+      # Database — host is the base file's service name. DB_PASSWORD must match
+      # the value Postgres was initialized with (set it before the first `up`).
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_NAME: cardmaker
       DB_USER: cardmaker
-      DB_PASSWORD: dev
+      DB_PASSWORD: "${DB_PASSWORD:?DB_PASSWORD required — set in .env before first up}"
       # Secrets / config — sourced from .env (compose auto-loads it).
       ENC_KEY_SECRET: "${ENC_KEY_SECRET:?ENC_KEY_SECRET required — generate: openssl rand -hex 32}"
+      # Auth — AUTH_MODE: password | google | both (default: password in self-host).
+      AUTH_MODE: "${AUTH_MODE:-password}"
+      # Seed an initial account at boot (created only if absent).
+      ADMIN_USER: "${ADMIN_USER:-}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
+      # Set false for plain-HTTP localhost/LAN; true (default) requires HTTPS.
+      COOKIE_SECURE: "${COOKIE_SECURE:-true}"
+      # AI keys — OPENAI_API_KEY powers card generation; PLATFORM_OPENROUTER_API_KEY
+      # powers OCR. Both are needed for full functionality.
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       OPENAI_DEMO_KEY: "${OPENAI_DEMO_KEY:-}"
+      PLATFORM_OPENROUTER_API_KEY: "${PLATFORM_OPENROUTER_API_KEY:-}"
       GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
       GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
       GOOGLE_REDIRECT_URI: "${GOOGLE_REDIRECT_URI:-}"

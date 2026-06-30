@@ -33,7 +33,12 @@
 #?(:clj
    (defn wrap-api-routes [handler]
      (fn [request]
-       (or (api/api-routes request)
+       (or ;; Dev-only GET /login shim (Playwright). Not in api/api-routes, so
+           ;; the prod build never exposes the query-string credential path.
+           (when (and (= (:uri request) "/login")
+                      (= (:request-method request) :get))
+             (api/login-handler request))
+           (api/api-routes request)
            (handler request)))))
 
 #?(:clj
