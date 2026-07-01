@@ -218,9 +218,11 @@
         ;; Column 1: Document (arrow + badge + title)
         ;; --row-indent carries the depth indent as a custom property so the
         ;; phone media query can flatten it (`var(--row-indent, 10px)` → 10px).
+        ;; Base 20 (not 10) reserves the fixed left gutter the absolutely
+        ;; positioned .drag-grip occupies (see tree_dnd / index.css .drag-grip).
         (dom/td
           (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
-                              :--row-indent (str (+ 10 (* depth 20)) "px")
+                              :--row-indent (str (+ 20 (* depth 20)) "px")
                               :padding-left "var(--row-indent)"
                               :overflow "hidden"
                               :border-left (when (= topic-status "done") "2px solid var(--color-success-lighter)")}})
@@ -294,8 +296,7 @@
               (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
                                   :font-size (if is-root "13px" "12px")
                                   :font-weight (if is-root "500" "400")
-                                  :color "var(--color-text-primary)"}
-                          :data-tooltip title})
+                                  :color "var(--color-text-primary)"}})
               (dom/text title))))
         ;; Column 2: Done
         (dom/td
@@ -336,8 +337,7 @@
                               :justify-content "flex-end" :gap "4px"}})
           (dom/button
             (dom/props {:class "btn btn-sm btn-secondary"
-                        :style {:padding "2px 6px" :font-size "12px" :line-height "1"}
-                        :data-tooltip "Rename"})
+                        :style {:padding "2px 6px" :font-size "12px" :line-height "1"}})
             (dom/text "✎")
             (dom/On "click"
               (fn [e]

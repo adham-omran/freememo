@@ -5,12 +5,17 @@
    move + undo lives in freememo.topic-move / freememo.db; this only wires the
    DOM events and the valid/invalid drop affordance.
 
-   Contract — call DragDropRow! inside a boxed cell (a `dom/td`), NOT the `dom/tr`:
-   these grid-tables give the tr `display:contents`, so the tr has no layout box
-   and `draggable` on it is ignored. The td IS a grid item with a box, so it can
-   be the drag source. dom/node must be that td.
+   Contract — call DragDropRow! inside the row's first boxed cell (a `dom/td`),
+   NOT the `dom/tr`: these grid-tables give the tr `display:contents`, so the tr
+   has no layout box. dom/node must be that td. DragDropRow! wires the drop-TARGET
+   side onto that td (dragover/drop/data-drop) and renders a `.drag-grip` handle
+   as the cell's first child carrying the drag-SOURCE side (draggable +
+   dragstart/dragend). The grip — not the cell text — is the only draggable
+   element, so the title stays selectable and a click-drag over it never turns
+   into a drag.
      my-id      this row's topic-id
-     draggable? false for structural rows that must not move (e.g. PDF pages)
+     draggable? false for structural rows that must not move (e.g. PDF pages);
+                such rows render no grip (they stay drop targets only)
      !drag-src  client atom holding the dragged id (nil when idle); dragstart
                 writes it, dragend clears it
      drag-src   (e/watch !drag-src)
@@ -22,8 +27,8 @@
    Visual block: invalid targets never preventDefault on dragover, so the browser
    shows its native no-drop cursor; valid targets get [data-drop=valid] for a CSS
    highlight. Until `forbidden` arrives (brief gap after dragstart) a descendant
-   may look valid — reparent-topic! re-checks the cycle server-side and rejects,
-   so the gap is a cosmetic best-effort, never a correctness hole."
+   may look valid — move-topic! re-checks the cycle server-side and rejects, so
+   the gap is a cosmetic best-effort, never a correctness hole."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]))
@@ -33,19 +38,9 @@
     (let [active? (some? drag-src)
           source? (= drag-src my-id)
           valid?  (and active? (not source?) (not (contains? forbidden my-id)))]
-      ;; `draggable` is an enumerated attribute, not a boolean one: it needs the
-      ;; literal string "true"/"false". A boolean true renders as draggable=""
-      ;; which the browser treats as "auto" → not draggable.
-      (dom/props {:draggable (if draggable? "true" "false")
-                  :data-drop (when active? (if valid? "valid" "invalid"))})
-      (when draggable?
-        (dom/On "dragstart"
-          (fn [e]
-            (.setData (.-dataTransfer e) "text/plain" (str my-id))
-            (set! (.. e -dataTransfer -effectAllowed) "move")
-            (reset! !drag-src my-id))
-          nil)
-        (dom/On "dragend" (fn [_] (reset! !drag-src nil)) nil))
+      ;; Drop-TARGET side — stays on the cell (dom/node = the td). The cell text
+      ;; is NOT draggable, so a click-drag over the title selects text as usual.
+      (dom/props {:data-drop (when active? (if valid? "valid" "invalid"))})
       (dom/On "dragover"
         (fn [e]
           (when valid?
@@ -57,4 +52,27 @@
           (when valid?
             (.preventDefault e)
             (reset! !drop-cmd {:src drag-src :dst my-id})))
-        nil))))
+        nil)
+      ;; Drag-SOURCE side — a dedicated grip handle so the title text stays
+      ;; selectable. Structural rows (draggable? false) render no grip.
+      ;; `draggable` is an enumerated attribute: it needs the literal "true"
+      ;; (a boolean true renders as draggable="" → "auto" → not draggable).
+      (when draggable?
+        (dom/span
+          (dom/props {:class "drag-grip" :draggable "true"
+                      :aria-label "Drag to re-nest"})
+          (dom/text "⠿")
+          ;; Grabbing the grip must not bubble to the row's navigate click.
+          (dom/On "mousedown" (fn [e] (.stopPropagation e)) nil)
+          (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+          (dom/On "dragstart"
+            (fn [e]
+              (.setData (.-dataTransfer e) "text/plain" (str my-id))
+              (set! (.. e -dataTransfer -effectAllowed) "move")
+              ;; Custom drag image = the whole row cell, not the bare glyph, so
+              ;; the ghost shows what is being moved.
+              (let [cell (.closest (.-currentTarget e) "td")]
+                (when cell (.setDragImage (.-dataTransfer e) cell 0 0)))
+              (reset! !drag-src my-id))
+            nil)
+          (dom/On "dragend" (fn [_] (reset! !drag-src nil)) nil))))))

@@ -1041,6 +1041,9 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
 @media (max-width: 600px) {
     /* Hide the header table — labels are inlined as pseudo-prefixes on each value cell. */
     .library-table-header { display: none !important; }
+    /* Drag grip is desktop-only: native HTML5 DnD ignores touch, and the phone
+       layout flattens the depth indent so the fixed left gutter would collide. */
+    .drag-grip { display: none; }
     /* Selectors prefixed with `.tape-scroll` so specificity beats the default
        `.tape-scroll table tr { display: contents }` / `.tape-scroll table td
        { grid-row: var(--order); height: var(--row-height) }` rules above. */
@@ -2748,11 +2751,31 @@ form[aria-busy="true"] {
     flex-shrink: 0;
 }
 
-/* Drag-and-drop topic nesting (tree_dnd). The drag source / drop target is the
-   row's first cell — the tr is display:contents (no box, not draggable). Valid
-   targets get a highlight; invalid targets (the dragged node's own subtree) get
-   no preventDefault on dragover, so the browser shows its native no-drop cursor. */
-.tape-scroll td[draggable="true"] { cursor: grab; }
+/* Drag-and-drop topic nesting (tree_dnd). Drop target = the row's first cell
+   (data-drop=valid highlight); drag source = a dedicated .drag-grip handle
+   inside that cell, so the title text stays selectable. The tr is
+   display:contents (no box). Invalid targets never preventDefault on dragover,
+   so the browser shows its native no-drop cursor.
+
+   The grip is absolutely positioned in a fixed left gutter (left:1px), pinned to
+   the cell's border edge regardless of the row's depth indent (padding-left), so
+   every grip lines up in one column at any nesting depth. The cell reserves that
+   gutter via its base padding-left (knowledge_tree / hierarchy_side_panel).
+   :has(> .drag-grip) makes only grip-hosting cells the positioning container. */
+.tape-scroll table td:has(> .drag-grip) { position: relative; }
+.drag-grip {
+    position: absolute;
+    left: 1px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 14px;
+    text-align: center;
+    line-height: 1;
+    cursor: grab;
+    color: var(--color-text-hint);
+    user-select: none;
+}
+.drag-grip:active { cursor: grabbing; }
 .tape-scroll td[data-drop="valid"] {
     outline: 2px solid var(--color-primary);
     outline-offset: -2px;
