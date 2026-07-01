@@ -3,11 +3,11 @@
    other site needing an inline HTML editor. NOT coupled to topic auto-save.
    Callers pass a string value and an on-change callback.
 
-   API:
-     (QuillField {:value-string \"<p>Hello</p>\"
-                  :on-change    (fn [html] ...)
-                  :placeholder  \"Enter text...\"
-                  :field-key    :some-stable-key})"
+   API (positional: value-string on-change placeholder field-key
+        !editor-atom cloze? autofocus?):
+     (QuillField \"<p>Hello</p>\"
+                 (fn [html] ...)
+                 \"Enter text...\" :some-stable-key !editor nil nil)"
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -399,20 +399,25 @@
                              constructed (cursor lands in the field on open).
 
    Usage:
-     (QuillField {:value-string (or (:question card) \"\")
-                  :on-change    (fn [html] (reset! !question html))
-                  :placeholder  \"Question...\"
-                  :field-key    [:question card-id]})"
+     (QuillField (or (:question card) \"\")
+                 (fn [html] (reset! !question html))
+                 \"Question...\" [:question card-id] !q-editor nil true)"
   [value-string on-change placeholder field-key !editor-atom cloze? autofocus?]
   (e/client
     ;; e/for-by provides frame isolation: Quill remounts when field-key changes.
     (e/for-by identity [_k [(or field-key :quill-field)]]
       (dom/div
         (dom/props {:class "quill-editor-wrapper quill-field-wrapper"})
-        (let [!ed-state (atom nil)]
+        (let [!ed-state (atom nil)
+              ;; Freeze the mount-time value. Callers may pass a live watched
+              ;; atom (the card modals seed the editor from !primary/!answer so
+              ;; content carries across a Basic↔Cloze switch); without the
+              ;; snapshot, each keystroke would change value-string and re-run
+              ;; schedule-quill-init!, mounting a second Quill instance.
+              seed (e/snapshot value-string)]
           ;; Schedule init via plain defn — reader conditional lives there,
           ;; not in this reactive body (avoids CLJ/CLJS signal-count mismatch).
-          (schedule-quill-init! !ed-state dom/node value-string placeholder on-change !editor-atom cloze? autofocus?)
+          (schedule-quill-init! !ed-state dom/node seed placeholder on-change !editor-atom cloze? autofocus?)
           (e/on-unmount
             (fn []
               (destroy-quill-field! @!ed-state)

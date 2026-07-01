@@ -55,6 +55,60 @@
          :else nil))
      :clj nil))
 
+;; ---------------------------------------------------------------------------
+;; Modal Tab navigation — Tab moves focus editor→editor→Save→Cancel instead of
+;; letting Quill insert a tab character. Toolbar buttons are excluded (they
+;; carry ql-* classes, not .btn); the Basic/Cloze radios are not tab-stops.
+;; ---------------------------------------------------------------------------
+
+#?(:cljs
+   (defn modal-tab-stops
+     "Ordered focus targets for `container` (the .card-modal-inner div): the
+      rendered Quill editors in DOM order, then the Save then Cancel button."
+     [container]
+     (let [editors (array-seq (.querySelectorAll container ".ql-editor"))
+           save    (.querySelector container "button.btn-primary")
+           cancel  (.querySelector container "button.btn-secondary")]
+       (vec (concat editors (remove nil? [save cancel]))))))
+
+#?(:cljs
+   (defn handle-modal-tab!
+     "Advance focus one tab-stop and consume the event so Quill cannot insert a
+      tab. Shift+Tab reverses; both ends wrap. No-op when there are no stops.
+      Pre : `e` is a keydown event on `container`.
+      Post: on Tab, document.activeElement is the next/prev stop; the event is
+            prevented and stopped (Quill's own Tab handler never fires)."
+     [container e]
+     (when (= (.-key e) "Tab")
+       (let [stops (modal-tab-stops container)
+             n     (count stops)]
+         (when (pos? n)
+           (.preventDefault e)
+           (.stopPropagation e)
+           (let [active (.-activeElement js/document)
+                 idx    (reduce (fn [_ i]
+                                  (let [s (nth stops i)]
+                                    (when (or (= s active) (.contains s active))
+                                      (reduced i))))
+                          nil (range n))
+                 delta  (if (.-shiftKey e) -1 1)
+                 nxt    (if idx
+                          (mod (+ idx delta) n)
+                          (if (.-shiftKey e) (dec n) 0))]
+             (.focus (nth stops nxt))))))))
+
+#?(:cljs
+   (defn attach-modal-tab-nav!
+     "Install the capture-phase Tab navigator on `container`, returning a 0-arg
+      cleanup that removes the listener. Capture phase is required: Quill's
+      keydown handler lives on the .ql-editor and would insert a tab before a
+      bubble-phase listener could act."
+     [container]
+     (let [handler (fn [e] (handle-modal-tab! container e))]
+       (.addEventListener container "keydown" handler true)
+       (fn [] (.removeEventListener container "keydown" handler true)))))
+#?(:clj (defn attach-modal-tab-nav! [_container] nil))
+
 ;; Export modal — Forms5 (Form! + Input!/Checkbox!).
 ;; Scope and Card Type render via A1-fallback selects (atom-backed); their
 ;; values are merged into the parsed command at commit time. Pattern mirrors
@@ -352,6 +406,8 @@
                        (.addEventListener inner "pointermove" move-fn)
                        (.addEventListener inner "pointerup" up-fn))))))
             nil)
+          (let [cleanup (attach-modal-tab-nav! dom/node)]
+            (e/on-unmount (fn [] (when cleanup (cleanup)))))
           (dom/h3 (dom/props {:style {:margin-top "0" :cursor "move" :user-select "none"
                                       :padding-bottom "var(--sp-2)" :margin-bottom "var(--sp-3)"
                                       :border-bottom "1px solid var(--color-border)"}})
@@ -448,21 +504,19 @@
 ;; Add card modal — uses topic-id and root-topic-id instead of doc-id + page-number
 (e/defn AddCardModal [!show-add !card-kind !captured-selection topic-id root-topic-id user-id]
   (e/client
-    (let [initial-kind @!card-kind
-          initial-text (or @!captured-selection "")
+    (let [initial-text (or @!captured-selection "")
           prefill? (not (str/blank? initial-text))
-          init-q (if (and prefill? (= initial-kind "basic")) initial-text "")
-          init-c (if (and prefill? (= initial-kind "cloze")) initial-text "")
+          ;; Front (basic Question) and Cloze Text share !primary so typed
+          ;; content carries across a Basic↔Cloze switch; Back/Extra already
+          ;; share !answer. A captured selection prefills whichever renders.
+          init-primary (if prefill? initial-text "")
           kind (e/watch !card-kind)
-          !question (atom init-q)
+          !primary (atom init-primary)
           !answer (atom "")
-          !cloze (atom init-c)
-          !q-editor (atom nil)
+          !primary-editor (atom nil)
           !a-editor (atom nil)
-          !c-editor (atom nil)
-          question (e/watch !question)
+          primary (e/watch !primary)
           answer (e/watch !answer)
-          cloze (e/watch !cloze)
           card-font-sz (e/server (settings/get-card-font-size user-id))
           modal-font (str (or card-font-sz 14) "px")
           !primary-btn (atom nil)]
@@ -516,6 +570,8 @@
                        (.addEventListener inner "pointermove" move-fn)
                        (.addEventListener inner "pointerup" up-fn))))))
             nil)
+          (let [cleanup (attach-modal-tab-nav! dom/node)]
+            (e/on-unmount (fn [] (when cleanup (cleanup)))))
           (dom/h3 (dom/props {:style {:margin-top "0" :cursor "move" :user-select "none"
                                       :padding-bottom "var(--sp-2)" :margin-bottom "var(--sp-3)"
                                       :border-bottom "1px solid var(--color-border)"}})
@@ -541,26 +597,26 @@
               (dom/label (dom/text "Question:"))
               (dom/div
                 (dom/props {:style {:margin-bottom "var(--sp-3)" :font-size modal-font}})
-                (QuillField init-q
-                  (fn [html] (reset! !question html))
-                  "Question..." [:add-q] !q-editor nil true))
+                (QuillField primary
+                  (fn [html] (reset! !primary html))
+                  "Question..." [:add-q] !primary-editor nil true))
               (dom/label (dom/text "Answer:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
-                (QuillField ""
+                (QuillField answer
                   (fn [html] (reset! !answer html))
                   "Answer..." [:add-a] !a-editor nil nil)))
             (dom/div
               (dom/label (dom/text "Cloze:"))
               (dom/div
                 (dom/props {:style {:margin-bottom "var(--sp-3)" :font-size modal-font}})
-                (QuillField init-c
-                  (fn [html] (reset! !cloze html))
-                  "Cloze text with {{c1::deletion}}..." [:add-c] !c-editor true true))
+                (QuillField primary
+                  (fn [html] (reset! !primary html))
+                  "Cloze text with {{c1::deletion}}..." [:add-c] !primary-editor true true))
               (dom/label (dom/text "Back Extra:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
-                (QuillField ""
+                (QuillField answer
                   (fn [html] (reset! !answer html))
                   "Optional back extra..." [:add-be] !a-editor nil nil))))
           (dom/div
@@ -576,14 +632,13 @@
                     ;; its formatAt pass, so on-change cannot deliver the
                     ;; tokenized HTML — we MUST reset! atoms directly here.
                     ;; dom/On is the button's last form → button returns the click.
+                    ;; !primary-editor is whichever of Question/Cloze is mounted.
                     (dom/On "click"
                       (fn [e]
-                        (when-let [html (flush-syntax-tokens! @!q-editor)]
-                          (reset! !question html))
+                        (when-let [html (flush-syntax-tokens! @!primary-editor)]
+                          (reset! !primary html))
                         (when-let [html (flush-syntax-tokens! @!a-editor)]
                           (reset! !answer html))
-                        (when-let [html (flush-syntax-tokens! @!c-editor)]
-                          (reset! !cloze html))
                         e)
                       nil))
                   [t ?error] (e/Token click-event)]
@@ -591,15 +646,14 @@
                 (dom/div (dom/props {:style {:order "-1" :margin-right "auto" :color "var(--color-danger)" :font-size "12px"}})
                   (dom/text "Error: " ?error)))
               (when t
-                (let [validation-error (when (= kind "cloze") (validate-cloze cloze))]
+                (let [validation-error (when (= kind "cloze") (validate-cloze primary))]
                   (if validation-error
                     (t validation-error)
-                    (let [clean-q (e/server (sanitize-card-field question))
+                    (let [clean-primary (e/server (sanitize-card-field primary))
                           clean-a (e/server (sanitize-card-field answer))
-                          clean-c (e/server (sanitize-card-field cloze))
                           card-data (if (= kind "basic")
-                                      [{:q clean-q :a clean-a}]
-                                      [(cond-> {:c clean-c}
+                                      [{:q clean-primary :a clean-a}]
+                                      [(cond-> {:c clean-primary}
                                          (and clean-a (not (str/blank? clean-a)))
                                          (assoc :a clean-a))])
                           ;; Route through cards/save-cards so bake-card-html
