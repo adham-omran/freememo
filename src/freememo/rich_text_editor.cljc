@@ -190,6 +190,65 @@
          (when (.-parentNode pop) (.remove pop))))
      :clj nil))
 
+(defn- override-bubble-tooltip-position!
+  "Keep the bubble format tooltip visible for tall/multi-line selections.
+
+   Quill 2.0.3 anchors a multi-line selection's tooltip to the selection's LAST
+   line and places it just below (ui/tooltip.ts `position`, themes/bubble.ts
+   `EDITOR_CHANGE`). Cmd-A on a long document then drops the tooltip at the
+   bottom — often scrolled out of view. This wraps `tooltip.position` so that,
+   for multi-line selections, it re-anchors to the FIRST selected line (top of
+   selection) and clamps the tooltip into the editor pane's visible rect,
+   re-aiming the pointer arrow toward the (possibly off-screen) selection.
+   Single-line and empty selections keep Quill's native positioning.
+
+   Pre:  `editor` is an initialized bubble-theme Quill whose theme.tooltip.position
+         is a fn (init-editor! just constructed it).
+   Post: that method is replaced; the original is delegated to for the horizontal
+         shift + arrow-marginLeft alignment. No teardown — the tooltip element is
+         destroyed with the editor in destroy-editor!."
+  [editor]
+  #?(:clj nil
+     :cljs
+     (let [^js ed      editor
+           ^js theme   (.-theme ed)
+           ^js tooltip (and theme (.-tooltip theme))]
+       (when (and tooltip (fn? (.-position tooltip)))
+         (let [^js orig-position (.-position tooltip)
+               ^js root          (.-root tooltip)
+               margin            8]                    ; px gap kept from the pane edge
+           (set! (.-position tooltip)
+             (fn [reference]
+               (this-as this
+                 (let [^js range (.getSelection ed)
+                       ^js lines (when (and range (pos? (.-length range)))
+                                   (.getLines ed (.-index range) (.-length range)))]
+                   (if-not (and lines (> (.-length lines) 1))
+                     ;; Single-line / no selection: Quill's native positioning.
+                     (.call orig-position this reference)
+                     ;; Multi-line: anchor to the first selected line, then clamp
+                     ;; the placed box into the editor pane's visible rect.
+                     (let [^js top-ref (.getBounds ed (.-index range) 0)
+                           shift       (.call orig-position this top-ref)
+                           ^js rr      (.getBoundingClientRect root)
+                           ^js cr      (.getBoundingClientRect (.-container ed))
+                           cur-top     (js/parseFloat (.. root -style -top))
+                           over-top    (- (+ (.-top cr) margin) (.-top rr))       ; >0 ⇒ box above view
+                           over-bottom (- (.-bottom rr) (- (.-bottom cr) margin)) ; >0 ⇒ box below view
+                           delta       (cond
+                                         (pos? over-top)    over-top
+                                         (pos? over-bottom) (- over-bottom)
+                                         :else              0)]
+                       (when-not (zero? delta)
+                         (set! (.. root -style -top) (str (+ cur-top delta) "px"))
+                         ;; Re-aim arrow toward the off-view selection:
+                         ;; pushed down ⇒ selection above ⇒ arrow up (no flip);
+                         ;; pushed up   ⇒ selection below ⇒ arrow down (flip).
+                         (if (pos? delta)
+                           (.remove (.-classList root) "ql-flip")
+                           (.add (.-classList root) "ql-flip")))
+                       shift)))))))))))
+
 (defn- setup-mobile-keyboard-suppression!
   "On touch devices, suppress virtual keyboard until double-tap.
    Sets inputmode=\"none\" on .ql-editor; double-tap removes it and
@@ -382,6 +441,7 @@
                                 :import-popover-teardown (setup-link-import-popover! editor)})
          (setup-mobile-keyboard-suppression! editor)
          (table-ui/init! editor)
+         (override-bubble-tooltip-position! editor)
          editor))))
 
 (defn set-content!
