@@ -16,6 +16,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.doc-context :as dctx]
    [freememo.content-toolbar-generate :refer [ToolbarGenerate]]
    [freememo.content-toolbar-settings :as settings]
    [freememo.icons :as icons]
@@ -53,11 +54,14 @@
 ;; cannot ride inside the serialized cfg map). They feed the settings widgets'
 ;; own dom-event tokens — NOT cfg-derived values — so no reactive loop arises
 ;; when cfg changes (e.g. gen-active? flips); see CLAUDE.md token-input rule.
-(e/defn GenerateDropdown [cfg !use-context !context-window !card-type]
+(e/defn GenerateDropdown []
   (e/client
-    (let [{:keys [user-id llm-enabled? gen-active? gen-pending gen-error
-                  card-type card-count-val use-context context-window
-                  context-tooltip content-text mod-key]} cfg
+    (let [user-id dctx/user-id llm-enabled? dctx/llm-enabled? gen-active? dctx/gen-active?
+          gen-pending dctx/gen-pending gen-error dctx/gen-error
+          card-type dctx/card-type card-count-val dctx/card-count-val use-context dctx/use-context
+          context-window dctx/context-window context-tooltip dctx/context-tooltip
+          content-text dctx/content-text mod-key dctx/mod-key
+          !use-context dctx/!use-context !context-window dctx/!context-window !card-type dctx/!card-type
           !open (atom false)
           open (e/watch !open)
           no-content? (empty? content-text)
@@ -78,7 +82,7 @@
       ;; rule hides the inline buttons but leaves the modal (a div) visible.
       (dom/div
         (dom/props {:class "toolbar-dropdown-sources"})
-        (ToolbarGenerate cfg))
+        (ToolbarGenerate))
 
       ;; Visible dropdown — gated on llm-enabled so the trigger disappears
       ;; when LLM is unavailable (same gating as the original buttons).
@@ -141,14 +145,8 @@
                 ;; deliberately stays inline in the toolbar — commonly changed.
                 (dom/div
                   (dom/props {:class "toolbar-generate-menu-settings"})
-                  (settings/ToolbarSettings
-                    {:user-id user-id :llm-enabled? llm-enabled? :card-type card-type}
-                    !use-context !context-window !card-type)
-                  (settings/ContextSettings
-                    {:user-id user-id :context-tooltip context-tooltip
-                     :llm-enabled? llm-enabled?
-                     :use-context use-context :context-window context-window}
-                    !use-context !context-window))
+                  (settings/ToolbarSettings)
+                  (settings/ContextSettings))
                 (dom/div (dom/props {:class "toolbar-dropdown-separator"}))
 
                 ;; Generate

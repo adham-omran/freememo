@@ -53,9 +53,8 @@
       ;; topic-id changes, so within a topic the optimistic mirror is the truth.
       (e/for-by identity [_pair [[topic-id priority]]]
         (let [v (reset! !mirror priority)] (when v nil)))
-      (NumberStepper
-        {:value mirror-val :min-val 0 :max-val 100
-         :mount-key topic-id :label "Priority"}
+      (NumberStepper mirror-val 0 100
+        topic-id "Priority" nil nil
         !mirror
         (e/fn [nv]
           (e/server (e/Offload #(update-priority!* topic-id nv))))))))

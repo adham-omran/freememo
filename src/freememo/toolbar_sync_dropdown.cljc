@@ -15,6 +15,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.doc-context :as dctx]
    [freememo.anki-sync :refer [AnkiSyncButton]]
    [freememo.quick-sync :refer [QuickSyncButton]]
    [freememo.anki-pull-button :refer [PullFromAnkiButton]]
@@ -44,10 +45,11 @@
          (.removeEventListener js/document "mousedown" on-mouse)))
      :clj (fn [] nil)))
 
-(e/defn SyncDropdown [cfg]
+(e/defn SyncDropdown []
   (e/client
-    (let [{:keys [user-id topic-id root-topic-id page-number
-                  card-type unsynced-count mod-key]} cfg
+    (let [user-id dctx/user-id topic-id dctx/topic-id root-topic-id dctx/root-topic-id
+          page-number dctx/page-number card-type dctx/card-type
+          unsynced-count dctx/unsynced-count mod-key dctx/mod-key
           !open (atom false)
           open (e/watch !open)
           has-unsynced? (and unsynced-count (pos? unsynced-count))

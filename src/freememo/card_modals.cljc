@@ -361,39 +361,28 @@
               (dom/label (dom/text "Question:"))
               (dom/div
                 (dom/props {:style {:margin-bottom "var(--sp-3)" :font-size modal-font}})
-                (QuillField {:value-string init-q
-                             :on-change (fn [html] (reset! !question html))
-                             :placeholder "Question..."
-                             :field-key [:edit-q card-id]
-                             :!editor-atom !q-editor
-                             :autofocus? true}))
+                (QuillField init-q
+                  (fn [html] (reset! !question html))
+                  "Question..." [:edit-q card-id] !q-editor nil true))
               (dom/label (dom/text "Answer:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
-                (QuillField {:value-string init-a
-                             :on-change (fn [html] (reset! !answer html))
-                             :placeholder "Answer..."
-                             :field-key [:edit-a card-id]
-                             :!editor-atom !a-editor})))
+                (QuillField init-a
+                  (fn [html] (reset! !answer html))
+                  "Answer..." [:edit-a card-id] !a-editor nil nil)))
             (dom/div
               (dom/label (dom/text "Cloze:"))
               (dom/div
                 (dom/props {:style {:margin-bottom "var(--sp-3)" :font-size modal-font}})
-                (QuillField {:value-string init-c
-                             :on-change (fn [html] (reset! !cloze html))
-                             :placeholder "Cloze text with {{c1::deletion}}..."
-                             :field-key [:edit-c card-id]
-                             :!editor-atom !c-editor
-                             :cloze? true
-                             :autofocus? true}))
+                (QuillField init-c
+                  (fn [html] (reset! !cloze html))
+                  "Cloze text with {{c1::deletion}}..." [:edit-c card-id] !c-editor true true))
               (dom/label (dom/text "Back Extra:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
-                (QuillField {:value-string init-a
-                             :on-change (fn [html] (reset! !answer html))
-                             :placeholder "Optional back extra..."
-                             :field-key [:edit-be card-id]
-                             :!editor-atom !a-editor}))))
+                (QuillField init-a
+                  (fn [html] (reset! !answer html))
+                  "Optional back extra..." [:edit-be card-id] !a-editor nil nil))))
           (dom/div
             (dom/props {:style {:display "flex" :justify-content "flex-end" :align-items "center" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
             (let [click-event
@@ -552,39 +541,28 @@
               (dom/label (dom/text "Question:"))
               (dom/div
                 (dom/props {:style {:margin-bottom "var(--sp-3)" :font-size modal-font}})
-                (QuillField {:value-string init-q
-                             :on-change (fn [html] (reset! !question html))
-                             :placeholder "Question..."
-                             :field-key [:add-q]
-                             :!editor-atom !q-editor
-                             :autofocus? true}))
+                (QuillField init-q
+                  (fn [html] (reset! !question html))
+                  "Question..." [:add-q] !q-editor nil true))
               (dom/label (dom/text "Answer:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
-                (QuillField {:value-string ""
-                             :on-change (fn [html] (reset! !answer html))
-                             :placeholder "Answer..."
-                             :field-key [:add-a]
-                             :!editor-atom !a-editor})))
+                (QuillField ""
+                  (fn [html] (reset! !answer html))
+                  "Answer..." [:add-a] !a-editor nil nil)))
             (dom/div
               (dom/label (dom/text "Cloze:"))
               (dom/div
                 (dom/props {:style {:margin-bottom "var(--sp-3)" :font-size modal-font}})
-                (QuillField {:value-string init-c
-                             :on-change (fn [html] (reset! !cloze html))
-                             :placeholder "Cloze text with {{c1::deletion}}..."
-                             :field-key [:add-c]
-                             :!editor-atom !c-editor
-                             :cloze? true
-                             :autofocus? true}))
+                (QuillField init-c
+                  (fn [html] (reset! !cloze html))
+                  "Cloze text with {{c1::deletion}}..." [:add-c] !c-editor true true))
               (dom/label (dom/text "Back Extra:"))
               (dom/div
                 (dom/props {:style {:font-size modal-font}})
-                (QuillField {:value-string ""
-                             :on-change (fn [html] (reset! !answer html))
-                             :placeholder "Optional back extra..."
-                             :field-key [:add-be]
-                             :!editor-atom !a-editor}))))
+                (QuillField ""
+                  (fn [html] (reset! !answer html))
+                  "Optional back extra..." [:add-be] !a-editor nil nil))))
           (dom/div
             (dom/props {:style {:display "flex" :justify-content "flex-end" :align-items "center" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
             (let [click-event

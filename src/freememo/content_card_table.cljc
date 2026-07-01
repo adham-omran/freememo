@@ -4,6 +4,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.doc-context :as dctx]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
    [freememo.card-components :refer [CardRow rtl-text?]]
@@ -27,9 +28,11 @@
               {:success false :error (.getMessage e)}))
      :cljs nil))
 
-(e/defn ContentCardTable [{:keys [topic-id card-font-size user-id]} refresh]
+(e/defn ContentCardTable []
   (e/client
-    (let [cards-result (e/server (get-cards-for-topic* refresh topic-id))
+    (let [topic-id dctx/page-topic-id card-font-size dctx/card-font-size user-id dctx/user-id
+          refresh dctx/card-refresh
+          cards-result (e/server (get-cards-for-topic* refresh topic-id))
           !editing-card (atom nil)
           editing-card (e/watch !editing-card)]
 

@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.doc-context :as dctx]
    [clojure.string]
    [freememo.logging :as log]
    [freememo.navigation :as nav]
@@ -25,9 +26,10 @@
 (def ^:private heic-name-rx #"(?i)\.hei[cf]$")
 (def ^:private heic-type-rx #"(?i)image/hei[cf]")
 
-(e/defn LiveDocAddPhotos [{:keys [document-id compact?]}]
+(e/defn LiveDocAddPhotos []
   (e/client
-    (let [!upload-input (atom nil)
+    (let [document-id dctx/document-id compact? dctx/compact?
+          !upload-input (atom nil)
           !camera-input (atom nil)
           !busy         (atom false)         ; commit in flight
           !staged       (atom [])            ; [{:id :name :status :rotation :url :payload :error}]
@@ -194,15 +196,17 @@
    when it changes (e.g. a Live Document append) the viewer fetches and swaps the
    fresh blob in place — see the versioned-key reconciliation below.
    Returns: The current page number (for OCR integration)."
-  [{:keys [document-id initial-page on-navigate! on-total!
-           target-page
-           is-live? has-file? reload-nonce]}]
+  []
   (e/client
     ;; e/snapshot seeds the atoms ONCE at first mount. Without it, Electric
     ;; re-evaluates (atom …) on subsequent reactive cycles when callers
     ;; rebuild prop closures, recreating !page and silently throwing away
     ;; scroll-induced page changes (observed: scroll to p14 → atom reset → p15).
-    (let [seed-page (e/snapshot (or initial-page 1))
+    (let [document-id dctx/document-id initial-page dctx/initial-page
+          on-navigate! dctx/on-navigate! on-total! dctx/on-total!
+          target-page dctx/target-page is-live? dctx/is-live?
+          has-file? dctx/has-file? reload-nonce dctx/reload-nonce
+          seed-page (e/snapshot (or initial-page 1))
           !page (atom seed-page)
           !total (atom 0)
           !container (atom nil)
@@ -257,7 +261,7 @@
               (dom/div (dom/props {:style {:font-size "13px" :max-width "320px"}})
                 (dom/text "Take photos or upload images of your material — each becomes a page you can keep adding to."))
               (dom/div (dom/props {:style {:display "flex" :gap "8px"}})
-                (LiveDocAddPhotos {:document-id document-id :compact? false}))))
+                (binding [dctx/compact? false] (LiveDocAddPhotos)))))
 
           ;; Viewer container — created ONCE (init-viewer!) and the document is
           ;; swapped IN-PLACE (set-document!) when document-id changes; never

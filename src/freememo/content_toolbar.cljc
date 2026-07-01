@@ -8,6 +8,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.doc-context :as dctx]
    [freememo.content-toolbar-helpers :as helpers]
    [freememo.content-toolbar-settings :as settings]
    [freememo.content-toolbar-actions :as actions]
@@ -42,13 +43,17 @@
 ;; install-overflow-detector! lives in freememo.toolbar-overflow (shared with
 ;; PdfToolbar). Required above.
 
-(e/defn ContentToolbar [state refresh !show-bib]
+(e/defn ContentToolbar []
   (e/client
     (let [mod-key (if (mac-platform?) "Cmd" "Ctrl")
-          {:keys [user-id enc-key topic-id audio? root-topic-id page-number content-text
-                  context-mode context-tooltip llm-enabled?
-                  extract-status navigate! origin on-done!
-                  citation page-info pdf-root? pdf-status reading-mode?]} state
+          user-id dctx/user-id enc-key dctx/enc-key topic-id dctx/topic-id audio? dctx/audio?
+          root-topic-id dctx/root-topic-id page-number dctx/page-number content-text dctx/content-text
+          context-mode dctx/context-mode context-tooltip dctx/context-tooltip llm-enabled? dctx/llm-enabled?
+          extract-status dctx/extract-status navigate! dctx/navigate! origin dctx/origin on-done! dctx/on-done!
+          citation dctx/citation page-info dctx/page-info pdf-root? dctx/pdf-root? pdf-status dctx/pdf-status
+          reading-mode? dctx/reading-mode?
+          refresh dctx/card-refresh
+          !show-bib dctx/!show-bib
           ;; Unsynced card count — uses refresh value for reactivity
           unsynced-count (e/server (helpers/get-unsynced-count* refresh topic-id))
           ;; biblio-target-id: source rows live on the document's root, not on
@@ -111,10 +116,8 @@
             (dom/props {:class "toolbar"})
             (dom/div
               (dom/props {:class "toolbar-group"})
-              (actions/ToolbarActions
-                {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
-                 :context-mode context-mode :mod-key mod-key
-                 :card-type card-type}))))
+              (binding [dctx/mod-key mod-key dctx/card-type card-type]
+                (actions/ToolbarActions)))))
 
         (dom/div
         ;; Electric's reactive class binding owns base + overflow-open only.
@@ -175,10 +178,10 @@
                 (dom/div
                   (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-docmeta"
                               :style {:flex-direction "column" :gap "6px"}})
-                  (DocumentMetaGroup
-                    {:user-id user-id :bib-topic-id biblio-target-id
-                     :pdf-root? pdf-root? :pdf-status pdf-status :variant :overflow}
-                    !show-bib))
+                  (binding [dctx/bib-topic-id biblio-target-id
+                            dctx/citation nil dctx/page-info nil
+                            dctx/variant :overflow]
+                    (DocumentMetaGroup)))
 
             ;; Separator between settings/context group and action buttons
                 (dom/div (dom/props {:class "toolbar-overflow-panel-separator"}))
@@ -252,10 +255,8 @@
           ;; 1. Extract + Add new (IR Tools).
               (dom/div
                 (dom/props {:class "toolbar-group"})
-                (actions/ToolbarActions
-                  {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
-                   :context-mode context-mode :mod-key mod-key
-                   :card-type card-type}))
+                (binding [dctx/mod-key mod-key dctx/card-type card-type]
+                  (actions/ToolbarActions)))
 
               (dom/div (dom/props {:class "toolbar-group-divider"}))
 
@@ -266,13 +267,13 @@
           ;; first to collapse (.toolbar-collapse-first).
               (dom/div
                 (dom/props {:class "toolbar-group toolbar-generate-cluster"})
-                (GenerateDropdown
-                  (assoc state
-                    :mod-key mod-key
-                    :card-type card-type :card-count-val card-count-val
-                    :use-context use-context :context-window context-window
-                    :gen-active? gen-active? :gen-pending gen-pending :gen-error gen-error)
-                  !use-context !context-window !card-type)
+                (binding [dctx/mod-key mod-key dctx/card-type card-type
+                          dctx/card-count-val card-count-val dctx/use-context use-context
+                          dctx/context-window context-window dctx/gen-active? gen-active?
+                          dctx/gen-pending gen-pending dctx/gen-error gen-error
+                          dctx/!use-context !use-context dctx/!context-window !context-window
+                          dctx/!card-type !card-type]
+                  (GenerateDropdown))
 
                 ;; Card-count stays inline (commonly changed). Card-type +
                 ;; Context moved into the Generate dropdown menu (C3).
@@ -286,10 +287,9 @@
           ;; 3. Sync dropdown (unboxed, lone trigger) — Export + Pull + Anki Sync.
           ;; Source buttons mount hidden inside so refs/modals/e/Token paths stay
           ;; live; .toolbar-collapse-sync sits on the visible trigger inside.
-              (SyncDropdown
-                {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
-                 :page-number page-number :card-type card-type
-                 :unsynced-count unsynced-count :mod-key mod-key})
+              (binding [dctx/card-type card-type dctx/unsynced-count unsynced-count
+                        dctx/mod-key mod-key]
+                (SyncDropdown))
 
           ;; Divider hides with Sync at tier 7 (no dangling separator).
               (dom/div (dom/props {:class "toolbar-group-divider toolbar-collapse-sync"}))
@@ -298,9 +298,7 @@
           ;; present; Done/Delete only for extract topics.
               (dom/div
                 (dom/props {:class "toolbar-group"})
-                (ExtractActions {:user-id user-id :topic-id topic-id :root-topic-id root-topic-id
-                                 :extract-status extract-status
-                                 :navigate! navigate! :origin origin :on-done! on-done!}))
+                (ExtractActions))
 
           ;; Divider hides with the doc-context group at tier 5.
               (dom/div (dom/props {:class "toolbar-group-divider toolbar-collapse-bib"}))
@@ -324,11 +322,9 @@
           ;; the rest at tier 2 (.toolbar-collapse-docmeta on the group).
               (dom/div
                 (dom/props {:class "toolbar-group toolbar-collapse-docmeta"})
-                (DocumentMetaGroup
-                  {:user-id user-id :bib-topic-id biblio-target-id
-                   :citation citation :page-info page-info
-                   :pdf-root? pdf-root? :pdf-status pdf-status :variant :inline}
-                  !show-bib))
+                (binding [dctx/bib-topic-id biblio-target-id
+                          dctx/variant :inline]
+                  (DocumentMetaGroup)))
 
           ;; Overflow trigger — visible only on mobile/tablet via CSS
               (dom/div

@@ -141,10 +141,9 @@
 (e/defn CompareModal
   "Runs both previews on mount, shows them side-by-side, commits the picked text
    to the current page, and (if Remember is checked) saves the per-PDF style."
-  [user-id root-topic-id state !compare]
+  [user-id root-topic-id page raw !compare]
   (e/client
-    (let [{:keys [page raw]} state
-          !remember (atom false)]
+    (let [!remember (atom false)]
       (dom/div
         (dom/props {:class "modal-backdrop"})
         (dom/On "click" (fn [_] (reset! !compare nil)) nil)
@@ -257,7 +256,7 @@
 
       ;; Compare path (style unset): run both previews in a modal.
       (when compare
-        (CompareModal user-id root-topic-id compare !compare)))))
+        (CompareModal user-id root-topic-id (:page compare) (:raw compare) !compare)))))
 
 ;; ── Copy-all button ───────────────────────────────────────────────────────
 

@@ -13,6 +13,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.doc-context :as dctx]
    [freememo.logging :as log]
    [freememo.icons :as icons]
    [freememo.keyboard :as keyboard]
@@ -110,9 +111,11 @@
   "Pre:  llm-enabled? true (caller gates); cfg carries the scan target.
    Post: trigger toggles a menu of [Scan Page, Compare OCR]; each dispatches the
          hidden source button. Scan keeps !scan-btn-ref (keyboard shortcut)."
-  [{:keys [user-id enc-key pdf-root-id page-number scan-dpi scanning?]}]
+  []
   (e/client
-    (let [!open (atom false)
+    (let [user-id dctx/user-id enc-key dctx/enc-key pdf-root-id dctx/pdf-root-id
+          page-number dctx/page-number scan-dpi dctx/scan-dpi scanning? dctx/scanning?
+          !open (atom false)
           open (e/watch !open)]
 
       ;; Hidden sources — kept mounted so tokens/modals/shortcut stay live.
@@ -181,9 +184,11 @@
   "Pre:  cfg carries the copy scope + per-PDF extract style.
    Post: trigger toggles a menu of [Copy text, Copy all text]; each dispatches
          the hidden source button (which owns busy-state + the compare modal)."
-  [{:keys [user-id pdf-root-id page-number extract-style]}]
+  []
   (e/client
-    (let [!open (atom false)
+    (let [user-id dctx/user-id pdf-root-id dctx/pdf-root-id page-number dctx/page-number
+          extract-style dctx/extract-style
+          !open (atom false)
           open (e/watch !open)]
 
       ;; Hidden sources.

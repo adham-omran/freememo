@@ -4,6 +4,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.doc-context :as dctx]
    [freememo.logging :as log]
    [freememo.rich-text-editor :as editor]
    [freememo.rich-text-editor-component :refer [RichTextEditorComponent]]
@@ -43,10 +44,11 @@
 ;; ---------------------------------------------------------------------------
 
 (e/defn EditorPane
-  [{:keys [user-id topic-id audio-topic-id is-pdf-page?
-           static-content
-           on-imported-navigate!]}]
+  []
   (e/client
+    (let [user-id dctx/user-id topic-id dctx/topic-id audio-topic-id dctx/audio-topic-id
+          is-pdf-page? dctx/is-pdf-page? static-content dctx/static-content
+          on-imported-navigate! dctx/on-imported-navigate!]
     (dom/div
       (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
                           :min-width "0" :min-height "0" :overflow "hidden"}})
@@ -193,8 +195,8 @@
                 (dom/props {:style {:height "100%" :display "flex" :flex-direction "column"
                                     :overflow "hidden"}
                             :data-role "editor-host"})
-                (RichTextEditorComponent {:initial-html static-content
-                                          :topic-id topic-id})
+                (binding [dctx/initial-html static-content]
+                  (RichTextEditorComponent))
                 ;; Install contextmenu listener on this container after mount.
                 ;; The accessor closures MUST be created here (inside the Electric
                 ;; reactive let), not inside js/setTimeout — closures created in
@@ -213,5 +215,5 @@
                       (reset! !cleanup-fn
                         (install-pin-contextmenu! host get-topic-id get-pin-count on-pin-fn)))
                     0)
-                  (e/on-unmount (fn [] (when-let [f @!cleanup-fn] (f)))))))))))))
+                  (e/on-unmount (fn [] (when-let [f @!cleanup-fn] (f))))))))))))))
 

@@ -4,6 +4,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.doc-context :as dctx]
    [clojure.string :as str]
    [freememo.rich-text-editor :as editor]
    [freememo.card-modals :refer [PromptDialog]]
@@ -24,13 +25,14 @@
             (or (:topics/content (db/get-topic pid)) ""))
      :cljs nil))
 
-(e/defn ToolbarGenerate [cfg]
+(e/defn ToolbarGenerate []
   (e/client
-    (let [{:keys [user-id enc-key topic-id root-topic-id page-number
-                  content-text context-mode mod-key
-                  llm-enabled?
-                  card-type card-count-val use-context context-window
-                  gen-active? gen-pending gen-error]} cfg
+    (let [user-id dctx/user-id enc-key dctx/enc-key topic-id dctx/topic-id root-topic-id dctx/root-topic-id
+          page-number dctx/page-number content-text dctx/content-text context-mode dctx/context-mode
+          mod-key dctx/mod-key llm-enabled? dctx/llm-enabled?
+          card-type dctx/card-type card-count-val dctx/card-count-val use-context dctx/use-context
+          context-window dctx/context-window
+          gen-active? dctx/gen-active? gen-pending dctx/gen-pending gen-error dctx/gen-error
 
           ;; All generate/prompt atoms are LOCAL — never passed through a map.
           ;; Passing watched values through a cfg map causes reactive loops:
