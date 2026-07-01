@@ -29,4 +29,7 @@
           :transcribing-topics (atom #{})
           :ocr-errors       (atom {})
           :scan-cancellers  (atom {})
-          :toasts           (atom []))))))
+          :toasts           (atom [])
+          ;; Optimistic-update pipeline (freememo.optimistic):
+          :pending-commands (atom [])   ; dispatch queue: [{:id :type :payload} ...]
+          :pending-cards    (atom {}))))))   ; add-card row overlay: tempid -> entry

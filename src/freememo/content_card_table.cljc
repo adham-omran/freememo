@@ -7,9 +7,11 @@
    [freememo.doc-context :as dctx]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
-   [freememo.card-components :refer [CardRow rtl-text?]]
+   [freememo.card-components :refer [CardRow PendingCardRow rtl-text?]]
    [freememo.card-modals :refer [EditCardModal]]
-   #?(:clj [freememo.db :as db])))
+   #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.user-state :as us])
+   #?(:clj [freememo.optimistic :as opt])))
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 ;; For root topics (no parent), fetches ALL descendant cards via get-all-flashcards.
@@ -51,7 +53,17 @@
               ;; Fixed row height: 12px padding + 28px content line + 1px border.
               ;; font-sz drives the text line within this budget, not the row height
               ;; (adding it left an empty band below every row).
-              row-height 41]
+              row-height 41
+              ;; Optimistic add-card overlay (freememo.optimistic :pending-cards).
+              pending-map (e/server (e/watch (us/get-atom user-id :pending-cards)))
+              present-ids (e/server (set (map :flashcards/id cards-vec)))
+              overlay-entries (e/server (opt/visible-pending-cards pending-map topic-id present-ids))
+              landed-tempids (e/server (opt/landed-pending-tempids pending-map topic-id present-ids))]
+          ;; Auto-forget confirmed overlay entries once their cards have landed
+          ;; in the refetched list (keeps :pending-cards from accumulating).
+          (e/for [tid (e/server (e/diff-by identity landed-tempids))]
+            (let [[t _] (e/Token tid)]
+              (when t (case (e/server (opt/forget-pending-card! user-id tid)) (t)))))
           (dom/div
             (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
             (when (pos? card-count)
@@ -76,16 +88,20 @@
                                     :font-size (str font-sz "px")
                                     :direction (if rtl? "rtl" "ltr")
                                     :grid-template-columns "24px 1fr 1fr 40px"}})
+                ;; Optimistic pending/error rows above the real cards.
+                (e/for [entry (e/server (e/diff-by :tempid overlay-entries))]
+                  (PendingCardRow entry user-id))
                 (if (pos? card-count)
                   (e/for [i (Tape offset limit)]
                     (let [card (e/server (nth cards-vec i nil))]
                       (when card
                         (CardRow card !editing-card user-id (inc i)))))
-                  (dom/tr
-                    (dom/td
-                      (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
-                                          :color "var(--color-text-hint)" :font-size "13px"}})
-                      (dom/text "No cards yet. Use the Generate button above to create flashcards from this content.")))))
+                  (when (empty? overlay-entries)
+                    (dom/tr
+                      (dom/td
+                        (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
+                                            :color "var(--color-text-hint)" :font-size "13px"}})
+                        (dom/text "No cards yet. Use the Generate button above to create flashcards from this content."))))))
               (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))
         (dom/div
           (dom/props {:style {:color "var(--color-danger)" :font-size "13px" :padding "8px 12px"}})

@@ -13,6 +13,8 @@
    [freememo.bibliography-button :as bib-btn]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])
+   #?(:clj [freememo.optimistic :as opt])
+   #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.biblio-import :as biblio-import])))
 
 (def csl-type-options
@@ -226,6 +228,20 @@
          {:ok false :error (.getMessage e)}))
      :cljs nil))
 
+;; Optimistic-update dispatch (freememo.optimistic). Pre: payload has :topic-id
+;; and :data. Post: source persisted (success toast) or error toast; command
+;; removed from the queue. Returns :done.
+#?(:clj
+   (defmethod opt/run-command! :save-biblio [user-id {:keys [id payload]}]
+     (let [{:keys [topic-id data]} payload
+           r (save-source-for-topic!* user-id topic-id data)]
+       (if (:ok r)
+         (toasts/push! user-id {:level :success :message "Bibliography saved"})
+         (toasts/push! user-id {:level :error
+                                :message (or (:error r) "Failed to save bibliography")}))
+       (opt/drop-command! user-id id)
+       :done)))
+
 ;; ---------------------------------------------------------------------------
 ;; UI
 ;; ---------------------------------------------------------------------------
@@ -409,12 +425,13 @@
                   :type :command
                   :show-buttons false)]
     (e/for [[token cmd] (e/diff-by first (e/as-vec commits))]
-      (let [data (nth cmd 2)
-            r (e/server (e/Offload #(save-source-for-topic!* user-id topic-id data)))]
-        (when (some? r)
-          (if (:ok r)
-            (do (reset! !show false) (token))
-            (token (:error r))))))))
+      (let [data (nth cmd 2)]
+        ;; Optimistic: enqueue the save and close immediately; the
+        ;; CommandDispatcher persists it server-side and toasts the outcome.
+        (case (e/server (opt/enqueue-command! user-id
+                          {:type :save-biblio
+                           :payload {:topic-id topic-id :data data}}))
+          (do (reset! !show false) (token)))))))
 
 (e/defn BibliographyForm [!show user-id topic-id]
   (e/client

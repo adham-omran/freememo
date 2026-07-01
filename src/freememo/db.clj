@@ -1828,18 +1828,23 @@
 
 (defn insert-flashcards!
   "Batch insert flashcards. Rows should include :topic_id and :root_topic_id.
-   Uses ON CONFLICT DO NOTHING to prevent duplicates."
+   Uses ON CONFLICT DO NOTHING to prevent duplicates.
+   Returns a vector of the inserted flashcards' ids in insertion order; rows
+   skipped by ON CONFLICT DO NOTHING return no id, so the result may be shorter
+   than `rows`. Returns nil when `rows` is empty."
   [rows]
   (when (seq rows)
     (doseq [row rows]
       (input/check-length! :question (:question row) input/card-max)
       (input/check-length! :answer (:answer row) input/card-max)
       (input/check-length! :cloze (:cloze row) input/card-max))
-    (jdbc/execute! ds
-      (sql/format {:insert-into :flashcards
-                   :values rows
-                   :on-conflict []
-                   :do-nothing true}))))
+    (mapv :flashcards/id
+      (jdbc/execute! ds
+        (sql/format {:insert-into :flashcards
+                     :values rows
+                     :on-conflict []
+                     :do-nothing true
+                     :returning [:id]})))))
 
 (defn get-flashcards
   "Get all flashcards for a specific topic (page or extract).

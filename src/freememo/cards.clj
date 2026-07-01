@@ -308,7 +308,10 @@
    For cloze cards: expects [{:c \"...\" :a html-or-nil}]
    topic-id: the page or extract topic that owns these cards.
    root-topic-id: the root PDF/EPUB/web/basic topic.
-   Bakes pinned images into each card's HTML before insert."
+   Bakes pinned images into each card's HTML before insert.
+   Returns {:success true :ids [id...]} — the ids of the newly inserted cards,
+   in order (may be shorter than `cards` if ON CONFLICT skipped duplicates) —
+   or {:success false :error msg} on failure."
   [topic-id root-topic-id kind cards]
   (try
     (let [rows (map (fn [card]
@@ -327,8 +330,7 @@
                            :answer (:a baked)
                            :cloze (:c baked)})))
                  cards)]
-      (db/insert-flashcards! rows)
-      {:success true})
+      {:success true :ids (vec (db/insert-flashcards! rows))})
     (catch Exception e
       (tel/error! {:id ::save-cards} e)
       {:success false :error (.getMessage e)})))
