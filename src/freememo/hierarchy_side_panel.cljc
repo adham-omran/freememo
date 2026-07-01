@@ -19,8 +19,10 @@
    [freememo.navigation :as nav]
    [freememo.util :as util]
    [freememo.viewport :as viewport]
+   [freememo.tree-dnd :as tree-dnd]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])
+   #?(:clj [freememo.topic-move :as topic-move])
    #?(:clj [freememo.user-state :as us])))
 
 #?(:clj
@@ -202,7 +204,21 @@
                 (when (e/server (some? rows))
                   (let [row-count (e/server (count rows))
                         row-height 36
-                        !scroll-node (atom nil)]
+                        !scroll-node (atom nil)
+                        ;; Drag-and-drop nesting (no promote-to-root here — the
+                        ;; hierarchy tab has no root target by design).
+                        !drag-src (atom nil)
+                        drag-src (e/watch !drag-src)
+                        forbidden (e/server (if drag-src (set (db/get-subtree-ids drag-src)) #{}))
+                        !drop-cmd (atom nil)
+                        drop-cmd (e/watch !drop-cmd)]
+
+                (let [[t _] (e/Token drop-cmd)]
+                  (when t
+                    (let [{:keys [src dst]} drop-cmd
+                          ok (e/server (e/Offload #(topic-move/move-topic! user-id src dst)))]
+                      (case ok
+                        (case (e/client (reset! !drop-cmd nil)) (t))))))
 
               (dom/div
                 (dom/props {:class "tape-scroll"
@@ -243,6 +259,11 @@
                                                       :outline (when current? "2px solid var(--color-primary)")
                                                       :outline-offset (when current? "-2px")
                                                       :font-weight (if current? "600" "400")}})
+                                  ;; DnD re-parenting on this cell (tr is
+                                  ;; display:contents → not draggable). Page stubs
+                                  ;; are structural — not draggable.
+                                  (tree-dnd/DragDropRow! id (not is-page)
+                                    !drag-src drag-src forbidden !drop-cmd)
                                   (dom/On "click"
                                     (fn [_]
                                       (when-not current?
