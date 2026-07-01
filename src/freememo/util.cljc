@@ -38,30 +38,34 @@
 ;; Drag helper for split-pane dividers (PointerEvent API — works for mouse, touch, and stylus)
 (defn start-drag!
   "Begin a split-pane drag. Call from a pointerdown handler.
-   axis: :x for horizontal, :y for vertical."
-  [e axis !pct]
-  #?(:clj nil
-     :cljs
-     (do
-       (.preventDefault e)
-       (let [target (.-currentTarget e)
-             horizontal? (= axis :x)
-             start-pos (if horizontal? (.-clientX e) (.-clientY e))
-             start-pct @!pct
-             parent (.-parentElement target)
-             parent-size (if horizontal? (.-offsetWidth parent) (.-offsetHeight parent))
-             on-move (fn [me]
-                       (let [delta (- (if horizontal? (.-clientX me) (.-clientY me)) start-pos)
-                             delta-pct (* (/ delta parent-size) 100)
-                             new-pct (-> (+ start-pct delta-pct) (max 15) (min 85))]
-                         (reset! !pct new-pct)))
-             on-up (fn self [ue]
-                     (.releasePointerCapture target (.-pointerId ue))
-                     (.removeEventListener target "pointermove" on-move)
-                     (.removeEventListener target "pointerup" self))]
-         (.setPointerCapture target (.-pointerId e))
-         (.addEventListener target "pointermove" on-move)
-         (.addEventListener target "pointerup" on-up)))))
+   axis: :x for horizontal, :y for vertical.
+   `on-commit` (optional) is called with the final pct on pointerup, for
+   persistence — mirrors start-drag-px!."
+  ([e axis !pct] (start-drag! e axis !pct nil))
+  ([e axis !pct {:keys [on-commit]}]
+   #?(:clj nil
+      :cljs
+      (do
+        (.preventDefault e)
+        (let [target (.-currentTarget e)
+              horizontal? (= axis :x)
+              start-pos (if horizontal? (.-clientX e) (.-clientY e))
+              start-pct @!pct
+              parent (.-parentElement target)
+              parent-size (if horizontal? (.-offsetWidth parent) (.-offsetHeight parent))
+              on-move (fn [me]
+                        (let [delta (- (if horizontal? (.-clientX me) (.-clientY me)) start-pos)
+                              delta-pct (* (/ delta parent-size) 100)
+                              new-pct (-> (+ start-pct delta-pct) (max 15) (min 85))]
+                          (reset! !pct new-pct)))
+              on-up (fn self [ue]
+                      (.releasePointerCapture target (.-pointerId ue))
+                      (.removeEventListener target "pointermove" on-move)
+                      (.removeEventListener target "pointerup" self)
+                      (when on-commit (on-commit @!pct)))]
+          (.setPointerCapture target (.-pointerId e))
+          (.addEventListener target "pointermove" on-move)
+          (.addEventListener target "pointerup" on-up))))))
 
 ;; Pixel-width drag for side panels (PointerEvent API — mouse, touch, stylus).
 ;; Distinct from start-drag! (which is %-of-parent for split panes): here the

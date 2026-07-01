@@ -55,6 +55,7 @@
 (def EMAIL_UPDATES "email_updates")
 (def THEME "theme")
 (def ZOTERO_ENABLED "zotero_enabled")
+(def CARD_SPLIT "card_split")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
 
 (defn get-email-updates [user-id]
@@ -624,6 +625,25 @@
     (catch Exception e
       (tel/error! {:id ::save-card-font-size} e)
       {:success false :error "Failed to save card font size"})))
+
+(defn get-card-split
+  "Global per-user content↕card-table split, as a percentage in [15,85].
+   Returns nil when unset — caller falls back to the client default
+   (default-split-pct, which depends on window height)."
+  [user-id]
+  (try
+    (when-let [v (db/get-setting user-id CARD_SPLIT)]
+      (-> (Double/parseDouble v) (max 15.0) (min 85.0)))
+    (catch Exception _ nil)))
+
+(defn save-card-split [user-id value]
+  (try
+    (let [clamped (-> (Double/parseDouble (str value)) (max 15.0) (min 85.0))]
+      (db/set-setting user-id CARD_SPLIT (str clamped))
+      {:success true})
+    (catch Exception e
+      (tel/error! {:id ::save-card-split} e)
+      {:success false :error "Failed to save card split"})))
 
 (defn get-scan-dpi [user-id]
   (try

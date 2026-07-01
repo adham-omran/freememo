@@ -19,7 +19,8 @@
    literals here is what overflowed the 64KB method, so we pass the one map
    through and let each child destructure the keys it needs."
   [{:keys [user-id page-topic-id pdf-root-id is-pdf? reading-mode?
-           card-font-size card-refresh !top-pct t-layout layout-save] :as m}]
+           card-font-size card-refresh !top-pct !top-pct-save reset-split!
+           t-layout layout-save] :as m}]
   (e/client
     ;; Persist layout on toggle
     (when t-layout
@@ -44,9 +45,14 @@
       ;; Add-Card still works; success surfaces as a toast (card_modals).
       (when-not reading-mode?
         ;; Vertical drag handle: resizes the top region ↕ the bottom bar.
+        ;; Drag persists the split on release; double-click resets to default.
         (dom/div
-          (dom/props {:class "split-divider-v" :title "Drag to resize panels"})
-          (dom/On "pointerdown" (fn [e] (util/start-drag! e :y !top-pct)) nil)))
+          (dom/props {:class "split-divider-v"
+                      :title "Drag to resize panels (double-click to reset)"})
+          (dom/On "pointerdown"
+            (fn [e] (util/start-drag! e :y !top-pct {:on-commit #(reset! !top-pct-save %)}))
+            nil)
+          (dom/On "dblclick" (fn [_] (reset-split!)) nil)))
 
       ;; BOTTOM BAR (full width): the card table.
       (when-not reading-mode?
