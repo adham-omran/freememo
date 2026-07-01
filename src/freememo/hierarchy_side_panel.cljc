@@ -251,7 +251,9 @@
                                 (dom/props {:style {:--order (inc i)}})
                                 (dom/td
                                   (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
-                                                      :padding-left (str (+ 6 (* depth 14)) "px")
+                                                      ;; Base 20 reserves the fixed left gutter for the
+                                                      ;; absolutely positioned .drag-grip (see tree_dnd).
+                                                      :padding-left (str (+ 20 (* depth 14)) "px")
                                                       :padding-right "8px"
                                                       :cursor (if current? "default" "pointer")
                                                       :background (when current? "var(--color-bg-card)")
