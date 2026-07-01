@@ -13,8 +13,10 @@
    [freememo.icons :as icons]
    [freememo.viewport :as viewport]
    [freememo.util :as util]
+   [freememo.tree-dnd :as tree-dnd]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.staged-delete :as staged-delete])
+   #?(:clj [freememo.topic-move :as topic-move])
    #?(:clj [freememo.user-state :as us])))
 
 ;; Frame-safe focus-on-mount. HTML :autofocus does NOT fire on dynamically
@@ -193,7 +195,8 @@
 
 (e/defn DocumentRow [user-id navigate! row i row-height
                      editing-id
-                     !expansion !editing-id !show-confirm !scroll-node]
+                     !expansion !editing-id !show-confirm !scroll-node
+                     !drag-src drag-src forbidden !drop-cmd]
   (e/client
     (let [{:keys [depth topic has-children is-root expanded?]} row
           id (:topics/id topic)
@@ -221,6 +224,10 @@
                               :padding-left "var(--row-indent)"
                               :overflow "hidden"
                               :border-left (when (= topic-status "done") "2px solid var(--color-success-lighter)")}})
+          ;; Native drag-and-drop re-parenting lives on this cell (the tr is
+          ;; display:contents → no box → not draggable). All library rows are
+          ;; draggable; page stubs are flattened away so none render here.
+          (tree-dnd/DragDropRow! id true !drag-src drag-src forbidden !drop-cmd)
           (if has-children
             (dom/span
               (dom/props {:style {:width "28px" :padding "4px 6px" :margin "-4px -6px"
@@ -337,6 +344,21 @@
                 (.stopPropagation e)
                 (reset! !editing-id id))
               nil))
+          ;; Promote to top level — the library-only path to un-nest a topic
+          ;; (drag-and-drop handles nesting; root has no drop target). Hidden on
+          ;; rows already at root.
+          (when-not is-root
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-secondary"
+                          :style {:padding "2px 6px" :font-size "12px" :line-height "1"}
+                          :aria-label "Move to top level"
+                          :data-tooltip "Move to top level"})
+              (dom/text "⤴")
+              (dom/On "click"
+                (fn [e]
+                  (.stopPropagation e)
+                  (reset! !drop-cmd {:src id :dst nil}))
+                nil)))
           (when has-children
             (dom/button
               (dom/props {:class "btn btn-sm btn-secondary"
@@ -453,7 +475,21 @@
           phone? (e/watch viewport/!phone?)
           row-height (if phone? 80 36)
           grid-cols (if phone? "1fr" "1fr 70px 80px 80px 110px")
-          !scroll-node (atom nil)]
+          !scroll-node (atom nil)
+          ;; Drag-and-drop nesting state. forbidden = the dragged node's subtree
+          ;; ids, fetched once per drag start; rows in it are invalid targets.
+          !drag-src (atom nil)
+          drag-src (e/watch !drag-src)
+          forbidden (e/server (if drag-src (set (db/get-subtree-ids drag-src)) #{}))
+          !drop-cmd (atom nil)
+          drop-cmd (e/watch !drop-cmd)]
+            ;; Commit a drop / promote-to-root via the standard mutation idiom.
+            (let [[t _] (e/Token drop-cmd)]
+              (when t
+                (let [{:keys [src dst]} drop-cmd
+                      ok (e/server (e/Offload #(topic-move/move-topic! user-id src dst)))]
+                  (case ok
+                    (case (e/client (reset! !drop-cmd nil)) (t))))))
             (dom/div
               (dom/props {:class "table-frame"
                           :style {:display "flex" :flex-direction "column" :min-height "0" :flex "1"}})
@@ -507,7 +543,8 @@
                           (when row
                             (DocumentRow user-id navigate! row i row-height
                               editing-id
-                              !expansion !editing-id !show-confirm !scroll-node))))
+                              !expansion !editing-id !show-confirm !scroll-node
+                              !drag-src drag-src forbidden !drop-cmd))))
                       (dom/tr
                         (dom/td
                           (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"

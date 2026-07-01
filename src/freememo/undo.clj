@@ -32,7 +32,8 @@
     "remove-pin"      (do (db/restore-pin! (first (:snapshot entry))) nil)
     "reset-prompt"    (let [{:keys [key value]} (first (:snapshot entry))]
                         (db/set-setting user-id key value) nil)
-    "delete-document" (db/restore-staged-document! user-id entry)))
+    "delete-document" (db/restore-staged-document! user-id entry)
+    "move-topic"      (do (db/restore-topic-parent! entry) nil)))
 
 (defn- bump-views! [user-id entry]
   (case (:entity_type entry)

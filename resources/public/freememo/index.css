@@ -2747,3 +2747,14 @@ form[aria-busy="true"] {
     border-radius: var(--radius-pill);
     flex-shrink: 0;
 }
+
+/* Drag-and-drop topic nesting (tree_dnd). The drag source / drop target is the
+   row's first cell — the tr is display:contents (no box, not draggable). Valid
+   targets get a highlight; invalid targets (the dragged node's own subtree) get
+   no preventDefault on dragover, so the browser shows its native no-drop cursor. */
+.tape-scroll td[draggable="true"] { cursor: grab; }
+.tape-scroll td[data-drop="valid"] {
+    outline: 2px solid var(--color-primary);
+    outline-offset: -2px;
+    background: var(--color-info-bg);
+}
