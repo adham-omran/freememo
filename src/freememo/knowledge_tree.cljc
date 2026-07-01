@@ -202,6 +202,7 @@
           id (:topics/id topic)
           title (or (:topics/title topic) "(empty)")
           kind (or (:topics/kind topic) "basic")
+          is-page (= kind "page")
           source-container (:sources/container_title topic)
           topic-status (or (:topics/status topic) "active")
           [badge-text badge-color] (bibform/topic-badge kind source-container)]
@@ -227,9 +228,10 @@
                               :overflow "hidden"
                               :border-left (when (= topic-status "done") "2px solid var(--color-success-lighter)")}})
           ;; Native drag-and-drop re-parenting lives on this cell (the tr is
-          ;; display:contents → no box → not draggable). All library rows are
-          ;; draggable; page stubs are flattened away so none render here.
-          (tree-dnd/DragDropRow! id true !drag-src drag-src forbidden !drop-cmd)
+          ;; display:contents → no box → not draggable). Page stubs are flattened
+          ;; away under a root PDF, but a NESTED PDF's pages do render here — gate
+          ;; them non-draggable so they can't be moved off their document.
+          (tree-dnd/DragDropRow! id (not is-page) !drag-src drag-src forbidden !drop-cmd)
           (if has-children
             (dom/span
               (dom/props {:style {:width "28px" :padding "4px 6px" :margin "-4px -6px"
