@@ -9,6 +9,7 @@
    [freememo.quill-field :refer [QuillField flush-syntax-tokens!]]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.toasts :as toasts])
+   #?(:clj [freememo.optimistic :as opt])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.html-cleaner :as cleaner])
@@ -501,6 +502,26 @@
        (catch Exception e
          {:success false :error (.getMessage e)}))))
 
+;; Optimistic add-card dispatch (freememo.optimistic). Pre: payload has
+;; :topic-id :root-topic-id :kind :card-data. Post: cards saved (success toast,
+;; :card-mutations bumped, overlay entry flipped :confirmed with real ids) or
+;; overlay entry flipped :error + error toast; command removed. Returns :done.
+#?(:clj
+   (defmethod opt/run-command! :add-card [user-id {:keys [id payload]}]
+     (let [{:keys [topic-id root-topic-id kind card-data]} payload
+           result (cards/save-cards topic-id root-topic-id kind card-data)]
+       (if (:success result)
+         (do (swap! (us/get-atom user-id :pending-cards) update id merge
+               {:status :confirmed :real-ids (:ids result)})
+             (swap! (us/get-atom user-id :card-mutations) inc)
+             (toasts/push! user-id {:level :success :message "Card added"}))
+         (do (swap! (us/get-atom user-id :pending-cards) update id merge
+               {:status :error :error (:error result)})
+             (toasts/push! user-id {:level :error
+                                    :message (or (:error result) "Failed to add card")})))
+       (opt/drop-command! user-id id)
+       :done)))
+
 ;; Add card modal — uses topic-id and root-topic-id instead of doc-id + page-number
 (e/defn AddCardModal [!show-add !card-kind !captured-selection topic-id root-topic-id user-id]
   (e/client
@@ -655,20 +676,17 @@
                                       [{:q clean-primary :a clean-a}]
                                       [(cond-> {:c clean-primary}
                                          (and clean-a (not (str/blank? clean-a)))
-                                         (assoc :a clean-a))])
-                          ;; Route through cards/save-cards so bake-card-html
-                          ;; appends pinned <img> tags before insert (P3d).
-                          result (e/server (cards/save-cards topic-id root-topic-id kind card-data))]
-                      (if (:success result)
-                        (do (e/on-unmount #(reset! !show-add false))
-                            ;; Confirm the add — the card table is hidden in
-                            ;; mobile reading-mode (spec 2.5), so a toast is the
-                            ;; only feedback there; harmless elsewhere.
-                            (case (e/server
-                                    (toasts/push! user-id {:level :success :message "Card added"})
-                                    (swap! (us/get-atom user-id :card-mutations) inc))
-                              (t)))
-                        (t (:error result))))))))
+                                         (assoc :a clean-a))])]
+                      ;; Optimistic: register a pending row + enqueue the save,
+                      ;; then close immediately. The CommandDispatcher runs
+                      ;; cards/save-cards (baking pinned <img> per P3d), toasts,
+                      ;; and reconciles the row (optimistic/run-command! :add-card).
+                      ;; The table is hidden in mobile reading-mode (spec 2.9),
+                      ;; so the toast is the only feedback there; harmless else.
+                      (case (e/server (opt/enqueue-add-card! user-id
+                                        {:topic-id topic-id :root-topic-id root-topic-id
+                                         :kind kind :card-data card-data}))
+                        (do (e/on-unmount #(reset! !show-add false)) (t))))))))
             (dom/button
               (dom/props {:class "btn btn-secondary"})
               (dom/text "Cancel")

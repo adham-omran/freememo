@@ -18,6 +18,7 @@
             [freememo.subset-review :refer [SubsetReviewSession]]
             [freememo.landing-page :refer [LandingPage]]
             [freememo.toast-stack :refer [ToastStack]]
+            [freememo.optimistic :refer [CommandDispatcher]]
             [freememo.undo-history-modal :refer [ActionsNavButton UndoHistoryModal UndoNewestTrigger]]
             [freememo.icons :as icons]
             [freememo.keyboard :as keyboard]
@@ -307,6 +308,9 @@
 
                 ;; Project-wide toast overlay (fixed position; renders nothing when queue empty)
                 (ToastStack user-id navigate!)
+
+                ;; Optimistic-update command pump (headless; renders nothing)
+                (CommandDispatcher user-id)
 
                 ;; Undo: hidden Cmd-Shift-Z trigger + the Actions history modal
                 (UndoNewestTrigger user-id)

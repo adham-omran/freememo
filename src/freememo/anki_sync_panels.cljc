@@ -7,10 +7,25 @@
    [freememo.anki-sync-helpers :as helpers]
    [freememo.anki-sync-form :as form]
    [freememo.modal-shell :as modal-shell]
+   [freememo.keyboard :as keyboard]
    [freememo.logging :as log]
    #?(:clj [freememo.anki-sync-server :as sync])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.db :as db])))
+
+(defn save-last-used-prefs!*
+  "Persist the modal's current prefs as global last-used so the background Quick
+   Sync executor picks them up. CLJ-only; keeps #?(:clj) out of the reactive graph."
+  [user-id prefs-map]
+  #?(:clj (do (settings/save-anki-sync-settings user-id prefs-map) nil)
+     :cljs nil))
+
+(defn trigger-quick-sync!
+  "Fire the hidden QuickSync proxy button (toolbar) to run a background push.
+   No-op if the toolbar — hence the button — isn't mounted."
+  []
+  #?(:cljs (when-some [node @keyboard/!quick-sync-btn-ref] (.click node))
+     :clj nil))
 
 (defn get-source-display-mode* [user-id]
   #?(:clj (settings/get-source-display-mode user-id)
@@ -359,5 +374,27 @@
           (when t
             (case (helpers/run-fetch-fields! cloze-model (:!cloze-fields form)
                     preferred-cloze-fields) (t)))))
-      (AnkiSyncExecutor user-id selected-doc current-pdf-page conn form sync)
+      ;; §4 optimistic: the Push button sets :pushing; instead of running the
+      ;; executor in-modal, persist the modal's prefs as last-used, close, and
+      ;; fire the headless QuickSync (re-connects, pushes, toasts the outcome).
+      ;; The in-modal AnkiSyncExecutor is intentionally not mounted here.
+      ;; See plans/optimistic-updates.md §4.
+      (when (= (e/watch !sync-phase) :pushing)
+        (let [[t _] (e/Token :anki-handoff)]
+          (when t
+            ;; Build prefs on the CLIENT (deref the client atoms here); only the
+            ;; resulting plain map crosses to the server — never the atoms, which
+            ;; are unserializable. (Mirrors AnkiSyncExecutor's prefs-map handling.)
+            (let [prefs {:scope @(:!scope form)
+                         :deck @(:!selected-deck conn)
+                         :basic-model @(:!basic-model conn)
+                         :cloze-model @(:!cloze-model conn)
+                         :allow-dupes @(:!allow-dupes form)
+                         :use-tags @(:!use-tags form)
+                         :tags @(:!tags form)}]
+              (case (e/server (save-last-used-prefs!* user-id prefs))
+                (do (reset! !show-modal false)
+                    (reset! !sync-phase nil)
+                    (trigger-quick-sync!)
+                    (t)))))))
       (AnkiSyncModalDom user-id selected-doc !show-modal conn form sync))))

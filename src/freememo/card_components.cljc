@@ -7,6 +7,7 @@
    [freememo.logging :as log]
    #?(:clj [freememo.cards :as cards])
    #?(:cljs [freememo.anki-sync-helpers :refer [anki-call!]])
+   #?(:clj [freememo.optimistic :as opt])
    #?(:clj [freememo.user-state :as us])))
 
 (defn replace-img-with-chip
@@ -153,3 +154,99 @@
             (dom/props {:style {:padding "6px 4px" :text-align "center"
                                 :border-bottom "1px solid var(--color-border)"}})
             (DeleteCardButton id user-id)))))))
+
+;; ---------------------------------------------------------------------------
+;; Optimistic add-card rows (freememo.optimistic :pending-cards overlay).
+;; Rendered by ContentCardTable above the real rows: light-green while pending,
+;; green on confirm, danger with retry/dismiss on error.
+;; ---------------------------------------------------------------------------
+
+(defn overlay-front-text [entry]
+  (let [{:keys [kind card-data]} (:payload entry)
+        c (first card-data)]
+    (if (= kind "cloze") (:c c) (:q c))))
+
+(defn overlay-back-text [entry]
+  (let [{:keys [kind card-data]} (:payload entry)]
+    (if (= kind "cloze") "" (:a (first card-data)))))
+
+(e/defn RetryPendingButton [tempid user-id]
+  (e/client
+    (dom/button
+      (dom/props {:title "Retry"
+                  :style {:background "transparent" :border "none" :cursor "pointer"
+                          :color "var(--color-danger)" :font-size "13px"}})
+      (dom/text "↻")
+      (let [click (dom/On "click" (fn [e] (.stopPropagation e) tempid) nil)
+            [t _] (e/Token click)]
+        (dom/props {:disabled (some? t)})
+        (when t
+          (case (e/server (opt/retry-pending-card! user-id tempid))
+            (t)))))))
+
+(e/defn DismissPendingButton [tempid user-id]
+  (e/client
+    (dom/button
+      (dom/props {:title "Dismiss"
+                  :style {:background "transparent" :border "none" :cursor "pointer"
+                          :color "var(--color-text-hint)" :font-size "13px"}})
+      (dom/text "×")
+      (let [click (dom/On "click" (fn [e] (.stopPropagation e) tempid) nil)
+            [t _] (e/Token click)]
+        (dom/props {:disabled (some? t)})
+        (when t
+          (case (e/server (opt/forget-pending-card! user-id tempid))
+            (t)))))))
+
+(e/defn PendingCardRow [entry user-id]
+  (e/client
+    (let [tempid (:tempid entry)
+          status (:status entry)
+          cloze? (= "cloze" (get-in entry [:payload :kind]))
+          front-html (card-row-html (overlay-front-text entry))
+          back-html (card-row-html (overlay-back-text entry))
+          bg (case status
+               :error "var(--color-danger-bg)"
+               "var(--color-success-light)")]   ; pending + confirmed both light-green
+      (dom/tr
+        (dom/props {:class "pending-card-row"
+                    :style {:--order 0 :background bg
+                            :transition "background-color 0.3s ease"}})
+        ;; Status indicator
+        (dom/td
+          (dom/props {:style {:padding "6px 4px" :text-align "center" :font-size "10px"
+                              :border-bottom "1px solid var(--color-border)"
+                              :color (if (= :error status) "var(--color-danger)" "var(--color-success)")}
+                      :title (case status
+                               :pending "Saving…"
+                               :confirmed "Saved"
+                               :error (or (:error entry) "Save failed")
+                               "")})
+          (dom/text (case status :pending "…" :confirmed "✓" :error "!" "")))
+        ;; Front — cloze spans both content columns
+        (dom/td
+          (dom/props {:dir "auto" :class "card-row-cell"
+                      :style (merge {:padding-block "6px" :padding-inline "8px"
+                                     :border-bottom "1px solid var(--color-border)"}
+                               (when cloze? {:grid-column "span 2"}))})
+          (e/for-by identity [_k [(str "pf-" tempid)]]
+            (dom/div (dom/props {:class "card-row-html"})
+              (set-inner-html! dom/node front-html))))
+        ;; Back — hidden for cloze
+        (dom/td
+          (dom/props {:dir "auto" :class "card-row-cell"
+                      :style (merge {:padding-block "6px" :padding-inline "8px"
+                                     :border-bottom "1px solid var(--color-border)"}
+                               (when cloze? {:display "none"}))})
+          (e/for-by identity [_k [(str "pb-" tempid)]]
+            (dom/div (dom/props {:class "card-row-html"})
+              (set-inner-html! dom/node back-html))))
+        ;; Action — retry + dismiss on error only
+        (dom/td
+          (dom/props {:style {:padding "6px 2px" :text-align "center"
+                              :border-bottom "1px solid var(--color-border)"
+                              :white-space "nowrap"}})
+          (when (= :error status)
+            (e/amb
+              (RetryPendingButton tempid user-id)
+              (DismissPendingButton tempid user-id))))))))
