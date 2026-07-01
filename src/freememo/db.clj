@@ -2937,22 +2937,30 @@
 ;; visited check — a cycle would loop them forever, not just corrupt display.
 ;; ---------------------------------------------------------------------------
 
+;; Kinds whose parent_id is structural, not user-arranged: a page stub's
+;; identity is (parent_id = pdf-root, page_number), and get-page-text keys the
+;; editor content off that pair — reparenting one orphans its content. These
+;; may never be moved by reparent-topic!.
+(def ^:private structural-kinds #{"page"})
+
 (defn reparent-topic!
   "Move topic-id under new-parent-id (nil ⇒ promote to root) for user-id.
    Pre: user owns topic-id. Rejected (returns nil) when the move is not owned,
    would create a cycle (new-parent is topic-id or one of its descendants),
-   targets another user's topic, or new-parent already equals the current parent
-   (no-op). On success writes one reversible 'move-topic' undo entry capturing
-   the prior parent and returns {:entry-id _ :old-parent-id _ :new-parent-id _}."
+   targets another user's topic, new-parent already equals the current parent
+   (no-op), or topic-id is a structural kind (page stub). On success writes one
+   reversible 'move-topic' undo entry capturing the prior parent and returns
+   {:entry-id _ :old-parent-id _ :new-parent-id _}."
   [user-id topic-id new-parent-id]
   (jdbc/with-transaction [tx ds]
     (when (= user-id (subtree-owner tx topic-id))
-      (let [old-parent-id (:parent_id
-                           (jdbc/execute-one! tx
-                             ["SELECT parent_id FROM topics WHERE id = ?" topic-id]
-                             {:builder-fn rs/as-unqualified-maps}))
+      (let [{old-parent-id :parent_id kind :kind}
+            (jdbc/execute-one! tx
+              ["SELECT parent_id, kind FROM topics WHERE id = ?" topic-id]
+              {:builder-fn rs/as-unqualified-maps})
             forbidden (set (subtree-topic-ids tx topic-id))]
-        (when (and (not= old-parent-id new-parent-id)
+        (when (and (not (structural-kinds kind))
+                (not= old-parent-id new-parent-id)
                 (not (contains? forbidden new-parent-id))
                 (or (nil? new-parent-id)
                   (= user-id (subtree-owner tx new-parent-id))))
