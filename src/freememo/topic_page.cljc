@@ -225,8 +225,20 @@
               citation (e/server (bibform/get-topic-citation* refresh user-id bib-topic-id))
               pdf-status (e/server (when pdf-root?
                                      (get-topic-status* meta-refresh pdf-root-id)))
-              !top-pct (atom (default-split-pct))
+              ;; Content↕card-table split (global per-user, persisted). Seeded
+              ;; from settings; nil → client default. Manual drag + double-click
+              ;; persist via !top-pct-save; layout toggle resets live (see
+              ;; toggle-layout!) but does not persist.
+              initial-top-pct (e/server (settings/get-card-split user-id))
+              !top-pct (atom (or initial-top-pct (default-split-pct)))
               top-pct (e/watch !top-pct)
+              !top-pct-save (atom nil)
+              top-pct-save (e/watch !top-pct-save)
+              [t-top-pct _] (e/Token top-pct-save)
+              reset-split! (fn []
+                             (let [d (default-split-pct)]
+                               (reset! !top-pct d)
+                               (reset! !top-pct-save d)))
 
               ;; PDF split layout (owned by TopicPage, persisted per-doc)
               !layout (atom (or initial-layout "left-right"))
@@ -262,6 +274,12 @@
               phone? (e/watch viewport/!phone?)
               reading-mode? (and phone? (= (:origin queue-ctx) :learn))]
 
+          ;; Persist the split on drag-commit / double-click (global per-user).
+          (when t-top-pct
+            (let [r (e/server (e/Offload #(settings/save-card-split user-id top-pct-save)))]
+              (when (some? r)
+                (if (:success r) (case r (t-top-pct)) (t-top-pct (:error r))))))
+
           (DocumentBody
             {:user-id user-id :enc-key enc-key :page-topic-id page-topic-id :kind kind :pdf-root-id pdf-root-id :root-topic-id root-topic-id
              :is-pdf? is-pdf? :current-page current-page :effective-content effective-content :llm-enabled? llm-enabled? :extract-status extract-status :navigate! navigate!
@@ -270,4 +288,5 @@
              :scan-dpi scan-dpi :scanning-pages scanning-pages :ocr-errors ocr-errors :phone? phone? :!current-page !current-page :toggle-layout! toggle-layout!
              :bib-topic-id bib-topic-id :initial-page initial-page :target-page target-page :pdf-has-file? pdf-has-file? :pdf-page-count pdf-page-count :top-pct top-pct
              :top-bottom? top-bottom? :top-split-pct top-split-pct :left-pct left-pct :!total !total :!nav-target !nav-target :!top-split-pct !top-split-pct
-             :!left-pct !left-pct :card-font-size card-font-size :t-layout t-layout :layout-save layout-save}))))))
+             :!left-pct !left-pct :card-font-size card-font-size :t-layout t-layout :layout-save layout-save
+             :!top-pct !top-pct :!top-pct-save !top-pct-save :reset-split! reset-split!}))))))
