@@ -4,6 +4,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.doc-context :as dctx]
    [freememo.card-components :as card-components]
    [freememo.history-modal :refer [HistoryModal]]
    [freememo.icons :as icons]
@@ -30,9 +31,10 @@
             {:parent-id nil :note-ids []})
      :cljs nil))
 
-(e/defn ExtractActions [cfg]
+(e/defn ExtractActions []
   (e/client
-    (let [{:keys [user-id topic-id root-topic-id extract-status navigate! origin on-done!]} cfg
+    (let [user-id dctx/user-id topic-id dctx/topic-id root-topic-id dctx/root-topic-id
+          extract-status dctx/extract-status navigate! dctx/navigate! origin dctx/origin on-done! dctx/on-done!
           ;; Local modal state — CLJS-side atom flipped by the History button
           ;; and the modal's own dismiss handlers (backdrop click / Escape / X).
           !history-open? (atom false)

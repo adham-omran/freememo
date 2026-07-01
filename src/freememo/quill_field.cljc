@@ -403,7 +403,7 @@
                   :on-change    (fn [html] (reset! !question html))
                   :placeholder  \"Question...\"
                   :field-key    [:question card-id]})"
-  [{:keys [value-string on-change placeholder field-key !editor-atom cloze? autofocus?]}]
+  [value-string on-change placeholder field-key !editor-atom cloze? autofocus?]
   (e/client
     ;; e/for-by provides frame isolation: Quill remounts when field-key changes.
     (e/for-by identity [_k [(or field-key :quill-field)]]

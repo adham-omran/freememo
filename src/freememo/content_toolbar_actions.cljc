@@ -9,13 +9,14 @@
    64KB method limit."
   (:require
    [hyperfiddle.electric3 :as e]
+   [freememo.doc-context :as dctx]
    [freememo.extract-topic-button :refer [ExtractTopicButton]]
    [freememo.add-card-button :refer [AddCardButton]]))
 
-(e/defn ToolbarActions [cfg]
+(e/defn ToolbarActions []
   (e/client
-    (let [{:keys [user-id topic-id root-topic-id
-                  context-mode mod-key card-type]} cfg]
+    (let [user-id dctx/user-id topic-id dctx/topic-id root-topic-id dctx/root-topic-id
+          context-mode dctx/context-mode mod-key dctx/mod-key card-type dctx/card-type]
       ;; IR Tools group: Extract + Add new. The Sync dropdown is rendered as
       ;; a sibling in ContentToolbar — keeping it separate from this e/defn
       ;; lets each stay small (JVM 64KB bytecode limit) and makes the toolbar

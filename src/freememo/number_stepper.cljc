@@ -48,7 +48,7 @@
          completion.
    Invariant: clamp on both paths — buttons saturate at the bounds, typed input
               is clamped before Save and before the digits are re-displayed."
-  [{:keys [value min-val max-val mount-key label suffix disabled?]} !mirror Save]
+  [value min-val max-val mount-key label suffix disabled? !mirror Save]
   (e/client
     (let [!node (atom nil)]
       (dom/span

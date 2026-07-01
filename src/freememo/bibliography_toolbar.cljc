@@ -6,6 +6,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.doc-context :as dctx]
    [freememo.icons :as icons]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])))
@@ -36,9 +37,12 @@
 ;;            informational, carry early-collapse classes); variant :overflow
 ;;            renders only the two actions for the ⋮ panel.
 (e/defn DocumentMetaGroup
-  [{:keys [user-id bib-topic-id citation page-info pdf-root? pdf-status variant]} !show-bib]
+  []
   (e/client
-    (let [done? (= pdf-status "done")
+    (let [user-id dctx/user-id bib-topic-id dctx/bib-topic-id citation dctx/citation
+          page-info dctx/page-info pdf-root? dctx/pdf-root? pdf-status dctx/pdf-status
+          variant dctx/variant !show-bib dctx/!show-bib
+          done? (= pdf-status "done")
           inline? (= variant :inline)]
 
       ;; Edit Bibliography — opens the modal. Co-located with Refetch.

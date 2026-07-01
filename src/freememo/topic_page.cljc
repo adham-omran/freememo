@@ -13,7 +13,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.topic-state :as ts]
-   [freememo.document-body :refer [DocumentBody]]))
+   [freememo.document-body :refer [DocumentRoot]]))
 
 ;; ---------------------------------------------------------------------------
 (e/defn TopicPage [user-id enc-key topic-id navigate! llm-enabled? queue-ctx]
@@ -27,10 +27,10 @@
                               :color "var(--color-text-secondary)"}})
           (dom/text "No topic selected."))
 
-        ;; Three providers each return a prop-keyed map; merge feeds DocumentBody
-        ;; directly — no prop-map literal here (that literal is what overflowed
-        ;; TopicPage's method).
+        ;; Three providers each return a prop-keyed map; merge seeds DocumentRoot,
+        ;; the thin binder that unpacks the map into the doc-context dynamic vars
+        ;; (dctx). No prop map reaches any component — they read dctx.
         (let [resolved (ts/ResolveTopic user-id enc-key topic-id navigate! llm-enabled? queue-ctx)
               layout   (ts/DocumentLayoutState resolved)
               view     (ts/DocumentViewState resolved topic-id)]
-          (DocumentBody (merge resolved layout view)))))))
+          (DocumentRoot (merge resolved layout view)))))))

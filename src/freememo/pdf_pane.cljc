@@ -7,6 +7,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.doc-context :as dctx]
    [freememo.logging :as log]
    [freememo.pdf-viewer-component :refer [PdfViewerComponent]]
    #?(:clj [freememo.settings :as settings])))
@@ -22,11 +23,12 @@
      :on-total!       — fn called with the PDF page count when known/changed
 
    Returns the current page number (int)."
-  [{:keys [user-id pdf-root-id initial-page target-page
-           is-live? has-file? reload-nonce
-           on-page-change! on-total!]}]
+  []
   (e/client
-    (let [!current-page   (atom (or initial-page 1))
+    (let [user-id dctx/user-id pdf-root-id dctx/pdf-root-id initial-page dctx/initial-page
+          target-page dctx/target-page is-live? dctx/is-live? has-file? dctx/has-file?
+          reload-nonce dctx/reload-nonce on-page-change! dctx/on-page-change! on-total! dctx/on-total!
+          !current-page   (atom (or initial-page 1))
           current-page    (e/watch !current-page)
           !page-to-save   (atom nil)
           page-to-save    (e/watch !page-to-save)
@@ -47,16 +49,11 @@
         ;; Remounting here caused the :diff-corruption WS crash on learn-session
         ;; advance.
         (reset! !current-page
-          (PdfViewerComponent
-            {:document-id pdf-root-id
-             :initial-page initial-page
-             :target-page target-page
-             :is-live? is-live?
-             :has-file? has-file?
-             :reload-nonce reload-nonce
-             :on-navigate! (fn [p]
-                             (reset! !page-to-save p)
-                             (when on-page-change! (on-page-change! p)))
-             :on-total! (fn [n] (when on-total! (on-total! n)))})))
+          (binding [dctx/document-id pdf-root-id
+                    dctx/on-navigate! (fn [p]
+                                        (reset! !page-to-save p)
+                                        (when on-page-change! (on-page-change! p)))
+                    dctx/on-total! (fn [n] (when on-total! (on-total! n)))]
+            (PdfViewerComponent))))
 
       current-page)))

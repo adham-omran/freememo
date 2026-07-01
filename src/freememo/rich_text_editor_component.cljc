@@ -5,6 +5,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.doc-context :as dctx]
    [freememo.logging :as log]
    [freememo.rich-text-editor :as editor]))
 
@@ -14,7 +15,7 @@
    - Updates content in-place via set-content! when initial-html changes.
    - Updates topic-id in editor state so text-change listener tags dirty-html correctly.
    - Skips in-place update if user has unsaved edits (don't damage user input)."
-  [{:keys [initial-html topic-id]}]
+  []
   (e/client
     (dom/div
       (dom/props {:class "quill-editor-wrapper"
@@ -27,7 +28,8 @@
                           :min-height "0"}
                   :data-role "widget"})
 
-      (let [node dom/node
+      (let [initial-html dctx/initial-html topic-id dctx/topic-id
+            node dom/node
             ;; Store timer-id in atom so the e/on-unmount closure is constant
             ;; (no reactive captures). A reactive closure causes Electric to
             ;; re-mount the on-unmount input, spuriously firing destroy-editor!.

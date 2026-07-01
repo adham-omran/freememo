@@ -20,6 +20,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.doc-context :as dctx]
    [freememo.icons :as icons]
    [freememo.keyboard :as keyboard]
    [freememo.copy-text :as copy]
@@ -52,9 +53,10 @@
   "◀ [page] ▶ navigation. Owns its own input-val/focus atoms so it can mount in
    either the inline bar or the overflow panel. Syncs the input to the live page
    when the user isn't typing."
-  [{:keys [page-number total on-page-change!]}]
+  []
   (e/client
-    (let [!input-val   (atom (str page-number))
+    (let [page-number dctx/page-number total dctx/total on-page-change! dctx/on-page-change!
+          !input-val   (atom (str page-number))
           input-val    (e/watch !input-val)
           !inp-focused (atom false)
           inp-focused  (e/watch !inp-focused)
@@ -106,8 +108,9 @@
 
 (e/defn PdfZoom
   "Zoom −/+ + preset select + layout toggle."
-  [{:keys [layout on-layout-toggle!]}]
+  []
   (e/client
+    (let [layout dctx/layout on-layout-toggle! dctx/on-layout-toggle!]
     (dom/div
       (dom/props {:class "toolbar-group"
                   :style {:display "flex" :align-items "center" :gap "4px"
@@ -152,13 +155,14 @@
                                       "Switch to side-by-side layout"
                                       "Switch to stacked layout")})
           (dom/text (if (= layout "top-bottom") "⇅" "⇄"))
-          (dom/On "click" (fn [_] (on-layout-toggle!)) nil))))))
+          (dom/On "click" (fn [_] (on-layout-toggle!)) nil)))))))
 
 (e/defn PdfMarkDone
   "Mark-page-done toggle — plain ghost secondary button, check/rotate icon,
    Done/Restore label. Registers the keyboard ref so the Done shortcut works."
-  [{:keys [user-id pdf-root-id page-number]}]
+  []
   (e/client
+    (let [user-id dctx/user-id pdf-root-id dctx/pdf-root-id page-number dctx/page-number]
     (dom/div
       (dom/props {:class "toolbar-group"
                   :style {:padding-left "12px"
@@ -185,31 +189,32 @@
             (when t
               (case (e/server (db/toggle-page-done! pdf-root-id (:page click-event)))
                 (case (e/server (swap! (us/get-atom user-id :meta-refresh) inc))
-                  (t))))))))))
+                  (t)))))))))))
 
 (e/defn PdfScanCopy
   "Scan (+Compare OCR) / Copy (+Copy all) dropdowns, plus the Live-Document
    add-photos buttons when `is-live?` (the inline-bar use; on phone the photos
    are surfaced as primaries instead, so callers pass is-live? false here)."
-  [{:keys [user-id enc-key pdf-root-id page-number scan-dpi llm-enabled?
-           scanning-pages extract-style is-live?]}]
+  []
   (e/client
-    (dom/div
-      (dom/props {:class "toolbar-group"})
-      (when llm-enabled?
-        (ScanDropdown {:user-id user-id :enc-key enc-key
-                       :pdf-root-id pdf-root-id :page-number page-number
-                       :scan-dpi scan-dpi
-                       :scanning? (contains? scanning-pages [pdf-root-id page-number])}))
-      (CopyDropdown {:user-id user-id :pdf-root-id pdf-root-id
-                     :page-number page-number :extract-style extract-style})
-      (when is-live?
-        (LiveDocAddPhotos {:document-id pdf-root-id :compact? true})))))
+    (let [user-id dctx/user-id enc-key dctx/enc-key pdf-root-id dctx/pdf-root-id
+          page-number dctx/page-number scan-dpi dctx/scan-dpi llm-enabled? dctx/llm-enabled?
+          scanning-pages dctx/scanning-pages extract-style dctx/extract-style is-live? dctx/is-live?]
+      (dom/div
+        (dom/props {:class "toolbar-group"})
+        (when llm-enabled?
+          (binding [dctx/scanning? (contains? scanning-pages [pdf-root-id page-number])]
+            (ScanDropdown)))
+        (CopyDropdown)
+        (when is-live?
+          (binding [dctx/document-id pdf-root-id dctx/compact? true]
+            (LiveDocAddPhotos)))))))
 
 (e/defn PdfOcrError
   "OCR error display — auto-dismiss after 3s."
-  [{:keys [pdf-root-id page-number ocr-errors]}]
+  []
   (e/client
+    (let [pdf-root-id dctx/pdf-root-id page-number dctx/page-number ocr-errors dctx/ocr-errors]
     (when-let [ocr-err (get ocr-errors [pdf-root-id page-number])]
       (let [!show (atom true)
             show (e/watch !show)]
@@ -224,7 +229,7 @@
                               :transition "opacity 0.5s ease-out"}})
           (dom/text ocr-err)
           (e/client
-            (js/setTimeout (fn [] (reset! !show false)) 3000)))))))
+            (js/setTimeout (fn [] (reset! !show false)) 3000))))))))
 
 (e/defn PdfToolbar
   "props: {:user-id :enc-key :pdf-root-id :page-number :total :layout :is-live?
@@ -233,23 +238,16 @@
    `pdf-root-id` is the document root — it serves as document-id (LiveDoc),
    done/scan target, and copy-extract scope (all the same value upstream).
    `phone?` selects the compact C3 layout (two primaries + ⋮ overflow)."
-  [{:keys [user-id enc-key pdf-root-id page-number total layout is-live?
-           scan-dpi llm-enabled? scanning-pages ocr-errors phone?
-           on-page-change! on-layout-toggle!]}]
+  []
   (e/client
-    (let [;; Reactive per-PDF extraction style (drives Copy text / Copy all).
+    (let [user-id dctx/user-id enc-key dctx/enc-key pdf-root-id dctx/pdf-root-id
+          page-number dctx/page-number total dctx/total layout dctx/layout is-live? dctx/is-live?
+          scan-dpi dctx/scan-dpi llm-enabled? dctx/llm-enabled? scanning-pages dctx/scanning-pages
+          ocr-errors dctx/ocr-errors phone? dctx/phone?
+          on-page-change! dctx/on-page-change! on-layout-toggle! dctx/on-layout-toggle!
+          ;; Reactive per-PDF extraction style (drives Copy text / Copy all).
           settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
-          extract-style (e/server (copy/get-extract-style* settings-refresh user-id pdf-root-id))
-          page-nav-props  {:page-number page-number :total total
-                           :on-page-change! on-page-change!}
-          zoom-props      {:layout layout :on-layout-toggle! on-layout-toggle!}
-          mark-done-props {:user-id user-id :pdf-root-id pdf-root-id :page-number page-number}
-          scan-copy-props {:user-id user-id :enc-key enc-key :pdf-root-id pdf-root-id
-                           :page-number page-number :scan-dpi scan-dpi
-                           :llm-enabled? llm-enabled? :scanning-pages scanning-pages
-                           :extract-style extract-style}
-          ocr-props       {:pdf-root-id pdf-root-id :page-number page-number
-                           :ocr-errors ocr-errors}]
+          extract-style (e/server (copy/get-extract-style* settings-refresh user-id pdf-root-id))]
       (if phone?
         ;; ── Phone (C3): two primaries + ⋮ overflow dropdown ──────────────
         (let [!overflow-open (atom false)
@@ -262,8 +260,9 @@
               (if is-live?
                 (dom/div
                   (dom/props {:class "toolbar-group"})
-                  (LiveDocAddPhotos {:document-id pdf-root-id :compact? true}))
-                (PdfPageNav page-nav-props))
+                  (binding [dctx/document-id pdf-root-id dctx/compact? true]
+                    (LiveDocAddPhotos)))
+                (PdfPageNav))
               ;; ⋮ trigger (pushed right).
               (dom/div
                 (dom/props {:class "toolbar-overflow-trigger"
@@ -278,11 +277,12 @@
               (when overflow-open
                 (dom/div
                   (dom/props {:class "pdf-overflow-panel"})
-                  (when is-live? (PdfPageNav page-nav-props))
-                  (PdfZoom zoom-props)
-                  (PdfMarkDone mark-done-props)
-                  (PdfScanCopy (assoc scan-copy-props :is-live? false))))
-              (PdfOcrError ocr-props))
+                  (when is-live? (PdfPageNav))
+                  (PdfZoom)
+                  (PdfMarkDone)
+                  (binding [dctx/extract-style extract-style dctx/is-live? false]
+                    (PdfScanCopy))))
+              (PdfOcrError))
             (when overflow-open
               (dom/div
                 (dom/props {:class "pdf-overflow-backdrop"})
@@ -304,8 +304,9 @@
                       cleanup (install-overflow-detector!
                                 container-node toolbar-node !tier !overflow-open)]
                   (e/on-unmount cleanup)
-                  (PdfPageNav page-nav-props)
-                  (PdfZoom zoom-props)
-                  (PdfMarkDone mark-done-props)
-                  (PdfScanCopy (assoc scan-copy-props :is-live? is-live?))
-                  (PdfOcrError ocr-props))))))))))
+                  (PdfPageNav)
+                  (PdfZoom)
+                  (PdfMarkDone)
+                  (binding [dctx/extract-style extract-style]
+                    (PdfScanCopy))
+                  (PdfOcrError))))))))))

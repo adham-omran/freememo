@@ -6,6 +6,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.doc-context :as dctx]
    [freememo.number-stepper :refer [NumberStepper]]
    #?(:clj [freememo.settings :as settings])))
 
@@ -17,10 +18,11 @@
 ;; Post: Renders Context checkbox + numeric page-window input. Mounted inside
 ;;       the overflow panel so it hides on desktop / shows in the mobile
 ;;       dropdown via the `.toolbar-overflow-panel-action` wrapper at the call site.
-(e/defn ContextSettings [cfg !use-context !context-window]
+(e/defn ContextSettings []
   (e/client
-    (let [{:keys [user-id context-tooltip llm-enabled?
-                  use-context context-window]} cfg]
+    (let [user-id dctx/user-id context-tooltip dctx/context-tooltip llm-enabled? dctx/llm-enabled?
+          use-context dctx/use-context context-window dctx/context-window
+          !use-context dctx/!use-context !context-window dctx/!context-window]
       (when llm-enabled?
         (dom/div
           (dom/props {:class "toolbar-settings-row"})
@@ -38,9 +40,8 @@
                     (case r
                       (if (:success r) (t) (t (:error r))))))))
             (dom/text "Context"))
-          (NumberStepper
-            {:value context-window :min-val context-pages-min :max-val context-pages-max
-             :mount-key :context-pages :suffix "pages" :disabled? (not use-context)}
+          (NumberStepper context-window context-pages-min context-pages-max
+            :context-pages nil "pages" (not use-context)
             !context-window
             (e/fn [nv] (e/server (e/Offload #(settings/save-context-pages user-id nv))))))))))
 
@@ -49,9 +50,10 @@
 ;; Post: Renders Basic / Cloze radio dots inline in the toolbar.
 ;; Note:  uses non-focusable spans to avoid stealing focus from Quill editor
 ;;        (preserves text selection).
-(e/defn ToolbarSettings [cfg _!use-context _!context-window !card-type]
+(e/defn ToolbarSettings []
   (e/client
-    (let [{:keys [llm-enabled? user-id card-type]} cfg]
+    (let [llm-enabled? dctx/llm-enabled? user-id dctx/user-id card-type dctx/card-type
+          !card-type dctx/!card-type]
       (when llm-enabled?
         (dom/div
           (dom/props {:class "toolbar-settings-row"})
@@ -92,8 +94,7 @@
 ;; Invariant: clamp to [1,20] on both the button and typed-input paths.
 (e/defn CardCountStepper [user-id card-count-val !card-count]
   (e/client
-    (NumberStepper
-      {:value card-count-val :min-val card-count-min :max-val card-count-max
-       :mount-key :card-count :label "#"}
+    (NumberStepper card-count-val card-count-min card-count-max
+      :card-count "#" nil nil
       !card-count
       (e/fn [nv] (e/server (e/Offload #(settings/save-card-count user-id nv)))))))
