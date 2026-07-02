@@ -7,8 +7,8 @@
 ;; Three sections:
 ;;   :credits     — economic tunables (rates, FX, markup, presets, grants).
 ;;   :deployment  — deployment flags (CREDITS_ENABLED, WAYL_HOST, WAYL_LINK_ENV).
-;;   :secrets     — credentials (Wayl token + webhook secret, platform OpenAI
-;;                  key, platform OpenRouter key, SMTP creds for the alert email).
+;;   :secrets     — credentials (Wayl token + webhook secret, platform OpenRouter
+;;                  key, SMTP creds for the alert email).
 ;;
 ;; Env vars take precedence over :deployment / :secrets entries. Names map
 ;; lowercased-kebab → SCREAMING_SNAKE (e.g. :credits-enabled? ↔ CREDITS_ENABLED).
@@ -21,17 +21,18 @@
   ;; IQD per 1 USD. Update when the rate (or OpenAI prices) move, else margin erodes.
   :fx-iqd-per-usd nil
 
-  ;; OpenAI price in USD per 1,000,000 tokens, per class. Fill from your OpenAI
-  ;; dashboard. :cached-input is the discounted rate for cached prompt tokens.
-  ;; Used by the token-billed lanes (card generation). OCR no longer needs a
-  ;; :models entry — it bills from OpenRouter's returned per-call cost (× fx × markup).
-  :models {"gpt-5.1" {:input 0.0 :cached-input 0.0 :output 0.0}}
+  ;; All AI lanes (OCR, card generation, transcription) bill from OpenRouter's
+  ;; returned per-call cost (× fx × markup) — there is no per-model rate table.
 
   ;; OCR models a credits-mode user may pick (ids from freememo.ocr-models/registry).
   ;; The user chooses the model and thus the OCR cost. Empty/unset = no restriction
   ;; (all registry models offered); set a subset to restrict. Self-host always
   ;; offers all models.
   :ocr-model-allowlist ["openai-gpt-5.1" "gemini-3-flash" "mistral-ocr-4"]
+
+  ;; Card-generation models a credits-mode user may pick (ids from
+  ;; freememo.card-models/registry). Empty/unset = all registry models offered.
+  :card-model-allowlist ["gpt-5.1" "gemini-3-flash" "claude-haiku-4.5" "claude-sonnet-5"]
 
   ;; Top-up amounts shown as buttons, in IQD (Wayl minimum per link is 1000).
   :presets [nil]
@@ -50,13 +51,12 @@
   :wayl-link-env "test"}    ;; per-link env sent to Wayl: "test" = sandbox / no real charge; "live" = real money
 
  ;; Secrets — also accept env vars WAYL_MERCHANT_TOKEN, WAYL_WEBHOOK_SECRET,
- ;; PLATFORM_OPENAI_API_KEY, PLATFORM_OPENROUTER_API_KEY, SMTP_HOST, SMTP_PORT,
+ ;; PLATFORM_OPENROUTER_API_KEY, SMTP_HOST, SMTP_PORT,
  ;; SMTP_USER, SMTP_PASS, ALERT_FROM, ALERT_TO.
  :secrets
  {:wayl-merchant-token nil      ;; X-WAYL-AUTHENTICATION header for Wayl API
   :wayl-webhook-secret nil      ;; shared secret for HMAC-SHA256 webhook verification
-  :platform-openai-api-key nil  ;; token-billed lanes (card generation)
-  :platform-openrouter-api-key nil  ;; OCR model picker — all OCR lanes route through OpenRouter (A1)
+  :platform-openrouter-api-key nil  ;; single provider key — OCR, card generation, transcription (A1)
 
   ;; Billing-failure alert email (::credit-charge-failed → one email, rate-limited).
   ;; Leave nil to disable (self-host default). Requires host+user+pass+alert-to.

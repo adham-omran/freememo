@@ -13,7 +13,6 @@
            com.zaxxer/HikariCP {:mvn/version "5.1.0"}
            org.apache.pdfbox/pdfbox {:mvn/version "3.0.3"}
            com.levigo.jbig2/levigo-jbig2-imageio {:mvn/version "2.0"}
-           net.clojars.wkok/openai-clojure {:mvn/version "0.23.0"}
            clj-http/clj-http {:mvn/version "3.12.3"}
            cheshire/cheshire {:mvn/version "5.12.0"}
            org.jsoup/jsoup {:mvn/version "1.17.2"}

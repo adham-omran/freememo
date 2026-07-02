@@ -2,7 +2,7 @@
   "Deployment configuration — three buckets (see plans/credits-wayl-payment-system.md §5.3):
 
    1. Secrets — env vars only, never committed (Wayl token, webhook secret,
-      platform OpenAI key).
+      platform OpenRouter key).
    2. Deployment flags — env vars (CREDITS_ENABLED, WAYL_HOST, WAYL_LINK_ENV).
    3. Economic tunables — config.edn (gitignored); config.example.edn committed.
 
@@ -77,9 +77,6 @@
     (not (or (false? v)
              (= "false" (some-> v str str/lower-case str/trim))))))
 
-(defn platform-openai-api-key []
-  (env-or-config "PLATFORM_OPENAI_API_KEY" [:secrets :platform-openai-api-key]))
-
 (defn platform-openrouter-api-key
   "OpenRouter key for the OCR model picker (topology A1: all OCR lanes route
    through one OpenRouter key). nil when unconfigured."
@@ -114,15 +111,15 @@
        :from (or (env-or-config "ALERT_FROM" [:secrets :alert-from]) user)
        :to   to})))
 
-;; ── Prod-pinned model (set at boot by src-prod/prod.cljc) ──
+;; ── Prod default model (set at boot by src-prod/prod.cljc) ──
 ;;
-;; Credits-enabled deployments hardcode the OpenAI model. The constant lives
-;; in src-prod (only on the prod classpath); src-prod/prod.cljc reset!s this
-;; atom at namespace-load time, before any traffic. settings/get-model reads
-;; it and throws ::prod-model-missing if credits-enabled? but the atom is nil
-;; (fail closed). nil in dev/self-host — get-model falls back to per-user DB.
+;; Credits-enabled deployments set a default card-generation model :id. The
+;; constant lives in src-prod (only on the prod classpath); src-prod/prod.cljc
+;; reset!s this atom at namespace-load time, before any traffic. settings/get-model
+;; uses it as the default when the user has no allowed saved selection; nil in
+;; dev/self-host, where get-model falls back to card-models/default-id.
 
-(defonce ^{:doc "Set by src-prod/prod.cljc at boot. nil = self-host / dev."}
+(defonce ^{:doc "Prod default card model :id, set by src-prod/prod.cljc at boot. nil = self-host / dev."}
   !prod-model (atom nil))
 
 ;; ── Economic tunables (config.edn) ──
@@ -157,13 +154,6 @@
   []
   (:fx-iqd-per-usd (credits-config)))
 
-(defn model-rates
-  "USD-per-1M-token rates {:input :cached-input :output} for a model, or nil.
-   Used by the token-billed lanes (card generation). OCR bills from OpenRouter's
-   returned per-call cost instead (× fx × markup) — see plans/ocr-multi-model-picker.md §6."
-  [model]
-  (get-in (credits-config) [:models model]))
-
 (defn ocr-model-allowlist
   "OCR-model :ids (from freememo.ocr-models/registry) a credits-mode user may
    pick — each carries its own OpenRouter cost (decision 4.2.1: allow-list, the
@@ -173,6 +163,14 @@
    models are offered."
   []
   (:ocr-model-allowlist (credits-config) []))
+
+(defn card-model-allowlist
+  "Card-generation model :ids (from freememo.card-models/registry) a credits-mode
+   user may pick — each carries its own OpenRouter cost. Empty vector when
+   unconfigured (⇒ all registry models offered). Ignored in self-host, where all
+   registry models are offered."
+  []
+  (:card-model-allowlist (credits-config) []))
 
 (defn presets
   "Top-up amounts in IQD shown as buttons. Empty vector when unconfigured."

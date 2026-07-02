@@ -7,8 +7,8 @@
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])))
 
-(defn get-api-key-status* [_refresh user-id enc-key]
-  #?(:clj (settings/get-openai-api-key-status user-id enc-key)
+(defn get-api-key-status* [_refresh user-id _enc-key]
+  #?(:clj (settings/get-openrouter-key-status user-id)
      :cljs nil))
 
 (defn get-queue-count* [user-id]
@@ -130,7 +130,7 @@
                                 :padding "12px 16px" :display "flex" :align-items "center" :gap "8px"}})
             (dom/span
               (dom/props {:style {:font-size "13px" :color "var(--color-warning-dark)" :flex "1"}})
-              (dom/text "OpenAI API key not configured."))
+              (dom/text "OpenRouter API key not configured."))
             (dom/a
               (dom/props {:style {:font-size "13px" :color "var(--color-warning-dark)" :font-weight "600" :cursor "pointer"
                                   :text-decoration "underline"}})

@@ -28,7 +28,7 @@
 
 (def faq-items
   [["What does it cost?"
-    "The app is free. Card generation and OCR use the OpenAI API — either via your own key (you pay OpenAI directly) or via hosted credits, depending on the deployment. Reading, reviewing, editing, and Anki sync never touch a paid API."]
+    "The app is free. Card generation, OCR, and transcription use OpenRouter — via hosted credits, or your own OpenRouter key when self-hosting. Reading, reviewing, editing, and Anki sync never touch a paid API."]
    ["Where does my reading go?"
     "PDFs, EPUBs, and extracted text live on the FreeMemo server, tied to your account. Cards stay in your browser until you push them to your own Anki collection."]
    #_["What if FreeMemo shuts down?"
@@ -40,7 +40,7 @@
    ["Can I run it offline or self-host?"
     [{:t "Self-host, yes — the "}
      {:t "codebase" :href "https://github.com/adham-omran/freememo"}
-     {:t " is runnable locally (Postgres + JVM), so your reading and cards can live entirely on your own machine. Fully offline, no — OCR and card generation call the OpenAI API, so those steps need an internet connection regardless of where the server runs."}]]
+     {:t " is runnable locally (Postgres + JVM), so your reading and cards can live entirely on your own machine. Fully offline, no — OCR and card generation call the OpenRouter API, so those steps need an internet connection regardless of where the server runs."}]]
    ["What does \"pre-production\" actually mean for me?"
     "You're an early user. That means direct access to the team and your feedback shapes the product. The flip side: no SLA, no uptime guarantee, no backup warranty. Export your cards regularly if they matter to you."]])
 

@@ -1,12 +1,13 @@
 (ns freememo.cards
-  "Flashcard generation using OpenAI API with prompt templates."
+  "Flashcard generation via OpenRouter with prompt templates."
   (:require
    [freememo.db :as db]
    [freememo.settings :as settings]
    [freememo.credits :as credits]
    [freememo.user-state :as us]
    [freememo.toasts :as toasts]
-   [wkok.openai-clojure.api :as api]
+   [freememo.openrouter :as openrouter]
+   [freememo.card-models :as card-models]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
    [clojure.edn :as edn]
@@ -119,9 +120,9 @@
   (when-let [page-text (:topics/content (first (db/get-context-pages parent-id page-number page-number)))]
     page-text))
 
-;; OpenAI API calls
+;; Model response parsing
 (defn parse-edn-response
-  "Parse OpenAI response as EDN. Handles markdown code fences.
+  "Parse the model response as EDN. Handles markdown code fences.
    Returns parsed EDN or throws exception."
   [raw-text]
   (let [cleaned (-> raw-text
@@ -134,21 +135,29 @@
       (catch Exception e
         (tel/error! {:id ::parse-edn-response
                      :data {:raw raw-text :cleaned cleaned}}
-          "Failed to parse EDN response from OpenAI")
-        (throw (ex-info "Failed to parse EDN response from OpenAI"
+          "Failed to parse EDN response from the model")
+        (throw (ex-info "Failed to parse EDN response from the model"
                  {:raw raw-text :cleaned cleaned}))))))
 
 (defn- generate-cards*
-  "Shared implementation for card generation with up to 3 retry attempts.
-   Validates that the returned card count matches the requested count.
-   endpoint-tag is :cards.basic or :cards.cloze for usage logging."
-  [{:keys [content context card-count model user-id pre-prompt enc-key]} prompt-builder-fn endpoint-tag]
-  (let [api-key (settings/get-openai-api-key user-id enc-key)
-        _ (when (empty? api-key) (throw (ex-info "OpenAI API key not configured" {})))
+  "Shared implementation for card generation with up to `max-retries` attempts.
+   Validates that the returned card count matches the requested count; on success
+   bills the summed OpenRouter usage.cost of all attempts (no charge on final
+   failure). endpoint-tag is :cards.basic or :cards.cloze for the ledger.
+   Pre:  opts has non-empty :content; :model (or the user's saved model) resolves
+         to a card-models entry; the OpenRouter key is configured.
+   Post: {:success true :cards v} with (count v) = card-count, else
+         {:success false :error s}."
+  [{:keys [content context card-count model user-id pre-prompt]} prompt-builder-fn endpoint-tag]
+  (let [api-key (settings/get-openrouter-api-key user-id)
+        _ (when (empty? api-key) (throw (ex-info "OpenRouter API key not configured" {})))
         _ (when (empty? content) (throw (ex-info "No content provided" {})))
         card-count (or card-count (settings/get-card-count user-id))
-        model (or model (settings/get-model user-id))
-        _ (let [gate (credits/check-balance! user-id model)]
+        model-id (or model (settings/get-model user-id))
+        entry (or (card-models/resolve-model model-id)
+                  (throw (ex-info (str "Unknown card model: " model-id) {})))
+        slug (:openrouter-model entry)
+        _ (let [gate (credits/check-cost-billed-balance! user-id)]
             (when-not (:ok gate)
               (throw (ex-info (:error gate) {:type ::insufficient-credits}))))
         max-retries (settings/get-card-gen-max-retries user-id)
@@ -159,40 +168,38 @@
         _ (when-not prompt (throw (ex-info "Failed to load prompt templates" {})))
         content-text (if has-context? (pr-str {:content content :context context}) content)]
     (loop [attempt 1
-           attempts-tokens []]
+           cost-acc 0.0]
       (let [t-start (System/nanoTime)
-            response (api/create-chat-completion
-                       {:model model
-                        :messages [{:role "system" :content prompt}
-                                   {:role "user" :content content-text}]
-                        :reasoning {:effort reasoning}
-                        :text {:verbosity verbosity}}
-                       {:api-key api-key
-                        :reasoning {:effort reasoning}
-                        :verbosity verbosity})
+            body (openrouter/chat-completion! api-key
+                   {:model slug
+                    :messages [{:role "system" :content prompt}
+                               {:role "user" :content content-text}]
+                    :reasoning_effort reasoning
+                    :verbosity verbosity})
             duration-ms (long (/ (- (System/nanoTime) t-start) 1000000))
-            usage (:usage response)
-            raw-text (-> response :choices first :message :content)
-            _ (tel/log! {:level :info :id ::openai-completion
+            usage (:usage body)
+            cost-usd (:cost usage)
+            raw-text (-> body :choices first :message :content)
+            _ (tel/log! {:level :info :id ::cards-completion
                          :data {:user-id user-id
-                                :model model
+                                :model (:id entry)
+                                :openrouter-model slug
                                 :endpoint endpoint-tag
                                 :prompt-tokens (:prompt_tokens usage)
                                 :completion-tokens (:completion_tokens usage)
-                                :cached-tokens (get-in usage [:prompt_tokens_details :cached_tokens])
-                                :reasoning-tokens (get-in usage [:completion_tokens_details :reasoning_tokens])
+                                :cost-usd cost-usd
                                 :duration-ms duration-ms
                                 :attempt attempt}}
-                "OpenAI completion")
+                "Card generation completion")
             cards (parse-edn-response raw-text)
             actual-count (count cards)
-            attempts-tokens' (conj attempts-tokens (credits/usage->tokens usage))]
+            cost-acc' (+ cost-acc (double (or cost-usd 0)))]
         (cond
           (= actual-count card-count)
-          ;; Success — bill all attempts (§5.4.5). record-charge! is total: a
-          ;; billing failure logs ::credit-charge-failed and returns nil, never
-          ;; discarding generated cards.
-          (do (credits/record-charge! user-id endpoint-tag model attempts-tokens')
+          ;; Success — bill the summed cost of all attempts (§5.4.5).
+          ;; record-cost-charge! is total: a billing failure logs
+          ;; ::credit-charge-failed and returns nil, never discarding cards.
+          (do (credits/record-cost-charge! user-id endpoint-tag (:id entry) cost-acc')
             {:success true :cards cards})
 
           (>= attempt max-retries)
@@ -207,17 +214,16 @@
           (do (tel/log! {:level :warn :id ::generate-cards-retry
                          :data {:attempt attempt :expected card-count :got actual-count}}
                 "Card count mismatch, retrying")
-            (recur (inc attempt) attempts-tokens')))))))
+            (recur (inc attempt) cost-acc')))))))
 
 (defn generate-basic-cards
-  "Generate basic Q&A flashcards using OpenAI API.
+  "Generate basic Q&A flashcards via OpenRouter.
    Options:
    - :content - The main text to generate cards from (required)
    - :context - Optional context text from previous pages
    - :card-count - Number of cards to generate (default from settings)
-   - :model - OpenAI model to use (default from settings)
+   - :model - card-models id to use (default from settings/get-model)
    - :pre-prompt - Optional custom formatting instructions
-   - :enc-key - Base64 key from session for API key decryption
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}"
   [opts]
   (try
@@ -235,7 +241,7 @@
        :error-type (error-type e)})))
 
 (defn generate-cloze-cards
-  "Generate cloze deletion flashcards using OpenAI API.
+  "Generate cloze deletion flashcards via OpenRouter.
    Options same as generate-basic-cards.
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}"
   [opts]
