@@ -322,3 +322,99 @@ pre > code {
 .nightMode .ql-code-block:not(:has(span.ql-token))[data-language="ruby"]       { color: #e06c75; }
 .nightMode .ql-code-block:not(:has(span.ql-token))[data-language="rust"]       { color: #dea584; }
 .nightMode .ql-code-block:not(:has(span.ql-token))[data-language="sql"]        { color: #d19a66; }
+
+/* ================================================================
+   Image Occlusion — required by the "IO FreeMemo" note type.
+   This entire file is pushed as that note type's Styling on every
+   IO push (ensure-and-enforce); edits made in Anki are overwritten.
+   fm-io-css v3
+   ================================================================ */
+
+/* ── Occlusion reveal (do not edit) ───────────────────────────── */
+
+/* The wrapper shrinks to the image's natural width (never upscaling a
+   small image) and caps at the card width (downscaling a large one).
+   Both layers then fill the wrapper, so the SVG overlay — sized in
+   natural-image pixels — stays aligned at every rendered size. */
+#io-wrapper {
+    position: relative;
+    width: fit-content;
+    max-width: 100%;
+    margin: 0 auto;
+}
+
+#io-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    z-index: 3;
+}
+
+#io-original {
+    position: relative;
+    z-index: 2;
+    visibility: hidden;
+}
+
+#io-original img {
+    display: block;
+    max-width: 100%;
+    width: auto;
+    height: auto;
+}
+
+#io-overlay img {
+    display: block;
+    width: 100%;
+}
+
+/* ── IO chrome ────────────────────────────────────────────────── */
+
+#io-header {
+    font-size: 1.1em;
+    margin-bottom: 0.2em;
+    text-align: center;
+}
+
+#io-footer {
+    max-width: 80%;
+    margin: 0.8em auto 0;
+    font-style: italic;
+    text-align: center;
+}
+
+#io-extra-wrapper {
+    width: 80%;
+    margin: 0.5em auto 0;
+}
+
+#io-extra {
+    text-align: center;
+    display: block;
+}
+
+.io-extra-entry {
+    margin-top: 0.8em;
+    font-size: 0.9em;
+    text-align: left;
+}
+
+.io-field-descr {
+    margin-bottom: 0.2em;
+    font-weight: bold;
+    font-size: 1em;
+}
+
+#io-revl-btn {
+    display: block;
+    margin: 0.6em auto 0;
+    font-size: 0.9em;
+    padding: 0.3em 1.2em;
+}
+
+/* ── Mobile ───────────────────────────────────────────────────── */
+
+.mobile #io-extra-wrapper {
+    width: 95%;
+}
