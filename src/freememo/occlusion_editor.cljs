@@ -29,7 +29,7 @@
 (defn- round2 [v]
   (/ (js/Math.round (* v 100)) 100))
 
-(defn- node->rect [node]
+(defn- node->rect [^js node]
   {:x (round2 (.x node))
    :y (round2 (.y node))
    :w (round2 (.width node))
@@ -52,13 +52,13 @@
       (on-change (read-rects handle)))))
 
 (defn- select! [handle node]
-  (let [{:keys [tr]} @handle]
+  (let [^js tr (:tr @handle)]
     (.nodes tr (if node (array node) (array)))))
 
 (defn- normalize-transform!
   "Konva resizes by scaling; fold scaleX/scaleY back into width/height so the
    stored rect stays a plain axis-aligned box."
-  [node]
+  [^js node]
   (let [w (* (.width node) (.scaleX node))
         h (* (.height node) (.scaleY node))]
     (.width node (js/Math.max min-rect-px w))
@@ -66,7 +66,7 @@
     (.scaleX node 1)
     (.scaleY node 1)))
 
-(defn- attach-rect-handlers! [handle node]
+(defn- attach-rect-handlers! [handle ^js node]
   (.on node "mousedown touchstart"
     (fn [e]
       (set! (.-cancelBubble e) true)
@@ -79,7 +79,7 @@
 
 (defn- make-rect [handle {:keys [x y w h ordinal]}]
   (let [Konva (.-Konva js/window)
-        node (new (.-Rect Konva)
+        ^js node (new (.-Rect Konva)
                #js {:x x :y y :width w :height h
                     :fill rect-fill :stroke rect-stroke :strokeWidth 1
                     :strokeScaleEnabled false
@@ -88,21 +88,22 @@
     (attach-rect-handlers! handle node)
     node))
 
-(defn- natural-pointer [stage scale]
+(defn- natural-pointer [^js stage scale]
   (when-let [pos (.getPointerPosition stage)]
     {:x (/ (.-x pos) scale) :y (/ (.-y pos) scale)}))
 
 (defn- wire-draw-handlers!
   "Drag on empty canvas creates a new rect; click on empty deselects."
   [handle]
-  (let [{:keys [stage rect-layer scale]} @handle
+  (let [{:keys [rect-layer scale]} @handle
+        ^js stage (:stage @handle)
         !draft (atom nil)]                          ; {:node :ox :oy} while drawing
     (.on stage "mousedown touchstart"
       (fn [e]
         ;; Only start drawing from the stage/image itself — rect mousedown
         ;; cancels bubbling above.
         (when (or (= (.-target e) stage)
-                (= "Image" (.getClassName (.-target e))))
+                (= "Image" (.getClassName ^js (.-target e))))
           (select! handle nil)
           (when-let [{:keys [x y]} (natural-pointer stage scale)]
             (let [node (make-rect handle {:x x :y y :w 0 :h 0 :ordinal nil})]
@@ -118,7 +119,7 @@
             (.height node (js/Math.abs (- y oy)))))))
     (.on stage "mouseup touchend"
       (fn [_]
-        (when-let [{:keys [node]} @!draft]
+        (when-let [^js node (:node @!draft)]
           (reset! !draft nil)
           (if (or (< (.width node) min-rect-px) (< (.height node) min-rect-px))
             (.destroy node)                          ; too small — discard
@@ -134,8 +135,8 @@
         key-handler
         (fn [e]
           (when (contains? #{"Delete" "Backspace"} (.-key e))
-            (let [{:keys [tr]} @handle
-                  selected (first (.nodes tr))]
+            (let [^js tr (:tr @handle)
+                  ^js selected (first (.nodes tr))]
               (when selected
                 (.preventDefault e)
                 (select! handle nil)
@@ -209,7 +210,8 @@
   "Tear down the stage and container listeners. Idempotent."
   [handle]
   (when handle
-    (let [{:keys [stage container key-handler]} @handle]
+    (let [{:keys [container key-handler]} @handle
+          ^js stage (:stage @handle)]
       (when (and container key-handler)
         (.removeEventListener container "keydown" key-handler))
       (when stage (.destroy stage))
