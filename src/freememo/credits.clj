@@ -2,12 +2,9 @@
   "Credit pricing + spend orchestration.
 
    Pass-through cost × markup (see plans/credits-wayl-payment-system.md §5.2/§5.4).
-   `charge-iqd` is pure; `check-balance!`/`record-charge!` gate and debit a
-   completed AI action; `start-checkout!` creates a Wayl top-up link.
-
-   OpenAI token convention: prompt_tokens includes cached_tokens, so billable
-   input = prompt − cached. reasoning_tokens are counted within completion_tokens
-   and billed at the output rate — tracked for the ledger, not priced separately."
+   All AI lanes bill from OpenRouter's returned usage.cost: `check-cost-billed-balance!`
+   gates and `record-cost-charge!` debits a completed action; `start-checkout!`
+   creates a Wayl top-up link."
   (:require
    [freememo.config :as config]
    [freememo.db :as db]
@@ -38,46 +35,6 @@
   [user-id]
   (or (db/get-user-markup user-id) (config/markup)))
 
-(defn- require-rates!
-  "Resolve [rates fx markup] for a user+model or throw, failing closed (§5.2.4).
-   markup is the user's effective rate (override or config default)."
-  [user-id model]
-  (let [rates (config/model-rates model)
-        fx (config/fx-iqd-per-usd)
-        markup (resolve-markup user-id)]
-    (when (nil? rates)
-      (throw (ex-info (str "No credit rate configured for model: " model)
-               {:type ::unpriced-model :model model})))
-    (when (or (nil? fx) (nil? markup))
-      (throw (ex-info "Credits misconfigured: missing fx-iqd-per-usd or markup"
-               {:type ::credits-misconfigured :fx fx :markup markup})))
-    [rates fx markup]))
-
-(defn- attempt-cost-usd
-  "USD cost of one OpenAI call. billable input = prompt − cached (clamped ≥ 0)."
-  [{:keys [input cached-input output]}
-   {:keys [prompt-tokens cached-tokens completion-tokens]}]
-  (let [prompt     (or prompt-tokens 0)
-        cached     (or cached-tokens 0)
-        completion (or completion-tokens 0)
-        billable   (max 0 (- prompt cached))]
-    (/ (+ (* billable input)
-          (* cached cached-input)
-          (* completion output))
-       1e6)))
-
-(defn charge-iqd
-  "IQD to debit for one user action = ceil(Σ attempts USD × fx × markup).
-   Pre:  model priced; attempts non-empty seq of {:prompt-tokens :cached-tokens
-         :completion-tokens} (non-negative); user-id for per-user markup.
-   Post: non-negative long; a cached-heavy call costs strictly less than the
-         same totals with no cache.
-   Throws (fails closed) when model/fx/markup are unconfigured."
-  [user-id model attempts]
-  (let [[rates fx markup] (require-rates! user-id model)
-        usd (reduce + 0.0 (map #(attempt-cost-usd rates %) attempts))]
-    (long (Math/ceil (* usd fx markup)))))
-
 (defn charge-iqd-from-usd
   "IQD to debit for an action billed by a provider-reported USD cost (the OCR
    lane — OpenRouter returns usage.cost). = ceil(usd × fx × markup).
@@ -91,42 +48,12 @@
                {:type ::credits-misconfigured :fx fx :markup markup})))
     (long (Math/ceil (* (max 0.0 (double (or usd 0))) fx markup)))))
 
-;; ── Usage extraction ──
-
-(defn usage->tokens
-  "Normalize an OpenAI :usage map to the token shape charge-iqd/ledger expect."
-  [usage]
-  {:prompt-tokens     (or (:prompt_tokens usage) 0)
-   :cached-tokens     (or (get-in usage [:prompt_tokens_details :cached_tokens]) 0)
-   :completion-tokens (or (:completion_tokens usage) 0)
-   :reasoning-tokens  (or (get-in usage [:completion_tokens_details :reasoning_tokens]) 0)})
-
 ;; ── Spend path (§5.4) ──
 
-(defn check-balance!
-  "Gate before an AI action.
-   Pre:  user-id, model.
-   Post: {:ok true} to proceed, or {:ok false :error msg} to refuse.
-   Self-host (credits disabled) always proceeds. Official requires fully-priced
-   config + balance > 0 (one overshoot allowed by debiting after success)."
-  [user-id model]
-  (if-not (config/credits-enabled?)
-    {:ok true}
-    (cond
-      (or (nil? (config/model-rates model))
-          (nil? (config/fx-iqd-per-usd))
-          (nil? (resolve-markup user-id)))
-      {:ok false :error (str "Credit pricing is not configured for \"" model "\".")}
-
-      (<= (db/get-credit-balance user-id) 0)
-      {:ok false :error "Out of credits. Top up in Settings to keep using AI features."}
-
-      :else {:ok true})))
-
 (defn check-cost-billed-balance!
-  "Gate before an OCR action billed from a provider-reported USD cost.
-   Like check-balance! but with no per-model rate requirement — the cost comes
-   from OpenRouter's usage.cost, not the :models table.
+  "Gate before an AI action billed from a provider-reported USD cost (OCR + card
+   generation). Requires only fx + markup configured and a positive balance — the
+   cost comes from OpenRouter's usage.cost, with no per-model rate table.
    Pre:  user-id. Post: {:ok true} to proceed, or {:ok false :error msg}.
    Self-host (credits disabled) always proceeds."
   [user-id]
@@ -180,19 +107,6 @@
     (catch Exception e
       (tel/error! {:id ::credit-charge-failed :data fail-data} e)
       nil)))
-
-(defn record-charge!
-  "Debit credits for a completed token-billed action — total (never throws).
-   No-op when credits are disabled. `attempts` is a non-empty seq of usage-token
-   maps (one per LLM attempt; all attempts billed per §5.4.5). Cost is computed
-   once via charge-iqd, then debited with retry. Returns charged IQD (long), or
-   nil when credits are disabled OR all debit attempts failed."
-  [user-id endpoint model attempts]
-  (when (config/credits-enabled?)
-    (debit-with-retry! user-id endpoint model
-      (charge-iqd user-id model attempts)
-      {:endpoint (name endpoint) :model model :attempts attempts}
-      {:user-id user-id :endpoint endpoint :model model :attempts attempts})))
 
 (defn record-cost-charge!
   "Debit credits for a completed OCR action billed from a provider-reported USD
@@ -283,27 +197,3 @@
             (< usd 0.01) "<$0.01"
             :else (format "~$%.2f" usd)))))))
 
-;; ── Cost-estimate table (§5.8.3) ──
-
-(def ^:private estimate-basis
-  "Mean observed tokens per action type (prod logs, 2026-03..05). Used to render
-   the static cost table. Each row adds :unit (plural noun) + :units-per-action
-   (billable units one action yields — 1 page for OCR, card-count notes, default
-   2, for card generation) so the view can show per-unit cost and balance counts."
-  [{:label "OCR a page" :unit "pages"       :units-per-action 1 :model-key :ocr   :prompt-tokens 907   :cached-tokens 0    :completion-tokens 526}
-   {:label "Basic note" :unit "basic notes" :units-per-action 2 :model-key :basic :prompt-tokens 9345  :cached-tokens 577  :completion-tokens 68}
-   {:label "Cloze note" :unit "cloze notes" :units-per-action 2 :model-key :cloze :prompt-tokens 15266 :cached-tokens 4887 :completion-tokens 94}])
-
-(defn cost-estimates
-  "Static cost estimates for the given model, or nil when pricing is unconfigured.
-   Returns a vec of {:label :unit :units-per-action :iqd :unit-cost}: :iqd is the
-   per-action charge; :unit-cost = round(:iqd / :units-per-action) for display; the
-   view derives balance counts as (quot balance :iqd) × :units-per-action.
-   Reflects the user's effective markup (override or config default)."
-  [user-id model]
-  (when (and (config/model-rates model) (config/fx-iqd-per-usd) (resolve-markup user-id))
-    (mapv (fn [{:keys [label unit units-per-action] :as basis}]
-            (let [iqd (charge-iqd user-id model [basis])]
-              {:label label :unit unit :units-per-action units-per-action
-               :iqd iqd :unit-cost (Math/round (/ (double iqd) units-per-action))}))
-      estimate-basis)))

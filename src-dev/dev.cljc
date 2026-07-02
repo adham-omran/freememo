@@ -24,8 +24,8 @@
    #?(:clj [ring.middleware.session.cookie :refer [cookie-store]])
    #?(:clj [hyperfiddle.electric-ring-adapter3 :as electric-ring])))
 
-;; Mirror src-prod/prod.cljc so dev with `:credits-enabled? true` doesn't throw
-;; ::prod-model-missing on first LLM call. Bump together with src-prod.
+;; Mirror src-prod/prod.cljc so dev with `:credits-enabled? true` uses the same
+;; default card model. Bump together with src-prod.
 #?(:clj (reset! config/!prod-model "gpt-5.1"))
 
 (comment (-main)) ; repl entrypoint

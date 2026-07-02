@@ -2,7 +2,7 @@
   "Catalog of user-selectable OCR models for \"Scan Page\".
 
    A selection is stored per-document as an :id (see settings/get-ocr-model);
-   the global default remains settings/get-model. All lanes route through one
+   the user's global default is settings/get-ocr-model-default. All lanes route through one
    OpenRouter key (topology A1). :shape tells freememo.ocr/extract-text how to
    build the request — it is the single dispatch key for the request layer.
 

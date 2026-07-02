@@ -2,7 +2,7 @@
   "Business logic for application settings."
   (:require
    [freememo.db :as db]
-   [freememo.crypto :as crypto]
+   [freememo.card-models :as card-models]
    [freememo.config :as config]
    [freememo.input-check :as input]
    [freememo.toasts :as toasts]
@@ -16,7 +16,6 @@
   (or (System/getenv "APP_BASE_URL") "https://freememo.net"))
 
 ;; Setting keys (constants)
-(def OPENAI_API_KEY "openai_api_key")
 (def MODEL "model")
 (def CARD_COUNT "card_count")
 (def REASONING "reasoning")
@@ -69,66 +68,53 @@
       (tel/error! {:id ::save-email-updates} e)
       {:success false :error "Failed to save email updates preference"})))
 
-;; OpenAI key helpers — per-user (BYOK), with optional server-wide demo
-;; fallback via OPENAI_DEMO_KEY env var.
-(defn- get-user-openai-api-key [user-id enc-key]
-  (let [k (crypto/decrypt (or (db/get-setting user-id OPENAI_API_KEY) "") enc-key)]
-    (when (seq k) k)))
-
-(defn- get-shared-openai-api-key []
-  ;; OPENAI_API_KEY is the documented self-host name; OPENAI_DEMO_KEY kept as a
-  ;; backward-compatible alias.
-  (let [k (some-> (or (System/getenv "OPENAI_API_KEY")
-                      (System/getenv "OPENAI_DEMO_KEY"))
-            str/trim)]
-    (when (seq k) k)))
-
-(defn get-openai-api-key
-  "Resolve the OpenAI key for a request.
-   Official (CREDITS_ENABLED): the platform key only — no BYO, no demo (Choice B).
-   Self-host: per-user key → demo fallback (unchanged)."
-  [user-id enc-key]
-  (if (config/credits-enabled?)
-    (config/platform-openai-api-key)
-    (or (get-user-openai-api-key user-id enc-key)
-        (get-shared-openai-api-key))))
-
 (defn get-openrouter-api-key
-  "Resolve the OpenRouter key for OCR (topology A1: all OCR routes through it).
-   The platform key serves both official and self-host — self-host operators set
-   :secrets :platform-openrouter-api-key (or env PLATFORM_OPENROUTER_API_KEY) in
-   their own config. `user-id` is accepted for a future per-user BYOK path.
+  "Resolve the OpenRouter key — the single provider key for OCR, card generation,
+   and transcription (topology A1). The platform key serves both official and
+   self-host; self-host operators set :secrets :platform-openrouter-api-key (or
+   env PLATFORM_OPENROUTER_API_KEY). `user-id` is accepted for a future per-user
+   BYOK path.
    Post: the key string, or nil when unconfigured (caller refuses the action)."
   [_user-id]
   (config/platform-openrouter-api-key))
 
-(defn get-openai-api-key-status
-  "Status for the settings UI. :platform in official mode (key block hidden);
-   :user / :shared / :none in self-host."
-  [user-id enc-key]
-  (cond
-    (config/credits-enabled?)
-    {:source :platform :configured? (some? (config/platform-openai-api-key))}
-    (some? (get-user-openai-api-key user-id enc-key))
-    {:source :user :configured? true}
-    (some? (get-shared-openai-api-key))
-    {:source :shared :configured? true}
-    :else
-    {:source :none :configured? false}))
+(defn get-openrouter-key-status
+  "Whether the OpenRouter key is configured, for the settings + home UI. There is
+   no per-user BYOK — a single operator-set key backs both modes.
+   Post: {:source :platform :configured? bool}."
+  [user-id]
+  {:source :platform
+   :configured? (some? (get-openrouter-api-key user-id))})
+
+(defn card-model-ids
+  "Card-generation model :ids a user may pick (single source of truth for the
+   resolver + picker). Credits-mode: config/card-model-allowlist when non-empty,
+   else all registry ids (an unset allow-list means \"no restriction\"). Self-host:
+   all registry ids.
+   Post: a non-empty vector of registry ids (registry is never empty)."
+  []
+  (let [all (mapv :id card-models/registry)]
+    (if (config/credits-enabled?)
+      (let [allow (config/card-model-allowlist)]
+        (if (seq allow) (vec allow) all))
+      all)))
 
 (defn get-model
-  "Effective OpenAI model for OCR + card generation.
-   In credits-enabled deployments the model is pinned via
-   `freememo.config/!prod-model` (set by `src-prod/prod.cljc`) and any per-user
-   DB setting is ignored. Throws `{:type ::prod-model-missing}` when
-   `credits-enabled?` is on but the atom is nil — fail-closed, matching
-   `credits/require-rates!`."
+  "Effective card-generation model :id for a user.
+   Precedence among allowed ids: per-user saved id → prod default (!prod-model in
+   credits mode) or registry default → first allowed. Mirrors
+   `ocr/effective-ocr-model`; !prod-model is now the default, not a hard pin.
+   Post: an :id present in (card-model-ids)."
   [user-id]
-  (if (config/credits-enabled?)
-    (or @config/!prod-model
-        (throw (ex-info "Prod model not set — src-prod/prod.cljc must reset! freememo.config/!prod-model"
-                 {:type ::prod-model-missing})))
-    (or (db/get-setting user-id MODEL) "gpt-5.1")))
+  (let [allowed (card-model-ids)
+        saved (db/get-setting user-id MODEL)
+        default (if (config/credits-enabled?)
+                  (or @config/!prod-model card-models/default-id)
+                  card-models/default-id)]
+    (cond
+      (some #{saved} allowed) saved
+      (some #{default} allowed) default
+      :else (first allowed))))
 
 (defn get-card-count [user-id]
   (try
@@ -358,22 +344,18 @@
       {:success false :error "Failed to save auto-load mode"})))
 
 ;; Save functions with validation
-(defn save-openai-api-key [user-id api-key enc-key]
-  (try
-    (let [trimmed (str/trim (or api-key ""))]
-      (db/set-setting user-id OPENAI_API_KEY (crypto/encrypt trimmed enc-key))
-      {:success true})
-    (catch Exception e
-      (tel/error! {:id ::save-openai-api-key} e)
-      {:success false :error "Failed to save API key"})))
-
-(defn save-model [user-id value]
-  (try
-    (db/set-setting user-id MODEL value)
-    {:success true}
-    (catch Exception e
-      (tel/error! {:id ::save-model} e)
-      {:success false :error "Failed to save model"})))
+(defn save-model
+  "Persist a card-generation model selection. Pre: `value` is a card-models :id
+   (else rejected — caller bug). Post: MODEL setting stored, or {:success false}."
+  [user-id value]
+  (if-not (card-models/resolve-model value)
+    {:success false :error (str "Unknown card model: " value)}
+    (try
+      (db/set-setting user-id MODEL value)
+      {:success true}
+      (catch Exception e
+        (tel/error! {:id ::save-model} e)
+        {:success false :error "Failed to save model"}))))
 
 (defn save-reasoning [user-id value]
   (try

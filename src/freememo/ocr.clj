@@ -9,8 +9,7 @@
    [freememo.ocr-models :as models]
    [freememo.html-cleaner :as cleaner]
    [freememo.text :as text]
-   [clj-http.client :as http]
-   [cheshire.core :as json]
+   [freememo.openrouter :as openrouter]
    [clojure.string :as str]
    [taoensso.telemere :as tel])
   (:import
@@ -133,8 +132,6 @@
              :else (first allowed))]
     (models/resolve-model id)))
 
-(def ^:private openrouter-base "https://openrouter.ai/api/v1")
-
 (def ^:private plugin-downstream-model
   "Cheapest verified downstream model for the file-parser plugin. Its completion
    is discarded — the OCR result is read from the file annotation — so it exists
@@ -145,10 +142,7 @@
   "POST a chat-completion to OpenRouter. Returns {:status :body}; never throws on
    HTTP status (4xx/5xx come back as data so the caller maps the error)."
   [api-key body]
-  (http/post (str openrouter-base "/chat/completions")
-    {:headers {"Authorization" (str "Bearer " api-key)}
-     :content-type :json :as :json :throw-exceptions false
-     :body (json/generate-string body)}))
+  (openrouter/post! api-key "/chat/completions" body))
 
 (defn- strip-code-fences
   "Drop a leading ```html / ``` fence and trailing ``` the model may wrap around

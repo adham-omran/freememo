@@ -1,13 +1,14 @@
 (ns freememo.ai-features-section
-  "AI Features card on the Settings page: LLM toggle, API key modal, reasoning,
-   verbosity, scan DPI, system + OCR prompts. Extracted from settings_page so
-   each e/defn stays under the JVM 64KB bytecode limit."
+  "AI Features card on the Settings page: LLM toggle, provider-key status, card
+   model, reasoning, verbosity, scan DPI, system + OCR prompts. Extracted from
+   settings_page so each e/defn stays under the JVM 64KB bytecode limit."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
    [freememo.home-page :refer [get-api-key-status*]]
    [freememo.ocr-models :as ocr-models]
+   [freememo.card-models :as card-models]
    #?(:clj [freememo.ocr :as ocr])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.config :as config])
@@ -26,19 +27,18 @@
           (db/get-credit-balance user-id)))
 
 (e/defn CreditsSection
-  "Official-deployment credits panel: balance, top-up presets, cost estimates.
-   Rendered in place of the BYO-key block when CREDITS_ENABLED is set (§5.8).
+  "Official-deployment credits panel: balance + top-up presets.
+   Rendered in place of the key-status block when CREDITS_ENABLED is set (§5.8).
    `base-url` is the public origin (derived from ring-request at Main) — used
    for the Wayl webhook + redirection URLs so dev (localhost) and prod work
    without a config knob. `client-country` is the ISO-3166 alpha-2 code resolved
    from the client IP at session boot (nil = unknown → USD)."
-  [user-id model base-url client-country]
+  [user-id base-url client-country]
   (e/client
     (let [credits-refresh (e/server (e/watch (us/get-atom user-id :credits-refresh)))
           balance (e/server (credit-balance* credits-refresh user-id))
           presets (e/server (mapv (fn [amt] {:iqd amt :usd-str (credits/iqd->usd-str amt)})
                               (config/presets)))
-          estimates (e/server (credits/cost-estimates user-id model))
           !checkout-error (atom nil)
           checkout-error (e/watch !checkout-error)]
       (dom/div
@@ -82,31 +82,7 @@
         (when checkout-error
           (dom/div
             (dom/props {:style {:margin-top "8px" :font-size "13px" :color "var(--color-danger)"}})
-            (dom/text checkout-error)))
-
-        (when estimates
-          (dom/div
-            (dom/props {:style {:margin-top "12px"}})
-            (dom/div (dom/props {:class "hint" :style {:margin-bottom "4px"}})
-              (dom/text "Typical cost:"))
-            (dom/table
-              (dom/props {:style {:width "100%" :font-size "12px" :border-collapse "collapse"}})
-              (e/for [{:keys [label unit-cost]} (e/diff-by :label estimates)]
-                (dom/tr
-                  (dom/td (dom/props {:style {:padding "2px 0" :color "var(--color-text-secondary)"}})
-                    (dom/text label))
-                  (dom/td (dom/props {:style {:padding "2px 0" :text-align "right"
-                                              :color "var(--color-text-primary)"}})
-                    (dom/text (str "~" unit-cost " credits"))))))
-            (when (pos? (or balance 0))
-              (dom/div
-                (dom/props {:class "hint" :style {:margin-top "8px"}})
-                (dom/text
-                  (str "Your " balance " credits ≈ "
-                    (str/join " or "
-                      (mapv (fn [{:keys [iqd units-per-action unit]}]
-                              (str "~" (* (quot balance iqd) units-per-action) " " unit))
-                        estimates))))))))))))
+            (dom/text checkout-error)))))))
 
 (e/defn AIFeaturesSection [user-id enc-key base-url client-country]
   (e/client
@@ -115,17 +91,13 @@
           llm-enabled (e/watch !llm-enabled)
           settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
           api-key-status (e/server (get-api-key-status* settings-refresh user-id enc-key))
-          api-key-source (:source api-key-status)
+          api-key-configured? (:configured? api-key-status)
           credits-enabled? (e/server (config/credits-enabled?))
-          !show-key-modal (atom false)
-          show-key-modal (e/watch !show-key-modal)
-          !draft-key (atom "")
-          draft-key (e/watch !draft-key)
-          !key-save-error (atom nil)
-          key-save-error (e/watch !key-save-error)
           server-model (e/server (settings/get-model user-id))
           !model (atom server-model)
           model (e/watch !model)
+          card-model-ids (e/server (settings/card-model-ids))
+          card-label-of (into {} (map (juxt :id :label)) card-models/registry)
           server-reasoning (e/server (settings/get-reasoning user-id))
           !reasoning (atom server-reasoning)
           reasoning (e/watch !reasoning)
@@ -144,7 +116,7 @@
                               :color "var(--color-text-secondary)"}})
           (dom/text (if credits-enabled?
                       "Incremental reading and Anki sync are always free. OCR and flashcard generation spend credits — top up below."
-                      "Incremental reading and Anki sync are always free. AI features (OCR and flashcard generation) use OpenAI and require your own API key -- bring your own key, pay only for what you use.")))
+                      "Incremental reading and Anki sync are always free. AI features (OCR, flashcard generation, transcription) use OpenRouter and require an OpenRouter API key set by the operator.")))
 
         ;; LLM toggle
         (dom/div
@@ -173,146 +145,48 @@
                 (dom/props {:class "hint"})
                 (dom/text (if credits-enabled?
                             "OCR text extraction and flashcard generation. Uses platform credits — top up below."
-                            "OCR text extraction and flashcard generation. Requires your own OpenAI API key."))))))
+                            "OCR text extraction and flashcard generation. Requires an OpenRouter API key."))))))
 
         (when llm-enabled
-          ;; Credits panel (official, CREDITS_ENABLED) or BYO-key block (self-host)
+          ;; Credits panel (official) or provider-key status (self-host).
           (if credits-enabled?
-            (CreditsSection user-id model base-url client-country)
+            (CreditsSection user-id base-url client-country)
             (dom/div
               (dom/props {:class "field"
                           :style {:padding "14px" :background "var(--color-bg-subtle)"
                                   :border-radius "var(--radius-md)" :border "1px solid var(--color-bg-hover)"}})
               (dom/div
-                (dom/props {:style {:display "flex" :align-items "center" :justify-content "space-between"
-                                    :margin-bottom "4px"}})
+                (dom/props {:style {:display "flex" :align-items "center" :justify-content "space-between"}})
                 (dom/span
                   (dom/props {:style {:font-size "13px" :font-weight "500" :color "var(--color-text-label)"}})
-                  (dom/text "OpenAI API Key"))
+                  (dom/text "OpenRouter API Key"))
                 (dom/span
-                  (dom/props {:class (case api-key-source
-                                       :user "badge badge-success"
-                                       :shared "badge badge-warning"
-                                       "badge badge-error")})
-                  (dom/text (case api-key-source
-                              :user "Configured"
-                              :shared "Server key"
-                              "Not set"))))
-              ;; Server-wide key set (OPENAI_API_KEY/OPENAI_DEMO_KEY): no per-user
-              ;; entry control — the key is fixed by the operator (S-2).
-              (when (not= api-key-source :shared)
-                (dom/button
-                  (dom/props {:type "button"
-                              :class "btn btn-secondary"
-                              :style {:margin-top "8px" :padding "6px 14px"
-                                      :font-size "13px" :color "var(--color-primary)"
-                                      :border "1px solid var(--color-primary)"}})
-                  (dom/text (if (= api-key-source :user) "Update Key" "Set API Key"))
-                  (dom/On "click"
-                    (fn [_]
-                      (reset! !draft-key "")
-                      (reset! !key-save-error nil)
-                      (reset! !show-key-modal true))
-                    nil)))))
+                  (dom/props {:class (if api-key-configured? "badge badge-success" "badge badge-error")})
+                  (dom/text (if api-key-configured? "Configured" "Not set"))))
+              (when-not api-key-configured?
+                (dom/div (dom/props {:class "hint" :style {:margin-top "8px"}})
+                  (dom/text "Set PLATFORM_OPENROUTER_API_KEY in your environment or config.edn.")))))
 
-          ;; API Key Modal (self-host only; hidden when a server-wide key is set)
-          (when (and (not credits-enabled?) (not= api-key-source :shared) show-key-modal)
-            (dom/div
-              (dom/props {:class "modal-backdrop" :tabindex "-1"})
-              (dom/On "click" (fn [_] (reset! !show-key-modal false)) nil)
-              (dom/On "keydown"
-                (fn [e]
-                  #?(:cljs
-                     (cond
-                       (= (.-key e) "Escape")
-                       (reset! !show-key-modal false)
-                       (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
-                       (when-let [btn (.querySelector (.-currentTarget e) ".btn-primary")]
-                         (.preventDefault e)
-                         (.click btn)))))
-                nil)
-              (dom/div
-                (dom/props {:class "modal-content modal-md"})
-                (dom/On "click" (fn [e] (.stopPropagation e)) nil)
-                (dom/h3
-                  (dom/props {:style {:margin-top "0" :margin-bottom "4px" :font-size "17px"}})
-                  (dom/text "OpenAI API Key"))
-                (dom/p
-                  (dom/props {:style {:margin-top "0" :margin-bottom "8px" :font-size "13px" :color "var(--color-text-hint)"}})
-                  (dom/text "FreeMemo uses OpenAI to scan documents and generate flashcards. "))
-                (dom/p
-                  (dom/props {:style {:margin-top "0" :margin-bottom "8px" :font-size "13px" :color "var(--color-text-hint)"}})
-                  (dom/a
-                    (dom/props {:href "https://platform.openai.com/api-keys" :target "_blank" :rel "noopener"
-                                :style {:color "var(--color-primary)" :text-decoration "underline"}})
-                    (dom/text "Get your API key from OpenAI"))
-                  (dom/text "."))
-                (dom/p
-                  (dom/props {:style {:margin-top "0" :margin-bottom "16px" :font-size "13px" :color "var(--color-text-hint)"}})
-                  (dom/text "Your key is encrypted and stored securely. Saving an empty value clears it."))
-                (dom/input
-                  (dom/props {:type "password"
-                              :value draft-key
-                              :placeholder "sk-..."
-                              :class "input input-full"
-                              :style {:padding "10px 12px"}})
-                  (let [input-event (dom/On "input" #(-> % .-target .-value) nil)]
-                    (when (some? input-event)
-                      (reset! !draft-key input-event))))
-                (when key-save-error
-                  (dom/div
-                    (dom/props {:style {:margin-top "10px" :font-size "13px" :color "var(--color-danger)"
-                                        :padding "8px 10px" :background "var(--color-danger-bg)" :border-radius "var(--radius-sm)"}})
-                    (dom/text key-save-error)))
-                (dom/div
-                  (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "10px"
-                                      :margin-top "20px"}})
-                  (dom/button
-                    (let [click-event (dom/On "click" identity nil)
-                          [t _] (e/Token click-event)]
-                      (dom/props {:type "button"
-                                  :disabled (some? t)
-                                  :class "btn btn-primary"
-                                  :style {:order "1"}})
-                      (dom/text (if (some? t) "Saving..." "Save"))
-                      (when t
-                        (let [result (e/server (e/Offload #(settings/save-openai-api-key user-id draft-key enc-key)))]
-                          (case result
-                            (if (:success result)
-                              (do (e/on-unmount #(do (reset! !draft-key "")
-                                                   (reset! !key-save-error nil)
-                                                   (reset! !show-key-modal false)))
-                                (case (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
-                                  (t)))
-                              (let [err-msg (or (:error result) "Failed to save API key")]
-                                (reset! !key-save-error err-msg)
-                                (t err-msg))))))))
-                  (dom/button
-                    (dom/props {:type "button"
-                                :class "btn btn-secondary"})
-                    (dom/text "Cancel")
-                    (dom/On "click" (fn [_] (reset! !show-key-modal false)) nil))))))
-
-          ;; Model — drives both OCR and card generation. Hidden in prod
-          ;; (credits-enabled?) where the model is pinned via
-          ;; freememo.config/!prod-model in src-prod/prod.cljc.
-          (when-not credits-enabled?
-            (dom/div
-              (dom/props {:class "field"})
-              (dom/label (dom/props {:class "label"}) (dom/text "Model"))
-              (dom/select
-                (dom/props {:value model :class "select"})
-                (dom/option (dom/props {:value "gpt-5.1"}) (dom/text "gpt-5.1"))
-                (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                      [t _] (e/Token change-event)]
-                  (when (some? change-event)
-                    (reset! !model change-event))
-                  (when t
-                    (let [r (e/server (e/Offload #(settings/save-model user-id change-event)))]
-                      (case r
-                        (if (:success r) (t) (t (:error r))))))))
-              (dom/div (dom/props {:class "hint"})
-                (dom/text "OpenAI model used for OCR and flashcard generation."))))
+          ;; Card-generation model. Shown in all modes; in credits mode the options
+          ;; are the configured allow-list (config/card-model-allowlist), defaulting
+          ;; to !prod-model.
+          (dom/div
+            (dom/props {:class "field"})
+            (dom/label (dom/props {:class "label"}) (dom/text "Card Model"))
+            (dom/select
+              (dom/props {:value model :class "select"})
+              (e/for [id (e/diff-by identity card-model-ids)]
+                (dom/option (dom/props {:value id}) (dom/text (get card-label-of id id))))
+              (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                    [t _] (e/Token change-event)]
+                (when (some? change-event)
+                  (reset! !model change-event))
+                (when t
+                  (let [r (e/server (e/Offload #(settings/save-model user-id change-event)))]
+                    (case r
+                      (if (:success r) (t) (t (:error r))))))))
+            (dom/div (dom/props {:class "hint"})
+              (dom/text "Model used for flashcard generation.")))
 
           ;; Reasoning
           (dom/div

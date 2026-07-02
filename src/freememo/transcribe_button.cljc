@@ -43,7 +43,7 @@
       ;; Fire effect — launches the async server task once per !fire value.
       (let [[t _] (e/Token fire)]
         (when t
-          (case (e/server (transcribe/start-transcribe! user-id topic-id enc-key))
+          (case (e/server (transcribe/start-transcribe! user-id topic-id))
             (do (reset! !fire nil) (t)))))
       ;; Warn-before-replace modal.
       (when (= confirm :confirming)
