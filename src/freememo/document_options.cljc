@@ -13,7 +13,9 @@
    [freememo.ocr-models :as ocr-models]
    [freememo.modal-shell :as modal]
    [freememo.priority-control :refer [PriorityControl get-topic-priority*]]
+   [freememo.bibliography-button :as bib-btn]
    #?(:clj [freememo.user-state :as us])
+   #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])))
 
 (def ^:private style-options [["ask"    "Ask every time (compare A vs B)"]
@@ -66,6 +68,100 @@
                   :disabled true :placeholder "Coming soon — a custom card-generation prompt for this item."}))
     (e/amb)))
 
+;; ---------------------------------------------------------------------------
+;; Bibliography section — item-scoped Edit / Refetch / Push-to-children
+;; ---------------------------------------------------------------------------
+
+(defn push-biblio-to-descendants!*
+  "Server: push the item's effective bibliography into every descendant extract
+   (overwrite-all), then bump :refresh so citations re-read.
+   Pre:  user-id, topic-id non-nil.
+   Post: {:ok true :count n} | {:ok false :error kw}."
+  [user-id topic-id]
+  #?(:clj (let [r (db/push-bibliography-to-descendants! user-id topic-id)]
+            (when (:ok r) (swap! (us/get-atom user-id :refresh) inc))
+            r)
+     :cljs nil))
+
+(defn has-effective-source?*
+  "Server: true iff the topic resolves to any bibliography source (own or
+   inherited). `_refresh` is a reactive dep so the gate re-reads after edits."
+  [_refresh user-id topic-id]
+  #?(:clj (boolean (and user-id topic-id (db/resolve-effective-source-id topic-id)))
+     :cljs false))
+
+(e/defn PushToChildrenButton
+  "Copy this item's effective bibliography into every descendant extract
+   (overwrite-all), after a confirm. Disabled when the item has no effective
+   source or while a roundtrip is in flight; flashes green on success, shows
+   the error text on failure. Mirrors BibliographyButton's token pattern."
+  [user-id bib-topic-id enabled?]
+  (e/client
+    (dom/button
+      (let [!flash-success (atom false)
+            flash-success? (e/watch !flash-success)
+            click-event (dom/On "click"
+                          (fn [e]
+                            (when #?(:cljs (js/confirm "Overwrite the bibliography of all descendant extracts with this item's bibliography? This cannot be undone.")
+                                     :clj true)
+                              e))
+                          nil)
+            [t ?error] (e/Token click-event)]
+        (dom/props {:class "btn btn-sm btn-secondary" :type "button"
+                    :aria-label "Push bibliography to children"
+                    :data-tooltip "Copy this bibliography to all descendant extracts"
+                    :disabled (or (not enabled?) (some? t))
+                    :aria-busy (some? t)
+                    :style (when flash-success?
+                             {:background "var(--color-success-light)"
+                              :border-color "var(--color-success)"
+                              :color "var(--color-success-dark)"
+                              :transition "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease"})})
+        (icons/Icon :download :size 16)
+        (dom/span (dom/props {:class "icon-label"}) (dom/text "Push to children"))
+        (when ?error
+          (dom/div
+            (dom/props {:style {:color "var(--color-danger)" :font-size "11px" :margin-top "4px"}})
+            (dom/text ?error)))
+        (when t
+          (let [result (e/server (e/Offload #(push-biblio-to-descendants!* user-id bib-topic-id)))]
+            (when (some? result)
+              (if (:ok result)
+                (do (e/on-unmount
+                      (fn []
+                        (reset! !flash-success true)
+                        #?(:cljs (js/setTimeout #(reset! !flash-success false) 1200))))
+                    (t))
+                (t (str "Failed: " (name (or (:error result) :error))))))))))))
+
+(e/defn BibliographySection
+  "Item-scoped bibliography ops. Edit opens the bibliography modal mounted in
+   TopicPage (closes this options modal first, avoiding modal stacking);
+   Refetch reuses BibliographyButton (own-source gate); Push-to-children copies
+   this item's bibliography down the subtree.
+   Pre: bib-topic-id is the item's bibliography target — for PDF pages this is
+   the document root, since pages own no bibliography."
+  [user-id bib-topic-id !open !show-bib]
+  (e/client
+    (let [refresh     (e/server (e/watch (us/get-atom user-id :refresh)))
+          has-source? (e/server (bib-btn/has-source?* refresh user-id bib-topic-id))
+          eff-source? (e/server (has-effective-source?* refresh user-id bib-topic-id))]
+      (dom/div
+        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
+        (dom/label
+          (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
+          (dom/text "Bibliography"))
+        (dom/div
+          (dom/props {:style {:display "flex" :flex-wrap "wrap" :gap "var(--sp-2)"}})
+          (dom/button
+            (dom/props {:class "btn btn-sm btn-secondary" :type "button"
+                        :aria-label "Edit bibliography" :data-tooltip "Edit bibliography"})
+            (icons/Icon :book-open :size 16)
+            (dom/span (dom/props {:class "icon-label"}) (dom/text "Edit"))
+            (dom/On "click" (fn [_] (reset! !open false) (reset! !show-bib true)) nil))
+          (bib-btn/BibliographyButton user-id bib-topic-id has-source? nil)
+          (PushToChildrenButton user-id bib-topic-id eff-source?))))))
+
 (e/defn DocumentOptionsDialog
   "PDF: Forms5 Style select + OCR-model select + disabled Custom Prompt + Submit
    (saves both the quick-extract style and the per-document OCR model)."
@@ -99,7 +195,7 @@
         (when (some? r)
           (if (:success r) (do (reset! !open false) (token)) (token (:error r))))))))
 
-(e/defn DocumentOptionsModal [user-id topic-id is-pdf? root-topic-id priority-topic-id !open]
+(e/defn DocumentOptionsModal [user-id bib-topic-id is-pdf? root-topic-id priority-topic-id !open !show-bib]
   (e/client
     (when (e/watch !open)
       (dom/div
@@ -124,6 +220,9 @@
               (PriorityControl user-id priority-topic-id
                 (e/server (get-topic-priority* refresh priority-topic-id)))))
 
+          ;; Bibliography — item-scoped Edit / Refetch / Push-to-children.
+          (BibliographySection user-id bib-topic-id !open !show-bib)
+
           (if is-pdf?
             (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
                   current (e/server (copy/get-extract-style* settings-refresh user-id root-topic-id))
@@ -138,7 +237,7 @@
                   (dom/props {:class "btn btn-primary" :type "button" :disabled true})
                   (dom/text "Save"))))))))))
 
-(e/defn DocumentOptionsButton [user-id topic-id is-pdf? root-topic-id priority-topic-id]
+(e/defn DocumentOptionsButton [user-id bib-topic-id is-pdf? root-topic-id priority-topic-id !show-bib]
   (e/client
     (let [!open (atom false)]
       (dom/button
@@ -148,4 +247,4 @@
         (icons/Icon :settings :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Document options"))
         (dom/On "click" (fn [_] (reset! !open true)) nil))
-      (DocumentOptionsModal user-id topic-id is-pdf? root-topic-id priority-topic-id !open))))
+      (DocumentOptionsModal user-id bib-topic-id is-pdf? root-topic-id priority-topic-id !open !show-bib))))

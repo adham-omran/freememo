@@ -161,7 +161,10 @@
                              (or (settings/get-pdf-layout user-id pdf-root-id) "left-right")))
           initial-top-pct (e/server (settings/get-card-split user-id))
 
-          bib-topic-id (or pdf-root-id root-topic-id)
+          ;; Bibliography target: PDF pages own no bibliography (resolve to the
+          ;; document root); every other kind (extract/root/web/epub) is its own
+          ;; owner. get-topic-citation* resolves the effective source from here.
+          bib-topic-id (if (= kind "page") (or pdf-root-id root-topic-id) topic-id)
           pdf-root? (and is-pdf? (= kind "pdf"))
           citation (e/server (bibform/get-topic-citation* refresh user-id bib-topic-id))
           pdf-status (e/server (when pdf-root?

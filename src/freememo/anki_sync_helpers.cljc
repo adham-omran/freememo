@@ -319,8 +319,11 @@
      [card settings filename-map]
      (let [{:keys [deck basic-model cloze-model basic-fields cloze-fields
                    allow-dupes use-header header-text tags source-display-mode
-                   bibliography-display-mode bibliography-html
+                   bibliography-display-mode
                    images-front-field images-back-field image-display-mode]} settings
+           ;; Per-item bibliography: the card's own topic (own source, else
+           ;; nearest ancestor); falls back to the bundle-level value.
+           bibliography-html (or (:fm/bibliography-html card) (:bibliography-html settings))
            kind (:flashcards/kind card)
            basic? (= kind "basic")
            model (if basic? basic-model cloze-model)
@@ -390,8 +393,10 @@
       filename-map = {media-id -> \"<id>.<ext>\"} — pre-uploaded filenames for src rewrite."
      [card settings filename-map]
      (let [{:keys [basic-fields cloze-fields use-header header-text source-display-mode
-                   bibliography-display-mode bibliography-html
+                   bibliography-display-mode
                    images-front-field images-back-field image-display-mode]} settings
+           ;; Per-item bibliography: the card's own topic; bundle-level fallback.
+           bibliography-html (or (:fm/bibliography-html card) (:bibliography-html settings))
            kind (:flashcards/kind card)
            basic? (= kind "basic")
            fields (if basic? basic-fields cloze-fields)

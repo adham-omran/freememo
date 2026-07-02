@@ -56,12 +56,12 @@
           !show-bib dctx/!show-bib
           ;; Unsynced card count — uses refresh value for reactivity
           unsynced-count (e/server (helpers/get-unsynced-count* refresh topic-id))
-          ;; biblio-target-id: source rows live on the document's root, not on
-          ;; PDF page children or extract children — see topic_page.cljc's
-          ;; `bib-topic-id (or pdf-root-id root-topic-id)`. The Refetch action
-          ;; now lives inside the Edit-Bibliography modal (C4), which owns its
-          ;; own has-source? gate; the toolbar no longer renders it.
-          biblio-target-id (or root-topic-id topic-id)
+          ;; biblio-target-id: the item that OWNS the bibliography. Extracts and
+          ;; web/epub topics own theirs; PDF pages own none, so they resolve to
+          ;; the document root. Feeds the citation display and the item-scoped
+          ;; Edit/Refetch/Push in Document Options. Server fns resolve the
+          ;; effective source (own, else nearest ancestor) from this id.
+          biblio-target-id (if (= context-mode :page) (or root-topic-id topic-id) topic-id)
           ;; Review-unit topic: PDF root for pages, the topic itself for
           ;; extracts — the entity Priority/History act on. Document Options
           ;; hosts the Priority field (C5); the inline stepper is gone.
@@ -170,7 +170,7 @@
             ;; Hosts the Priority field (C5), so it targets review-topic-id.
                 (dom/div
                   (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-bib"})
-                  (DocumentOptionsButton user-id topic-id is-pdf? biblio-target-id review-topic-id))
+                  (DocumentOptionsButton user-id biblio-target-id is-pdf? (or root-topic-id topic-id) review-topic-id !show-bib))
 
             ;; DocumentMeta proxy (.toolbar-overflow-docmeta, reveals T2+) —
             ;; actions only (Edit-Bibliography + Mark-PDF-Done); citation and
@@ -312,7 +312,7 @@
                 (when (= context-mode :extract)
                   (JumpToSourcePageButton topic-id navigate!))
                 (AutoExtractButton)
-                (DocumentOptionsButton user-id topic-id is-pdf? biblio-target-id review-topic-id))
+                (DocumentOptionsButton user-id biblio-target-id is-pdf? (or root-topic-id topic-id) review-topic-id !show-bib))
 
           ;; Divider hides with the document-meta group at tier 2.
               (dom/div (dom/props {:class "toolbar-group-divider toolbar-collapse-docmeta"}))
