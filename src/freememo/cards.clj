@@ -9,6 +9,7 @@
    [freememo.openrouter :as openrouter]
    [freememo.card-models :as card-models]
    [taoensso.telemere :as tel]
+   [cheshire.core :as json]
    [clojure.java.io :as io]
    [clojure.edn :as edn]
    [clojure.string :as str]))
@@ -121,23 +122,33 @@
     page-text))
 
 ;; Model response parsing
-(defn parse-edn-response
-  "Parse the model response as EDN. Handles markdown code fences.
-   Returns parsed EDN or throws exception."
+(defn parse-card-response
+  "Parse the model's card response into a collection of maps. Prefers EDN (the
+   prompted `[{:q ..} ..]` format); falls back to JSON for models that emit
+   `[{\"q\": ..}]` despite the instructions (observed: Gemini 3 Flash) — JSON
+   object keys are keywordized, so the downstream :q/:a/:c shape is identical.
+   Strips markdown code fences first (```clojure/edn/json). Throws if neither
+   parses.
+   Pre:  raw-text is the model message content (may be nil).
+   Post: returns the parsed collection; throws ex-info on unparseable input."
   [raw-text]
-  (let [cleaned (-> raw-text
+  (let [cleaned (-> (str raw-text)
                   str/trim
-                  (str/replace #"^```(?:clojure|edn)?\s*\n?" "")
+                  (str/replace #"^```(?:clojure|edn|json)?\s*\n?" "")
                   (str/replace #"\n?```\s*$" "")
                   str/trim)]
-    (try
-      (edn/read-string cleaned)
-      (catch Exception e
-        (tel/error! {:id ::parse-edn-response
-                     :data {:raw raw-text :cleaned cleaned}}
-          "Failed to parse EDN response from the model")
-        (throw (ex-info "Failed to parse EDN response from the model"
-                 {:raw raw-text :cleaned cleaned}))))))
+    (or (try
+          (edn/read-string cleaned)
+          (catch Exception _
+            ;; Not EDN — the model likely returned JSON; keywordize keys so the
+            ;; :q/:a/:c shape matches the EDN path exactly.
+            (try (json/parse-string cleaned true)
+                 (catch Exception _ nil))))
+        (do (tel/error! {:id ::parse-card-response
+                         :data {:raw raw-text :cleaned cleaned}}
+              "Failed to parse card response from the model (neither EDN nor JSON)")
+            (throw (ex-info "Failed to parse card response from the model"
+                     {:raw raw-text :cleaned cleaned}))))))
 
 (defn- generate-cards*
   "Shared implementation for card generation with up to `max-retries` attempts.
@@ -191,7 +202,7 @@
                                 :duration-ms duration-ms
                                 :attempt attempt}}
                 "Card generation completion")
-            cards (parse-edn-response raw-text)
+            cards (parse-card-response raw-text)
             actual-count (count cards)
             cost-acc' (+ cost-acc (double (or cost-usd 0)))]
         (cond
