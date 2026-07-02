@@ -3161,6 +3161,44 @@
   [topic-id]
   (subtree-topic-ids ds topic-id))
 
+(defn get-flashcards-for-subtree
+  "Flashcards for a topic and all its descendants (via parent_id). Same row
+   shape as get-all-flashcards (coalesced page_number, occlusion cols) so the
+   Anki-sync 'subtree' scope feeds the same downstream as 'self'/'document'.
+   Reuses get-subtree-ids for the id set (always includes topic-id itself)."
+  [topic-id]
+  (if topic-id
+    (mapv (comp strip-foreign-jsonb normalize-flashcard-row)
+      (jdbc/execute! ds
+        (sql/format {:select [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]
+                              [:og.image_media_id :occlusion_image_media_id]
+                              [:og.mode :occlusion_mode]]
+                     :from [[:flashcards :f]]
+                     :join [[:topics :t] [:= :f.topic_id :t.id]]
+                     :left-join [[:topics :parent] [:= :t.parent_id :parent.id]
+                                 [:occlusion_groups :og] [:= :f.occlusion_group_id :og.id]]
+                     :where [:in :f.topic_id (get-subtree-ids topic-id)]
+                     :order-by [[:f.created_at :desc]]})))
+    []))
+
+(defn topic-scope-context
+  "Scope-selector context for a topic: its kind and whether it has any
+   non-staged child topic. {:kind <string> :has-children? <bool>}. nil topic-id
+   → nil. Drives the Anki-sync scope label (kind) and the 'subtree' leaf gate."
+  [topic-id]
+  (when topic-id
+    (let [row (jdbc/execute-one! ds
+                (sql/format {:select [:kind
+                                      [[:exists {:select [1]
+                                                 :from [[:topics :c]]
+                                                 :where [:and [:= :c.parent_id topic-id]
+                                                         [:is :c.staged_delete_id nil]]}]
+                                       :has_children]]
+                             :from [:topics]
+                             :where [:= :id topic-id]}))]
+      {:kind (:topics/kind row)
+       :has-children? (boolean (:has_children row))})))
+
 (defn- subtree-owner
   "user_id of the root document above topic-id (root carries the owner;
    children may have NULL user_id). Returns nil if not found."

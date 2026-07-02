@@ -13,9 +13,9 @@
 (e/defn AnkiSyncInnerBody
   "Form-config state (scope, fields, options, tags) + delegate to AnkiSyncSyncBody.
    conn = {:!status :!error :!decks :!models :!selected-deck :!basic-model :!cloze-model :!all-tags}"
-  [user-id selected-doc current-pdf-page !show-modal conn]
+  [user-id selected-doc !show-modal conn]
   (e/client
-    (let [form {:!scope (atom "Current Page")
+    (let [form {:!scope (atom "self")
                 :!allow-dupes (atom false)
                 ;; Custom header is per-PDF, owned by HeaderSettings (not here).
                 :!use-tags (atom false)
@@ -23,17 +23,17 @@
                 :!basic-fields (atom [])
                 :!cloze-fields (atom [])}]
       (panels/AnkiSyncSyncBody
-        user-id selected-doc current-pdf-page !show-modal conn form))))
+        user-id selected-doc !show-modal conn form))))
 
 (e/defn AnkiSyncModalBody
   "Delegates to AnkiSyncInnerBody — split point to stay below JVM 64KB method limit.
    conn = {:!status :!error :!decks :!models :!selected-deck :!basic-model :!cloze-model :!all-tags}"
-  [user-id selected-doc current-pdf-page !show-modal conn]
-  (AnkiSyncInnerBody user-id selected-doc current-pdf-page !show-modal conn))
+  [user-id selected-doc !show-modal conn]
+  (AnkiSyncInnerBody user-id selected-doc !show-modal conn))
 
 (e/defn AnkiSyncModal
   "Connection/selection atoms + config-fetch token; delegates to AnkiSyncModalBody."
-  [user-id selected-doc current-pdf-page card-type !show-modal]
+  [user-id selected-doc card-type !show-modal]
   (e/client
     (let [conn {:!status (atom :connecting)
                 :!error (atom nil)
@@ -49,9 +49,9 @@
         (when t
           (case (e/client (helpers/run-fetch-config! conn)) (t))))
 
-      (AnkiSyncModalBody user-id selected-doc current-pdf-page !show-modal conn))))
+      (AnkiSyncModalBody user-id selected-doc !show-modal conn))))
 
-(e/defn AnkiSyncButton [user-id selected-doc current-pdf-page card-type unsynced-count]
+(e/defn AnkiSyncButton [user-id selected-doc card-type unsynced-count]
   (e/client
     (let [!show-modal (atom false)
           show-modal (e/watch !show-modal)]
@@ -74,4 +74,4 @@
 
       ;; Modal
       (when show-modal
-        (AnkiSyncModal user-id selected-doc current-pdf-page card-type !show-modal)))))
+        (AnkiSyncModal user-id selected-doc card-type !show-modal)))))

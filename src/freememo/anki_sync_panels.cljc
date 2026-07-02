@@ -6,6 +6,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.anki-sync-form :as form]
+   [freememo.doc-context :as dctx]
    [freememo.modal-shell :as modal-shell]
    [freememo.keyboard :as keyboard]
    [freememo.logging :as log]
@@ -84,7 +85,7 @@
    conn = {:!status :!decks :!models :!selected-deck :!basic-model :!cloze-model ...}
    form = {:!scope :!allow-dupes :!use-tags :!tags :!basic-fields :!cloze-fields}
    sync = {:!phase :!result :!error :!push-pairs}"
-  [user-id selected-doc current-pdf-page conn form sync]
+  [user-id selected-doc conn form sync]
   (let [{:keys [!phase !error !push-pairs]} sync
         sync-phase (e/watch (:!phase sync))
         scope (e/watch (:!scope form))
@@ -167,18 +168,16 @@
                 (reset! !phase :error)
                 (token)))))))
 
-    ;; Push execution
+    ;; Push execution. Scope resolves server-side against the in-view topic:
+    ;; 'self' → that topic only, 'subtree' → + descendants, 'document' → whole
+    ;; root tree. topic-id is the ambient in-view topic (dctx), not the root —
+    ;; so a nested Web syncs only its own cards under 'self'.
     (e/client
       (when (= sync-phase :pushing)
-        (let [page-num (when (= scope "Current Page") current-pdf-page)
-              page-topic-id (when page-num
-                              (e/server
-                                (:topics/id
-                                 (first (filter #(= (:topics/page_number %) page-num)
-                                          (db/list-pages selected-doc))))))
-              cards-result (e/server (sync/get-cards-for-sync
+        (let [cards-result (e/server (sync/get-cards-for-sync
                                        {:user-id user-id
-                                        :topic-id page-topic-id
+                                        :scope scope
+                                        :topic-id dctx/topic-id
                                         :root-topic-id selected-doc}))]
           (if-not (:success cards-result)
             (do (reset! !error (:error cards-result))
@@ -342,7 +341,7 @@
   "Sync state, field-fetch tokens, executor, and modal DOM.
    conn = {:!status :!basic-model :!cloze-model ...}
    form = {:!basic-fields :!cloze-fields ...}"
-  [user-id selected-doc current-pdf-page !show-modal conn form]
+  [user-id selected-doc !show-modal conn form]
   (e/client
     (let [!sync-phase (atom nil)
           !sync-result (atom nil)

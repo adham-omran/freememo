@@ -7,8 +7,28 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.anki-sync-helpers :as helpers]
+   [freememo.doc-context :as dctx]
    [freememo.typeahead :refer [Typeahead]]
+   #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])))
+
+(defn topic-scope-context*
+  "Reactive wrapper: {:kind :has-children?} for the in-view topic. Feeds the
+   scope selector's dynamic label + 'subtree' leaf gate."
+  [topic-id]
+  #?(:clj (db/topic-scope-context topic-id)
+     :cljs nil))
+
+(defn scope-label
+  "Display label for a scope key given the in-view topic kind. PDF pages read
+   'Page'; everything else 'Topic'. 'subtree' mirrors the noun."
+  [scope kind]
+  (let [page? (= kind "page")]
+    (case scope
+      "self"     (if page? "Current Page" "Current Topic")
+      "subtree"  (if page? "Current Page & Children" "Current Topic & Children")
+      "document" "Entire Document"
+      scope)))
 
 (e/defn AnkiSyncModelSelect
   "Reusable model typeahead with field mapping hint.
@@ -239,20 +259,33 @@
           decks (e/watch (:!decks conn))
           models (e/watch (:!models conn))
           basic-fields (e/watch (:!basic-fields form))
-          cloze-fields (e/watch (:!cloze-fields form))]
+          cloze-fields (e/watch (:!cloze-fields form))
+          scope-ctx (e/server (topic-scope-context* dctx/topic-id))
+          kind (:kind scope-ctx)
+          has-children? (:has-children? scope-ctx)
+          ;; Coerce display when a leaf carries a stale 'subtree' pref — the
+          ;; option isn't rendered, so the select must not point at it.
+          shown-scope (if (and (= scope "subtree") (not has-children?)) "self" scope)]
 
       ;; Scope
       (dom/div
         (dom/props {:style {:margin-bottom "var(--sp-3)"}})
         (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
           (dom/text "Scope"))
+        ;; reset! lives INSIDE the change callback (plain fn, always runs) — a
+        ;; bare (when v (reset! ..)) in the reactive body is work-skipped by
+        ;; Electric. Selection is reflected via per-option :selected. Mirrors
+        ;; card-modals/ExportScopeSelect.
         (dom/select
-          (dom/props {:class "select" :style {:font-size "15px"}
-                      :value scope})
-          (dom/option (dom/props {:value "Current Page"}) (dom/text "Current Page"))
-          (dom/option (dom/props {:value "Entire Doc"}) (dom/text "Entire Document"))
-          (let [v (dom/On "change" (fn [e] (-> e .-target .-value)) nil)]
-            (when (some? v) (reset! (:!scope form) v)))))
+          (dom/props {:class "select" :style {:font-size "15px"}})
+          (dom/On "change" (fn [e] (reset! (:!scope form) (-> e .-target .-value))) nil)
+          (dom/option (dom/props {:value "self" :selected (= shown-scope "self")})
+            (dom/text (scope-label "self" kind)))
+          (when has-children?
+            (dom/option (dom/props {:value "subtree" :selected (= shown-scope "subtree")})
+              (dom/text (scope-label "subtree" kind))))
+          (dom/option (dom/props {:value "document" :selected (= shown-scope "document")})
+            (dom/text (scope-label "document" kind)))))
 
       ;; Deck
       (dom/div

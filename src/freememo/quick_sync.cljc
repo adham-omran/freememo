@@ -149,24 +149,24 @@
    panels/AnkiSyncExecutor → outcome toasts.
    Run-scoped flags (!trigger/!running?/!prefs-applied?/!busy-bump) are owned by
    QuickSyncButton so the click handler can reset them at start."
-  [user-id selected-doc current-pdf-page conn form sync
+  [user-id selected-doc conn form sync
    !trigger !running? !prefs-applied? !busy-bump]
   (e/client
     (QuickSyncStartToasts user-id !trigger !busy-bump)
     (QuickSyncConnectAndPush user-id selected-doc conn form sync !trigger !prefs-applied?)
     ;; (e) Reuse the modal's DOM-free phase machine: fetch cards → push → finalize.
-    (panels/AnkiSyncExecutor user-id selected-doc current-pdf-page conn form sync)
+    (panels/AnkiSyncExecutor user-id selected-doc conn form sync)
     (QuickSyncOutcome user-id conn sync !trigger !running?)))
 
 (e/defn QuickSyncButton
   "Hidden proxy button registered as keyboard/!quick-sync-btn-ref. Clicking it
    (via Cmd-Shift-Opt-X) starts a background push. Mounts the headless executor."
-  [user-id selected-doc current-pdf-page card-type unsynced-count]
+  [user-id selected-doc card-type unsynced-count]
   (e/client
     (let [conn {:!status (atom :idle) :!error (atom nil) :!decks (atom [])
                 :!models (atom []) :!selected-deck (atom nil)
                 :!basic-model (atom nil) :!cloze-model (atom nil) :!all-tags (atom [])}
-          form {:!scope (atom "Current Page") :!allow-dupes (atom false)
+          form {:!scope (atom "self") :!allow-dupes (atom false)
                 :!use-tags (atom false)
                 :!tags (atom []) :!basic-fields (atom []) :!cloze-fields (atom [])}
           sync {:!phase (atom nil) :!result (atom nil) :!error (atom nil) :!push-pairs (atom nil)}
@@ -200,5 +200,5 @@
                 (reset! (:!push-pairs sync) nil)
                 (swap! !trigger inc))))
           nil))
-      (QuickSyncExecutor user-id selected-doc current-pdf-page conn form sync
+      (QuickSyncExecutor user-id selected-doc conn form sync
         !trigger !running? !prefs-applied? !busy-bump))))

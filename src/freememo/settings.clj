@@ -214,8 +214,19 @@
       (tel/error! {:id ::save-llm-enabled} e)
       {:success false :error "Failed to save LLM enabled"})))
 
+(defn normalize-scope
+  "Map any stored/legacy Anki-sync scope value to a current key:
+   'self' | 'subtree' | 'document'. Legacy 'Current Page' → 'self',
+   'Entire Doc' → 'document'; nil/unknown → 'self' (narrowest default)."
+  [v]
+  (case v
+    ("self" "subtree" "document") v
+    "Current Page" "self"
+    "Entire Doc"   "document"
+    "self"))
+
 (defn get-anki-scope [user-id]
-  (or (db/get-setting user-id ANKI_SCOPE) "Current Page"))
+  (normalize-scope (db/get-setting user-id ANKI_SCOPE)))
 
 (defn get-anki-deck [user-id]
   (db/get-setting user-id ANKI_DECK))
