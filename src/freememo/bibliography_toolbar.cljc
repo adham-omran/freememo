@@ -1,8 +1,8 @@
 (ns freememo.bibliography-toolbar
   "DocumentMetaGroup — the former bibliography bar, folded into the toolbar.
-   Holds document-level controls: Edit-Bibliography (opens the bib modal),
-   the citation, the page-progress X/Y badge, and Mark-PDF-Done. Replaces the
-   separate full-width strip that used to sit below the toolbar (TitleBar)."
+   Holds document-level readouts + Mark-PDF-Done: the citation and the
+   page-progress X/Y badge. Edit/Refetch/Push bibliography moved to Document
+   Options (item-scoped). Replaces the full-width strip below the toolbar."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -26,33 +26,23 @@
               :ok)
      :cljs nil))
 
-;; Pre:  user-id non-nil; bib-topic-id = the document root; citation is a
-;;       string-or-nil; page-info is {:done :total :remaining-tooltip}-or-nil;
-;;       pdf-root? + pdf-status describe the PDF root (both nil for non-PDF).
-;;       !show-bib is the modal-open atom owned by TopicPage (passed positionally
-;;       — atoms cannot ride inside a serialized props map).
-;; Post: Edit-Bibliography click sets !show-bib true (opens the modal mounted in
-;;       TopicPage); Mark-PDF-Done toggles topics.status via toggle-pdf-done!*.
-;; Invariant: variant :inline renders all four elements (citation + progress are
-;;            informational, carry early-collapse classes); variant :overflow
-;;            renders only the two actions for the ⋮ panel.
+;; Pre:  user-id non-nil; bib-topic-id = the citation's item (document root for
+;;       PDF pages); citation is a string-or-nil; page-info is
+;;       {:done :total :remaining-tooltip}-or-nil; pdf-root? + pdf-status
+;;       describe the PDF root (both nil for non-PDF).
+;; Post: Mark-PDF-Done toggles topics.status via toggle-pdf-done!* (PDF root
+;;       only). Bibliography actions (Edit/Refetch/Push) live in Document
+;;       Options now.
+;; Invariant: variant :inline adds the citation + progress readouts (early-
+;;            collapse classes); :overflow renders only Mark-PDF-Done.
 (e/defn DocumentMetaGroup
   []
   (e/client
     (let [user-id dctx/user-id bib-topic-id dctx/bib-topic-id citation dctx/citation
           page-info dctx/page-info pdf-root? dctx/pdf-root? pdf-status dctx/pdf-status
-          variant dctx/variant !show-bib dctx/!show-bib
+          variant dctx/variant
           done? (= pdf-status "done")
           inline? (= variant :inline)]
-
-      ;; Edit Bibliography — opens the modal. Co-located with Refetch.
-      (dom/button
-        (dom/props {:class "btn btn-sm btn-secondary"
-                    :aria-label "Edit Bibliography"
-                    :data-tooltip "Edit bibliography"})
-        (icons/Icon :book-open :size 16)
-        (dom/span (dom/props {:class "icon-label"}) (dom/text "Edit Bibliography"))
-        (dom/On "click" (fn [_] (reset! !show-bib true)) nil))
 
       ;; Mark PDF Done / Restore — PDF root only.
       (when pdf-root?

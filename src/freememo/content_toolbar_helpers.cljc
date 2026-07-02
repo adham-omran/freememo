@@ -47,12 +47,16 @@
                             " stack=" (->> (.getStackTrace (Thread/currentThread))
                                         (drop 1) (take 8) (map #(.toString %)) vec)))
             (try
-              (let [created (db/create-topic! {:parent-id parent-id
+              (let [inherited-src (db/clone-source! user-id
+                                    (db/resolve-effective-source-id parent-id))
+                    created (db/create-topic! {:parent-id parent-id
                                                :user-id user-id
                                                :content (cleaner/clean-html content)
                                                :kind "basic"
-                                               :title title})]
-                (log/log-info (str "[CREATE-EXTRACT " invocation-id "] DB-INSERT-OK new-id=" (:topics/id created)))
+                                               :title title
+                                               :source-id inherited-src})]
+                (log/log-info (str "[CREATE-EXTRACT " invocation-id "] DB-INSERT-OK new-id=" (:topics/id created)
+                                " inherited-source=" inherited-src))
                 (db/copy-pins-to-child! parent-id (:topics/id created))
                 {:success true})
               (catch Exception e

@@ -133,10 +133,32 @@
       (tel/error! {:id ::resolve-preferred-fields :data {:kind kind}} e)
       [])))
 
+(defn- attach-card-bibliography
+  "Assoc :fm/bibliography-html onto each card, resolved from the card's OWN
+   topic via the effective-source walk (own source_id, else nearest ancestor).
+   Resolves once per distinct topic, so a whole-document push is O(topics),
+   not O(cards).
+   Pre:  cards carry :flashcards/topic_id and/or :flashcards/root_topic_id.
+   Post: every card gains :fm/bibliography-html (string or nil)."
+  [cards]
+  (let [topic-of      (fn [c] (or (:flashcards/topic_id c) (:flashcards/root_topic_id c)))
+        html-by-topic (reduce (fn [m tid]
+                                (if (contains? m tid)
+                                  m
+                                  (assoc m tid
+                                    (some-> (db/resolve-effective-source-id tid)
+                                      db/get-source
+                                      :sources/csl
+                                      helpers/format-bibliography-html))))
+                        {}
+                        (keep topic-of cards))]
+    (mapv #(assoc % :fm/bibliography-html (get html-by-topic (topic-of %))) cards)))
+
 (defn get-cards-for-sync
   "Get flashcards for Anki sync. Also returns the current root topic title/kind
-   and pre-resolved bibliography (text + HTML) so the Source field and the
-   Bibliography field/append reflect edits made since the modal was opened.
+   and pre-resolved bibliography (text + HTML). Each card additionally carries
+   :fm/bibliography-html resolved from its OWN topic (own source, else nearest
+   ancestor), so extract cards cite the extract's bibliography, not the root's.
    opts: {:user-id N, :topic-id N, :root-topic-id N}
    When topic-id is nil, returns all cards for the root topic."
   [{:keys [user-id topic-id root-topic-id]}]
@@ -147,9 +169,10 @@
                     :root-topic-id root-topic-id}}
     "get-cards-for-sync invoked")
   (try
-    (let [cards (if topic-id
-                  (db/get-flashcards topic-id)
-                  (db/get-all-flashcards root-topic-id))
+    (let [cards (attach-card-bibliography
+                  (if topic-id
+                    (db/get-flashcards topic-id)
+                    (db/get-all-flashcards root-topic-id)))
           root-topic (when (and user-id root-topic-id)
                        (db/get-topic-for-user user-id root-topic-id))
           source-id (:topics/source_id root-topic)
@@ -344,7 +367,7 @@
                              (db/get-source sid))
                     bib-html (helpers/format-bibliography-html (:sources/csl source))]
                 {:root-topic-id root-id
-                 :cards (vec cards)
+                 :cards (attach-card-bibliography (vec cards))
                  :settings {:basic-model (pick :basic-model)
                             :cloze-model (pick :cloze-model)
                             :basic-fields (vec (resolve-preferred-fields user-id root-id :basic))

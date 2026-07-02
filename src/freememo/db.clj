@@ -1320,6 +1320,45 @@
     ["UPDATE topics SET source_id = ? WHERE id = ? AND user_id = ?"
      source-id topic-id user-id]))
 
+(defn resolve-effective-source-id
+  "Source id a topic should cite: its own source_id when set, else the nearest
+   ancestor's (walking parent_id upward), else nil.
+   Pre:  topic-id may be nil (→ nil).
+   Post: returns a sources.id drawn from topic-id's ancestor chain (self
+         included), preferring the shallowest; nil when no topic in the chain
+         has a source. Legacy source-less extracts thus resolve to the root."
+  [topic-id]
+  (when topic-id
+    (:source_id
+     (jdbc/execute-one! ds
+       ["WITH RECURSIVE anc(id, parent_id, source_id, depth) AS (
+           SELECT id, parent_id, source_id, 0 FROM topics WHERE id = ?
+           UNION ALL
+           SELECT t.id, t.parent_id, t.source_id, a.depth + 1
+             FROM topics t JOIN anc a ON t.id = a.parent_id)
+         SELECT source_id FROM anc
+          WHERE source_id IS NOT NULL
+          ORDER BY depth
+          LIMIT 1"
+        topic-id]
+       {:builder-fn rs/as-unqualified-maps}))))
+
+(defn clone-source!
+  "Duplicate sources row `source-id` into a NEW row owned by user-id, so later
+   edits to either row stay independent. Copies csl/csl_type/url/title.
+   Pre:  source-id may be nil (→ nil).
+   Post: returns the new sources.id, or nil when source-id is nil or the row
+         is missing."
+  [user-id source-id]
+  (when source-id
+    (when-let [src (get-source source-id)]
+      (:sources/id
+       (create-source! {:user-id  user-id
+                        :csl-type (:sources/csl_type src)
+                        :csl      (:sources/csl src)
+                        :url      (:sources/url src)
+                        :title    (:sources/title src)})))))
+
 (defn- kind->csl-type
   "Map legacy topics.kind values to CSL-JSON type tokens."
   [kind]
@@ -1846,31 +1885,47 @@
                      :do-nothing true
                      :returning [:id]})))))
 
+(defn- strip-foreign-jsonb
+  "Remove map entries whose value is an unparsed org.postgresql.util.PGobject.
+   These are JSONB columns this branch's schema does not model — e.g. a column
+   added by another branch sharing the same database — which are not
+   Electric-serializable and must never cross the wire to the client. Modeled
+   JSONB is parsed by its own query (pgobject->clj), so it is never raw here.
+   Pre:  row is a result-set map, or nil.
+   Post: the same map without PGobject-valued entries; nil → nil.
+   Blame: environment (schema drift) — a client-render row must not carry a
+   column this branch cannot serialize."
+  [row]
+  (when row
+    (into {} (remove (fn [[_ v]] (instance? PGobject v))) row)))
+
 (defn get-flashcards
   "Get all flashcards for a specific topic (page or extract).
    Includes page_number from the topic hierarchy (direct or via parent)."
   [topic-id]
   (if topic-id
-    (jdbc/execute! ds
-      (sql/format {:select [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]]
-                   :from [[:flashcards :f]]
-                   :join [[:topics :t] [:= :f.topic_id :t.id]]
-                   :left-join [[:topics :parent] [:= :t.parent_id :parent.id]]
-                   :where [:= :f.topic_id topic-id]
-                   :order-by [[:f.created_at :desc]]}))
+    (mapv strip-foreign-jsonb
+      (jdbc/execute! ds
+        (sql/format {:select [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]]
+                     :from [[:flashcards :f]]
+                     :join [[:topics :t] [:= :f.topic_id :t.id]]
+                     :left-join [[:topics :parent] [:= :t.parent_id :parent.id]]
+                     :where [:= :f.topic_id topic-id]
+                     :order-by [[:f.created_at :desc]]})))
     []))
 
 (defn get-all-flashcards
   "Get all flashcards under a root topic.
    Includes page_number from the topic hierarchy (direct or via parent)."
   [root-topic-id]
-  (jdbc/execute! ds
-    (sql/format {:select [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]]
-                 :from [[:flashcards :f]]
-                 :join [[:topics :t] [:= :f.topic_id :t.id]]
-                 :left-join [[:topics :parent] [:= :t.parent_id :parent.id]]
-                 :where [:= :f.root_topic_id root-topic-id]
-                 :order-by [[:f.created_at :desc]]})))
+  (mapv strip-foreign-jsonb
+    (jdbc/execute! ds
+      (sql/format {:select [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]]
+                   :from [[:flashcards :f]]
+                   :join [[:topics :t] [:= :f.topic_id :t.id]]
+                   :left-join [[:topics :parent] [:= :t.parent_id :parent.id]]
+                   :where [:= :f.root_topic_id root-topic-id]
+                   :order-by [[:f.created_at :desc]]}))))
 
 (defn get-user-flashcards
   "Get every flashcard owned by user-id, with topic/root context for the
@@ -1884,6 +1939,7 @@
   [user-id]
   (mapv (fn [row]
           (-> row
+            strip-foreign-jsonb
             (assoc :topic_title (:topics/topic_title row)
               :root_title (:topics/root_title row))
             (dissoc :topics/topic_title :topics/root_title)))
@@ -1907,16 +1963,17 @@
   [user-id card-ids]
   (if (empty? card-ids)
     []
-    (jdbc/execute! ds
-      (sql/format {:select [[:f.*]
-                            [[:coalesce :t.page_number :parent.page_number] :page_number]]
-                   :from [[:flashcards :f]]
-                   :join [[:topics :t] [:= :f.topic_id :t.id]
-                          [:topics :root] [:= :f.root_topic_id :root.id]]
-                   :left-join [[:topics :parent] [:= :t.parent_id :parent.id]]
-                   :where [:and
-                           [:= :root.user_id user-id]
-                           [:in :f.id (vec card-ids)]]}))))
+    (mapv strip-foreign-jsonb
+      (jdbc/execute! ds
+        (sql/format {:select [[:f.*]
+                              [[:coalesce :t.page_number :parent.page_number] :page_number]]
+                     :from [[:flashcards :f]]
+                     :join [[:topics :t] [:= :f.topic_id :t.id]
+                            [:topics :root] [:= :f.root_topic_id :root.id]]
+                     :left-join [[:topics :parent] [:= :t.parent_id :parent.id]]
+                     :where [:and
+                             [:= :root.user_id user-id]
+                             [:in :f.id (vec card-ids)]]})))))
 
 (defn delete-user-flashcards!
   "Bulk delete of user-id's flashcards. Ownership enforced via the root
@@ -2988,6 +3045,54 @@
         (sql/format {:update :topics
                      :set {:parent_id old-parent-id}
                      :where [:= :id topic-id]})))))
+
+(defn push-bibliography-to-descendants!
+  "Copy topic-id's effective bibliography into every descendant extract as a
+   fresh private sources row (overwrite-all). Excludes kind='page' descendants
+   and topic-id itself, so each affected extract owns an independent copy.
+   Pre:  user-id owns the subtree root above topic-id.
+   Post: {:ok true :count n} — n descendants re-pointed to new source copies;
+         {:ok false :error :no-source} when topic-id has no effective source;
+         {:ok false :error :not-owned} when ownership fails.
+   Invariant: one transaction; prior descendant source rows are left in place
+   (sources are not garbage-collected here)."
+  [user-id topic-id]
+  (let [src-id (resolve-effective-source-id topic-id)]
+    (if-not src-id
+      {:ok false :error :no-source}
+      (let [src      (get-source src-id)
+            csl      (:sources/csl src)
+            csl-type (:sources/csl_type src)
+            url      (:sources/url src)
+            title    (:sources/title src)]
+        (jdbc/with-transaction [tx ds]
+          (if-not (= user-id (subtree-owner tx topic-id))
+            {:ok false :error :not-owned}
+            (let [descendants (jdbc/execute! tx
+                                ["WITH RECURSIVE subtree(id, kind) AS (
+                                    SELECT id, kind FROM topics WHERE id = ?
+                                    UNION ALL
+                                    SELECT c.id, c.kind FROM topics c
+                                      JOIN subtree s ON c.parent_id = s.id)
+                                  SELECT id FROM subtree
+                                   WHERE id <> ? AND (kind IS DISTINCT FROM 'page')"
+                                 topic-id topic-id]
+                                {:builder-fn rs/as-unqualified-maps})]
+              (doseq [{:keys [id]} descendants]
+                (let [new-src (jdbc/execute-one! tx
+                                (sql/format {:insert-into :sources
+                                             :values [{:user_id         user-id
+                                                       :csl_type        csl-type
+                                                       :csl             (->jsonb csl)
+                                                       :url             url
+                                                       :title           title
+                                                       :container_title (when (map? csl)
+                                                                          (:container-title csl))}]
+                                             :returning [:id]}))]
+                  (jdbc/execute! tx
+                    ["UPDATE topics SET source_id = ? WHERE id = ?"
+                     (:sources/id new-src) id])))
+              {:ok true :count (count descendants)})))))))
 
 (defn purge-staged-documents!
   "Hard-delete topic subtrees whose staging entry has aged past the 12h window,

@@ -10,7 +10,6 @@
    [freememo.loading :as loading]
    [clojure.string :as str]
    [freememo.icons :as icons]
-   [freememo.bibliography-button :as bib-btn]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.optimistic :as opt])
@@ -165,29 +164,42 @@
 ;; ---------------------------------------------------------------------------
 
 (defn get-topic-citation*
-  "Server: returns the citation string for a topic, or nil. `_refresh` is a
-   reactive dep so the UI updates after a save."
+  "Server: returns the citation string for a topic, or nil. Resolves the
+   topic's effective source (own source_id, else nearest ancestor), so an
+   edited extract shows its own citation while legacy source-less extracts
+   still show the root's. `_refresh` is a reactive dep so the UI updates
+   after a save."
   [_refresh user-id topic-id]
   #?(:clj
      (when (and user-id topic-id)
-       (when-let [topic (db/get-topic-for-user user-id topic-id)]
-         (when-let [sid (:topics/source_id topic)]
+       (when (db/get-topic-for-user user-id topic-id)
+         (when-let [sid (db/resolve-effective-source-id topic-id)]
            (when-let [src (db/get-source sid)]
              (format-citation (:sources/csl src))))))
      :cljs nil))
 
 (defn load-source-for-topic*
-  "Returns {:source-id N-or-nil :form {...form-values...}} for the topic's
-   current bibliography. `_refresh` provides a reactive dependency."
+  "Returns the form state for a topic's bibliography. `_refresh` provides a
+   reactive dependency.
+   Post: {:source-id own-source_id-or-nil
+          :effective-source-id resolved-source-id-or-nil
+          :inherited? true when the form is pre-filled from an ancestor
+          :form {...form-values...}}
+   The form pre-fills from the EFFECTIVE source (own, else nearest ancestor),
+   so editing a legacy source-less extract starts from its root's fields; the
+   save path forks a private row because :source-id (own) is still nil."
   [_refresh user-id topic-id]
   #?(:clj
      (when (and user-id topic-id)
-       (let [topic     (db/get-topic-for-user user-id topic-id)
-             source-id (:topics/source_id topic)
-             source    (when source-id (db/get-source source-id))
-             csl       (or (:sources/csl source) {})]
-         {:source-id source-id
-          :form      (csl->form csl)}))
+       (when-let [topic (db/get-topic-for-user user-id topic-id)]
+         (let [own-sid (:topics/source_id topic)
+               eff-sid (db/resolve-effective-source-id topic-id)
+               source  (when eff-sid (db/get-source eff-sid))
+               csl     (or (:sources/csl source) {})]
+           {:source-id           own-sid
+            :effective-source-id eff-sid
+            :inherited?          (boolean (and eff-sid (not= eff-sid own-sid)))
+            :form                (csl->form csl)})))
      :cljs nil))
 
 (defn claim-pending-biblio-show?*
@@ -448,21 +460,11 @@
           (dom/props {:class "modal-content modal-lg"
                       :style {:max-height "85vh" :overflow-y "auto"
                               :display "flex" :flex-direction "column"}})
-          ;; Header: title + Refetch (C4). Refetch re-runs identifier
-          ;; resolution for a topic that already has a source; gated on
-          ;; has-source?* (reactive on :refresh). Folds in the old toolbar
-          ;; Refetch button. Note: the open form is loaded once, so a refetch's
-          ;; new data shows on reopen.
-          (let [refresh     (e/server (e/watch (us/get-atom user-id :refresh)))
-                has-source? (e/server (bib-btn/has-source?* refresh user-id topic-id))]
-            (dom/div
-              (dom/props {:style {:display "flex" :align-items "center"
-                                  :justify-content "space-between" :gap "12px"
-                                  :margin "0 0 16px 0"}})
-              (dom/h3
-                (dom/props {:style {:margin "0" :font-size "16px"}})
-                (dom/text "Bibliography"))
-              (bib-btn/BibliographyButton user-id topic-id has-source? nil)))
+          ;; Header (D-b): title only. Refetch moved to Document Options →
+          ;; Bibliography, which is item-scoped like this form.
+          (dom/h3
+            (dom/props {:style {:margin "0 0 16px 0" :font-size "16px"}})
+            (dom/text "Bibliography"))
           (loading/WithLoading
             (e/fn [] (e/server (e/Offload #(load-source-for-topic* 0 user-id topic-id))))
             (e/fn [data] (BibliographyDialog !show user-id topic-id (:form data)))))))))
