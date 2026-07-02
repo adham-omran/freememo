@@ -48,7 +48,7 @@
 (e/defn SyncDropdown []
   (e/client
     (let [user-id dctx/user-id topic-id dctx/topic-id root-topic-id dctx/root-topic-id
-          page-number dctx/page-number card-type dctx/card-type
+          card-type dctx/card-type
           unsynced-count dctx/unsynced-count mod-key dctx/mod-key
           !open (atom false)
           open (e/watch !open)
@@ -66,10 +66,10 @@
         (dom/props {:class "toolbar-dropdown-sources"})
         (ExportButton user-id topic-id root-topic-id unsynced-count)
         (PullFromAnkiButton user-id root-topic-id)
-        (AnkiSyncButton user-id root-topic-id page-number card-type unsynced-count)
+        (AnkiSyncButton user-id root-topic-id card-type unsynced-count)
         ;; Hidden proxy for background Quick Sync (Cmd-Shift-Opt-X). No menu
         ;; item — keyboard-only; the executor runs without opening the modal.
-        (QuickSyncButton user-id root-topic-id page-number card-type unsynced-count))
+        (QuickSyncButton user-id root-topic-id card-type unsynced-count))
 
       ;; Visible dropdown. `toolbar-collapse-sync` participates in the tier
       ;; ladder — hidden at viewport-tier 7 so only the trigger collapses;

@@ -85,7 +85,9 @@
    lists come from AnkiConnect and need validation there):
      deck         : per-doc preset > last-used (skipped in 'none')
      basic/cloze  : per-doc preset > Settings default
-     scope/dupes/tags : per-doc preset > global last-used
+     dupes/tags   : per-doc preset > global last-used
+     scope        : global last-used only (per-push choice, not per-item —
+                    the modal saves it to global at handoff and it must win)
    Settings note-type/field defaults always seed (even in 'none'); 'none' only
    skips the per-doc preset and the last-used deck.
 
@@ -100,7 +102,11 @@
           global (:prefs (load-anki-preferences user-id))]
       {:mode        mode
        :preset?     (some? preset)
-       :scope       (or (:scope preset) (:scope global))
+       ;; Scope is a per-push choice (self/subtree/document relative to the
+       ;; in-view topic), NOT per-item config — resolve from global last-used
+       ;; so the modal's fresh selection (saved to global at handoff) always
+       ;; wins. Reading preset-first let a stale preset scope override it.
+       :scope       (settings/normalize-scope (:scope global))
        :deck        (or (:deck preset)
                       (when (not= mode "none") (:deck global)))
        :basic-model (or (:basic-model preset) (:basic-model global))
@@ -182,21 +188,28 @@
    topic (own source, else nearest ancestor), so extract cards cite the
    extract's bibliography, not the root's.
    Occlusion rows carry :occlusion-group (attach-occlusion-groups).
-   opts: {:user-id N, :topic-id N, :root-topic-id N}
-   When topic-id is nil, returns all cards for the root topic."
-  [{:keys [user-id topic-id root-topic-id]}]
+   opts: {:user-id N, :topic-id N, :root-topic-id N, :scope <key>}
+   scope resolves the card set: 'self' → topic-id only; 'subtree' → topic-id +
+   descendants; 'document' → whole root tree. When scope is absent/legacy,
+   falls back to topic-id-or-root (the pre-scope contract; pull uses this)."
+  [{:keys [user-id topic-id root-topic-id scope]}]
   (tel/log! {:level :info
              :id ::get-cards-for-sync.entry
              :data {:user-id user-id
                     :topic-id topic-id
-                    :root-topic-id root-topic-id}}
+                    :root-topic-id root-topic-id
+                    :scope scope}}
     "get-cards-for-sync invoked")
   (try
     (let [cards (attach-occlusion-groups
                   (attach-card-bibliography
-                    (if topic-id
-                      (db/get-flashcards topic-id)
-                      (db/get-all-flashcards root-topic-id))))
+                    (case scope
+                      "self"     (db/get-flashcards topic-id)
+                      "subtree"  (db/get-flashcards-for-subtree topic-id)
+                      "document" (db/get-all-flashcards root-topic-id)
+                      (if topic-id
+                        (db/get-flashcards topic-id)
+                        (db/get-all-flashcards root-topic-id)))))
           root-topic (when (and user-id root-topic-id)
                        (db/get-topic-for-user user-id root-topic-id))
           source-id (:topics/source_id root-topic)
