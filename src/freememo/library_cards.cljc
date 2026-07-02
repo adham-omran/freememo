@@ -543,8 +543,12 @@
         (dom/props {:class (when (even? i) "row-alt")
                     :style {:--order (inc i) :cursor "pointer"}})
         (dom/On "click"
-          (fn [_] (reset! !editing-card {:id id :kind kind :question question
-                                         :answer answer :cloze cloze}))
+          ;; Occlusion rows have no text-field editor here — their editor is
+          ;; the occlusion modal in the topic view. Ignore the click rather
+          ;; than open EditCardModal with empty fields.
+          (fn [_] (when (not= kind "occlusion")
+                    (reset! !editing-card {:id id :kind kind :question question
+                                           :answer answer :cloze cloze})))
           nil)
         (RowSelectCell cell-style id !selected selected)
         (RowDiffCell cell-style sync-st (get anki-overlay id)

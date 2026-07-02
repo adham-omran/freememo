@@ -91,6 +91,19 @@
     (and updated-at (pos? (compare (str updated-at) (str synced-at)))) :modified
     :else :synced))
 
+(defn occlusion-row-html
+  "Compact front-cell HTML for an occlusion row: image thumbnail + mask
+   ordinal + mode + (stripped) header."
+  [image-media-id mask-ordinal mode header-html]
+  (let [header-text (some-> header-html (str/replace #"<[^>]+>" "") str/trim not-empty)]
+    (str "<img src=\"/api/media/" image-media-id "\""
+      " style=\"height:28px;max-width:60px;object-fit:cover;border-radius:3px;"
+      "vertical-align:middle;margin-right:6px\" />"
+      "<span>Occlusion · mask " mask-ordinal " · "
+      (if (= mode "hide-one") "Hide One" "Hide All")
+      (when header-text (str " · " (truncate-html-for-row header-text 80)))
+      "</span>")))
+
 (e/defn CardRow [card !editing-card user-id order]
   (e/client
     (let [id (e/server (:flashcards/id card))
@@ -98,13 +111,24 @@
           question (e/server (:flashcards/question card))
           answer (e/server (:flashcards/answer card))
           cloze (e/server (:flashcards/cloze card))
+          group-id (e/server (:flashcards/occlusion_group_id card))
+          mask-ordinal (e/server (:flashcards/mask_ordinal card))
+          occ-image-id (e/server (:occlusion_image_media_id card))
+          occ-mode (e/server (:occlusion_mode card))
+          io-header (e/server (get-in card [:flashcards/io_fields :header]))
           sync-st (e/server (sync-state (:flashcards/anki_synced_at card)
                               (:flashcards/updated_at card)))]
-      (let [cloze? (= kind "cloze")]
+      (let [occ? (= kind "occlusion")
+            cloze? (= kind "cloze")
+            span2? (or cloze? occ?)]
         (dom/tr
           (dom/props {:style {:--order order :cursor "pointer"}})
           (dom/On "click" (fn [_]
-                            (let [data {:id id :kind kind :question question :answer answer :cloze cloze}]
+                            (let [data (if occ?
+                                         ;; Routes to OcclusionModal (edit mode)
+                                         ;; — see ContentCardTable.
+                                         {:kind "occlusion" :mode :edit :group-id group-id}
+                                         {:id id :kind kind :question question :answer answer :cloze cloze})]
                               (log/log-debug (str "Edit card clicked id=" id " kind=" kind))
                               (reset! !editing-card data))) nil)
           ;; Sync indicator
@@ -123,28 +147,29 @@
                                          :unsynced "var(--color-warning)"
                                          :synced "var(--color-success)"
                                          :modified "var(--color-warning)")}}))
-          ;; Front column — cloze spans both content columns via CSS Grid
-          (let [front-text (if cloze? cloze question)
-                front-html (card-row-html front-text)]
+          ;; Front column — cloze and occlusion span both content columns
+          (let [front-html (if occ?
+                             (occlusion-row-html occ-image-id mask-ordinal occ-mode io-header)
+                             (card-row-html (if cloze? cloze question)))]
             (dom/td
               (dom/props {:dir "auto"
                           :class "card-row-cell"
                           :style (merge {:padding-block "6px" :padding-inline "8px"
                                          :border-bottom "1px solid var(--color-border)"}
-                                   (when cloze? {:grid-column "span 2"}))})
+                                   (when span2? {:grid-column "span 2"}))})
               (e/for-by identity [_k [(str "f-" id)]]
                 (dom/div
                   (dom/props {:class "card-row-html"})
                   (set-inner-html! dom/node front-html)))))
-          ;; Back column — hidden for cloze (front cell spans both)
-          (let [back-text (if cloze? "" (or answer ""))
+          ;; Back column — hidden when the front cell spans both
+          (let [back-text (if span2? "" (or answer ""))
                 back-html (card-row-html back-text)]
             (dom/td
               (dom/props {:dir "auto"
                           :class "card-row-cell"
                           :style (merge {:padding-block "6px" :padding-inline "8px"
                                          :border-bottom "1px solid var(--color-border)"}
-                                   (when cloze? {:display "none"}))})
+                                   (when span2? {:display "none"}))})
               (e/for-by identity [_k [(str "b-" id)]]
                 (dom/div
                   (dom/props {:class "card-row-html"})
@@ -162,13 +187,17 @@
 ;; ---------------------------------------------------------------------------
 
 (defn overlay-front-text [entry]
-  (let [{:keys [kind card-data]} (:payload entry)
+  (let [{:keys [kind card-data geometry]} (:payload entry)
         c (first card-data)]
-    (if (= kind "cloze") (:c c) (:q c))))
+    (case kind
+      "occlusion" (let [n (count (:rects geometry))]
+                    (str "Image occlusion · " n " mask" (when (not= 1 n) "s")))
+      "cloze" (:c c)
+      (:q c))))
 
 (defn overlay-back-text [entry]
   (let [{:keys [kind card-data]} (:payload entry)]
-    (if (= kind "cloze") "" (:a (first card-data)))))
+    (if (= kind "basic") (:a (first card-data)) "")))
 
 (e/defn RetryPendingButton [tempid user-id]
   (e/client
@@ -202,7 +231,8 @@
   (e/client
     (let [tempid (:tempid entry)
           status (:status entry)
-          cloze? (= "cloze" (get-in entry [:payload :kind]))
+          ;; cloze and occlusion rows both span the two content columns
+          cloze? (contains? #{"cloze" "occlusion"} (get-in entry [:payload :kind]))
           front-html (card-row-html (overlay-front-text entry))
           back-html (card-row-html (overlay-back-text entry))
           bg (case status

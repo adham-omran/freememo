@@ -9,6 +9,7 @@
    [contrib.data :refer [clamp-left]]
    [freememo.card-components :refer [CardRow PendingCardRow rtl-text?]]
    [freememo.card-modals :refer [EditCardModal]]
+   [freememo.occlusion-modal :refer [OcclusionModal]]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.optimistic :as opt])))
@@ -39,7 +40,11 @@
           editing-card (e/watch !editing-card)]
 
       (when editing-card
-        (EditCardModal !editing-card user-id))
+        (if (= "occlusion" (:kind editing-card))
+          ;; CardRow puts {:kind "occlusion" :mode :edit :group-id N} in the
+          ;; atom — the occlusion modal treats it as its edit request.
+          (OcclusionModal !editing-card user-id)
+          (EditCardModal !editing-card user-id)))
 
       (if (:success cards-result)
         (let [cards-vec (e/server (vec (:cards cards-result)))

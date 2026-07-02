@@ -154,11 +154,34 @@
                         (keep topic-of cards))]
     (mapv #(assoc % :fm/bibliography-html (get html-by-topic (topic-of %))) cards)))
 
+(defn attach-occlusion-groups
+  "Attach plain-data group info (:occlusion-group {:anki-key :mode :geometry
+   :image-media-id}) to every occlusion card row — everything the client-side
+   push needs to generate mask SVGs and IO note fields. Non-occlusion rows
+   pass through untouched."
+  [cards]
+  (let [gids (into #{} (keep :flashcards/occlusion_group_id) cards)]
+    (if (empty? gids)
+      cards
+      (let [groups (db/get-occlusion-groups-by-ids gids)]
+        (mapv (fn [card]
+                (if-let [g (get groups (:flashcards/occlusion_group_id card))]
+                  (assoc card :occlusion-group
+                    {:anki-key (:occlusion_groups/anki_key g)
+                     :mode (:occlusion_groups/mode g)
+                     :geometry (:occlusion_groups/geometry g)
+                     :image-media-id (:occlusion_groups/image_media_id g)})
+                  card))
+          cards)))))
+
 (defn get-cards-for-sync
   "Get flashcards for Anki sync. Also returns the current root topic title/kind
-   and pre-resolved bibliography (text + HTML). Each card additionally carries
-   :fm/bibliography-html resolved from its OWN topic (own source, else nearest
-   ancestor), so extract cards cite the extract's bibliography, not the root's.
+   and pre-resolved bibliography (text + HTML) so the Source field and the
+   Bibliography field/append reflect edits made since the modal was opened.
+   Each card additionally carries :fm/bibliography-html resolved from its OWN
+   topic (own source, else nearest ancestor), so extract cards cite the
+   extract's bibliography, not the root's.
+   Occlusion rows carry :occlusion-group (attach-occlusion-groups).
    opts: {:user-id N, :topic-id N, :root-topic-id N}
    When topic-id is nil, returns all cards for the root topic."
   [{:keys [user-id topic-id root-topic-id]}]
@@ -169,10 +192,11 @@
                     :root-topic-id root-topic-id}}
     "get-cards-for-sync invoked")
   (try
-    (let [cards (attach-card-bibliography
-                  (if topic-id
-                    (db/get-flashcards topic-id)
-                    (db/get-all-flashcards root-topic-id)))
+    (let [cards (attach-occlusion-groups
+                  (attach-card-bibliography
+                    (if topic-id
+                      (db/get-flashcards topic-id)
+                      (db/get-all-flashcards root-topic-id))))
           root-topic (when (and user-id root-topic-id)
                        (db/get-topic-for-user user-id root-topic-id))
           source-id (:topics/source_id root-topic)
@@ -298,12 +322,17 @@
           (into {}
             (keep (fn [{:keys [note-id stripped-fields tags suspended]}]
                     (when-let [card (get local-by-note note-id)]
-                      (let [basic? (= "basic" (:flashcards/kind card))
+                      (let [kind (:flashcards/kind card)
+                            basic? (= "basic" kind)
                             anki-modified?
-                            (if basic?
-                              (or (not (stripped= (first stripped-fields) (:flashcards/question card)))
-                                (not (stripped= (second stripped-fields) (:flashcards/answer card))))
-                              (not (stripped= (first stripped-fields) (:flashcards/cloze card))))
+                            (cond
+                              ;; Occlusion content diff is owned by the pull
+                              ;; path (io_fields); the overlay only surfaces
+                              ;; marked/suspended for these rows.
+                              (= "occlusion" kind) false
+                              basic? (or (not (stripped= (first stripped-fields) (:flashcards/question card)))
+                                       (not (stripped= (second stripped-fields) (:flashcards/answer card))))
+                              :else (not (stripped= (first stripped-fields) (:flashcards/cloze card))))
                             marked? (boolean (some #{"marked"} tags))
                             suspended-n (or (:suspended suspended) 0)
                             flags (cond-> {}
@@ -354,7 +383,7 @@
   [user-id card-ids]
   (try
     (let [global (:prefs (load-anki-preferences user-id))
-          rows (db/get-flashcards-by-ids user-id card-ids)
+          rows (attach-occlusion-groups (db/get-flashcards-by-ids user-id card-ids))
           pushed (filterv :flashcards/anki_note_id rows)
           by-root (group-by :flashcards/root_topic_id pushed)
           bundles
@@ -445,18 +474,22 @@
 (defn apply-pull-updates
   "After pull, update card content from Anki edits and delete locally cards removed from Anki.
    Bumps :sync-mutations so the client toolbar refreshes counts.
-   updates: [{:card-id N :question Q :answer A :cloze C} ...]
+   updates: [{:card-id N :question Q :answer A :cloze C} ...] or
+            [{:card-id N :io-fields {partial map}} ...] for occlusion cards
    deleted-card-ids: [N ...] — cards whose Anki notes no longer exist"
   [user-id updates deleted-card-ids]
   (try
-    (doseq [{:keys [card-id question answer cloze]} updates]
-      (let [fields (cond-> {}
-                     question (assoc :question question)
-                     answer (assoc :answer answer)
-                     cloze (assoc :cloze cloze))]
-        (when (seq fields)
-          (db/update-flashcard! card-id fields)
-          (db/mark-anki-synced card-id))))
+    (doseq [{:keys [card-id question answer cloze io-fields]} updates]
+      (if (seq io-fields)
+        ;; Occlusion: shallow JSONB merge — unchanged keys keep local values.
+        (db/merge-flashcard-io-fields! card-id io-fields)
+        (let [fields (cond-> {}
+                       question (assoc :question question)
+                       answer (assoc :answer answer)
+                       cloze (assoc :cloze cloze))]
+          (when (seq fields)
+            (db/update-flashcard! card-id fields)
+            (db/mark-anki-synced card-id)))))
     (when (seq deleted-card-ids)
       (doseq [id deleted-card-ids]
         (db/delete-flashcard! id)))

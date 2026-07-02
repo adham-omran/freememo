@@ -277,6 +277,30 @@
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_pins_topic ON topic_pins(topic_id)"])
 
+  ;; Occlusion groups — one row per image-occlusion authoring session.
+  ;; geometry JSONB = {:width :height :rects [{:x :y :w :h :ordinal} ...]}
+  ;; in natural-image pixels. next_ordinal is the single ordinal authority:
+  ;; ordinals are assigned from it and NEVER reused, because they bind the
+  ;; per-mask flashcard row ↔ Anki note ↔ SVG rect id. anki_key names the
+  ;; group's Anki media files (fm-<anki_key>-…) and note IDs.
+  ;; Placed after media (image FK) and before the flashcards ALTERs below.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS occlusion_groups (
+      id SERIAL PRIMARY KEY,
+      anki_key TEXT NOT NULL,
+      image_media_id BIGINT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+      mode TEXT NOT NULL CHECK (mode IN ('hide-all','hide-one')),
+      geometry JSONB NOT NULL,
+      next_ordinal INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT NULL
+    )"])
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS occlusion_group_id INTEGER REFERENCES occlusion_groups(id) ON DELETE CASCADE"])
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS mask_ordinal INTEGER"])
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS io_fields JSONB"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_occlusion_group
+                      ON flashcards(occlusion_group_id) WHERE occlusion_group_id IS NOT NULL"])
+
   ;; Drop deprecated source_reference columns — title is the single source of truth.
   (jdbc/execute! ds ["ALTER TABLE topics DROP COLUMN IF EXISTS source_reference"])
   (jdbc/execute! ds ["ALTER TABLE flashcards DROP COLUMN IF EXISTS source_reference"])
@@ -1865,6 +1889,21 @@
 ;; Flashcard operations
 ;; ---------------------------------------------------------------------------
 
+(defn- normalize-flashcard-row
+  "Post-process a flashcard query row so it is plain data (Electric-wire safe):
+   parse the io_fields JSONB, and move the occlusion-group join columns to the
+   unqualified keys this ns promises (:occlusion_image_media_id
+   :occlusion_mode) — pgjdbc qualifies plain aliased columns by their base
+   table (see get-user-flashcards), so cover both key shapes."
+  [row]
+  (-> row
+    (update :flashcards/io_fields pgobject->clj)
+    (assoc :occlusion_image_media_id (or (:occlusion_image_media_id row)
+                                       (:occlusion_groups/occlusion_image_media_id row))
+      :occlusion_mode (or (:occlusion_mode row)
+                        (:occlusion_groups/occlusion_mode row)))
+    (dissoc :occlusion_groups/occlusion_image_media_id :occlusion_groups/occlusion_mode)))
+
 (defn insert-flashcards!
   "Batch insert flashcards. Rows should include :topic_id and :root_topic_id.
    Uses ON CONFLICT DO NOTHING to prevent duplicates.
@@ -1904,12 +1943,15 @@
    Includes page_number from the topic hierarchy (direct or via parent)."
   [topic-id]
   (if topic-id
-    (mapv strip-foreign-jsonb
+    (mapv (comp strip-foreign-jsonb normalize-flashcard-row)
       (jdbc/execute! ds
-        (sql/format {:select [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]]
+        (sql/format {:select [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]
+                              [:og.image_media_id :occlusion_image_media_id]
+                              [:og.mode :occlusion_mode]]
                      :from [[:flashcards :f]]
                      :join [[:topics :t] [:= :f.topic_id :t.id]]
-                     :left-join [[:topics :parent] [:= :t.parent_id :parent.id]]
+                     :left-join [[:topics :parent] [:= :t.parent_id :parent.id]
+                                 [:occlusion_groups :og] [:= :f.occlusion_group_id :og.id]]
                      :where [:= :f.topic_id topic-id]
                      :order-by [[:f.created_at :desc]]})))
     []))
@@ -1918,12 +1960,15 @@
   "Get all flashcards under a root topic.
    Includes page_number from the topic hierarchy (direct or via parent)."
   [root-topic-id]
-  (mapv strip-foreign-jsonb
+  (mapv (comp strip-foreign-jsonb normalize-flashcard-row)
     (jdbc/execute! ds
-      (sql/format {:select [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]]
+      (sql/format {:select [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]
+                            [:og.image_media_id :occlusion_image_media_id]
+                            [:og.mode :occlusion_mode]]
                    :from [[:flashcards :f]]
                    :join [[:topics :t] [:= :f.topic_id :t.id]]
-                   :left-join [[:topics :parent] [:= :t.parent_id :parent.id]]
+                   :left-join [[:topics :parent] [:= :t.parent_id :parent.id]
+                               [:occlusion_groups :og] [:= :f.occlusion_group_id :og.id]]
                    :where [:= :f.root_topic_id root-topic-id]
                    :order-by [[:f.created_at :desc]]}))))
 
@@ -1939,6 +1984,7 @@
   [user-id]
   (mapv (fn [row]
           (-> row
+            normalize-flashcard-row
             strip-foreign-jsonb
             (assoc :topic_title (:topics/topic_title row)
               :root_title (:topics/root_title row))
@@ -1963,14 +2009,17 @@
   [user-id card-ids]
   (if (empty? card-ids)
     []
-    (mapv strip-foreign-jsonb
+    (mapv (comp strip-foreign-jsonb normalize-flashcard-row)
       (jdbc/execute! ds
         (sql/format {:select [[:f.*]
-                              [[:coalesce :t.page_number :parent.page_number] :page_number]]
+                              [[:coalesce :t.page_number :parent.page_number] :page_number]
+                              [:og.image_media_id :occlusion_image_media_id]
+                              [:og.mode :occlusion_mode]]
                      :from [[:flashcards :f]]
                      :join [[:topics :t] [:= :f.topic_id :t.id]
                             [:topics :root] [:= :f.root_topic_id :root.id]]
-                     :left-join [[:topics :parent] [:= :t.parent_id :parent.id]]
+                     :left-join [[:topics :parent] [:= :t.parent_id :parent.id]
+                                 [:occlusion_groups :og] [:= :f.occlusion_group_id :og.id]]
                      :where [:and
                              [:= :root.user_id user-id]
                              [:in :f.id (vec card-ids)]]})))))
@@ -2013,11 +2062,14 @@
     ["DELETE FROM flashcards WHERE id = ? RETURNING *" card-id]))
 
 (defn update-flashcard!
-  "Update flashcard content fields. Sets updated_at for sync tracking."
+  "Update flashcard content fields. Sets updated_at for sync tracking.
+   :io_fields (a plain map) is converted to JSONB here — callers never
+   touch PGobject."
   [card-id fields]
   (jdbc/execute-one! ds
     (sql/format {:update :flashcards
-                 :set (assoc fields :updated_at [:now])
+                 :set (cond-> (assoc fields :updated_at [:now])
+                        (contains? fields :io_fields) (update :io_fields ->jsonb))
                  :where [:= :id card-id]})))
 
 (defn get-anki-note-ids
@@ -2055,6 +2107,186 @@
   (jdbc/execute-one! ds
     ["UPDATE flashcards SET anki_synced_at = CURRENT_TIMESTAMP WHERE id = ?"
      card-id]))
+
+(defn merge-flashcard-io-fields!
+  "Shallow-merge a partial map into a card's io_fields (JSONB ||) and mark it
+   synced — the Anki-pull write path for occlusion text fields. Unchanged
+   keys keep their local values; updated_at is untouched so the row does not
+   read as locally modified."
+  [card-id partial-fields]
+  (jdbc/execute-one! ds
+    ["UPDATE flashcards
+      SET io_fields = COALESCE(io_fields, '{}'::jsonb) || ?,
+          anki_synced_at = CURRENT_TIMESTAMP
+      WHERE id = ?"
+     (->jsonb partial-fields) card-id]))
+
+;; ---------------------------------------------------------------------------
+;; Occlusion groups — geometry lives here, one 'occlusion' flashcard row per
+;; mask. Ordinal contract: assigned from the group's next_ordinal, never
+;; reused (they bind row ↔ Anki note ↔ SVG rect id). All geometry writes are
+;; transactional with their row changes.
+;; ---------------------------------------------------------------------------
+
+(defn- parse-occlusion-group [row]
+  (some-> row (update :occlusion_groups/geometry pgobject->clj)))
+
+(defn get-occlusion-group
+  "Group row with parsed :occlusion_groups/geometry, or nil."
+  [group-id]
+  (parse-occlusion-group
+    (jdbc/execute-one! ds
+      ["SELECT * FROM occlusion_groups WHERE id = ?" group-id])))
+
+(defn get-occlusion-groups-by-ids
+  "Map of group-id -> group row (geometry parsed). Empty ids → {}."
+  [group-ids]
+  (if (empty? group-ids)
+    {}
+    (into {}
+      (map (fn [row]
+             (let [row (parse-occlusion-group row)]
+               [(:occlusion_groups/id row) row])))
+      (jdbc/execute! ds
+        (sql/format {:select [:*]
+                     :from [:occlusion_groups]
+                     :where [:in :id (vec group-ids)]})))))
+
+(defn get-occlusion-cards
+  "Flashcard rows of a group ordered by mask_ordinal, io_fields parsed."
+  [group-id]
+  (mapv normalize-flashcard-row
+    (jdbc/execute! ds
+      (sql/format {:select [:*]
+                   :from [:flashcards]
+                   :where [:= :occlusion_group_id group-id]
+                   :order-by [[:mask_ordinal :asc]]}))))
+
+(defn insert-occlusion-group!
+  "Insert a group plus one 'occlusion' flashcard row per rect, transactionally.
+   attrs = {:topic-id :root-topic-id :image-media-id :mode :geometry :io-fields}
+   geometry = {:width :height :rects [{:x :y :w :h} ...]} — ordinals are
+   assigned HERE (1..N) so the group row stays the single ordinal authority.
+   Returns {:group-id id :ids [flashcard-id ...]}."
+  [{:keys [topic-id root-topic-id image-media-id mode geometry io-fields]}]
+  (jdbc/with-transaction [tx ds]
+    (let [rects (mapv (fn [rect ordinal] (assoc rect :ordinal ordinal))
+                  (:rects geometry) (map inc (range)))
+          group (jdbc/execute-one! tx
+                  (sql/format {:insert-into :occlusion_groups
+                               :values [{:anki_key (str (java.util.UUID/randomUUID))
+                                         :image_media_id image-media-id
+                                         :mode mode
+                                         :geometry (->jsonb (assoc geometry :rects rects))
+                                         :next_ordinal (inc (count rects))}]
+                               :returning [:id]}))
+          group-id (:occlusion_groups/id group)
+          ids (mapv (fn [rect]
+                      (:flashcards/id
+                       (jdbc/execute-one! tx
+                         (sql/format {:insert-into :flashcards
+                                      :values [{:topic_id topic-id
+                                                :root_topic_id root-topic-id
+                                                :kind "occlusion"
+                                                :occlusion_group_id group-id
+                                                :mask_ordinal (:ordinal rect)
+                                                :io_fields (->jsonb (or io-fields {}))}]
+                                      :returning [:id]}))))
+                rects)]
+      {:group-id group-id :ids ids})))
+
+(defn reconcile-occlusion-group!
+  "Apply a group edit in one transaction (full reconcile).
+   attrs = {:group-id :mode :geometry :io-fields}
+   Incoming rects WITH :ordinal are kept (position/size updated); rects
+   WITHOUT :ordinal are new masks, assigned fresh ordinals from next_ordinal.
+   Existing rows whose ordinal is absent from the incoming rects are deleted.
+   io-fields overwrite every surviving row, and every surviving row gets
+   updated_at=now — geometry dirtiness is group-scoped because hide-all
+   question masks embed the whole rect set.
+   Returns {:group-id .. :added-ids [..]
+            :removed [{:id .. :anki-note-id ..} ..]}."
+  [{:keys [group-id mode geometry io-fields]}]
+  (jdbc/with-transaction [tx ds]
+    (let [group (jdbc/execute-one! tx
+                  ["SELECT * FROM occlusion_groups WHERE id = ? FOR UPDATE" group-id])]
+      (when-not group
+        (throw (ex-info "Occlusion group not found" {:group-id group-id})))
+      (let [next0 (:occlusion_groups/next_ordinal group)
+            [rects next']
+            (reduce (fn [[acc n] rect]
+                      (if (:ordinal rect)
+                        [(conj acc rect) n]
+                        [(conj acc (assoc rect :ordinal n)) (inc n)]))
+              [[] next0] (vec (:rects geometry)))
+            added-rects (filterv #(>= (:ordinal %) next0) rects)
+            kept-ordinals (set (map :ordinal rects))
+            existing (jdbc/execute! tx
+                       ["SELECT id, mask_ordinal, anki_note_id, topic_id, root_topic_id
+                         FROM flashcards WHERE occlusion_group_id = ?" group-id])
+            template (first existing)
+            removed (filterv #(not (contains? kept-ordinals (:flashcards/mask_ordinal %)))
+                      existing)]
+        (doseq [r removed]
+          (jdbc/execute-one! tx ["DELETE FROM flashcards WHERE id = ?" (:flashcards/id r)]))
+        (jdbc/execute! tx
+          (sql/format {:update :flashcards
+                       :set {:io_fields (->jsonb (or io-fields {}))
+                             :updated_at [:now]}
+                       :where [:= :occlusion_group_id group-id]}))
+        (let [added-ids
+              (mapv (fn [rect]
+                      (:flashcards/id
+                       (jdbc/execute-one! tx
+                         (sql/format {:insert-into :flashcards
+                                      :values [{:topic_id (:flashcards/topic_id template)
+                                                :root_topic_id (:flashcards/root_topic_id template)
+                                                :kind "occlusion"
+                                                :occlusion_group_id group-id
+                                                :mask_ordinal (:ordinal rect)
+                                                :io_fields (->jsonb (or io-fields {}))}]
+                                      :returning [:id]}))))
+                added-rects)]
+          (jdbc/execute-one! tx
+            (sql/format {:update :occlusion_groups
+                         :set {:mode mode
+                               :geometry (->jsonb (assoc geometry :rects rects))
+                               :next_ordinal next'
+                               :updated_at [:now]}
+                         :where [:= :id group-id]}))
+          {:group-id group-id
+           :added-ids added-ids
+           :removed (mapv (fn [r] {:id (:flashcards/id r)
+                                   :anki-note-id (:flashcards/anki_note_id r)})
+                      removed)})))))
+
+(defn remove-occlusion-mask!
+  "Cleanup after a single occlusion flashcard row was deleted elsewhere:
+   retire its rect (ordinal never reused), dirty the sibling rows so the next
+   push regenerates the group's masks, and delete the group once no rows
+   remain. Returns {:group-deleted? bool} (nil when the group is gone)."
+  [group-id ordinal]
+  (jdbc/with-transaction [tx ds]
+    (when-let [group (jdbc/execute-one! tx
+                       ["SELECT * FROM occlusion_groups WHERE id = ? FOR UPDATE" group-id])]
+      (let [geometry (pgobject->clj (:occlusion_groups/geometry group))
+            rects' (vec (remove #(= ordinal (:ordinal %)) (:rects geometry)))
+            remaining (:n (jdbc/execute-one! tx
+                            ["SELECT COUNT(*) AS n FROM flashcards WHERE occlusion_group_id = ?"
+                             group-id]))]
+        (if (zero? remaining)
+          (do (jdbc/execute-one! tx ["DELETE FROM occlusion_groups WHERE id = ?" group-id])
+            {:group-deleted? true})
+          (do (jdbc/execute-one! tx
+                (sql/format {:update :occlusion_groups
+                             :set {:geometry (->jsonb (assoc geometry :rects rects'))
+                                   :updated_at [:now]}
+                             :where [:= :id group-id]}))
+            (jdbc/execute! tx
+              (sql/format {:update :flashcards
+                           :set {:updated_at [:now]}
+                           :where [:= :occlusion_group_id group-id]}))
+            {:group-deleted? false}))))))
 
 (defn mark-cards-exported
   "Mark cards as exported (sets anki_synced_at). Used after CSV export."
@@ -2756,9 +2988,13 @@
 
 (defn- unqualify-row
   "Strip the table namespace from a next.jdbc row's keys (:flashcards/id → :id)
-   so a stored snapshot is portable across the wire and back into an INSERT."
+   so a stored snapshot is portable across the wire and back into an INSERT.
+   JSONB column values (PGobject) are parsed to plain data — cheshire cannot
+   encode PGobject when the snapshot itself is stored as JSONB."
   [row]
-  (update-keys row (comp keyword name)))
+  (-> row
+    (update-keys (comp keyword name))
+    (update-vals pgobject->clj)))
 
 (def ^:private flashcard-ts-cols
   "Timestamp columns that arrive as ISO strings after a JSONB round-trip and
@@ -2873,9 +3109,13 @@
   (when (seq snapshot-rows)
     (jdbc/execute! conn
       (sql/format {:insert-into :flashcards
-                   :values (mapv #(-> %
-                                    (assoc :anki_note_id nil :anki_synced_at nil)
-                                    (cast-timestamps flashcard-ts-cols))
+                   :values (mapv #(as-> % row
+                                    (assoc row :anki_note_id nil :anki_synced_at nil)
+                                    (cast-timestamps row flashcard-ts-cols)
+                                    ;; JSONB round-trip left a plain map — re-wrap.
+                                    (cond-> row
+                                      (some? (:io_fields row))
+                                      (update :io_fields ->jsonb)))
                                   snapshot-rows)
                    :on-conflict [:id]
                    :do-nothing true}))))

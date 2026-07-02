@@ -9,6 +9,7 @@
    [freememo.rich-text-editor :as editor]
    [freememo.rich-text-editor-component :refer [RichTextEditorComponent]]
    [freememo.navigation :as nav]
+   [freememo.occlusion-modal :refer [OcclusionModal]]
    [clojure.string :as str]
    #?(:cljs [freememo.editor-pin-menu :as pin-menu])
    #?(:clj [freememo.user-state :as us])
@@ -23,9 +24,9 @@
 (defn install-pin-contextmenu!
   "Attach pin contextmenu to container-el. Returns a cleanup fn.
    CLJS-only; returns nil on CLJ."
-  [container-el get-topic-id get-pin-count on-pin!]
+  [container-el get-topic-id get-pin-count on-pin! on-occlude!]
   #?(:cljs (pin-menu/install-contextmenu!
-             container-el get-topic-id get-pin-count on-pin!)
+             container-el get-topic-id get-pin-count on-pin! on-occlude!)
      :clj nil))
 
 (defn count-pins-for-topic*
@@ -47,6 +48,7 @@
   []
   (e/client
     (let [user-id dctx/user-id topic-id dctx/topic-id audio-topic-id dctx/audio-topic-id
+          root-topic-id dctx/root-topic-id
           is-pdf-page? dctx/is-pdf-page? static-content dctx/static-content
           on-imported-navigate! dctx/on-imported-navigate!]
     (dom/div
@@ -144,6 +146,10 @@
         ;; -----------------------------------------------------------------------
         (let [!pin-request (atom nil)
               pin-request (e/watch !pin-request)
+              ;; Occlusion-request atom — the context menu's Image Occlusion
+              ;; item fires into this; OcclusionModal (mounted below) opens
+              ;; while it is non-nil. Shape: see freememo.occlusion-modal.
+              !occlusion-request (atom nil)
               ;; Reactive pin count — used for K1 cap check in the context menu
               ;; Watch :pin-mutations so the menu's K1 cap check refreshes
               ;; after the side panel adds/removes a pin.
@@ -209,11 +215,21 @@
                       !cleanup-fn (atom nil)
                       get-topic-id (fn [] topic-id)
                       get-pin-count (fn [] pin-count)
-                      on-pin-fn (fn [req] (reset! !pin-request req))]
+                      on-pin-fn (fn [req] (reset! !pin-request req))
+                      on-occlude-fn (fn [{:keys [media-id topic-id]}]
+                                      (reset! !occlusion-request
+                                        {:mode :create
+                                         :image-media-id media-id
+                                         :topic-id topic-id
+                                         :root-topic-id root-topic-id}))]
                   (js/setTimeout
                     (fn []
                       (reset! !cleanup-fn
-                        (install-pin-contextmenu! host get-topic-id get-pin-count on-pin-fn)))
+                        (install-pin-contextmenu! host get-topic-id get-pin-count
+                          on-pin-fn on-occlude-fn)))
                     0)
-                  (e/on-unmount (fn [] (when-let [f @!cleanup-fn] (f))))))))))))))
+                  (e/on-unmount (fn [] (when-let [f @!cleanup-fn] (f)))))))
+
+            ;; Image-occlusion authoring modal (context-menu entry point).
+            (OcclusionModal !occlusion-request user-id))))))))
 

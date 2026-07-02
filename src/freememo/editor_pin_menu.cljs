@@ -1,16 +1,19 @@
 (ns freememo.editor-pin-menu
-  "CLJS-only helper: right-click context menu for pinning <img> blots in the
-   main Quill editor. Provides `install-contextmenu!` which attaches a
-   contextmenu listener to the editor container div.
+  "CLJS-only helper: right-click context menu for <img> blots in the main
+   Quill editor. Provides `install-contextmenu!` which attaches a contextmenu
+   listener to the editor container div.
 
-   The menu has three items:
+   The menu has four items:
      - Pin to topic — Front
      - Pin to topic — Back
+     - Image Occlusion…
      - Cancel
 
    When a pin action is chosen the supplied `on-pin!` callback is invoked with
-   {:src <img-src> :placement \"front\"|\"back\"}.  The caller (editor_pane.cljc)
-   is responsible for resolving the media id and calling db/set-pin!."
+   {:src <img-src> :placement \"front\"|\"back\"}.  When Image Occlusion is
+   chosen, `on-occlude!` is invoked with {:media-id <int> :topic-id <int>}
+   after the img src is resolved. The caller (editor_pane.cljc) owns what
+   happens next (db/set-pin! / opening the occlusion modal)."
   (:require [clojure.string :as str]))
 
 ;; ---------------------------------------------------------------------------
@@ -40,9 +43,10 @@
 
 (defn- show-menu!
   "Render the pin context menu at [x y]. Calls on-pin! with
-   {:src src :placement placement} when user selects front/back.
+   {:src src :placement placement} when user selects front/back, or
+   on-occlude! with {:src src} for Image Occlusion.
    If pin-count >= 2, the pin items are disabled."
-  [x y src pin-count on-pin!]
+  [x y src pin-count on-pin! on-occlude!]
   (remove-menu!)
   (let [capped? (>= pin-count 2)
         cap-tip "Max 2 pins. Remove one first."
@@ -59,6 +63,9 @@
     (.appendChild menu
       (make-button "Pin to topic — Back" capped? cap-tip
         #(on-pin! {:src src :placement "back"})))
+    (.appendChild menu
+      (make-button "Image Occlusion…" false nil
+        #(on-occlude! {:src src})))
     (.appendChild menu
       (make-button "Cancel" false nil nil))
     (.appendChild js/document.body menu)
@@ -145,8 +152,10 @@
    `get-pin-count` — zero-arg fn returning current pin count for the topic.
    `on-pin!` — fn called with {:media-id <int> :placement \"front\"|\"back\"
                                :topic-id <int>} after src is resolved.
+   `on-occlude!` — fn called with {:media-id <int> :topic-id <int>} after src
+                   is resolved, when the user picks Image Occlusion.
    Returns a cleanup fn that removes the listener."
-  [container-el get-topic-id get-pin-count on-pin!]
+  [container-el get-topic-id get-pin-count on-pin! on-occlude!]
   (let [handler
         (fn [e]
           ;; Only intercept right-clicks on <img> elements inside .ql-editor
@@ -168,7 +177,14 @@
                                          :placement placement
                                          :topic-id (get-topic-id)})))
                       (.catch (fn [err]
-                                (js/console.warn "[PinMenu] resolve failed:" (str err)))))))))))]
+                                (js/console.warn "[PinMenu] resolve failed:" (str err))))))
+                  (fn [{:keys [src]}]
+                    (-> (resolve-src->media-id! src)
+                      (.then (fn [media-id]
+                               (on-occlude! {:media-id media-id
+                                             :topic-id (get-topic-id)})))
+                      (.catch (fn [err]
+                                (js/console.warn "[PinMenu] occlusion resolve failed:" (str err)))))))))))]
     (.addEventListener container-el "contextmenu" handler)
     ;; Return cleanup fn
     (fn [] (.removeEventListener container-el "contextmenu" handler))))

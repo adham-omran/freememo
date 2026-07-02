@@ -54,16 +54,25 @@
 ;; ---------------------------------------------------------------------------
 
 #?(:clj
-   (defn enqueue-add-card!
+   (defn enqueue-pending-card!
      "Register a :pending overlay row and enqueue its save command under one
-      fresh tempid (shared by both, so they correlate). `payload` is
-      {:topic-id :root-topic-id :kind :card-data}. Returns :enqueued."
-     [user-id payload]
+      fresh tempid (shared by both, so they correlate). `type` is the
+      run-command! dispatch keyword; it is remembered on the entry so retry
+      re-enqueues the same command. Returns :enqueued."
+     [user-id type payload]
      (let [tempid (java.util.UUID/randomUUID)]
        (swap! (us/get-atom user-id :pending-cards) assoc tempid
-         {:tempid tempid :topic-id (:topic-id payload) :status :pending :payload payload})
-       (enqueue-command! user-id {:id tempid :type :add-card :payload payload})
+         {:tempid tempid :topic-id (:topic-id payload) :status :pending
+          :command-type type :payload payload})
+       (enqueue-command! user-id {:id tempid :type type :payload payload})
        :enqueued)))
+
+#?(:clj
+   (defn enqueue-add-card!
+     "enqueue-pending-card! for the :add-card command. `payload` is
+      {:topic-id :root-topic-id :kind :card-data}."
+     [user-id payload]
+     (enqueue-pending-card! user-id :add-card payload)))
 
 #?(:clj
    (defn retry-pending-card!
@@ -72,7 +81,9 @@
      [user-id tempid]
      (when-let [entry (get @(us/get-atom user-id :pending-cards) tempid)]
        (swap! (us/get-atom user-id :pending-cards) update tempid merge {:status :pending :error nil})
-       (enqueue-command! user-id {:id tempid :type :add-card :payload (:payload entry)}))
+       (enqueue-command! user-id {:id tempid
+                                  :type (or (:command-type entry) :add-card)
+                                  :payload (:payload entry)}))
      :done))
 
 #?(:clj

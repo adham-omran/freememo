@@ -3,6 +3,7 @@
   (:require
    [missionary.core :as m]
    [clojure.string :as str]
+   [freememo.occlusion-svg :as osvg]
    [freememo.logging :as log]))
 
 ;; ---------------------------------------------------------------------------
@@ -225,6 +226,122 @@
        (anki-call! "getTags" nil))))
 
 ;; ---------------------------------------------------------------------------
+;; IO FreeMemo note type — canonical definition + ensure-and-enforce.
+;; The app owns this model: its styling is the served freememo-anki.css and
+;; its single template is the constant below (cloned from Image Occlusion
+;; Enhanced's "IO Card"). Any Anki-side drift is overwritten on the next IO
+;; push — user styling tweaks belong in the source CSS file, not in Anki.
+;; ---------------------------------------------------------------------------
+
+(def io-model-name "IO FreeMemo")
+(def io-template-name "IO Card")
+
+(def io-field-names
+  ["ID (hidden)" "Header" "Image" "Question Mask" "Footer" "Remarks"
+   "Sources" "Extra 1" "Extra 2" "Answer Mask" "Original Mask"])
+
+(def io-pull-field-indexes
+  "io_fields key -> index into the model's field order. The pull-side diff
+   reads notesInfo values by Anki's :order; safe because this app owns the
+   model's field list (io-field-names)."
+  {:header 1 :footer 4 :remarks 5 :sources 6 :extra1 7 :extra2 8})
+
+(def io-card-front
+  "{{#Image}}\n<div id=\"io-header\">{{Header}}</div>\n<div id=\"io-wrapper\">\n  <div id=\"io-overlay\">{{Question Mask}}</div>\n  <div id=\"io-original\">{{Image}}</div>\n</div>\n<div id=\"io-footer\">{{Footer}}</div>\n\n<script>\n// Prevent original image from loading before mask\naFade = 50, qFade = 0;\nvar mask = document.querySelector('#io-overlay>img');\nfunction loaded() {\n    var original = document.querySelector('#io-original');\n    original.style.visibility = \"visible\";\n}\nif (mask === null || mask.complete) {\n    loaded();\n} else {\n    mask.addEventListener('load', loaded);\n}\n</script>\n{{/Image}}\n")
+
+(def io-card-back
+  "{{#Image}}\n<div id=\"io-header\">{{Header}}</div>\n<div id=\"io-wrapper\">\n  <div id=\"io-overlay\">{{Answer Mask}}</div>\n  <div id=\"io-original\">{{Image}}</div>\n</div>\n{{#Footer}}<div id=\"io-footer\">{{Footer}}</div>{{/Footer}}\n<button id=\"io-revl-btn\" onclick=\"toggle();\">Toggle Masks</button>\n<div id=\"io-extra-wrapper\">\n  <div id=\"io-extra\">\n    {{#Remarks}}\n      <div class=\"io-extra-entry\">\n        <div class=\"io-field-descr\">Remarks</div>{{Remarks}}\n      </div>\n    {{/Remarks}}\n    {{#Sources}}\n      <div class=\"io-extra-entry\">\n        <div class=\"io-field-descr\">Sources</div>{{Sources}}\n      </div>\n    {{/Sources}}\n    {{#Extra 1}}\n      <div class=\"io-extra-entry\">\n        <div class=\"io-field-descr\">Extra 1</div>{{Extra 1}}\n      </div>\n    {{/Extra 1}}\n    {{#Extra 2}}\n      <div class=\"io-extra-entry\">\n        <div class=\"io-field-descr\">Extra 2</div>{{Extra 2}}\n      </div>\n    {{/Extra 2}}\n  </div>\n</div>\n\n<script>\n// Toggle answer mask on clicking the image\nvar toggle = function() {\n  var amask = document.getElementById('io-overlay');\n  if (amask.style.display === 'block' || amask.style.display === '')\n    amask.style.display = 'none';\n  else\n    amask.style.display = 'block'\n}\n\n// Prevent original image from loading before mask\naFade = 50, qFade = 0;\nvar mask = document.querySelector('#io-overlay>img');\nfunction loaded() {\n    var original = document.querySelector('#io-original');\n    original.style.visibility = \"visible\";\n}\nif (mask === null || mask.complete) {\n    loaded();\n} else {\n    mask.addEventListener('load', loaded);\n}\n</script>\n{{/Image}}\n")
+
+(def app-anki-css-url "/freememo/freememo-anki.css")
+
+(defn occlusion-card? [card]
+  (= "occlusion" (:flashcards/kind card)))
+
+#?(:cljs
+   (defn fetch-text!
+     "Missionary task: GET a same-origin URL, resolve to the body text."
+     [url]
+     (from-future
+       (fn [token]
+         (let [ctrl (js/AbortController.)]
+           (.finally token #(.abort ctrl))
+           (-> (js/fetch url (clj->js {:signal (.-signal ctrl)}))
+             (.then (fn [resp]
+                      (when-not (.-ok resp)
+                        (throw (js/Error. (str "HTTP " (.-status resp) " fetching " url))))
+                      (.text resp)))))))))
+
+#?(:cljs
+   (defn ensure-io-model!
+     "Missionary task: create the IO FreeMemo model if missing, else re-assert
+      its styling (the served freememo-anki.css) and template against the
+      canonical definition. Drift check is strict string equality — any
+      Anki-side edit is restored. Resolves to true; throws on AnkiConnect
+      errors (the caller's whole push fails with that message)."
+     []
+     (m/sp
+       (let [css (m/? (fetch-text! app-anki-css-url))
+             models (vec (js->clj (m/? (anki-call! "modelNames" nil))))]
+         (if (some #{io-model-name} models)
+           (do
+             (let [styling (js->clj (m/? (anki-call! "modelStyling" {:modelName io-model-name})))]
+               (when (not= (get styling "css") css)
+                 (log/log-debug "[anki-push] IO FreeMemo styling drifted — restoring")
+                 (m/? (anki-call! "updateModelStyling"
+                        {:model {:name io-model-name :css css}}))))
+             (let [templates (js->clj (m/? (anki-call! "modelTemplates" {:modelName io-model-name})))
+                   tmpl (get templates io-template-name)]
+               (when (or (not= (get tmpl "Front") io-card-front)
+                       (not= (get tmpl "Back") io-card-back))
+                 (log/log-debug "[anki-push] IO FreeMemo templates drifted — restoring")
+                 (m/? (anki-call! "updateModelTemplates"
+                        {:model {:name io-model-name
+                                 :templates {io-template-name {:Front io-card-front
+                                                               :Back io-card-back}}}})))))
+           (m/? (anki-call! "createModel"
+                  {:modelName io-model-name
+                   :inOrderFields io-field-names
+                   :css css
+                   :isCloze false
+                   :cardTemplates [{:Name io-template-name
+                                    :Front io-card-front
+                                    :Back io-card-back}]})))
+         true))))
+
+(defn io-mask-uploads
+  "[{:filename :svg} ...] — the Q and A masks of one occlusion card.
+   Pre: card carries :occlusion-group (attached by get-cards-for-sync)."
+  [card]
+  (let [{:keys [anki-key mode geometry]} (:occlusion-group card)
+        ordinal (:flashcards/mask_ordinal card)
+        names (osvg/media-filenames anki-key ordinal)]
+    [{:filename (:q names)
+      :svg (osvg/question-mask-svg anki-key geometry mode ordinal)}
+     {:filename (:a names)
+      :svg (osvg/answer-mask-svg anki-key geometry mode ordinal)}]))
+
+(defn io-mask-upload-plan
+  "Q/A uploads for every occlusion card plus ONE shared O mask per group.
+   Re-pushing overwrites the same filenames — that is how geometry edits
+   propagate to already-pushed sibling notes."
+  [io-cards]
+  (let [per-group (into {}
+                    (map (fn [card]
+                           (let [{:keys [anki-key geometry]} (:occlusion-group card)]
+                             [anki-key
+                              {:filename (:o (osvg/media-filenames anki-key 0))
+                               :svg (osvg/original-mask-svg anki-key geometry)}])))
+                    io-cards)]
+    (vec (concat (mapcat io-mask-uploads io-cards) (vals per-group)))))
+
+#?(:cljs
+   (defn store-io-mask!
+     "Missionary task: upload one generated mask SVG to Anki's media folder.
+      Generated SVGs are pure ASCII, so btoa is safe."
+     [{:keys [filename svg]}]
+     (anki-call! "storeMediaFile" {:filename filename :data (js/btoa svg)})))
+
+;; ---------------------------------------------------------------------------
 ;; Media image handling for Anki push
 ;; ---------------------------------------------------------------------------
 
@@ -249,13 +366,18 @@
         (or (get filename-map id-str) match)))))
 
 (defn collect-card-media-ids
-  "Return a set of all media ID strings referenced in any HTML field of a card."
+  "Return a set of all media ID strings referenced in any HTML field of a card.
+   Occlusion cards contribute their io_fields HTML plus the group's image."
   [card]
-  (reduce into #{}
-    (keep extract-media-ids
-      [(:flashcards/question card)
-       (:flashcards/answer card)
-       (:flashcards/cloze card)])))
+  (let [html-ids (reduce into #{}
+                   (keep extract-media-ids
+                     (concat [(:flashcards/question card)
+                              (:flashcards/answer card)
+                              (:flashcards/cloze card)]
+                       (vals (or (:flashcards/io_fields card) {})))))]
+    (cond-> html-ids
+      (:occlusion-group card)
+      (conj (str (get-in card [:occlusion-group :image-media-id]))))))
 
 (defn extract-img-tags
   "Return a string of all <img ...> tags extracted from html, preserving order.
@@ -308,6 +430,42 @@
     (when-not (str/blank? title)
       (str "<a href=\"" (html-escape url) "\">" (html-escape anchor-text) "</a>"))))
 
+(defn build-io-fields
+  "Field map for an IO FreeMemo note: generated media references plus the six
+   io_fields text values (with /api/media srcs rewritten to uploaded names).
+   Pre: card carries :occlusion-group and :flashcards/mask_ordinal."
+  [card filename-map]
+  (let [{:keys [anki-key image-media-id]} (:occlusion-group card)
+        ordinal (:flashcards/mask_ordinal card)
+        io (or (:flashcards/io_fields card) {})
+        names (osvg/media-filenames anki-key ordinal)
+        image-filename (get filename-map (str image-media-id)
+                         (str "/api/media/" image-media-id))
+        rw (fn [k] (rewrite-media-srcs (or (get io k) "") filename-map))]
+    {"ID (hidden)" (osvg/note-hidden-id anki-key ordinal)
+     "Header" (rw :header)
+     "Image" (str "<img src=\"" image-filename "\" />")
+     "Question Mask" (str "<img src=\"" (:q names) "\" />")
+     "Footer" (rw :footer)
+     "Remarks" (rw :remarks)
+     "Sources" (rw :sources)
+     "Extra 1" (rw :extra1)
+     "Extra 2" (rw :extra2)
+     "Answer Mask" (str "<img src=\"" (:a names) "\" />")
+     "Original Mask" (str "<img src=\"" (:o names) "\" />")}))
+
+(defn build-io-note
+  "AnkiConnect note map for an occlusion card. The 'ID (hidden)' first field
+   is unique per note, so Anki's duplicate check never trips."
+  [card settings filename-map]
+  {:deckName (:deck settings)
+   :modelName io-model-name
+   :fields (build-io-fields card filename-map)
+   :tags (:tags settings)
+   :options {:allowDuplicate false :duplicateScope "deck"}})
+
+#?(:cljs (declare build-note*))
+
 #?(:cljs
    (defn build-note
      "Build an AnkiConnect note map for addNote.
@@ -315,7 +473,15 @@
                   :allow-dupes :use-header :header-text :tags :source-display-mode
                   :bibliography-display-mode :bibliography-field-name :bibliography-html
                   :images-front-field :images-back-field :image-display-mode}
-      filename-map = {media-id -> \"<id>.<ext>\"} — pre-uploaded filenames for src rewrite."
+      filename-map = {media-id -> \"<id>.<ext>\"} — pre-uploaded filenames for src rewrite.
+      Occlusion cards route to build-io-note (fixed model, generated fields)."
+     [card settings filename-map]
+     (if (occlusion-card? card)
+       (build-io-note card settings filename-map)
+       (build-note* card settings filename-map))))
+
+#?(:cljs
+   (defn build-note*
      [card settings filename-map]
      (let [{:keys [deck basic-model cloze-model basic-fields cloze-fields
                    allow-dupes use-header header-text tags source-display-mode
@@ -387,10 +553,20 @@
                                             :duplicateScope "deck"})
          allow-dupes (assoc :options {:allowDuplicate true})))))
 
+#?(:cljs (declare build-update-fields*))
+
 #?(:cljs
    (defn build-update-fields
      "Build Anki field map for updating an existing note.
-      filename-map = {media-id -> \"<id>.<ext>\"} — pre-uploaded filenames for src rewrite."
+      filename-map = {media-id -> \"<id>.<ext>\"} — pre-uploaded filenames for src rewrite.
+      Occlusion cards regenerate the full IO field map (masks + text)."
+     [card settings filename-map]
+     (if (occlusion-card? card)
+       (build-io-fields card filename-map)
+       (build-update-fields* card settings filename-map))))
+
+#?(:cljs
+   (defn build-update-fields*
      [card settings filename-map]
      (let [{:keys [basic-fields cloze-fields use-header header-text source-display-mode
                    bibliography-display-mode
@@ -456,20 +632,53 @@
            ;; card body content was not edited. Anki-side timestamp checks
            ;; can't see these settings, so optimizing here would silently drop
            ;; legitimate updates.
-           changed-cards (vec (filter #(some? (:flashcards/anki_note_id %)) cards))]
+           changed-cards (vec (filter #(some? (:flashcards/anki_note_id %)) cards))
+           ;; Occlusion cards that actually carry group data (attached by
+           ;; get-cards-for-sync); the same re-push-everything rule regenerates
+           ;; every pushed group's masks, which is what makes geometry
+           ;; dirtiness group-scoped.
+           io-cards (vec (filter :occlusion-group cards))]
        (log/log-debug (str "[anki-push] do-anki-push! starting"
                         " new=" (count new-cards)
                         " update=" (count changed-cards)
+                        " occlusion=" (count io-cards)
                         " mode=" (:source-display-mode settings)
                         " image-display-mode=" (:image-display-mode settings)
                         " topic-title=" (pr-str (:topic-title settings))
                         " topic-kind=" (pr-str (:topic-kind settings))))
        (m/sp
+         ;; Phase -1: any occlusion card ⇒ guarantee the IO FreeMemo model
+         ;; exists and matches canon BEFORE any note lands. A failure here
+         ;; fails the whole push with the AnkiConnect error — by design:
+         ;; "mandatory" means no IO note is ever created against a missing or
+         ;; drifted model.
+         (when (seq io-cards)
+           (m/? (ensure-io-model!)))
          ;; Phase 0: collect all unique media IDs across every card, upload each once,
          ;; build filename-map {id -> "<id>.<ext>"} for src rewriting.
          (let [all-media-ids (reduce (fn [acc card] (into acc (collect-card-media-ids card)))
                                #{}
                                (concat new-cards changed-cards))
+               ;; Phase 0.5: generate + store the mask SVGs (Q/A per card, one
+               ;; shared O per group). Overwrites the same filenames on every
+               ;; push. Failures don't abort the push; they surface on the
+               ;; :errors channel below.
+               mask-errors
+               (if (empty? io-cards)
+                 []
+                 (m/? (m/reduce into []
+                        (m/ap
+                          (let [upload (m/?> 3 (m/seed (io-mask-upload-plan io-cards)))]
+                            (try
+                              (m/? (store-io-mask! upload))
+                              []
+                              (catch :default err
+                                (log/log-error (str "[anki-push] mask store FAILED "
+                                                 (:filename upload)
+                                                 " error=" (.-message err)))
+                                [{:card-id nil
+                                  :error (str "mask " (:filename upload) ": "
+                                           (.-message err))}])))))))
                filename-map
                (m/? (m/reduce
                       (fn [acc [id filename]] (assoc acc id filename))
@@ -522,8 +731,9 @@
                               (log/log-error (str "[anki-push] updateNote FAILED card-id=" (:flashcards/id card)
                                                " error=" (.-message err)))
                               {:errors [{:card-id (:flashcards/id card) :error (.-message err)}]}))))))]
-           ;; Merge both phases
+           ;; Merge both phases (+ mask-upload errors)
            (-> (merge-with into add-result update-result)
+             (update :errors into mask-errors)
              (assoc :updated (count (:updated update-result)))))))))
 
 (defn ordered-field-values
@@ -577,9 +787,29 @@
                                  acc
                                  (let [kind (:flashcards/kind card)
                                        basic? (= kind "basic")
+                                       occlusion? (= kind "occlusion")
                                        ordered-vals (ordered-field-values (:fields anki-note))
                                        update-map
-                                       (if basic?
+                                       (cond
+                                         ;; Occlusion: diff the six text fields by the
+                                         ;; app-owned field order; masks/Image/ID are
+                                         ;; FM-owned and ignored. Both sides stripped so
+                                         ;; local Quill markup doesn't read as a diff.
+                                         occlusion?
+                                         (let [io (or (:flashcards/io_fields card) {})
+                                               changed (reduce
+                                                         (fn [acc [k idx]]
+                                                           (let [anki-v (strip-html (or (nth ordered-vals idx nil) ""))
+                                                                 local-v (strip-html (or (get io k) ""))]
+                                                             (if (= anki-v local-v)
+                                                               acc
+                                                               (assoc acc k anki-v))))
+                                                         {} io-pull-field-indexes)]
+                                           (when (seq changed)
+                                             {:card-id (:flashcards/id card)
+                                              :io-fields changed}))
+
+                                         basic?
                                          (let [q (strip-html (first ordered-vals))
                                                a (strip-html (second ordered-vals))
                                                local-q (or (:flashcards/question card) "")
@@ -587,6 +817,8 @@
                                            (when (or (not= q local-q) (not= a local-a))
                                              {:card-id (:flashcards/id card)
                                               :question q :answer a}))
+
+                                         :else
                                          (let [c (strip-html (first ordered-vals))
                                                local-c (or (:flashcards/cloze card) "")]
                                            (when (not= c local-c)
