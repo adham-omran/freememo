@@ -62,12 +62,22 @@
     (dom/form
       (dom/props {:method "post" :action "/login"
                   :class (str "landing-login-form landing-login-" (name variant))})
-      (dom/input
-        (dom/props {:type "text" :name "user" :placeholder "Username"
-                    :class "input" :autocomplete "username" :required true}))
-      (dom/input
-        (dom/props {:type "password" :name "password" :placeholder "Password"
-                    :class "input" :autocomplete "current-password" :required true}))
+      ;; Visible labels (WCAG 3.3.2) — placeholder alone vanishes on entry.
+      ;; Ids carry the variant: the form mounts twice on the landing page.
+      (let [user-id (str "login-user-" (name variant))
+            pass-id (str "login-password-" (name variant))]
+        (dom/label
+          (dom/props {:for user-id :class "landing-login-label"})
+          (dom/text "Username"))
+        (dom/input
+          (dom/props {:id user-id :type "text" :name "user" :placeholder "Username"
+                      :class "input" :autocomplete "username" :required true}))
+        (dom/label
+          (dom/props {:for pass-id :class "landing-login-label"})
+          (dom/text "Password"))
+        (dom/input
+          (dom/props {:id pass-id :type "password" :name "password" :placeholder "Password"
+                      :class "input" :autocomplete "current-password" :required true})))
       (dom/button
         (dom/props {:type "submit" :class "btn btn-primary landing-cta-primary"})
         (dom/text "Sign in")))))

@@ -66,7 +66,7 @@
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Refetch bibliography"))
         (when ?error
           (dom/div
-            (dom/props {:style {:color "var(--color-danger)" :font-size "11px"
+            (dom/props {:style {:color "var(--color-danger-text)" :font-size "11px"
                                 :margin-top "4px"}})
             (dom/text ?error)))
         (when t

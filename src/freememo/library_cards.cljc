@@ -9,6 +9,7 @@
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
    [freememo.modal-shell :as modal]
+   [freememo.a11y :as a11y]
    [missionary.core :as m]
    [freememo.navigation :as nav]
    [freememo.logging :as log]
@@ -69,11 +70,13 @@
     :conflict "▲▼"
     ""))
 
+;; Glyphs are TEXT — use the text-safe variants (danger/warning base tokens
+;; are filled-background colors and sit below 4.5:1 as glyph colors).
 (defn direction-color [direction]
   (case direction
-    :conflict "var(--color-danger)"
+    :conflict "var(--color-danger-text)"
     :in-sync "var(--color-text-hint)"
-    "var(--color-warning)"))
+    "var(--color-warning-dark)"))
 
 (defn direction-tooltip [direction]
   (case direction
@@ -132,7 +135,7 @@
     (apply str
       (map (fn [[op text]]
              (let [[color prefix] (case op
-                                    :- ["var(--color-danger)" "− "]
+                                    :- ["var(--color-danger-text)" "− "]
                                     :+ ["var(--color-success-dark, var(--color-success))" "+ "]
                                     ["var(--color-text-secondary)" "  "])]
                (str "<div style=\"color:" color
@@ -444,7 +447,7 @@
     (dom/td
       (dom/props {:style (merge cell-style {:justify-content "center" :padding-inline "4px"})})
       (dom/input
-        (dom/props {:type "checkbox" :style {:cursor "pointer"}})
+        (dom/props {:type "checkbox" :aria-label "Select card" :style {:cursor "pointer"}})
         (set! (.-checked dom/node) (contains? selected id))
         (dom/On "click"
           (fn [e]
@@ -462,17 +465,17 @@
                                               :padding-inline "4px" :font-size "11px"
                                               :cursor "pointer"})
                     :data-tooltip (direction-tooltip direction)})
-        (dom/On "click"
-          (fn [e]
-            (.stopPropagation e)
-            (reset! !diff-card diff-payload))
-          nil)
+        (let [show-diff! (fn [e]
+                           (.stopPropagation e)
+                           (reset! !diff-card diff-payload))]
+          (a11y/KeyActivate {:label (direction-tooltip direction)} show-diff!)
+          (dom/On "click" show-diff! nil))
         (dom/span
           (dom/props {:style {:color (direction-color direction)}})
           (dom/text (direction-glyph direction)))
         (when (:marked flags)
           (dom/span
-            (dom/props {:style {:color "var(--color-primary)" :font-size "9px"}
+            (dom/props {:style {:color "var(--color-primary-text)" :font-size "9px"}
                         :data-tooltip "Marked in Anki"})
             (dom/text "★")))
         (when (and susp (pos? (:suspended susp)))
@@ -512,11 +515,11 @@
   (e/client
     (dom/td
       (dom/props {:style (merge cell-style {:overflow "hidden" :cursor "pointer"})})
-      (dom/On "click"
-        (fn [e]
-          (.stopPropagation e)
-          (navigate! :viewer (nav/nav-topic topic-id :library)))
-        nil)
+      (let [open-document! (fn [e]
+                             (.stopPropagation e)
+                             (navigate! :viewer (nav/nav-topic topic-id :library)))]
+        (a11y/KeyActivate {:label (str "Open document " (or root-title ""))} open-document!)
+        (dom/On "click" open-document! nil))
       (dom/span
         (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
                             :font-size "12px" :color "var(--color-text-secondary)"}
@@ -539,25 +542,25 @@
           cell-style {:padding-block "6px" :padding-inline "8px"
                       :display "flex" :align-items "center"
                       :border-bottom "1px solid var(--color-bg-subtle)"}]
+      (let [;; Occlusion rows have no text-field editor here — their editor is
+            ;; the occlusion modal in the topic view. Ignore the activation
+            ;; rather than open EditCardModal with empty fields.
+            edit-card! (fn [_] (when (not= kind "occlusion")
+                                 (reset! !editing-card {:id id :kind kind :question question
+                                                        :answer answer :cloze cloze})))]
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt")
                     :style {:--order (inc i) :cursor "pointer"}})
-        (dom/On "click"
-          ;; Occlusion rows have no text-field editor here — their editor is
-          ;; the occlusion modal in the topic view. Ignore the click rather
-          ;; than open EditCardModal with empty fields.
-          (fn [_] (when (not= kind "occlusion")
-                    (reset! !editing-card {:id id :kind kind :question question
-                                           :answer answer :cloze cloze})))
-          nil)
+        (dom/On "click" edit-card! nil)
         (RowSelectCell cell-style id !selected selected)
         (RowDiffCell cell-style sync-st (get anki-overlay id)
           {:id id :kind kind :question question :answer answer
            :cloze cloze :note-id note-id}
           !diff-card)
-        ;; Kind badge
+        ;; Kind badge — also the row's keyboard path to edit-card!
         (dom/td
           (dom/props {:style (merge cell-style {:padding-inline "4px"})})
+          (a11y/KeyActivate {:label "Edit card"} edit-card!)
           (dom/span
             (dom/props {:class "type-badge"
                         :style {:background (if cloze? "var(--color-badge-epub)" "var(--color-badge-pdf)")}})
@@ -572,7 +575,7 @@
         ;; Delete
         (dom/td
           (dom/props {:style (merge cell-style {:justify-content "center" :padding-inline "4px"})})
-          (DeleteCardButton id user-id))))))
+          (DeleteCardButton id user-id)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Main view
@@ -629,7 +632,7 @@
             (fetch-anki-note-fields! note-id !anki-result))
           (dom/div
             (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
-            (modal/ModalEscape (fn [] (reset! !diff-card nil)))
+            (modal/ModalEscape (fn [] (reset! !diff-card nil)) "Card sync diff")
             (dom/On "click" (fn [_] (reset! !diff-card nil)) nil)
             (dom/div
               (dom/props {:class "modal-content modal-sm"
@@ -663,7 +666,7 @@
             [t ?error] (e/Token event)]
         (when ?error
           (dom/div
-            (dom/props {:style {:color "var(--color-danger)" :font-size "11px"}})
+            (dom/props {:style {:color "var(--color-danger-text)" :font-size "11px"}})
             (dom/text ?error)))
         (when t
           (let [r (e/server (e/Offload #(cards/delete-cards! user-id event)))]
@@ -683,7 +686,7 @@
     (let [n (count (e/watch !selected))]
       (dom/div
         (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
-        (modal/ModalEscape (fn [] (reset! !confirm-bulk-delete false)))
+        (modal/ModalEscape (fn [] (reset! !confirm-bulk-delete false)) "Confirm bulk delete")
         (dom/On "click" (fn [_] (reset! !confirm-bulk-delete false)) nil)
         (dom/div
           (dom/props {:class "modal-content modal-sm"})
@@ -908,13 +911,13 @@
                     :class "input" :style {:flex "1" :min-width "140px"}})
         (dom/On "input" (fn [e] (reset! !text (-> e .-target .-value))) nil))
       (dom/select
-        (dom/props {:class "input"})
+        (dom/props {:class "input" :aria-label "Filter by card kind"})
         (dom/option (dom/props {:value "all"}) (dom/text "All kinds"))
         (dom/option (dom/props {:value "basic"}) (dom/text "Basic"))
         (dom/option (dom/props {:value "cloze"}) (dom/text "Cloze"))
         (dom/On "change" (fn [e] (reset! !kind (-> e .-target .-value))) nil))
       (dom/select
-        (dom/props {:class "input"})
+        (dom/props {:class "input" :aria-label "Filter by sync status"})
         (dom/option (dom/props {:value "all"}) (dom/text "All statuses"))
         (dom/option (dom/props {:value "unpushed"}) (dom/text "Unpushed"))
         (dom/option (dom/props {:value "modified"}) (dom/text "Modified"))
@@ -954,7 +957,8 @@
               (dom/th
                 (dom/props {:style (merge th-style {:text-align "center" :padding "8px 4px"})})
                 (dom/input
-                  (dom/props {:type "checkbox" :style {:cursor "pointer"}
+                  (dom/props {:type "checkbox" :aria-label "Select all filtered"
+                              :style {:cursor "pointer"}
                               :data-tooltip "Select all filtered"})
                   (set! (.-checked dom/node)
                     (boolean (and (seq filtered-ids) (every? selected filtered-ids))))
@@ -1122,7 +1126,7 @@
 
       (if (= false success?)
         (dom/div
-          (dom/props {:style {:color "var(--color-danger)" :font-size "13px" :padding "8px 12px"}})
+          (dom/props {:style {:color "var(--color-danger-text)" :font-size "13px" :padding "8px 12px"}})
           (dom/text "Error loading cards: " (e/server (:error result))))
         (CardsSelectionRegion user-id navigate! result row-height font-sz filters-active?
           anki-overlay ov-status !sort-col !sort-dir !editing-card)))))

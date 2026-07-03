@@ -11,6 +11,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [taoensso.telemere :as tel]
    [freememo.icons :as icons]
+   [freememo.modal-shell :as modal]
    [freememo.commands :as commands]
    [freememo.command-bus :as bus]
    [freememo.loading :as loading]
@@ -147,6 +148,7 @@
       (dom/div
         (dom/props {:class "modal-backdrop"})
         (dom/On "click" (fn [_] (reset! !compare nil)) nil)
+        (modal/ModalEscape (fn [] (reset! !compare nil)) "Copy text")
         (dom/div
           (dom/props {:class "modal-content"
                       :style {:width "min(880px, 95vw)" :max-height "85vh"

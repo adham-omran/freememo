@@ -7,6 +7,7 @@
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
    [freememo.navigation :as nav]
+   [freememo.a11y :as a11y]
    [freememo.bibliography-form :as bibform]
    #?(:clj [freememo.user-state :as us])
    [freememo.util :as util]
@@ -139,7 +140,7 @@
                                    (:date bar))))
             (svg/rect
               (dom/props {:x (:x bar) :y (:y bar) :width bw :height (:bh bar) :rx 2
-                          :style {:fill (if (:today bar) "var(--color-success)" "var(--color-primary)")
+                          :style {:fill (if (:today bar) "var(--color-success)" "var(--color-primary-text)")
                                   :opacity (if (zero? (:count bar)) "0.4" "1")}}))
             ;; Count above each non-zero bar (zeros omitted to avoid clutter).
             (when (pos? (:count bar))
@@ -206,7 +207,7 @@
               (dom/props {:x (:x bar) :y (:y bar) :width bw :height (:bh bar) :rx 2
                           :style {:fill (cond (:backlog bar) "var(--color-warning, #d97706)"
                                               (:today bar) "var(--color-success)"
-                                              :else "var(--color-primary)")
+                                              :else "var(--color-primary-text)")
                                   :opacity (if (zero? (:count bar)) "0.35" "1")}}))
             (when (or (:backlog bar) (zero? (mod (:offset bar) 5)))
               (svg/text
@@ -317,31 +318,41 @@
         (let [grid-cols "1fr 90px 120px"
               row-height 36
               visible-rows 12]
+          ;; ONE ARIA table spans the two native tables (header + virtual-
+          ;; scrolled body). A physical merge would put the thead inside the
+          ;; tape-scroll table, whose --offset translation breaks sticky
+          ;; headers — so the natives become role=presentation and explicit
+          ;; row/columnheader/cell roles restore the header-cell association
+          ;; (WCAG 1.3.1) under this wrapper's role=table.
           (dom/div
             (dom/props {:class "table-frame"
+                        :role "table" :aria-label "Due topics"
                         :style {:display "flex" :flex-direction "column" :min-height "0"}})
 
             ;; Fixed header
             (dom/table
-              (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px" :flex-shrink "0"}})
+              (dom/props {:role "presentation"
+                          :style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px" :flex-shrink "0"}})
               (dom/thead
-                (dom/props {:style {:display "contents"}})
+                (dom/props {:role "rowgroup" :style {:display "contents"}})
                 (let [th-base {:padding "8px 6px" :border-bottom "2px solid var(--color-border)" :font-weight "600" :color "var(--color-text-primary)"}]
                   (dom/tr
-                    (dom/props {:style {:display "contents"}})
-                    (dom/th (dom/props {:style (merge th-base {:text-align "left" :padding "8px 10px"})}) (dom/text "Document"))
-                    (dom/th (dom/props {:style (merge th-base {:text-align "center"})}) (dom/text "Due"))
-                    (dom/th (dom/props {:style (merge th-base {:text-align "right" :padding "8px 10px"})}) (dom/text "Date"))))))
+                    (dom/props {:role "row" :style {:display "contents"}})
+                    (dom/th (dom/props {:role "columnheader" :style (merge th-base {:text-align "left" :padding "8px 10px"})}) (dom/text "Document"))
+                    (dom/th (dom/props {:role "columnheader" :style (merge th-base {:text-align "center"})}) (dom/text "Due"))
+                    (dom/th (dom/props {:role "columnheader" :style (merge th-base {:text-align "right" :padding "8px 10px"})}) (dom/text "Date"))))))
 
             ;; Scrollable body
             (dom/div
-              (dom/props {:style {:max-height (str (* row-height visible-rows) "px") :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
+              (dom/props {:role "rowgroup"
+                          :style {:max-height (str (* row-height visible-rows) "px") :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
               (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 1})
                     occluded-height (clamp-left (* row-height (- item-count limit)) 0)]
                 (dom/props {:class "tape-scroll"
                             :style {:--offset offset :--row-height (str row-height "px")}})
                 (dom/table
-                  (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
+                  (dom/props {:role "presentation"
+                              :style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
                   (if (pos? item-count)
                     (e/for [i (Tape offset limit)]
                       (let [item (e/server (nth items-vec i nil))]
@@ -355,19 +366,23 @@
                                 id (:id item)
                                 source-container (:source-container item)
                                 [badge-text badge-color] (bibform/topic-badge kind source-container)]
-                            (dom/tr
-                              (dom/props {:class (when (even? i) "row-alt")
-                                          :style {:border-bottom "1px solid var(--color-bg-subtle)" :height (str row-height "px")
-                                                  :opacity (if inactive? "0.6" "1")
-                                                  :cursor "pointer" :--order (inc i)}})
-                              (dom/On "click"
-                                (fn [_]
-                                  (navigate! :viewer (nav/nav-topic id :learn)))
-                                nil)
-                              ;; Document (badge + title)
+                            (let [open-topic! (fn [_] (navigate! :viewer (nav/nav-topic id :learn)))]
+                              (dom/tr
+                                (dom/props {:class (when (even? i) "row-alt")
+                                            :role "row"
+                                            :style {:border-bottom "1px solid var(--color-bg-subtle)" :height (str row-height "px")
+                                                    :opacity (if inactive? "0.6" "1")
+                                                    :cursor "pointer" :--order (inc i)}})
+                                (dom/On "click" open-topic! nil)
+                              ;; Document (badge + title). KeyActivate on the
+                              ;; td (has a box; the display:contents tr does
+                              ;; not) — Enter/Space share open-topic! with the
+                              ;; tr's click handler.
                               (dom/td
-                                (dom/props {:style {:padding "4px 10px" :overflow "hidden" :text-overflow "ellipsis"
+                                (dom/props {:role "cell"
+                                            :style {:padding "4px 10px" :overflow "hidden" :text-overflow "ellipsis"
                                                     :white-space "nowrap" :display "flex" :align-items "center" :gap "8px"}})
+                                (a11y/KeyActivate {} open-topic!)
                                 (dom/span
                                   (dom/props {:class "type-badge" :style {:background badge-color :flex-shrink "0"}})
                                   (dom/text badge-text))
@@ -376,22 +391,26 @@
                                   (dom/text display-title)))
                               ;; Due (relative label)
                               (dom/td
-                                (dom/props {:style {:padding "4px 6px" :text-align "center" :font-size "12px"
+                                (dom/props {:role "cell"
+                                            :style {:padding "4px 6px" :text-align "center" :font-size "12px"
                                                     :color (case due-label "done" "var(--color-success-dark)" "var(--color-text-secondary)")}})
                                 (dom/text due-label))
                               ;; Date (absolute next-review date; em dash when unscheduled)
                               (dom/td
-                                (dom/props {:style {:padding "4px 10px" :text-align "right" :font-size "12px"
+                                (dom/props {:role "cell"
+                                            :style {:padding "4px 10px" :text-align "right" :font-size "12px"
                                                     :color "var(--color-text-secondary)"}})
-                                (dom/text (or due-date "—"))))))))
+                                (dom/text (or due-date "—")))))))))
                     (dom/tr
+                      (dom/props {:role "row"})
                       (dom/td
-                        (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
+                        (dom/props {:role "cell"
+                                    :style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
                                             :color "var(--color-text-secondary)" :font-size "13px"}})
                         (dom/text (if (pos? (:total summary))
                                     "Nothing due — you're all caught up."
                                     "No topics yet. Import a document from the Import tab to start learning."))))))
-                (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))
+                (dom/div (dom/props {:aria-hidden "true" :style {:height (str occluded-height "px")}}))))))
 
         (Dashboard dash due-today (:due-week summary))))))
 

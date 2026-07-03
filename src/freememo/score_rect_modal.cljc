@@ -79,7 +79,7 @@
             close! (fn [] (reset! dctx/!score-modal-open? false))]
         (dom/div
           (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
-          (modal/ModalEscape close!)
+          (modal/ModalEscape close! "Score regions")
           (dom/On "click" (fn [e]
                             (when (= (.-target e) (.-currentTarget e)) (close!)))
             nil)

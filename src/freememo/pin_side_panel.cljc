@@ -155,7 +155,9 @@
           (dom/div
             (dom/props {:class "side-panel__header"})
             (dom/button
-              (dom/props {:class "side-panel__toggle"})
+              (dom/props {:class "side-panel__toggle"
+                          :aria-label "Toggle pins panel"
+                          :aria-expanded (str (boolean open?))})
               (dom/text "☰")
               (dom/On "click"
                 (fn [_]
@@ -172,10 +174,21 @@
           (when open?
             (dom/div
               (dom/props {:class "side-panel__resize side-panel__resize--left"
-                          :title "Drag to resize"})
+                          :title "Drag to resize"
+                          :role "separator" :aria-orientation "vertical"
+                          :aria-label "Resize pins panel" :tabindex "0"
+                          :aria-valuenow (str (int (or width-px 0)))})
               (dom/On "pointerdown"
                 (fn [e]
                   (util/start-drag-px! e !width-px
+                    {:min 120
+                     :max (max 120 (util/panel-resize-max (.-currentTarget e) :before 320))
+                     :invert? true
+                     :on-commit #(reset! !width-save %)}))
+                nil)
+              (dom/On "keydown"
+                (fn [e]
+                  (util/key-resize-px! e !width-px
                     {:min 120
                      :max (max 120 (util/panel-resize-max (.-currentTarget e) :before 320))
                      :invert? true

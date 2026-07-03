@@ -54,7 +54,7 @@
       (e/for-by identity [_pair [[topic-id priority]]]
         (let [v (reset! !mirror priority)] (when v nil)))
       (NumberStepper mirror-val 0 100
-        topic-id "Priority" nil nil
+        topic-id "Priority" "Priority" nil nil
         !mirror
         (e/fn [nv]
           (e/server (e/Offload #(update-priority!* topic-id nv))))))))

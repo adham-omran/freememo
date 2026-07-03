@@ -120,7 +120,7 @@
                               :align-items "center"
                               :gap "10px"
                               :background "var(--color-info-bg-light)"
-                              :color "var(--color-primary)"
+                              :color "var(--color-primary-text)"
                               :border-radius "var(--radius-lg)"
                               :padding "10px 12px"
                               :margin-top "var(--sp-3)"}})
@@ -214,7 +214,7 @@
               row-count (count rows)]
           (dom/div
             (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
-            (modal/ModalEscape (fn [] (reset! !open? false)))
+            (modal/ModalEscape (fn [] (reset! !open? false)) "History")
             (dom/On "click" (fn [_] (reset! !open? false)) nil)
             (dom/div
               (dom/props {:class "modal-content"

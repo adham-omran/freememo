@@ -156,7 +156,9 @@
           (dom/div
             (dom/props {:class "side-panel__header"})
             (dom/button
-              (dom/props {:class "side-panel__toggle"})
+              (dom/props {:class "side-panel__toggle"
+                          :aria-label "Toggle hierarchy panel"
+                          :aria-expanded (str (boolean open?))})
               (dom/text "☰")
               (dom/On "click"
                 (fn [_]
@@ -173,10 +175,21 @@
           (when open?
             (dom/div
               (dom/props {:class "side-panel__resize side-panel__resize--right"
-                          :title "Drag to resize"})
+                          :title "Drag to resize"
+                          :role "separator" :aria-orientation "vertical"
+                          :aria-label "Resize hierarchy panel" :tabindex "0"
+                          :aria-valuenow (str (int (or width-px 0)))})
               (dom/On "pointerdown"
                 (fn [e]
                   (util/start-drag-px! e !width-px
+                    {:min 180
+                     :max (max 180 (util/panel-resize-max (.-currentTarget e) :after 320))
+                     :invert? false
+                     :on-commit #(reset! !width-save %)}))
+                nil)
+              (dom/On "keydown"
+                (fn [e]
+                  (util/key-resize-px! e !width-px
                     {:min 180
                      :max (max 180 (util/panel-resize-max (.-currentTarget e) :after 320))
                      :invert? false
@@ -253,7 +266,7 @@
                                   (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
                                                       ;; Base 20 reserves the fixed left gutter for the
                                                       ;; absolutely positioned .drag-grip (see tree_dnd).
-                                                      :padding-left (str (+ 20 (* depth 14)) "px")
+                                                      :padding-left (str (+ 26 (* depth 14)) "px")
                                                       :padding-right "8px"
                                                       :cursor (if current? "default" "pointer")
                                                       :background (when current? "var(--color-bg-card)")

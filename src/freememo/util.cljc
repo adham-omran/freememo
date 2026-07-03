@@ -101,6 +101,47 @@
          (.addEventListener target "pointermove" on-move)
          (.addEventListener target "pointerup" on-up)))))
 
+;; Keyboard analogs of the two drag helpers (WCAG 2.1.1 — resize must work
+;; without a pointer). Call from a keydown handler on the divider; both
+;; return nil for non-resize keys so callers can fall through.
+
+(defn key-resize-pct!
+  "Step a split percentage by ±2 on the arrow keys matching `axis`
+   (:x → Left/Right, :y → Up/Down), clamped to the same [15 85] as
+   start-drag!. Calls `on-commit` (nilable) with the new pct."
+  [e axis !pct on-commit]
+  #?(:clj nil
+     :cljs
+     (let [delta (case [axis (.-key e)]
+                   [:x "ArrowLeft"] -2 [:x "ArrowRight"] 2
+                   [:y "ArrowUp"] -2 [:y "ArrowDown"] 2
+                   nil)]
+       (when delta
+         (.preventDefault e)
+         (let [nv (-> (+ @!pct delta) (cljs.core/max 15) (cljs.core/min 85))]
+           (reset! !pct nv)
+           (when on-commit (on-commit nv))
+           nv)))))
+
+(defn key-resize-px!
+  "Step a panel pixel width by ±16 on ArrowLeft/ArrowRight, clamped to
+   [min max] like start-drag-px!. `invert?` true when the handle is on the
+   panel's left edge (arrows track the DIVIDER's motion, so ArrowRight
+   shrinks an invert? panel). Calls `on-commit` (nilable) with the new width."
+  [e !width-px {:keys [min max invert? on-commit]}]
+  #?(:clj nil
+     :cljs
+     (let [dir (case (.-key e) "ArrowLeft" -16 "ArrowRight" 16 nil)]
+       (when dir
+         (.preventDefault e)
+         (let [signed (if invert? (- dir) dir)
+               nv (-> (+ (or @!width-px 0) signed)
+                    (cljs.core/max min)
+                    (cljs.core/min max))]
+           (reset! !width-px nv)
+           (when on-commit (on-commit nv))
+           nv)))))
+
 (defn panel-resize-max
   "Max px this side panel may grow to without shrinking the flex content
    column below `content-floor`. The only reclaimable space is the content

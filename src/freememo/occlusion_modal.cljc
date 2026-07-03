@@ -217,7 +217,7 @@
                             :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
         (when ?error
           (dom/div (dom/props {:style {:order "-1" :margin-right "auto"
-                                       :color "var(--color-danger)" :font-size "12px"}})
+                                       :color "var(--color-danger-text)" :font-size "12px"}})
             (dom/text "Error: " ?error)))
         (if edit?
           (dom/button
@@ -369,7 +369,7 @@
               (:success result) (OcclusionModalBody request !request user-id (:group result))
               :else (dom/div
                       (dom/props {:style {:position "fixed" :bottom "20px" :right "20px"
-                                          :background "var(--color-danger-bg)" :color "var(--color-danger)"
+                                          :background "var(--color-danger-bg)" :color "var(--color-danger-text)"
                                           :padding "var(--sp-3)" :border-radius "var(--radius-sm)"
                                           :z-index "1000"}})
                       (dom/text "Cannot open occlusion: " (:error result)))))
