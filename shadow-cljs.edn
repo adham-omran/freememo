@@ -23,9 +23,24 @@
          :asset-path "/freememo/js"
          :modules {:main {:entries [prod] :init-fn prod/-main}}
          :module-hash-names true
-         :compiler-options {:infer-externs :auto}}
+         ;; :parallel-build false forces shadow's single-threaded
+         ;; seq-compile path (shadow.build.compiler/compile-cljs-sources).
+         ;; Electric's dual macro-compiler resolves aliased element macros
+         ;; (e.g. svg/line in freememo.icons) via a SHARED cljs-analyzer atom
+         ;; that it populates with a best-effort `safe-require`. Under shadow's
+         ;; default parallel compile, that require can lose a race and fail
+         ;; silently, leaving the macro unresolved so the form leaks unexpanded
+         ;; -> "Can't take value of a macro: #'hyperfiddle.electric-svg3/line".
+         ;; The failure is CPU-count/timing dependent (hits multi-core CI/Docker
+         ;; builds, usually misses local builds) and the reported file/line is
+         ;; misattributed to whatever ns was compiling concurrently. Serial
+         ;; compile removes the race. Closure :advanced optimization still runs
+         ;; multi-threaded (:closure-threads), so the release-build cost is small.
+         :compiler-options {:infer-externs :auto
+                            :parallel-build false}}
   :prod-jetty9 {:target :browser
                 :output-dir "resources/public/freememo/js"
                 :asset-path "/freememo/js"
                 :modules {:main {:entries [prod-jetty9] :init-fn prod-jetty9/-main}}
-                :module-hash-names true}}}
+                :module-hash-names true
+                :compiler-options {:parallel-build false}}}}
