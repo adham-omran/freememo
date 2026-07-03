@@ -251,15 +251,11 @@
           ;; away under a root PDF, but a NESTED PDF's pages do render here — gate
           ;; them non-draggable so they can't be moved off their document.
           (tree-dnd/DragDropRow! id (not is-page) !drag-src drag-src forbidden !drop-cmd)
-          (a11y/KeyActivate {} open-topic!)
           (if has-children
             (dom/span
               (dom/props {:style {:width "28px" :padding "4px 6px" :margin "-4px -6px"
                                   :font-size "12px" :cursor "pointer"
                                   :user-select "none" :text-align "center" :flex-shrink "0"}})
-              (a11y/KeyActivate {:role "button"
-                                 :label (if expanded? "Collapse children" "Expand children")}
-                toggle-children!)
               (dom/text (if expanded? "▼" "▶"))
               (dom/On "click" toggle-children! nil))
             (dom/span (dom/props {:style {:width "16px" :flex-shrink "0"}})))

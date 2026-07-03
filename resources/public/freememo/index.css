@@ -2877,20 +2877,13 @@ form[aria-busy="true"] {
     min-height: 24px;
 }
 
-/* Focus rings inside the virtual-scroll grids. The grid cells clip a
-   2px-offset outline (overflow:hidden, adjacent cells paint over it), which
-   rendered as partial rectangles — draw the ring INSET instead, and tint the
-   whole row via :has() so a focused cell reads as a row selection. */
-.tape-scroll td:focus-visible,
+/* Sort-header focus ring (headers are keyboard-operable; rows are click-only). */
 .table-frame th:focus-visible {
     outline-offset: -2px;
     background: var(--color-info-bg);
 }
-.tape-scroll tr:has(> td:focus-visible) > td {
-    background: var(--color-info-bg);
-}
-/* Native controls inside cells (checkboxes, grips, expand arrows, delete
-   buttons): hug the control instead of the default 2px halo the cell clips. */
+/* Native controls inside cells (checkboxes, delete buttons, the ⋯ trigger):
+   hug the control instead of the default 2px halo the cell clips. */
 .tape-scroll td :focus-visible {
     outline-offset: 0;
 }

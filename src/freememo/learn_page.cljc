@@ -7,7 +7,6 @@
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
    [freememo.navigation :as nav]
-   [freememo.a11y :as a11y]
    [freememo.bibliography-form :as bibform]
    #?(:clj [freememo.user-state :as us])
    [freememo.util :as util]
@@ -374,15 +373,12 @@
                                                     :opacity (if inactive? "0.6" "1")
                                                     :cursor "pointer" :--order (inc i)}})
                                 (dom/On "click" open-topic! nil)
-                              ;; Document (badge + title). KeyActivate on the
-                              ;; td (has a box; the display:contents tr does
-                              ;; not) — Enter/Space share open-topic! with the
-                              ;; tr's click handler.
+                              ;; Document (badge + title). Row opens via the tr's
+                              ;; click handler; rows are not keyboard-focusable.
                               (dom/td
                                 (dom/props {:role "cell"
                                             :style {:padding "4px 10px" :overflow "hidden" :text-overflow "ellipsis"
                                                     :white-space "nowrap" :display "flex" :align-items "center" :gap "8px"}})
-                                (a11y/KeyActivate {} open-topic!)
                                 (dom/span
                                   (dom/props {:class "type-badge" :style {:background badge-color :flex-shrink "0"}})
                                   (dom/text badge-text))
