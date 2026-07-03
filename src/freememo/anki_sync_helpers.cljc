@@ -168,6 +168,7 @@
        "image/svg+xml" "svg"
        "image/bmp" "bmp"
        "image/tiff" "tiff"
+       "audio/mpeg" "mp3"
        "bin")))
 
 #?(:cljs
@@ -257,6 +258,39 @@
 (defn occlusion-card? [card]
   (= "occlusion" (:flashcards/kind card)))
 
+;; ---------------------------------------------------------------------------
+;; Score FreeMemo note type — app-owned like IO FreeMemo. One template; the
+;; direction is baked into which field carries the [sound:...] clip vs the
+;; stacked notation crops, so "Both" is two independent notes.
+;; Field ownership: ID/Front/Back/Source/Bibliography are FM-generated and
+;; overwritten on every push; Remarks is the user's Anki-side annotation
+;; space — addNote seeds it empty, updateNote never touches it.
+;; ---------------------------------------------------------------------------
+
+(def score-model-name "Score FreeMemo")
+(def score-template-name "Score Card")
+
+(def score-field-names
+  ["ID (hidden)" "Front" "Back" "Source" "Bibliography" "Remarks"])
+
+(def score-card-front
+  "<div class=\"score-front\">{{Front}}</div>\n")
+
+(def score-card-back
+  "{{FrontSide}}\n<hr id=answer>\n<div class=\"score-back\">{{Back}}</div>\n{{#Remarks}}<div class=\"score-extra\"><div class=\"score-field-descr\">Remarks</div>{{Remarks}}</div>{{/Remarks}}\n{{#Source}}<div class=\"score-extra\"><div class=\"score-field-descr\">Source</div>{{Source}}</div>{{/Source}}\n{{#Bibliography}}<div class=\"score-extra\"><div class=\"score-field-descr\">Bibliography</div>{{Bibliography}}</div>{{/Bibliography}}\n")
+
+(defn score-card? [card]
+  (= "score" (:flashcards/kind card)))
+
+(defn score-media-ids
+  "Media id strings of a score card's clip + every notation crop.
+   Pre: card carries :score-group (attached by get-cards-for-sync)."
+  [card]
+  (let [{:keys [clip-media-id geometry]} (:score-group card)]
+    (into #{(str clip-media-id)}
+      (map (comp str :media-id))
+      (mapcat :rects (:pages geometry)))))
+
 #?(:cljs
    (defn fetch-text!
      "Missionary task: GET a same-origin URL, resolve to the body text."
@@ -306,6 +340,61 @@
                    :cardTemplates [{:Name io-template-name
                                     :Front io-card-front
                                     :Back io-card-back}]})))
+         true))))
+
+#?(:cljs
+   (defn ensure-score-model!
+     "Missionary task: create the Score FreeMemo model if missing, else
+      re-assert its styling/template against canon — same strict-drift policy
+      as ensure-io-model! — and reconcile its FIELDS: 'Sources' (shipped
+      briefly) renames to 'Source', and any canonical field the model lacks
+      is appended. Existing note content survives both operations."
+     []
+     (m/sp
+       (let [css (m/? (fetch-text! app-anki-css-url))
+             models (vec (js->clj (m/? (anki-call! "modelNames" nil))))]
+         (if (some #{score-model-name} models)
+           (do
+             (let [fields (vec (js->clj (m/? (anki-call! "modelFieldNames"
+                                               {:modelName score-model-name}))))]
+               (when (and (some #{"Sources"} fields)
+                       (not (some #{"Source"} fields)))
+                 (log/log-debug "[anki-push] Score FreeMemo: renaming field Sources → Source")
+                 (m/? (anki-call! "modelFieldRename"
+                        {:modelName score-model-name
+                         :oldFieldName "Sources"
+                         :newFieldName "Source"}))))
+             (let [fields (set (js->clj (m/? (anki-call! "modelFieldNames"
+                                               {:modelName score-model-name}))))
+                   missing (vec (remove fields score-field-names))]
+               (loop [[f & more] missing]
+                 (when f
+                   (log/log-debug (str "[anki-push] Score FreeMemo: adding field " f))
+                   (m/? (anki-call! "modelFieldAdd"
+                          {:modelName score-model-name :fieldName f}))
+                   (recur more))))
+             (let [styling (js->clj (m/? (anki-call! "modelStyling" {:modelName score-model-name})))]
+               (when (not= (get styling "css") css)
+                 (log/log-debug "[anki-push] Score FreeMemo styling drifted — restoring")
+                 (m/? (anki-call! "updateModelStyling"
+                        {:model {:name score-model-name :css css}}))))
+             (let [templates (js->clj (m/? (anki-call! "modelTemplates" {:modelName score-model-name})))
+                   tmpl (get templates score-template-name)]
+               (when (or (not= (get tmpl "Front") score-card-front)
+                       (not= (get tmpl "Back") score-card-back))
+                 (log/log-debug "[anki-push] Score FreeMemo templates drifted — restoring")
+                 (m/? (anki-call! "updateModelTemplates"
+                        {:model {:name score-model-name
+                                 :templates {score-template-name {:Front score-card-front
+                                                                  :Back score-card-back}}}})))))
+           (m/? (anki-call! "createModel"
+                  {:modelName score-model-name
+                   :inOrderFields score-field-names
+                   :css css
+                   :isCloze false
+                   :cardTemplates [{:Name score-template-name
+                                    :Front score-card-front
+                                    :Back score-card-back}]})))
          true))))
 
 (defn io-mask-uploads
@@ -367,7 +456,8 @@
 
 (defn collect-card-media-ids
   "Return a set of all media ID strings referenced in any HTML field of a card.
-   Occlusion cards contribute their io_fields HTML plus the group's image."
+   Occlusion cards contribute their io_fields HTML plus the group's image;
+   score cards contribute their clip + notation crops."
   [card]
   (let [html-ids (reduce into #{}
                    (keep extract-media-ids
@@ -377,7 +467,9 @@
                        (vals (or (:flashcards/io_fields card) {})))))]
     (cond-> html-ids
       (:occlusion-group card)
-      (conj (str (get-in card [:occlusion-group :image-media-id]))))))
+      (conj (str (get-in card [:occlusion-group :image-media-id])))
+      (:score-group card)
+      (into (score-media-ids card)))))
 
 (defn extract-img-tags
   "Return a string of all <img ...> tags extracted from html, preserving order.
@@ -464,6 +556,59 @@
    :tags (:tags settings)
    :options {:allowDuplicate false :duplicateScope "deck"}})
 
+(defn- score-sound-html
+  "[sound:...] tag for the group's clip, via the uploaded filename."
+  [clip-media-id filename-map]
+  (str "[sound:" (get filename-map (str clip-media-id)
+                   (str clip-media-id ".mp3")) "]"))
+
+(defn- score-sheet-html
+  "Notation crops stacked vertically in ordinal order (page order — a phrase
+   wrapping across systems reads top to bottom)."
+  [geometry filename-map]
+  (->> (:pages geometry)
+    (mapcat :rects)
+    (sort-by :ordinal)
+    (map (fn [{:keys [media-id]}]
+           (str "<img src=\""
+             (get filename-map (str media-id) (str "/api/media/" media-id))
+             "\" />")))
+    (str/join "<br/>")))
+
+(defn build-score-fields
+  "FM-owned fields for a score note, direction-baked: audio-front puts the
+   clip on the Front and the crops on the Back; sheet-front mirrors. Source
+   and Bibliography fill exactly like basic cards' field mode (topic anchor +
+   the card's own resolved bibliography). Remarks is deliberately absent —
+   it is the user's Anki-side annotation space and updateNote must never
+   clobber it.
+   Pre: card carries :score-group and :flashcards/score_direction; settings
+   carries the source-anchor inputs (:topic-title :app-base-url ...)."
+  [card settings filename-map]
+  (let [{:keys [anki-key clip-media-id geometry]} (:score-group card)
+        direction (:flashcards/score_direction card)
+        sound (score-sound-html clip-media-id filename-map)
+        sheet (score-sheet-html geometry filename-map)
+        source-ref (build-source-anchor card settings)
+        bibliography-html (or (:fm/bibliography-html card) (:bibliography-html settings))]
+    {"ID (hidden)" (str "fm-score-" anki-key "-" direction)
+     "Front" (if (= direction "audio-front") sound sheet)
+     "Back" (if (= direction "audio-front") sheet sound)
+     "Source" (wrap-fm-source (or source-ref ""))
+     "Bibliography" (wrap-fm-bibliography (or bibliography-html ""))}))
+
+(defn build-score-note
+  "AnkiConnect note map for a score card. Remarks seeded empty on create;
+   the unique 'ID (hidden)' first field defeats the duplicate check (the
+   Both pair shares Front/Back media)."
+  [card settings filename-map]
+  {:deckName (:deck settings)
+   :modelName score-model-name
+   :fields (merge {"Remarks" ""}
+             (build-score-fields card settings filename-map))
+   :tags (:tags settings)
+   :options {:allowDuplicate false :duplicateScope "deck"}})
+
 #?(:cljs (declare build-note*))
 
 #?(:cljs
@@ -474,11 +619,13 @@
                   :bibliography-display-mode :bibliography-field-name :bibliography-html
                   :images-front-field :images-back-field :image-display-mode}
       filename-map = {media-id -> \"<id>.<ext>\"} — pre-uploaded filenames for src rewrite.
-      Occlusion cards route to build-io-note (fixed model, generated fields)."
+      Occlusion cards route to build-io-note, score cards to build-score-note
+      (fixed app-owned models, generated fields)."
      [card settings filename-map]
-     (if (occlusion-card? card)
-       (build-io-note card settings filename-map)
-       (build-note* card settings filename-map))))
+     (cond
+       (occlusion-card? card) (build-io-note card settings filename-map)
+       (score-card? card) (build-score-note card settings filename-map)
+       :else (build-note* card settings filename-map))))
 
 #?(:cljs
    (defn build-note*
@@ -559,11 +706,14 @@
    (defn build-update-fields
      "Build Anki field map for updating an existing note.
       filename-map = {media-id -> \"<id>.<ext>\"} — pre-uploaded filenames for src rewrite.
-      Occlusion cards regenerate the full IO field map (masks + text)."
+      Occlusion cards regenerate the full IO field map (masks + text); score
+      cards regenerate ID/Front/Back/Source/Bibliography (Remarks stays
+      Anki-owned)."
      [card settings filename-map]
-     (if (occlusion-card? card)
-       (build-io-fields card filename-map)
-       (build-update-fields* card settings filename-map))))
+     (cond
+       (occlusion-card? card) (build-io-fields card filename-map)
+       (score-card? card) (build-score-fields card settings filename-map)
+       :else (build-update-fields* card settings filename-map))))
 
 #?(:cljs
    (defn build-update-fields*
@@ -637,23 +787,27 @@
            ;; get-cards-for-sync); the same re-push-everything rule regenerates
            ;; every pushed group's masks, which is what makes geometry
            ;; dirtiness group-scoped.
-           io-cards (vec (filter :occlusion-group cards))]
+           io-cards (vec (filter :occlusion-group cards))
+           score-cards (vec (filter :score-group cards))]
        (log/log-debug (str "[anki-push] do-anki-push! starting"
                         " new=" (count new-cards)
                         " update=" (count changed-cards)
                         " occlusion=" (count io-cards)
+                        " score=" (count score-cards)
                         " mode=" (:source-display-mode settings)
                         " image-display-mode=" (:image-display-mode settings)
                         " topic-title=" (pr-str (:topic-title settings))
                         " topic-kind=" (pr-str (:topic-kind settings))))
        (m/sp
-         ;; Phase -1: any occlusion card ⇒ guarantee the IO FreeMemo model
+         ;; Phase -1: any occlusion/score card ⇒ guarantee its app-owned model
          ;; exists and matches canon BEFORE any note lands. A failure here
          ;; fails the whole push with the AnkiConnect error — by design:
-         ;; "mandatory" means no IO note is ever created against a missing or
+         ;; "mandatory" means no note is ever created against a missing or
          ;; drifted model.
          (when (seq io-cards)
            (m/? (ensure-io-model!)))
+         (when (seq score-cards)
+           (m/? (ensure-score-model!)))
          ;; Phase 0: collect all unique media IDs across every card, upload each once,
          ;; build filename-map {id -> "<id>.<ext>"} for src rewriting.
          (let [all-media-ids (reduce (fn [acc card] (into acc (collect-card-media-ids card)))
@@ -788,9 +942,14 @@
                                  (let [kind (:flashcards/kind card)
                                        basic? (= kind "basic")
                                        occlusion? (= kind "occlusion")
+                                       score? (= kind "score")
                                        ordered-vals (ordered-field-values (:fields anki-note))
                                        update-map
                                        (cond
+                                         ;; Score: Front/Back are FM-generated media
+                                         ;; references and Remarks/Sources are
+                                         ;; Anki-owned — nothing to pull.
+                                         score? nil
                                          ;; Occlusion: diff the six text fields by the
                                          ;; app-owned field order; masks/Image/ID are
                                          ;; FM-owned and ignored. Both sides stripped so

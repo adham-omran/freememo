@@ -9,9 +9,9 @@
    [freememo.typeahead :refer [Typeahead]]
    [freememo.anki-sync-helpers :as anki-helpers]
    [freememo.zotero-client :as zc]
+   [freememo.commands :as commands]
    #?(:clj [freememo.settings :as settings])
-   #?(:clj [freememo.anki-sync-server :as sync])
-   #?(:clj [freememo.user-state :as us])))
+   #?(:clj [freememo.anki-sync-server :as sync])))
 
 
 ;; Section anchor ids + sidebar labels, in display order.
@@ -632,7 +632,7 @@
                       (let [r (e/server (e/Offload #(settings/save-theme user-id change-event)))]
                         (case r
                           (if (:success r)
-                            (case (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                            (case (e/server (commands/bump! user-id :set-setting))
                               (t))
                             (t (:error r))))))))
                 (dom/div (dom/props {:class "hint"})
@@ -719,7 +719,7 @@
                             (let [r (e/server (e/Offload #(settings/save-source-display-mode user-id change-event)))]
                               (case r
                                 (if (:success r)
-                                  (case (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                  (case (e/server (commands/bump! user-id :set-setting))
                                     (t))
                                   (t (:error r))))))))
                       (dom/div
@@ -741,7 +741,7 @@
                             (let [r (e/server (e/Offload #(settings/save-source-display-mode user-id change-event)))]
                               (case r
                                 (if (:success r)
-                                  (case (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                  (case (e/server (commands/bump! user-id :set-setting))
                                     (t))
                                   (t (:error r))))))))
                       (dom/div
@@ -798,7 +798,7 @@
                             (let [r (e/server (e/Offload #(settings/save-bibliography-display-mode user-id change-event)))]
                               (case r
                                 (if (:success r)
-                                  (case (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                  (case (e/server (commands/bump! user-id :set-setting))
                                     (t))
                                   (t (:error r))))))))
                       (dom/div
@@ -820,7 +820,7 @@
                             (let [r (e/server (e/Offload #(settings/save-bibliography-display-mode user-id change-event)))]
                               (case r
                                 (if (:success r)
-                                  (case (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                  (case (e/server (commands/bump! user-id :set-setting))
                                     (t))
                                   (t (:error r))))))))
                       (dom/div
@@ -842,7 +842,7 @@
                             (let [r (e/server (e/Offload #(settings/save-bibliography-display-mode user-id change-event)))]
                               (case r
                                 (if (:success r)
-                                  (case (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                  (case (e/server (commands/bump! user-id :set-setting))
                                     (t))
                                   (t (:error r))))))))
                       (dom/div
@@ -899,7 +899,7 @@
                             (let [r (e/server (e/Offload #(settings/save-image-display-mode user-id change-event)))]
                               (case r
                                 (if (:success r)
-                                  (case (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                  (case (e/server (commands/bump! user-id :set-setting))
                                     (t))
                                   (t (:error r))))))))
                       (dom/div
@@ -921,7 +921,7 @@
                             (let [r (e/server (e/Offload #(settings/save-image-display-mode user-id change-event)))]
                               (case r
                                 (if (:success r)
-                                  (case (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                                  (case (e/server (commands/bump! user-id :set-setting))
                                     (t))
                                   (t (:error r))))))))
                       (dom/div

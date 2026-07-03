@@ -8,7 +8,7 @@
    [freememo.icons :as icons]
    [freememo.rich-text-editor :as editor]
    [freememo.card-modals :refer [AddCardModal]]
-   [freememo.keyboard :as keyboard]))
+   [freememo.command-bus :as bus]))
 
 (e/defn AddCardButton [user-id topic-id root-topic-id card-type]
   (e/client
@@ -23,8 +23,9 @@
                     :data-tooltip "Add new card"})
         (icons/Icon :plus :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Add new card"))
-        (reset! keyboard/!add-new-btn-ref dom/node)
-        (e/on-unmount (fn [] (reset! keyboard/!add-new-btn-ref nil)))
+        (let [node dom/node]
+          (bus/publish-invoker! :add-new (fn [] (.click node)))
+          (e/on-unmount (fn [] (bus/retract-invoker! :add-new))))
         (dom/On "click"
           (fn [_]
             (let [{:keys [html text]} (editor/get-selection-html!)]

@@ -7,6 +7,8 @@
 ;; {:type :topic           :topic-id _ :origin _}
 ;; {:type :learn-session}
 ;; {:type :subset-review   :root-id _ :root-name _}
+;; Search nav type (tab :search):
+;; {:type :search-query    :query "text"}
 
 ;; Cross-topic page handoff: a PDF-page extract's "Go to page" button sets this
 ;; before navigating to the PDF root; the destination TopicPage consumes it once
@@ -23,3 +25,6 @@
 
 (defn nav-subset-review [root-id root-name]
   {:type :subset-review :root-id root-id :root-name root-name})
+
+(defn nav-search-query [query]
+  {:type :search-query :query query})

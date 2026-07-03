@@ -181,11 +181,20 @@
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS topic_files (
       id SERIAL PRIMARY KEY,
-      topic_id INTEGER NOT NULL UNIQUE REFERENCES topics(id) ON DELETE CASCADE,
+      topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
       file_data BYTEA NOT NULL,
       file_size INTEGER,
       mime_type TEXT
     )"])
+
+  ;; Score topics own TWO blobs (role='main' PDF + role='audio' recording);
+  ;; every other kind keeps a single 'main' row. The historical
+  ;; UNIQUE(topic_id) relaxes to UNIQUE(topic_id, role) — the DROP CONSTRAINT
+  ;; migrates existing installs, the index covers both old and new.
+  (jdbc/execute! ds ["ALTER TABLE topic_files ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'main'"])
+  (jdbc/execute! ds ["ALTER TABLE topic_files DROP CONSTRAINT IF EXISTS topic_files_topic_id_key"])
+  (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_topic_files_topic_role
+                      ON topic_files(topic_id, role)"])
 
   ;; Flashcards table — create if not exists, then add new columns
   (jdbc/execute! ds ["
@@ -300,6 +309,30 @@
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS io_fields JSONB"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_occlusion_group
                       ON flashcards(occlusion_group_id) WHERE occlusion_group_id IS NOT NULL"])
+
+  ;; Score groups — one row per (audio segment × notation rects) pair on a
+  ;; kind='score' topic. geometry JSONB = {:pages [{:page :width :height
+  ;; :rects [{:x :y :w :h :ordinal :media-id} ...]} ...]} in snapshot-pixel
+  ;; space of the recorded page render. Clip + crops are materialized media
+  ;; rows (cut/cropped client-side at card creation, NOT at push time).
+  ;; anki_key names the group's Anki media files (fm-score-<anki_key>-…).
+  ;; One flashcard row per direction ('audio-front'/'sheet-front'); 'Both'
+  ;; fans out to two notes sharing the same media.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS score_groups (
+      id SERIAL PRIMARY KEY,
+      anki_key TEXT NOT NULL,
+      start_ms INTEGER NOT NULL,
+      end_ms INTEGER NOT NULL,
+      clip_media_id BIGINT NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+      geometry JSONB NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT NULL
+    )"])
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS score_group_id INTEGER REFERENCES score_groups(id) ON DELETE CASCADE"])
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS score_direction TEXT"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_score_group
+                      ON flashcards(score_group_id) WHERE score_group_id IS NOT NULL"])
 
   ;; Drop deprecated source_reference columns — title is the single source of truth.
   (jdbc/execute! ds ["ALTER TABLE topics DROP COLUMN IF EXISTS source_reference"])
@@ -1050,29 +1083,38 @@
                  :from [:topics]
                  :where [:and [:= :id id] [:= :user_id user-id] [:is :staged_delete_id nil]]})))
 
+(def ^:private topic-file-sizes
+  "Derived table summing topic_files per topic. Join THIS instead of
+   topic_files directly in list queries: score topics own TWO file rows
+   (PDF + audio), so a bare row join fans a topic out into duplicates."
+  {:select [:topic_id [[:sum :file_size] :file_size]]
+   :from [:topic_files]
+   :group-by [:topic_id]})
+
 (defn get-root-topics
   "Get all root topics for a user (parent_id IS NULL). Replaces get-documents.
-   Includes file_size from topic_files or content length, plus bibliography
-   fields joined from `sources` (NULL when topic has no source_id)."
+   Includes file_size (summed across a topic's file rows) or content length,
+   plus bibliography fields joined from `sources` (NULL when topic has no
+   source_id)."
   [user-id]
   (let [topics (jdbc/execute! ds
                  (sql/format {:select [:t/id :t/title :t/kind
                                        :s/url :s/title :s/csl_type :s/container_title
                                        :t/status :t/priority :t/created_at :t/content
-                                       :tf/file_size]
+                                       [:tf/file_size :file_size]]
                               :from [[:topics :t]]
-                              :left-join [[:topic_files :tf] [:= :t/id :tf/topic_id]
+                              :left-join [[topic-file-sizes :tf] [:= :t/id :tf/topic_id]
                                           [:sources :s] [:= :t/source_id :s/id]]
                               :where [:and [:= :t/user_id user-id] [:= :t/parent_id nil]
                                       [:is :t/staged_delete_id nil]]
                               :order-by [[:t/created_at :desc]]}))]
     (mapv (fn [t]
-            (let [size (or (:topic_files/file_size t)
+            (let [size (or (:file_size t)
                          (when-let [c (:topics/content t)]
                            (count (.getBytes c "UTF-8"))))]
               (-> t
                 (assoc :topics/file_size size)
-                (dissoc :topics/content :topic_files/file_size))))
+                (dissoc :topics/content :file_size))))
       topics)))
 
 (defn get-children
@@ -1219,20 +1261,24 @@
 ;; ---------------------------------------------------------------------------
 
 (defn get-topic-file
-  "Get the binary file data for a topic (PDF/EPUB)."
-  [topic-id]
-  (jdbc/execute-one! ds
-    (sql/format {:select [:file_data :file_size :mime_type]
-                 :from [:topic_files]
-                 :where [:= :topic_id topic-id]})))
+  "Get the binary file data for a topic (PDF/EPUB/audio). 1-arity reads the
+   'main' blob — the only one non-score kinds have. Score topics carry a
+   second 'audio' role."
+  ([topic-id] (get-topic-file topic-id "main"))
+  ([topic-id role]
+   (jdbc/execute-one! ds
+     (sql/format {:select [:file_data :file_size :mime_type]
+                  :from [:topic_files]
+                  :where [:and [:= :topic_id topic-id] [:= :role role]]}))))
 
 (defn topic-file-exists?
-  "True iff a topic has a stored binary file blob."
-  [topic-id]
-  (some? (jdbc/execute-one! ds
-           (sql/format {:select [[[:inline 1] :x]]
-                        :from [:topic_files]
-                        :where [:= :topic_id topic-id]}))))
+  "True iff a topic has a stored binary file blob for the role ('main' default)."
+  ([topic-id] (topic-file-exists? topic-id "main"))
+  ([topic-id role]
+   (some? (jdbc/execute-one! ds
+            (sql/format {:select [[[:inline 1] :x]]
+                         :from [:topic_files]
+                         :where [:and [:= :topic_id topic-id] [:= :role role]]})))))
 
 (defn count-pages
   "Number of kind='page' child topics under `parent-id` (excludes staged
@@ -1573,6 +1619,48 @@
            topic-id file-bytes file-size mime-type])
         topic))))
 
+(defn create-score-topic!
+  "Create a score root topic owning TWO blobs: the sheet-music PDF as
+   role='main' (so /api/pdf and the PDF viewer work unchanged) and the
+   recording as role='audio'. No page stubs — cards attach to the root.
+   Atomically checks quota against the combined byte size.
+   Returns the result with :topics/id."
+  [user-id title ^bytes pdf-bytes ^bytes audio-bytes audio-mime]
+  (let [clean-name (input/prettify-title (input/sanitize-filename title))
+        pdf-size (alength pdf-bytes)
+        audio-size (alength audio-bytes)]
+    (input/check-length! :title clean-name input/title-max)
+    (jdbc/with-transaction [tx ds]
+      (quota/check-and-bump! tx user-id (+ pdf-size audio-size))
+      (let [csl {:type "song" :title clean-name
+                 :accessed {:date-parts (now-date-parts)}}
+            source (jdbc/execute-one! tx
+                     (sql/format {:insert-into :sources
+                                  :values [{:user_id user-id
+                                            :csl_type "song"
+                                            :csl (->jsonb csl)
+                                            :title clean-name}]
+                                  :returning [:id]}))
+            source-id (:sources/id source)
+            topic (jdbc/execute-one! tx
+                    (sql/format {:insert-into :topics
+                                 :values [{:user_id user-id
+                                           :kind "score"
+                                           :title clean-name
+                                           :content ""
+                                           :source_id source-id}]
+                                 :returning [:id]}))
+            topic-id (:topics/id topic)]
+        (jdbc/execute! tx
+          ["INSERT INTO topic_files (topic_id, role, file_data, file_size, mime_type)
+            VALUES (?, 'main', ?, ?, 'application/pdf')"
+           topic-id pdf-bytes pdf-size])
+        (jdbc/execute! tx
+          ["INSERT INTO topic_files (topic_id, role, file_data, file_size, mime_type)
+            VALUES (?, 'audio', ?, ?, ?)"
+           topic-id audio-bytes audio-size audio-mime])
+        topic))))
+
 (defn create-live-doc!
   "Create an empty Live Document: a kind='pdf', is_live=true root topic with a
    bibliography `sources` row and NO file blob or page stubs. The backing PDF is
@@ -1618,7 +1706,7 @@
     (jdbc/execute! tx
       ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
         VALUES (?, ?, ?, 'application/pdf')
-        ON CONFLICT (topic_id)
+        ON CONFLICT (topic_id, role)
         DO UPDATE SET file_data = excluded.file_data, file_size = excluded.file_size,
                       mime_type = excluded.mime_type"
        topic-id new-bytes new-size])
@@ -1891,18 +1979,24 @@
 
 (defn- normalize-flashcard-row
   "Post-process a flashcard query row so it is plain data (Electric-wire safe):
-   parse the io_fields JSONB, and move the occlusion-group join columns to the
-   unqualified keys this ns promises (:occlusion_image_media_id
-   :occlusion_mode) — pgjdbc qualifies plain aliased columns by their base
-   table (see get-user-flashcards), so cover both key shapes."
+   parse the io_fields JSONB, and move the occlusion-group and score-group
+   join columns to the unqualified keys this ns promises
+   (:occlusion_image_media_id :occlusion_mode :score_start_ms :score_end_ms) —
+   pgjdbc qualifies plain aliased columns by their base table (see
+   get-user-flashcards), so cover both key shapes."
   [row]
   (-> row
     (update :flashcards/io_fields pgobject->clj)
     (assoc :occlusion_image_media_id (or (:occlusion_image_media_id row)
                                        (:occlusion_groups/occlusion_image_media_id row))
       :occlusion_mode (or (:occlusion_mode row)
-                        (:occlusion_groups/occlusion_mode row)))
-    (dissoc :occlusion_groups/occlusion_image_media_id :occlusion_groups/occlusion_mode)))
+                        (:occlusion_groups/occlusion_mode row))
+      :score_start_ms (or (:score_start_ms row)
+                        (:score_groups/score_start_ms row))
+      :score_end_ms (or (:score_end_ms row)
+                      (:score_groups/score_end_ms row)))
+    (dissoc :occlusion_groups/occlusion_image_media_id :occlusion_groups/occlusion_mode
+      :score_groups/score_start_ms :score_groups/score_end_ms)))
 
 (defn insert-flashcards!
   "Batch insert flashcards. Rows should include :topic_id and :root_topic_id.
@@ -1947,11 +2041,14 @@
       (jdbc/execute! ds
         (sql/format {:select [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]
                               [:og.image_media_id :occlusion_image_media_id]
-                              [:og.mode :occlusion_mode]]
+                              [:og.mode :occlusion_mode]
+                              [:sg.start_ms :score_start_ms]
+                              [:sg.end_ms :score_end_ms]]
                      :from [[:flashcards :f]]
                      :join [[:topics :t] [:= :f.topic_id :t.id]]
                      :left-join [[:topics :parent] [:= :t.parent_id :parent.id]
-                                 [:occlusion_groups :og] [:= :f.occlusion_group_id :og.id]]
+                                 [:occlusion_groups :og] [:= :f.occlusion_group_id :og.id]
+                                 [:score_groups :sg] [:= :f.score_group_id :sg.id]]
                      :where [:= :f.topic_id topic-id]
                      :order-by [[:f.created_at :desc]]})))
     []))
@@ -1964,11 +2061,14 @@
     (jdbc/execute! ds
       (sql/format {:select [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]
                             [:og.image_media_id :occlusion_image_media_id]
-                            [:og.mode :occlusion_mode]]
+                            [:og.mode :occlusion_mode]
+                            [:sg.start_ms :score_start_ms]
+                            [:sg.end_ms :score_end_ms]]
                    :from [[:flashcards :f]]
                    :join [[:topics :t] [:= :f.topic_id :t.id]]
                    :left-join [[:topics :parent] [:= :t.parent_id :parent.id]
-                               [:occlusion_groups :og] [:= :f.occlusion_group_id :og.id]]
+                               [:occlusion_groups :og] [:= :f.occlusion_group_id :og.id]
+                               [:score_groups :sg] [:= :f.score_group_id :sg.id]]
                    :where [:= :f.root_topic_id root-topic-id]
                    :order-by [[:f.created_at :desc]]}))))
 
@@ -2014,12 +2114,15 @@
         (sql/format {:select [[:f.*]
                               [[:coalesce :t.page_number :parent.page_number] :page_number]
                               [:og.image_media_id :occlusion_image_media_id]
-                              [:og.mode :occlusion_mode]]
+                              [:og.mode :occlusion_mode]
+                              [:sg.start_ms :score_start_ms]
+                              [:sg.end_ms :score_end_ms]]
                      :from [[:flashcards :f]]
                      :join [[:topics :t] [:= :f.topic_id :t.id]
                             [:topics :root] [:= :f.root_topic_id :root.id]]
                      :left-join [[:topics :parent] [:= :t.parent_id :parent.id]
-                                 [:occlusion_groups :og] [:= :f.occlusion_group_id :og.id]]
+                                 [:occlusion_groups :og] [:= :f.occlusion_group_id :og.id]
+                                 [:score_groups :sg] [:= :f.score_group_id :sg.id]]
                      :where [:and
                              [:= :root.user_id user-id]
                              [:in :f.id (vec card-ids)]]})))))
@@ -2287,6 +2390,132 @@
                            :set {:updated_at [:now]}
                            :where [:= :occlusion_group_id group-id]}))
             {:group-deleted? false}))))))
+
+;; ---------------------------------------------------------------------------
+;; Score groups — one (audio segment × notation rects) pair on a kind='score'
+;; topic, fanning out to one 'score' flashcard row per direction. Clip and
+;; per-rect crops are pre-materialized media rows; the group only references
+;; them. Unlike occlusion there is no ordinal authority: rects don't bind to
+;; individual cards, so an edit replaces geometry wholesale.
+;; ---------------------------------------------------------------------------
+
+(defn- parse-score-group [row]
+  (some-> row (update :score_groups/geometry pgobject->clj)))
+
+(defn get-score-group
+  "Group row with parsed :score_groups/geometry, or nil."
+  [group-id]
+  (parse-score-group
+    (jdbc/execute-one! ds
+      ["SELECT * FROM score_groups WHERE id = ?" group-id])))
+
+(defn get-score-groups-by-ids
+  "Map of group-id -> group row (geometry parsed). Empty ids → {}."
+  [group-ids]
+  (if (empty? group-ids)
+    {}
+    (into {}
+      (map (fn [row]
+             (let [row (parse-score-group row)]
+               [(:score_groups/id row) row])))
+      (jdbc/execute! ds
+        (sql/format {:select [:*]
+                     :from [:score_groups]
+                     :where [:in :id (vec group-ids)]})))))
+
+(defn get-score-cards
+  "Flashcard rows of a score group, audio-front first."
+  [group-id]
+  (jdbc/execute! ds
+    (sql/format {:select [:*]
+                 :from [:flashcards]
+                 :where [:= :score_group_id group-id]
+                 :order-by [[:score_direction :asc]]})))
+
+(defn insert-score-group!
+  "Insert a group plus one 'score' flashcard row per direction, transactionally.
+   attrs = {:topic-id :root-topic-id :start-ms :end-ms :clip-media-id
+            :geometry :directions [\"audio-front\" ...]}
+   Rect ordinals are assigned HERE (1..N across pages in page order) — they
+   index the crop stack on the card and name the Anki crop files.
+   Returns {:group-id id :ids [flashcard-id ...]}."
+  [{:keys [topic-id root-topic-id start-ms end-ms clip-media-id geometry directions]}]
+  (jdbc/with-transaction [tx ds]
+    (let [pages (vec (:pages geometry))
+          pages' (first
+                   (reduce (fn [[acc n] page]
+                             (let [rects (mapv (fn [rect ordinal] (assoc rect :ordinal ordinal))
+                                           (:rects page) (iterate inc n))]
+                               [(conj acc (assoc page :rects rects))
+                                (+ n (count rects))]))
+                     [[] 1] pages))
+          group (jdbc/execute-one! tx
+                  (sql/format {:insert-into :score_groups
+                               :values [{:anki_key (str (java.util.UUID/randomUUID))
+                                         :start_ms start-ms
+                                         :end_ms end-ms
+                                         :clip_media_id clip-media-id
+                                         :geometry (->jsonb {:pages pages'})}]
+                               :returning [:id]}))
+          group-id (:score_groups/id group)
+          ids (mapv (fn [direction]
+                      (:flashcards/id
+                       (jdbc/execute-one! tx
+                         (sql/format {:insert-into :flashcards
+                                      :values [{:topic_id topic-id
+                                                :root_topic_id root-topic-id
+                                                :kind "score"
+                                                :score_group_id group-id
+                                                :score_direction direction}]
+                                      :returning [:id]}))))
+                directions)]
+      {:group-id group-id :ids ids})))
+
+(defn update-score-group!
+  "Replace a group's segment, clip, and geometry wholesale (rect ordinals
+   re-assigned 1..N — crops are regenerated media, nothing binds to old
+   ordinals). Directions are fixed at creation; the edit dirties every card
+   row so the next push re-uploads media and re-builds both notes.
+   Returns {:group-id id}."
+  [{:keys [group-id start-ms end-ms clip-media-id geometry]}]
+  (jdbc/with-transaction [tx ds]
+    (when-not (jdbc/execute-one! tx
+                ["SELECT id FROM score_groups WHERE id = ? FOR UPDATE" group-id])
+      (throw (ex-info "Score group not found" {:group-id group-id})))
+    (let [pages' (first
+                   (reduce (fn [[acc n] page]
+                             (let [rects (mapv (fn [rect ordinal] (assoc rect :ordinal ordinal))
+                                           (:rects page) (iterate inc n))]
+                               [(conj acc (assoc page :rects rects))
+                                (+ n (count rects))]))
+                     [[] 1] (vec (:pages geometry))))]
+      (jdbc/execute-one! tx
+        (sql/format {:update :score_groups
+                     :set {:start_ms start-ms
+                           :end_ms end-ms
+                           :clip_media_id clip-media-id
+                           :geometry (->jsonb {:pages pages'})
+                           :updated_at [:now]}
+                     :where [:= :id group-id]}))
+      (jdbc/execute! tx
+        (sql/format {:update :flashcards
+                     :set {:updated_at [:now]}
+                     :where [:= :score_group_id group-id]}))
+      {:group-id group-id})))
+
+(defn remove-score-card-cleanup!
+  "After a single score flashcard row was deleted elsewhere: delete the group
+   once no direction rows remain (its media rows stay — sha-deduped, orphan
+   tolerated). Returns {:group-deleted? bool}."
+  [group-id]
+  (jdbc/with-transaction [tx ds]
+    (let [remaining (:n (jdbc/execute-one! tx
+                          ["SELECT COUNT(*) AS n FROM flashcards WHERE score_group_id = ?"
+                           group-id]))]
+      (if (zero? remaining)
+        (do (jdbc/execute-one! tx ["DELETE FROM score_groups WHERE id = ?" group-id])
+          {:group-deleted? true})
+        {:group-deleted? false}))))
 
 (defn mark-cards-exported
   "Mark cards as exported (sets anki_synced_at). Used after CSV export."
@@ -2760,7 +2989,9 @@
                           [[:coalesce :tf.file_size [:octet_length [:coalesce :t.content ""]]] :file_size]
                           [[:to_char :t.created_at [:inline "Mon DD"]] :formatted_date]]
                  :from [[:topics :t]]
-                 :left-join [[:topic_files :tf] [:= :tf.topic_id :t.id]
+                 ;; Aggregated file sizes — a direct topic_files join would
+                 ;; duplicate score topics (two file rows: PDF + audio).
+                 :left-join [[topic-file-sizes :tf] [:= :tf.topic_id :t.id]
                              [:sources :s] [:= :t.source_id :s.id]]
                  :where [:and [:= :t.user_id user-id] [:is :t.staged_delete_id nil]]
                  :order-by [[:t.parent_id :asc-nulls-first] [:t.page_number :asc-nulls-first] [:t.created_at :asc]]})))
@@ -3172,11 +3403,14 @@
       (jdbc/execute! ds
         (sql/format {:select [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]
                               [:og.image_media_id :occlusion_image_media_id]
-                              [:og.mode :occlusion_mode]]
+                              [:og.mode :occlusion_mode]
+                              [:sg.start_ms :score_start_ms]
+                              [:sg.end_ms :score_end_ms]]
                      :from [[:flashcards :f]]
                      :join [[:topics :t] [:= :f.topic_id :t.id]]
                      :left-join [[:topics :parent] [:= :t.parent_id :parent.id]
-                                 [:occlusion_groups :og] [:= :f.occlusion_group_id :og.id]]
+                                 [:occlusion_groups :og] [:= :f.occlusion_group_id :og.id]
+                                 [:score_groups :sg] [:= :f.score_group_id :sg.id]]
                      :where [:in :f.topic_id (get-subtree-ids topic-id)]
                      :order-by [[:f.created_at :desc]]})))
     []))

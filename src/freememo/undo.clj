@@ -10,7 +10,8 @@
    restoring an Anki-synced card surfaces a divergence warning toast."
   (:require
    [freememo.db :as db]
-   [freememo.user-state :as us]
+   [freememo.commands :as commands]
+   [freememo.optimistic :as opt]
    [freememo.toasts :as toasts]
    [taoensso.telemere :as tel]))
 
@@ -35,14 +36,13 @@
     "delete-document" (db/restore-staged-document! user-id entry)
     "move-topic"      (do (db/restore-topic-parent! entry) nil)))
 
-(defn- bump-views! [user-id entry]
-  (case (:entity_type entry)
-    "flashcard" (swap! (us/get-atom user-id :card-mutations) inc)
-    "pin"       (swap! (us/get-atom user-id :pin-mutations) inc)
-    "setting"   (swap! (us/get-atom user-id :settings-refresh) inc)
-    "document"  (do (swap! (us/get-atom user-id :card-mutations) inc)
-                  (swap! (us/get-atom user-id :tree-mutations) inc)
-                  (swap! (us/get-atom user-id :refresh) inc))))
+(defn- bump-views!
+  "The one runtime-dynamic bump: the channels depend on the undone entry's
+   entity type (freememo.commands/entity-views), plus :undo-mutations so the
+   Actions modal refreshes. Registry :views for the undo commands are empty."
+  [user-id entry]
+  (commands/bump-channels! user-id
+    (conj (commands/entity-views (:entity_type entry) #{}) :undo-mutations)))
 
 (defn undo-entry!
   "Reverse a single undo entry owned by user-id.
@@ -64,7 +64,6 @@
               over-quota? (boolean (:over-quota? result))]
           (db/mark-undone! entry-id)
           (bump-views! user-id entry)
-          (swap! (us/get-atom user-id :undo-mutations) inc)
           (when warn?
             (toasts/push! user-id
               {:level :warning
@@ -86,3 +85,15 @@
     (undo-entry! user-id (:id newest))
     (do (toasts/push! user-id {:level :info :message "Nothing to undo"})
         {:success true :nothing? true})))
+
+;; ── Command methods ─────────────────────────────────────────────────────────
+;; Effects only: execute! owns queue removal; bumps happen inside undo-entry!
+;; because the channels are only known once the entry's entity type is read.
+
+(defmethod opt/run-command! :undo-newest [user-id _command]
+  (undo-newest! user-id)
+  :done)
+
+(defmethod opt/run-command! :undo-entry [user-id command]
+  (undo-entry! user-id (get-in command [:payload :id]))
+  :done)

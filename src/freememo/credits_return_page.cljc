@@ -7,6 +7,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.commands :as commands]
    #?(:clj [missionary.core :as m])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.credits :as credits])
@@ -48,7 +49,7 @@
        (loop [n 1]
          (m/? (m/sleep retry-delay-ms))
          (m/? (m/via m/blk (credits/reconcile-order! reference-id)))
-         (swap! (us/get-atom user-id :credits-refresh) inc)
+         (commands/bump! user-id :credits-granted)
          (m/amb n
            (if (< n retry-max-attempts) (recur (inc n)) (m/amb)))))))
 
@@ -108,7 +109,7 @@
                         ;; Bump :credits-refresh so order-snapshot* re-queries —
                         ;; without this the UI stays on "Confirming…" even after
                         ;; the server has marked the order complete.
-                        (case (e/server (swap! (us/get-atom user-id :credits-refresh) inc))
+                        (case (e/server (commands/bump! user-id :credits-granted))
                           (do (if (:credited r)
                                 (reset! !reconcile-error nil)
                                 (when-not (#{"Complete" "Delivered"} (:wayl-status r))

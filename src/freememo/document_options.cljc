@@ -14,6 +14,7 @@
    [freememo.modal-shell :as modal]
    [freememo.priority-control :refer [PriorityControl get-topic-priority*]]
    [freememo.bibliography-button :as bib-btn]
+   [freememo.commands :as commands]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])))
@@ -79,7 +80,7 @@
    Post: {:ok true :count n} | {:ok false :error kw}."
   [user-id topic-id]
   #?(:clj (let [r (db/push-bibliography-to-descendants! user-id topic-id)]
-            (when (:ok r) (swap! (us/get-atom user-id :refresh) inc))
+            (when (:ok r) (commands/bump! user-id :push-biblio))
             r)
      :cljs nil))
 

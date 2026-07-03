@@ -6,7 +6,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
    [freememo.card-modals :refer [ExportModal]]
-   [freememo.keyboard :as keyboard]))
+   [freememo.command-bus :as bus]))
 
 (e/defn ExportButton [user-id topic-id root-topic-id unsynced-count]
   (e/client
@@ -22,8 +22,9 @@
           (dom/text (if (pos? unsynced-count)
                       (str "Export (" unsynced-count ")...")
                       "Export...")))
-        (reset! keyboard/!export-btn-ref dom/node)
-        (e/on-unmount (fn [] (reset! keyboard/!export-btn-ref nil)))
+        (let [node dom/node]
+          (bus/publish-invoker! :export (fn [] (.click node)))
+          (e/on-unmount (fn [] (bus/retract-invoker! :export))))
         (dom/On "click" (fn [_] (reset! !show-export true)) nil))
       (when show-export
         (ExportModal !show-export topic-id root-topic-id user-id)))))

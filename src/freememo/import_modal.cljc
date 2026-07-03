@@ -58,6 +58,7 @@
        "markdown" "Markdown"
        "web" "Web Article"
        "audio" "Audio"
+       "score" "Score"
        "Item")))
 
 ;; ── Paste-source detection ─────────────────────────────────────────
@@ -613,6 +614,93 @@
                     (case (navigate-to-viewer! (:topic-id r)) (token))
                     (case (url-set-error! !error !quota-error? !stage (:error r)) (token))))))))))))
 
+;; Pre:  !score-pdf / !score-audio hold nil or {:upload-id :filename :size} —
+;;       each slot uploads on pick (audio with purpose=score, lifting the
+;;       Whisper cap) and stores its staged entry.
+;; Post: once BOTH slots are staged, a Forms5 command form mounts; submit
+;;       dispatches [Confirm-score pdf-id audio-id] to
+;;       web-import/confirm-score-upload!* via e/server and navigates on success.
+;; Invariant: a slot rejects a file whose classified flow ≠ its expected flow —
+;;            the staged entry never holds the wrong media type.
+(e/defn ScoreStage [user-id navigate-to-viewer! !stage !score-pdf !score-audio
+                    !error !quota-error? !busy-msg]
+  (e/client
+    (let [score-pdf (e/watch !score-pdf)
+          score-audio (e/watch !score-audio)
+          !pdf-file (atom nil)
+          !pdf-input (atom nil)
+          !audio-file (atom nil)
+          !audio-input (atom nil)
+          slot-error! (fn [msg]
+                        (reset! !error (or msg "Upload failed."))
+                        (reset! !quota-error? false)
+                        (reset! !stage :error))
+          slot-response (fn [!slot expected ^js data]
+                          (if (.-success data)
+                            (if (and (.-upload_id data) (= expected (.-flow data)))
+                              (reset! !slot {:upload-id (.-upload_id data)
+                                             :filename (.-filename data)
+                                             :size (.-size data)})
+                              (slot-error! (str "That file was recognized as "
+                                             (flow-label (.-flow data))
+                                             " — expected " (flow-label expected) ".")))
+                            (do (reset! !error (or (.-error data) "Upload failed."))
+                                (reset! !quota-error? (or (= (.-code data) "over-quota")
+                                                        (= (.-code data) "file-too-large")))
+                                (reset! !stage :error))))
+          on-pdf (fn [^js f]
+                   (post-multipart! "/api/upload-file" f {}
+                     (fn [data] (slot-response !score-pdf "pdf" data))
+                     slot-error!))
+          on-audio (fn [^js f]
+                     (post-multipart! "/api/upload-file" f {"purpose" "score"}
+                       (fn [data] (slot-response !score-audio "audio" data))
+                       slot-error!))
+          staged-style {:font-size "12px" :color "var(--color-success, #16a34a)"
+                        :margin "-8px 0 var(--sp-3) 0"}]
+      (FilePicker !pdf-file !pdf-input on-pdf ".pdf" "Sheet music (PDF)")
+      (when score-pdf
+        (dom/div (dom/props {:style staged-style})
+          (dom/text (str "✓ " (:filename score-pdf) " (" (format-bytes (:size score-pdf)) ")"))))
+      (FilePicker !audio-file !audio-input on-audio
+        ".mp3,.m4a,.mp4,.wav,.webm,.ogg,.oga,.flac,.mpeg,.mpga"
+        "Recording (mp3, m4a, wav, webm, ogg, flac)")
+      (when score-audio
+        (dom/div (dom/props {:style staged-style})
+          (dom/text (str "✓ " (:filename score-audio) " (" (format-bytes (:size score-audio)) ")"))))
+      (if-not (and score-pdf score-audio)
+        (dom/p
+          (dom/props {:style {:margin "0" :font-size "12px"
+                              :color "var(--color-text-secondary)" :text-align "right"}})
+          (dom/text "Pick both files to import."))
+        (let [commits (forms/Form! {}
+                        (e/fn Fields [_]
+                          (dom/div
+                            (dom/props {:style {:display "flex" :gap "var(--sp-2)"
+                                                :justify-content "flex-end"}})
+                            (forms/SubmitButton! :label "Import Score"
+                              :class "btn btn-primary"
+                              :style {:font-weight "600" :order "1"})))
+                        :type :command
+                        :show-buttons false
+                        :Parse (e/fn [_ _tempid]
+                                 [`Confirm-score
+                                  (:upload-id score-pdf)
+                                  (:upload-id score-audio)]))]
+          (e/for [[token [_head pdf-id audio-id]] (e/diff-by first (e/as-vec commits))]
+            (when token
+              ;; Busy overlay while both staged uploads commit into one topic
+              ;; (sibling of the offload; cleared on token spend via e/on-unmount).
+              (e/on-unmount #(reset! !busy-msg nil))
+              (case (reset! !busy-msg "Importing…")
+                (case (reset-error! !error !quota-error?)
+                  (let [r (e/server (e/Offload #(web-import/confirm-score-upload!*
+                                                  user-id pdf-id audio-id)))]
+                    (case r
+                      (if (:ok r)
+                        (case (navigate-to-viewer! (:topic-id r)) (token))
+                        (case (url-set-error! !error !quota-error? !stage (:error r)) (token))))))))))))))
+
 (e/defn StatusStage [message]
   (e/client
     (loading/Spinner message)))
@@ -661,6 +749,9 @@
           !paste-url (atom "")
           !image-mode (atom "reduce")
           !advanced-open (atom false)
+          ;; Score preset: the two staged slots ({:upload-id :filename :size} or nil)
+          !score-pdf (atom nil)
+          !score-audio (atom nil)
           ;; nil = idle; a string = an e/Offload import is in flight, shown as a
           ;; spinner overlay. Set/cleared by UrlInput and ConfirmingStage (the
           ;; two flows whose offload can't swap to StatusStage without being
@@ -752,16 +843,20 @@
           on-manage-library (fn []
                               (reset! !show false)
                               (navigate! :library))
-          ;; Universal drop handler — switches to file source on any drop
+          ;; Universal drop handler — switches to file source on any drop.
+          ;; Score has two typed dropzones of its own; hijacking those drops
+          ;; into the single-file flow would discard the slot pairing.
           on-modal-drop (fn [e]
                           (.preventDefault e)
-                          (when-some [f (-> e .-dataTransfer .-files (aget 0))]
-                            (reset! !source :file)
-                            (handle-file f)))
+                          (when (not= @!source :score)
+                            (when-some [f (-> e .-dataTransfer .-files (aget 0))]
+                              (reset! !source :file)
+                              (handle-file f))))
           title (case source
                   :url "Import from URL"
                   :file "Upload"
                   :audio "Upload Audio"
+                  :score "Import Score"
                   :paste "Paste"
                   :new-topic "New Topic"
                   "Import")]
@@ -812,6 +907,9 @@
               :audio (FilePicker !file !file-input handle-file
                                  ".mp3,.m4a,.mp4,.wav,.webm,.ogg,.oga,.flac,.mpeg,.mpga"
                                  "Audio file (mp3, m4a, wav, webm, ogg, flac). Maximum 25 MB.")
+              :score (ScoreStage user-id navigate-to-viewer! !stage
+                                 !score-pdf !score-audio
+                                 !error !quota-error? !busy-msg)
               :paste (PasteEditor !format !title !paste-url !html-text !md-text
                                   on-paste-import)
               :new-topic (NewTopicInput on-new-topic)

@@ -7,16 +7,17 @@
 
    Each dropdown renders its real source buttons (hidden, in a
    `toolbar-dropdown-sources` wrapper) so their tokens / modals / keyboard
-   shortcut stay live; menu items dispatch by `.click()` on the refs in
-   `freememo.keyboard`. Owns `start-ocr-scan!` (relocated from pdf_toolbar so
-   that pdf_toolbar can require this ns without a cycle)."
+   shortcut stay live; menu items dispatch their commands through
+   `freememo.command-bus`. Owns `start-ocr-scan!` (relocated from pdf_toolbar
+   so that pdf_toolbar can require this ns without a cycle)."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.logging :as log]
    [freememo.icons :as icons]
-   [freememo.keyboard :as keyboard]
+   [freememo.commands :as commands]
+   [freememo.command-bus :as bus]
    [freememo.copy-text :as copy]
    [freememo.ocr-compare :as ocr-compare]
    #?(:clj [freememo.page-ocr :as page])
@@ -50,7 +51,7 @@
                 (swap! (us/get-atom uid :scan-cancellers) dissoc [doc page])
                 (if (:success result)
                   (do (log/log-info (str "OCR scan complete topic-id=" doc " page=" page))
-                    (swap! (us/get-atom uid :refresh) inc))
+                    (commands/bump! uid :scan))
                   (do (log/log-info (str "OCR scan failed topic-id=" doc " page=" page " error=" (:error result)))
                     (swap! (us/get-atom uid :ocr-errors) assoc [doc page] (:error result))
                     (toasts/push! uid
@@ -93,13 +94,13 @@
          (.removeEventListener js/document "mousedown" on-mouse)))
      :clj (fn [] nil)))
 
-(defn- click-ref!
-  "Dispatch a menu item by clicking the hidden source button, then close menu.
-   No-op (but still closes) when the ref is unset or its button is disabled."
-  [ref-atom !open]
+(defn- dispatch-item!
+  "Dispatch a menu item's command through the bus, then close the menu.
+   No-op (but still closes) when the command is unavailable — same semantics
+   as the old unset-ref / disabled-button check."
+  [command-id !open]
   #?(:cljs
-     (do (when-let [btn @ref-atom]
-           (when-not (.-disabled btn) (.click btn)))
+     (do (bus/dispatch! command-id)
          (reset! !open false))
      :clj nil))
 
@@ -125,8 +126,9 @@
           (dom/props {:class "btn btn-sm btn-secondary"
                       :aria-label "Scan page"
                       :disabled scanning?})
-          (reset! keyboard/!scan-btn-ref dom/node)
-          (e/on-unmount (fn [] (reset! keyboard/!scan-btn-ref nil)))
+          (let [node dom/node]
+            (bus/publish-invoker! :scan (fn [] (.click node)))
+            (e/on-unmount (fn [] (bus/retract-invoker! :scan))))
           (let [click-event (dom/On "click"
                               (fn [_] {:id (str (random-uuid)) :page page-number})
                               nil)
@@ -169,12 +171,12 @@
                 (dom/props {:class "toolbar-dropdown-item" :role "menuitem" :aria-label "Scan page"})
                 (icons/Icon :sparkles :size 16)
                 (dom/span (dom/text (if scanning? "Scanning…" "Scan Page")))
-                (dom/On "click" (fn [_] (click-ref! keyboard/!scan-btn-ref !open)) nil))
+                (dom/On "click" (fn [_] (dispatch-item! :scan !open)) nil))
               (dom/button
                 (dom/props {:class "toolbar-dropdown-item" :role "menuitem" :aria-label "Compare OCR"})
                 (icons/Icon :scan-text :size 16)
                 (dom/span (dom/text "Compare OCR"))
-                (dom/On "click" (fn [_] (click-ref! keyboard/!compare-ocr-btn-ref !open)) nil)))))))))
+                (dom/On "click" (fn [_] (dispatch-item! :compare-ocr !open)) nil)))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; CopyDropdown (C2) — Copy text + Copy all text.
@@ -220,9 +222,9 @@
                 (dom/props {:class "toolbar-dropdown-item" :role "menuitem" :aria-label "Copy text"})
                 (icons/Icon :clipboard :size 16)
                 (dom/span (dom/text "Copy text"))
-                (dom/On "click" (fn [_] (click-ref! keyboard/!copy-text-btn-ref !open)) nil))
+                (dom/On "click" (fn [_] (dispatch-item! :copy-text !open)) nil))
               (dom/button
                 (dom/props {:class "toolbar-dropdown-item" :role "menuitem" :aria-label "Copy all text"})
                 (icons/Icon :library :size 16)
                 (dom/span (dom/text "Copy all text"))
-                (dom/On "click" (fn [_] (click-ref! keyboard/!copy-all-btn-ref !open)) nil)))))))))
+                (dom/On "click" (fn [_] (dispatch-item! :copy-all !open)) nil)))))))))

@@ -7,6 +7,7 @@
    [clojure.string :as str]
    [freememo.typeahead :refer [Typeahead]]
    [freememo.quill-field :refer [QuillField flush-syntax-tokens!]]
+   [freememo.commands :as commands]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.optimistic :as opt])
@@ -485,7 +486,7 @@
                           result (e/server (cards/update-card card-id fields))]
                       (if (:success result)
                         (do (e/on-unmount #(reset! !editing-card nil))
-                            (case (e/server (swap! (us/get-atom user-id :card-mutations) inc))
+                            (case (e/server (commands/bump! user-id :edit-card))
                               (t)))
                         (t (:error result))))))))
             (dom/button
@@ -504,8 +505,9 @@
 
 ;; Optimistic add-card dispatch (freememo.optimistic). Pre: payload has
 ;; :topic-id :root-topic-id :kind :card-data. Post: cards saved (success toast,
-;; :card-mutations bumped, overlay entry flipped :confirmed with real ids) or
-;; overlay entry flipped :error + error toast; command removed. Returns :done.
+;; overlay entry flipped :confirmed with real ids) or overlay entry flipped
+;; :error + error toast. Effect + toast only — optimistic/execute! bumps the
+;; registry :views and removes the command. Returns :done.
 #?(:clj
    (defmethod opt/run-command! :add-card [user-id {:keys [id payload]}]
      (let [{:keys [topic-id root-topic-id kind card-data]} payload
@@ -513,13 +515,11 @@
        (if (:success result)
          (do (swap! (us/get-atom user-id :pending-cards) update id merge
                {:status :confirmed :real-ids (:ids result)})
-             (swap! (us/get-atom user-id :card-mutations) inc)
              (toasts/push! user-id {:level :success :message "Card added"}))
          (do (swap! (us/get-atom user-id :pending-cards) update id merge
                {:status :error :error (:error result)})
              (toasts/push! user-id {:level :error
                                     :message (or (:error result) "Failed to add card")})))
-       (opt/drop-command! user-id id)
        :done)))
 
 ;; Add card modal — uses topic-id and root-topic-id instead of doc-id + page-number

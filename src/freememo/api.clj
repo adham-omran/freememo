@@ -11,7 +11,7 @@
    [freememo.extractor :as extractor]
    [freememo.html-cleaner :as cleaner]
    [freememo.quota :as quota]
-   [freememo.user-state :as us]
+   [freememo.commands :as commands]
    [freememo.biblio-import :as biblio-import]
    [freememo.content-type :as ct]
    [freememo.import-staging :as staging]
@@ -211,15 +211,20 @@
                                       :filename filename}))
 
                 :audio
-                (if (> size audio/max-bytes)
-                  (do (log-upload-failure! ::upload-file-audio-too-large request
-                        {:user-id user-id :filename filename :file-size size :limit audio/max-bytes})
-                      (json-response 413 {:success false
-                                          :error (str "Audio exceeds " audio/max-bytes " bytes (25 MB Whisper limit)")
-                                          :code "file-too-large" :limit audio/max-bytes :incoming size}))
-                  (let [upload-id (staging/stage! user-id bytes filename :audio)]
-                    (json-response 200 {:success true :upload_id upload-id :flow "audio"
-                                        :filename filename :size size})))
+                ;; Score recordings ("purpose"="score" multipart field) are never
+                ;; transcribed — the Whisper cap doesn't apply to them.
+                (let [score? (= "score" (get-in request [:params "purpose"]))
+                      audio-cap (if score? audio/score-max-bytes audio/max-bytes)]
+                  (if (> size audio-cap)
+                    (do (log-upload-failure! ::upload-file-audio-too-large request
+                          {:user-id user-id :filename filename :file-size size :limit audio-cap})
+                        (json-response 413 {:success false
+                                            :error (str "Audio exceeds " audio-cap " bytes ("
+                                                     (if score? "200 MB Score limit" "25 MB Whisper limit") ")")
+                                            :code "file-too-large" :limit audio-cap :incoming size}))
+                    (let [upload-id (staging/stage! user-id bytes filename :audio)]
+                      (json-response 200 {:success true :upload_id upload-id :flow "audio"
+                                          :filename filename :size size}))))
 
                 :reject
                 (json-response 400 {:success false :error reject-msg
@@ -259,8 +264,7 @@
               (try (biblio-import/prepare-biblio! user-id topic-id nil)
                    (catch Exception e
                      (tel/log! {:level :warn :id ::upload-paste-biblio} (.getMessage e)))))
-            (swap! (us/get-atom user-id :refresh) inc)
-            (swap! (us/get-atom user-id :tree-mutations) inc)
+            (commands/bump! user-id :import-document)
             (json-response 200 {:success true :doc_id topic-id}))
 
           (= format "markdown")
@@ -270,8 +274,7 @@
               (try (biblio-import/prepare-biblio! user-id topic-id nil)
                    (catch Exception e
                      (tel/log! {:level :warn :id ::upload-paste-biblio} (.getMessage e)))))
-            (swap! (us/get-atom user-id :refresh) inc)
-            (swap! (us/get-atom user-id :tree-mutations) inc)
+            (commands/bump! user-id :import-document)
             (json-response 200 {:success true :doc_id topic-id}))
 
           :else
@@ -306,6 +309,7 @@
                 (let [result (pdf/save-pdf user-id filename bytes)]
                   (if (:success result)
                     (let [topic-id (:id result)]
+                      (commands/bump! user-id :import-document)
                       (try (biblio-import/prepare-biblio! user-id topic-id web-biblio)
                            (catch Exception e
                              (tel/log! {:level :warn :id ::upload-staged-pdf-biblio}
@@ -332,8 +336,7 @@
                           file-size (alength bytes)
                           {:keys [topic-id]} (db/create-epub-topic!
                                                user-id display-name bytes file-size chapters)]
-                      (swap! (us/get-atom user-id :refresh) inc)
-                      (swap! (us/get-atom user-id :tree-mutations) inc)
+                      (commands/bump! user-id :import-document)
                       (try (biblio-import/prepare-biblio! user-id topic-id)
                            (catch Exception e
                              (tel/log! {:level :warn :id ::upload-staged-epub-biblio}
@@ -422,9 +425,13 @@
       (let [title (or (get-in request [:params "title"]) "New Topic")
             {:keys [topic-id]} (db/create-standalone-topic! user-id title)]
         (if topic-id
-          {:status 200
-           :headers {"Content-Type" "application/json"}
-           :body (json/generate-string {:success true :doc_id topic-id})}
+          (do
+            ;; Was a stale-view gap pre-registry: no bump, so Library missed
+            ;; new standalone topics until an unrelated mutation fired.
+            (commands/bump! user-id :import-document)
+            {:status 200
+             :headers {"Content-Type" "application/json"}
+             :body (json/generate-string {:success true :doc_id topic-id})})
           {:status 500
            :headers {"Content-Type" "application/json"}
            :body (json/generate-string {:success false :error "Failed to create topic"})}))
@@ -447,8 +454,7 @@
     (try
       (let [topic (db/create-live-doc! user-id)
             topic-id (:topics/id topic)]
-        (swap! (us/get-atom user-id :refresh) inc)
-        (swap! (us/get-atom user-id :tree-mutations) inc)
+        (commands/bump! user-id :import-document)
         (json-response 200 {:success true :doc_id topic-id}))
       (catch Exception e
         (tel/error! {:id ::create-live-doc-handler} e)
@@ -498,7 +504,8 @@
                                       :code "file-too-large" :limit cap :incoming total}))
               (let [r (live-doc/append-images! user-id doc-id images rotations)]
                 (if (:success r)
-                  (json-response 200 {:success true :pages_added (:pages-added r) :doc_id doc-id})
+                  (do (commands/bump! user-id :append-images)
+                      (json-response 200 {:success true :pages_added (:pages-added r) :doc_id doc-id}))
                   (json-response (error-status (:code r))
                     (cond-> {:success false :error (:error r)}
                       (:code r) (assoc :code (:code r))
@@ -534,7 +541,8 @@
     (json-response 401 {:success false :error "Not authenticated"})))
 
 (defn upload-media-handler
-  "Accept a multipart image upload, dedup by (user, sha256), return media id."
+  "Accept a multipart media upload (images; MP3 clips for Score cards),
+   dedup by (user, sha256), return media id."
   [request]
   (if-let [user-id (require-auth request)]
     (try
@@ -547,10 +555,14 @@
                         (io/copy in baos)
                         (.toByteArray baos)))
               size (alength bytes)
-              cap (upload-byte-cap)]
+              cap (upload-byte-cap)
+              media-kind (cond
+                           (re-find #"^image/" mime-type) "image"
+                           (= "audio/mpeg" mime-type) "audio"
+                           :else nil)]
           (cond
-            (not (re-find #"^image/" mime-type))
-            (json-response 400 {:success false :error "Only image uploads are supported"})
+            (nil? media-kind)
+            (json-response 400 {:success false :error "Only image and MP3 uploads are supported"})
 
             (and cap (> size cap))
             (do (log-upload-failure! ::upload-media-too-large request
@@ -560,7 +572,7 @@
 
             :else
             (let [id (db/upsert-media! {:user-id user-id
-                                        :kind "image"
+                                        :kind media-kind
                                         :bytes bytes
                                         :mime-type mime-type})]
               (json-response 200 {:success true :id id}))))
@@ -631,14 +643,16 @@
 
 (defn get-audio-handler [request]
   "Serve an audio topic's file by topic ID. Unlike PDF, the Content-Type is read
-   from topic_files.mime_type since audio formats vary."
+   from topic_files.mime_type since audio formats vary. Score topics keep their
+   recording under role='audio' (role='main' is the PDF)."
   (if-let [user-id (require-auth request)]
     (try
       (let [uri (:uri request)
             topic-id (-> uri (clojure.string/split #"/") last parse-long)
             topic (db/get-topic topic-id)]
         (if (and topic (= (:topics/user_id topic) user-id))
-          (if-let [file-row (db/get-topic-file topic-id)]
+          (if-let [file-row (db/get-topic-file topic-id
+                              (if (= "score" (:topics/kind topic)) "audio" "main"))]
             {:status 200
              :headers {"Content-Type" (or (:topic_files/mime_type file-row) "audio/mpeg")
                        "Content-Disposition" (str "inline; filename=\"" (:topics/title topic) "\"")}
@@ -824,7 +838,7 @@
             (#{"Complete" "Delivered"} status)
             (let [r (db/complete-credit-order! reference-id)]
               (when (:credited r)
-                (swap! (us/get-atom (:user-id r) :credits-refresh) inc)
+                (commands/bump! (:user-id r) :credits-granted)
                 (tel/log! {:level :info :id ::wayl-credited
                            :data {:reference-id reference-id :amount (:amount r)
                                   :user-id (:user-id r)}}

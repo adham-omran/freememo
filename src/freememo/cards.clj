@@ -4,7 +4,7 @@
    [freememo.db :as db]
    [freememo.settings :as settings]
    [freememo.credits :as credits]
-   [freememo.user-state :as us]
+   [freememo.commands :as commands]
    [freememo.toasts :as toasts]
    [freememo.openrouter :as openrouter]
    [freememo.card-models :as card-models]
@@ -386,6 +386,15 @@
       (:flashcards/occlusion_group_id deleted-row)
       (:flashcards/mask_ordinal deleted-row))))
 
+(defn- cleanup-score-group!
+  "After a score flashcard row is deleted: drop the group once no direction
+   rows remain (its clip/crop media rows stay — orphan-tolerated). Deleting
+   one direction keeps the other card intact. No-op for other kinds."
+  [deleted-row]
+  (when (= "score" (:flashcards/kind deleted-row))
+    (db/remove-score-card-cleanup!
+      (:flashcards/score_group_id deleted-row))))
+
 (defn delete-card
   "Delete a single flashcard, snapshotting it for undo and pushing an
    Undo toast. Returns {:success true :anki-note-id N :undo-id L}; :undo-id
@@ -393,13 +402,16 @@
   [user-id card-id]
   (try
     (let [deleted (db/delete-flashcard! card-id)
-          _ (when deleted (cleanup-occlusion-mask! deleted))
+          _ (when deleted
+              (cleanup-occlusion-mask! deleted)
+              (cleanup-score-group! deleted))
           note-id (:flashcards/anki_note_id deleted)
           occlusion? (= "occlusion" (:flashcards/kind deleted))
-          ;; No undo for occlusion masks: the rect is retired from the group
-          ;; geometry on delete, so restoring the row alone would leave an
-          ;; inconsistent group.
-          undo-id (when (and deleted (not occlusion?))
+          ;; No undo for occlusion masks (rect retired from the group geometry
+          ;; on delete) or score cards (the group row may be dropped with the
+          ;; last direction) — restoring the row alone would dangle.
+          score? (= "score" (:flashcards/kind deleted))
+          undo-id (when (and deleted (not occlusion?) (not score?))
                     (db/insert-undo-entry! user-id "delete-card" "flashcard"
                       [card-id] [deleted]))]
       (cond
@@ -430,7 +442,7 @@
       (doseq [row deleted]
         (cleanup-occlusion-mask! row))
       (when (seq deleted)
-        (swap! (us/get-atom user-id :card-mutations) inc)
+        (commands/bump! user-id :bulk-delete-cards)
         ;; Occlusion rows are excluded from the undo snapshot — their rects
         ;; are retired from the group geometry above, so a row-only restore
         ;; would be inconsistent (and the group itself may be gone).

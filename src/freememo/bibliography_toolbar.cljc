@@ -8,8 +8,8 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.icons :as icons]
-   #?(:clj [freememo.db :as db])
-   #?(:clj [freememo.user-state :as us])))
+   [freememo.commands :as commands]
+   #?(:clj [freememo.db :as db])))
 
 (defn toggle-pdf-done!*
   "Flip a PDF root's completion status (DB write only — the :meta-refresh bump
@@ -62,7 +62,7 @@
               ;; is last so (t) unmounts this block before `done?` re-reads —
               ;; otherwise the status flips back. Mirrors the old TitleBar.
               (case (e/server (toggle-pdf-done!* bib-topic-id done?))
-                (case (e/server (swap! (us/get-atom user-id :meta-refresh) inc))
+                (case (e/server (commands/bump! user-id :done))
                   (t)))))))
 
       ;; Citation — inline only; first element to collapse (variable width).

@@ -10,7 +10,7 @@
    navigate away), so it passes refresh? false."
   (:require
    [freememo.db :as db]
-   [freememo.user-state :as us]
+   [freememo.commands :as commands]
    [freememo.toasts :as toasts]
    [taoensso.telemere :as tel]))
 
@@ -22,8 +22,10 @@
   [user-id topic-id refresh?]
   (try
     (when-let [r (db/stage-topic-for-deletion! user-id topic-id)]
-      (swap! (us/get-atom user-id :tree-mutations) inc)
-      (when refresh? (swap! (us/get-atom user-id :refresh) inc))
+      ;; Runtime-conditional channel set (see refresh? note above) — uses
+      ;; bump-channels! like freememo.undo; :delete-document declares :views #{}.
+      (commands/bump-channels! user-id
+        (cond-> #{:tree-mutations} refresh? (conj :refresh)))
       (toasts/push! user-id {:level :success
                              :message "Document deleted"
                              :dedup? false

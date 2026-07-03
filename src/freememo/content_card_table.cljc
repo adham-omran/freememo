@@ -10,6 +10,7 @@
    [freememo.card-components :refer [CardRow PendingCardRow rtl-text?]]
    [freememo.card-modals :refer [EditCardModal]]
    [freememo.occlusion-modal :refer [OcclusionModal]]
+   [freememo.score-toolbar :refer [ScoreEditLoader]]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.optimistic :as opt])))
@@ -40,10 +41,14 @@
           editing-card (e/watch !editing-card)]
 
       (when editing-card
-        (if (= "occlusion" (:kind editing-card))
+        (case (:kind editing-card)
           ;; CardRow puts {:kind "occlusion" :mode :edit :group-id N} in the
           ;; atom — the occlusion modal treats it as its edit request.
-          (OcclusionModal !editing-card user-id)
+          "occlusion" (OcclusionModal !editing-card user-id)
+          ;; Score rows load their group into the in-view score editor
+          ;; (waveform region + rect pages) instead of opening a modal.
+          "score" (when dctx/is-score?
+                    (ScoreEditLoader !editing-card))
           (EditCardModal !editing-card user-id)))
 
       (if (:success cards-result)

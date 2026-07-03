@@ -8,7 +8,8 @@
    [freememo.card-components :as card-components]
    [freememo.history-modal :refer [HistoryModal]]
    [freememo.icons :as icons]
-   [freememo.keyboard :as keyboard]
+   [freememo.commands :as commands]
+   [freememo.command-bus :as bus]
    [freememo.logging :as log]
    [freememo.navigation :as nav]
    #?(:clj [freememo.db :as db])
@@ -94,8 +95,9 @@
                             :data-tooltip "Mark as fully processed (extracted/carded everything useful)"})
                 (icons/Icon :check :size 16)
                 (dom/span (dom/props {:class "icon-label"}) (dom/text "Done"))
-                (reset! keyboard/!done-btn-ref dom/node)
-                (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
+                (let [node dom/node]
+                  (bus/publish-invoker! :done (fn [] (.click node)))
+                  (e/on-unmount (fn [] (bus/retract-invoker! :done))))
                 (dom/On "click" (fn [_] (when-not @!busy (reset! !done-click (str (random-uuid))))) nil))
               ;; on-done! (queue contexts /learn, subset-review) advances the
               ;; queue and unmounts this component, so it is registered as
@@ -109,8 +111,7 @@
               (let [[t _] (e/Token done-click)]
                 (when t
                   (case (e/server (e/Offload #(do (db/done-topic! topic-id) :ok)))
-                    (case (e/server (do (swap! (us/get-atom user-id :refresh) inc)
-                                      (swap! (us/get-atom user-id :meta-refresh) inc)))
+                    (case (e/server (commands/bump! user-id :done))
                       (do (when on-done! (e/on-unmount (fn [] (on-done!))))
                           (t)))))))
 
@@ -125,14 +126,14 @@
                           :data-tooltip "Restore to active review queue"})
               (icons/Icon :rotate-ccw :size 16)
               (dom/span (dom/props {:class "icon-label"}) (dom/text "Restore"))
-              (reset! keyboard/!restore-btn-ref dom/node)
-              (e/on-unmount (fn [] (reset! keyboard/!restore-btn-ref nil)))
+              (let [node dom/node]
+                (bus/publish-invoker! :restore (fn [] (.click node)))
+                (e/on-unmount (fn [] (bus/retract-invoker! :restore))))
               (dom/On "click" (fn [_] (reset! !restore-click (str (random-uuid)))) nil))
             (let [[t _] (e/Token restore-click)]
               (when t
                 (case (e/server (e/Offload #(do (db/restore-topic! topic-id) :ok)))
-                  (case (e/server (do (swap! (us/get-atom user-id :refresh) inc)
-                                    (swap! (us/get-atom user-id :meta-refresh) inc)))
+                  (case (e/server (commands/bump! user-id :restore))
                     (if (and navigate! origin)
                       (case (navigate! origin) (t))
                       (t))))))))))
@@ -155,8 +156,9 @@
                         :data-tooltip "Delete this extract and its cards"})
             (icons/Icon :trash-2 :size 16)
             (dom/span (dom/props {:class "icon-label"}) (dom/text "Delete"))
-            (reset! keyboard/!delete-btn-ref dom/node)
-            (e/on-unmount (fn [] (reset! keyboard/!delete-btn-ref nil)))
+            (let [node dom/node]
+              (bus/publish-invoker! :delete-document (fn [] (.click node)))
+              (e/on-unmount (fn [] (bus/retract-invoker! :delete-document))))
             (dom/On "click" (fn [_] (reset! !delete-state :confirming)) nil))
           (when (= delete-state :confirming)
             (dom/div

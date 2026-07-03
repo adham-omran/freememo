@@ -9,6 +9,7 @@
    [freememo.home-page :refer [get-api-key-status*]]
    [freememo.ocr-models :as ocr-models]
    [freememo.card-models :as card-models]
+   [freememo.commands :as commands]
    #?(:clj [freememo.ocr :as ocr])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.config :as config])
@@ -134,7 +135,7 @@
                   (let [r (e/server (e/Offload #(settings/save-llm-enabled user-id change-event)))]
                     (case r
                       (if (:success r)
-                        (case (e/server (swap! (us/get-atom user-id :settings-refresh) inc))
+                        (case (e/server (commands/bump! user-id :set-setting))
                           (t))
                         (t (:error r))))))))
             (dom/div

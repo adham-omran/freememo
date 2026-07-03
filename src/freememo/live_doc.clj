@@ -5,7 +5,6 @@
   (:require
    [freememo.db :as db]
    [freememo.quota :as quota]
-   [freememo.user-state :as us]
    [taoensso.telemere :as tel])
   (:import
    [org.apache.pdfbox Loader]
@@ -122,8 +121,8 @@
                 {:keys [pages-added]} (db/commit-live-append!
                                         user-id topic-id new-bytes new-size
                                         delta prev-total new-total)]
-            (swap! (us/get-atom user-id :refresh) inc)
-            (swap! (us/get-atom user-id :tree-mutations) inc)
+            ;; No bump here: the calling boundary bumps :append-images
+            ;; (freememo.commands single-authority rule).
             {:success true :pages-added pages-added :doc_id topic-id}))
         (finally (.close doc))))
     (catch clojure.lang.ExceptionInfo e

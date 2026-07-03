@@ -5,10 +5,10 @@
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
    [freememo.logging :as log]
+   [freememo.commands :as commands]
    #?(:clj [freememo.cards :as cards])
    #?(:cljs [freememo.anki-sync-helpers :refer [anki-call!]])
-   #?(:clj [freememo.optimistic :as opt])
-   #?(:clj [freememo.user-state :as us])))
+   #?(:clj [freememo.optimistic :as opt])))
 
 (defn replace-img-with-chip
   "Replace each <img ...> tag with an inline `[image]` chip so card rows stay compact."
@@ -76,7 +76,7 @@
           (let [result (e/server (e/Offload #(cards/delete-card user-id click-event)))]
             (when (some? result)
               (if (:success result)
-                (case (e/server (swap! (us/get-atom user-id :card-mutations) inc))
+                (case (e/server (commands/bump! user-id :delete-card))
                   (case (e/client (when-some [note-id (:anki-note-id result)]
                                     (try-delete-anki-notes! [note-id])))
                     (t)))
@@ -104,6 +104,19 @@
       (when header-text (str " · " (truncate-html-for-row header-text 80)))
       "</span>")))
 
+(defn- format-ms-brief [ms]
+  (let [s (int (/ (or ms 0) 1000))
+        m (int (/ s 60))]
+    (str m ":" (let [r (rem s 60)] (if (< r 10) (str "0" r) r)))))
+
+(defn score-row-html
+  "Compact front-cell HTML for a score row: direction + audio segment."
+  [direction start-ms end-ms]
+  (str "<span>Score · "
+    (if (= direction "audio-front") "Audio → Sheet" "Sheet → Audio")
+    " · " (format-ms-brief start-ms) "–" (format-ms-brief end-ms)
+    "</span>"))
+
 (e/defn CardRow [card !editing-card user-id order]
   (e/client
     (let [id (e/server (:flashcards/id card))
@@ -115,19 +128,30 @@
           mask-ordinal (e/server (:flashcards/mask_ordinal card))
           occ-image-id (e/server (:occlusion_image_media_id card))
           occ-mode (e/server (:occlusion_mode card))
+          score-group-id (e/server (:flashcards/score_group_id card))
+          score-direction (e/server (:flashcards/score_direction card))
+          score-start-ms (e/server (:score_start_ms card))
+          score-end-ms (e/server (:score_end_ms card))
           io-header (e/server (get-in card [:flashcards/io_fields :header]))
           sync-st (e/server (sync-state (:flashcards/anki_synced_at card)
                               (:flashcards/updated_at card)))]
       (let [occ? (= kind "occlusion")
+            score? (= kind "score")
             cloze? (= kind "cloze")
-            span2? (or cloze? occ?)]
+            span2? (or cloze? occ? score?)]
         (dom/tr
           (dom/props {:style {:--order order :cursor "pointer"}})
           (dom/On "click" (fn [_]
-                            (let [data (if occ?
+                            (let [data (cond
+                                         occ?
                                          ;; Routes to OcclusionModal (edit mode)
                                          ;; — see ContentCardTable.
                                          {:kind "occlusion" :mode :edit :group-id group-id}
+                                         score?
+                                         ;; Routes to ScoreEditLoader — loads the
+                                         ;; pair into the in-view score editor.
+                                         {:kind "score" :group-id score-group-id}
+                                         :else
                                          {:id id :kind kind :question question :answer answer :cloze cloze})]
                               (log/log-debug (str "Edit card clicked id=" id " kind=" kind))
                               (reset! !editing-card data))) nil)
@@ -147,10 +171,11 @@
                                          :unsynced "var(--color-warning)"
                                          :synced "var(--color-success)"
                                          :modified "var(--color-warning)")}}))
-          ;; Front column — cloze and occlusion span both content columns
-          (let [front-html (if occ?
-                             (occlusion-row-html occ-image-id mask-ordinal occ-mode io-header)
-                             (card-row-html (if cloze? cloze question)))]
+          ;; Front column — cloze, occlusion, and score span both content columns
+          (let [front-html (cond
+                             occ? (occlusion-row-html occ-image-id mask-ordinal occ-mode io-header)
+                             score? (score-row-html score-direction score-start-ms score-end-ms)
+                             :else (card-row-html (if cloze? cloze question)))]
             (dom/td
               (dom/props {:dir "auto"
                           :class "card-row-cell"
@@ -187,11 +212,15 @@
 ;; ---------------------------------------------------------------------------
 
 (defn overlay-front-text [entry]
-  (let [{:keys [kind card-data geometry]} (:payload entry)
+  (let [{:keys [kind card-data geometry directions]} (:payload entry)
         c (first card-data)]
     (case kind
       "occlusion" (let [n (count (:rects geometry))]
                     (str "Image occlusion · " n " mask" (when (not= 1 n) "s")))
+      "score" (let [n (transduce (map (comp count :rects)) + 0 (:pages geometry))]
+                (str "Score · " (count directions) " card"
+                  (when (not= 1 (count directions)) "s")
+                  " · " n " rect" (when (not= 1 n) "s")))
       "cloze" (:c c)
       (:q c))))
 

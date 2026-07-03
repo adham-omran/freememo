@@ -9,9 +9,9 @@
    [freememo.rich-text-editor :as editor]
    [freememo.content-toolbar-helpers :as helpers]
    [freememo.icons :as icons]
-   [freememo.keyboard :as keyboard]
-   [freememo.logging :as log]
-   #?(:clj [freememo.user-state :as us])))
+   [freememo.commands :as commands]
+   [freememo.command-bus :as bus]
+   [freememo.logging :as log]))
 
 (e/defn ExtractTopicButton [user-id topic-id context-mode mod-key]
   (e/client
@@ -26,8 +26,9 @@
                                     (str "Extract selected text as a topic (" mod-key "+Shift+E)"))})
         (icons/Icon :scissors :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Extract"))
-        (reset! keyboard/!extract-btn-ref dom/node)
-        (e/on-unmount (fn [] (reset! keyboard/!extract-btn-ref nil)))
+        (let [node dom/node]
+          (bus/publish-invoker! :extract (fn [] (.click node)))
+          (e/on-unmount (fn [] (bus/retract-invoker! :extract))))
         ;; Event-driven token (one-shot per click) — prevents the e/server
         ;; body from re-firing if upstream reactive deps change while the
         ;; token is open (e.g. :refresh bump after success).
@@ -59,10 +60,8 @@
               (case result
                 (do (log/log-debug (str "[EXTRACT-RESULT] result=" (pr-str result)))
                   (if (:success result)
-                    (do (log/log-debug "[EXTRACT-SUCCESS] closing token + bumping :tree-mutations")
-                      (case (e/server
-                              (do (log/log-info "[EXTRACT-BUMP-TREE] bumping :tree-mutations")
-                                (swap! (us/get-atom user-id :tree-mutations) inc)))
+                    (do (log/log-debug "[EXTRACT-SUCCESS] closing token + bumping :extract views")
+                      (case (e/server (commands/bump! user-id :extract))
                         (t)))
                     (do (log/log-debug (str "[EXTRACT-ERROR] err=" (pr-str (:error result))))
                       (reset! !error (or (:error result) "Failed to save extract"))

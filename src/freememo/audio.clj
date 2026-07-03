@@ -6,7 +6,6 @@
    [clojure.string :as str]
    [freememo.db :as db]
    [freememo.quota :as quota]
-   [freememo.user-state :as us]
    [taoensso.telemere :as tel]))
 
 (def max-bytes
@@ -14,6 +13,11 @@
    so a stored file is always transcribable. Stricter than the global per-file
    storage cap."
   (* 25 1024 1024))
+
+(def score-max-bytes
+  "Score recordings are never transcribed, so Whisper's 25 MB cap doesn't
+   apply; bound them at 200 MB to keep blobs sane."
+  (* 200 1024 1024))
 
 (defn filename->mime
   "Best-effort audio MIME from a filename extension. Staging carries no
@@ -38,14 +42,13 @@
    Pre  : file-bytes is a non-empty byte array; filename names an audio file.
    Post : {:success true :id topic-id} with usage_bytes raised by the byte size,
           or {:success false :error S :code C} on quota violation.
-   Bumps :refresh and :tree-mutations so the reactive UI shows the new topic."
+   No bump here: callers are command boundaries and bump :import-document
+   (freememo.commands single-authority rule)."
   [user-id filename ^bytes file-bytes mime-type]
   (try
     (let [file-size (alength file-bytes)
           topic (db/create-audio-topic! user-id filename file-bytes file-size mime-type)
           topic-id (:topics/id topic)]
-      (swap! (us/get-atom user-id :refresh) inc)
-      (swap! (us/get-atom user-id :tree-mutations) inc)
       {:success true :id topic-id})
     (catch clojure.lang.ExceptionInfo e
       (let [data (ex-data e)]

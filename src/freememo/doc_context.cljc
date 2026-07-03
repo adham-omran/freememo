@@ -32,6 +32,7 @@
 
 ;; ── Flags ────────────────────────────────────────────────────────────────
 (e/declare is-pdf?)
+(e/declare is-score?)
 (e/declare is-live?)
 (e/declare pdf-root?)
 (e/declare pdf-has-file?)
@@ -119,3 +120,9 @@
 (e/declare !context-window)
 (e/declare !card-type)
 (e/declare !card-count)
+
+;; ── Score editor state (kind='score' topics only) ──────────────────────────
+(e/declare !score-region)       ; {:start-ms N :end-ms N} or nil — waveform selection
+(e/declare !score-pages)        ; {page {:width :height :rects [{:x :y :w :h}]}} — pending rects
+(e/declare !score-modal-open?)  ; rect snapshot modal visibility
+(e/declare !score-edit)         ; {:group-id N} while editing an existing pair

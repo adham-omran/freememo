@@ -2,9 +2,9 @@
   "Generate dropdown — replaces the inline Generate + Generate-with-Prompt
    buttons with a single dropdown trigger. Action wiring is reused from
    ToolbarGenerate (which is rendered inside a hidden source wrapper so its
-   button refs / modal / e/Token paths stay live). Menu items dispatch via
-   `.click()` on the existing button refs in `freememo.keyboard`, identical to
-   the established overflow-panel proxy pattern.
+   invoker handles / modal / e/Token paths stay live). Menu items dispatch
+   their commands through `freememo.command-bus`, identical to the
+   overflow-panel pattern.
 
    New e/defn lives in its own namespace to stay under the JVM 64KB bytecode
    limit (pattern from `extract_topic_button.cljc`).
@@ -20,7 +20,7 @@
    [freememo.content-toolbar-generate :refer [ToolbarGenerate]]
    [freememo.content-toolbar-settings :as settings]
    [freememo.icons :as icons]
-   [freememo.keyboard :as keyboard]))
+   [freememo.command-bus :as bus]))
 
 ;; Pre:  `!open` is a CLJS atom holding the menu open state.
 ;;       `trigger-class` / `menu-class` are bare CSS class names (no leading dot).
@@ -161,10 +161,7 @@
                     (dom/text (str mod-key "+Shift+G")))
                   (dom/On "click"
                     (fn [_]
-                      #?(:cljs
-                         (when-let [btn @keyboard/!generate-btn-ref]
-                           (when-not (.-disabled btn)
-                             (.click btn))))
+                      (bus/dispatch! :generate)
                       (reset! !open false))
                     nil))
 
@@ -178,9 +175,6 @@
                   (dom/span (dom/text "Generate with prompt..."))
                   (dom/On "click"
                     (fn [_]
-                      #?(:cljs
-                         (when-let [btn @keyboard/!gen-prompt-btn-ref]
-                           (when-not (.-disabled btn)
-                             (.click btn))))
+                      (bus/dispatch! :gen-prompt)
                       (reset! !open false))
                     nil))))))))))

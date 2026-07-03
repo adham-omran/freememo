@@ -6,7 +6,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.anki-sync-helpers :as anki]
    [freememo.icons :as icons]
-   [freememo.keyboard :as keyboard]
+   [freememo.command-bus :as bus]
    #?(:clj [freememo.anki-sync-server :as sync])))
 
 (e/defn PullFromAnkiButton [user-id root-topic-id]
@@ -45,8 +45,9 @@
                                     "Pull edits from Anki for this document.")})
         (icons/Icon :cloud-download :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text label))
-        (reset! keyboard/!pull-anki-btn-ref dom/node)
-        (e/on-unmount (fn [] (reset! keyboard/!pull-anki-btn-ref nil)))
+        (let [node dom/node]
+          (bus/publish-invoker! :pull-anki (fn [] (.click node)))
+          (e/on-unmount (fn [] (bus/retract-invoker! :pull-anki))))
         (dom/On "click"
           (fn [_]
             (reset! !pull-phase :pulling)

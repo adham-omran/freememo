@@ -4,7 +4,6 @@
     [freememo.db :as db]
     [freememo.ocr :as ocr]
     [freememo.quota :as quota]
-    [freememo.user-state :as us]
     [taoensso.telemere :as tel]))
 
 (defn pdf-magic-bytes?
@@ -28,8 +27,8 @@
         (let [page-count (ocr/get-page-count file-bytes)
               topic (db/create-pdf-topic! user-id filename file-bytes file-size page-count)
               topic-id (:topics/id topic)]
-          (swap! (us/get-atom user-id :refresh) inc)
-          (swap! (us/get-atom user-id :tree-mutations) inc)
+          ;; No bump here: callers are command boundaries and bump
+          ;; :import-document (freememo.commands single-authority rule).
           {:success true :id topic-id})))
     (catch clojure.lang.ExceptionInfo e
       (let [data (ex-data e)]
@@ -60,8 +59,7 @@
 (defn delete-pdf [user-id id]
   (try
     (db/delete-topic-for-user! user-id id)
-    (swap! (us/get-atom user-id :refresh) inc)
-    (swap! (us/get-atom user-id :tree-mutations) inc)
+    ;; No bump here: a calling command boundary bumps (single-authority rule).
     {:success true}
     (catch Exception e
       (tel/error! {:id ::delete-pdf} e)
