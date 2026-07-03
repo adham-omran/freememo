@@ -156,8 +156,15 @@
           ;; text from get-page-text*, so fetching the topic's stored content
           ;; for them was a dead transfer. Score topics ARE pdf-paned but have
           ;; no page children — their editor shows the topic's own content.
-          static-content (e/server (when (or (not is-pdf?) is-score?)
-                                     (get-topic-content* refresh topic-id)))
+          ;; Bundle the body with the topic-id it was fetched for, in ONE server
+          ;; value: on a topic switch the pending re-fetch latches the PREVIOUS
+          ;; tuple (empty-amb semantics — the value never goes nil; see
+          ;; freememo.loading), so a downstream reader can compare the fetched-for
+          ;; id against the live topic-id to detect that the shown body is stale.
+          static-content+id (e/server (when (or (not is-pdf?) is-score?)
+                                        [topic-id (get-topic-content* refresh topic-id)]))
+          static-content (when static-content+id (nth static-content+id 1))
+          static-content-topic-id (when static-content+id (nth static-content+id 0))
           initial-page (e/server
                          (when is-pdf?
                            (cond
@@ -190,6 +197,7 @@
        :is-live? (:is-live? overview) :pdf-has-file? (:pdf-has-file? overview)
        :pdf-page-count (:pdf-page-count overview) :root-topic-id root-topic-id
        :extract-status (:status overview) :static-content static-content
+       :static-content-topic-id static-content-topic-id
        :initial-page initial-page :initial-layout initial-layout :initial-top-pct initial-top-pct
        :bib-topic-id bib-topic-id :pdf-root? pdf-root? :citation citation :pdf-status pdf-status
        ;; settings + server-watched PDF state
@@ -261,7 +269,7 @@
   [resolved topic-id]
   (e/client
     (let [{:keys [refresh meta-refresh is-pdf? is-score? pdf-root-id initial-page
-                  static-content queue-ctx]} resolved
+                  static-content static-content-topic-id queue-ctx]} resolved
           ;; Current PDF page (mutated by PdfPane via callback)
           !current-page (atom initial-page)
           current-page (e/watch !current-page)
@@ -294,6 +302,15 @@
           effective-content (if (and is-pdf? (not is-score?))
                               (when (:success text-result) (:text text-result))
                               static-content)
+          ;; Topic the shown editor body belongs to. Non-PDF/score read the
+          ;; static body → carry its fetched-for id, which lags the live topic-id
+          ;; through a switch (stale-detectable). Real PDFs read per-page text
+          ;; keyed on the page, not the topic; pin this to page-topic-id so the
+          ;; editor's staleness check is a no-op there and PDF page-nav keeps its
+          ;; in-place update unchanged.
+          effective-content-topic-id (if (and is-pdf? (not is-score?))
+                                       page-topic-id
+                                       static-content-topic-id)
           ;; Score editor state — owned here (the stable client ancestor) so the
           ;; waveform strip, the PDF-toolbar rect button, the rect modal, and
           ;; the score card bar all share one pending-card selection.
@@ -311,6 +328,7 @@
       {:!current-page !current-page :current-page current-page
        :!total !total :total total :!nav-target !nav-target :target-page target-page
        :page-info page-info :page-topic-id page-topic-id :effective-content effective-content
+       :effective-content-topic-id effective-content-topic-id
        :!show-bib !show-bib :show-bib? show-bib? :phone? phone? :reading-mode? reading-mode?
        :!score-region !score-region :!score-pages !score-pages
        :!score-modal-open? !score-modal-open? :!score-edit !score-edit})))

@@ -74,6 +74,7 @@
     (binding [dctx/user-id (:user-id m) dctx/enc-key (:enc-key m) dctx/page-topic-id (:page-topic-id m)
               dctx/kind (:kind m) dctx/pdf-root-id (:pdf-root-id m) dctx/root-topic-id (:root-topic-id m)
               dctx/is-pdf? (:is-pdf? m) dctx/current-page (:current-page m) dctx/effective-content (:effective-content m)
+              dctx/effective-content-topic-id (:effective-content-topic-id m)
               dctx/llm-enabled? (:llm-enabled? m) dctx/extract-status (:extract-status m) dctx/navigate! (:navigate! m)
               dctx/queue-ctx (:queue-ctx m) dctx/citation (:citation m) dctx/page-info (:page-info m)
               dctx/pdf-root? (:pdf-root? m) dctx/pdf-status (:pdf-status m) dctx/reading-mode? (:reading-mode? m)

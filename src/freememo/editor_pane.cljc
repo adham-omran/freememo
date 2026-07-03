@@ -5,6 +5,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
+   [freememo.loading :as loading]
    [freememo.logging :as log]
    [freememo.rich-text-editor :as editor]
    [freememo.rich-text-editor-component :refer [RichTextEditorComponent]]
@@ -51,6 +52,7 @@
     (let [user-id dctx/user-id topic-id dctx/topic-id audio-topic-id dctx/audio-topic-id
           root-topic-id dctx/root-topic-id
           is-pdf-page? dctx/is-pdf-page? static-content dctx/static-content
+          effective-content-topic-id dctx/effective-content-topic-id
           on-imported-navigate! dctx/on-imported-navigate!]
     (dom/div
       (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
@@ -190,12 +192,16 @@
           ;; -----------------------------------------------------------------------
           (dom/div
             (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
-            (if (nil? static-content)
-              ;; Genuinely loading — server fetch in flight
-              (dom/p
-                (dom/props {:style {:color "var(--color-text-hint)"}})
-                (dom/span (dom/props {:class "spinner"}))
-                (dom/text "Loading text..."))
+            (if (or (nil? static-content)
+                  ;; Stale body from the previous topic: on a switch the content
+                  ;; re-fetch is pending and its value latches (never nil), so the
+                  ;; old text would otherwise sit under the new topic-id until the
+                  ;; new body swaps in. The fetched-for id lags the live topic-id
+                  ;; here → show the spinner instead of the stale text. No-op for
+                  ;; real PDFs (id pinned to page-topic-id in DocumentViewState).
+                  (not= effective-content-topic-id topic-id))
+              ;; Loading — first fetch in flight, or a topic switch mid-load.
+              (loading/Spinner)
               ;; Render editor for any string (including "") — PDF pages without
               ;; scanned text yet are editable
               (dom/div
