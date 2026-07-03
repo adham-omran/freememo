@@ -345,7 +345,7 @@
             (dom/div
               (dom/props {:role "rowgroup"
                           :style {:max-height (str (* row-height visible-rows) "px") :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
-              (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 1})
+              (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 2})
                     occluded-height (clamp-left (* row-height (- item-count limit)) 0)]
                 (dom/props {:class "tape-scroll"
                             :style {:--offset offset :--row-height (str row-height "px")}})

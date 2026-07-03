@@ -238,7 +238,7 @@
                             :style {:flex "1" :overflow-y "auto" :min-height "0"
                                     :scrollbar-gutter "stable"}})
                 (reset! !scroll-node dom/node)
-                (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 1})
+                (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 2})
                       occluded-height (clamp-left (* row-height (- row-count limit)) 0)]
                   (dom/props {:style {:--offset offset
                                       :--row-height (str row-height "px")}})

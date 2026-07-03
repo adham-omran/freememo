@@ -112,7 +112,7 @@
                                   :max-height "240px" :overflow-y "auto"
                                   :box-shadow "0 2px 4px rgba(0,0,0,0.15)"
                                   :--row-height (str row-height "px")}})
-              (let [[offset limit] (Scroll-window row-height n dom/node {:overquery-factor 1})
+              (let [[offset limit] (Scroll-window row-height n dom/node {:overquery-factor 2})
                     occluded (clamp-left (* row-height (- n limit)) 0)]
                 (dom/props {:style {:--offset offset}})
                 ;; Keep the keyboard-active row on screen (case forces the call —

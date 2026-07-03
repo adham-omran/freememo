@@ -202,7 +202,7 @@
                             :border "1px solid var(--color-border)"
                             :border-radius "var(--radius-sm)"}})
         (let [[offset limit] (Scroll-window row-height row-count dom/node
-                               {:overquery-factor 1})
+                               {:overquery-factor 2})
               occluded (clamp-left (* row-height (- row-count limit)) 0)]
           (dom/props {:class "tape-scroll"
                       :style {:--offset offset :--row-height (str row-height "px")}})
