@@ -49,15 +49,26 @@
   []
   (e/client
     (let [top-bottom? dctx/top-bottom? !top-split-pct dctx/!top-split-pct
-          !left-pct dctx/!left-pct]
+          !left-pct dctx/!left-pct
+          top-split-pct dctx/top-split-pct left-pct dctx/left-pct]
       (dom/div
         (dom/props {:class (if top-bottom? "split-divider-v" "split-divider-h")
-                    :title "Drag to resize panels"})
+                    :title "Drag to resize panels"
+                    :role "separator"
+                    :aria-orientation (if top-bottom? "horizontal" "vertical")
+                    :aria-label "Resize PDF and editor panes" :tabindex "0"
+                    :aria-valuenow (str (int (or (if top-bottom? top-split-pct left-pct) 0)))})
         (dom/On "pointerdown"
           (fn [e]
             (if top-bottom?
               (util/start-drag! e :y !top-split-pct)
               (util/start-drag! e :x !left-pct)))
+          nil)
+        (dom/On "keydown"
+          (fn [e]
+            (if top-bottom?
+              (util/key-resize-pct! e :y !top-split-pct nil)
+              (util/key-resize-pct! e :x !left-pct nil)))
           nil)))))
 
 (e/defn PdfSplitPane

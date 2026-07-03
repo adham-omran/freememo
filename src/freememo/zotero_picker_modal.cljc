@@ -264,7 +264,7 @@
         (dom/props {:style {:padding "10px 12px" :margin-bottom "var(--sp-3)"
                             :background "var(--color-danger-bg, #fee)"
                             :border-radius "var(--radius-sm)"
-                            :color "var(--color-danger)"
+                            :color "var(--color-danger-text)"
                             :font-size "13px"}})
         (dom/text (or msg "Something went wrong.")))
       (dom/div
@@ -392,7 +392,7 @@
 
       (dom/div
         (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
-        (modal/ModalEscape close-modal!)
+        (modal/ModalEscape close-modal! "Zotero picker")
         (dom/On "click"
           (fn [e] (when (= (.-target e) (.-currentTarget e)) (close-modal!)))
           nil)

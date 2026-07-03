@@ -11,6 +11,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
    [freememo.command-bus :as bus]
+   [freememo.modal-shell :as modal]
    #?(:clj [freememo.db :as db])
    ;; Loads the :undo-newest / :undo-entry run-command! methods server-side.
    #?(:clj [freememo.undo :as undo])
@@ -92,17 +93,6 @@
      :cljs []))
 
 ;; ---------------------------------------------------------------------------
-;; Escape-to-close — plain defn so addEventListener attaches once per open
-;; (Electric re-evaluates let-bindings unpredictably). Returns a cleanup fn.
-;; ---------------------------------------------------------------------------
-
-(defn install-escape-listener! [!open?]
-  #?(:cljs
-     (let [on-key (fn [e] (when (= (.-key e) "Escape") (reset! !open? false)))]
-       (.addEventListener js/document "keydown" on-key)
-       (fn [] (.removeEventListener js/document "keydown" on-key)))
-     :clj (fn [] nil)))
-
 ;; ---------------------------------------------------------------------------
 ;; Components
 ;; ---------------------------------------------------------------------------
@@ -164,8 +154,7 @@
         (dom/div
           (dom/props {:class "modal-backdrop"})
           (dom/On "click" (fn [_] (reset! !open? false)) nil)
-          (let [cleanup (install-escape-listener! !open?)]
-            (e/on-unmount cleanup))
+          (modal/ModalEscape (fn [] (reset! !open? false)) "Actions history")
           (dom/div
             (dom/props {:class "modal-content"
                         :style {:width "min(680px, 95vw)" :max-height "85vh"

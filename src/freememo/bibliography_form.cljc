@@ -450,7 +450,7 @@
     (e/for-by identity [_k [topic-id]]
       (dom/div
         (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
-        (modal/ModalEscape (fn [] (reset! !show false)))
+        (modal/ModalEscape (fn [] (reset! !show false)) "Bibliography")
         (dom/On "click"
           (fn [e]
             (when (= (.-target e) (.-currentTarget e))

@@ -12,6 +12,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.quill-table-ui :as table-ui]
+   [freememo.a11y :as a11y]
    [clojure.string :as str]))
 
 ;; ---------------------------------------------------------------------------
@@ -301,6 +302,13 @@
          ;; this the button is rendered but inert. Cleanup is paired in
          ;; destroy-quill-field! via table-ui/teardown!.
          (table-ui/init! ed)
+         ;; Snow renders its toolbar as a sibling of the container — label
+         ;; its pickers/custom buttons from the shared parent.
+         (a11y/label-quill-toolbar! (.-parentElement container))
+         ;; Tab moves focus out (Quill's indent bindings removed); Escape
+         ;; also blurs, as belt-and-suspenders for nested contexts.
+         (a11y/free-quill-tab! ed)
+         (a11y/install-quill-tab-escape! ed)
          ed))
      :clj nil))
 

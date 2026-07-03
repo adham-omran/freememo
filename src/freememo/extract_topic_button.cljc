@@ -68,5 +68,5 @@
                       (t (or (:error result) "Failed to save extract"))))))))))
       (when error
         (dom/span
-          (dom/props {:style {:color "var(--color-danger)" :font-size "12px"}})
+          (dom/props {:style {:color "var(--color-danger-text)" :font-size "12px"}})
           (dom/text error))))))

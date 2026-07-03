@@ -76,7 +76,7 @@
           (dom/p
             (dom/props {:style {:font-size "14px" :color "var(--color-text-secondary)" :margin "-28px 0 32px 0"}})
             (dom/a
-              (dom/props {:style {:font-weight "600" :color "var(--color-primary)" :cursor "pointer"
+              (dom/props {:style {:font-weight "600" :color "var(--color-primary-text)" :cursor "pointer"
                                   :text-decoration "none"}})
               (dom/text (str queue-count " topics due"))
               (dom/On "click" (fn [_] (navigate! :learn)) nil))
@@ -132,7 +132,8 @@
               (dom/props {:style {:font-size "13px" :color "var(--color-warning-dark)" :flex "1"}})
               (dom/text "OpenRouter API key not configured."))
             (dom/a
-              (dom/props {:style {:font-size "13px" :color "var(--color-warning-dark)" :font-weight "600" :cursor "pointer"
+              (dom/props {:href "/settings"
+                          :style {:font-size "13px" :color "var(--color-warning-dark)" :font-weight "600" :cursor "pointer"
                                   :text-decoration "underline"}})
               (dom/text "Configure in Settings")
-              (dom/On "click" (fn [_] (navigate! :settings)) nil))))))))
+              (dom/On "click" (fn [e] (.preventDefault e) (navigate! :settings)) nil))))))))

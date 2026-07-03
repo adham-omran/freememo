@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.logging :as log]
    [freememo.quill-table-ui :as table-ui]
+   [freememo.a11y :as a11y]
    [clojure.string :as str]))
 
 ;; Global singleton — mirrors pdf_viewer.cljc pattern
@@ -57,10 +58,12 @@
   #?(:clj nil
      :cljs
      (do
-       (when-let [{:keys [editor container toolbar import-popover-teardown]} @!editor-state]
+       (when-let [{:keys [editor container toolbar import-popover-teardown a11y-observer]} @!editor-state]
          (let [^js ed editor
                ^js ct container
                ^js tb toolbar]
+           ;; Stop the content-a11y MutationObserver before the DOM is torn down.
+           (when a11y-observer (.disconnect ^js a11y-observer))
            ;; Tear down the wiki-link import popover (element + document/window
            ;; listeners + status watch). Must run before innerHTML clear below.
            (when import-popover-teardown (import-popover-teardown))
@@ -286,6 +289,42 @@
            (suppress!))))
      :clj nil))
 
+;; ---------------------------------------------------------------------------
+;; Content accessibility pass (WCAG 1.1.1 / 2.4.4 / 4.1.2). Quill's Delta
+;; conversion drops <img alt> (the blot only stores the src), imported content
+;; can carry text-less anchors, and the syntax module's per-code-block
+;; language <select> renders unlabeled. Patch the rendered DOM: it is the only
+;; layer that sees all three, and it covers documents imported before the fix.
+;; Re-applied via MutationObserver — the syntax module re-renders code blocks
+;; on its own timer, and edits can insert new images/links.
+;; ---------------------------------------------------------------------------
+
+#?(:cljs
+   (defn- apply-content-a11y! [^js root]
+     ;; Images whose alt was dropped → explicit decorative marker.
+     (doseq [^js img (array-seq (.querySelectorAll root "img:not([alt])"))]
+       (.setAttribute img "alt" ""))
+     ;; Anchors with no accessible name → name them from their target.
+     (doseq [^js a (array-seq (.querySelectorAll root "a[href]:not([aria-label])"))]
+       (when (and (str/blank? (.-textContent a))
+                  (nil? (.querySelector a "img[alt]:not([alt=''])")))
+         (.setAttribute a "aria-label" (str "Link: " (.-href a)))))
+     ;; Quill syntax-module language pickers.
+     (doseq [^js sel (array-seq (.querySelectorAll root "select.ql-ui:not([aria-label])"))]
+       (.setAttribute sel "aria-label" "Code block language"))))
+
+#?(:cljs
+   (defn- install-content-a11y!
+     "Run the a11y pass now and on every subtree change. Returns the
+      MutationObserver (disconnect it on editor teardown). Attribute writes in
+      the pass don't re-trigger the observer — it only watches childList."
+     [^js editor]
+     (let [root (.-root editor)
+           obs (js/MutationObserver. (fn [_ _] (apply-content-a11y! root)))]
+       (apply-content-a11y! root)
+       (.observe obs root #js {:childList true :subtree true})
+       obs)))
+
 (defn init-editor!
   "Initialize Quill editor in the given container with initial HTML.
    Destroys any existing editor first (singleton).
@@ -438,10 +477,18 @@
          ;; toolbar node is stored (:toolbar nil; destroy-editor! skips removal).
          (reset! !editor-state {:editor editor :container container
                                 :topic-id topic-id :toolbar nil
+                                :a11y-observer (install-content-a11y! editor)
                                 :import-popover-teardown (setup-link-import-popover! editor)})
          (setup-mobile-keyboard-suppression! editor)
          (table-ui/init! editor)
          (override-bubble-tooltip-position! editor)
+         ;; Bubble's toolbar lives in the floating .ql-tooltip inside the
+         ;; container — label its pickers/buttons.
+         (a11y/label-quill-toolbar! container)
+         ;; Tab moves focus out (Quill's indent bindings removed); Escape
+         ;; also blurs, as belt-and-suspenders for nested contexts.
+         (a11y/free-quill-tab! editor)
+         (a11y/install-quill-tab-escape! editor)
          editor))))
 
 (defn set-content!

@@ -203,7 +203,7 @@
       (dom/div
         (dom/props {:style {:text-align "center" :padding "20px"}})
         (dom/div
-          (dom/props {:style {:color "var(--color-danger)" :margin-bottom "var(--sp-3)"}})
+          (dom/props {:style {:color "var(--color-danger-text)" :margin-bottom "var(--sp-3)"}})
           (dom/text (or conn-error "Connection failed")))
         (dom/div
           (dom/props {:style {:font-size "14px" :color "var(--color-text-secondary)" :margin-bottom "var(--sp-4)"}})
@@ -307,7 +307,9 @@
           sync-phase (e/watch (:!phase sync))]
       (dom/div
         (dom/props {:class "modal-backdrop" :style {:background "rgba(0,0,0,0.5)"}
+                    :role "dialog" :aria-modal "true" :aria-label "Anki sync"
                     :tabindex "-1"})
+        (modal-shell/FocusReturn)
         (modal-shell/focus-on-mount! dom/node)
         (dom/On "click" (fn [_] (when-not sync-phase (reset! !show-modal false))) nil)
         (dom/On "keydown"

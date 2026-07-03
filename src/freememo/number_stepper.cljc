@@ -41,6 +41,8 @@
 
    Pre:  `value` ∈ [min-val, max-val]; `mount-key` is a stable per-mount
          identity (frame isolation; a changed key remounts the input).
+         `input-aria-label` names the number input for assistive tech — the
+         visible `label` (\"#\", nil) is not a usable accessible name.
          `Save` :: (e/fn [clamped-int] → result-or-nil).
    Post: every −/+ click and committed edit calls `(Save clamped)` exactly once
          (the value is computed in the click/change callback, so the reactive
@@ -48,7 +50,7 @@
          completion.
    Invariant: clamp on both paths — buttons saturate at the bounds, typed input
               is clamped before Save and before the digits are re-displayed."
-  [value min-val max-val mount-key label suffix disabled? !mirror Save]
+  [value min-val max-val mount-key label input-aria-label suffix disabled? !mirror Save]
   (e/client
     (let [!node (atom nil)]
       (dom/span
@@ -74,6 +76,7 @@
           (dom/input
             (dom/props {:type "number" :min (str min-val) :max (str max-val)
                         :inputmode "numeric" :class "number-stepper-input"
+                        :aria-label input-aria-label
                         :disabled disabled?})
             (reset! !node dom/node)
             (set! (.-value dom/node) (str value))

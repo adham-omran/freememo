@@ -22,7 +22,8 @@
     (let [user-id dctx/user-id page-topic-id dctx/page-topic-id pdf-root-id dctx/pdf-root-id
           is-pdf? dctx/is-pdf? reading-mode? dctx/reading-mode?
           card-font-size dctx/card-font-size card-refresh dctx/card-refresh
-          !top-pct dctx/!top-pct !top-pct-save dctx/!top-pct-save reset-split! dctx/reset-split!
+          !top-pct dctx/!top-pct top-pct dctx/top-pct
+          !top-pct-save dctx/!top-pct-save reset-split! dctx/reset-split!
           t-layout dctx/t-layout layout-save dctx/layout-save]
     ;; Persist layout on toggle
     (when t-layout
@@ -50,9 +51,15 @@
         ;; Drag persists the split on release; double-click resets to default.
         (dom/div
           (dom/props {:class "split-divider-v"
-                      :title "Drag to resize panels (double-click to reset)"})
+                      :title "Drag to resize panels (double-click to reset)"
+                      :role "separator" :aria-orientation "horizontal"
+                      :aria-label "Resize content and card table" :tabindex "0"
+                      :aria-valuenow (str (int (or top-pct 0)))})
           (dom/On "pointerdown"
             (fn [e] (util/start-drag! e :y !top-pct {:on-commit #(reset! !top-pct-save %)}))
+            nil)
+          (dom/On "keydown"
+            (fn [e] (util/key-resize-pct! e :y !top-pct #(reset! !top-pct-save %)))
             nil)
           (dom/On "dblclick" (fn [_] (reset-split!)) nil)))
 

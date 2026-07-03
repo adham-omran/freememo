@@ -59,7 +59,7 @@
                 (dom/On "input" (fn [e] (reset! !filter-text (-> e .-target .-value))) nil))
 
               (dom/select
-                (dom/props {:class "input"})
+                (dom/props {:class "input" :aria-label "Filter by document kind"})
                 (dom/option (dom/props {:value "all"}) (dom/text "All kinds"))
                 (dom/option (dom/props {:value "pdf"}) (dom/text "PDF"))
                 (dom/option (dom/props {:value "epub"}) (dom/text "EPUB"))
@@ -68,7 +68,7 @@
                 (dom/On "change" (fn [e] (reset! !kind-filter (-> e .-target .-value))) nil))
 
               (dom/select
-                (dom/props {:class "input"})
+                (dom/props {:class "input" :aria-label "Filter by reading status"})
                 (dom/option (dom/props {:value "all"}) (dom/text "All statuses"))
                 (dom/option (dom/props {:value "not-started"}) (dom/text "Not Started"))
                 (dom/option (dom/props {:value "in-progress"}) (dom/text "In Progress"))

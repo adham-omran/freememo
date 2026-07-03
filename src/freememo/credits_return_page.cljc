@@ -82,7 +82,7 @@
 
           (= status "failed")
           (dom/div
-            (dom/h2 (dom/props {:style {:color "var(--color-danger)" :margin-top "0"}})
+            (dom/h2 (dom/props {:style {:color "var(--color-danger-text)" :margin-top "0"}})
               (dom/text "Payment failed"))
             (dom/p (dom/text "The order could not be completed. Your balance is unchanged.")))
 
@@ -122,7 +122,7 @@
 
         (when reconcile-error
           (dom/div
-            (dom/props {:style {:margin-top "10px" :font-size "13px" :color "var(--color-danger)"}})
+            (dom/props {:style {:margin-top "10px" :font-size "13px" :color "var(--color-danger-text)"}})
             (dom/text reconcile-error)))
 
         (dom/button

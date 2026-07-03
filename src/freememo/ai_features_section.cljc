@@ -82,7 +82,7 @@
 
         (when checkout-error
           (dom/div
-            (dom/props {:style {:margin-top "8px" :font-size "13px" :color "var(--color-danger)"}})
+            (dom/props {:style {:margin-top "8px" :font-size "13px" :color "var(--color-danger-text)"}})
             (dom/text checkout-error)))))))
 
 (e/defn AIFeaturesSection [user-id enc-key base-url client-country]

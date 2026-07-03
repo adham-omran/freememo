@@ -40,7 +40,7 @@
           pct-str (e/server (format-pct* refresh pct))
           bar-color (cond (>= pct 100) "var(--color-danger)"
                           (>= pct 80)  "var(--color-warning, #c98a00)"
-                          :else        "var(--color-primary)")
+                          :else        "var(--color-primary-text)")
           bar-width-pct (if (>= pct 100) 100 pct)]
       (dom/div
         (dom/props {:class "card"})

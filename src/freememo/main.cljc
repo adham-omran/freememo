@@ -199,7 +199,7 @@
                     tab-style (fn [key]
                                 {:padding "6px 16px" :border "none" :background "none" :cursor "pointer"
                                  :font-size "14px" :font-weight (if (= active-tab key) "600" "400")
-                                 :color (if (= active-tab key) "var(--color-primary)" "var(--color-text-secondary)")
+                                 :color (if (= active-tab key) "var(--color-primary-text)" "var(--color-text-secondary)")
                                  :border-bottom (if (= active-tab key) "2px solid var(--color-primary)" "2px solid transparent")
                                  :margin-bottom "-2px"})
                     navigate! (fn
@@ -220,16 +220,27 @@
                                    :navigate! navigate!
                                    :undo-modal-open-atom !undo-modal-open?})
 
+                ;; Skip link — first focusable element; visually hidden until
+                ;; focused (.skip-link CSS). WCAG 2.4.1 bypass for the nav bar.
+                (dom/a
+                  (dom/props {:href "#main-content" :class "skip-link"})
+                  (dom/text "Skip to content"))
+
                 ;; Combined title + tab bar
-                (dom/div
+                (dom/nav
                   (dom/props {:class "tab-bar"
+                              :aria-label "Primary"
                               :style {:display "flex" :align-items "center" :border-bottom "2px solid var(--color-border)" :flex-shrink "0"}})
 
-                  (dom/span
-                    (dom/props {:style {:font-size "16px" :font-weight "700" :padding "6px 16px"
-                                        :color "var(--color-text-primary)" :cursor "pointer" :white-space "nowrap"}})
+                  ;; Brand is a real link (keyboard + SR reachable); click is
+                  ;; intercepted so navigation stays in the SPA router.
+                  (dom/a
+                    (dom/props {:href "/"
+                                :style {:font-size "16px" :font-weight "700" :padding "6px 16px"
+                                        :color "var(--color-text-primary)" :cursor "pointer" :white-space "nowrap"
+                                        :text-decoration "none"}})
                     (dom/text "FreeMemo")
-                    (dom/On "click" (fn [_] (navigate! :home)) nil))
+                    (dom/On "click" (fn [e] (.preventDefault e) (navigate! :home)) nil))
 
                   ;; Each tab: Icon + label-span. CSS hides `.nav-tab-label`
                   ;; at <600px so phone shows icon-only.
@@ -302,8 +313,9 @@
                         (dom/On "click" (fn [_] (navigate! :library)) nil)))))
 
                 ;; Tab content
-                (dom/div
-                  (dom/props {:style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :search} active-tab) "hidden" "auto")}})
+                (dom/main
+                  (dom/props {:id "main-content"
+                              :style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :search} active-tab) "hidden" "auto")}})
                   (when (= active-tab :home) (HomePage navigate! user-id enc-key))
                   (when (= active-tab :library)
                     (r/pop ; consume 'library from route; LibraryPage reads the sub-view segment

@@ -231,14 +231,14 @@
             (dom/On "input" (fn [e] (reset! !query (-> e .-target .-value))) nil))
 
           (dom/select
-            (dom/props {:class "input"})
+            (dom/props {:class "input" :aria-label "Match mode"})
             (dom/option (dom/props {:value "fuzzy"}) (dom/text "Fuzzy"))
             (dom/option (dom/props {:value "exact"}) (dom/text "Exact"))
             (set! (.-value dom/node) (name mode))
             (dom/On "change" (fn [e] (reset! !mode (keyword (-> e .-target .-value)))) nil))
 
           (dom/select
-            (dom/props {:class "input"})
+            (dom/props {:class "input" :aria-label "Content kind"})
             (e/for [[v label] (e/diff-by first kind-options)]
               (dom/option (dom/props {:value v}) (dom/text label)))
             (set! (.-value dom/node) kind)

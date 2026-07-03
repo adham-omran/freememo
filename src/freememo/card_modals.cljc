@@ -4,6 +4,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
+   [freememo.modal-shell :as modal]
    [clojure.string :as str]
    [freememo.typeahead :refer [Typeahead]]
    [freememo.quill-field :refer [QuillField flush-syntax-tokens!]]
@@ -168,14 +169,9 @@
     (let [!scope (atom (e/snapshot "Current Page"))
           !kind (atom (e/snapshot "Both"))]
       (dom/div
-        (dom/props {:class "modal-backdrop" :tabindex "-1"})
+        (dom/props {:class "modal-backdrop"})
         (dom/On "click" (fn [_] (reset! !show-export false)) nil)
-        (dom/On "keydown"
-          (fn [e]
-            #?(:cljs
-               (when (= (.-key e) "Escape")
-                 (reset! !show-export false))))
-          nil)
+        (modal/ModalEscape (fn [] (reset! !show-export false)) "Export cards")
         (dom/div
           (dom/props {:class "modal-content modal-sm"})
           (dom/On "click" (fn [e] (.stopPropagation e)) nil)
@@ -469,7 +465,7 @@
                       nil))
                   [t ?error] (e/Token click-event)]
               (when ?error
-                (dom/div (dom/props {:style {:order "-1" :margin-right "auto" :color "var(--color-danger)" :font-size "12px"}})
+                (dom/div (dom/props {:style {:order "-1" :margin-right "auto" :color "var(--color-danger-text)" :font-size "12px"}})
                   (dom/text "Error: " ?error)))
               (when t
                 (let [validation-error (when (= kind "cloze") (validate-cloze cloze))]
@@ -673,7 +669,7 @@
                       nil))
                   [t ?error] (e/Token click-event)]
               (when ?error
-                (dom/div (dom/props {:style {:order "-1" :margin-right "auto" :color "var(--color-danger)" :font-size "12px"}})
+                (dom/div (dom/props {:style {:order "-1" :margin-right "auto" :color "var(--color-danger-text)" :font-size "12px"}})
                   (dom/text "Error: " ?error)))
               (when t
                 (let [validation-error (when (= kind "cloze") (validate-cloze primary))]

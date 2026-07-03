@@ -61,8 +61,8 @@
           (case level
             :success [:circle-check   "var(--color-success)"]
             :warning [:triangle-alert "var(--color-warning)"]
-            :error   [:circle-alert   "var(--color-danger)"]
-            :info    [:info           "var(--color-primary)"]
+            :error   [:circle-alert   "var(--color-danger-text)"]
+            :info    [:info           "var(--color-primary-text)"]
             [:info "var(--color-text-secondary)"])
           ;; Per-toast trigger atom for auto-dismiss.
           !timer-fired (atom false)

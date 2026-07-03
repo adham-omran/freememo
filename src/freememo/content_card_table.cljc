@@ -114,5 +114,5 @@
                         (dom/text "No cards yet. Use the Generate button above to create flashcards from this content."))))))
               (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))
         (dom/div
-          (dom/props {:style {:color "var(--color-danger)" :font-size "13px" :padding "8px 12px"}})
+          (dom/props {:style {:color "var(--color-danger-text)" :font-size "13px" :padding "8px 12px"}})
           (dom/text "Error loading cards: " (:error cards-result)))))))

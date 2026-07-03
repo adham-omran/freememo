@@ -713,7 +713,7 @@
         (dom/props {:style {:padding "10px 12px" :margin-bottom "var(--sp-3)"
                             :background "var(--color-danger-bg, #fee)"
                             :border-radius "var(--radius-sm)"
-                            :color "var(--color-danger)" :font-size "13px"}})
+                            :color "var(--color-danger-text)" :font-size "13px"}})
         (dom/text (or error-msg "Something went wrong.")))
       (dom/div
         (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
@@ -721,7 +721,7 @@
           (dom/button
             (dom/props {:style {:padding "4px 12px" :font-size "12px"
                                 :background "transparent" :border "1px solid var(--color-danger)"
-                                :color "var(--color-danger)" :border-radius "3px" :cursor "pointer"}})
+                                :color "var(--color-danger-text)" :border-radius "3px" :cursor "pointer"}})
             (dom/text "Manage Library")
             (dom/On "click" (fn [_] (on-manage-library)) nil)))
         (dom/button
@@ -862,7 +862,7 @@
                   "Import")]
       (dom/div
         (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
-        (modal/ModalEscape (fn [] (reset! !show false)))
+        (modal/ModalEscape (fn [] (reset! !show false)) "Import")
         (dom/On "click" (fn [e]
                           (when (= (.-target e) (.-currentTarget e))
                             (reset! !show false)))

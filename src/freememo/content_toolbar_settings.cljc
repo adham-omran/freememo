@@ -7,6 +7,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
+   [freememo.a11y :as a11y]
    [freememo.number-stepper :refer [NumberStepper]]
    #?(:clj [freememo.settings :as settings])))
 
@@ -41,47 +42,69 @@
                       (if (:success r) (t) (t (:error r))))))))
             (dom/text "Context"))
           (NumberStepper context-window context-pages-min context-pages-max
-            :context-pages nil "pages" (not use-context)
+            :context-pages nil "Context pages" "pages" (not use-context)
             !context-window
             (e/fn [nv] (e/server (e/Offload #(settings/save-context-pages user-id nv))))))))))
 
+;; Enter/Space on the focused option, as an On-all transform: returns the
+;; event (truthy → enters the fork) for an activation keypress on the element
+;; itself, nil otherwise (listen-some drops it). preventDefault stops Space
+;; from scrolling the page.
+(defn- radio-activation-key [e]
+  #?(:cljs (when (a11y/focused-enter-or-space? e)
+             (.preventDefault e)
+             e)
+     :clj nil))
+
+;; One save path for both input modalities (click and keyboard) — the token
+;; spends on server completion, mirroring the number-stepper policy.
+(e/defn SaveCardType [t user-id !card-type kind]
+  (e/client
+    (reset! !card-type kind)
+    (let [r (e/server (e/Offload #(settings/save-card-type user-id kind)))]
+      (when (some? r)
+        (if (:success r) (t) (t (:error r)))))))
+
 ;; Pre:  llm-enabled? gates rendering. card-type is current value; !card-type
 ;;       is the controlling atom.
-;; Post: Renders Basic / Cloze radio dots inline in the toolbar.
-;; Note:  uses non-focusable spans to avoid stealing focus from Quill editor
-;;        (preserves text selection).
+;; Post: Renders Basic / Cloze as a keyboard-operable radiogroup (Tab to each
+;;       option, Enter/Space selects).
+;; Note:  mousedown preventDefault keeps a CLICK from stealing focus off the
+;;        Quill editor (preserves text selection); Tab-focus is deliberate
+;;        user intent and is allowed.
 (e/defn ToolbarSettings []
   (e/client
     (let [llm-enabled? dctx/llm-enabled? user-id dctx/user-id card-type dctx/card-type
           !card-type dctx/!card-type]
       (when llm-enabled?
         (dom/div
-          (dom/props {:class "toolbar-settings-row"})
+          (dom/props {:class "toolbar-settings-row"
+                      :role "radiogroup" :aria-label "Card type"})
           (dom/span
-            (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :cursor "pointer"}})
+            (dom/props {:role "radio" :tabindex "0"
+                        :aria-checked (str (= card-type "basic"))
+                        :style {:display "flex" :align-items "center" :gap "4px" :cursor "pointer"}})
             (dom/On "mousedown" (fn [e] (.preventDefault e)) nil)
             (dom/span
               (dom/props {:class (str "radio-dot" (when (= card-type "basic") " radio-dot--checked"))})
               (dom/text (if (= card-type "basic") "◉" "○")))
             (e/for [[t e] (dom/On-all "click")]
-              (when e
-                (reset! !card-type "basic")
-                (let [r (e/server (e/Offload #(settings/save-card-type user-id "basic")))]
-                  (when (some? r)
-                    (if (:success r) (t) (t (:error r)))))))
+              (when e (SaveCardType t user-id !card-type "basic")))
+            (e/for [[t e] (dom/On-all "keydown" radio-activation-key)]
+              (when e (SaveCardType t user-id !card-type "basic")))
             (dom/text "Basic"))
           (dom/span
-            (dom/props {:style {:display "flex" :align-items "center" :gap "4px" :cursor "pointer"}})
+            (dom/props {:role "radio" :tabindex "0"
+                        :aria-checked (str (= card-type "cloze"))
+                        :style {:display "flex" :align-items "center" :gap "4px" :cursor "pointer"}})
             (dom/On "mousedown" (fn [e] (.preventDefault e)) nil)
             (dom/span
               (dom/props {:class (str "radio-dot" (when (= card-type "cloze") " radio-dot--checked"))})
               (dom/text (if (= card-type "cloze") "◉" "○")))
             (e/for [[t e] (dom/On-all "click")]
-              (when e
-                (reset! !card-type "cloze")
-                (let [r (e/server (e/Offload #(settings/save-card-type user-id "cloze")))]
-                  (when (some? r)
-                    (if (:success r) (t) (t (:error r)))))))
+              (when e (SaveCardType t user-id !card-type "cloze")))
+            (e/for [[t e] (dom/On-all "keydown" radio-activation-key)]
+              (when e (SaveCardType t user-id !card-type "cloze")))
             (dom/text "Cloze")))))))
 
 (def ^:private card-count-min 1)
@@ -95,6 +118,6 @@
 (e/defn CardCountStepper [user-id card-count-val !card-count]
   (e/client
     (NumberStepper card-count-val card-count-min card-count-max
-      :card-count "#" nil nil
+      :card-count "#" "Cards to generate" nil nil
       !card-count
       (e/fn [nv] (e/server (e/Offload #(settings/save-card-count user-id nv)))))))

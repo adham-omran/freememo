@@ -57,14 +57,45 @@
       ;; selectable. Structural rows (draggable? false) render no grip.
       ;; `draggable` is an enumerated attribute: it needs the literal "true"
       ;; (a boolean true renders as draggable="" → "auto" → not draggable).
+      ;;
+      ;; The grip is a BUTTON with a click-move mode (WCAG 2.1.1 / 2.5.7 —
+      ;; drag must have a keyboard and single-pointer alternative):
+      ;;   idle          click arms the move (writes !drag-src, same signal
+      ;;                 drag uses, so `forbidden` and the [data-drop] target
+      ;;                 affordances light up exactly as during a drag)
+      ;;   armed, source click again (or Escape) cancels
+      ;;   armed, valid  click completes the move via !drop-cmd
+      ;; Mouse drag continues to work — buttons are draggable.
       (when draggable?
-        (dom/span
-          (dom/props {:class "drag-grip" :draggable "true"
-                      :aria-label "Drag to re-nest"})
+        (dom/button
+          (dom/props {:class "drag-grip" :draggable "true" :type "button"
+                      :aria-pressed (str source?)
+                      :aria-label (cond
+                                    source? "Cancel move"
+                                    valid?  "Move the selected topic under this topic"
+                                    active? "Not a valid destination for the selected topic"
+                                    :else   "Move this topic (then activate a destination row's grip)")
+                      :title (if active?
+                               (if source? "Click to cancel move" "Click to move the selected topic here")
+                               "Drag to re-nest, or click to start a move")})
           (dom/text "⠿")
           ;; Grabbing the grip must not bubble to the row's navigate click.
           (dom/On "mousedown" (fn [e] (.stopPropagation e)) nil)
-          (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+          (dom/On "click"
+            (fn [e]
+              (.stopPropagation e)
+              (cond
+                (nil? @!drag-src) (reset! !drag-src my-id)
+                (= @!drag-src my-id) (reset! !drag-src nil)
+                (and (not (contains? forbidden my-id)))
+                (do (reset! !drop-cmd {:src @!drag-src :dst my-id})
+                    (reset! !drag-src nil))))
+            nil)
+          (dom/On "keydown"
+            (fn [e] (when (and (= (.-key e) "Escape") (some? @!drag-src))
+                      (.stopPropagation e)
+                      (reset! !drag-src nil)))
+            nil)
           (dom/On "dragstart"
             (fn [e]
               (.setData (.-dataTransfer e) "text/plain" (str my-id))

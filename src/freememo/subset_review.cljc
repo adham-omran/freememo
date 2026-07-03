@@ -75,7 +75,7 @@
 
         ;; Subset Review banner
         (dom/span
-          (dom/props {:style {:font-size "13px" :font-weight "600" :color "var(--color-primary)"
+          (dom/props {:style {:font-size "13px" :font-weight "600" :color "var(--color-primary-text)"
                               :padding "2px 8px" :background "var(--color-info-bg-light)" :border-radius "var(--radius-sm)"}})
           (dom/text (str "Subset Review: " root-name)))
 

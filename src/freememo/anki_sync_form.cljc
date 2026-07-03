@@ -332,7 +332,7 @@
             (= sync-phase :recording) (dom/text "Saving to database...")
             (= sync-phase :error)
             (dom/div
-              (dom/props {:style {:color "var(--color-danger)"}})
+              (dom/props {:style {:color "var(--color-danger-text)"}})
               (dom/text (str "Error: " (or sync-error "Unknown error"))))
             (= sync-phase :done)
             (dom/div

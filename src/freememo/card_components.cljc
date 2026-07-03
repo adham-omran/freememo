@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.a11y :as a11y]
    [clojure.string :as str]
    [freememo.logging :as log]
    [freememo.commands :as commands]
@@ -70,7 +71,7 @@
                             :cursor (if (some? t) "not-allowed" "pointer")}})
         (when ?error
           (dom/div
-            (dom/props {:style {:color "var(--color-danger)" :font-size "11px"}})
+            (dom/props {:style {:color "var(--color-danger-text)" :font-size "11px"}})
             (dom/text ?error)))
         (when t
           (let [result (e/server (e/Offload #(cards/delete-card user-id click-event)))]
@@ -139,22 +140,23 @@
             score? (= kind "score")
             cloze? (= kind "cloze")
             span2? (or cloze? occ? score?)]
+        (let [edit-card! (fn [_]
+                           (let [data (cond
+                                        occ?
+                                        ;; Routes to OcclusionModal (edit mode)
+                                        ;; — see ContentCardTable.
+                                        {:kind "occlusion" :mode :edit :group-id group-id}
+                                        score?
+                                        ;; Routes to ScoreEditLoader — loads the
+                                        ;; pair into the in-view score editor.
+                                        {:kind "score" :group-id score-group-id}
+                                        :else
+                                        {:id id :kind kind :question question :answer answer :cloze cloze})]
+                             (log/log-debug (str "Edit card clicked id=" id " kind=" kind))
+                             (reset! !editing-card data)))]
         (dom/tr
           (dom/props {:style {:--order order :cursor "pointer"}})
-          (dom/On "click" (fn [_]
-                            (let [data (cond
-                                         occ?
-                                         ;; Routes to OcclusionModal (edit mode)
-                                         ;; — see ContentCardTable.
-                                         {:kind "occlusion" :mode :edit :group-id group-id}
-                                         score?
-                                         ;; Routes to ScoreEditLoader — loads the
-                                         ;; pair into the in-view score editor.
-                                         {:kind "score" :group-id score-group-id}
-                                         :else
-                                         {:id id :kind kind :question question :answer answer :cloze cloze})]
-                              (log/log-debug (str "Edit card clicked id=" id " kind=" kind))
-                              (reset! !editing-card data))) nil)
+          (dom/On "click" edit-card! nil)
           ;; Sync indicator
           (dom/td
             (dom/props {:style {:padding "6px 4px" :text-align "center"
@@ -182,6 +184,7 @@
                           :style (merge {:padding-block "6px" :padding-inline "8px"
                                          :border-bottom "1px solid var(--color-border)"}
                                    (when span2? {:grid-column "span 2"}))})
+              (a11y/KeyActivate {:label "Edit card"} edit-card!)
               (e/for-by identity [_k [(str "f-" id)]]
                 (dom/div
                   (dom/props {:class "card-row-html"})
@@ -203,7 +206,7 @@
           (dom/td
             (dom/props {:style {:padding "6px 4px" :text-align "center"
                                 :border-bottom "1px solid var(--color-border)"}})
-            (DeleteCardButton id user-id)))))))
+            (DeleteCardButton id user-id))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Optimistic add-card rows (freememo.optimistic :pending-cards overlay).
@@ -233,7 +236,7 @@
     (dom/button
       (dom/props {:title "Retry"
                   :style {:background "transparent" :border "none" :cursor "pointer"
-                          :color "var(--color-danger)" :font-size "13px"}})
+                          :color "var(--color-danger-text)" :font-size "13px"}})
       (dom/text "↻")
       (let [click (dom/On "click" (fn [e] (.stopPropagation e) tempid) nil)
             [t _] (e/Token click)]

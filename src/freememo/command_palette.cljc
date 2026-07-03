@@ -84,21 +84,28 @@
 
 #?(:cljs
    (defn- on-palette-key
-     "Container keydown: arrows move selection, Enter runs the highlighted
-      row, Escape closes. Reads atoms at event time and re-derives rows via
-      palette-rows (see ns contract)."
+     "Container keydown: arrows — and Emacs-style Ctrl/Cmd-n / Ctrl/Cmd-p —
+      move selection, Enter runs the highlighted row, Escape closes. Reads
+      atoms at event time and re-derives rows via palette-rows (see ns
+      contract). Cmd-N never reaches the page in Chrome (browser-reserved:
+      new window) — Ctrl-n is the binding that always works; Cmd-P is
+      interceptable and preventDefault suppresses the print dialog."
      [active-tab !query !idx e]
      (let [rows (palette-rows active-tab @bus/!ctx @!query)
-           n (count rows)]
-       (case (.-key e)
-         "Escape"    (do (.preventDefault e) (close!))
-         "ArrowDown" (do (.preventDefault e) (swap! !idx #(min (dec n) (inc %))))
-         "ArrowUp"   (do (.preventDefault e) (swap! !idx #(max 0 (dec %))))
-         "Enter"     (do (.preventDefault e)
-                       (let [i (min @!idx (dec n))]
-                         (when-let [row (and (>= i 0) (nth rows i nil))]
-                           (run-row! row @!query))))
-         nil)))
+           n (count rows)
+           k (.-key e)
+           mod? (or (.-ctrlKey e) (.-metaKey e))
+           next? (or (= k "ArrowDown") (and mod? (= k "n")))
+           prev? (or (= k "ArrowUp") (and mod? (= k "p")))]
+       (cond
+         (= k "Escape") (do (.preventDefault e) (close!))
+         next?          (do (.preventDefault e) (swap! !idx #(min (dec n) (inc %))))
+         prev?          (do (.preventDefault e) (swap! !idx #(max 0 (dec %))))
+         (= k "Enter")  (do (.preventDefault e)
+                          (let [i (min @!idx (dec n))]
+                            (when-let [row (and (>= i 0) (nth rows i nil))]
+                              (run-row! row @!query))))
+         :else nil)))
    :clj
    (defn- on-palette-key [_active-tab _!query _!idx _e] nil))
 
@@ -116,7 +123,9 @@
             rows (palette-rows active-tab @bus/!ctx query)]
         (dom/div
           (dom/props {:class "modal-backdrop"
+                      :role "dialog" :aria-modal "true" :aria-label "Command palette"
                       :style {:align-items "flex-start" :padding-top "12vh"}})
+          (modal-shell/FocusReturn)
           (dom/On "click" (fn [_] (close!)) nil)
           (dom/div
             (dom/props {:class "modal-content"

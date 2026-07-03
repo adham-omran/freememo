@@ -122,7 +122,7 @@
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Push to children"))
         (when ?error
           (dom/div
-            (dom/props {:style {:color "var(--color-danger)" :font-size "11px" :margin-top "4px"}})
+            (dom/props {:style {:color "var(--color-danger-text)" :font-size "11px" :margin-top "4px"}})
             (dom/text ?error)))
         (when t
           (let [result (e/server (e/Offload #(push-biblio-to-descendants!* user-id bib-topic-id)))]
@@ -204,7 +204,7 @@
     (when (e/watch !open)
       (dom/div
         (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
-        (modal/ModalEscape (fn [] (reset! !open false)))
+        (modal/ModalEscape (fn [] (reset! !open false)) "Document options")
         (dom/On "click" (fn [e] (when (= (.-target e) (.-currentTarget e)) (reset! !open false))) nil)
         (dom/div
           (dom/props {:class "modal-content"
@@ -232,14 +232,11 @@
                   current (e/server (copy/get-extract-style* settings-refresh user-id root-topic-id))
                   current-ocr (e/server (do settings-refresh (settings/get-ocr-model user-id root-topic-id)))]
               (DocumentOptionsDialog user-id root-topic-id current current-ocr !open))
-            ;; non-PDF: only the disabled Custom Prompt; nothing to save.
-            (e/amb
-              (CustomPromptField)
-              (dom/div
-                (dom/props {:style {:display "flex" :justify-content "flex-end"}})
-                (dom/button
-                  (dom/props {:class "btn btn-primary" :type "button" :disabled true})
-                  (dom/text "Save"))))))))))
+            ;; non-PDF: only the disabled Custom Prompt; nothing to save, so
+            ;; no Save button — a permanently disabled one is unreachable by
+            ;; Tab (correctly) yet looks operable, which reads as a broken
+            ;; keyboard path.
+            (CustomPromptField)))))))
 
 ;; show-edit?    — render BibliographySection's Edit button (needs the viewer's
 ;;                 bibliography modal); false on surfaces without it.

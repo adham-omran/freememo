@@ -9,6 +9,7 @@
    [clojure.string :as str]
    [freememo.rich-text-editor :as editor]
    [freememo.icons :as icons]
+   [freememo.modal-shell :as modal]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.transcribe :as transcribe])))
 
@@ -50,7 +51,7 @@
         (dom/div
           (dom/props {:class "modal-backdrop"})
           (dom/On "click" (fn [_] (reset! !confirm nil)) nil)
-          (dom/On "keydown" (fn [e] (when (= (.-key e) "Escape") (reset! !confirm nil))) nil)
+          (modal/ModalEscape (fn [] (reset! !confirm nil)) "Confirm transcribe")
           (dom/div
             (dom/props {:class "modal-content modal-sm"})
             (dom/On "click" (fn [e] (.stopPropagation e)) nil)

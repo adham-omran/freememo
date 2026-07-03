@@ -4,17 +4,26 @@
 :root {
     color-scheme: light dark;
 
-    --color-primary: light-dark(#2563eb, #3b82f6);
-    --color-primary-hover: light-dark(#1d4ed8, #2563eb);
+    /* Split roles (WCAG 1.4.3): `--color-primary`/`--color-danger` are FILLED
+       backgrounds carrying white text (≥4.5:1 vs white in both themes);
+       `--color-primary-text`/`--color-danger-text` are accent TEXT on
+       page/card backgrounds (≥4.5:1 vs those in both themes). No single
+       value can satisfy both roles in dark mode — keep the roles apart. */
+    --color-primary: light-dark(#2563eb, #2563eb);
+    --color-primary-hover: light-dark(#1d4ed8, #1d4ed8);
     --color-primary-light: light-dark(#93c5fd, #1e40af);
-    --color-danger: light-dark(#dc3545, #ef4444);
-    --color-danger-hover: light-dark(#c82333, #dc2626);
+    --color-primary-text: light-dark(#2563eb, #60a5fa);
+    --color-danger: light-dark(#dc3545, #dc2626);
+    --color-danger-hover: light-dark(#c82333, #b91c1c);
+    --color-danger-text: light-dark(#c82333, #f87171);
     --color-success: #22c55e;
     --color-warning: #f59e0b;
 
     --color-text-primary: light-dark(#111, #e5e7eb);
     --color-text-secondary: light-dark(#666, #9ca3af);
-    --color-text-hint: light-dark(#9ca3af, #6b7280);
+    /* Values swapped from (#9ca3af, #6b7280): each failed 4.5:1 on its own
+       theme's backgrounds; each passes on the other's. */
+    --color-text-hint: light-dark(#6b7280, #9ca3af);
     --color-text-label: light-dark(#374151, #d1d5db);
 
     --color-border: light-dark(#e0e0e0, #374151);
@@ -28,7 +37,7 @@
     --color-text-disabled: light-dark(#999, #6b7280);
 
     /* Status: success */
-    --color-success-dark: light-dark(#16a34a, #4ade80);
+    --color-success-dark: light-dark(#15803d, #4ade80); /* #16a34a was 3.3:1 as text on white */
     --color-success-light: light-dark(#dcfce7, #14532d);
     --color-success-lighter: light-dark(#86efac, #22c55e);
 
@@ -133,7 +142,7 @@ html, body {
 
 .btn-danger {
     background: var(--color-bg-card);
-    color: var(--color-danger);
+    color: var(--color-danger-text);
     border: 1px solid var(--color-danger);
 }
 .btn-danger:not(:disabled):hover { background: light-dark(#fef2f2, #35181a); }
@@ -515,7 +524,7 @@ html, body {
 }
 .toolbar-sep { color: var(--color-border); }
 .radio-dot { font-size: 14px; color: var(--color-text-hint); user-select: none; line-height: 1; }
-.radio-dot--checked { color: var(--color-primary); }
+.radio-dot--checked { color: var(--color-primary-text); }
 .toolbar-generate-group { margin-left: auto; }
 
 /* Toolbar groups — flat flex runs separated by .toolbar-group-divider
@@ -707,7 +716,7 @@ html, body {
 }
 .icon-btn[data-error="true"],
 .icon-btn.error {
-    color: var(--color-danger);
+    color: var(--color-danger-text);
 }
 
 /* Focus ring on any button when keyboard-navigated */
@@ -1474,7 +1483,7 @@ textarea:hover {
 }
 .ql-toolbar button.ql-table:hover::before,
 .ql-toolbar button.ql-table.ql-active::before {
-    color: var(--color-primary);
+    color: var(--color-primary-text);
 }
 
 /* Quill v2 contextual table action bar — floating button group anchored to
@@ -1633,7 +1642,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 }
 .landing-error {
     align-self: stretch;
-    color: var(--color-danger);
+    color: var(--color-danger-text);
     background: var(--color-danger-bg);
     border: 1px solid var(--color-danger-light);
     padding: 8px 14px;
@@ -1669,7 +1678,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     border-radius: var(--radius-md);
 }
 .landing-cta-secondary {
-    color: var(--color-primary);
+    color: var(--color-primary-text);
     text-decoration: none;
     font-size: 15px;
     font-weight: 500;
@@ -1770,7 +1779,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     height: 36px;
     border-radius: 50%;
     background: var(--color-bg-subtle);
-    color: var(--color-primary);
+    color: var(--color-primary-text);
     border: 1px solid var(--color-border);
     font-size: 15px;
     font-weight: 700;
@@ -1841,7 +1850,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     letter-spacing: 0.6px;
     text-transform: uppercase;
     font-weight: 700;
-    color: var(--color-primary);
+    color: var(--color-primary-text);
     background: var(--color-info-bg);
     padding: 2px 8px;
     border-radius: var(--radius-pill);
@@ -1869,7 +1878,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     color: var(--color-text-primary);
 }
 .demo-cloze-mark {
-    color: var(--color-primary);
+    color: var(--color-primary-text);
     font-weight: 600;
 }
 .landing-objection-list {
@@ -1999,8 +2008,9 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     font-size: 15px;
     color: var(--color-text-secondary);
 }
-.landing-pact-contact a { color: var(--color-primary); text-decoration: none; }
-.landing-pact-contact a:hover { text-decoration: underline; }
+/* Underline always, not just on hover — the link sits inside body text and
+   color alone does not distinguish it (WCAG 1.4.1). */
+.landing-pact-contact a { color: var(--color-primary-text); text-decoration: underline; }
 
 /* Footer */
 .landing-footer {
@@ -2027,7 +2037,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     text-decoration: none;
     font-size: 14px;
 }
-.landing-footer-nav a:hover { color: var(--color-primary); }
+.landing-footer-nav a:hover { color: var(--color-primary-text); }
 
 /* Mobile reflow */
 @media (max-width: 800px) {
@@ -2261,6 +2271,9 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     border: none;
     background: transparent;
     padding: 8px 4px;
+    /* ≥24×24 hit area (WCAG 2.5.8) — glyph + horizontal padding alone was 22px wide */
+    min-width: 24px;
+    min-height: 24px;
     font-size: 16px;
     line-height: 1;
     cursor: pointer;
@@ -2756,7 +2769,7 @@ form[aria-busy="true"] {
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--color-primary);
+    color: var(--color-primary-text);
     background: var(--color-info-bg);
     border: 1px solid var(--color-primary-light);
     padding: 2px 8px;
@@ -2776,12 +2789,20 @@ form[aria-busy="true"] {
    gutter via its base padding-left (knowledge_tree / hierarchy_side_panel).
    :has(> .drag-grip) makes only grip-hosting cells the positioning container. */
 .tape-scroll table td:has(> .drag-grip) { position: relative; }
+/* Now a <button> (click-move alternative to drag) — reset button chrome,
+   keep the gutter geometry. min sizes give the ≥24px hit area (2.5.8). */
 .drag-grip {
     position: absolute;
     left: 1px;
     top: 50%;
     transform: translateY(-50%);
-    width: 14px;
+    width: 24px;
+    min-width: 24px;
+    min-height: 24px;
+    padding: 0;
+    background: none;
+    border: none;
+    font-size: inherit;
     text-align: center;
     line-height: 1;
     cursor: grab;
@@ -2789,8 +2810,87 @@ form[aria-busy="true"] {
     user-select: none;
 }
 .drag-grip:active { cursor: grabbing; }
+.drag-grip[aria-pressed="true"] {
+    color: var(--color-primary-text);
+    outline: 2px solid var(--color-primary);
+    outline-offset: 1px;
+}
 .tape-scroll td[data-drop="valid"] {
     outline: 2px solid var(--color-primary);
     outline-offset: -2px;
     background: var(--color-info-bg);
+}
+
+/* ── Accessibility (WCAG 2.2 AA pass) ────────────────────────── */
+
+/* Skip link — first focusable element in the app shell (WCAG 2.4.1).
+   Off-screen until keyboard focus lands on it. */
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 1000;
+    padding: 8px 16px;
+    background: var(--color-bg-primary, #fff);
+    color: var(--color-primary-text);
+    border: 2px solid var(--color-primary);
+    border-radius: 4px;
+    font-size: 14px;
+    text-decoration: none;
+}
+.skip-link:focus {
+    left: 8px;
+    top: 8px;
+}
+
+/* Visible labels on the landing login form (WCAG 3.3.2). */
+.landing-login-label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+    margin: 8px 0 4px;
+    text-align: left;
+}
+
+/* Respect the OS reduced-motion setting: collapse transitions and
+   animations to effectively instant instead of removing them (keeps
+   transitionend/animationend events firing for any logic that waits). */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+/* Imported and user-applied inline highlights are light pastels; in dark mode
+   the theme text (#e5e7eb) sits on them at ~1:1. Force dark text on any
+   inline-highlighted span, both themes (dark-on-pastel passes both). */
+.ql-editor [style*="background-color"] { color: #111; }
+
+/* Reference-list links in imported documents: give the anchor a ≥24px hit box
+   (WCAG 2.5.8) — list rows of stacked short citation links measured 18.5px. */
+.ql-editor li > a {
+    display: inline-block;
+    min-height: 24px;
+}
+
+/* Focus rings inside the virtual-scroll grids. The grid cells clip a
+   2px-offset outline (overflow:hidden, adjacent cells paint over it), which
+   rendered as partial rectangles — draw the ring INSET instead, and tint the
+   whole row via :has() so a focused cell reads as a row selection. */
+.tape-scroll td:focus-visible,
+.table-frame th:focus-visible {
+    outline-offset: -2px;
+    background: var(--color-info-bg);
+}
+.tape-scroll tr:has(> td:focus-visible) > td {
+    background: var(--color-info-bg);
+}
+/* Native controls inside cells (checkboxes, grips, expand arrows, delete
+   buttons): hug the control instead of the default 2px halo the cell clips. */
+.tape-scroll td :focus-visible {
+    outline-offset: 0;
 }

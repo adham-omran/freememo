@@ -7,9 +7,11 @@
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
    [freememo.navigation :as nav]
+   [freememo.a11y :as a11y]
    [freememo.card-components :as card-components]
    [freememo.pdf-cache :as pdf-cache]
    [freememo.bibliography-form :as bibform]
+   [freememo.modal-shell :as modal]
    [freememo.viewport :as viewport]
    [freememo.util :as util]
    [freememo.tree-dnd :as tree-dnd]
@@ -205,25 +207,42 @@
           is-page (= kind "page")
           source-container (:sources/container_title topic)
           topic-status (or (:topics/status topic) "active")
-          [badge-text badge-color] (bibform/topic-badge kind source-container)]
+          [badge-text badge-color] (bibform/topic-badge kind source-container)
+          open-topic! (fn [_] (navigate! :viewer (nav/nav-topic id :library)))
+          toggle-children! (fn [e]
+                             (.stopPropagation e)
+                             (let [sn @!scroll-node
+                                   st (when sn (.-scrollTop sn))]
+                               ;; toggling id flips expansion in either mode: it is an
+                               ;; exception in :all mode, an expansion in :set mode
+                               (swap! !expansion
+                                 (fn [{:keys [ids] :as ex}]
+                                   (assoc ex :ids (if (contains? ids id) (disj ids id) (conj ids id)))))
+                               ;; Anchor scroll across the async server re-render: a single
+                               ;; rAF fires before the new rows land and scrollTop resets to
+                               ;; 0; re-apply over a few frames so the toggled row stays put.
+                               (util/restore-scroll-after-render! sn st)))]
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt")
+                    :role "row"
                     :style {:border-bottom "1px solid var(--color-bg-subtle)"
                             :height (str row-height "px")
                             :opacity (case topic-status "done" "0.6" "1")
                             :cursor "pointer"
                             :--order (inc i)}})
-        (dom/On "click"
-          (fn [_] (navigate! :viewer (nav/nav-topic id :library)))
-          nil)
+        (dom/On "click" open-topic! nil)
         ;; Column 1: Document (arrow + badge + title)
         ;; --row-indent carries the depth indent as a custom property so the
         ;; phone media query can flatten it (`var(--row-indent, 10px)` → 10px).
-        ;; Base 20 (not 10) reserves the fixed left gutter the absolutely
-        ;; positioned .drag-grip occupies (see tree_dnd / index.css .drag-grip).
+        ;; Base 31 reserves the fixed left gutter the absolutely positioned
+        ;; .drag-grip button occupies: grip spans 1–25px (24px hit area,
+        ;; 2.5.8), and the expand arrow's -6px margin pulls its hit box back
+        ;; to indent-6 — 31-6=25 keeps the two targets from overlapping
+        ;; (see tree_dnd / index.css .drag-grip).
         (dom/td
-          (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
-                              :--row-indent (str (+ 20 (* depth 20)) "px")
+          (dom/props {:role "cell"
+                      :style {:display "flex" :align-items "center" :gap "6px"
+                              :--row-indent (str (+ 31 (* depth 20)) "px")
                               :padding-left "var(--row-indent)"
                               :overflow "hidden"
                               :border-left (when (= topic-status "done") "2px solid var(--color-success-lighter)")}})
@@ -232,27 +251,17 @@
           ;; away under a root PDF, but a NESTED PDF's pages do render here — gate
           ;; them non-draggable so they can't be moved off their document.
           (tree-dnd/DragDropRow! id (not is-page) !drag-src drag-src forbidden !drop-cmd)
+          (a11y/KeyActivate {} open-topic!)
           (if has-children
             (dom/span
               (dom/props {:style {:width "28px" :padding "4px 6px" :margin "-4px -6px"
                                   :font-size "12px" :cursor "pointer"
                                   :user-select "none" :text-align "center" :flex-shrink "0"}})
+              (a11y/KeyActivate {:role "button"
+                                 :label (if expanded? "Collapse children" "Expand children")}
+                toggle-children!)
               (dom/text (if expanded? "▼" "▶"))
-              (dom/On "click"
-                (fn [e]
-                  (.stopPropagation e)
-                  (let [sn @!scroll-node
-                        st (when sn (.-scrollTop sn))]
-                    ;; toggling id flips expansion in either mode: it is an
-                    ;; exception in :all mode, an expansion in :set mode
-                    (swap! !expansion
-                      (fn [{:keys [ids] :as ex}]
-                        (assoc ex :ids (if (contains? ids id) (disj ids id) (conj ids id)))))
-                    ;; Anchor scroll across the async server re-render: a single
-                    ;; rAF fires before the new rows land and scrollTop resets to
-                    ;; 0; re-apply over a few frames so the toggled row stays put.
-                    (util/restore-scroll-after-render! sn st)))
-                nil))
+              (dom/On "click" toggle-children! nil))
             (dom/span (dom/props {:style {:width "16px" :flex-shrink "0"}})))
           (dom/span
             (dom/props {:class "type-badge" :style {:background badge-color}})
@@ -302,7 +311,8 @@
               (dom/text title))))
         ;; Column 2: Done
         (dom/td
-          (dom/props {:style {:padding "4px 6px" :text-align "center"
+          (dom/props {:role "cell"
+                      :style {:padding "4px 6px" :text-align "center"
                               :display "flex" :align-items "center" :justify-content "center"}})
           (when is-root
             (let [total (:total-items topic)
@@ -315,7 +325,8 @@
                 (dom/text (str done " / " total))))))
         ;; Column 3: Synced
         (dom/td
-          (dom/props {:style {:padding "4px 6px" :text-align "center"
+          (dom/props {:role "cell"
+                      :style {:padding "4px 6px" :text-align "center"
                               :display "flex" :align-items "center" :justify-content "center"
                               :color "var(--color-text-secondary)"}})
           (when is-root
@@ -327,7 +338,8 @@
                             "–"))))))
         ;; Column 4: Added
         (dom/td
-          (dom/props {:style {:padding "4px 6px" :text-align "right"
+          (dom/props {:role "cell"
+                      :style {:padding "4px 6px" :text-align "right"
                               :display "flex" :align-items "center" :justify-content "flex-end"
                               :color "var(--color-text-secondary)"}})
           (when is-root
@@ -354,7 +366,10 @@
     (when (some? show-confirm)
       (let [!delete-btn (atom nil)]
         (dom/div
-          (dom/props {:class "modal-backdrop"})
+          (dom/props {:class "modal-backdrop"
+                      :role "dialog" :aria-modal "true"
+                      :aria-label "Confirm delete" :tabindex "-1"})
+          (modal/FocusReturn)
           (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil)
           (dom/On "keydown"
             (fn [e]
@@ -452,45 +467,68 @@
                       ok (e/server (e/Offload #(topic-move/move-topic! user-id src dst)))]
                   (case ok
                     (case (e/client (reset! !drop-cmd nil)) (t))))))
+            ;; ONE ARIA table spans header + virtual-scrolled body (see the
+            ;; identical mapping on the Learn table for the rationale).
             (dom/div
               (dom/props {:class "table-frame"
+                          :role "table" :aria-label "Library documents"
                           :style {:display "flex" :flex-direction "column" :min-height "0" :flex "1"}})
 
-              ;; Fixed header
+              ;; Fixed header — sort headers are keyboard-operable (KeyActivate)
+              ;; and expose aria-sort for the active column.
               (dom/table
                 (dom/props {:class "library-table library-table-header"
+                            :role "presentation"
                             :style {:width "100%" :display "grid" :grid-template-columns grid-cols :flex-shrink "0"}})
                 (dom/thead
-                  (dom/props {:style {:display "contents"}})
+                  (dom/props {:role "rowgroup" :style {:display "contents"}})
                   (dom/tr
-                    (dom/props {:style {:display "contents"}})
+                    (dom/props {:role "row" :style {:display "contents"}})
                     (let [th-style {:padding "8px 10px" :border-bottom "2px solid var(--color-border)"
                                     :font-weight "600" :font-size "13px" :color "var(--color-text-primary)"
                                     :cursor "pointer" :user-select "none"}
-                          arrow (fn [col] (when (= sort-col col) (if (= sort-dir :asc) " \u25B2" " \u25BC")))]
+                          arrow (fn [col] (when (= sort-col col) (if (= sort-dir :asc) " \u25B2" " \u25BC")))
+                          aria-sort (fn [col] (if (= sort-col col)
+                                                (if (= sort-dir :asc) "ascending" "descending")
+                                                "none"))
+                          sort-on! (fn [col dir] (fn [_] (reset! !sort-cmd [col dir])))
+                          sort-document! (sort-on! :document :asc)
+                          sort-done! (sort-on! :done :asc)
+                          sort-synced! (sort-on! :synced :asc)
+                          sort-added! (sort-on! :added :desc)]
                       (dom/th
-                        (dom/props {:style (merge th-style {:text-align "left"})})
+                        (dom/props {:role "columnheader" :aria-sort (aria-sort :document)
+                                    :style (merge th-style {:text-align "left"})})
+                        (a11y/KeyActivate {} sort-document!)
                         (dom/text (str "Document" (arrow :document)))
-                        (dom/On "click" (fn [_] (reset! !sort-cmd [:document :asc])) nil))
+                        (dom/On "click" sort-document! nil))
                       (dom/th
-                        (dom/props {:style (merge th-style {:text-align "center" :padding "8px 6px"})})
+                        (dom/props {:role "columnheader" :aria-sort (aria-sort :done)
+                                    :style (merge th-style {:text-align "center" :padding "8px 6px"})})
+                        (a11y/KeyActivate {} sort-done!)
                         (dom/text (str "Done" (arrow :done)))
-                        (dom/On "click" (fn [_] (reset! !sort-cmd [:done :asc])) nil))
+                        (dom/On "click" sort-done! nil))
                       (dom/th
-                        (dom/props {:style (merge th-style {:text-align "center" :padding "8px 6px"})})
+                        (dom/props {:role "columnheader" :aria-sort (aria-sort :synced)
+                                    :style (merge th-style {:text-align "center" :padding "8px 6px"})})
+                        (a11y/KeyActivate {} sort-synced!)
                         (dom/text (str "Synced" (arrow :synced)))
-                        (dom/On "click" (fn [_] (reset! !sort-cmd [:synced :asc])) nil))
+                        (dom/On "click" sort-synced! nil))
                       (dom/th
-                        (dom/props {:style (merge th-style {:text-align "right" :padding "8px 6px"})})
+                        (dom/props {:role "columnheader" :aria-sort (aria-sort :added)
+                                    :style (merge th-style {:text-align "right" :padding "8px 6px"})})
+                        (a11y/KeyActivate {} sort-added!)
                         (dom/text (str "Added" (arrow :added)))
-                        (dom/On "click" (fn [_] (reset! !sort-cmd [:added :desc])) nil))
+                        (dom/On "click" sort-added! nil))
                       (dom/th
-                        (dom/props {:style (merge th-style {:text-align "right" :padding "8px 6px" :cursor "default"})})
+                        (dom/props {:role "columnheader"
+                                    :style (merge th-style {:text-align "right" :padding "8px 6px" :cursor "default"})})
                         (dom/text "Actions"))))))
 
               ;; Scrollable body
               (dom/div
-                (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
+                (dom/props {:role "rowgroup"
+                            :style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
                 (reset! !scroll-node dom/node)
                 (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 1})
                       occluded-height (clamp-left (* row-height (- row-count limit)) 0)]
@@ -498,6 +536,7 @@
                               :style {:--offset offset :--row-height (str row-height "px")}})
                   (dom/table
                     (dom/props {:class "library-table library-table-body"
+                                :role "presentation"
                                 :style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
                     (if (pos? row-count)
                       (e/for [i (Tape offset limit)]
@@ -508,11 +547,13 @@
                               !expansion !editing-id !show-confirm !scroll-node
                               !drag-src drag-src forbidden !drop-cmd))))
                       (dom/tr
+                        (dom/props {:role "row"})
                         (dom/td
-                          (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
+                          (dom/props {:role "cell"
+                                      :style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
                                               :color "var(--color-text-secondary)" :font-size "13px"}})
                           (dom/text "No content yet. Import content from the Import tab.")))))
-                  (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))
+                  (dom/div (dom/props {:aria-hidden "true" :style {:height (str occluded-height "px")}}))))
 
               (DeleteConfirmModal user-id show-confirm !show-confirm !scroll-node)))))
 

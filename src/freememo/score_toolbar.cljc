@@ -300,11 +300,11 @@
                             :align-items "center" :gap "var(--sp-2)"}})
         (when pipe-error
           (dom/span
-            (dom/props {:style {:color "var(--color-danger)" :font-size "12px"}})
+            (dom/props {:style {:color "var(--color-danger-text)" :font-size "12px"}})
             (dom/text pipe-error)))
         (when ?error
           (dom/span
-            (dom/props {:style {:color "var(--color-danger)" :font-size "12px"}})
+            (dom/props {:style {:color "var(--color-danger-text)" :font-size "12px"}})
             (dom/text (str ?error))))
         (when busy
           (dom/span

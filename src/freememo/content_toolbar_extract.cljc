@@ -8,6 +8,7 @@
    [freememo.card-components :as card-components]
    [freememo.history-modal :refer [HistoryModal]]
    [freememo.icons :as icons]
+   [freememo.modal-shell :as modal]
    [freememo.commands :as commands]
    [freememo.command-bus :as bus]
    [freememo.logging :as log]
@@ -120,7 +121,7 @@
                 restore-click (e/watch !restore-click)]
             (dom/button
               (dom/props {:class "btn btn-sm btn-secondary toolbar-restore-btn"
-                          :style {:color "var(--color-primary)" :border "1px solid var(--color-primary)"
+                          :style {:color "var(--color-primary-text)" :border "1px solid var(--color-primary)"
                                   :font-weight "500"}
                           :aria-label "Restore"
                           :data-tooltip "Restore to active review queue"})
@@ -164,7 +165,7 @@
             (dom/div
               (dom/props {:class "modal-backdrop"})
               (dom/On "click" (fn [_] (reset! !delete-state nil)) nil)
-              (dom/On "keydown" (fn [e] (when (= (.-key e) "Escape") (reset! !delete-state nil))) nil)
+              (modal/ModalEscape (fn [] (reset! !delete-state nil)) "Confirm delete")
               (dom/div
                 (dom/props {:class "modal-content modal-sm"})
                 (dom/On "click" (fn [e] (.stopPropagation e)) nil)
