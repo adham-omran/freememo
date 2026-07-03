@@ -276,6 +276,12 @@
   [topic-id]
   (db/get-pins topic-id))
 
+(defn- pin-img-tag
+  "Markup for one pinned image. Shared by bake-card-html and pins-prefill-html
+   so baked and Add-Card-prefilled cards produce byte-identical HTML."
+  [media-id]
+  (str "<p><img src=\"/api/media/" media-id "\"></p>"))
+
 (defn bake-card-html
   "Append pinned <img> tags to card field HTML at gen/Add-Item time.
 
@@ -298,26 +304,43 @@
   (let [pins (effective-pins-for-bake topic-id)]
     (if (empty? pins)
       fields
-      (let [img-tag (fn [media-id]
-                      (str "<p><img src=\"/api/media/" media-id "\"></p>"))]
-        (if (= kind "basic")
-          (let [front-imgs (->> pins
-                             (filter #(= "front" (:topic_pins/placement %)))
-                             (map #(img-tag (:topic_pins/media_id %)))
-                             (apply str))
-                back-imgs (->> pins
-                            (filter #(= "back" (:topic_pins/placement %)))
-                            (map #(img-tag (:topic_pins/media_id %)))
-                            (apply str))]
-            (cond-> fields
-              (not (str/blank? front-imgs)) (update :q str front-imgs)
-              (not (str/blank? back-imgs)) (update :a str back-imgs)))
-          ;; cloze — F2-uniform: all pins appended to :c regardless of placement
-          (let [all-imgs (->> pins
-                           (map #(img-tag (:topic_pins/media_id %)))
-                           (apply str))]
-            (cond-> fields
-              (not (str/blank? all-imgs)) (update :c str all-imgs))))))))
+      (if (= kind "basic")
+        (let [front-imgs (->> pins
+                           (filter #(= "front" (:topic_pins/placement %)))
+                           (map #(pin-img-tag (:topic_pins/media_id %)))
+                           (apply str))
+              back-imgs (->> pins
+                          (filter #(= "back" (:topic_pins/placement %)))
+                          (map #(pin-img-tag (:topic_pins/media_id %)))
+                          (apply str))]
+          (cond-> fields
+            (not (str/blank? front-imgs)) (update :q str front-imgs)
+            (not (str/blank? back-imgs)) (update :a str back-imgs)))
+        ;; cloze — F2-uniform: all pins appended to :c regardless of placement
+        (let [all-imgs (->> pins
+                         (map #(pin-img-tag (:topic_pins/media_id %)))
+                         (apply str))]
+          (cond-> fields
+            (not (str/blank? all-imgs)) (update :c str all-imgs)))))))
+
+(defn pins-prefill-html
+  "Front/back pinned-image HTML for prefilling the manual Add-Card editors.
+   front pin → primary editor (Question/Cloze), back pin → answer editor
+   (Answer/Back-Extra). Reuses pin-img-tag so a prefilled card is byte-identical
+   to a baked one. Returns {:front html :back html}; each concatenates that
+   placement's tags in ord order, or \"\" when none.
+
+   Contract: callers that prefill with this MUST save via
+   (save-cards … bake? false) so the images are not appended a second time."
+  [topic-id]
+  (let [pins (effective-pins-for-bake topic-id)
+        for-placement (fn [placement]
+                        (->> pins
+                          (filter #(= placement (:topic_pins/placement %)))
+                          (map #(pin-img-tag (:topic_pins/media_id %)))
+                          (apply str)))]
+    {:front (for-placement "front")
+     :back (for-placement "back")}))
 
 (defn save-cards
   "Save generated cards to the database.
@@ -328,29 +351,35 @@
    Bakes pinned images into each card's HTML before insert.
    Returns {:success true :ids [id...]} — the ids of the newly inserted cards,
    in order (may be shorter than `cards` if ON CONFLICT skipped duplicates) —
-   or {:success false :error msg} on failure."
-  [topic-id root-topic-id kind cards]
-  (try
-    (let [rows (map (fn [card]
-                      (let [baked (bake-card-html topic-id kind card)]
-                        (if (= kind "basic")
-                          {:topic_id topic-id
-                           :root_topic_id root-topic-id
-                           :kind kind
-                           :question (:q baked)
-                           :answer (:a baked)
-                           :cloze nil}
-                          {:topic_id topic-id
-                           :root_topic_id root-topic-id
-                           :kind kind
-                           :question nil
-                           :answer (:a baked)
-                           :cloze (:c baked)})))
-                 cards)]
-      {:success true :ids (vec (db/insert-flashcards! rows))})
-    (catch Exception e
-      (tel/error! {:id ::save-cards} e)
-      {:success false :error (.getMessage e)})))
+   or {:success false :error msg} on failure.
+
+   bake? false skips bake-card-html — used by the manual Add-Card path, which
+   prefills pinned images into the editor content itself (pins-prefill-html), so
+   baking would duplicate them."
+  ([topic-id root-topic-id kind cards]
+   (save-cards topic-id root-topic-id kind cards true))
+  ([topic-id root-topic-id kind cards bake?]
+   (try
+     (let [rows (map (fn [card]
+                       (let [baked (if bake? (bake-card-html topic-id kind card) card)]
+                         (if (= kind "basic")
+                           {:topic_id topic-id
+                            :root_topic_id root-topic-id
+                            :kind kind
+                            :question (:q baked)
+                            :answer (:a baked)
+                            :cloze nil}
+                           {:topic_id topic-id
+                            :root_topic_id root-topic-id
+                            :kind kind
+                            :question nil
+                            :answer (:a baked)
+                            :cloze (:c baked)})))
+                  cards)]
+       {:success true :ids (vec (db/insert-flashcards! rows))})
+     (catch Exception e
+       (tel/error! {:id ::save-cards} e)
+       {:success false :error (.getMessage e)}))))
 
 (defn add-card
   "Manually add a single flashcard.

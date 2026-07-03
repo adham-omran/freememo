@@ -803,6 +803,11 @@ html, body {
     left: auto;
     right: 0;
 }
+/* Keep sync menu items ("Push to Anki (N)…" + shortcut) on one line; the menu
+   grows to fit rather than wrapping the label. */
+.toolbar-sync-dropdown .toolbar-dropdown-item {
+    white-space: nowrap;
+}
 
 /* Menu items — full-width rows, icon + label, hover/focus states match the
    rest of the app's secondary buttons. */
