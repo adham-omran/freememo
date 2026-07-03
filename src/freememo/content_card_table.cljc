@@ -81,7 +81,7 @@
                 (dom/props {:style {:padding "4px 12px" :font-size "12px" :color "var(--color-text-hint)"}})
                 (dom/text (str card-count " card" (when (not= card-count 1) "s")
                             (when (pos? unsynced-count) (str " (" unsynced-count " unsynced)"))))))
-            (let [[offset limit] (Scroll-window row-height card-count dom/node {:overquery-factor 1})
+            (let [[offset limit] (Scroll-window row-height card-count dom/node {:overquery-factor 2})
                   occluded-height (clamp-left (* row-height (- card-count limit)) 0)
                   first-card (e/server (first cards-vec))
                   rtl? (e/server (rtl-text? (or (:flashcards/question first-card)
