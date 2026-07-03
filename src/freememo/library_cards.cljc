@@ -9,7 +9,6 @@
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
    [freememo.modal-shell :as modal]
-   [freememo.a11y :as a11y]
    [missionary.core :as m]
    [freememo.navigation :as nav]
    [freememo.logging :as log]
@@ -468,7 +467,6 @@
         (let [show-diff! (fn [e]
                            (.stopPropagation e)
                            (reset! !diff-card diff-payload))]
-          (a11y/KeyActivate {:label (direction-tooltip direction)} show-diff!)
           (dom/On "click" show-diff! nil))
         (dom/span
           (dom/props {:style {:color (direction-color direction)}})
@@ -518,7 +516,6 @@
       (let [open-document! (fn [e]
                              (.stopPropagation e)
                              (navigate! :viewer (nav/nav-topic topic-id :library)))]
-        (a11y/KeyActivate {:label (str "Open document " (or root-title ""))} open-document!)
         (dom/On "click" open-document! nil))
       (dom/span
         (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
@@ -557,10 +554,9 @@
           {:id id :kind kind :question question :answer answer
            :cloze cloze :note-id note-id}
           !diff-card)
-        ;; Kind badge — also the row's keyboard path to edit-card!
+        ;; Kind badge — clicking the row (anywhere) opens the editor via the tr.
         (dom/td
           (dom/props {:style (merge cell-style {:padding-inline "4px"})})
-          (a11y/KeyActivate {:label "Edit card"} edit-card!)
           (dom/span
             (dom/props {:class "type-badge"
                         :style {:background (if cloze? "var(--color-badge-epub)" "var(--color-badge-pdf)")}})
