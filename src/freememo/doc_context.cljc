@@ -58,6 +58,7 @@
 
 ;; ── Content ────────────────────────────────────────────────────────────────
 (e/declare effective-content)
+(e/declare effective-content-topic-id)  ; topic the shown editor body was fetched for; ≠ page-topic-id ⇒ stale (loading)
 (e/declare static-content)
 (e/declare content-text)
 (e/declare initial-html)
