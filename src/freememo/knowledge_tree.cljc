@@ -10,10 +10,10 @@
    [freememo.card-components :as card-components]
    [freememo.pdf-cache :as pdf-cache]
    [freememo.bibliography-form :as bibform]
-   [freememo.icons :as icons]
    [freememo.viewport :as viewport]
    [freememo.util :as util]
    [freememo.tree-dnd :as tree-dnd]
+   [freememo.library-row-actions :refer [RowActionsMenu]]
    [freememo.commands :as commands]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.staged-delete :as staged-delete])
@@ -333,52 +333,12 @@
           (when is-root
             (dom/span
               (dom/text (or (:formatted_date topic) "")))))
-        ;; Column 5: Actions
+        ;; Column 5: Actions — all row actions collapsed behind one ⋯ menu.
         (dom/td
           (dom/props {:style {:padding "4px 6px" :display "flex" :align-items "center"
-                              :justify-content "flex-end" :gap "4px"}})
-          (dom/button
-            (dom/props {:class "btn btn-sm btn-secondary"
-                        :style {:padding "2px 6px" :font-size "12px" :line-height "1"}})
-            (dom/text "✎")
-            (dom/On "click"
-              (fn [e]
-                (.stopPropagation e)
-                (reset! !editing-id id))
-              nil))
-          ;; Promote to top level — the library-only path to un-nest a topic
-          ;; (drag-and-drop handles nesting; root has no drop target). Hidden on
-          ;; rows already at root.
-          (when-not is-root
-            (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary"
-                          :style {:padding "2px 6px" :font-size "12px" :line-height "1"}
-                          :aria-label "Move to top level"
-                          :data-tooltip "Move to top level"})
-              (dom/text "⤴")
-              (dom/On "click"
-                (fn [e]
-                  (.stopPropagation e)
-                  (reset! !drop-cmd {:src id :dst nil}))
-                nil)))
-          (when has-children
-            (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary"
-                          :style {:padding "2px 6px" :font-size "10px"}})
-              (dom/text "Review")
-              (dom/On "click"
-                (fn [e]
-                  (.stopPropagation e)
-                  (navigate! :viewer (nav/nav-subset-review id title)))
-                nil)))
-          (when is-root
-            (dom/button
-              (dom/props {:class "btn btn-sm btn-danger-fill"
-                          :style {:padding "2px 6px" :font-size "12px" :line-height "1"}
-                          :aria-label "Delete topic"
-                          :data-tooltip "Delete topic"})
-              (icons/Icon :x :size 14 :title "Delete topic")
-              (dom/On "click" (fn [e] (.stopPropagation e) (reset! !show-confirm id)) nil))))))))
+                              :justify-content "flex-end"}})
+          (RowActionsMenu user-id id title is-root has-children kind
+            navigate! !editing-id !drop-cmd !show-confirm !scroll-node))))))
 
 ;; ---------------------------------------------------------------------------
 ;; DeleteConfirmModal — extracted to keep DocumentTreeView lean
@@ -525,8 +485,8 @@
                         (dom/text (str "Added" (arrow :added)))
                         (dom/On "click" (fn [_] (reset! !sort-cmd [:added :desc])) nil))
                       (dom/th
-                        (dom/props {:style {:padding "8px 6px" :border-bottom "2px solid var(--color-border)"}})
-                        (dom/text ""))))))
+                        (dom/props {:style (merge th-style {:text-align "right" :padding "8px 6px" :cursor "default"})})
+                        (dom/text "Actions"))))))
 
               ;; Scrollable body
               (dom/div

@@ -142,7 +142,7 @@
    this item's bibliography down the subtree.
    Pre: bib-topic-id is the item's bibliography target — for PDF pages this is
    the document root, since pages own no bibliography."
-  [user-id bib-topic-id !open !show-bib]
+  [user-id bib-topic-id !open !show-bib show-edit?]
   (e/client
     (let [refresh     (e/server (e/watch (us/get-atom user-id :refresh)))
           has-source? (e/server (bib-btn/has-source?* refresh user-id bib-topic-id))
@@ -154,12 +154,15 @@
           (dom/text "Bibliography"))
         (dom/div
           (dom/props {:style {:display "flex" :flex-wrap "wrap" :gap "var(--sp-2)"}})
-          (dom/button
-            (dom/props {:class "btn btn-sm btn-secondary" :type "button"
-                        :aria-label "Edit bibliography" :data-tooltip "Edit bibliography"})
-            (icons/Icon :book-open :size 16)
-            (dom/span (dom/props {:class "icon-label"}) (dom/text "Edit"))
-            (dom/On "click" (fn [_] (reset! !open false) (reset! !show-bib true)) nil))
+          ;; Edit opens the bibliography modal mounted in the viewer (TopicPage);
+          ;; gated off on surfaces that don't mount it (e.g. the library tree).
+          (when show-edit?
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-secondary" :type "button"
+                          :aria-label "Edit bibliography" :data-tooltip "Edit bibliography"})
+              (icons/Icon :book-open :size 16)
+              (dom/span (dom/props {:class "icon-label"}) (dom/text "Edit"))
+              (dom/On "click" (fn [_] (reset! !open false) (reset! !show-bib true)) nil)))
           (bib-btn/BibliographyButton user-id bib-topic-id has-source? nil)
           (PushToChildrenButton user-id bib-topic-id eff-source?))))))
 
@@ -196,7 +199,7 @@
         (when (some? r)
           (if (:success r) (do (reset! !open false) (token)) (token (:error r))))))))
 
-(e/defn DocumentOptionsModal [user-id bib-topic-id is-pdf? root-topic-id priority-topic-id !open !show-bib]
+(e/defn DocumentOptionsModal [user-id bib-topic-id is-pdf? root-topic-id priority-topic-id !open !show-bib show-edit?]
   (e/client
     (when (e/watch !open)
       (dom/div
@@ -222,7 +225,7 @@
                 (e/server (get-topic-priority* refresh priority-topic-id)))))
 
           ;; Bibliography — item-scoped Edit / Refetch / Push-to-children.
-          (BibliographySection user-id bib-topic-id !open !show-bib)
+          (BibliographySection user-id bib-topic-id !open !show-bib show-edit?)
 
           (if is-pdf?
             (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
@@ -238,14 +241,21 @@
                   (dom/props {:class "btn btn-primary" :type "button" :disabled true})
                   (dom/text "Save"))))))))))
 
-(e/defn DocumentOptionsButton [user-id bib-topic-id is-pdf? root-topic-id priority-topic-id !show-bib]
+;; show-edit?    — render BibliographySection's Edit button (needs the viewer's
+;;                 bibliography modal); false on surfaces without it.
+;; trigger-class — CSS class for the trigger button; lets a caller (e.g. the
+;;                 library row menu) restyle it as a dropdown row. Defaults to
+;;                 the toolbar's secondary-button look.
+(e/defn DocumentOptionsButton [user-id bib-topic-id is-pdf? root-topic-id priority-topic-id !show-bib show-edit? trigger-class]
   (e/client
     (let [!open (atom false)]
       (dom/button
-        (dom/props {:class "btn btn-sm btn-secondary"
+        (dom/props {:class (or trigger-class "btn btn-sm btn-secondary")
                     :aria-label "Document options"
                     :data-tooltip "Per-document options"})
         (icons/Icon :settings :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Document options"))
-        (dom/On "click" (fn [_] (reset! !open true)) nil))
-      (DocumentOptionsModal user-id bib-topic-id is-pdf? root-topic-id priority-topic-id !open !show-bib))))
+        ;; stop propagation so a click doesn't reach an ancestor row handler
+        ;; (the library tree row navigates on click); inert in the toolbar.
+        (dom/On "click" (fn [e] (.stopPropagation e) (reset! !open true)) nil))
+      (DocumentOptionsModal user-id bib-topic-id is-pdf? root-topic-id priority-topic-id !open !show-bib show-edit?))))
