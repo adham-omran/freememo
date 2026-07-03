@@ -105,18 +105,20 @@
               (dom/props {:class "toolbar-dropdown-menu toolbar-sync-menu"
                           :role "menu"})
 
-              ;; Export
+              ;; Push to Anki
               (dom/button
                 (dom/props {:class "toolbar-dropdown-item"
                             :role "menuitem"
-                            :aria-label "Export"})
-                (icons/Icon :download :size 16)
+                            :aria-label "Push to Anki"})
+                (icons/Icon :refresh-cw :size 16)
                 (dom/span (dom/text (if has-unsynced?
-                                      (str "Export (" unsynced-count ")...")
-                                      "Export...")))
+                                      (str "Push to Anki (" unsynced-count ")...")
+                                      "Push to Anki...")))
+                (dom/span (dom/props {:class "dropdown-shortcut"})
+                  (dom/text (str mod-key "+Shift+X")))
                 (dom/On "click"
                   (fn [_]
-                    (bus/dispatch! :export)
+                    (bus/dispatch! :anki-sync)
                     (reset! !open false))
                   nil))
 
@@ -133,19 +135,17 @@
                     (reset! !open false))
                   nil))
 
-              ;; Push to Anki
+              ;; Export as CSV
               (dom/button
                 (dom/props {:class "toolbar-dropdown-item"
                             :role "menuitem"
-                            :aria-label "Push to Anki"})
-                (icons/Icon :refresh-cw :size 16)
+                            :aria-label "Export as CSV"})
+                (icons/Icon :download :size 16)
                 (dom/span (dom/text (if has-unsynced?
-                                      (str "Push to Anki (" unsynced-count ")...")
-                                      "Push to Anki...")))
-                (dom/span (dom/props {:class "dropdown-shortcut"})
-                  (dom/text (str mod-key "+Shift+X")))
+                                      (str "Export as CSV (" unsynced-count ")...")
+                                      "Export as CSV...")))
                 (dom/On "click"
                   (fn [_]
-                    (bus/dispatch! :anki-sync)
+                    (bus/dispatch! :export)
                     (reset! !open false))
                   nil)))))))))

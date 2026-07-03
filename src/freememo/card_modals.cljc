@@ -511,7 +511,9 @@
 #?(:clj
    (defmethod opt/run-command! :add-card [user-id {:keys [id payload]}]
      (let [{:keys [topic-id root-topic-id kind card-data]} payload
-           result (cards/save-cards topic-id root-topic-id kind card-data)]
+           ;; bake? false — the Add-Card modal already inlined pinned images
+           ;; into card-data via pins-prefill-html; baking would duplicate them.
+           result (cards/save-cards topic-id root-topic-id kind card-data false)]
        (if (:success result)
          (do (swap! (us/get-atom user-id :pending-cards) update id merge
                {:status :confirmed :real-ids (:ids result)})
@@ -527,13 +529,20 @@
   (e/client
     (let [initial-text (or @!captured-selection "")
           prefill? (not (str/blank? initial-text))
+          ;; Pinned images inline into the editors (model B): front pin → primary
+          ;; (Question/Cloze), back pin → answer (Answer/Back-Extra). The Save
+          ;; below passes bake? false so these are not appended a second time.
+          pins-prefill (e/server (cards/pins-prefill-html topic-id))
+          front-pin-html (:front pins-prefill)
+          back-pin-html (:back pins-prefill)
           ;; Front (basic Question) and Cloze Text share !primary so typed
           ;; content carries across a Basic↔Cloze switch; Back/Extra already
-          ;; share !answer. A captured selection prefills whichever renders.
-          init-primary (if prefill? initial-text "")
+          ;; share !answer. A captured selection prefills whichever renders;
+          ;; pin HTML is appended after it to match bake ordering.
+          init-primary (str (if prefill? initial-text "") front-pin-html)
           kind (e/watch !card-kind)
           !primary (atom init-primary)
-          !answer (atom "")
+          !answer (atom back-pin-html)
           !primary-editor (atom nil)
           !a-editor (atom nil)
           primary (e/watch !primary)
