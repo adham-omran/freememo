@@ -28,6 +28,7 @@
                                                        org.clojure/tools.deps             {:mvn/version "0.26.1553"}
                                                        io.github.nextjournal/clojure-mode {:git/sha "5d88847aecd253e047f36565e0455bfec7f4964d"}}}
            :prod {:extra-paths ["src-prod"] :jvm-opts ["-Xss4m"]}
+           :test {:extra-paths ["test"]}
            :build ; use `clj -X:prod:build build-client`, NOT -T!
            {:extra-paths ["src-build"]
             :ns-default  build

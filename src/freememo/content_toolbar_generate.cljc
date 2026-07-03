@@ -10,7 +10,7 @@
    [freememo.card-modals :refer [PromptDialog]]
    [freememo.content-toolbar-helpers :as helpers]
    [freememo.icons :as icons]
-   [freememo.keyboard :as keyboard]
+   [freememo.command-bus :as bus]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.html-cleaner :as cleaner])
    #?(:clj [freememo.settings :as settings])))
@@ -95,8 +95,9 @@
                             :else "Generate")))
               (when (and gen-active? (nil? gen-error))
                 (dom/span (dom/props {:class "icon-label"}) (dom/text (str " (" gen-pending ")"))))
-              (reset! keyboard/!generate-btn-ref dom/node)
-              (e/on-unmount (fn [] (reset! keyboard/!generate-btn-ref nil)))
+              (let [node dom/node]
+                (bus/publish-invoker! :generate (fn [] (.click node)))
+                (e/on-unmount (fn [] (bus/retract-invoker! :generate))))
               (dom/On "click"
                 (fn [_]
                   (let [sel (editor/get-selection-html!)]
@@ -115,8 +116,9 @@
                         :data-tooltip "Add custom instructions to guide card generation"})
             (icons/Icon :pen-sparkles :size 16)
             (dom/span (dom/props {:class "icon-label"}) (dom/text "Generate with Prompt..."))
-            (reset! keyboard/!gen-prompt-btn-ref dom/node)
-            (e/on-unmount (fn [] (reset! keyboard/!gen-prompt-btn-ref nil)))
+            (let [node dom/node]
+              (bus/publish-invoker! :gen-prompt (fn [] (.click node)))
+              (e/on-unmount (fn [] (bus/retract-invoker! :gen-prompt))))
             (dom/On "click" (fn [_]
                               (let [sel (editor/get-selection-html!)]
                                 (when sel

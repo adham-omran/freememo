@@ -10,6 +10,7 @@
    [freememo.settings :as settings]
    [freememo.toasts :as toasts]
    [freememo.user-state :as us]
+   [freememo.commands :as commands]
    [missionary.core :as m]
    [taoensso.telemere :as tel])
   (:import
@@ -104,7 +105,7 @@
    (fn [result]
      (if (:success result)
        (do (log/log-info (str "Transcription complete topic-id=" topic-id))
-           (swap! (us/get-atom user-id :refresh) inc))
+           (commands/bump! user-id :transcribe))
        (do (log/log-info (str "Transcription failed topic-id=" topic-id " error=" (:error result)))
            (toasts/push! user-id {:level :error :message (:error result)})))
      (swap! (us/get-atom user-id :transcribing-topics) disj topic-id))

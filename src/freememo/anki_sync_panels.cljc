@@ -8,7 +8,7 @@
    [freememo.anki-sync-form :as form]
    [freememo.doc-context :as dctx]
    [freememo.modal-shell :as modal-shell]
-   [freememo.keyboard :as keyboard]
+   [freememo.command-bus :as bus]
    [freememo.logging :as log]
    #?(:clj [freememo.anki-sync-server :as sync])
    #?(:clj [freememo.settings :as settings])
@@ -22,10 +22,10 @@
      :cljs nil))
 
 (defn trigger-quick-sync!
-  "Fire the hidden QuickSync proxy button (toolbar) to run a background push.
-   No-op if the toolbar — hence the button — isn't mounted."
+  "Dispatch the :quick-sync command to run a background push.
+   No-op if the toolbar — hence its invoker handle — isn't mounted."
   []
-  #?(:cljs (when-some [node @keyboard/!quick-sync-btn-ref] (.click node))
+  #?(:cljs (bus/dispatch! :quick-sync)
      :clj nil))
 
 (defn get-source-display-mode* [user-id]

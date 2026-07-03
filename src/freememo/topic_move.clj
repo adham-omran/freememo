@@ -8,7 +8,7 @@
    (reparent-topic!), this ns owns the reactive-channel bump + toast."
   (:require
    [freememo.db :as db]
-   [freememo.user-state :as us]
+   [freememo.commands :as commands]
    [freememo.toasts :as toasts]
    [taoensso.telemere :as tel]))
 
@@ -20,7 +20,7 @@
   [user-id topic-id new-parent-id]
   (try
     (when-let [r (db/reparent-topic! user-id topic-id new-parent-id)]
-      (swap! (us/get-atom user-id :tree-mutations) inc)
+      (commands/bump! user-id :move-topic)
       (toasts/push! user-id {:level :success
                              :message (if new-parent-id "Topic moved" "Topic moved to top level")
                              :dedup? false

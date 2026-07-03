@@ -292,6 +292,14 @@ html, body {
 .toolbar-container.pdf-toolbar-container {
     z-index: 2;
 }
+/* Score card bar: NO stacking context (base .toolbar-container is z:3).
+   With z-index:auto its Add-card dropdown (z:50) and tooltips (z:1100)
+   escape to root level and paint over the waveform strip / PDF pane, while
+   the PdfToolbar's own tooltips (context level 2) still paint over this
+   bar's plain contents (level 0) — a bar-level z-index can't satisfy both. */
+.toolbar-container.score-toolbar-container {
+    z-index: auto;
+}
 /* `.toolbar` MUST be `flex-wrap: nowrap` for the content-aware ResizeObserver
    to work: with wrapping, items push to a new row instead of overflowing
    horizontally, and `scrollWidth ≤ clientWidth` would incorrectly report

@@ -87,5 +87,8 @@
               dctx/!total (:!total m) dctx/!nav-target (:!nav-target m) dctx/!top-split-pct (:!top-split-pct m)
               dctx/!left-pct (:!left-pct m) dctx/card-font-size (:card-font-size m) dctx/t-layout (:t-layout m)
               dctx/layout-save (:layout-save m) dctx/!top-pct (:!top-pct m) dctx/!top-pct-save (:!top-pct-save m)
-              dctx/reset-split! (:reset-split! m)]
+              dctx/reset-split! (:reset-split! m)
+              dctx/is-score? (:is-score? m) dctx/!score-region (:!score-region m)
+              dctx/!score-pages (:!score-pages m) dctx/!score-modal-open? (:!score-modal-open? m)
+              dctx/!score-edit (:!score-edit m)]
       (DocumentBody))))

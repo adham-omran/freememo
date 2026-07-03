@@ -22,11 +22,13 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.icons :as icons]
-   [freememo.keyboard :as keyboard]
+   [freememo.commands :as commands]
+   [freememo.command-bus :as bus]
    [freememo.copy-text :as copy]
    [freememo.pdf-action-dropdowns :refer [ScanDropdown CopyDropdown]]
    [freememo.pdf-viewer :as viewer]
    [freememo.pdf-viewer-component :refer [LiveDocAddPhotos]]
+   [freememo.score-toolbar :refer [ScoreRectButton]]
    [freememo.toolbar-overflow :refer [install-overflow-detector!]]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])))
@@ -180,15 +182,16 @@
             (dom/text (if page-done?
                         (str "Restore page " page-number)
                         (str "Mark page " page-number " as done"))))
-          (reset! keyboard/!done-btn-ref dom/node)
-          (e/on-unmount (fn [] (reset! keyboard/!done-btn-ref nil)))
+          (let [node dom/node]
+            (bus/publish-invoker! :done (fn [] (.click node)))
+            (e/on-unmount (fn [] (bus/retract-invoker! :done))))
           (let [click-event (dom/On "click"
                               (fn [_] {:id (str (random-uuid)) :page page-number})
                               nil)
                 [t _] (e/Token click-event)]
             (when t
               (case (e/server (db/toggle-page-done! pdf-root-id (:page click-event)))
-                (case (e/server (swap! (us/get-atom user-id :meta-refresh) inc))
+                (case (e/server (commands/bump! user-id :done))
                   (t)))))))))))
 
 (e/defn PdfScanCopy
@@ -279,9 +282,14 @@
                   (dom/props {:class "pdf-overflow-panel"})
                   (when is-live? (PdfPageNav))
                   (PdfZoom)
-                  (PdfMarkDone)
-                  (binding [dctx/extract-style extract-style dctx/is-live? false]
-                    (PdfScanCopy))))
+                  ;; Score topics have no page children — done/scan/copy all
+                  ;; target page topics. They get the notation rect tool.
+                  (if dctx/is-score?
+                    (ScoreRectButton)
+                    (e/amb
+                      (PdfMarkDone)
+                      (binding [dctx/extract-style extract-style dctx/is-live? false]
+                        (PdfScanCopy))))))
               (PdfOcrError))
             (when overflow-open
               (dom/div
@@ -306,7 +314,12 @@
                   (e/on-unmount cleanup)
                   (PdfPageNav)
                   (PdfZoom)
-                  (PdfMarkDone)
-                  (binding [dctx/extract-style extract-style]
-                    (PdfScanCopy))
+                  ;; Score topics have no page children — done/scan/copy all
+                  ;; target page topics. They get the notation rect tool.
+                  (if dctx/is-score?
+                    (ScoreRectButton)
+                    (e/amb
+                      (PdfMarkDone)
+                      (binding [dctx/extract-style extract-style]
+                        (PdfScanCopy))))
                   (PdfOcrError))))))))))

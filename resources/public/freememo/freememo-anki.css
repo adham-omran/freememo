@@ -1,3 +1,17 @@
+/* ── Card base — matches the user's _anki.css .card rule so FreeMemo
+   models render with the same font family/size as their other decks. */
+.card {
+    font-family: Liberation Sans, sans-serif;
+    font-size: 1.5em;
+    text-align: center;
+    color: black;
+    background-color: whitesmoke;
+}
+
+.mobile {
+    font-size: 1em;
+}
+
 /* ================================================================
    FreeMemo Anki Card Stylesheet
    ----------------------------------------------------------------
@@ -417,4 +431,62 @@ pre > code {
 
 .mobile #io-extra-wrapper {
     width: 95%;
+}
+
+/* ================================================================
+   Score — required by the "Score FreeMemo" note type.
+   This entire file is pushed as that note type's Styling on every
+   Score push (ensure-and-enforce); edits made in Anki are overwritten.
+   fm-score-css v1
+   ================================================================ */
+
+.score-front,
+.score-back {
+    text-align: center;
+    margin: 0.6em auto;
+}
+
+/* Notation crops: centered, generously sized, on a white plate so the
+   sheet stays readable in night mode. */
+.score-front img,
+.score-back img {
+    display: block;
+    margin: 0.8em auto;
+    max-width: min(92%, 640px);
+    width: auto;
+    height: auto;
+    background: #fff;
+    padding: 0.8em;
+    border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+/* Anki's audio replay button — centered, a touch larger. */
+.score-front .replay-button,
+.score-back .replay-button {
+    display: inline-block;
+    margin: 0.6em auto;
+    transform: scale(1.4);
+}
+
+/* Source / Bibliography / Remarks under the answer — same font treatment
+   as the user's .extra-entry / .extra-descr conventions (_anki.css). */
+.score-extra {
+    max-width: 40em;
+    margin: 1.2em auto 0;
+    padding-top: 0.8em;
+    border-top: 1px solid rgba(128, 128, 128, 0.35);
+    font-size: 0.9em;
+    text-align: center;
+}
+
+.score-field-descr {
+    margin-bottom: 0.2em;
+    font-weight: bold;
+    font-size: 1em;
+}
+
+.nightMode .score-front img,
+.nightMode .score-back img {
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
 }

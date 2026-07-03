@@ -6,18 +6,19 @@
    [freememo.logging :as log]
    [freememo.topic-page :refer [TopicPage]]
    [freememo.bibliography-form :as bibform]
-   #?(:clj [freememo.user-state :as us])
+   [freememo.commands :as commands]
+   [freememo.command-bus :as bus]
    #?(:clj [freememo.db :as db])))
 
 #?(:clj
    (defn advance-topic* [user-id id]
      (db/advance-topic! id)
-     (swap! (us/get-atom user-id :queue-mutations) inc)))
+     (commands/bump! user-id :advance-topic)))
 
 #?(:clj
    (defn postpone-topic* [user-id id days]
      (db/postpone-topic! id days)
-     (swap! (us/get-atom user-id :queue-mutations) inc)))
+     (commands/bump! user-id :postpone-topic)))
 
 ;; Shared bottom bar with Postpone + Next
 (e/defn BottomBar [user-id topic-id !queue-idx]
@@ -69,6 +70,9 @@
           (dom/button
             (dom/props {:class "btn btn-secondary" :style {:padding "8px 20px"}})
             (dom/text "Postpone")
+            (let [node dom/node]
+              (bus/publish-invoker! :postpone-topic (fn [] (.click node)))
+              (e/on-unmount (fn [] (bus/retract-invoker! :postpone-topic))))
             (dom/On "click" (fn [_] (reset! !show-postpone true)) nil)))
 
         ;; Next button — disabled briefly after click to prevent skipping during content load
@@ -81,6 +85,9 @@
                                 :opacity (if busy "0.5" "1")
                                 :cursor (if busy "not-allowed" "pointer")}})
             (dom/text "Next")
+            (let [node dom/node]
+              (bus/publish-invoker! :advance-topic (fn [] (.click node)))
+              (e/on-unmount (fn [] (bus/retract-invoker! :advance-topic))))
             (let [event (dom/On "click" (fn [_] (when-not @!busy (str (random-uuid)))) nil)
                   [t _error] (e/Token event)]
               (when t

@@ -72,6 +72,25 @@
     [:path {:d "M19 10v2a7 7 0 0 1-14 0v-2"}]
     [:line {:x1 "12" :x2 "12" :y1 "19" :y2 "22"}]]
 
+   :music
+   [[:path {:d "M9 18V5l12-2v13"}]
+    [:circle {:cx "6" :cy "18" :r "3"}]
+    [:circle {:cx "18" :cy "16" :r "3"}]]
+
+   :rect-select
+   [[:path {:d "M5 3a2 2 0 0 0-2 2"}]
+    [:path {:d "M19 3a2 2 0 0 1 2 2"}]
+    [:path {:d "M21 19a2 2 0 0 1-2 2"}]
+    [:path {:d "M5 21a2 2 0 0 1-2-2"}]
+    [:path {:d "M9 3h1"}]
+    [:path {:d "M14 3h1"}]
+    [:path {:d "M9 21h1"}]
+    [:path {:d "M14 21h1"}]
+    [:path {:d "M3 9v1"}]
+    [:path {:d "M3 14v1"}]
+    [:path {:d "M21 9v1"}]
+    [:path {:d "M21 14v1"}]]
+
    :cloud-download
    [[:path {:d "M12 13v8l-4-4"}]
     [:path {:d "m12 21 4-4"}]

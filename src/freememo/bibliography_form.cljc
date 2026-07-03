@@ -11,7 +11,6 @@
    [clojure.string :as str]
    [freememo.icons :as icons]
    #?(:clj [freememo.db :as db])
-   #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.optimistic :as opt])
    #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.biblio-import :as biblio-import])))
@@ -136,6 +135,7 @@
     (#{"web" "wikipedia"} kind)      ["Web"       "var(--color-badge-web)"]
     (= kind "markdown")              ["MD"        "var(--color-badge-web)"]
     (= kind "audio")                 ["Audio"     "var(--color-badge-web)"]
+    (= kind "score")                 ["Score"     "var(--color-badge-pdf)"]
     :else                            ["Topic"     "var(--color-badge-epub)"]))
 
 ;; ---------------------------------------------------------------------------
@@ -234,24 +234,24 @@
                               sid     (:sources/id new-src)]
                           (db/attach-source-to-topic! user-id topic-id sid)
                           {:ok true :source-id sid}))]
-           (swap! (us/get-atom user-id :refresh) inc)
+           ;; No bump here: optimistic/execute! bumps :save-biblio's :views.
            result))
        (catch Exception e
          {:ok false :error (.getMessage e)}))
      :cljs nil))
 
 ;; Optimistic-update dispatch (freememo.optimistic). Pre: payload has :topic-id
-;; and :data. Post: source persisted (success toast) or error toast; command
-;; removed from the queue. Returns :done.
+;; and :data. Post: source persisted (success toast) or error toast. Effect +
+;; toast only — optimistic/execute! bumps the registry :views and removes the
+;; command. Returns :done.
 #?(:clj
-   (defmethod opt/run-command! :save-biblio [user-id {:keys [id payload]}]
+   (defmethod opt/run-command! :save-biblio [user-id {:keys [payload]}]
      (let [{:keys [topic-id data]} payload
            r (save-source-for-topic!* user-id topic-id data)]
        (if (:ok r)
          (toasts/push! user-id {:level :success :message "Bibliography saved"})
          (toasts/push! user-id {:level :error
                                 :message (or (:error r) "Failed to save bibliography")}))
-       (opt/drop-command! user-id id)
        :done)))
 
 ;; ---------------------------------------------------------------------------

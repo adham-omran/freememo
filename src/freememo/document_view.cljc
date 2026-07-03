@@ -12,6 +12,7 @@
    [freememo.pin-side-panel :refer [PinSidePanel]]
    [freememo.pdf-pane :refer [PdfPane]]
    [freememo.pdf-toolbar :refer [PdfToolbar]]
+   [freememo.score-toolbar :refer [ScoreToolbar ScoreWaveformStrip]]
    [freememo.editor-pane :refer [EditorPane]]
    [freememo.bottom-panel :refer [ToolbarBar]]
    [freememo.bibliography-form :as bibform :refer [BibliographyForm]]
@@ -81,6 +82,10 @@
       (dom/div
         (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
                             :min-width "0" :min-height "0" :overflow "hidden"}})
+        ;; Score topics: waveform strip across the top of the content column;
+        ;; the audio segment picked here pairs with notation rects for cards.
+        (when dctx/is-score?
+          (ScoreWaveformStrip))
         (dom/div
           (dom/props {:style {:flex "1" :display "flex"
                               :flex-direction (if (and is-pdf? top-bottom?)
@@ -185,6 +190,11 @@
                     dctx/on-page-change! (fn [p] (reset! !current-page p))
                     dctx/on-layout-toggle! toggle-layout!]
             (PdfToolbar)))
+
+        ;; THIRD BAR (Score only): pending-selection status + Add-card
+        ;; dropdown; also hosts the notation-rect snapshot modal.
+        (when dctx/is-score?
+          (ScoreToolbar))
 
         ;; No third formatting bar (E1): the document editor uses Quill's
         ;; bubble theme, whose formatting controls float on text selection

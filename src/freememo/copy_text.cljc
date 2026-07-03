@@ -11,26 +11,26 @@
    [hyperfiddle.electric-dom3 :as dom]
    [taoensso.telemere :as tel]
    [freememo.icons :as icons]
-   [freememo.keyboard :as keyboard]
+   [freememo.commands :as commands]
+   [freememo.command-bus :as bus]
    [freememo.loading :as loading]
    [freememo.pdf-viewer :as pdfviewer]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.page-ocr :as page])
    #?(:clj [freememo.settings :as settings])
-   #?(:clj [freememo.toasts :as toasts])
-   #?(:clj [freememo.user-state :as us])))
+   #?(:clj [freememo.toasts :as toasts])))
 
 ;; ── Server bridges (plain defns; CLJS gets a no-op) ────────────────────────
 
 (defn remote-extract-save!* [user-id root page]
   #?(:clj (let [r (page/extract-page-text-pdfbox root page)]
-            (when (:success r) (swap! (us/get-atom user-id :refresh) inc))
+            (when (:success r) (commands/bump! user-id :copy-text))
             r)
      :cljs nil))
 
 (defn client-save!* [user-id root page raw]
   #?(:clj (let [r (page/save-pdfjs-text! root page raw)]
-            (when (:success r) (swap! (us/get-atom user-id :refresh) inc))
+            (when (:success r) (commands/bump! user-id :copy-text))
             r)
      :cljs nil))
 
@@ -42,7 +42,7 @@
 
 (defn commit-html!* [user-id root page html]
   #?(:clj (let [r (page/save-page-html-impl root page html)]
-            (when (:success r) (swap! (us/get-atom user-id :refresh) inc))
+            (when (:success r) (commands/bump! user-id :copy-text))
             r)
      :cljs nil))
 
@@ -54,7 +54,7 @@
 
 (defn save-style!* [user-id root style]
   #?(:clj (let [r (settings/save-extract-style user-id root style)]
-            (swap! (us/get-atom user-id :settings-refresh) inc)
+            (commands/bump! user-id :set-setting)
             r)
      :cljs nil))
 
@@ -78,7 +78,7 @@
                           (for [p pages
                                 :let [pn (:topics/page_number p)]]
                             (page/extract-page-text-pdfbox root pn)))]
-            (swap! (us/get-atom user-id :refresh) inc)
+            (commands/bump! user-id :copy-all)
             (summarize results))
      :cljs nil))
 
@@ -94,7 +94,7 @@
                           (for [[pn raw] page->raw
                                 :when (contains? valid pn)]
                             (page/save-pdfjs-text! root pn raw)))]
-            (swap! (us/get-atom user-id :refresh) inc)
+            (commands/bump! user-id :copy-all)
             (summarize results))
      :cljs nil))
 
@@ -227,8 +227,9 @@
                     :disabled busy?})
         (icons/Icon :clipboard :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text (if busy? "Copying…" "Copy text")))
-        (reset! keyboard/!copy-text-btn-ref dom/node)
-        (e/on-unmount (fn [] (reset! keyboard/!copy-text-btn-ref nil)))
+        (let [node dom/node]
+          (bus/publish-invoker! :copy-text (fn [] (.click node)))
+          (e/on-unmount (fn [] (bus/retract-invoker! :copy-text))))
         (dom/On "click"
           (fn [_]
             (let [pg page-number id (str (random-uuid)) style extract-style]
@@ -320,8 +321,9 @@
         (icons/Icon :library :size 16)
         (dom/span (dom/props {:class "icon-label"})
           (dom/text (if busy? "Copying…" "Copy all text")))
-        (reset! keyboard/!copy-all-btn-ref dom/node)
-        (e/on-unmount (fn [] (reset! keyboard/!copy-all-btn-ref nil)))
+        (let [node dom/node]
+          (bus/publish-invoker! :copy-all (fn [] (.click node)))
+          (e/on-unmount (fn [] (bus/retract-invoker! :copy-all))))
         (dom/On "click"
           (fn [_]
             (let [id (str (random-uuid)) style extract-style]

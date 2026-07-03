@@ -1,9 +1,9 @@
 (ns freememo.toolbar-sync-dropdown
   "Sync dropdown — replaces the inline Export + Pull from Anki + Anki Sync
    buttons with a single dropdown trigger. The three source buttons are
-   rendered (hidden) inside this component so their refs / modals / e/Token
-   paths stay live; menu items dispatch by calling `.click()` on the existing
-   button refs in `freememo.keyboard`.
+   rendered (hidden) inside this component so their invoker handles / modals /
+   e/Token paths stay live; menu items dispatch their commands through
+   `freememo.command-bus`.
 
    New e/defn lives in its own namespace to stay under the JVM 64KB bytecode
    limit (pattern from `extract_topic_button.cljc`).
@@ -21,7 +21,7 @@
    [freememo.anki-pull-button :refer [PullFromAnkiButton]]
    [freememo.export-button :refer [ExportButton]]
    [freememo.icons :as icons]
-   [freememo.keyboard :as keyboard]))
+   [freememo.command-bus :as bus]))
 
 ;; See `toolbar_generate_dropdown.cljc:install-dropdown-listeners!` for
 ;; rationale on keeping this as a plain (defn) outside e/defn bodies. We
@@ -116,10 +116,7 @@
                                       "Export...")))
                 (dom/On "click"
                   (fn [_]
-                    #?(:cljs
-                       (when-let [btn @keyboard/!export-btn-ref]
-                         (when-not (.-disabled btn)
-                           (.click btn))))
+                    (bus/dispatch! :export)
                     (reset! !open false))
                   nil))
 
@@ -132,10 +129,7 @@
                 (dom/span (dom/text "Pull from Anki"))
                 (dom/On "click"
                   (fn [_]
-                    #?(:cljs
-                       (when-let [btn @keyboard/!pull-anki-btn-ref]
-                         (when-not (.-disabled btn)
-                           (.click btn))))
+                    (bus/dispatch! :pull-anki)
                     (reset! !open false))
                   nil))
 
@@ -152,9 +146,6 @@
                   (dom/text (str mod-key "+Shift+X")))
                 (dom/On "click"
                   (fn [_]
-                    #?(:cljs
-                       (when-let [btn @keyboard/!anki-sync-btn-ref]
-                         (when-not (.-disabled btn)
-                           (.click btn))))
+                    (bus/dispatch! :anki-sync)
                     (reset! !open false))
                   nil)))))))))

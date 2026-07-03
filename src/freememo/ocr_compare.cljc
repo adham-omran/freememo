@@ -8,13 +8,13 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
-   [freememo.keyboard :as keyboard]
+   [freememo.commands :as commands]
+   [freememo.command-bus :as bus]
    [freememo.loading :as loading]
    [freememo.ocr-models :as ocr-models]
    #?(:clj [freememo.ocr :as ocr])
    #?(:clj [freememo.page-ocr :as page])
-   #?(:clj [freememo.settings :as settings])
-   #?(:clj [freememo.user-state :as us])))
+   #?(:clj [freememo.settings :as settings])))
 
 (defn ocr-preview!*
   "Run one model's OCR on a page WITHOUT saving (bills the call). Server-only."
@@ -30,10 +30,10 @@
   [user-id root page html model-id remember?]
   #?(:clj (let [r (page/save-page-html-impl root page html)]
             (when (:success r)
-              (swap! (us/get-atom user-id :refresh) inc)
+              (commands/bump! user-id :compare-ocr)
               (when remember?
                 (settings/save-ocr-model user-id root model-id)
-                (swap! (us/get-atom user-id :settings-refresh) inc)))
+                (commands/bump! user-id :set-setting)))
             r)
      :cljs nil))
 
@@ -166,8 +166,9 @@
                     :data-tooltip "Run every OCR model on this page and compare (uses credits)"})
         (icons/Icon :scan-text :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Compare OCR"))
-        (reset! keyboard/!compare-ocr-btn-ref dom/node)
-        (e/on-unmount (fn [] (reset! keyboard/!compare-ocr-btn-ref nil)))
+        (let [node dom/node]
+          (bus/publish-invoker! :compare-ocr (fn [] (.click node)))
+          (e/on-unmount (fn [] (bus/retract-invoker! :compare-ocr))))
         (dom/On "click" (fn [_] (reset! !open true)) nil))
       (when open
         (OcrCompareModal user-id root-topic-id page-number model-ids dpi !open)))))

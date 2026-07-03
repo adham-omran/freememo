@@ -5,7 +5,7 @@
    [clojure.string :as str]
    [freememo.db :as db]
    [freememo.settings :as settings]
-   [freememo.user-state :as us]
+   [freememo.commands :as commands]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.bibliography-form :as bibform]
    [taoensso.telemere :as tel])
@@ -23,6 +23,7 @@
     "image/svg+xml" "svg"
     "image/bmp" "bmp"
     "image/tiff" "tiff"
+    "audio/mpeg" "mp3"
     "bin"))
 
 (defn get-media-base64
@@ -180,6 +181,27 @@
                   card))
           cards)))))
 
+(defn attach-score-groups
+  "Attach plain-data group info (:score-group {:anki-key :start-ms :end-ms
+   :clip-media-id :geometry}) to every score card row — everything the
+   client-side push needs to build Score note fields. Non-score rows pass
+   through untouched."
+  [cards]
+  (let [gids (into #{} (keep :flashcards/score_group_id) cards)]
+    (if (empty? gids)
+      cards
+      (let [groups (db/get-score-groups-by-ids gids)]
+        (mapv (fn [card]
+                (if-let [g (get groups (:flashcards/score_group_id card))]
+                  (assoc card :score-group
+                    {:anki-key (:score_groups/anki_key g)
+                     :start-ms (:score_groups/start_ms g)
+                     :end-ms (:score_groups/end_ms g)
+                     :clip-media-id (:score_groups/clip_media_id g)
+                     :geometry (:score_groups/geometry g)})
+                  card))
+          cards)))))
+
 (defn get-cards-for-sync
   "Get flashcards for Anki sync. Also returns the current root topic title/kind
    and pre-resolved bibliography (text + HTML) so the Source field and the
@@ -201,15 +223,16 @@
                     :scope scope}}
     "get-cards-for-sync invoked")
   (try
-    (let [cards (attach-occlusion-groups
-                  (attach-card-bibliography
-                    (case scope
-                      "self"     (db/get-flashcards topic-id)
-                      "subtree"  (db/get-flashcards-for-subtree topic-id)
-                      "document" (db/get-all-flashcards root-topic-id)
-                      (if topic-id
-                        (db/get-flashcards topic-id)
-                        (db/get-all-flashcards root-topic-id)))))
+    (let [cards (attach-score-groups
+                  (attach-occlusion-groups
+                    (attach-card-bibliography
+                      (case scope
+                        "self"     (db/get-flashcards topic-id)
+                        "subtree"  (db/get-flashcards-for-subtree topic-id)
+                        "document" (db/get-all-flashcards root-topic-id)
+                        (if topic-id
+                          (db/get-flashcards topic-id)
+                          (db/get-all-flashcards root-topic-id))))))
           root-topic (when (and user-id root-topic-id)
                        (db/get-topic-for-user user-id root-topic-id))
           source-id (:topics/source_id root-topic)
@@ -283,7 +306,7 @@
                  :id ::finalize-push!.per-item-saved
                  :data {:root-topic-id root-topic-id}}
         "per-item preset saved"))
-    (swap! (us/get-atom user-id :sync-mutations) inc)
+    (commands/bump! user-id :anki-sync)
     (tel/log! {:level :info :id ::finalize-push!.done} "finalize-push! complete")
     {:success true :count (count pairs)}
     (catch Exception e
@@ -340,9 +363,11 @@
                             anki-modified?
                             (cond
                               ;; Occlusion content diff is owned by the pull
-                              ;; path (io_fields); the overlay only surfaces
-                              ;; marked/suspended for these rows.
-                              (= "occlusion" kind) false
+                              ;; path (io_fields); score fields are FM-generated
+                              ;; media (or Anki-owned Remarks/Sources). The
+                              ;; overlay only surfaces marked/suspended for
+                              ;; these rows.
+                              (contains? #{"occlusion" "score"} kind) false
                               basic? (or (not (stripped= (first stripped-fields) (:flashcards/question card)))
                                        (not (stripped= (second stripped-fields) (:flashcards/answer card))))
                               :else (not (stripped= (first stripped-fields) (:flashcards/cloze card))))
@@ -361,7 +386,7 @@
                               (db/delete-flashcard! (:flashcards/id r)))
                           (count absent-rows))]
       (when (pos? deleted-count)
-        (swap! (us/get-atom user-id :sync-mutations) inc))
+        (commands/bump! user-id :pull-anki))
       (tel/log! {:level :debug
                  :id ::apply-anki-overlay!
                  :data {:user-id user-id
@@ -396,7 +421,8 @@
   [user-id card-ids]
   (try
     (let [global (:prefs (load-anki-preferences user-id))
-          rows (attach-occlusion-groups (db/get-flashcards-by-ids user-id card-ids))
+          rows (attach-score-groups
+                 (attach-occlusion-groups (db/get-flashcards-by-ids user-id card-ids)))
           pushed (filterv :flashcards/anki_note_id rows)
           by-root (group-by :flashcards/root_topic_id pushed)
           bundles
@@ -478,7 +504,7 @@
   (try
     (db/set-anki-note-ids
       (mapv (fn [{:keys [card-id anki-note-id]}] [card-id anki-note-id]) pairs))
-    (swap! (us/get-atom user-id :sync-mutations) inc)
+    (commands/bump! user-id :anki-sync)
     {:success true :count (count pairs)}
     (catch Exception e
       (tel/error! {:id ::finalize-bulk-push!} e)
@@ -506,7 +532,7 @@
     (when (seq deleted-card-ids)
       (doseq [id deleted-card-ids]
         (db/delete-flashcard! id)))
-    (swap! (us/get-atom user-id :sync-mutations) inc)
+    (commands/bump! user-id :pull-anki)
     {:success true :count (count updates) :deleted (count (or deleted-card-ids []))}
     (catch Exception e
       (tel/error! {:id ::apply-pull-updates} e)

@@ -19,9 +19,12 @@
             [freememo.landing-page :refer [LandingPage]]
             [freememo.toast-stack :refer [ToastStack]]
             [freememo.optimistic :refer [CommandDispatcher]]
-            [freememo.undo-history-modal :refer [ActionsNavButton UndoHistoryModal UndoNewestTrigger]]
+            [freememo.undo-history-modal :refer [ActionsNavButton UndoHistoryModal]]
             [freememo.icons :as icons]
-            [freememo.keyboard :as keyboard]
+            [freememo.command-bus :as bus]
+            [freememo.command-palette :refer [CommandPalette]]
+            [freememo.keyboard :as keyboard] ; loads the registry-driven shortcut handler
+
             #?(:clj [freememo.settings :as settings])
             #?(:clj [freememo.quota :as quota])
             #?(:clj [freememo.user-state :as us])
@@ -95,6 +98,10 @@
        :learn-session (list 'viewer 'learn-session)
        :subset-review (list 'viewer 'subset-review (:root-id nav-map))
        :library-cards (list 'library 'cards)
+       ;; SearchPage seeds [mode kind query] from these segments.
+       :search-query (list 'search "fuzzy" "all"
+                       #?(:cljs (js/encodeURIComponent (:query nav-map))
+                          :clj (:query nav-map)))
        (list (symbol (name tab)))))))
 
 (e/defn NotFoundView []
@@ -207,6 +214,12 @@
                   (r/Navigate! ['/ (:route nav-cmd)])
                   (token))
 
+                ;; Shell command context: what app-level commands need.
+                ;; Re-published whenever active-tab changes (merge overwrites).
+                (bus/publish-ctx! {:active-tab active-tab
+                                   :navigate! navigate!
+                                   :undo-modal-open-atom !undo-modal-open?})
+
                 ;; Combined title + tab bar
                 (dom/div
                   (dom/props {:class "tab-bar"
@@ -312,8 +325,11 @@
                 ;; Optimistic-update command pump (headless; renders nothing)
                 (CommandDispatcher user-id)
 
-                ;; Undo: hidden Cmd-Shift-Z trigger + the Actions history modal
-                (UndoNewestTrigger user-id)
+                ;; Command architecture: queue-invocation bridge + palette
+                (bus/QueueInvoker user-id)
+                (CommandPalette active-tab)
+
+                ;; Actions history modal (undo-newest is a :queue command now)
                 (UndoHistoryModal user-id !undo-modal-open?))))
 
           ;; Not authenticated: render landing page

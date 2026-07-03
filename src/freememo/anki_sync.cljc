@@ -8,7 +8,7 @@
    [freememo.anki-sync-helpers :as helpers]
    [freememo.anki-sync-panels :as panels]
    [freememo.icons :as icons]
-   [freememo.keyboard :as keyboard]))
+   [freememo.command-bus :as bus]))
 
 (e/defn AnkiSyncInnerBody
   "Form-config state (scope, fields, options, tags) + delegate to AnkiSyncSyncBody.
@@ -56,8 +56,8 @@
     (let [!show-modal (atom false)
           show-modal (e/watch !show-modal)]
 
-      ;; Toolbar button (hidden inside Sync dropdown; its ref is .click()'d
-      ;; by the dropdown menu item to surface the modal).
+      ;; Toolbar button (hidden inside Sync dropdown; the dropdown menu item
+      ;; and the meta+shift+x shortcut invoke it via the :anki-sync command).
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary"
                     :style {:background "var(--color-bg-subtle)" :color "var(--color-text-primary)" :font-weight "500"}
@@ -68,8 +68,9 @@
           (dom/text (if (and unsynced-count (pos? unsynced-count))
                       (str "Push to Anki (" unsynced-count ")...")
                       "Push to Anki...")))
-        (reset! keyboard/!anki-sync-btn-ref dom/node)
-        (e/on-unmount (fn [] (reset! keyboard/!anki-sync-btn-ref nil)))
+        (let [node dom/node]
+          (bus/publish-invoker! :anki-sync (fn [] (.click node)))
+          (e/on-unmount (fn [] (bus/retract-invoker! :anki-sync))))
         (dom/On "click" (fn [_] (reset! !show-modal true)) nil))
 
       ;; Modal

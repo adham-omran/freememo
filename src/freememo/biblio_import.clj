@@ -10,6 +10,7 @@
             [freememo.biblio-resolver :as br]
             [freememo.epub :as epub]
             [freememo.user-state :as us]
+            [freememo.commands :as commands]
             [freememo.wikipedia :as wikipedia]
             [taoensso.telemere :as tel]))
 
@@ -273,7 +274,7 @@
                 title        (or (:title merged) (:topics/title topic))]
             (db/update-source! {:id current-sid :csl-type csl-type
                                 :csl merged :url url :title title})
-            (swap! (us/get-atom user-id :refresh) inc)
+            (commands/bump! user-id :refetch-biblio)
             {:ok true :source-id current-sid
              :resolver (:resolver resolver-result)}))))
     (catch Exception e

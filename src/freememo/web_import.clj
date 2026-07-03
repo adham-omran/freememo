@@ -18,7 +18,8 @@
             [freememo.import-staging :as staging]
             [freememo.logging :as log]
             [freememo.pdf :as pdf]
-            [freememo.user-state :as us]
+            [freememo.quota :as quota]
+            [freememo.commands :as commands]
             [freememo.wikipedia :as wiki]))
 
 (defn- attach-biblio-best-effort!
@@ -72,8 +73,7 @@
                               :issued-date-parts (:issued-date-parts r)})]
               (when topic-id
                 (attach-biblio-best-effort! user-id topic-id (:biblio r))
-                (swap! (us/get-atom user-id :refresh) inc)
-                (swap! (us/get-atom user-id :tree-mutations) inc))
+                (commands/bump! user-id :import-document))
               {:ok true :flow :imported :topic-id topic-id :title (:title r)})))))
     (catch Exception e
       (log/log-error (str "import-url!* failed: " (.getMessage e)))
@@ -96,6 +96,7 @@
             (if (:success result)
               (let [topic-id (:id result)]
                 (attach-biblio-best-effort! user-id topic-id web-biblio)
+                (commands/bump! user-id :import-document)
                 {:ok true :topic-id topic-id})
               {:ok false :error (:error result)}))
 
@@ -108,19 +109,52 @@
                     file-size (alength bytes)
                     {:keys [topic-id]} (db/create-epub-topic!
                                          user-id display-name bytes file-size chapters)]
-                (swap! (us/get-atom user-id :refresh) inc)
-                (swap! (us/get-atom user-id :tree-mutations) inc)
                 (attach-biblio-best-effort! user-id topic-id web-biblio)
+                (commands/bump! user-id :import-document)
                 {:ok true :topic-id topic-id})))
 
           :audio
           (let [result (audio/save-audio! user-id filename bytes (audio/filename->mime filename))]
             (if (:success result)
-              {:ok true :topic-id (:id result)}
+              (do (commands/bump! user-id :import-document)
+                  {:ok true :topic-id (:id result)})
               {:ok false :error (:error result)}))
 
           {:ok false :error (str "Unknown flow: " flow)}))
       {:ok false :error "Upload not found or expired"})
     (catch Exception e
       (log/log-error (str "confirm-staged-upload!* failed: " (.getMessage e)))
+      {:ok false :error (.getMessage e)})))
+
+(defn confirm-score-upload!*
+  "Finalize a Score import from TWO staged uploads (sheet-music PDF + recording).
+   Pre  : user-id owns both staged uploads; the pdf entry has flow :pdf and the
+          audio entry flow :audio.
+   Post : {:ok true :topic-id N} or {:ok false :error S}. Claims are one-shot;
+          a failed pair leaves neither entry reusable (restaging is a re-upload).
+   The topic title comes from the PDF filename — the score names the piece."
+  [user-id pdf-upload-id audio-upload-id]
+  (try
+    (let [pdf-entry (staging/claim! user-id pdf-upload-id)
+          audio-entry (staging/claim! user-id audio-upload-id)]
+      (cond
+        (nil? pdf-entry) {:ok false :error "PDF upload not found or expired"}
+        (nil? audio-entry) {:ok false :error "Audio upload not found or expired"}
+        (not= :pdf (:flow pdf-entry)) {:ok false :error "Sheet-music file is not a PDF"}
+        (not= :audio (:flow audio-entry)) {:ok false :error "Recording is not an audio file"}
+        :else
+        (let [topic (db/create-score-topic! user-id (:filename pdf-entry)
+                      (:bytes pdf-entry) (:bytes audio-entry)
+                      (audio/filename->mime (:filename audio-entry)))]
+          (commands/bump! user-id :import-document)
+          {:ok true :topic-id (:topics/id topic)})))
+    (catch clojure.lang.ExceptionInfo e
+      (log/log-error (str "confirm-score-upload!* failed: " (.getMessage e)))
+      {:ok false :error (if (quota/quota-error? (ex-data e))
+                          (case (:reason (ex-data e))
+                            :file-too-large "File exceeds the per-file storage limit"
+                            "Storage quota exceeded — delete documents to free space")
+                          (.getMessage e))})
+    (catch Exception e
+      (log/log-error (str "confirm-score-upload!* failed: " (.getMessage e)))
       {:ok false :error (.getMessage e)})))

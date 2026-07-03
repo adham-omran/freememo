@@ -4,6 +4,7 @@
   (:require
    [clojure.string :as str]
    [freememo.logging :as log]
+   [freememo.commands :as commands]
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.html-cleaner :as cleaner])
@@ -129,7 +130,7 @@
                           (assoc :active-id nil)
                           (update :pending #(max 0 (dec (or % 0)))))))
               (if (:success result)
-                (do (swap! (us/get-atom uid :card-mutations) inc)
+                (do (commands/bump! uid :generate)
                   (log/log-info (str "Card gen complete topic=" tid)))
                 (do (log/log-info (str "Card gen failed topic=" tid " error=" (:error result)))
                   (swap! !status update tid assoc :error (:error result))

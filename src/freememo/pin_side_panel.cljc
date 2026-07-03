@@ -13,6 +13,7 @@
    [freememo.icons :as icons]
    [freememo.util :as util]
    [freememo.viewport :as viewport]
+   [freememo.commands :as commands]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.toasts :as toasts])
@@ -44,7 +45,7 @@
                                   :message "Pin removed"
                                   :dedup? false
                                   :actions [{:label "Undo" :undo-id undo-id}]})))
-       (swap! (us/get-atom user-id :pin-mutations) inc)
+       (commands/bump! user-id :remove-pin)
        :ok)
      :cljs nil))
 
@@ -54,7 +55,7 @@
   #?(:clj
      (let [new-placement (if (= current-placement "front") "back" "front")]
        (db/update-pin-placement! pin-id new-placement)
-       (swap! (us/get-atom user-id :pin-mutations) inc)
+       (commands/bump! user-id :toggle-pin-placement)
        :ok)
      :cljs nil))
 

@@ -9,7 +9,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.anki-sync-panels :as panels]
-   [freememo.keyboard :as keyboard]
+   [freememo.command-bus :as bus]
    #?(:clj [freememo.anki-sync-server :as sync])
    #?(:clj [freememo.toasts :as toasts])))
 
@@ -159,8 +159,8 @@
     (QuickSyncOutcome user-id conn sync !trigger !running?)))
 
 (e/defn QuickSyncButton
-  "Hidden proxy button registered as keyboard/!quick-sync-btn-ref. Clicking it
-   (via Cmd-Shift-Opt-X) starts a background push. Mounts the headless executor."
+  "Hidden host button for the :quick-sync command (Cmd-Shift-Opt-X or palette).
+   Invoking starts a background push. Mounts the headless executor."
   [user-id selected-doc card-type unsynced-count]
   (e/client
     (let [conn {:!status (atom :idle) :!error (atom nil) :!decks (atom [])
@@ -177,8 +177,9 @@
       (dom/button
         (dom/props {:style {:display "none"} :aria-hidden "true" :tabindex "-1"
                     :data-quick-sync "1"})
-        (reset! keyboard/!quick-sync-btn-ref dom/node)
-        (e/on-unmount (fn [] (reset! keyboard/!quick-sync-btn-ref nil)))
+        (let [node dom/node]
+          (bus/publish-invoker! :quick-sync (fn [] (.click node)))
+          (e/on-unmount (fn [] (bus/retract-invoker! :quick-sync))))
         (dom/On "click"
           (fn [_]
             (if @!running?

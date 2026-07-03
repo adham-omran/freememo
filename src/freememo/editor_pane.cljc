@@ -11,6 +11,7 @@
    [freememo.navigation :as nav]
    [freememo.occlusion-modal :refer [OcclusionModal]]
    [clojure.string :as str]
+   [freememo.commands :as commands]
    #?(:cljs [freememo.editor-pin-menu :as pin-menu])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
@@ -179,7 +180,7 @@
                                     {:success false :error (.getMessage ex)}))))]
                 (case result
                   (if (:success result)
-                    (case (e/server (swap! (us/get-atom user-id :pin-mutations) inc))
+                    (case (e/server (commands/bump! user-id :add-pin))
                       (t))
                     (do (log/log-debug (str "EditorPane set-pin! failed: " result))
                       (t)))))))

@@ -110,6 +110,76 @@ Two consumption shapes:
   clear it with `e/on-unmount`; render a spinner overlay from that atom while the
   form stays mounted. See `import_modal`'s `!busy-msg` overlay.
 
+### Command architecture
+
+Every user-invocable action is a **command**: an entry in the central registry
+`freememo.commands/registry` (pure data), plus an effect implementation. The
+registry is the single inventory behind three frontends — buttons, keyboard
+shortcuts, and the Cmd/Ctrl-K command palette — and behind reactive
+invalidation.
+
+A registry entry:
+
+```clojure
+:anki-sync {:label "Push to Anki…"          ; palette text
+            :class :mutation                ; :mutation | :query | :nav
+            :exec  :ui-button               ; how the effect runs (below)
+            :bind  "meta+shift+x"           ; keyboard shortcut (nil = palette-only)
+            :when  #{:viewer}               ; tabs where the command applies
+            :data  {...}                    ; payload fields (documentation)
+            :table #{:flashcards}           ; DB tables written (audit/docs)
+            :views #{:sync-mutations}}      ; invalidation channels bumped
+```
+
+**Why `:views` exists.** Electric's reactivity does not cover the database:
+views re-query only because a per-user counter atom (`freememo.user-state`,
+channels like `:card-mutations`, `:refresh`) is bumped after a mutation.
+Pre-registry, every mutation site hand-picked channels; a missed bump meant a
+stale view. Now there is **one bump authority**: only `freememo.commands`
+increments channel atoms. Domain code declares `:views` in the registry and
+calls `(commands/bump! user-id :command-id)` at its boundary — or
+`bump-channels!` for the two runtime-dynamic cases (undo, staged delete).
+`freememo.commands-test` fails the build if any other namespace bumps by hand.
+
+**Execution modes (`:exec`).**
+
+- `:queue` — server effect. The client enqueues `{:id :type :payload}` onto
+  the per-user optimistic queue; the always-mounted `CommandDispatcher` pump
+  runs `optimistic/execute!`, which calls the command's
+  `(defmethod optimistic/run-command! :my-command …)`, then bumps its
+  registry `:views`, then drops the queue entry. Methods own effect + toast
+  only — they must not bump or drop.
+- `:ui-button` — the flow lives in a mounted Electric component (tokens,
+  client continuations like post-delete navigation). The component publishes
+  an invoke handle via `command-bus/publish-invoker!` (retracting on
+  unmount); keyboard/palette/menus trigger the same flow the visible button
+  runs. Availability = the handle is published. The flow's terminal server
+  step calls `bump!`.
+- `:client` — synchronous client handler (navigation, modal toggles,
+  queries) registered with `command-bus/register-handler!`.
+- Long-running background work (card generation, OCR scan) keeps its
+  processor; the processor calls `bump!` at its own terminal step.
+
+**Invocation.** All three frontends call `command-bus/dispatch!`:
+`freememo.keyboard` registers every `:bind` from the registry on one
+`KeyboardShortcutHandler`; the palette (`freememo.command-palette`, Cmd/Ctrl-K,
+mounted in Main) fuzzy-matches labels and shows bindings; buttons and dropdown
+menu items call `dispatch!` directly. Context (active tab, `navigate!`, modal
+atoms) is published into `command-bus/!ctx` by the components that own it,
+retracted on unmount.
+
+**Adding a command:**
+
+1. Add the registry entry in `freememo.commands` (`domain-registry`) —
+   label, class, exec, optional `:bind`/`:when`, and `:views` (which
+   channels its mutation invalidates).
+2. Implement the effect: a `run-command!` defmethod (`:queue`), a published
+   invoker on the owning button (`:ui-button`), or a registered client
+   handler (`:client`).
+3. Invoke it via `(bus/dispatch! :my-command)` (payload optional — a
+   registered preparer can build it from context).
+4. Run `freememo.commands-test` (`clj -M:test -e "(require 'freememo.commands-test) (clojure.test/run-tests 'freememo.commands-test)"`).
+
 ### Tooltips
 
 Tooltips are driven by the `data-tooltip` attribute plus a CSS `:hover` rule

@@ -14,6 +14,7 @@
    [freememo.viewport :as viewport]
    [freememo.util :as util]
    [freememo.tree-dnd :as tree-dnd]
+   [freememo.commands :as commands]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.staged-delete :as staged-delete])
    #?(:clj [freememo.topic-move :as topic-move])
@@ -59,8 +60,7 @@
 ;; the side effect when the binding is "unused" in the client body.
 (defn rename-and-refresh! [user-id id new-title]
   #?(:clj (do (db/rename-topic! id new-title)
-            (swap! (us/get-atom user-id :refresh) inc)
-            (swap! (us/get-atom user-id :tree-mutations) inc)
+            (commands/bump! user-id :rename-topic)
             :ok)
      :cljs nil))
 

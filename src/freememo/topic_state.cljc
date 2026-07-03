@@ -37,11 +37,16 @@
                root-id (or (db/get-root-topic-id topic-id) topic-id)
                root (when (not= root-id topic-id) (db/get-topic root-id))
                root-kind (:topics/kind (or root topic))
+               ;; Score topics ride the PDF viewer machinery: their role='main'
+               ;; blob is the sheet-music PDF, so they resolve as their own
+               ;; pdf-root. Score-specific UI gates on :is-score? on top.
                pdf-root-id (cond
                              (= kind "pdf") topic-id
+                             (= kind "score") topic-id
                              (and (= kind "page") (= root-kind "pdf")) root-id
                              :else nil)
                pdf-root-topic (cond (= kind "pdf") topic
+                                    (= kind "score") topic
                                     (and (= kind "page") (= root-kind "pdf")) (or root topic)
                                     :else nil)]
            ;; Scalars only — TopicPage destructures this map client-side, so
@@ -53,6 +58,7 @@
             :parent-id parent-id
             :page-number page-number
             :pdf-root-id pdf-root-id
+            :is-score? (= kind "score")
             ;; Live Document: drives the viewer's add-photos affordance,
             ;; empty-state, and (via page count) post-append reload.
             :is-live? (boolean (:topics/is_live pdf-root-topic))
@@ -144,11 +150,13 @@
           kind (:kind overview)
           pdf-root-id (:pdf-root-id overview)
           is-pdf? (some? pdf-root-id)
+          is-score? (boolean (:is-score? overview))
           root-topic-id (:root-topic-id overview)
           ;; Content body fetched separately and gated: PDF panes get their
           ;; text from get-page-text*, so fetching the topic's stored content
-          ;; for them was a dead transfer.
-          static-content (e/server (when-not is-pdf?
+          ;; for them was a dead transfer. Score topics ARE pdf-paned but have
+          ;; no page children — their editor shows the topic's own content.
+          static-content (e/server (when (or (not is-pdf?) is-score?)
                                      (get-topic-content* refresh topic-id)))
           initial-page (e/server
                          (when is-pdf?
@@ -178,6 +186,7 @@
        :refresh refresh :meta-refresh meta-refresh :card-refresh card-refresh
        ;; topic facts
        :overview overview :kind kind :pdf-root-id pdf-root-id :is-pdf? is-pdf?
+       :is-score? is-score?
        :is-live? (:is-live? overview) :pdf-has-file? (:pdf-has-file? overview)
        :pdf-page-count (:pdf-page-count overview) :root-topic-id root-topic-id
        :extract-status (:status overview) :static-content static-content
@@ -251,7 +260,7 @@
    Post: returns the page/content/biblio prop slice for DocumentBody."
   [resolved topic-id]
   (e/client
-    (let [{:keys [refresh meta-refresh is-pdf? pdf-root-id initial-page
+    (let [{:keys [refresh meta-refresh is-pdf? is-score? pdf-root-id initial-page
                   static-content queue-ctx]} resolved
           ;; Current PDF page (mutated by PdfPane via callback)
           !current-page (atom initial-page)
@@ -269,20 +278,29 @@
           target-page (when (and is-pdf? pdf-root-id nav-target
                               (= (:topic-id nav-target) pdf-root-id))
                         (:page nav-target))
-          ;; Live page-info — re-derives as user navigates pages
+          ;; Live page-info — re-derives as user navigates pages. Score topics
+          ;; have no page children: skip the fetch, keep the topic's own id.
           page-info (e/server
-                      (when is-pdf?
+                      (when (and is-pdf? (not is-score?))
                         (get-page-info* refresh meta-refresh pdf-root-id current-page)))
-          page-topic-id (if is-pdf?
+          page-topic-id (if (and is-pdf? (not is-score?))
                           (or (:topic-id page-info) topic-id)
                           topic-id)
-          ;; Effective content: PDF -> fetched page text; non-PDF -> static
+          ;; Effective content: PDF -> fetched page text; non-PDF and score ->
+          ;; static (score pages carry no per-page text).
           text-result (e/server
-                        (when is-pdf?
+                        (when (and is-pdf? (not is-score?))
                           (e/Offload #(get-page-text* refresh pdf-root-id current-page))))
-          effective-content (if is-pdf?
+          effective-content (if (and is-pdf? (not is-score?))
                               (when (:success text-result) (:text text-result))
                               static-content)
+          ;; Score editor state — owned here (the stable client ancestor) so the
+          ;; waveform strip, the PDF-toolbar rect button, the rect modal, and
+          ;; the score card bar all share one pending-card selection.
+          !score-region (atom nil)      ;; {:start-ms N :end-ms N} or nil
+          !score-pages (atom {})        ;; {page {:width :height :rects [{:x :y :w :h}]}}
+          !score-modal-open? (atom false)
+          !score-edit (atom nil)        ;; {:group-id N} while editing a pair
           !show-bib (atom false)
           show-bib? (e/watch !show-bib)
           ;; Mobile layout: reading-mode? = phone + learn origin (distraction-free
@@ -293,4 +311,6 @@
       {:!current-page !current-page :current-page current-page
        :!total !total :total total :!nav-target !nav-target :target-page target-page
        :page-info page-info :page-topic-id page-topic-id :effective-content effective-content
-       :!show-bib !show-bib :show-bib? show-bib? :phone? phone? :reading-mode? reading-mode?})))
+       :!show-bib !show-bib :show-bib? show-bib? :phone? phone? :reading-mode? reading-mode?
+       :!score-region !score-region :!score-pages !score-pages
+       :!score-modal-open? !score-modal-open? :!score-edit !score-edit})))

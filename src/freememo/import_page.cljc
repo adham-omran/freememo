@@ -7,8 +7,46 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
    [freememo.navigation :as nav]
+   [freememo.command-bus :as bus]
    [freememo.import-modal :refer [ImportModal]]
    [freememo.zotero-picker-modal :refer [ZoteroPickerModal]]))
+
+;; Palette → Import handoff: the command handler records which entry modal to
+;; open and navigates to :import; ImportPage consumes the intent on mount.
+(defonce !pending-import (atom nil))
+
+;; Both platforms so the e/defn body below references a resolvable var on CLJ
+;; (no #?(:cljs …) inside the reactive body — frame-safety convention).
+#?(:cljs
+   (defn- create-live-doc! [navigate!]
+     (-> (js/fetch "/api/create-live-doc" (clj->js {:method "POST"}))
+       (.then (fn [r] (.json r)))
+       (.then (fn [^js d]
+                (when (.-success d)
+                  (navigate! :viewer (nav/nav-topic (.-doc_id d) nil)))))
+       (.catch (fn [e] (js/console.error "Create Live Document failed:" e)))))
+   :clj
+   (defn- create-live-doc! [_navigate!] nil))
+
+#?(:cljs
+   (defn- open-import! [intent]
+     (fn [ctx _payload]
+       (reset! !pending-import intent)
+       (when-let [navigate! (:navigate! ctx)]
+         (navigate! :import)))))
+
+#?(:cljs
+   (do (bus/register-handler! :import-link (open-import! :link))
+       (bus/register-handler! :import-upload (open-import! :upload))
+       (bus/register-handler! :import-audio (open-import! :audio))
+       (bus/register-handler! :import-score (open-import! :score))
+       (bus/register-handler! :import-paste (open-import! :paste))
+       (bus/register-handler! :new-topic (open-import! :new-topic))
+       (bus/register-handler! :import-zotero (open-import! :zotero))
+       (bus/register-handler! :create-live-doc
+         (fn [ctx _payload]
+           (when-let [navigate! (:navigate! ctx)]
+             (create-live-doc! navigate!))))))
 
 ;; ImportCard — single launcher tile. `on-click` is a 0-arg fn run on click
 ;; (typically opening a modal; the Live Document tile creates + navigates).
@@ -37,56 +75,73 @@
 
 (e/defn ImportPage [user-id navigate! _enc-key _llm-enabled?]
   (e/client
-    (dom/div
-      (dom/props {:class "page-container"})
+    (let [!show-link (atom false)
+          !show-upload (atom false)
+          !show-audio (atom false)
+          !show-score (atom false)
+          !show-paste (atom false)
+          !show-topic (atom false)
+          !show-zotero (atom false)
+          pending (e/watch !pending-import)]
+
+      ;; Consume a palette-dispatched import intent: open its modal once.
+      (when pending
+        (case pending
+          :link (reset! !show-link true)
+          :upload (reset! !show-upload true)
+          :audio (reset! !show-audio true)
+          :score (reset! !show-score true)
+          :paste (reset! !show-paste true)
+          :new-topic (reset! !show-topic true)
+          :zotero (reset! !show-zotero true)
+          nil)
+        (reset! !pending-import nil))
+
       (dom/div
-        (dom/props {:style {:display "grid" :grid-template-columns "repeat(auto-fill, minmax(200px, 1fr))"
-                            :gap "12px"}})
+        (dom/props {:class "page-container"})
+        (dom/div
+          (dom/props {:style {:display "grid" :grid-template-columns "repeat(auto-fill, minmax(200px, 1fr))"
+                              :gap "12px"}})
 
-        (let [!show-link (atom false)
-              show-link (e/watch !show-link)]
-          (ImportCard :link "Link" "Fetch from any web page or Wikipedia URL" (fn [] (reset! !show-link true)))
-          (when show-link
-            (ImportModal !show-link user-id :url navigate!)))
+          (let [show-link (e/watch !show-link)]
+            (ImportCard :link "Link" "Fetch from any web page or Wikipedia URL" (fn [] (reset! !show-link true)))
+            (when show-link
+              (ImportModal !show-link user-id :url navigate!)))
 
-        (let [!show-upload (atom false)
-              show-upload (e/watch !show-upload)]
-          (ImportCard :upload "Upload" "PDF, EPUB, HTML, or Markdown — chosen by file extension" (fn [] (reset! !show-upload true)))
-          (when show-upload
-            (ImportModal !show-upload user-id :file navigate!)))
+          (let [show-upload (e/watch !show-upload)]
+            (ImportCard :upload "Upload" "PDF, EPUB, HTML, or Markdown — chosen by file extension" (fn [] (reset! !show-upload true)))
+            (when show-upload
+              (ImportModal !show-upload user-id :file navigate!)))
 
-        (let [!show-audio (atom false)
-              show-audio (e/watch !show-audio)]
-          (ImportCard :mic "Audio" "Upload an audio file to transcribe" (fn [] (reset! !show-audio true)))
-          (when show-audio
-            (ImportModal !show-audio user-id :audio navigate!)))
+          (let [show-audio (e/watch !show-audio)]
+            (ImportCard :mic "Audio" "Upload an audio file to transcribe" (fn [] (reset! !show-audio true)))
+            (when show-audio
+              (ImportModal !show-audio user-id :audio navigate!)))
 
-        (let [!show-paste (atom false)
-              show-paste (e/watch !show-paste)]
-          (ImportCard :clipboard "Paste" "Paste HTML or Markdown content" (fn [] (reset! !show-paste true)))
-          (when show-paste
-            (ImportModal !show-paste user-id :paste navigate!)))
+          (let [show-score (e/watch !show-score)]
+            (ImportCard :music "Score" "Sheet music PDF + recording — audio ↔ notation cards"
+              (fn [] (reset! !show-score true)))
+            (when show-score
+              (ImportModal !show-score user-id :score navigate!)))
 
-        (let [!show-topic (atom false)
-              show-topic (e/watch !show-topic)]
-          (ImportCard :file-plus "New Topic" "Create a blank topic to write in" (fn [] (reset! !show-topic true)))
-          (when show-topic
-            (ImportModal !show-topic user-id :new-topic navigate!)))
+          (let [show-paste (e/watch !show-paste)]
+            (ImportCard :clipboard "Paste" "Paste HTML or Markdown content" (fn [] (reset! !show-paste true)))
+            (when show-paste
+              (ImportModal !show-paste user-id :paste navigate!)))
 
-        ;; Live Document — one click creates an empty append-only PDF and opens
-        ;; it; the user adds camera/upload image pages from the viewer toolbar.
-        (ImportCard :scan-text "Live Document"
-          "Snap photos of pages — appended to a PDF you keep adding to"
-          (fn []
-            (-> (js/fetch "/api/create-live-doc" (clj->js {:method "POST"}))
-              (.then (fn [r] (.json r)))
-              (.then (fn [^js d]
-                       (when (.-success d)
-                         (navigate! :viewer (nav/nav-topic (.-doc_id d) nil)))))
-              (.catch (fn [e] (js/console.error "Create Live Document failed:" e))))))
+          (let [show-topic (e/watch !show-topic)]
+            (ImportCard :file-plus "New Topic" "Create a blank topic to write in" (fn [] (reset! !show-topic true)))
+            (when show-topic
+              (ImportModal !show-topic user-id :new-topic navigate!)))
 
-        (let [!show-zotero (atom false)
-              show-zotero (e/watch !show-zotero)]
-          (ImportCard :library "Zotero" "Pick a PDF from your local Zotero library" (fn [] (reset! !show-zotero true)))
-          (when show-zotero
-            (ZoteroPickerModal !show-zotero user-id navigate!)))))))
+          ;; Live Document — one click creates an empty append-only PDF and opens
+          ;; it; the user adds camera/upload image pages from the viewer toolbar.
+          ;; Same effect as the :create-live-doc palette command.
+          (ImportCard :scan-text "Live Document"
+            "Snap photos of pages — appended to a PDF you keep adding to"
+            (fn [] (create-live-doc! navigate!)))
+
+          (let [show-zotero (e/watch !show-zotero)]
+            (ImportCard :library "Zotero" "Pick a PDF from your local Zotero library" (fn [] (reset! !show-zotero true)))
+            (when show-zotero
+              (ZoteroPickerModal !show-zotero user-id navigate!))))))))

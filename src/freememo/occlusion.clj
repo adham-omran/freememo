@@ -111,7 +111,8 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Optimistic-queue commands. Contract (see freememo.optimistic ns docstring):
-;; each method removes its own command before returning and returns :done.
+;; methods own the effect + toast; optimistic/execute! bumps the registry
+;; :views and removes the command from the queue.
 ;; ---------------------------------------------------------------------------
 
 (defmethod opt/run-command! :add-occlusion [user-id {:keys [id payload]}]
@@ -119,7 +120,6 @@
     (if (:success result)
       (do (swap! (us/get-atom user-id :pending-cards) update id merge
             {:status :confirmed :real-ids (:ids result)})
-        (swap! (us/get-atom user-id :card-mutations) inc)
         (toasts/push! user-id {:level :success
                                :message (let [n (count (:ids result))]
                                           (str n " occlusion card" (when (not= 1 n) "s") " added"))}))
@@ -127,15 +127,12 @@
             {:status :error :error (:error result)})
         (toasts/push! user-id {:level :error
                                :message (or (:error result) "Failed to add occlusion cards")})))
-    (opt/drop-command! user-id id)
     :done))
 
-(defmethod opt/run-command! :update-occlusion [user-id {:keys [id payload]}]
+(defmethod opt/run-command! :update-occlusion [user-id {:keys [payload]}]
   (let [result (update-group! payload)]
     (if (:success result)
-      (do (swap! (us/get-atom user-id :card-mutations) inc)
-        (toasts/push! user-id {:level :success :message "Occlusion updated"}))
+      (toasts/push! user-id {:level :success :message "Occlusion updated"})
       (toasts/push! user-id {:level :error
                              :message (or (:error result) "Failed to update occlusion")}))
-    (opt/drop-command! user-id id)
     :done))

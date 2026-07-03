@@ -1,52 +1,14 @@
 (ns freememo.keyboard
-  #?(:cljs (:import [goog.ui KeyboardShortcutHandler]))
-  #?(:cljs (:require [goog.events :as gevents])))
-
-;; Button refs — available on both CLJ and CLJS (no reader conditional)
-;; to avoid frame mismatch when referenced in e/defn bodies.
-(defonce !extract-btn-ref (atom nil))
-(defonce !generate-btn-ref (atom nil))
-(defonce !scan-btn-ref (atom nil))
-(defonce !anki-sync-btn-ref (atom nil))
-(defonce !done-btn-ref (atom nil))
-;; Restore (un-done) gets its OWN ref so it never hijacks the "done" shortcut.
-;; No shortcut targets it yet — Restore is a button-only action.
-(defonce !restore-btn-ref (atom nil))
-(defonce !postpone-btn-ref (atom nil))
-
-;; Hidden trigger for global undo (Cmd-Shift-Z). Clicking it undoes the
-;; newest live action; see freememo.undo-history-modal/UndoNewestTrigger.
-(defonce !undo-newest-btn-ref (atom nil))
-
-;; Hidden trigger for background Quick Sync (Cmd-Shift-Opt-X). Clicking it
-;; runs an Anki push using last-used settings without opening the modal;
-;; see freememo.quick-sync/QuickSyncButton. Proxy mounts only in the toolbar,
-;; so the shortcut no-ops when no document is open (on-shortcut nil-ref check).
-(defonce !quick-sync-btn-ref (atom nil))
-
-;; Overflow menu proxy refs (toolbar buttons hidden on mobile, clicked via ⋮ menu)
-(defonce !gen-prompt-btn-ref (atom nil))
-(defonce !add-new-btn-ref (atom nil))
-(defonce !export-btn-ref (atom nil))
-(defonce !delete-btn-ref (atom nil))
-(defonce !pull-anki-btn-ref (atom nil))
-
-;; PDF action-dropdown proxy refs (C1/C2): the Scan and Copy dropdowns dispatch
-;; their menu items by .click on these hidden source-button refs. No keyboard
-;; shortcuts target them (Scan keeps its own !scan-btn-ref above).
-(defonce !compare-ocr-btn-ref (atom nil))
-(defonce !copy-text-btn-ref (atom nil))
-(defonce !copy-all-btn-ref (atom nil))
-
-#?(:cljs
-   (def ^:private shortcut->ref
-     {"extract" !extract-btn-ref
-      "generate" !generate-btn-ref
-      "scan" !scan-btn-ref
-      "anki-sync" !anki-sync-btn-ref
-      "done" !done-btn-ref
-      "undo-newest" !undo-newest-btn-ref
-      "quick-sync" !quick-sync-btn-ref}))
+  "Global keyboard shortcuts, driven by the command registry: every
+   freememo.commands entry with a :bind is registered on one goog
+   KeyboardShortcutHandler and dispatched through command-bus/dispatch!.
+   No per-action wiring lives here — adding a shortcut = adding :bind to a
+   registry entry. Shortcut identifiers are (name command-id), so the
+   handler's event round-trips back to the registry id."
+  (:require [freememo.commands :as commands]
+            [freememo.command-bus :as bus]
+            #?(:cljs [goog.events :as gevents]))
+  #?(:cljs (:import [goog.ui KeyboardShortcutHandler])))
 
 #?(:cljs
    (defn- in-quill-editor?
@@ -58,12 +20,10 @@
 
 #?(:cljs
    (defn- on-shortcut [e]
-     ;; Yield Cmd-Shift-Z to Quill's redo while editing rich text.
-     (when-not (and (= (.-identifier e) "undo-newest") (in-quill-editor?))
-       (when-let [ref-atom (get shortcut->ref (.-identifier e))]
-         (when-let [btn @ref-atom]
-           (when-not (.-disabled btn)
-             (.click btn)))))))
+     (let [command-id (keyword (.-identifier e))]
+       ;; Yield Cmd-Shift-Z to Quill's redo while editing rich text.
+       (when-not (and (= command-id :undo-newest) (in-quill-editor?))
+         (bus/dispatch! command-id)))))
 
 #?(:cljs
    (defonce handler
@@ -73,12 +33,7 @@
        ;; contentEditable — modifierShortcutsAreGlobal_ only applies to
        ;; form elements (input/textarea/select), not contentEditable.
        (.setAllShortcutsAreGlobal h true)
-       (.registerShortcut h "extract" "meta+shift+e")
-       (.registerShortcut h "generate" "meta+shift+g")
-       (.registerShortcut h "scan" "meta+shift+s")
-       (.registerShortcut h "anki-sync" "meta+shift+x")
-       (.registerShortcut h "done" "meta+shift+d")
-       (.registerShortcut h "undo-newest" "meta+shift+z")
-       (.registerShortcut h "quick-sync" "meta+shift+alt+x")
+       (doseq [[id bind] (commands/bindings)]
+         (.registerShortcut h (name id) bind))
        (gevents/listen h "shortcut" on-shortcut)
        h)))

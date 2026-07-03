@@ -23,7 +23,7 @@
    #?(:clj [freememo.settings :as user-settings])
    #?(:clj [freememo.user-state :as us])
    [freememo.icons :as icons]
-   [freememo.keyboard :as keyboard]
+   [freememo.command-bus :as bus]
    [freememo.toolbar-overflow :refer [install-overflow-detector!]]
    [freememo.util :refer [mac-platform?]]))
 
@@ -187,15 +187,15 @@
                 (dom/div (dom/props {:class "toolbar-overflow-panel-separator"}))
 
             ;; Proxy action buttons — hidden on desktop, visible in dropdown on mobile.
-            ;; Each .click()s the hidden real button via ref (same pattern as keyboard shortcuts).
+            ;; Each dispatches its command through the bus (same path as
+            ;; keyboard shortcuts and the palette).
                 (dom/button
                   (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-default"
                               :aria-label "Add new"})
                   (icons/Icon :plus :size 16)
                   (dom/span (dom/props {:class "icon-label"}) (dom/text "Add new"))
                   (dom/On "click" (fn [_]
-                                    (when-let [btn (deref keyboard/!add-new-btn-ref)]
-                                      (.click btn))
+                                    (bus/dispatch! :add-new)
                                     (reset! !overflow-open false)) nil))
                 (dom/button
                   (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-sync"
@@ -206,8 +206,7 @@
                                 (str "Export (" unsynced-count ")...")
                                 "Export...")))
                   (dom/On "click" (fn [_]
-                                    (when-let [btn (deref keyboard/!export-btn-ref)]
-                                      (.click btn))
+                                    (bus/dispatch! :export)
                                     (reset! !overflow-open false)) nil))
                 (dom/button
                   (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-sync"
@@ -215,8 +214,7 @@
                   (icons/Icon :cloud-download :size 16)
                   (dom/span (dom/props {:class "icon-label"}) (dom/text "Pull from Anki"))
                   (dom/On "click" (fn [_]
-                                    (when-let [btn (deref keyboard/!pull-anki-btn-ref)]
-                                      (.click btn))
+                                    (bus/dispatch! :pull-anki)
                                     (reset! !overflow-open false)) nil))
                 (dom/button
                   (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-sync"
@@ -227,8 +225,7 @@
                                 (str "Push to Anki (" unsynced-count ")...")
                                 "Push to Anki...")))
                   (dom/On "click" (fn [_]
-                                    (when-let [btn (deref keyboard/!anki-sync-btn-ref)]
-                                      (.click btn))
+                                    (bus/dispatch! :anki-sync)
                                     (reset! !overflow-open false)) nil))
                 (when extract-status
                   (dom/button
@@ -237,8 +234,7 @@
                     (icons/Icon :trash-2 :size 16)
                     (dom/span (dom/props {:class "icon-label"}) (dom/text "Delete..."))
                     (dom/On "click" (fn [_]
-                                      (when-let [btn (deref keyboard/!delete-btn-ref)]
-                                        (.click btn))
+                                      (bus/dispatch! :delete-document)
                                       (reset! !overflow-open false)) nil))))
 
           ;; Toolbar groups (flat runs + dividers), left-to-right:

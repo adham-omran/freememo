@@ -18,13 +18,19 @@
      :id       unique per submit; supplied by the client for add-card (so the
                overlay entry and the command share identity), else generated
                here.
-     :type     keyword with a run-command! method; unknown types are dropped.
+     :type     a freememo.commands registry id with a run-command! method;
+               unknown types are dropped.
      :payload  type-specific map.
 
-   run-command! invariant: it MUST remove its own command from :pending-commands
-   before returning, so each entry is dispatched exactly once."
+   Execution contract (see freememo.commands and README):
+     run-command! methods own the EFFECT and its toast — nothing else.
+     execute! (the pump's unit of work) then bumps the invalidation channels
+     declared in the registry entry's :views and removes the command from the
+     queue. Methods MUST NOT bump channels or call drop-command! themselves —
+     a method that does is double-bumping (implementation bug)."
   (:require
    [hyperfiddle.electric3 :as e]
+   [freememo.commands :as commands]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.toasts :as toasts])))
 
@@ -136,18 +142,38 @@
    (defmethod run-command! :default [user-id command]
      (toasts/push! user-id {:level :warning
                             :message (str "Unknown action: " (pr-str (:type command)))})
-     (drop-command! user-id (:id command))
+     :done))
+
+#?(:clj
+   (defn execute!
+     "The pump's unit of work: run the effect, bump the registry-declared
+      :views, drop the command from the queue. Pre: command has :id and :type.
+      Post: command absent from :pending-commands, its :views channels bumped
+      exactly once (even when the method throws — the queue must not wedge,
+      and a partial effect may still have written; a stale view hides a
+      failure worse than a spurious refetch reveals one). Returns :done."
+     [user-id command]
+     (try
+       (run-command! user-id command)
+       (catch Throwable t
+         (toasts/push! user-id {:level :error
+                                :message (str (name (:type command)) " failed: "
+                                           (.getMessage t))}))
+       (finally
+         (when (commands/command (:type command))
+           (commands/bump! user-id (:type command)))
+         (drop-command! user-id (:id command))))
      :done))
 
 (e/defn CommandDispatcher
   "Always-mounted, headless command pump. Watches the user's pending-commands
    queue and runs each command exactly once: a per-entry token (keyed by the
-   command id) arms on mount and is spent when the offloaded run-command!
+   command id) arms on mount and is spent when the offloaded execute!
    returns, which also removes the entry (unmounting the branch)."
   [user-id]
   (e/client
     (e/for [cmd (e/server (e/diff-by :id (e/watch (us/get-atom user-id :pending-commands))))]
       (let [[t _] (e/Token (:id cmd))]
         (when t
-          (when-some [_ (e/server (e/Offload #(run-command! user-id cmd)))]
+          (when-some [_ (e/server (e/Offload #(execute! user-id cmd)))]
             (t)))))))
