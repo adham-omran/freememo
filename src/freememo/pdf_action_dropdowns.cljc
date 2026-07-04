@@ -21,6 +21,8 @@
    [freememo.copy-text :as copy]
    [freememo.ocr-compare :as ocr-compare]
    #?(:clj [freememo.page-ocr :as page])
+   #?(:clj [freememo.kg-extract :as kg])
+   #?(:clj [freememo.kg-questions :as kgq])
    #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [missionary.core :as m]))
@@ -71,6 +73,42 @@
          (swap! (us/get-atom uid :scan-cancellers) assoc [doc page] cancel-fn))
        nil)
      :cljs nil))
+
+;; ---------------------------------------------------------------------------
+;; Knowledge-graph command sources — hidden invokable buttons giving the
+;; palette/keyboard a per-open-document target: :distill and
+;; :generate-questions act on the PDF open in the viewer (plan doc, palette
+;; integration, design C). No visible UI — the Knowledge tab keeps the
+;; browsing buttons. Guards live server-side: start-distill! no-ops on an
+;; in-flight run; exhausted question generation toasts.
+;; ---------------------------------------------------------------------------
+
+(e/defn KgCommandSources []
+  (e/client
+    (let [user-id dctx/user-id
+          doc dctx/pdf-root-id]
+      (dom/div
+        (dom/props {:class "toolbar-dropdown-sources"})
+        (dom/button
+          (dom/props {:aria-hidden "true" :tabindex "-1"})
+          (let [node dom/node]
+            (bus/publish-invoker! :distill (fn [] (.click node)))
+            (e/on-unmount (fn [] (bus/retract-invoker! :distill))))
+          (let [click (dom/On "click" (fn [_] {:id (str (random-uuid))}) nil)
+                [t _] (e/Token click)]
+            (when t
+              (case (e/server (kg/start-distill! user-id doc))
+                (t)))))
+        (dom/button
+          (dom/props {:aria-hidden "true" :tabindex "-1"})
+          (let [node dom/node]
+            (bus/publish-invoker! :generate-questions (fn [] (.click node)))
+            (e/on-unmount (fn [] (bus/retract-invoker! :generate-questions))))
+          (let [click (dom/On "click" (fn [_] {:id (str (random-uuid))}) nil)
+                [t _] (e/Token click)]
+            (when t
+              (case (e/server (kgq/start-atomic-generation! user-id doc))
+                (t)))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Click-outside / Escape listener for an open menu. Plain defn (not in an
