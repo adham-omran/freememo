@@ -16,6 +16,8 @@
    [clojure.string :as str]
    [freememo.icons :as icons]
    [freememo.commands :as commands]
+   [freememo.modal-shell :as modal]
+   [freememo.typeahead :as typeahead]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.kg-extract :as kg])
    #?(:clj [freememo.kg-questions :as kgq])
@@ -38,7 +40,11 @@
                  {:id id
                   :title (:topics/title t)
                   :kind (:topics/kind t)
-                  :facts (get-in stats [id "approved"] 0)}))
+                  :facts (get-in stats [id "approved"] 0)
+                  ;; distilled? — any fact of ANY status exists (status-agnostic),
+                  ;; so a doc whose facts were all rejected still counts as distilled
+                  ;; and re-distilling it is guarded by a confirm.
+                  :distilled? (pos? (reduce + 0 (vals (get stats id))))}))
          (db/get-root-topics user-id)))))
 
 #?(:clj
@@ -46,13 +52,49 @@
      (db/get-kg-facts user-id doc-id "approved" query)))
 
 #?(:clj
-   (defn list-entities* [_kg-bump user-id query]
+   (defn list-entities* [_kg-bump user-id query source-id]
      ;; 1000: virtual scroll owns the DOM cost; the wire cost is ~60 B/row.
-     (db/list-kg-entities user-id query 1000)))
+     (db/list-kg-entities user-id query 1000 source-id)))
 
 #?(:clj
-   (defn get-questions* [_kg-bump user-id query]
-     (db/get-kg-questions user-id "approved" query)))
+   (defn get-questions* [_kg-bump user-id query source-id entity-id]
+     (db/get-kg-questions user-id "approved" query
+       {:source-id source-id :entity-id entity-id})))
+
+#?(:clj
+   (defn list-source-docs*
+     "Lean [{:id :title}] of root documents — options for the source filters."
+     [_kg-bump user-id]
+     (mapv (fn [t] {:id (:topics/id t) :title (:topics/title t)})
+       (db/get-root-topics user-id))))
+
+#?(:clj
+   (defn list-entity-options*
+     "Lean [{:id :label}] of entities — options for the Questions entity filter."
+     [_kg-bump user-id]
+     (mapv (fn [ent] {:id (:id ent) :label (:label ent)})
+       (db/list-kg-entities user-id nil 1000))))
+
+#?(:clj
+   (defn reject-question!*
+     "Reject a question, logging an undo entry and surfacing an Undo toast."
+     [user-id question-id]
+     (when-let [undo-id (db/reject-kg-question! user-id question-id)]
+       (commands/bump! user-id :generate-questions)
+       (toasts/push! user-id {:level :success :message "Question rejected" :dedup? false
+                              :actions [{:label "Undo" :undo-id undo-id}]}))
+     :done))
+
+#?(:clj
+   (defn reject-fact!*
+     "Reject a fact (retiring its live questions), logging an undo entry and
+      surfacing an Undo toast."
+     [user-id fact-id]
+     (when-let [undo-id (db/reject-kg-fact! user-id fact-id)]
+       (commands/bump! user-id :distill)
+       (toasts/push! user-id {:level :success :message "Fact rejected" :dedup? false
+                              :actions [{:label "Undo" :undo-id undo-id}]}))
+     :done))
 
 ;; ---------------------------------------------------------------------------
 ;; Shared bits
@@ -112,26 +154,29 @@
           (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))))
 
 (e/defn SubViewTabs [!view view]
+  ;; Settings-style horizontal nav (see settings-page/SettingsNav). Copies the
+  ;; .settings-nav markup + CSS rather than sharing the component, which is bound
+  ;; to settings-specific module state. Driven by the client-local !view atom
+  ;; (not a URL hash); a [:facts id] vector view keeps Documents highlighted.
   (e/client
-    (dom/div
-      (dom/props {:style {:display "flex" :gap "4px" :padding "10px 16px 0"}})
+    (dom/nav
+      (dom/props {:class "settings-nav"})
       (e/for [[k label] (e/diff-by first [[:documents "Documents"] [:entities "Entities"]
                                           [:questions "Questions"]])]
         (let [active? (or (= view k) (and (vector? view) (= k :documents)))]
-          (dom/button
-            (dom/props {:class "btn btn-sm"
-                        :style {:font-weight (if active? "600" "400")
-                                :border-bottom (if active?
-                                                 "2px solid var(--color-primary)"
-                                                 "2px solid transparent")}})
+          (dom/a
+            (dom/props {:href "#"
+                        :class (if active?
+                                 "settings-nav__item settings-nav__item--active"
+                                 "settings-nav__item")})
             (dom/text label)
-            (dom/On "click" (fn [_] (reset! !view k)) nil)))))))
+            (dom/On "click" (fn [e] (.preventDefault e) (reset! !view k)) nil)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Documents view
 ;; ---------------------------------------------------------------------------
 
-(e/defn DistillButton [user-id doc-id distilling?]
+(e/defn DistillButton [user-id doc-id distilling? distilled? !redistill]
   (e/client
     (dom/button
       (dom/props {:class "btn btn-sm btn-secondary"
@@ -142,11 +187,16 @@
         (icons/Icon :loader-2 :size 14 :class "spin")
         (icons/Icon :pen-sparkles :size 14))
       (dom/text (if distilling? " Distilling…" " Distill"))
-      (let [click (dom/On "click" (fn [_] {:id (str (random-uuid))}) nil)
-            [t _] (e/Token click)]
-        (when t
-          (case (e/server (kg/start-distill! user-id doc-id))
-            (t)))))
+      (if distilled?
+        ;; Already distilled — confirm before spending credits/time again. The
+        ;; single ConfirmModal lives in DocumentsView, keyed off this doc-id.
+        (dom/On "click" (fn [_] (reset! !redistill doc-id)) nil)
+        ;; First distill — nothing to lose, go straight through.
+        (let [click (dom/On "click" (fn [_] {:id (str (random-uuid))}) nil)
+              [t _] (e/Token click)]
+          (when t
+            (case (e/server (kg/start-distill! user-id doc-id))
+              (t))))))
     (when distilling?
       (dom/button
         (dom/props {:class "btn btn-sm" :aria-label "Cancel distillation"})
@@ -185,9 +235,9 @@
             (case (e/server (kgq/cancel-atomic-generation! user-id doc-id))
               (t))))))))
 
-(e/defn DocumentRow [user-id doc i !view distilling generating]
+(e/defn DocumentRow [user-id doc i !view distilling generating !redistill]
   (e/client
-    (let [{:keys [id title kind facts]} doc]
+    (let [{:keys [id title kind facts distilled?]} doc]
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt") :style {:--order (inc i)}})
         (dom/td (dom/props {:style fact-cell-style})
@@ -198,7 +248,7 @@
         (dom/td (dom/props {:style fact-cell-style}) (dom/text (str facts)))
         (dom/td (dom/props {:style (merge fact-cell-style
                                      {:white-space "nowrap" :justify-content "flex-end"})})
-          (DistillButton user-id id (contains? distilling id))
+          (DistillButton user-id id (contains? distilling id) distilled? !redistill)
           (when (pos? facts)
             (GenerateQuestionsButton user-id id (contains? generating id)))
           (dom/button
@@ -214,7 +264,8 @@
     (let [docs (e/server (get-knowledge-docs* kg-bump user-id))
           item-count (count docs)
           distilling (e/server (e/watch (us/get-atom user-id :distilling-docs)))
-          generating (e/server (e/watch (us/get-atom user-id :generating-questions)))]
+          generating (e/server (e/watch (us/get-atom user-id :generating-questions)))
+          !redistill (atom nil)]              ; doc-id pending a re-distill confirm, or nil
       (dom/div
         (dom/props {:style {:display "flex" :flex-direction "column"
                             :height "calc(100vh - 160px)" :padding-top "8px"}})
@@ -225,7 +276,15 @@
             "minmax(240px,1fr) 70px minmax(340px,max-content)" item-count
             (e/fn [i]
               (when-let [doc (nth docs i nil)]
-                (DocumentRow user-id doc i !view distilling generating)))))))))
+                (DocumentRow user-id doc i !view distilling generating !redistill)))))
+        ;; Single re-distill confirm for the whole view (virtualization-safe;
+        ;; per-row modals would ride the Tape's reused DOM nodes). !redistill holds
+        ;; the doc-id to re-run; ConfirmModal passes it back as the payload.
+        (modal/ConfirmModal !redistill
+          "Re-distill document?"
+          "This document is already distilled. Re-running spends credits and takes time, and only adds new facts — it won't change your edits or rejected facts."
+          "Re-distill" "btn btn-primary"
+          (e/fn [doc-id] (e/server (kg/start-distill! user-id doc-id))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Facts view — searchable browser over a document's approved facts.
@@ -249,9 +308,7 @@
         (when t
           (let [result (e/server
                          (e/Offload
-                           #(do (db/set-kg-fact-status! user-id click "rejected")
-                              (commands/bump! user-id :distill)
-                              :done)))]
+                           #(reject-fact!* user-id click)))]
             (case result
               (t))))))))
 
@@ -375,9 +432,7 @@
         (when t
           (let [result (e/server
                          (e/Offload
-                           #(do (db/set-kg-question-status! user-id click "rejected")
-                              (commands/bump! user-id :generate-questions)
-                              :done)))]
+                           #(reject-question!* user-id click)))]
             (case result
               (t))))))))
 
@@ -444,7 +499,14 @@
 (e/defn QuestionsView [user-id kg-bump]
   (e/client
     (let [!query (atom "") query (e/watch !query)
-          questions (e/server (get-questions* kg-bump user-id query))
+          !source-text (atom "") source-text (e/watch !source-text)
+          !entity-text (atom "") entity-text (e/watch !entity-text)
+          docs (e/server (list-source-docs* kg-bump user-id))
+          ents (e/server (list-entity-options* kg-bump user-id))
+          ;; Resolve picked title/label → id; blank / no-match = that filter off.
+          source-id (some (fn [d] (when (= (:title d) source-text) (:id d))) docs)
+          entity-id (some (fn [ent] (when (= (:label ent) entity-text) (:id ent))) ents)
+          questions (e/server (get-questions* kg-bump user-id query source-id entity-id))
           item-count (count questions)
           grid-cols "minmax(220px,1.4fr) minmax(220px,1.4fr) 90px 55px 60px"
           !editing (atom nil)               ; [question-id :question|:answer]
@@ -453,18 +515,23 @@
         (dom/props {:style {:padding "0 16px" :display "flex" :flex-direction "column"
                             :height "calc(100vh - 160px)"}})
         (dom/div
-          (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :margin "10px 0"}})
+          (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :margin "10px 0"
+                              :flex-wrap "wrap"}})
           (dom/input
             (dom/props {:placeholder "Search questions…" :class "form-input"
                         :aria-label "Search questions"
                         :style {:max-width "320px"}})
             (dom/On "input" (fn [ev] (reset! !query (.. ev -target -value))) nil))
+          (dom/div (dom/props {:style {:width "200px"}})
+            (typeahead/Typeahead !source-text (mapv :title docs) "Filter by source…" nil nil))
+          (dom/div (dom/props {:style {:width "200px"}})
+            (typeahead/Typeahead !entity-text (mapv :label ents) "Filter by entity…" nil nil))
           (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
             (dom/text (str item-count " question" (when (not= 1 item-count) "s")
                         " — double-click text to edit"))))
         (if (zero? item-count)
           (dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
-            (dom/text (if (str/blank? query)
+            (dom/text (if (and (str/blank? query) (nil? source-id) (nil? entity-id))
                         "No questions yet — generate from a document or synthesize from an entity."
                         "No matches.")))
           (TapeTable ["Question" "Answer" "Kind" "Facts" ""] grid-cols item-count
@@ -497,7 +564,7 @@
             (case result
               (t))))))))
 
-(e/defn EntityRow [user-id entity i !renaming renaming !merge-source merge-source]
+(e/defn EntityRow [user-id entity i !renaming renaming !merge-source merge-source !merge-confirm]
   (e/client
     (let [{:keys [id label aliases fact_count]} entity]
       (dom/tr
@@ -555,35 +622,36 @@
               (dom/props {:class "btn btn-sm btn-secondary" :style {:margin-left "4px"}
                           :aria-label (str "Merge into " label)})
               (dom/text "Merge here")
-              (let [click (dom/On "click" (fn [_] {:id (str (random-uuid))}) nil)
-                    [t _] (e/Token click)]
-                (dom/props {:disabled (some? t)})
-                (when t
-                  (let [result (e/server
-                                 (e/Offload
-                                   #(do (db/merge-kg-entities! user-id id merge-source)
-                                      (commands/bump! user-id :distill)
-                                      :done)))]
-                    (case result
-                      (do (reset! !merge-source nil) (t)))))))))))))
+              ;; Merge is irreversible (no undo — see plan 6.5): confirm first.
+              (dom/On "click"
+                (fn [_] (reset! !merge-confirm {:target id :source merge-source :target-label label}))
+                nil))))))))
 
 (e/defn EntitiesView [user-id kg-bump]
   (e/client
     (let [!query (atom "") query (e/watch !query)
+          !source-text (atom "") source-text (e/watch !source-text)
           !merge-source (atom nil) merge-source (e/watch !merge-source)
+          !merge-confirm (atom nil) merge-confirm (e/watch !merge-confirm)
           !renaming (atom nil) renaming (e/watch !renaming)
-          entities (e/server (list-entities* kg-bump user-id query))
+          docs (e/server (list-source-docs* kg-bump user-id))
+          ;; Resolve the picked title → its doc id; blank / no-match = no filter.
+          source-id (some (fn [d] (when (= (:title d) source-text) (:id d))) docs)
+          entities (e/server (list-entities* kg-bump user-id query source-id))
           item-count (count entities)]
       (dom/div
         (dom/props {:style {:padding "0 16px" :display "flex" :flex-direction "column"
                             :height "calc(100vh - 160px)"}})
         (dom/div
-          (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :margin "10px 0"}})
+          (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :margin "10px 0"
+                              :flex-wrap "wrap"}})
           (dom/input
             (dom/props {:placeholder "Search entities…" :class "form-input"
                         :aria-label "Search entities"
                         :style {:max-width "320px"}})
             (dom/On "input" (fn [ev] (reset! !query (.. ev -target -value))) nil))
+          (dom/div (dom/props {:style {:width "220px"}})
+            (typeahead/Typeahead !source-text (mapv :title docs) "Filter by source…" nil nil))
           (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
             (dom/text (str item-count " entit" (if (= 1 item-count) "y" "ies"))))
           (when merge-source
@@ -594,12 +662,25 @@
                 (dom/On "click" (fn [_] (reset! !merge-source nil)) nil)))))
         (if (zero? item-count)
           (dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
-            (dom/text (if (str/blank? query) "No entities yet — distill first." "No matches.")))
+            (dom/text (if (and (str/blank? query) (nil? source-id))
+                        "No entities yet — distill first." "No matches.")))
           (TapeTable ["Entity" "Aliases" "Facts" ""]
             "minmax(200px,1fr) minmax(160px,1fr) 60px minmax(220px,max-content)" item-count
             (e/fn [i]
               (when-let [entity (nth entities i nil)]
-                (EntityRow user-id entity i !renaming renaming !merge-source merge-source)))))))))
+                (EntityRow user-id entity i !renaming renaming !merge-source merge-source !merge-confirm)))))
+        ;; Guard the irreversible entity merge behind a confirm (merge undo is out
+        ;; of scope, plan 6.5). One modal for the view; !merge-confirm carries the
+        ;; {:target :source :target-label} payload set by the row's "Merge here".
+        (modal/ConfirmModal !merge-confirm
+          "Merge entities?"
+          (str "Merge the other entity into " (:target-label merge-confirm)
+               "? Its facts and aliases move over and the source entity is removed. This can't be undone.")
+          "Merge" "btn btn-danger-fill"
+          (e/fn [payload]
+            (let [r (e/server (e/Offload #(do (db/merge-kg-entities! user-id (:target payload) (:source payload))
+                                           (commands/bump! user-id :distill) :done)))]
+              (case r (reset! !merge-source nil)))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Page

@@ -488,9 +488,13 @@
           !draft (atom "")
           !now (atom (now-ms)) now (e/watch !now)
           deadline (+ (now-ms) (* 1000 (max 0 (- (or limit 0) (or elapsed 0)))))
-          _ticker #?(:cljs (let [iv (js/setInterval (fn [] (reset! !now (js/Date.now))) 1000)]
-                             (e/on-unmount (fn [] (js/clearInterval iv))))
-                     :clj nil)
+          ;; e/on-unmount + let must live on BOTH peers (identical frame slots);
+          ;; guarding only the JS interop keeps CLJ/CLJS frame counts in lockstep.
+          ;; Wrapping e/on-unmount itself in #?(:cljs …) diverged the frames and
+          ;; crashed the exam view with a frame_signal AIOOBE (modal-shell/20 rule).
+          _ticker (let [iv #?(:cljs (js/setInterval (fn [] (reset! !now (js/Date.now))) 1000)
+                              :clj nil)]
+                    (e/on-unmount (fn [] #?(:cljs (js/clearInterval iv) :clj nil))))
           remaining (max 0 (quot (- deadline now) 1000))
           !submit-req (atom nil) submit-req (e/watch !submit-req)
           grading (e/server (e/watch (us/get-atom user-id :exam-grading)))

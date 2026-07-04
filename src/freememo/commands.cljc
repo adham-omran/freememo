@@ -65,7 +65,9 @@
   {"flashcard" #{:card-mutations}
    "pin"       #{:pin-mutations}
    "setting"   #{:settings-refresh}
-   "document"  #{:card-mutations :tree-mutations :refresh}})
+   "document"  #{:card-mutations :tree-mutations :refresh}
+   "question"  #{:kg-mutations}
+   "fact"      #{:kg-mutations}})
 
 ;; ── Registry ───────────────────────────────────────────────────────────────
 

@@ -453,8 +453,9 @@
       id BIGSERIAL PRIMARY KEY,
       user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       action_type TEXT NOT NULL CHECK (action_type IN
-        ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','move-topic')),
-      entity_type TEXT NOT NULL CHECK (entity_type IN ('flashcard','pin','setting','document')),
+        ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','move-topic',
+         'reject-question','reject-fact')),
+      entity_type TEXT NOT NULL CHECK (entity_type IN ('flashcard','pin','setting','document','question','fact')),
       entity_refs JSONB NOT NULL,
       snapshot JSONB NOT NULL,
       occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -467,10 +468,11 @@
   (jdbc/execute! ds ["ALTER TABLE undo_log DROP CONSTRAINT IF EXISTS undo_log_action_type_check"])
   (jdbc/execute! ds ["ALTER TABLE undo_log ADD CONSTRAINT undo_log_action_type_check
                       CHECK (action_type IN
-                        ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','move-topic'))"])
+                        ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','move-topic',
+                         'reject-question','reject-fact'))"])
   (jdbc/execute! ds ["ALTER TABLE undo_log DROP CONSTRAINT IF EXISTS undo_log_entity_type_check"])
   (jdbc/execute! ds ["ALTER TABLE undo_log ADD CONSTRAINT undo_log_entity_type_check
-                      CHECK (entity_type IN ('flashcard','pin','setting','document'))"])
+                      CHECK (entity_type IN ('flashcard','pin','setting','document','question','fact'))"])
 
   ;; Staged-delete marker: a topic (and its whole subtree) hidden pending the
   ;; 12h undo window points at the undo_log entry that staged it. ON DELETE
@@ -3907,36 +3909,45 @@
 
 (defn list-kg-entities
   "Entities with their fact usage count; trigram-filtered when query is
-   non-blank, else busiest first. aliases normalized PgArray → vector so rows
-   are Electric-wire safe."
-  [user-id query limit]
-  (let [blank? (or (nil? query) (str/blank? query))
-        rows (if blank?
-               (jdbc/execute! ds
-                 ["SELECT e.id, e.label, e.aliases,
-                     (SELECT COUNT(*) FROM kg_facts f
-                      WHERE f.subject_entity_id = e.id OR f.object_entity_id = e.id) AS fact_count
-                   FROM kg_entities e WHERE e.user_id = ?
-                   ORDER BY fact_count DESC, e.label LIMIT ?"
-                  user-id limit]
-                 {:builder-fn rs/as-unqualified-maps})
-               (jdbc/execute! ds
-                 ["SELECT e.id, e.label, e.aliases,
-                     (SELECT COUNT(*) FROM kg_facts f
-                      WHERE f.subject_entity_id = e.id OR f.object_entity_id = e.id) AS fact_count
-                   FROM kg_entities e
-                   WHERE e.user_id = ?
-                     AND GREATEST(
-                       similarity(e.label, ?),
-                       COALESCE((SELECT MAX(similarity(a, ?)) FROM unnest(e.aliases) a), 0)
-                     ) >= 0.2
-                   ORDER BY GREATEST(
-                       similarity(e.label, ?),
-                       COALESCE((SELECT MAX(similarity(a, ?)) FROM unnest(e.aliases) a), 0)
-                     ) DESC LIMIT ?"
-                  user-id query query query query limit]
-                 {:builder-fn rs/as-unqualified-maps}))]
-    (kg-aliases->vec rows)))
+   non-blank, else busiest first. Optional `source-id` (a graph_topic_id) keeps
+   only entities that appear in a fact of that document. aliases normalized
+   PgArray → vector so rows are Electric-wire safe."
+  ([user-id query limit] (list-kg-entities user-id query limit nil))
+  ([user-id query limit source-id]
+   (let [blank? (or (nil? query) (str/blank? query))
+         ;; Optional source filter: entity participates in a fact of the document.
+         ;; No FK on kg_entities — reachable via kg_facts subject/object columns.
+         src-sql (if source-id
+                   " AND EXISTS (SELECT 1 FROM kg_facts fs
+                       WHERE (fs.subject_entity_id = e.id OR fs.object_entity_id = e.id)
+                         AND fs.graph_topic_id = ?)"
+                   "")
+         src-params (if source-id [source-id] [])
+         base "SELECT e.id, e.label, e.aliases,
+                 (SELECT COUNT(*) FROM kg_facts f
+                  WHERE f.subject_entity_id = e.id OR f.object_entity_id = e.id) AS fact_count
+               FROM kg_entities e WHERE e.user_id = ?"
+         rows (if blank?
+                (jdbc/execute! ds
+                  (into [(str base src-sql
+                           " ORDER BY fact_count DESC, e.label LIMIT ?")
+                         user-id]
+                    (concat src-params [limit]))
+                  {:builder-fn rs/as-unqualified-maps})
+                (jdbc/execute! ds
+                  (into [(str base src-sql
+                           " AND GREATEST(
+                               similarity(e.label, ?),
+                               COALESCE((SELECT MAX(similarity(a, ?)) FROM unnest(e.aliases) a), 0)
+                             ) >= 0.2
+                             ORDER BY GREATEST(
+                               similarity(e.label, ?),
+                               COALESCE((SELECT MAX(similarity(a, ?)) FROM unnest(e.aliases) a), 0)
+                             ) DESC LIMIT ?")
+                         user-id]
+                    (concat src-params [query query query query limit]))
+                  {:builder-fn rs/as-unqualified-maps}))]
+     (kg-aliases->vec rows))))
 
 (defn set-kg-fact-status!
   "Fact status transition. Approving also approves the fact's predicate;
@@ -3962,6 +3973,81 @@
               (SELECT question_id FROM kg_question_facts WHERE fact_id = ?)"
            fact-id]))
       (some? row))))
+
+(defn reject-kg-question!
+  "Reject a question and log an undo entry (so the toast can offer Undo).
+   Returns the undo entry id, or nil when the question was missing or already
+   rejected. The undo insert follows the mutation non-transactionally, matching
+   insert-undo-entry!'s contract."
+  [user-id question-id]
+  (let [prev (jdbc/with-transaction [tx ds]
+               (let [row (jdbc/execute-one! tx
+                           ["SELECT status FROM kg_questions WHERE id = ? AND user_id = ?"
+                            question-id user-id]
+                           {:builder-fn rs/as-unqualified-maps})]
+                 (when (and row (not= "rejected" (:status row)))
+                   (jdbc/execute! tx
+                     ["UPDATE kg_questions SET status = 'rejected' WHERE id = ? AND user_id = ?"
+                      question-id user-id])
+                   (:status row))))]
+    (when prev
+      (insert-undo-entry! user-id "reject-question" "question"
+        [question-id]
+        [{:question-id question-id :prev-status prev}]))))
+
+(defn restore-rejected-question!
+  "Undo a reject-question: restore the question's pre-reject status."
+  [snapshot]
+  (let [{:keys [question-id prev-status]} (first snapshot)]
+    (jdbc/execute! ds
+      ["UPDATE kg_questions SET status = ? WHERE id = ?" prev-status question-id])))
+
+(defn reject-kg-fact!
+  "Reject a fact and, like set-kg-fact-status!'s reject path, retire every live
+   question that covers it — but snapshot the EXACT question ids retired so undo
+   un-retires precisely those (never one already retired before this reject,
+   never missing one). Returns the undo entry id, or nil when the fact was
+   missing or already rejected."
+  [user-id fact-id]
+  (let [snap (jdbc/with-transaction [tx ds]
+               (let [row (jdbc/execute-one! tx
+                           ["SELECT status FROM kg_facts WHERE id = ? AND user_id = ?"
+                            fact-id user-id]
+                           {:builder-fn rs/as-unqualified-maps})]
+                 (when (and row (not= "rejected" (:status row)))
+                   ;; Capture the approved covering questions BEFORE retiring — these,
+                   ;; and only these, are the ones this reject transitions to retired.
+                   (let [qids (mapv :id
+                                (jdbc/execute! tx
+                                  ["SELECT id FROM kg_questions
+                                    WHERE status = 'approved' AND id IN
+                                      (SELECT question_id FROM kg_question_facts WHERE fact_id = ?)"
+                                   fact-id]
+                                  {:builder-fn rs/as-unqualified-maps}))]
+                     (jdbc/execute! tx
+                       ["UPDATE kg_facts SET status = 'rejected', reviewed_at = now()
+                         WHERE id = ? AND user_id = ?" fact-id user-id])
+                     (when (seq qids)
+                       (jdbc/execute! tx
+                         (sql/format {:update :kg_questions :set {:status "retired"}
+                                      :where [:in :id qids]})))
+                     {:fact-id fact-id :prev-status (:status row)
+                      :retired-question-ids (vec qids)}))))]
+    (when snap
+      (insert-undo-entry! user-id "reject-fact" "fact" [fact-id] [snap]))))
+
+(defn restore-rejected-fact!
+  "Undo a reject-fact: restore the fact's pre-reject status and set exactly the
+   questions this reject retired back to approved."
+  [snapshot]
+  (let [{:keys [fact-id prev-status retired-question-ids]} (first snapshot)]
+    (jdbc/with-transaction [tx ds]
+      (jdbc/execute! tx
+        ["UPDATE kg_facts SET status = ? WHERE id = ?" prev-status fact-id])
+      (when (seq retired-question-ids)
+        (jdbc/execute! tx
+          (sql/format {:update :kg_questions :set {:status "approved"}
+                       :where [:in :id retired-question-ids]}))))))
 
 (defn update-kg-fact-literal!
   "Edit-then-approve for literal-object facts (entity edits go through
@@ -4105,23 +4191,39 @@
 (defn get-kg-questions
   "The user's questions with covered-fact counts; non-blank `query` filters
    question + answer text case-insensitively. status nil = all live views
-   should pass \"approved\". Newest first."
-  [user-id status query]
-  (let [q (when-not (or (nil? query) (str/blank? query))
-            (str "%" (str/trim query) "%"))]
-    (jdbc/execute! ds
-      (sql/format {:select [[:q.id :id] [:q.kind :kind] [:q.question :question]
-                            [:q.reference_answer :reference_answer]
-                            [:q.status :status]
-                            [[:raw "(SELECT COUNT(*) FROM kg_question_facts qf WHERE qf.question_id = q.id)"]
-                             :fact_count]]
-                   :from [[:kg_questions :q]]
-                   :where [:and [:= :q.user_id user-id]
-                           (when status [:= :q.status status])
-                           (when q [:or [:ilike :q.question q]
-                                    [:ilike :q.reference_answer q]])]
-                   :order-by [[:q.id :desc]]})
-      {:builder-fn rs/as-unqualified-maps})))
+   should pass \"approved\". Optional opts {:source-id gid :entity-id eid}:
+   source-id keeps questions with ANY linked fact in that document; entity-id
+   keeps questions with a linked fact touching that entity (subject or object).
+   Neither is a stored column on kg_questions — both route via kg_question_facts
+   → kg_facts. Newest first."
+  ([user-id status query] (get-kg-questions user-id status query nil))
+  ([user-id status query {:keys [source-id entity-id]}]
+   (let [q (when-not (or (nil? query) (str/blank? query))
+             (str "%" (str/trim query) "%"))]
+     (jdbc/execute! ds
+       (sql/format {:select [[:q.id :id] [:q.kind :kind] [:q.question :question]
+                             [:q.reference_answer :reference_answer]
+                             [:q.status :status]
+                             [[:raw "(SELECT COUNT(*) FROM kg_question_facts qf WHERE qf.question_id = q.id)"]
+                              :fact_count]]
+                    :from [[:kg_questions :q]]
+                    :where [:and [:= :q.user_id user-id]
+                            (when status [:= :q.status status])
+                            (when q [:or [:ilike :q.question q]
+                                     [:ilike :q.reference_answer q]])
+                            (when source-id
+                              [:exists {:select [1] :from [[:kg_question_facts :qf]]
+                                        :join [[:kg_facts :f] [:= :f.id :qf.fact_id]]
+                                        :where [:and [:= :qf.question_id :q.id]
+                                                [:= :f.graph_topic_id source-id]]}])
+                            (when entity-id
+                              [:exists {:select [1] :from [[:kg_question_facts :qf2]]
+                                        :join [[:kg_facts :f2] [:= :f2.id :qf2.fact_id]]
+                                        :where [:and [:= :qf2.question_id :q.id]
+                                                [:or [:= :f2.subject_entity_id entity-id]
+                                                     [:= :f2.object_entity_id entity-id]]]}])]
+                    :order-by [[:q.id :desc]]})
+       {:builder-fn rs/as-unqualified-maps}))))
 
 (defn facts-without-atomic-question
   "Approved facts of a document not yet covered by a live atomic question —

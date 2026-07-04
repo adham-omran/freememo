@@ -118,3 +118,51 @@
           (= (.-key e) "Escape") (close!)
           (= (.-key e) "Tab")    (trap-tab! (.-currentTarget e) e)))
       nil)))
+
+(e/defn ConfirmModal
+  "Reusable confirm dialog on ModalEscape chrome. Renders nothing while @!open is
+   nil; when non-nil, shows `message` (with `title` as the dialog label) and
+   Cancel / confirm buttons.
+
+   Cancel, Escape, or a backdrop click → (reset! !open nil).
+   The confirm click SNAPSHOTS @!open as a payload, invokes `(Confirm! payload)` —
+   a 1-arg e/fn carrying the caller's (usually server-sited) work — and closes when
+   it completes. The button is disabled between click and completion, and the payload
+   is frozen in the click event, so the action can't double-fire and can't race a
+   concurrent !open change. Server-work → close → token-spend are sequenced via
+   nested `case`, mirroring knowledge-tree/DeleteConfirmModal.
+
+   Pre  : `!open` is a client atom — nil hides the modal; any non-nil value both
+          shows it and is passed to `Confirm!` as the payload.
+          `Confirm!` returns a non-nil value when its work is done.
+   Post : `Confirm!` runs once per confirm click with the payload captured at click
+          time; `!open` is nil afterwards."
+  [!open title message confirm-label confirm-class Confirm!]
+  (e/client
+    (when (some? (e/watch !open))
+      (dom/div
+        (dom/props {:class "modal-backdrop"})
+        (dom/On "click" (fn [_] (reset! !open nil)) nil)
+        (ModalEscape (fn [] (reset! !open nil)) title)
+        (dom/div
+          (dom/props {:class "modal-content modal-sm"})
+          (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+          (dom/div
+            (dom/props {:class "confirm-modal-body"})
+            (dom/p (dom/text message)))
+          (dom/div
+            (dom/props {:class "confirm-modal-actions"})
+            (dom/button
+              (dom/props {:class "btn btn-secondary"})
+              (dom/text "Cancel")
+              (dom/On "click" (fn [_] (reset! !open nil)) nil))
+            (dom/button
+              (dom/props {:class (or confirm-class "btn btn-primary")})
+              (dom/text confirm-label)
+              (let [ev (dom/On "click" (fn [_] {:id (str (random-uuid)) :payload @!open}) nil)
+                    [t _] (e/Token ev)]
+                (dom/props {:disabled (some? t)})
+                (when t
+                  (case (Confirm! (:payload ev))
+                    (case (reset! !open nil)
+                      (t))))))))))))
