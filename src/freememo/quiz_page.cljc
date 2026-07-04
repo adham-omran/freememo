@@ -681,6 +681,15 @@
   ;; session still outranks a mode preset (cond order below).
   (atom nil))
 
+;; Plain fn (NOT inside an e/defn reactive body) so the cljs-only nested calls
+;; don't compile to client-only reactive nodes the server lacks. An inline
+;; #?(:cljs (first (swap-vals! …)) :clj nil) in QuizPage's let diverged the
+;; CLJ/CLJS frame slot counts (client > server → frame_signal AIOOBE on /quiz).
+;; Same platform-split-behind-a-defn shape as now-ms.
+(defn consume-pending-preset! []
+  #?(:cljs (first (swap-vals! !pending-preset (constantly nil)))
+     :clj nil))
+
 (e/defn GlobalQuizInvokers
   "Headless; mounted once in Main. Publishes the invokers that make the
    global quiz :nav commands available from every tab (command-bus requires
@@ -700,9 +709,18 @@
 
 (e/defn QuizPage [user-id]
   (e/client
-    (let [preset #?(:cljs (first (swap-vals! !pending-preset (constantly nil)))
-                    :clj nil)
-          !session (atom nil)
-          !view (atom :play)]
-      ;; DEBUG bisection — QuizSetup standalone, no cond/watches/resume.
-      (QuizSetup user-id !session !view (:mode preset)))))
+    (let [preset (consume-pending-preset!)
+          resume (e/server (active-session* user-id))
+          !session (atom ::unset) session (e/watch !session)
+          !summary (atom nil) summary (e/watch !summary)
+          !result-sid (atom nil) result-sid (e/watch !result-sid)
+          !view (atom (if (= :history (:view preset)) :history :play))
+          view (e/watch !view)]
+      (cond
+        (= ::unset session) (do (reset! !session resume) nil)
+        (some? result-sid) (SessionResult user-id result-sid !result-sid)
+        (= view :history) (HistoryView user-id !view !result-sid)
+        (some? summary) (QuizSummary !session !summary summary)
+        (nil? session) (QuizSetup user-id !session !view (:mode preset))
+        (= "exam" (:kind session)) (ExamActive user-id !session session !result-sid)
+        :else (QuizActive user-id !session session !summary)))))
