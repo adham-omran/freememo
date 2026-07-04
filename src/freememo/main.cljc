@@ -14,6 +14,8 @@
             [freememo.learn-page :refer [LearnPage]]
             [freememo.learn-session :refer [LearnSession]]
             [freememo.topic-page :refer [TopicPage]]
+            [freememo.knowledge-page :refer [KnowledgePage]]
+            [freememo.quiz-page :refer [QuizPage GlobalQuizInvokers]]
             [freememo.search-page :refer [SearchPage]]
             [freememo.subset-review :refer [SubsetReviewSession]]
             [freememo.landing-page :refer [LandingPage]]
@@ -275,6 +277,18 @@
                     (dom/On "click" (fn [_] (navigate! :search)) nil))
 
                   (dom/button
+                    (dom/props {:class "nav-tab" :style (tab-style :knowledge)})
+                    (icons/Icon :link :size 18)
+                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Knowledge"))
+                    (dom/On "click" (fn [_] (navigate! :knowledge)) nil))
+
+                  (dom/button
+                    (dom/props {:class "nav-tab" :style (tab-style :quiz)})
+                    (icons/Icon :clipboard :size 18)
+                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Quiz"))
+                    (dom/On "click" (fn [_] (navigate! :quiz)) nil))
+
+                  (dom/button
                     (dom/props {:class "nav-tab" :style (tab-style :import)})
                     (icons/Icon :plus :size 18)
                     (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Import"))
@@ -325,6 +339,8 @@
                     (r/pop ; consume 'search from route; SearchPage reads remaining segments
                       (SearchPage user-id navigate!)))
                   (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
+                  (when (= active-tab :knowledge) (KnowledgePage user-id))
+                  (when (= active-tab :quiz) (QuizPage user-id))
                   (when (= active-tab :settings) (SettingsPage user-id username enc-key base-url client-country))
                   (when (= active-tab :credits) (CreditsReturnPage user-id navigate!))
                   (when (= active-tab :learn) (LearnPage user-id navigate! nil))
@@ -339,6 +355,7 @@
 
                 ;; Command architecture: queue-invocation bridge + palette
                 (bus/QueueInvoker user-id)
+                (GlobalQuizInvokers navigate!)
                 (CommandPalette active-tab)
 
                 ;; Actions history modal (undo-newest is a :queue command now)
