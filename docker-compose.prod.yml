@@ -9,6 +9,26 @@
 # init-time values (cardmaker / cardmaker / dev), which Postgres fixed at first
 # init and cannot be rotated via env.
 services:
+  # SPARQL facade over the knowledge graph (read-only). No ports: reachable
+  # only on the compose network — the Cloudflare tunnel fronts the app alone,
+  # and this endpoint has no user auth. Query from the host via:
+  #   docker compose exec app curl http://ontop:8080/sparql ...
+  ontop:
+    build: ./ontop
+    restart: unless-stopped
+    environment:
+      ONTOP_MAPPING_FILE: /opt/ontop/input/mapping.obda
+      ONTOP_PROPERTIES_FILE: /opt/ontop/input/ontop.properties
+      ONTOP_DB_USER: cardmaker
+      ONTOP_DB_PASSWORD: dev
+      ONTOP_LAZY_INIT: "true"
+    volumes:
+      - ./ontop/mapping.obda:/opt/ontop/input/mapping.obda:ro
+      - ./ontop/ontop.properties:/opt/ontop/input/ontop.properties:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   app:
     build:
       context: .

@@ -14,5 +14,23 @@
         interval: 5s
         timeout: 5s
         retries: 5
+    ontop:
+      build: ./ontop
+      environment:
+        ONTOP_MAPPING_FILE: /opt/ontop/input/mapping.obda
+        ONTOP_PROPERTIES_FILE: /opt/ontop/input/ontop.properties
+        ONTOP_DB_USER: cardmaker
+        ONTOP_DB_PASSWORD: dev
+        # Don't connect until first query — the app creates the kg_* tables
+        # on boot, which may happen after this container starts.
+        ONTOP_LAZY_INIT: "true"
+      volumes:
+        - ./ontop/mapping.obda:/opt/ontop/input/mapping.obda:ro
+        - ./ontop/ontop.properties:/opt/ontop/input/ontop.properties:ro
+      ports:
+        - "8081:8080"
+      depends_on:
+        postgres:
+          condition: service_healthy
   volumes:
     pgdata:
