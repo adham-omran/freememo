@@ -1,0 +1,56 @@
+[PrefixDeclaration]
+:		urn:freememo:vocab#
+rdf:		http://www.w3.org/1999/02/22-rdf-syntax-ns#
+rdfs:		http://www.w3.org/2000/01/rdf-schema#
+skos:		http://www.w3.org/2004/02/skos/core#
+prov:		http://www.w3.org/ns/prov#
+xsd:		http://www.w3.org/2001/XMLSchema#
+
+[MappingDeclaration] @collection [[
+mappingId	entity-node
+target		<urn:freememo:{user_id}:entity/{id}> a :Entity ; rdfs:label {label}^^xsd:string .
+source		SELECT id, user_id, label FROM kg_entities
+
+mappingId	entity-alias
+target		<urn:freememo:{user_id}:entity/{id}> skos:altLabel {alias}^^xsd:string .
+source		SELECT id, user_id, unnest(aliases) AS alias FROM kg_entities
+
+mappingId	predicate-node
+target		<urn:freememo:{user_id}:predicate/{slug}> a rdf:Property ; rdfs:label {label}^^xsd:string .
+source		SELECT user_id, slug, label FROM kg_predicates WHERE status = 'approved'
+
+mappingId	fact-direct-entity
+target		<urn:freememo:{user_id}:entity/{subject_entity_id}> <urn:freememo:{user_id}:predicate/{slug}> <urn:freememo:{user_id}:entity/{object_entity_id}> .
+source		SELECT f.user_id, f.subject_entity_id, p.slug, f.object_entity_id
+		FROM kg_facts f JOIN kg_predicates p ON p.id = f.predicate_id
+		WHERE f.status = 'approved' AND f.object_entity_id IS NOT NULL
+
+mappingId	fact-direct-literal
+target		<urn:freememo:{user_id}:entity/{subject_entity_id}> <urn:freememo:{user_id}:predicate/{slug}> {object_literal}^^xsd:string .
+source		SELECT f.user_id, f.subject_entity_id, p.slug, f.object_literal
+		FROM kg_facts f JOIN kg_predicates p ON p.id = f.predicate_id
+		WHERE f.status = 'approved' AND f.object_literal IS NOT NULL
+
+mappingId	fact-statement-entity
+target		<urn:freememo:fact/{id}> a rdf:Statement ; rdf:subject <urn:freememo:{user_id}:entity/{subject_entity_id}> ; rdf:predicate <urn:freememo:{user_id}:predicate/{slug}> ; rdf:object <urn:freememo:{user_id}:entity/{object_entity_id}> ; prov:wasQuotedFrom <urn:freememo:{user_id}:doc/{graph_topic_id}> .
+source		SELECT f.id, f.user_id, f.subject_entity_id, p.slug, f.object_entity_id, f.graph_topic_id
+		FROM kg_facts f JOIN kg_predicates p ON p.id = f.predicate_id
+		WHERE f.status = 'approved' AND f.object_entity_id IS NOT NULL
+
+mappingId	fact-statement-literal
+target		<urn:freememo:fact/{id}> a rdf:Statement ; rdf:subject <urn:freememo:{user_id}:entity/{subject_entity_id}> ; rdf:predicate <urn:freememo:{user_id}:predicate/{slug}> ; rdf:object {object_literal}^^xsd:string ; prov:wasQuotedFrom <urn:freememo:{user_id}:doc/{graph_topic_id}> .
+source		SELECT f.id, f.user_id, f.subject_entity_id, p.slug, f.object_literal, f.graph_topic_id
+		FROM kg_facts f JOIN kg_predicates p ON p.id = f.predicate_id
+		WHERE f.status = 'approved' AND f.object_literal IS NOT NULL
+
+mappingId	fact-page
+target		<urn:freememo:fact/{id}> :page {page_number}^^xsd:integer .
+source		SELECT id, page_number FROM kg_facts
+		WHERE status = 'approved' AND page_number IS NOT NULL
+
+mappingId	doc-node
+target		<urn:freememo:{user_id}:doc/{id}> a prov:Entity ; rdfs:label {title}^^xsd:string .
+source		SELECT DISTINCT t.id, t.user_id, t.title
+		FROM topics t JOIN kg_facts f ON f.graph_topic_id = t.id
+		WHERE f.status = 'approved'
+]]

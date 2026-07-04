@@ -27,6 +27,25 @@ services:
       timeout: 5s
       retries: 5
 
+  # SPARQL facade over the knowledge graph (read-only). Internal-only by
+  # default — the endpoint has no user auth. To expose it on your LAN, add a
+  # ports mapping (e.g. "8082:8080") here.
+  ontop:
+    build: ./ontop
+    restart: unless-stopped
+    environment:
+      ONTOP_MAPPING_FILE: /opt/ontop/input/mapping.obda
+      ONTOP_PROPERTIES_FILE: /opt/ontop/input/ontop.properties
+      ONTOP_DB_USER: cardmaker
+      ONTOP_DB_PASSWORD: "${DB_PASSWORD:?DB_PASSWORD required — set in .env (generate: openssl rand -hex 32)}"
+      ONTOP_LAZY_INIT: "true"
+    volumes:
+      - ./ontop/mapping.obda:/opt/ontop/input/mapping.obda:ro
+      - ./ontop/ontop.properties:/opt/ontop/input/ontop.properties:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   app:
     build:
       context: .
