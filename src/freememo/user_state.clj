@@ -24,11 +24,17 @@
           :queue-mutations  (atom 0)
           :pin-mutations    (atom 0)
           :undo-mutations   (atom 0)
+          :kg-mutations     (atom 0)
           :card-gen-status  (atom {})
           :scanning-pages   (atom #{})
           :transcribing-topics (atom #{})
           :ocr-errors       (atom {})
           :scan-cancellers  (atom {})
+          :distilling-docs  (atom #{})      ; root topic ids with a distill run in flight
+          :distill-cancellers (atom {})     ; root topic id -> missionary cancel fn
+          :generating-questions (atom #{})  ; root topic ids with a question run in flight
+          :question-cancellers (atom {})    ; root topic id -> missionary cancel fn
+          :exam-grading     (atom {})       ; session id -> [graded total] during end-of-exam grading
           :toasts           (atom [])
           ;; Optimistic-update pipeline (freememo.optimistic):
           :pending-commands (atom [])   ; dispatch queue: [{:id :type :payload} ...]

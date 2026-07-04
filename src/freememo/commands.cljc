@@ -43,13 +43,13 @@
             #?(:clj [freememo.user-state :as us])))
 
 ;; ── Invalidation channels ──────────────────────────────────────────────────
-;; The 10 per-user counter atoms in freememo.user-state. Views e/watch these;
+;; The 11 per-user counter atoms in freememo.user-state. Views e/watch these;
 ;; bumping re-runs their queries.
 
 (def invalidation-channels
   #{:refresh :credits-refresh :meta-refresh :settings-refresh
     :card-mutations :sync-mutations :tree-mutations
-    :queue-mutations :pin-mutations :undo-mutations})
+    :queue-mutations :pin-mutations :undo-mutations :kg-mutations})
 
 ;; ── Channel groups ─────────────────────────────────────────────────────────
 ;; Named unions used by entries below and by dynamic bumpers (freememo.undo
@@ -113,6 +113,19 @@
      :scan           {:label "Scan page (OCR)" :class :mutation :exec :ui-button
                       :bind "meta+shift+s" :when #{:viewer}
                       :table #{:topics} :views #{:refresh}}
+     :distill        {:label "Distill facts (KG)" :class :mutation :exec :ui-button
+                      :when #{:viewer}
+                      :table #{:kg_facts :kg_entities :kg_predicates}
+                      :views #{:kg-mutations}}
+     :generate-questions {:label "Generate questions (KG)" :class :mutation :exec :ui-button
+                          :when #{:viewer}
+                          :table #{:kg_questions :kg_question_facts}
+                          :views #{:kg-mutations}}
+     ;; Global quiz navigation — invokers published by GlobalQuizInvokers
+     ;; (mounted once in Main), so they're reachable from every tab.
+     :start-quiz     {:label "Start quiz…" :class :nav :exec :ui-button :views #{}}
+     :start-exam     {:label "Start exam…" :class :nav :exec :ui-button :views #{}}
+     :quiz-history   {:label "Quiz history" :class :nav :exec :ui-button :views #{}}
      :compare-ocr    {:label "Compare OCR models" :class :mutation :exec :ui-button
                       :when #{:viewer} :table #{:topics} :views #{:refresh}}
      :copy-text      {:label "Copy text" :class :mutation :exec :ui-button

@@ -481,6 +481,154 @@
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_staged_delete
                       ON topics(staged_delete_id) WHERE staged_delete_id IS NOT NULL"])
 
+  ;; Knowledge graph — LLM-distilled facts with human review (see
+  ;; plans/knowledge-graph-quizzes.md). Physical store is annotated rows;
+  ;; the Ontop service (ontop/) publishes approved rows as orthodox RDF.
+  ;; IRIs are DERIVED, never stored: urn:freememo:{user_id}:entity/{id},
+  ;; :predicate/{slug}, urn:freememo:fact/{id} — the OBDA mapping owns the
+  ;; derivation, so rows and RDF cannot drift.
+
+  ;; Entities — graph nodes. label/aliases double as the quiz keyword lexicon.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS kg_entities (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      label TEXT NOT NULL,
+      aliases TEXT[] NOT NULL DEFAULT '{}',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_entities_user ON kg_entities(user_id)"])
+  ;; Trigram index feeds the entity-linking shortlist during extraction.
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_entities_label_trgm
+                      ON kg_entities USING gin (label gin_trgm_ops)"])
+
+  ;; Predicates — per-user vocabulary, born empty; extraction proposes, the
+  ;; review queue approves. slug CHECK enforces IRI-safety at the boundary so
+  ;; no insert site has to.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS kg_predicates (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      slug TEXT NOT NULL CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'),
+      label TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'proposed'
+        CHECK (status IN ('proposed','approved','rejected')),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      reviewed_at TIMESTAMP,
+      UNIQUE (user_id, slug)
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_predicates_user_status
+                      ON kg_predicates(user_id, status)"])
+
+  ;; Facts — one row per statement. Invariants: exactly one of
+  ;; object_entity_id / object_literal (CHECK); no duplicate s/p/o within one
+  ;; document (partial unique indexes below — writers must ON CONFLICT DO
+  ;; NOTHING). graph_topic_id = root document topic (the named graph);
+  ;; page_number = provenance. Only status='approved' rows are published via
+  ;; SPARQL, feed question generation, or feed grading.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS kg_facts (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      subject_entity_id INTEGER NOT NULL REFERENCES kg_entities(id) ON DELETE CASCADE,
+      predicate_id INTEGER NOT NULL REFERENCES kg_predicates(id),
+      object_entity_id INTEGER REFERENCES kg_entities(id) ON DELETE CASCADE,
+      object_literal TEXT,
+      object_datatype TEXT,
+      graph_topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      page_number INTEGER,
+      status TEXT NOT NULL DEFAULT 'proposed'
+        CHECK (status IN ('proposed','approved','rejected')),
+      source_model TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      reviewed_at TIMESTAMP,
+      CHECK ((object_entity_id IS NULL) <> (object_literal IS NULL))
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_facts_graph_status
+                      ON kg_facts(graph_topic_id, status)"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_facts_user_status
+                      ON kg_facts(user_id, status)"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_facts_subject
+                      ON kg_facts(subject_entity_id)"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_facts_object_entity
+                      ON kg_facts(object_entity_id) WHERE object_entity_id IS NOT NULL"])
+  ;; Dedup within a document; the same s/p/o from a second document is a new
+  ;; row (distinct provenance). md5() keeps long literals under btree limits.
+  (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS uq_kg_facts_spo_entity
+                      ON kg_facts(subject_entity_id, predicate_id, object_entity_id, graph_topic_id)
+                      WHERE object_entity_id IS NOT NULL"])
+  (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS uq_kg_facts_spo_literal
+                      ON kg_facts(subject_entity_id, predicate_id, md5(object_literal), graph_topic_id)
+                      WHERE object_literal IS NOT NULL"])
+
+  ;; Question bank — generated from approved facts, curated by exception
+  ;; (edit/reject); 'retired' marks questions whose underlying fact was
+  ;; rejected. kind: 'atomic' covers one fact, 'synthesis' spans an entity's
+  ;; neighborhood. Links live in kg_question_facts; a hard fact delete
+  ;; (entity-merge dedup) cascades the link rows only.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS kg_questions (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('atomic','synthesis')),
+      question TEXT NOT NULL,
+      reference_answer TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'approved'
+        CHECK (status IN ('approved','rejected','retired')),
+      source_model TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_questions_user_status
+                      ON kg_questions(user_id, status)"])
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS kg_question_facts (
+      question_id INTEGER NOT NULL REFERENCES kg_questions(id) ON DELETE CASCADE,
+      fact_id INTEGER NOT NULL REFERENCES kg_facts(id) ON DELETE CASCADE,
+      PRIMARY KEY (question_id, fact_id)
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_question_facts_fact
+                      ON kg_question_facts(fact_id)"])
+
+  ;; Quiz/exam sessions — question_ids freezes the draw at start (reload-safe,
+  ;; and an exam's paper must not shift mid-sitting). time_limit_seconds NULL =
+  ;; quiz (untimed, instant feedback); set = exam. finished_at NULL = active.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS kg_sessions (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('quiz','exam')),
+      scope_topic_ids INTEGER[] NOT NULL,
+      question_ids INTEGER[] NOT NULL,
+      time_limit_seconds INTEGER,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      finished_at TIMESTAMPTZ
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_sessions_user_active
+                      ON kg_sessions(user_id, kind) WHERE finished_at IS NULL"])
+
+  ;; One answer row per (session, question); verdict NULL until graded.
+  ;; missed_fact_ids ⊆ the question's linked facts; matched_keywords ⊆ the
+  ;; linked entities' labels/aliases — both enforced by the grading fn, which
+  ;; is the only writer of graded fields.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS kg_answers (
+      id SERIAL PRIMARY KEY,
+      session_id INTEGER NOT NULL REFERENCES kg_sessions(id) ON DELETE CASCADE,
+      question_id INTEGER NOT NULL REFERENCES kg_questions(id),
+      position INTEGER NOT NULL,
+      user_answer TEXT NOT NULL,
+      verdict TEXT CHECK (verdict IN ('correct','partial','incorrect')),
+      explanation TEXT,
+      missed_fact_ids INTEGER[] NOT NULL DEFAULT '{}',
+      matched_keywords TEXT[] NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      graded_at TIMESTAMPTZ,
+      UNIQUE (session_id, question_id)
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_answers_session
+                      ON kg_answers(session_id, position)"])
+
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
   (run-grandfather-migration!)
 
@@ -3638,3 +3786,683 @@
         1 60 java.util.concurrent.TimeUnit/MINUTES)
       (reset! purge-scheduler exec)
       (tel/log! :info "Staged-document purge scheduler started"))))
+
+;; ---------------------------------------------------------------------------
+;; Knowledge graph operations (see plans/knowledge-graph-quizzes.md)
+;; ---------------------------------------------------------------------------
+
+(defn- kg-aliases->vec
+  "Normalize the aliases TEXT[] column (PgArray) to a Clojure vector — rows
+   feed pr-str'd LLM prompts and Electric wires, neither of which can take a
+   raw java.sql.Array."
+  [rows]
+  (mapv #(update % :aliases (fn [a] (some-> ^java.sql.Array a .getArray vec))) rows))
+
+(defn find-entity-link-candidates
+  "Trigram-ranked shortlist of the user's entities whose label or an alias
+   resembles `label` — the pass-2 linking candidates.
+   Pre:  label non-blank.
+   Post: ≤ `limit` rows {:id :label :aliases :sim}, sim DESC, all sim ≥ 0.25."
+  [user-id label limit]
+  (kg-aliases->vec
+    (jdbc/execute! ds
+      ["SELECT id, label, aliases, GREATEST(
+          similarity(label, ?),
+          COALESCE((SELECT MAX(similarity(a, ?)) FROM unnest(aliases) a), 0)
+        ) AS sim
+        FROM kg_entities
+        WHERE user_id = ?
+          AND GREATEST(
+            similarity(label, ?),
+            COALESCE((SELECT MAX(similarity(a, ?)) FROM unnest(aliases) a), 0)
+          ) >= 0.25
+        ORDER BY sim DESC LIMIT ?"
+       label label user-id label label limit]
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn insert-kg-entity!
+  "Insert an entity; returns its id."
+  [user-id label]
+  (:id (jdbc/execute-one! ds
+         ["INSERT INTO kg_entities (user_id, label) VALUES (?, ?) RETURNING id"
+          user-id (sanitize-utf8 label)]
+         {:builder-fn rs/as-unqualified-maps})))
+
+(defn get-or-create-kg-predicate!
+  "Upsert a predicate by (user-id, slug); new rows land status='approved' —
+   the graph curates by exception (edit/reject in the facts browser), not by
+   pre-approval (decision revised 2026-07-04, see plan doc).
+   The no-op DO UPDATE makes RETURNING yield the id on conflict too.
+   Pre:  slug matches the table's CHECK (callers slugify first — violation
+         throws, blame: caller).
+   Post: {:id int :status str} of the existing-or-new row."
+  [user-id slug label]
+  (jdbc/execute-one! ds
+    ["INSERT INTO kg_predicates (user_id, slug, label, status) VALUES (?, ?, ?, 'approved')
+      ON CONFLICT (user_id, slug) DO UPDATE SET slug = EXCLUDED.slug
+      RETURNING id, status"
+     user-id slug (sanitize-utf8 label)]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn insert-kg-facts!
+  "Batch insert facts. Rows: {:user_id :subject_entity_id :predicate_id
+   :object_entity_id|:object_literal :graph_topic_id :page_number
+   :source_model :status}. ON CONFLICT DO NOTHING — the partial unique
+   indexes drop same-document s/p/o duplicates (including rows already
+   reviewed: a re-distill never resurrects a rejected fact).
+   Post: vector of inserted ids (shorter than rows when duplicates skipped)."
+  [rows]
+  (when (seq rows)
+    (mapv :id
+      (jdbc/execute! ds
+        (sql/format {:insert-into :kg_facts
+                     :values (map #(update % :object_literal sanitize-utf8) rows)
+                     :on-conflict []
+                     :do-nothing true
+                     :returning [:id]})
+        {:builder-fn rs/as-unqualified-maps}))))
+
+(defn get-kg-facts
+  "Facts for a root document, display-joined (subject/object/predicate labels).
+   status nil = all; non-blank `query` filters case-insensitively across
+   subject/predicate/object labels and the literal. Ordered by page, then id."
+  [user-id graph-topic-id status query]
+  (let [q (when-not (or (nil? query) (str/blank? query))
+            (str "%" (str/trim query) "%"))]
+    (jdbc/execute! ds
+      (sql/format {:select [[:f.id :id] [:f.status :status]
+                            [:f.page_number :page_number]
+                            [:f.object_literal :object_literal]
+                            [:f.subject_entity_id :subject_entity_id]
+                            [:f.object_entity_id :object_entity_id]
+                            [:f.predicate_id :predicate_id]
+                            [:s.label :subject_label]
+                            [:o.label :object_label]
+                            [:p.label :predicate_label] [:p.slug :predicate_slug]]
+                   :from [[:kg_facts :f]]
+                   :join [[:kg_entities :s] [:= :s.id :f.subject_entity_id]
+                          [:kg_predicates :p] [:= :p.id :f.predicate_id]]
+                   :left-join [[:kg_entities :o] [:= :o.id :f.object_entity_id]]
+                   :where [:and [:= :f.user_id user-id]
+                           [:= :f.graph_topic_id graph-topic-id]
+                           (when status [:= :f.status status])
+                           (when q
+                             [:or [:ilike :s.label q] [:ilike :p.label q]
+                              [:ilike :o.label q] [:ilike :f.object_literal q]])]
+                   :order-by [[:f.page_number :asc] [:f.id :asc]]})
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn kg-fact-stats
+  "Per-document fact counts by status — feeds the Knowledge page badges.
+   Post: {graph-topic-id {status-string n}}."
+  [user-id]
+  (reduce (fn [acc {:keys [graph_topic_id status n]}]
+            (assoc-in acc [graph_topic_id status] n))
+    {}
+    (jdbc/execute! ds
+      ["SELECT graph_topic_id, status, COUNT(*) AS n FROM kg_facts
+        WHERE user_id = ? GROUP BY graph_topic_id, status"
+       user-id]
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn list-kg-entities
+  "Entities with their fact usage count; trigram-filtered when query is
+   non-blank, else busiest first. aliases normalized PgArray → vector so rows
+   are Electric-wire safe."
+  [user-id query limit]
+  (let [blank? (or (nil? query) (str/blank? query))
+        rows (if blank?
+               (jdbc/execute! ds
+                 ["SELECT e.id, e.label, e.aliases,
+                     (SELECT COUNT(*) FROM kg_facts f
+                      WHERE f.subject_entity_id = e.id OR f.object_entity_id = e.id) AS fact_count
+                   FROM kg_entities e WHERE e.user_id = ?
+                   ORDER BY fact_count DESC, e.label LIMIT ?"
+                  user-id limit]
+                 {:builder-fn rs/as-unqualified-maps})
+               (jdbc/execute! ds
+                 ["SELECT e.id, e.label, e.aliases,
+                     (SELECT COUNT(*) FROM kg_facts f
+                      WHERE f.subject_entity_id = e.id OR f.object_entity_id = e.id) AS fact_count
+                   FROM kg_entities e
+                   WHERE e.user_id = ?
+                     AND GREATEST(
+                       similarity(e.label, ?),
+                       COALESCE((SELECT MAX(similarity(a, ?)) FROM unnest(e.aliases) a), 0)
+                     ) >= 0.2
+                   ORDER BY GREATEST(
+                       similarity(e.label, ?),
+                       COALESCE((SELECT MAX(similarity(a, ?)) FROM unnest(e.aliases) a), 0)
+                     ) DESC LIMIT ?"
+                  user-id query query query query limit]
+                 {:builder-fn rs/as-unqualified-maps}))]
+    (kg-aliases->vec rows)))
+
+(defn set-kg-fact-status!
+  "Fact status transition. Approving also approves the fact's predicate;
+   REJECTING retires every live question that covers the fact (the question's
+   ground truth is gone — done-condition: reject never orphans a drawable
+   question). Ownership enforced in SQL.
+   Post: true iff the fact row changed."
+  [user-id fact-id status]
+  (jdbc/with-transaction [tx ds]
+    (let [row (jdbc/execute-one! tx
+                ["UPDATE kg_facts SET status = ?, reviewed_at = now()
+                  WHERE id = ? AND user_id = ? RETURNING predicate_id"
+                 status fact-id user-id]
+                {:builder-fn rs/as-unqualified-maps})]
+      (when (and row (= "approved" status))
+        (jdbc/execute! tx
+          ["UPDATE kg_predicates SET status = 'approved', reviewed_at = now()
+            WHERE id = ? AND status = 'proposed'" (:predicate_id row)]))
+      (when (and row (= "rejected" status))
+        (jdbc/execute! tx
+          ["UPDATE kg_questions SET status = 'retired'
+            WHERE status = 'approved' AND id IN
+              (SELECT question_id FROM kg_question_facts WHERE fact_id = ?)"
+           fact-id]))
+      (some? row))))
+
+(defn update-kg-fact-literal!
+  "Edit-then-approve for literal-object facts (entity edits go through
+   entity rename/merge instead). Ownership enforced in SQL."
+  [user-id fact-id literal]
+  (pos? (::jdbc/update-count
+          (jdbc/execute-one! ds
+            ["UPDATE kg_facts SET object_literal = ?
+              WHERE id = ? AND user_id = ? AND object_literal IS NOT NULL"
+             (sanitize-utf8 literal) fact-id user-id]))))
+
+(defn rename-kg-entity!
+  "Rename an entity; the old label joins aliases (deduped)."
+  [user-id entity-id new-label]
+  (pos? (::jdbc/update-count
+          (jdbc/execute-one! ds
+            ["UPDATE kg_entities
+              SET aliases = (SELECT ARRAY(SELECT DISTINCT x FROM unnest(aliases || label) x
+                                          WHERE x <> ?)),
+                  label = ?
+              WHERE id = ? AND user_id = ?"
+             (sanitize-utf8 new-label) (sanitize-utf8 new-label) entity-id user-id]))))
+
+(defn merge-kg-entities!
+  "Merge `absorbed-id` into `target-id`: facts repointed, labels/aliases
+   unioned, absorbed row deleted. Facts whose repoint would collide with the
+   per-document s/p/o unique indexes are deleted (they are duplicates by
+   definition). All-or-nothing transaction.
+   Pre:  both entities belong to user-id and differ (violation = caller bug).
+   Post: no kg_facts row references absorbed-id; absorbed row gone."
+  [user-id target-id absorbed-id]
+  (jdbc/with-transaction [tx ds]
+    (let [owned (jdbc/execute! tx
+                  ["SELECT id FROM kg_entities WHERE user_id = ? AND id IN (?, ?)"
+                   user-id target-id absorbed-id])]
+      (when (or (= target-id absorbed-id) (not= 2 (count owned)))
+        (throw (ex-info "merge-kg-entities!: entities must be two distinct rows owned by user"
+                 {:user-id user-id :target target-id :absorbed absorbed-id})))
+      ;; Duplicates-after-repoint die first, then the survivors repoint.
+      (jdbc/execute! tx
+        ["DELETE FROM kg_facts f WHERE f.subject_entity_id = ?
+          AND EXISTS (SELECT 1 FROM kg_facts g
+                      WHERE g.subject_entity_id = ? AND g.predicate_id = f.predicate_id
+                        AND g.graph_topic_id = f.graph_topic_id
+                        AND (g.object_entity_id = f.object_entity_id
+                             OR (g.object_literal IS NOT NULL AND g.object_literal = f.object_literal)))"
+         absorbed-id target-id])
+      (jdbc/execute! tx
+        ["DELETE FROM kg_facts f WHERE f.object_entity_id = ?
+          AND EXISTS (SELECT 1 FROM kg_facts g
+                      WHERE g.object_entity_id = ? AND g.predicate_id = f.predicate_id
+                        AND g.graph_topic_id = f.graph_topic_id
+                        AND g.subject_entity_id = f.subject_entity_id)"
+         absorbed-id target-id])
+      ;; Facts joining the pair in either direction (or absorbed to itself)
+      ;; would become self-loops after repointing; drop them.
+      (jdbc/execute! tx
+        ["DELETE FROM kg_facts
+          WHERE (subject_entity_id = ? AND object_entity_id IN (?, ?))
+             OR (subject_entity_id = ? AND object_entity_id = ?)"
+         absorbed-id target-id absorbed-id target-id absorbed-id])
+      (jdbc/execute! tx
+        ["UPDATE kg_facts SET subject_entity_id = ? WHERE subject_entity_id = ?"
+         target-id absorbed-id])
+      (jdbc/execute! tx
+        ["UPDATE kg_facts SET object_entity_id = ? WHERE object_entity_id = ?"
+         target-id absorbed-id])
+      (jdbc/execute! tx
+        ["UPDATE kg_entities t
+          SET aliases = (SELECT ARRAY(SELECT DISTINCT x
+                                      FROM unnest(t.aliases || a.aliases || a.label) x
+                                      WHERE x <> t.label))
+          FROM kg_entities a
+          WHERE t.id = ? AND a.id = ?" target-id absorbed-id])
+      (jdbc/execute! tx ["DELETE FROM kg_entities WHERE id = ?" absorbed-id])
+      true)))
+
+(defn get-kg-approved-predicates
+  "The user's approved vocabulary, for the extraction prompt."
+  [user-id]
+  (jdbc/execute! ds
+    ["SELECT slug, label FROM kg_predicates WHERE user_id = ? AND status = 'approved'
+      ORDER BY label" user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn relink-kg-fact-object!
+  "Point `fact-id`'s object at the entity named `label` — matched
+   case-insensitively among the user's entities, created if absent. Fact-local:
+   other facts referencing the old entity are untouched (rename-everywhere is
+   rename-kg-entity!'s job). The old entity may become unreferenced; it stays
+   visible in the entities browser for cleanup.
+   Pre:  the fact is entity-valued and owned by user-id.
+   Post: :done — object repointed; :duplicate — the target s/p/o already
+         exists in this document (fact left unchanged); nil — fact not found /
+         not entity-valued."
+  [user-id fact-id label]
+  (let [label (sanitize-utf8 (str/trim (str label)))]
+    (when-not (str/blank? label)
+      (jdbc/with-transaction [tx ds]
+        (let [entity-id (or (:id (jdbc/execute-one! tx
+                                   ["SELECT id FROM kg_entities
+                                     WHERE user_id = ? AND lower(label) = lower(?) LIMIT 1"
+                                    user-id label]
+                                   {:builder-fn rs/as-unqualified-maps}))
+                            (:id (jdbc/execute-one! tx
+                                   ["INSERT INTO kg_entities (user_id, label) VALUES (?, ?) RETURNING id"
+                                    user-id label]
+                                   {:builder-fn rs/as-unqualified-maps})))]
+          (try
+            (when (pos? (::jdbc/update-count
+                          (jdbc/execute-one! tx
+                            ["UPDATE kg_facts SET object_entity_id = ?
+                              WHERE id = ? AND user_id = ? AND object_entity_id IS NOT NULL
+                                AND subject_entity_id <> ?"
+                             entity-id fact-id user-id entity-id])))
+              :done)
+            (catch org.postgresql.util.PSQLException e
+              (if (= "23505" (.getSQLState e)) ; unique_violation on the s/p/o index
+                :duplicate
+                (throw e)))))))))
+
+;; ── Question bank ───────────────────────────────────────────────────────────
+
+(defn create-kg-question!
+  "Insert a question and its fact links in one transaction.
+   Pre:  fact-ids non-empty, all owned by user-id (generation queries only the
+         user's facts — violation = caller bug).
+   Post: the new question id."
+  [user-id kind question answer fact-ids source-model]
+  (jdbc/with-transaction [tx ds]
+    (let [qid (:id (jdbc/execute-one! tx
+                     ["INSERT INTO kg_questions (user_id, kind, question, reference_answer, source_model)
+                       VALUES (?, ?, ?, ?, ?) RETURNING id"
+                      user-id kind (sanitize-utf8 question) (sanitize-utf8 answer) source-model]
+                     {:builder-fn rs/as-unqualified-maps}))]
+      (jdbc/execute! tx
+        (sql/format {:insert-into :kg_question_facts
+                     :values (mapv (fn [fid] {:question_id qid :fact_id fid}) fact-ids)}))
+      qid)))
+
+(defn get-kg-questions
+  "The user's questions with covered-fact counts; non-blank `query` filters
+   question + answer text case-insensitively. status nil = all live views
+   should pass \"approved\". Newest first."
+  [user-id status query]
+  (let [q (when-not (or (nil? query) (str/blank? query))
+            (str "%" (str/trim query) "%"))]
+    (jdbc/execute! ds
+      (sql/format {:select [[:q.id :id] [:q.kind :kind] [:q.question :question]
+                            [:q.reference_answer :reference_answer]
+                            [:q.status :status]
+                            [[:raw "(SELECT COUNT(*) FROM kg_question_facts qf WHERE qf.question_id = q.id)"]
+                             :fact_count]]
+                   :from [[:kg_questions :q]]
+                   :where [:and [:= :q.user_id user-id]
+                           (when status [:= :q.status status])
+                           (when q [:or [:ilike :q.question q]
+                                    [:ilike :q.reference_answer q]])]
+                   :order-by [[:q.id :desc]]})
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn facts-without-atomic-question
+  "Approved facts of a document not yet covered by a live atomic question —
+   the atomic generator's work list. Rows carry the labels the prompt needs
+   plus :has_alternatives — true when sibling facts share this fact's
+   predicate+object or subject+predicate, so the generator must phrase the
+   question non-exclusively ('name one…')."
+  [user-id graph-topic-id]
+  (jdbc/execute! ds
+    ["SELECT f.id, s.label AS subject_label, p.label AS predicate_label,
+             o.label AS object_label, f.object_literal,
+             EXISTS (SELECT 1 FROM kg_facts f2
+                     WHERE f2.user_id = f.user_id AND f2.status = 'approved'
+                       AND f2.id <> f.id AND f2.predicate_id = f.predicate_id
+                       AND ((f.object_entity_id IS NOT NULL
+                             AND f2.object_entity_id = f.object_entity_id)
+                            OR f2.subject_entity_id = f.subject_entity_id))
+               AS has_alternatives
+      FROM kg_facts f
+      JOIN kg_entities s ON s.id = f.subject_entity_id
+      JOIN kg_predicates p ON p.id = f.predicate_id
+      LEFT JOIN kg_entities o ON o.id = f.object_entity_id
+      WHERE f.user_id = ? AND f.graph_topic_id = ? AND f.status = 'approved'
+        AND NOT EXISTS
+          (SELECT 1 FROM kg_question_facts qf
+           JOIN kg_questions kq ON kq.id = qf.question_id
+           WHERE qf.fact_id = f.id AND kq.kind = 'atomic' AND kq.status = 'approved')
+      ORDER BY f.page_number, f.id"
+     user-id graph-topic-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn entity-fact-neighborhood
+  "Approved facts touching an entity (as subject or object), labeled with
+   provenance and entity ids — input for synthesis generation AND the concept
+   popover (whose rows link onward through the ids).
+   Post: rows {:id :subject_label :predicate_label :object_label
+   :object_literal :page_number :doc_title :subject_entity_id
+   :object_entity_id}."
+  [user-id entity-id]
+  (jdbc/execute! ds
+    ["SELECT f.id, s.label AS subject_label, p.label AS predicate_label,
+             o.label AS object_label, f.object_literal, f.page_number,
+             t.title AS doc_title, f.subject_entity_id, f.object_entity_id
+      FROM kg_facts f
+      JOIN kg_entities s ON s.id = f.subject_entity_id
+      JOIN kg_predicates p ON p.id = f.predicate_id
+      JOIN topics t ON t.id = f.graph_topic_id
+      LEFT JOIN kg_entities o ON o.id = f.object_entity_id
+      WHERE f.user_id = ? AND f.status = 'approved'
+        AND (f.subject_entity_id = ? OR f.object_entity_id = ?)
+      ORDER BY f.id"
+     user-id entity-id entity-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn kg-entity-card
+  "Entity + its fact neighborhood — the concept popover's payload.
+   Post: {:id :label :aliases [str] :facts [...]} (wire-safe) or nil."
+  [user-id entity-id]
+  (when-let [e (jdbc/execute-one! ds
+                 ["SELECT id, label, aliases FROM kg_entities
+                   WHERE id = ? AND user_id = ?" entity-id user-id]
+                 {:builder-fn rs/as-unqualified-maps})]
+    (assoc (first (kg-aliases->vec [e]))
+      :facts (entity-fact-neighborhood user-id entity-id))))
+
+(defn set-kg-question-status!
+  "reject (curation) or retire. Ownership enforced in SQL.
+   Post: true iff the row changed."
+  [user-id question-id status]
+  (pos? (::jdbc/update-count
+          (jdbc/execute-one! ds
+            ["UPDATE kg_questions SET status = ? WHERE id = ? AND user_id = ?"
+             status question-id user-id]))))
+
+(defn update-kg-question!
+  "Edit question text and/or reference answer (nil field = keep current)."
+  [user-id question-id question answer]
+  (pos? (::jdbc/update-count
+          (jdbc/execute-one! ds
+            ["UPDATE kg_questions
+              SET question = COALESCE(?, question),
+                  reference_answer = COALESCE(?, reference_answer)
+              WHERE id = ? AND user_id = ?"
+             (some-> question sanitize-utf8) (some-> answer sanitize-utf8)
+             question-id user-id]))))
+
+;; ── Quiz/exam sessions ──────────────────────────────────────────────────────
+
+(defn- sql-int-array->vec [a]
+  (some->> ^java.sql.Array a .getArray (mapv long)))
+
+(defn kg-questions-per-doc
+  "Live-question count per document, for the quiz scope picker.
+   Post: {graph-topic-id n} (a question spanning docs counts in each)."
+  [user-id]
+  (into {}
+    (map (juxt :graph_topic_id :n))
+    (jdbc/execute! ds
+      ["SELECT f.graph_topic_id, COUNT(DISTINCT q.id) AS n
+        FROM kg_questions q
+        JOIN kg_question_facts qf ON qf.question_id = q.id
+        JOIN kg_facts f ON f.id = qf.fact_id
+        WHERE q.user_id = ? AND q.status = 'approved'
+        GROUP BY f.graph_topic_id"
+       user-id]
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn draw-kg-questions
+  "Random draw of up to n approved questions ALL of whose facts lie inside the
+   scope documents (a question must be answerable from the chosen material).
+   Post: vector of question ids, ≤ n, random order."
+  [user-id scope-topic-ids n]
+  (mapv :id
+    (jdbc/execute! ds
+      (sql/format {:select [:q.id]
+                   :from [[:kg_questions :q]]
+                   :where [:and [:= :q.user_id user-id] [:= :q.status "approved"]
+                           [:exists {:select [1] :from [[:kg_question_facts :qf]]
+                                     :join [[:kg_facts :f] [:= :f.id :qf.fact_id]]
+                                     :where [:and [:= :qf.question_id :q.id]
+                                             [:in :f.graph_topic_id scope-topic-ids]]}]
+                           [:not [:exists {:select [1] :from [[:kg_question_facts :qf]]
+                                           :join [[:kg_facts :f] [:= :f.id :qf.fact_id]]
+                                           :where [:and [:= :qf.question_id :q.id]
+                                                   [:not-in :f.graph_topic_id scope-topic-ids]]}]]]
+                   :order-by [[[:raw "random()"]]]
+                   :limit n})
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn create-kg-session!
+  "Freeze a draw into a session row. Pre: question-ids non-empty (callers
+   refuse an empty draw — violation = caller bug). Post: session id."
+  [user-id kind scope-topic-ids question-ids time-limit-seconds]
+  (:id (jdbc/execute-one! ds
+         (sql/format {:insert-into :kg_sessions
+                      :values [{:user_id user-id :kind kind
+                                :scope_topic_ids [:array (vec scope-topic-ids)]
+                                :question_ids [:array (vec question-ids)]
+                                :time_limit_seconds time-limit-seconds}]
+                      :returning [:id]})
+         {:builder-fn rs/as-unqualified-maps})))
+
+(defn get-active-kg-session
+  "Latest unfinished session of `kind`, wire-lean, or nil.
+   Post: {:id :kind :question-ids [long] :answered n :time-limit-seconds
+          :elapsed-seconds n} — :answered counts SAVED answers (graded or
+   not), so an exam resumes at the first unanswered question even when
+   grading hasn't run. Timestamps stay server-side; the client gets derived
+   numbers only."
+  [user-id kind]
+  (when-let [row (jdbc/execute-one! ds
+                   ["SELECT id, kind, question_ids, time_limit_seconds,
+                       EXTRACT(EPOCH FROM (now() - started_at))::bigint AS elapsed_seconds,
+                       (SELECT COUNT(*) FROM kg_answers a
+                        WHERE a.session_id = s.id) AS answered
+                     FROM kg_sessions s
+                     WHERE user_id = ? AND kind = ? AND finished_at IS NULL
+                     ORDER BY id DESC LIMIT 1"
+                    user-id kind]
+                   {:builder-fn rs/as-unqualified-maps})]
+    {:id (:id row)
+     :kind (:kind row)
+     :question-ids (sql-int-array->vec (:question_ids row))
+     :answered (long (:answered row))
+     :time-limit-seconds (:time_limit_seconds row)
+     :elapsed-seconds (long (:elapsed_seconds row))}))
+
+(defn get-kg-question-for-session
+  "Everything one quiz turn needs: the question, its facts with document +
+   page provenance, and the highlight lexicon (labels + aliases of every
+   entity in the linked facts). Wire-lean. nil when not found/not owned."
+  [user-id question-id]
+  (when-let [q (jdbc/execute-one! ds
+                 ["SELECT id, kind, question, reference_answer FROM kg_questions
+                   WHERE id = ? AND user_id = ?" question-id user-id]
+                 {:builder-fn rs/as-unqualified-maps})]
+    (let [facts (jdbc/execute! ds
+                  ["SELECT f.id, s.label AS subject_label, p.label AS predicate_label,
+                       o.label AS object_label, f.object_literal, f.page_number,
+                       t.title AS doc_title,
+                       f.subject_entity_id, f.object_entity_id
+                    FROM kg_question_facts qf
+                    JOIN kg_facts f ON f.id = qf.fact_id
+                    JOIN kg_entities s ON s.id = f.subject_entity_id
+                    JOIN kg_predicates p ON p.id = f.predicate_id
+                    JOIN topics t ON t.id = f.graph_topic_id
+                    LEFT JOIN kg_entities o ON o.id = f.object_entity_id
+                    WHERE qf.question_id = ?" question-id]
+                  {:builder-fn rs/as-unqualified-maps})
+          entity-ids (into #{} (comp (mapcat (juxt :subject_entity_id :object_entity_id))
+                                 (remove nil?))
+                       facts)
+          entities (when (seq entity-ids)
+                     (kg-aliases->vec
+                       (jdbc/execute! ds
+                         (sql/format {:select [:id :label :aliases]
+                                      :from [:kg_entities]
+                                      :where [:in :id (vec entity-ids)]})
+                         {:builder-fn rs/as-unqualified-maps})))
+          keywords (into []
+                     (comp (mapcat (fn [{:keys [label aliases]}] (cons label aliases)))
+                       (remove str/blank?)
+                       (distinct))
+                     entities)]
+      {:id (:id q) :kind (:kind q)
+       :question (:question q) :reference-answer (:reference_answer q)
+       :facts facts ; entity ids stay on rows — feedback links through them
+       :entities (or entities [])
+       :keywords keywords})))
+
+(defn record-kg-answer!
+  "Persist the user's answer text before grading (an LLM failure must not
+   lose what they typed). Idempotent per (session, question).
+   Post: answer row id."
+  [user-id session-id question-id position user-answer]
+  (:id (jdbc/execute-one! ds
+         ["INSERT INTO kg_answers (session_id, question_id, position, user_answer)
+           SELECT s.id, ?, ?, ? FROM kg_sessions s
+           WHERE s.id = ? AND s.user_id = ?
+           ON CONFLICT (session_id, question_id)
+             DO UPDATE SET user_answer = EXCLUDED.user_answer
+           RETURNING id"
+          question-id position (sanitize-utf8 user-answer) session-id user-id]
+         {:builder-fn rs/as-unqualified-maps})))
+
+(defn grade-kg-answer!
+  "Write the grading verdict. Only freememo.kg-grade calls this — it owns the
+   ⊆-validation of missed-fact-ids and matched-keywords. Empty arrays must be
+   explicitly typed — bare ARRAY[] is untypable for Postgres."
+  [answer-id verdict explanation missed-fact-ids matched-keywords]
+  (jdbc/execute-one! ds
+    (sql/format {:update :kg_answers
+                 :set {:verdict verdict
+                       :explanation (sanitize-utf8 explanation)
+                       :missed_fact_ids (if (seq missed-fact-ids)
+                                          [:array (vec missed-fact-ids)]
+                                          [:raw "'{}'::integer[]"])
+                       :matched_keywords (if (seq matched-keywords)
+                                           [:array (mapv sanitize-utf8 matched-keywords)]
+                                           [:raw "'{}'::text[]"])
+                       :graded_at [:now]}
+                 :where [:= :id answer-id]}))
+  answer-id)
+
+(defn finish-kg-session!
+  "Close a session (idempotent). Post: true iff this call closed it."
+  [user-id session-id]
+  (pos? (::jdbc/update-count
+          (jdbc/execute-one! ds
+            ["UPDATE kg_sessions SET finished_at = now()
+              WHERE id = ? AND user_id = ? AND finished_at IS NULL"
+             session-id user-id]))))
+
+(defn kg-session-verdict-counts
+  "Graded-verdict tally for a session's summary. Post: {verdict-string n}."
+  [user-id session-id]
+  (into {}
+    (map (juxt :verdict :n))
+    (jdbc/execute! ds
+      ["SELECT a.verdict, COUNT(*) AS n FROM kg_answers a
+        JOIN kg_sessions s ON s.id = a.session_id
+        WHERE s.id = ? AND s.user_id = ? AND a.verdict IS NOT NULL
+        GROUP BY a.verdict"
+       session-id user-id]
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn kg-fact-alternates
+  "Approved facts that share a predicate+object or subject+predicate with any
+   of `fact-ids` (excluding them) — the grader's 'also true' context, so an
+   answer confirmed by a sibling fact is never marked wrong.
+   Post: ≤ 12 labeled rows, same shape as entity-fact-neighborhood."
+  [user-id fact-ids]
+  (when (seq fact-ids)
+    (jdbc/execute! ds
+      (sql/format
+        {:select [[:f.id :id] [:s.label :subject_label] [:p.label :predicate_label]
+                  [:o.label :object_label] [:f.object_literal :object_literal]]
+         :from [[:kg_facts :f]]
+         :join [[:kg_entities :s] [:= :s.id :f.subject_entity_id]
+                [:kg_predicates :p] [:= :p.id :f.predicate_id]]
+         :left-join [[:kg_entities :o] [:= :o.id :f.object_entity_id]]
+         :where [:and [:= :f.user_id user-id] [:= :f.status "approved"]
+                 [:not-in :f.id (vec fact-ids)]
+                 [:exists {:select [1] :from [[:kg_facts :lf]]
+                           :where [:and [:in :lf.id (vec fact-ids)]
+                                   [:= :lf.predicate_id :f.predicate_id]
+                                   [:or
+                                    [:and [:!= :lf.object_entity_id nil]
+                                     [:= :lf.object_entity_id :f.object_entity_id]]
+                                    [:= :lf.subject_entity_id :f.subject_entity_id]]]}]]
+         :limit 12})
+      {:builder-fn rs/as-unqualified-maps})))
+
+;; ── Exam grading + session history ─────────────────────────────────────────
+
+(defn kg-ungraded-answers
+  "Saved-but-ungraded answers of a session, in sitting order — the exam
+   grader's work list. Ownership enforced via the session join."
+  [user-id session-id]
+  (jdbc/execute! ds
+    ["SELECT a.question_id, a.position, a.user_answer
+      FROM kg_answers a JOIN kg_sessions s ON s.id = a.session_id
+      WHERE s.id = ? AND s.user_id = ? AND a.verdict IS NULL
+      ORDER BY a.position"
+     session-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn list-kg-sessions
+  "Finished sessions, newest first, with verdict tallies — the history list.
+   Post: [{:id :kind :total :started :correct :partial :incorrect}]."
+  [user-id]
+  (jdbc/execute! ds
+    ["SELECT s.id, s.kind, cardinality(s.question_ids) AS total,
+             to_char(s.started_at, 'YYYY-MM-DD HH24:MI') AS started,
+             COUNT(a.verdict) FILTER (WHERE a.verdict = 'correct')   AS correct,
+             COUNT(a.verdict) FILTER (WHERE a.verdict = 'partial')   AS partial,
+             COUNT(a.verdict) FILTER (WHERE a.verdict = 'incorrect') AS incorrect
+      FROM kg_sessions s
+      LEFT JOIN kg_answers a ON a.session_id = s.id
+      WHERE s.user_id = ? AND s.finished_at IS NOT NULL
+      GROUP BY s.id ORDER BY s.id DESC LIMIT 100"
+     user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn kg-session-detail
+  "One finished (or being-reviewed) session with its per-question record.
+   Post: {:session {:id :kind :total :started} :answers [{:position :question
+   :reference_answer :user_answer :verdict :explanation}]} or nil when not
+   owned/found. Verdict nil = saved but ungraded (grading failure or skip)."
+  [user-id session-id]
+  (when-let [s (jdbc/execute-one! ds
+                 ["SELECT id, kind, cardinality(question_ids) AS total,
+                     to_char(started_at, 'YYYY-MM-DD HH24:MI') AS started
+                   FROM kg_sessions WHERE id = ? AND user_id = ?"
+                  session-id user-id]
+                 {:builder-fn rs/as-unqualified-maps})]
+    {:session s
+     :answers (jdbc/execute! ds
+                ["SELECT a.position, a.user_answer, a.verdict, a.explanation,
+                     q.question, q.reference_answer
+                  FROM kg_answers a JOIN kg_questions q ON q.id = a.question_id
+                  WHERE a.session_id = ? ORDER BY a.position"
+                 session-id]
+                {:builder-fn rs/as-unqualified-maps})}))
