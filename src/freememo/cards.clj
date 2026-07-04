@@ -8,10 +8,9 @@
    [freememo.toasts :as toasts]
    [freememo.openrouter :as openrouter]
    [freememo.card-models :as card-models]
+   [freememo.llm-edn :as llm-edn]
    [taoensso.telemere :as tel]
-   [cheshire.core :as json]
    [clojure.java.io :as io]
-   [clojure.edn :as edn]
    [clojure.string :as str]))
 
 (defn- root-cause
@@ -123,32 +122,11 @@
 
 ;; Model response parsing
 (defn parse-card-response
-  "Parse the model's card response into a collection of maps. Prefers EDN (the
-   prompted `[{:q ..} ..]` format); falls back to JSON for models that emit
-   `[{\"q\": ..}]` despite the instructions (observed: Gemini 3 Flash) — JSON
-   object keys are keywordized, so the downstream :q/:a/:c shape is identical.
-   Strips markdown code fences first (```clojure/edn/json). Throws if neither
-   parses.
-   Pre:  raw-text is the model message content (may be nil).
-   Post: returns the parsed collection; throws ex-info on unparseable input."
+  "Parse the model's card response into a collection of maps — delegates to
+   freememo.llm-edn/parse-response (EDN preferred, JSON fallback, fences
+   stripped; throws ex-info on unparseable input)."
   [raw-text]
-  (let [cleaned (-> (str raw-text)
-                  str/trim
-                  (str/replace #"^```(?:clojure|edn|json)?\s*\n?" "")
-                  (str/replace #"\n?```\s*$" "")
-                  str/trim)]
-    (or (try
-          (edn/read-string cleaned)
-          (catch Exception _
-            ;; Not EDN — the model likely returned JSON; keywordize keys so the
-            ;; :q/:a/:c shape matches the EDN path exactly.
-            (try (json/parse-string cleaned true)
-                 (catch Exception _ nil))))
-        (do (tel/error! {:id ::parse-card-response
-                         :data {:raw raw-text :cleaned cleaned}}
-              "Failed to parse card response from the model (neither EDN nor JSON)")
-            (throw (ex-info "Failed to parse card response from the model"
-                     {:raw raw-text :cleaned cleaned}))))))
+  (llm-edn/parse-response raw-text))
 
 (defn- generate-cards*
   "Shared implementation for card generation with up to `max-retries` attempts.
