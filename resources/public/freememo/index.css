@@ -2180,6 +2180,32 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     transform: none;
 }
 
+/* Virtual-scroll (.tape-scroll) tooltips: the anchor-positioning `position:fixed`
+   path (@supports block above) detaches from its button as the list scrolls — the
+   implicit anchor stops tracking once the trigger moves inside the overflow:auto
+   scroll box, so the tooltip drifts and eventually leaves the viewport. Pin it with
+   plain absolute positioning relative to the button (position:relative via
+   [data-tooltip]); top:100% is the button's bottom edge, so it stays attached
+   directly below on every scroll offset. Mirrors the .toolbar override above;
+   centered to match the base [data-tooltip]::after rule. Placed after @supports and
+   higher-specificity so it wins in every browser. */
+.tape-scroll [data-tooltip]::after {
+    position: absolute;
+    position-area: none;
+    position-try-fallbacks: none;
+    top: 100%;
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    margin: 4px 0 0 0;
+    transform: translateX(-50%);
+}
+.tape-scroll [data-tooltip].tooltip-right::after {
+    left: auto;
+    right: 0;
+    transform: none;
+}
+
 /* ── Pin Context Menu (right-click on <img> in editor) ──────────── */
 .pin-context-menu {
     position: fixed;
