@@ -686,9 +686,9 @@
 ;; #?(:cljs (first (swap-vals! …)) :clj nil) in QuizPage's let diverged the
 ;; CLJ/CLJS frame slot counts (client > server → frame_signal AIOOBE on /quiz).
 ;; Same platform-split-behind-a-defn shape as now-ms.
-(defn consume-pending-preset! []
-  #?(:cljs (first (swap-vals! !pending-preset (constantly nil)))
-     :clj nil))
+#?(:cljs
+   (defn consume-pending-preset! []
+     (first (swap-vals! !pending-preset (constantly nil)))))
 
 (e/defn GlobalQuizInvokers
   "Headless; mounted once in Main. Publishes the invokers that make the
