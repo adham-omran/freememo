@@ -702,17 +702,7 @@
   (e/client
     (let [preset #?(:cljs (first (swap-vals! !pending-preset (constantly nil)))
                     :clj nil)
-          resume (e/server (active-session* user-id))
-          !session (atom ::unset) session (e/watch !session)
-          !summary (atom nil) summary (e/watch !summary)
-          !result-sid (atom nil) result-sid (e/watch !result-sid)
-          !view (atom (if (= :history (:view preset)) :history :play))
-          view (e/watch !view)]
-      (cond
-        (= ::unset session) (do (reset! !session resume) nil)
-        (some? result-sid) (SessionResult user-id result-sid !result-sid)
-        (= view :history) (HistoryView user-id !view !result-sid)
-        (some? summary) (QuizSummary !session !summary summary)
-        (nil? session) (QuizSetup user-id !session !view (:mode preset))
-        (= "exam" (:kind session)) (ExamActive user-id !session session !result-sid)
-        :else (QuizActive user-id !session session !summary)))))
+          !session (atom nil)
+          !view (atom :play)]
+      ;; DEBUG bisection — QuizSetup standalone, no cond/watches/resume.
+      (QuizSetup user-id !session !view (:mode preset)))))
