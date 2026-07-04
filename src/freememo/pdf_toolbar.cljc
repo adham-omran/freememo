@@ -25,7 +25,7 @@
    [freememo.commands :as commands]
    [freememo.command-bus :as bus]
    [freememo.copy-text :as copy]
-   [freememo.pdf-action-dropdowns :refer [ScanDropdown CopyDropdown]]
+   [freememo.pdf-action-dropdowns :refer [ScanDropdown CopyDropdown KgCommandSources]]
    [freememo.pdf-viewer :as viewer]
    [freememo.pdf-viewer-component :refer [LiveDocAddPhotos]]
    [freememo.score-toolbar :refer [ScoreRectButton]]
@@ -208,6 +208,8 @@
         (when llm-enabled?
           (binding [dctx/scanning? (contains? scanning-pages [pdf-root-id page-number])]
             (ScanDropdown)))
+        (when llm-enabled?
+          (KgCommandSources))
         (CopyDropdown)
         (when is-live?
           (binding [dctx/document-id pdf-root-id dctx/compact? true]
