@@ -94,12 +94,16 @@
        :home nil
        :viewer (list 'viewer) ; empty viewer
        :library (list 'library 'documents) ; documents tree is an explicit sub-route
+       :knowledge (list 'knowledge 'documents) ; documents is the default sub-route
        (list (symbol (name tab))))
      (case (:type nav-map)
        :topic (list 'viewer 'topic (:topic-id nav-map))
        :learn-session (list 'viewer 'learn-session)
        :subset-review (list 'viewer 'subset-review (:root-id nav-map))
        :library-cards (list 'library 'cards)
+       :knowledge-entities (list 'knowledge 'entities)
+       :knowledge-questions (list 'knowledge 'questions)
+       :knowledge-facts (list 'knowledge 'facts (:doc-id nav-map))
        ;; SearchPage seeds [mode kind query] from these segments.
        :search-query (list 'search "fuzzy" "all"
                        #?(:cljs (js/encodeURIComponent (:query nav-map))
@@ -339,7 +343,9 @@
                     (r/pop ; consume 'search from route; SearchPage reads remaining segments
                       (SearchPage user-id navigate!)))
                   (when (= active-tab :import) (ImportPage user-id navigate! enc-key llm-enabled?))
-                  (when (= active-tab :knowledge) (KnowledgePage user-id))
+                  (when (= active-tab :knowledge)
+                    (r/pop ; consume 'knowledge from route; KnowledgePage reads the sub-view segment
+                      (KnowledgePage user-id navigate!)))
                   (when (= active-tab :quiz) (QuizPage user-id))
                   (when (= active-tab :settings) (SettingsPage user-id username enc-key base-url client-country))
                   (when (= active-tab :credits) (CreditsReturnPage user-id navigate!))

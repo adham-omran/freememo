@@ -12,12 +12,14 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
+   [hyperfiddle.router5 :as r]
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
    [freememo.icons :as icons]
    [freememo.commands :as commands]
    [freememo.modal-shell :as modal]
    [freememo.typeahead :as typeahead]
+   [freememo.loading :as loading]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.kg-extract :as kg])
    #?(:clj [freememo.kg-questions :as kgq])
@@ -31,21 +33,26 @@
 
 #?(:clj
    (defn get-knowledge-docs*
-     "Root documents + fact counts, lean maps for the wire.
-      Post: [{:id :title :kind :facts}] — :facts = approved count."
-     [_kg-bump user-id]
-     (let [stats (db/kg-fact-stats user-id)]
-       (mapv (fn [t]
-               (let [id (:topics/id t)]
-                 {:id id
-                  :title (:topics/title t)
-                  :kind (:topics/kind t)
-                  :facts (get-in stats [id "approved"] 0)
-                  ;; distilled? — any fact of ANY status exists (status-agnostic),
-                  ;; so a doc whose facts were all rejected still counts as distilled
-                  ;; and re-distilling it is guarded by a confirm.
-                  :distilled? (pos? (reduce + 0 (vals (get stats id))))}))
-         (db/get-root-topics user-id)))))
+     "Root documents + fact counts, lean maps for the wire. `query` filters by
+      title (case-insensitive substring, mirroring knowledge-tree/filter-root-topics);
+      blank/nil = all. Post: [{:id :title :kind :facts :distilled?}]."
+     [_kg-bump user-id query]
+     (let [stats (db/kg-fact-stats user-id)
+           q (some-> query str/trim not-empty str/lower-case)
+           docs (mapv (fn [t]
+                        (let [id (:topics/id t)]
+                          {:id id
+                           :title (:topics/title t)
+                           :kind (:topics/kind t)
+                           :facts (get-in stats [id "approved"] 0)
+                           ;; distilled? — any fact of ANY status exists (status-agnostic),
+                           ;; so a doc whose facts were all rejected still counts as
+                           ;; distilled and re-distilling it is guarded by a confirm.
+                           :distilled? (pos? (reduce + 0 (vals (get stats id))))}))
+                  (db/get-root-topics user-id))]
+       (if q
+         (filterv #(str/includes? (str/lower-case (:title %)) q) docs)
+         docs))))
 
 #?(:clj
    (defn get-doc-facts* [_kg-bump user-id doc-id query]
@@ -70,10 +77,12 @@
 
 #?(:clj
    (defn list-entity-options*
-     "Lean [{:id :label}] of entities — options for the Questions entity filter."
-     [_kg-bump user-id]
+     "Lean [{:id :label}] of entities for the Questions entity filter. When
+      `source-id` (a graph_topic_id) is set, limits options to entities appearing
+      in that document."
+     [_kg-bump user-id source-id]
      (mapv (fn [ent] {:id (:id ent) :label (:label ent)})
-       (db/list-kg-entities user-id nil 1000))))
+       (db/list-kg-entities user-id nil 1000 source-id))))
 
 #?(:clj
    (defn reject-question!*
@@ -153,11 +162,11 @@
               (Row i)))
           (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))))
 
-(e/defn SubViewTabs [!view view]
+(e/defn SubViewTabs [navigate! view]
   ;; Settings-style horizontal nav (see settings-page/SettingsNav). Copies the
   ;; .settings-nav markup + CSS rather than sharing the component, which is bound
-  ;; to settings-specific module state. Driven by the client-local !view atom
-  ;; (not a URL hash); a [:facts id] vector view keeps Documents highlighted.
+  ;; to settings-specific module state. Driven by the /knowledge/<sub> URL segment
+  ;; via navigate!; a [:facts id] vector view keeps Documents highlighted.
   (e/client
     (dom/nav
       (dom/props {:class "settings-nav"})
@@ -170,7 +179,14 @@
                                  "settings-nav__item settings-nav__item--active"
                                  "settings-nav__item")})
             (dom/text label)
-            (dom/On "click" (fn [e] (.preventDefault e) (reset! !view k)) nil)))))))
+            (dom/On "click"
+              (fn [e]
+                (.preventDefault e)
+                (case k
+                  :documents (navigate! :knowledge)
+                  :entities  (navigate! :knowledge {:type :knowledge-entities})
+                  :questions (navigate! :knowledge {:type :knowledge-questions})))
+              nil)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Documents view
@@ -235,7 +251,7 @@
             (case (e/server (kgq/cancel-atomic-generation! user-id doc-id))
               (t))))))))
 
-(e/defn DocumentRow [user-id doc i !view distilling generating !redistill]
+(e/defn DocumentRow [user-id doc i navigate! distilling generating !redistill]
   (e/client
     (let [{:keys [id title kind facts distilled?]} doc]
       (dom/tr
@@ -257,34 +273,50 @@
                         :disabled (zero? facts)
                         :aria-label (str "Browse facts for " title)})
             (dom/text (str "Facts (" facts ")"))
-            (dom/On "click" (fn [_] (reset! !view [:facts id])) nil)))))))
+            (dom/On "click" (fn [_] (navigate! :knowledge {:type :knowledge-facts :doc-id id})) nil)))))))
 
-(e/defn DocumentsView [user-id !view kg-bump]
+(e/defn DocumentsView [user-id navigate! kg-bump]
   (e/client
-    (let [docs (e/server (get-knowledge-docs* kg-bump user-id))
-          item-count (count docs)
+    (let [!query (atom "") query (e/watch !query)
           distilling (e/server (e/watch (us/get-atom user-id :distilling-docs)))
           generating (e/server (e/watch (us/get-atom user-id :generating-questions)))
           !redistill (atom nil)]              ; doc-id pending a re-distill confirm, or nil
-      (dom/div
-        (dom/props {:style {:display "flex" :flex-direction "column"
-                            :height "calc(100vh - 160px)" :padding-top "8px"}})
-        (if (zero? item-count)
-          (dom/p (dom/props {:style {:padding "16px" :color "var(--color-text-secondary)"}})
-            (dom/text "No documents yet — import one first."))
-          (TapeTable ["Document" "Facts" ""]
-            "minmax(240px,1fr) 70px minmax(340px,max-content)" item-count
-            (e/fn [i]
-              (when-let [doc (nth docs i nil)]
-                (DocumentRow user-id doc i !view distilling generating !redistill)))))
-        ;; Single re-distill confirm for the whole view (virtualization-safe;
-        ;; per-row modals would ride the Tape's reused DOM nodes). !redistill holds
-        ;; the doc-id to re-run; ConfirmModal passes it back as the payload.
-        (modal/ConfirmModal !redistill
-          "Re-distill document?"
-          "This document is already distilled. Re-running spends credits and takes time, and only adds new facts — it won't change your edits or rejected facts."
-          "Re-distill" "btn btn-primary"
-          (e/fn [doc-id] (e/server (kg/start-distill! user-id doc-id))))))))
+      ;; Spinner covers the first offloaded fetch (blank otherwise); the search
+      ;; input lives inside Loaded and revalidates in place via the Offload latch.
+      (loading/WithLatestLoading
+        (e/fn [] (e/server (e/Offload #(get-knowledge-docs* kg-bump user-id query))))
+        (e/fn [docs]
+          (let [item-count (count docs)]
+            (dom/div
+              (dom/props {:style {:display "flex" :flex-direction "column"
+                                  :height "calc(100vh - 160px)" :padding-top "8px"}})
+              (dom/div
+                (dom/props {:style {:display "flex" :gap "12px" :align-items "center"
+                                    :margin "10px 0" :flex-wrap "wrap"}})
+                (dom/input
+                  (dom/props {:placeholder "Search documents…" :class "input"
+                              :aria-label "Search documents"
+                              :style {:flex "1" :min-width "140px"}})
+                  (dom/On "input" (fn [ev] (reset! !query (.. ev -target -value))) nil))
+                (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
+                  (dom/text (str item-count " doc" (when (not= 1 item-count) "s")))))
+              (if (zero? item-count)
+                (dom/p (dom/props {:style {:padding "16px" :color "var(--color-text-secondary)"}})
+                  (dom/text (if (str/blank? query)
+                              "No documents yet — import one first." "No matches.")))
+                (TapeTable ["Document" "Facts" ""]
+                  "minmax(240px,1fr) 70px minmax(340px,max-content)" item-count
+                  (e/fn [i]
+                    (when-let [doc (nth docs i nil)]
+                      (DocumentRow user-id doc i navigate! distilling generating !redistill)))))
+              ;; Single re-distill confirm for the whole view (virtualization-safe;
+              ;; per-row modals would ride the Tape's reused DOM nodes). !redistill holds
+              ;; the doc-id to re-run; ConfirmModal passes it back as the payload.
+              (modal/ConfirmModal !redistill
+                "Re-distill document?"
+                "This document is already distilled. Re-running spends credits and takes time, and only adds new facts — it won't change your edits or rejected facts."
+                "Re-distill" "btn btn-primary"
+                (e/fn [doc-id] (e/server (kg/start-distill! user-id doc-id)))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Facts view — searchable browser over a document's approved facts.
@@ -323,7 +355,7 @@
   (e/client
     (if (= editing fact-id)
       (dom/input
-        (dom/props {:value (or object_label object_literal) :class "form-input"
+        (dom/props {:value (or object_label object_literal) :class "input"
                     :aria-label "Edit object"})
         (let [keyev (dom/On "keydown"
                       (fn [ev]
@@ -382,10 +414,10 @@
               (dom/On "click" (fn [_] (reset! !editing id)) nil)))
           (RejectFactButton user-id id))))))
 
-(e/defn FactsView [user-id doc-id !view kg-bump]
+(e/defn FactsView [user-id doc-id navigate! kg-bump]
   (e/client
     (let [!query (atom "") query (e/watch !query)
-          facts (e/server (get-doc-facts* kg-bump user-id doc-id query))
+          facts (e/server (e/Offload #(get-doc-facts* kg-bump user-id doc-id query)))
           item-count (count facts)
           grid-cols "minmax(140px,1fr) minmax(130px,1fr) minmax(160px,1.2fr) 60px 110px"
           !editing (atom nil)               ; fact id whose literal is being edited
@@ -398,11 +430,11 @@
           (dom/button
             (dom/props {:class "btn btn-sm"})
             (dom/text "← Documents")
-            (dom/On "click" (fn [_] (reset! !view :documents)) nil))
+            (dom/On "click" (fn [_] (navigate! :knowledge)) nil))
           (dom/input
-            (dom/props {:placeholder "Search facts…" :class "form-input"
+            (dom/props {:placeholder "Search facts…" :class "input"
                         :aria-label "Search facts"
-                        :style {:max-width "320px"}})
+                        :style {:flex "1" :min-width "140px"}})
             (dom/On "input" (fn [ev] (reset! !query (.. ev -target -value))) nil))
           (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
             (dom/text (str item-count " fact" (when (not= 1 item-count) "s")))))
@@ -436,62 +468,90 @@
             (case result
               (t))))))))
 
-(e/defn QuestionTextCell
-  "Question or answer cell: text, or an inline editor when (= editing
-   [qid field]). Enter saves (Offload), Escape cancels."
-  [user-id qid field current !editing editing]
+(e/defn QuestionEditorModal
+  "Edit a question's text and reference answer in a modal — plain textareas,
+   since questions carry no rich formatting. `!editing` holds the question map
+   being edited, or nil. Save writes both fields; Cancel/Escape/backdrop close."
+  [user-id !editing]
   (e/client
-    (if (= editing [qid field])
-      (dom/input
-        (dom/props {:value current :class "form-input"
-                    :aria-label (str "Edit " (name field))})
-        (let [keyev (dom/On "keydown"
-                      (fn [ev]
-                        (let [k (.-key ev) v (.. ev -target -value)]
-                          (cond
-                            (= k "Enter") {:id (str (random-uuid)) :value v}
-                            (= k "Escape") (do (reset! !editing nil) nil)
-                            :else nil)))
-                      nil)
-              [t _] (e/Token keyev)
-              question? (= field :question)]
-          (when t
-            (let [result (e/server
-                           (e/Offload
-                             #(do (db/update-kg-question! user-id qid
-                                    (when question? (:value keyev))
-                                    (when-not question? (:value keyev)))
-                                (commands/bump! user-id :generate-questions)
-                                :done)))]
-              (case result
-                (do (reset! !editing nil) (t)))))))
-      (dom/span
-        (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis"
-                            :white-space "nowrap" :cursor "text"}
-                    :data-tooltip current})
-        (dom/text current)
-        (dom/On "dblclick" (fn [_] (reset! !editing [qid field])) nil)))))
+    (when-some [q (e/watch !editing)]
+      (let [qid (:id q)
+            !question (atom (or (:question q) ""))
+            !answer (atom (or (:reference_answer q) ""))
+            close! (fn [] (reset! !editing nil))]
+        (dom/div
+          (dom/props {:class "modal-backdrop"})
+          (dom/On "click" (fn [_] (close!)) nil)
+          (modal/ModalEscape close! "Edit question")
+          (dom/div
+            (dom/props {:class "modal-content"
+                        :style {:width "min(640px, 95vw)" :max-height "85vh"
+                                :display "flex" :flex-direction "column" :gap "10px"}})
+            (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+            (dom/h3 (dom/props {:style {:margin "0" :font-size "16px"}}) (dom/text "Edit question"))
+            (dom/label (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
+              (dom/text "Question"))
+            (dom/textarea
+              (dom/props {:class "input" :rows 3 :aria-label "Question"
+                          :value (or (:question q) "")
+                          :style {:width "100%" :resize "vertical"}})
+              (dom/On "input" (fn [ev] (reset! !question (.. ev -target -value))) nil))
+            (dom/label (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
+              (dom/text "Reference answer"))
+            (dom/textarea
+              (dom/props {:class "input" :rows 5 :aria-label "Reference answer"
+                          :value (or (:reference_answer q) "")
+                          :style {:width "100%" :resize "vertical"}})
+              (dom/On "input" (fn [ev] (reset! !answer (.. ev -target -value))) nil))
+            (dom/div
+              (dom/props {:style {:display "flex" :gap "8px" :justify-content "flex-end"}})
+              (dom/button (dom/props {:class "btn btn-secondary"})
+                (dom/text "Cancel")
+                (dom/On "click" (fn [_] (close!)) nil))
+              (dom/button
+                (dom/props {:class "btn btn-primary"})
+                (dom/text "Save")
+                ;; Capture the edited values client-side in the click event, then
+                ;; save on the server (an e/server thunk can't deref client atoms).
+                (let [ev (dom/On "click"
+                           (fn [_] {:id (str (random-uuid)) :q @!question :a @!answer}) nil)
+                      [t _] (e/Token ev)]
+                  (dom/props {:disabled (some? t)})
+                  (when t
+                    (case (e/server
+                            (e/Offload
+                              #(do (db/update-kg-question! user-id qid (:q ev) (:a ev))
+                                 (commands/bump! user-id :generate-questions)
+                                 :done)))
+                      (case (reset! !editing nil) (t)))))))))))))
 
-(e/defn QuestionRow [user-id q i !editing editing]
+(e/defn QuestionRow [user-id q i !editing]
   (e/client
-    (let [{:keys [id kind question reference_answer fact_count]} q]
+    (let [{:keys [id kind question reference_answer fact_count]} q
+          open! (fn [_] (reset! !editing q))]  ; click a row cell → open the editor modal
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt")
                     :style {:--order (inc i)}})
-        (dom/td (dom/props {:style fact-cell-style})
-          (QuestionTextCell user-id id :question question !editing editing))
+        (dom/td (dom/props {:style (merge fact-cell-style {:cursor "pointer"})})
+          (dom/On "click" open! nil)
+          (dom/span (dom/props {:style fact-text-style :data-tooltip question})
+            (dom/text question)))
         (dom/td (dom/props {:style (merge fact-cell-style
-                                     {:color "var(--color-text-secondary)"})})
-          (QuestionTextCell user-id id :answer reference_answer !editing editing))
-        (dom/td (dom/props {:style fact-cell-style})
+                                     {:color "var(--color-text-secondary)" :cursor "pointer"})})
+          (dom/On "click" open! nil)
+          (dom/span (dom/props {:style fact-text-style}) (dom/text reference_answer)))
+        (dom/td (dom/props {:style (merge fact-cell-style {:cursor "pointer"})})
+          (dom/On "click" open! nil)
           (dom/span
             (dom/props {:class "type-badge"
                         :style {:background (if (= kind "synthesis")
                                               "var(--color-badge-epub)"
                                               "var(--color-badge-pdf)")}})
             (dom/text kind)))
-        (dom/td (dom/props {:style (merge fact-cell-style {:font-size "12px"})})
+        (dom/td (dom/props {:style (merge fact-cell-style {:font-size "12px" :cursor "pointer"})})
+          (dom/On "click" open! nil)
           (dom/text (str fact_count)))
+        ;; Reject lives in its own non-clickable cell so × never opens the editor.
         (dom/td (dom/props {:style (merge fact-cell-style
                                      {:justify-content "flex-end"})})
           (RejectQuestionButton user-id id))))))
@@ -501,43 +561,47 @@
     (let [!query (atom "") query (e/watch !query)
           !source-text (atom "") source-text (e/watch !source-text)
           !entity-text (atom "") entity-text (e/watch !entity-text)
-          docs (e/server (list-source-docs* kg-bump user-id))
-          ents (e/server (list-entity-options* kg-bump user-id))
-          ;; Resolve picked title/label → id; blank / no-match = that filter off.
+          docs (e/server (e/Offload #(list-source-docs* kg-bump user-id)))
+          ;; Resolve the source doc first so entity options can be scoped to it.
           source-id (some (fn [d] (when (= (:title d) source-text) (:id d))) docs)
+          ents (e/server (e/Offload #(list-entity-options* kg-bump user-id source-id)))
           entity-id (some (fn [ent] (when (= (:label ent) entity-text) (:id ent))) ents)
-          questions (e/server (get-questions* kg-bump user-id query source-id entity-id))
-          item-count (count questions)
           grid-cols "minmax(220px,1.4fr) minmax(220px,1.4fr) 90px 55px 60px"
-          !editing (atom nil)               ; [question-id :question|:answer]
-          editing (e/watch !editing)]
-      (dom/div
-        (dom/props {:style {:padding "0 16px" :display "flex" :flex-direction "column"
-                            :height "calc(100vh - 160px)"}})
-        (dom/div
-          (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :margin "10px 0"
-                              :flex-wrap "wrap"}})
-          (dom/input
-            (dom/props {:placeholder "Search questions…" :class "form-input"
-                        :aria-label "Search questions"
-                        :style {:max-width "320px"}})
-            (dom/On "input" (fn [ev] (reset! !query (.. ev -target -value))) nil))
-          (dom/div (dom/props {:style {:width "200px"}})
-            (typeahead/Typeahead !source-text (mapv :title docs) "Filter by source…" nil nil))
-          (dom/div (dom/props {:style {:width "200px"}})
-            (typeahead/Typeahead !entity-text (mapv :label ents) "Filter by entity…" nil nil))
-          (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
-            (dom/text (str item-count " question" (when (not= 1 item-count) "s")
-                        " — double-click text to edit"))))
-        (if (zero? item-count)
-          (dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
-            (dom/text (if (and (str/blank? query) (nil? source-id) (nil? entity-id))
-                        "No questions yet — generate from a document or synthesize from an entity."
-                        "No matches.")))
-          (TapeTable ["Question" "Answer" "Kind" "Facts" ""] grid-cols item-count
-            (e/fn [i]
-              (when-let [q (nth questions i nil)]
-                (QuestionRow user-id q i !editing editing)))))))))
+          !editing (atom nil)]              ; the question map being edited, or nil
+      ;; Spinner covers the first offloaded fetch chain (docs → source-id → questions);
+      ;; filter changes revalidate in place via the Offload latch, no spinner reflash.
+      (loading/WithLatestLoading
+        (e/fn [] (e/server (e/Offload #(get-questions* kg-bump user-id query source-id entity-id))))
+        (e/fn [questions]
+          (let [item-count (count questions)]
+            (dom/div
+              (dom/props {:style {:padding "0 16px" :display "flex" :flex-direction "column"
+                                  :height "calc(100vh - 160px)"}})
+              (dom/div
+                (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :margin "10px 0"
+                                    :flex-wrap "wrap"}})
+                (dom/input
+                  (dom/props {:placeholder "Search questions…" :class "input"
+                              :aria-label "Search questions"
+                              :style {:flex "1" :min-width "140px"}})
+                  (dom/On "input" (fn [ev] (reset! !query (.. ev -target -value))) nil))
+                (dom/div (dom/props {:style {:width "200px"}})
+                  (typeahead/Typeahead !source-text (mapv :title docs) "Filter by source…" nil nil))
+                (dom/div (dom/props {:style {:width "200px"}})
+                  (typeahead/Typeahead !entity-text (mapv :label ents) "Filter by entity…" nil nil))
+                (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
+                  (dom/text (str item-count " question" (when (not= 1 item-count) "s")
+                              " — click a row to edit"))))
+              (if (zero? item-count)
+                (dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
+                  (dom/text (if (and (str/blank? query) (nil? source-id) (nil? entity-id))
+                              "No questions yet — generate from a document or synthesize from an entity."
+                              "No matches.")))
+                (TapeTable ["Question" "Answer" "Kind" "Facts" ""] grid-cols item-count
+                  (e/fn [i]
+                    (when-let [q (nth questions i nil)]
+                      (QuestionRow user-id q i !editing)))))
+              (QuestionEditorModal user-id !editing))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Entities view
@@ -572,7 +636,7 @@
         (dom/td (dom/props {:style fact-cell-style})
           (if (= renaming id)
             (dom/input
-              (dom/props {:value label :class "form-input" :aria-label "Rename entity"})
+              (dom/props {:value label :class "input" :aria-label "Rename entity"})
               (let [keyev (dom/On "keydown"
                             (fn [ev]
                               (let [k (.-key ev) v (.. ev -target -value)]
@@ -634,69 +698,83 @@
           !merge-source (atom nil) merge-source (e/watch !merge-source)
           !merge-confirm (atom nil) merge-confirm (e/watch !merge-confirm)
           !renaming (atom nil) renaming (e/watch !renaming)
-          docs (e/server (list-source-docs* kg-bump user-id))
+          docs (e/server (e/Offload #(list-source-docs* kg-bump user-id)))
           ;; Resolve the picked title → its doc id; blank / no-match = no filter.
-          source-id (some (fn [d] (when (= (:title d) source-text) (:id d))) docs)
-          entities (e/server (list-entities* kg-bump user-id query source-id))
-          item-count (count entities)]
-      (dom/div
-        (dom/props {:style {:padding "0 16px" :display "flex" :flex-direction "column"
-                            :height "calc(100vh - 160px)"}})
-        (dom/div
-          (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :margin "10px 0"
-                              :flex-wrap "wrap"}})
-          (dom/input
-            (dom/props {:placeholder "Search entities…" :class "form-input"
-                        :aria-label "Search entities"
-                        :style {:max-width "320px"}})
-            (dom/On "input" (fn [ev] (reset! !query (.. ev -target -value))) nil))
-          (dom/div (dom/props {:style {:width "220px"}})
-            (typeahead/Typeahead !source-text (mapv :title docs) "Filter by source…" nil nil))
-          (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
-            (dom/text (str item-count " entit" (if (= 1 item-count) "y" "ies"))))
-          (when merge-source
-            (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
-              (dom/text (str "Merging #" merge-source " — pick the surviving entity, or "))
-              (dom/button (dom/props {:class "btn btn-sm"})
-                (dom/text "cancel")
-                (dom/On "click" (fn [_] (reset! !merge-source nil)) nil)))))
-        (if (zero? item-count)
-          (dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
-            (dom/text (if (and (str/blank? query) (nil? source-id))
-                        "No entities yet — distill first." "No matches.")))
-          (TapeTable ["Entity" "Aliases" "Facts" ""]
-            "minmax(200px,1fr) minmax(160px,1fr) 60px minmax(220px,max-content)" item-count
-            (e/fn [i]
-              (when-let [entity (nth entities i nil)]
-                (EntityRow user-id entity i !renaming renaming !merge-source merge-source !merge-confirm)))))
-        ;; Guard the irreversible entity merge behind a confirm (merge undo is out
-        ;; of scope, plan 6.5). One modal for the view; !merge-confirm carries the
-        ;; {:target :source :target-label} payload set by the row's "Merge here".
-        (modal/ConfirmModal !merge-confirm
-          "Merge entities?"
-          (str "Merge the other entity into " (:target-label merge-confirm)
-               "? Its facts and aliases move over and the source entity is removed. This can't be undone.")
-          "Merge" "btn btn-danger-fill"
-          (e/fn [payload]
-            (let [r (e/server (e/Offload #(do (db/merge-kg-entities! user-id (:target payload) (:source payload))
-                                           (commands/bump! user-id :distill) :done)))]
-              (case r (reset! !merge-source nil)))))))))
+          source-id (some (fn [d] (when (= (:title d) source-text) (:id d))) docs)]
+      ;; Spinner covers the first offloaded fetch chain (docs → source-id → entities);
+      ;; filter changes revalidate in place via the Offload latch, no spinner reflash.
+      (loading/WithLatestLoading
+        (e/fn [] (e/server (e/Offload #(list-entities* kg-bump user-id query source-id))))
+        (e/fn [entities]
+          (let [item-count (count entities)]
+            (dom/div
+              (dom/props {:style {:padding "0 16px" :display "flex" :flex-direction "column"
+                                  :height "calc(100vh - 160px)"}})
+              (dom/div
+                (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :margin "10px 0"
+                                    :flex-wrap "wrap"}})
+                (dom/input
+                  (dom/props {:placeholder "Search entities…" :class "input"
+                              :aria-label "Search entities"
+                              :style {:flex "1" :min-width "140px"}})
+                  (dom/On "input" (fn [ev] (reset! !query (.. ev -target -value))) nil))
+                (dom/div (dom/props {:style {:width "220px"}})
+                  (typeahead/Typeahead !source-text (mapv :title docs) "Filter by source…" nil nil))
+                (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
+                  (dom/text (str item-count " entit" (if (= 1 item-count) "y" "ies"))))
+                (when merge-source
+                  (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
+                    (dom/text (str "Merging #" merge-source " — pick the surviving entity, or "))
+                    (dom/button (dom/props {:class "btn btn-sm"})
+                      (dom/text "cancel")
+                      (dom/On "click" (fn [_] (reset! !merge-source nil)) nil)))))
+              (if (zero? item-count)
+                (dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
+                  (dom/text (if (and (str/blank? query) (nil? source-id))
+                              "No entities yet — distill first." "No matches.")))
+                (TapeTable ["Entity" "Aliases" "Facts" ""]
+                  "minmax(200px,1fr) minmax(160px,1fr) 60px minmax(220px,max-content)" item-count
+                  (e/fn [i]
+                    (when-let [entity (nth entities i nil)]
+                      (EntityRow user-id entity i !renaming renaming !merge-source merge-source !merge-confirm)))))
+              ;; Guard the irreversible entity merge behind a confirm (merge undo is out
+              ;; of scope, plan 6.5). One modal for the view; !merge-confirm carries the
+              ;; {:target :source :target-label} payload set by the row's "Merge here".
+              (modal/ConfirmModal !merge-confirm
+                "Merge entities?"
+                (str "Merge the other entity into " (:target-label merge-confirm)
+                     "? Its facts and aliases move over and the source entity is removed. This can't be undone.")
+                "Merge" "btn btn-danger-fill"
+                (e/fn [payload]
+                  (let [r (e/server (e/Offload #(do (db/merge-kg-entities! user-id (:target payload) (:source payload))
+                                                 (commands/bump! user-id :distill) :done)))]
+                    (case r (reset! !merge-source nil))))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Page
 ;; ---------------------------------------------------------------------------
 
-(e/defn KnowledgePage [user-id]
+(e/defn KnowledgePage [user-id navigate!]
   (e/client
-    (let [!view (atom :documents)
-          view (e/watch !view)
+    ;; Sub-view is the URL segment under /knowledge (router5 r/pop'd by main), so
+    ;; tabs are deep-linkable and survive refresh/back. `arg` carries the doc-id
+    ;; for the facts drill-down (/knowledge/facts/<id>).
+    (let [[sub arg] r/route
+          view (case sub
+                 entities  :entities
+                 questions :questions
+                 facts     [:facts arg]
+                 :documents)                 ; nil / documents / unknown → documents
           kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))]
       (dom/div
         (dom/props {:style {:max-width "960px" :margin "0 auto" :padding-bottom "32px"}})
-        (SubViewTabs !view view)
+        (SubViewTabs navigate! view)
         (cond
           (= view :entities) (EntitiesView user-id kg-bump)
           (= view :questions) (QuestionsView user-id kg-bump)
-          (vector? view) (FactsView user-id (second view) !view kg-bump)
+          ;; `arg` (route doc-id), not `(second view)` — Electric keeps a branch's
+          ;; argument exprs live during the switch frame, so seq-ing `view` when it
+          ;; has flipped to the :documents keyword would throw (not-ISeqable).
+          (vector? view) (FactsView user-id arg navigate! kg-bump)
           :else (dom/div (dom/props {:style {:padding "0 16px"}})
-                  (DocumentsView user-id !view kg-bump)))))))
+                  (DocumentsView user-id navigate! kg-bump)))))))
