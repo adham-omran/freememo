@@ -17,6 +17,7 @@
             [freememo.knowledge-page :refer [KnowledgePage]]
             [freememo.quiz-page :refer [QuizPage GlobalQuizInvokers]]
             [freememo.search-page :refer [SearchPage]]
+            [freememo.help-page :refer [HelpPage]]
             [freememo.subset-review :refer [SubsetReviewSession]]
             [freememo.landing-page :refer [LandingPage]]
             [freememo.toast-stack :refer [ToastStack]]
@@ -299,6 +300,12 @@
                     (dom/On "click" (fn [_] (navigate! :import)) nil))
 
                   (dom/button
+                    (dom/props {:class "nav-tab" :style (tab-style :help)})
+                    (icons/Icon :circle-help :size 18)
+                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Help"))
+                    (dom/On "click" (fn [_] (navigate! :help)) nil))
+
+                  (dom/button
                     (dom/props {:class "nav-tab" :style (tab-style :settings)})
                     (icons/Icon :settings :size 18)
                     (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Settings"))
@@ -347,6 +354,7 @@
                     (r/pop ; consume 'knowledge from route; KnowledgePage reads the sub-view segment
                       (KnowledgePage user-id navigate!)))
                   (when (= active-tab :quiz) (QuizPage user-id))
+                  (when (= active-tab :help) (HelpPage))
                   (when (= active-tab :settings) (SettingsPage user-id username enc-key base-url client-country))
                   (when (= active-tab :credits) (CreditsReturnPage user-id navigate!))
                   (when (= active-tab :learn) (LearnPage user-id navigate! nil))

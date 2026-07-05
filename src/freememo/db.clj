@@ -924,6 +924,24 @@
                          [:= :user_id user-id]
                          [:= :key key]]})))
 
+(defn list-email-update-recipients
+  "Email addresses of users who opted into email updates (settings key
+   'email_updates' = 'true') and have a non-blank email.
+   Post: vector of distinct email strings (possibly empty)."
+  []
+  (->> (jdbc/execute! ds
+         (sql/format {:select-distinct [:users.email]
+                      :from [:users]
+                      :join [:settings [:= :settings.user_id :users.id]]
+                      :where [:and
+                              [:= :settings.key "email_updates"]
+                              [:= :settings.value "true"]
+                              [:<> :users.email nil]
+                              [:<> [:trim :users.email] ""]]}))
+    (map :users/email)
+    (remove str/blank?)
+    vec))
+
 ;; ---------------------------------------------------------------------------
 ;; Credits — pass-through AI billing (see plans/credits-wayl-payment-system.md §5)
 ;; ---------------------------------------------------------------------------
