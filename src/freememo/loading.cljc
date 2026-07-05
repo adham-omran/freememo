@@ -45,3 +45,29 @@
        (if (nil? v)
          (Loading)
          (Loaded v))))))
+
+(e/defn WithLatestLoading
+  "Like WithLoading, but re-query-aware: renders `Loading` until `Thunk`'s value
+   first resolves, then `(Loaded latest-value)` — and keeps tracking the latest
+   value (no one-shot Token), so a re-querying Thunk (e.g. wrapping e/Offload)
+   updates in place without flashing back to Loading. Pairs with e/Offload's
+   latch for stale-while-revalidate.
+
+   Pre  : `Thunk` is `(e/fn [] <server value>)`, resolved value non-nil (a nil
+          result reads as perpetual Loading — wrap a nil source in a sentinel).
+          `Loaded` is `(e/fn [value] …)`. `Loading` is `(e/fn [] …)`.
+   Post : `(Loading)` until the value first resolves, then `(Loaded value)` with
+          the most recent value.
+   Invariant: the shown value comes from a client atom, never the pending server
+          value directly — that is what avoids e/Offload's empty-amb suppression."
+  ([Thunk Loaded] (WithLatestLoading Thunk Loaded Spinner))
+  ([Thunk Loaded Loading]
+   (e/client
+     (let [!v (atom nil)]
+       ;; Capture each resolved value into the client atom; suppressed while the
+       ;; value is pending (empty amb), so the atom stays nil → Loading — until
+       ;; the first value arrives. `case` forces evaluation (anki-sync idiom).
+       (let [v (Thunk)] (case v (reset! !v v)))
+       (if-some [v (e/watch !v)]
+         (Loaded v)
+         (Loading))))))

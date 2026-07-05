@@ -8,9 +8,12 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
+   [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
    [freememo.command-bus :as bus]
    [freememo.icons :as icons]
+   [freememo.modal-shell :as modal]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.kg-grade :as grade])
    #?(:clj [freememo.toasts :as toasts])
@@ -75,7 +78,6 @@
           (if ent
             (dom/span
               (dom/props {:role "button"
-                          :data-tooltip (str "About “" (:label ent) "”")
                           :style (cond-> {:cursor "pointer"
                                           :text-decoration "underline dotted"
                                           :text-underline-offset "3px"
@@ -166,7 +168,14 @@
 (def ^:private panel-style
   {:max-width "720px" :margin "0 auto" :padding "16px"})
 
-(e/defn QuizSetup [user-id !session !view initial-mode]
+;; Fixed row height for the virtualized material (document) list — Scroll-window
+;; needs it up front and the .tape-scroll CSS consumes it as --row-height.
+(def ^:private quiz-material-row-height 36)
+
+;; Fixed row height for the virtualized session-history list in QuizHistoryModal.
+(def ^:private quiz-history-row-height 52)
+
+(e/defn QuizSetup [user-id !session !history-open? initial-mode]
   (e/client
     (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
           docs (e/server (quiz-docs* kg-bump user-id))
@@ -186,7 +195,7 @@
             (dom/props {:class "btn btn-sm" :aria-label "Session history"})
             (icons/Icon :history :size 14)
             (dom/text " History")
-            (dom/On "click" (fn [_] (reset! !view :history)) nil)))
+            (dom/On "click" (fn [_] (reset! !history-open? true)) nil)))
         ;; Mode toggle — quiz: untimed, instant feedback; exam: timed, graded at end.
         (dom/div
           (dom/props {:style {:display "flex" :gap "4px" :margin "10px 0"}})
@@ -201,16 +210,43 @@
           (dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
             (dom/text "No questions yet — distill a document and generate questions in Knowledge."))
           (dom/div
-            (e/for [{:keys [id title questions]} (e/diff-by :id docs)]
-              (dom/label
-                (dom/props {:style {:display "flex" :gap "8px" :align-items "center"
-                                    :padding "6px 0" :cursor "pointer"}})
-                (dom/input
-                  (dom/props {:type "checkbox" :checked (contains? scope id)})
-                  (dom/On "change" (fn [_] (swap! !scope #(if (% id) (disj % id) (conj % id)))) nil))
-                (dom/span (dom/text title))
-                (dom/span (dom/props {:style {:color "var(--color-text-secondary)" :font-size "12px"}})
-                  (dom/text (str questions " questions")))))
+            ;; Virtualized 1-col material list (Scroll-window/Tape; shared by quiz+exam
+            ;; modes). Bounded height gives the virtual viewport its bounds; reuses the
+            ;; .tape-scroll table CSS (grid-row via --order, --offset translation).
+            (dom/div
+              (dom/props {:style {:max-height "40vh" :overflow-y "auto" :min-height "0"
+                                  :border "1px solid var(--color-border)"
+                                  :border-radius "var(--radius-sm)"}})
+              (let [row-count (count docs)
+                    [offset limit] (Scroll-window quiz-material-row-height row-count dom/node
+                                     {:overquery-factor 2})
+                    occluded (clamp-left (* quiz-material-row-height (- row-count limit)) 0)]
+                (dom/props {:class "tape-scroll"
+                            :style {:--offset offset
+                                    :--row-height (str quiz-material-row-height "px")}})
+                (dom/table
+                  (dom/props {:style {:width "100%" :display "grid" :grid-template-columns "1fr"}})
+                  (e/for [i (Tape offset limit)]
+                    (when-let [{:keys [id title questions]} (nth docs i nil)]
+                      (dom/tr
+                        (dom/props {:class (when (even? i) "row-alt")
+                                    :style {:--order (inc i)
+                                            :height (str quiz-material-row-height "px")}})
+                        (dom/td
+                          (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
+                                              :padding "0 4px"}})
+                          (dom/label
+                            (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
+                                                :cursor "pointer" :width "100%"}})
+                            (dom/input
+                              (dom/props {:type "checkbox" :checked (contains? scope id)})
+                              (dom/On "change"
+                                (fn [_] (swap! !scope #(if (% id) (disj % id) (conj % id)))) nil))
+                            (dom/span (dom/text title))
+                            (dom/span (dom/props {:style {:color "var(--color-text-secondary)"
+                                                          :font-size "12px" :margin-left "auto"}})
+                              (dom/text (str questions " questions")))))))))
+                (dom/div (dom/props {:style {:height (str occluded "px")}}))))
             (dom/div
               (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :margin-top "12px"}})
               (dom/label (dom/props {:style {:font-size "13px"}}) (dom/text "Questions:"))
@@ -587,42 +623,8 @@
   (when (pos? (or total 0))
     (int (+ 0.5 (* 100.0 (/ (+ correct (* 0.5 partial)) total))))))
 
-(e/defn HistoryView [user-id !view !result-sid]
-  (e/client
-    (let [sessions (e/server (history-sessions* user-id))]
-      (dom/div
-        (dom/props {:style panel-style})
-        (dom/div
-          (dom/props {:style {:display "flex" :gap "8px" :align-items "center"}})
-          (dom/button
-            (dom/props {:class "btn btn-sm"})
-            (dom/text "← Back")
-            (dom/On "click" (fn [_] (reset! !view :play)) nil))
-          (dom/h2 (dom/props {:style {:font-size "18px" :margin "0"}}) (dom/text "History")))
-        (if (empty? sessions)
-          (dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
-            (dom/text "No finished sessions yet."))
-          (dom/div
-            (e/for [{:keys [id kind total started correct partial incorrect]}
-                    (e/diff-by :id sessions)]
-              (dom/div
-                (dom/props {:role "button" :tabindex "0"
-                            :style {:display "flex" :gap "12px" :align-items "center"
-                                    :padding "8px 10px" :cursor "pointer"
-                                    :border-bottom "1px solid var(--color-bg-subtle)"}})
-                (dom/On "click" (fn [_] (reset! !result-sid id)) nil)
-                (dom/span
-                  (dom/props {:class "type-badge"
-                              :style {:background (if (= kind "exam")
-                                                    "var(--color-badge-epub)"
-                                                    "var(--color-badge-pdf)")}})
-                  (dom/text kind))
-                (dom/span (dom/props {:style {:font-size "13px"}}) (dom/text started))
-                (dom/span (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
-                  (dom/text (str (+ correct partial incorrect) " / " total " answered")))
-                (dom/span (dom/props {:style {:font-size "14px" :font-weight "600"
-                                              :margin-left "auto"}})
-                  (dom/text (str (or (session-score correct partial total) "—") "%")))))))))))
+;; History is now a virtualized modal overlay — see QuizHistoryModal (below
+;; SessionResult, which it reuses for the in-modal drill-down).
 
 (e/defn SessionResult
   "Per-question record of a finished session — the exam report and the
@@ -675,6 +677,85 @@
                                          :color "var(--color-text-secondary)"}})
                 (dom/text (str "Reference: " reference_answer))))))))))
 
+(e/defn QuizHistoryModal
+  "Finished-session history as a modal overlay with a virtualized list. Selecting
+   a session swaps the body to its SessionResult report (modal-local !result-sid);
+   Back returns to the list. Closing resets both. Chrome mirrors HistoryModal /
+   ZoteroPickerModal (fixed height so the virtual viewport is bounded)."
+  [user-id !open? !result-sid]
+  (e/client
+    (when (e/watch !open?)
+      (let [result-sid (e/watch !result-sid)
+            close! (fn [] (reset! !open? false) (reset! !result-sid nil))]
+        (dom/div
+          (dom/props {:class "modal-backdrop"})
+          (dom/On "click" (fn [_] (close!)) nil)
+          (modal/ModalEscape close! "Quiz history")
+          (dom/div
+            (dom/props {:class "modal-content"
+                        :style {:width "min(680px, 95vw)" :height "75vh"
+                                :display "flex" :flex-direction "column" :padding "0"}})
+            (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+            (dom/div
+              (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
+                                  :padding "12px 16px" :flex-shrink "0"
+                                  :border-bottom "1px solid var(--color-border)"}})
+              (dom/h3 (dom/props {:style {:margin "0" :font-size "16px" :flex "1"}})
+                (dom/text "Quiz history"))
+              (dom/button
+                (dom/props {:class "btn btn-sm" :aria-label "Close"})
+                (icons/Icon :x :size 16)
+                (dom/On "click" (fn [_] (close!)) nil)))
+            (if (some? result-sid)
+              (dom/div
+                (dom/props {:style {:flex "1" :min-height "0" :overflow-y "auto"}})
+                (SessionResult user-id result-sid !result-sid))
+              (dom/div
+                (dom/props {:style {:flex "1" :min-height "0" :overflow-y "auto"}})
+                (let [sessions (e/server (history-sessions* user-id))
+                      row-count (count sessions)]
+                  (if (zero? row-count)
+                    (dom/p (dom/props {:style {:padding "24px 16px" :text-align "center"
+                                               :color "var(--color-text-secondary)"}})
+                      (dom/text "No finished sessions yet."))
+                    (let [[offset limit] (Scroll-window quiz-history-row-height row-count dom/node
+                                           {:overquery-factor 2})
+                          occluded (clamp-left (* quiz-history-row-height (- row-count limit)) 0)]
+                      (dom/props {:class "tape-scroll"
+                                  :style {:--offset offset
+                                          :--row-height (str quiz-history-row-height "px")}})
+                      (dom/table
+                        (dom/props {:style {:width "100%" :display "grid"
+                                            :grid-template-columns "1fr"}})
+                        (e/for [i (Tape offset limit)]
+                          (when-let [{:keys [id kind total started correct partial incorrect]}
+                                     (nth sessions i nil)]
+                            (dom/tr
+                              (dom/props {:class (when (even? i) "row-alt")
+                                          :style {:--order (inc i)
+                                                  :height (str quiz-history-row-height "px")}})
+                              (dom/td
+                                (dom/props {:role "button" :tabindex "0"
+                                            :style {:display "flex" :gap "12px" :align-items "center"
+                                                    :padding "0 14px" :cursor "pointer"
+                                                    :border-bottom "1px solid var(--color-bg-subtle)"}})
+                                (dom/On "click" (fn [_] (reset! !result-sid id)) nil)
+                                (dom/span
+                                  (dom/props {:class "type-badge"
+                                              :style {:background (if (= kind "exam")
+                                                                    "var(--color-badge-epub)"
+                                                                    "var(--color-badge-pdf)")}})
+                                  (dom/text kind))
+                                (dom/span (dom/props {:style {:font-size "13px"}})
+                                  (dom/text started))
+                                (dom/span (dom/props {:style {:font-size "13px"
+                                                              :color "var(--color-text-secondary)"}})
+                                  (dom/text (str (+ correct partial incorrect) " / " total " answered")))
+                                (dom/span (dom/props {:style {:font-size "14px" :font-weight "600"
+                                                              :margin-left "auto"}})
+                                  (dom/text (str (or (session-score correct partial total) "—") "%"))))))))
+                      (dom/div (dom/props {:style {:height (str occluded "px")}})))))))))))))
+
 (defonce !pending-preset
   ;; Palette → QuizPage handoff ({:mode "quiz"|"exam"} or {:view :history}),
   ;; set by GlobalQuizInvokers, consumed ONCE on QuizPage mount. A resumable
@@ -714,13 +795,15 @@
           !session (atom ::unset) session (e/watch !session)
           !summary (atom nil) summary (e/watch !summary)
           !result-sid (atom nil) result-sid (e/watch !result-sid)
-          !view (atom (if (= :history (:view preset)) :history :play))
-          view (e/watch !view)]
+          ;; History is a modal overlay, not a view branch: seeded open from the
+          ;; :quiz-history preset handoff, and QuizSetup's History button opens it.
+          !history-open? (atom (= :history (:view preset)))
+          !history-result-sid (atom nil)]  ; modal-local drill-down, independent of the page result
+      (QuizHistoryModal user-id !history-open? !history-result-sid)
       (cond
         (= ::unset session) (do (reset! !session resume) nil)
         (some? result-sid) (SessionResult user-id result-sid !result-sid)
-        (= view :history) (HistoryView user-id !view !result-sid)
         (some? summary) (QuizSummary !session !summary summary)
-        (nil? session) (QuizSetup user-id !session !view (:mode preset))
+        (nil? session) (QuizSetup user-id !session !history-open? (:mode preset))
         (= "exam" (:kind session)) (ExamActive user-id !session session !result-sid)
         :else (QuizActive user-id !session session !summary)))))
