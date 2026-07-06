@@ -569,7 +569,8 @@
                                                         :answer answer :cloze cloze})))]
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt")
-                    :style {:--order (inc i) :cursor "pointer"}})
+                    ;; 0-based absolute index → per-row translateY (C1c)
+                    :style {:--order i :cursor "pointer"}})
         (dom/On "click" edit-card! nil)
         (RowSelectCell cell-style id !selected selected)
         (RowDiffCell cell-style sync-st (get anki-overlay id)
@@ -1019,14 +1020,15 @@
   (e/client
     (dom/div
       (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
-      (let [[offset limit] (Scroll-window row-height card-count dom/node {:overquery-factor 2})
-            occluded-height (clamp-left (* row-height (- card-count limit)) 0)]
+      (let [[offset limit] (Scroll-window row-height card-count dom/node {:overquery-factor 2})]
         (dom/props {:class "tape-scroll table-frame-body"
-                    :style {:--offset offset :--row-height (str row-height "px")}})
+                    ;; C1c: --count drives table height (scroll range); each row
+                    ;; self-positions via transform (see .cards-table-body in index.css).
+                    :style {:--count card-count :--row-height (str row-height "px")}})
         (dom/table
           (dom/props {:class "cards-table-body"
-                      :style {:width "100%" :display "grid" :grid-template-columns grid-cols
-                              :font-size (str font-sz "px")}})
+                      ;; display:block + column template live in index.css (C1c).
+                      :style {:width "100%" :font-size (str font-sz "px")}})
           (if (pos? card-count)
             (e/for [i (Tape offset limit)]
               (let [card (e/server (nth cards-vec i nil))]
@@ -1034,6 +1036,8 @@
                   (LibraryCardRow card navigate! !editing-card !diff-card !selected
                     selected user-id i anki-overlay))))
             (dom/tr
+              ;; Opt out of the fixed row-height so the message isn't clipped (C1c).
+              (dom/props {:style {:height "auto"}})
               (dom/td
                 (dom/props {:style {:grid-column "1 / -1" :text-align "center"
                                     :padding "24px 12px" :font-size "13px"
@@ -1041,7 +1045,7 @@
                 (dom/text (if filters-active?
                             "No cards match the current filters."
                             "No cards yet. Generate flashcards from your documents to see them here."))))))
-        (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))
+        ))))
 
 ;; Anki overlay (Phase 2): client fetches AnkiConnect state, server diffs +
 ;; applies F4 deletions; returns the sparse per-card flag map.
