@@ -1,20 +1,23 @@
 (ns freememo.scroll
   "App-local virtual-scroll primitive, vendored from hyperfiddle.electric-scroll0.
 
-   Two deltas from upstream, both fixing observed Library bugs:
+   Stateless Tape windowing with three deltas from upstream:
 
-   1. `scroll-state` drops the upstream 16 ms throttle. The observer is already
-      rAF-coalesced (one emit per frame), so the throttle only added latency: it
-      let `--offset` lag native scroll by up to an extra frame, leaving a blank
-      strip at the viewport's trailing edge during fast scroll. Removing it keeps
-      positioning within one frame of the scroll.
+   1. `:reset-key` — scrollTop resets to 0 only when the caller's key changes
+      (search / sort / navigate), NOT on every `record-count` change. Absent
+      `:reset-key`, matches upstream (resets on count).
 
-   2. `Scroll-window` takes an optional `:reset-key`. scrollTop is forced to 0
-      only when that key changes (search / sort / navigate), NOT on every
-      `record-count` change. Callers that grow the list in place (expand a topic,
-      delete a row) pass a key excluding that growth, so the view no longer jumps
-      to the top. Absent `:reset-key`, behaviour is identical to upstream
-      (resets on record-count change).
+   2. D′ — `scroll-state` drops the upstream 16 ms throttle; the observer already
+      coalesces to one emit per animation frame.
+
+   3. Offset is a pure per-frame function of scrollTop (no cross-frame state), so
+      it survives Electric frame re-mounts (WS reconnect / hot reload).
+
+   Flicker-free rendering depends on two CSS companions on `.tape-scroll` in
+   index.css: `overflow-anchor: none` (browser scroll-anchoring otherwise fights
+   the row repositioning into a ±row oscillation) and the table offset applied via
+   `transform: translateY` NOT `top` (transform is GPU-composited; `top` relayouts
+   + repaints the whole table every scroll step → visible flashing).
 
    `Tape` / `IndexRing` are unchanged and still referred from electric-scroll0."
   (:require [clojure.math :as math]
@@ -27,12 +30,12 @@
 #?(:cljs
    (defn scroll-state
      "Continuous flow of [scrollTop scrollHeight clientHeight scrollLeft scrollWidth
-      clientWidth] for `scrollable`.
+      clientWidth] for `scrollable`, sampled once per animation frame.
 
       Reads are deferred into a single rAF (never synchronously in the scroll/resize
       handler — a sync scrollTop read can force an expensive layout pass with sticky
-      children or iOS Safari grid containers). No throttle beyond that rAF, so the
-      window position trails native scroll by at most one frame."
+      children or iOS Safari grid containers). The upstream 16 ms throttle is dropped
+      (D′); the observer already coalesces to one emit per frame."
      [scrollable]
      (->> (m/observe
             (fn [!]
@@ -57,7 +60,7 @@
                                   (aset 5 (.-width r))
                                   (aset 2 (.-height r))))
                               (schedule #(emit !))))
-                    on-scroll (fn [^js event]
+                    on-scroll (fn [^js event] ; do not read scrollTop synchronously — layout pass risk
                                 (let [t (.-target event)]
                                   (schedule
                                     (fn []
@@ -70,7 +73,7 @@
                 (emit !)
                 #(do (.disconnect sizes)
                      (.removeEventListener scrollable "scroll" on-scroll)))))
-       (m/relieve {})))) ; discrete → continuous for e/input; keeps latest, no rate cap
+       (m/relieve {})))) ; discrete → continuous for e/input; keeps latest
 
 #?(:cljs
    (defn compute-overquery [overquery-factor record-count offset limit]
@@ -81,10 +84,12 @@
        [q-offset q-limit])))
 
 #?(:cljs
-   (defn compute-scroll-window [row-height record-count clientHeight scrollTop overquery-factor]
-     (let [padding-top 0 ; e.g. sticky header row
-           limit (math/ceil (/ (- clientHeight padding-top) (max row-height 1))) ; aka page-size
-           offset (int (/ (clamp scrollTop 0 (* record-count row-height)) ; prevent overscroll past the end
+   (defn compute-scroll-window
+     "Stateless window for one axis: floor(scrollTop / row-height) → offset, plus the
+      overquery buffer. Pure per-frame function of scrollTop (no cross-frame state)."
+     [row-height record-count clientHeight scrollTop overquery-factor]
+     (let [limit  (int (math/ceil (/ clientHeight (max row-height 1)))) ; visible row count (page-size)
+           offset (int (/ (clamp scrollTop 0 (* record-count row-height)) ; clamp — no overscroll past the end
                          (max row-height 1)))]
        (compute-overquery overquery-factor record-count offset limit))))
 
@@ -98,7 +103,7 @@
     ;; Falls back to record-count so callers that don't distinguish in-place row
     ;; growth from navigation keep the upstream behaviour.
     ((fn [_] (set! (.-scrollTop dom/node) 0)) (if (some? reset-key) reset-key record-count))
-    (let [[scrollTop scrollHeight clientHeight scrollLeft scrollWidth clientWidth] (e/input (scroll-state node))] ; smooth scroll has already happened, cannot quantize
+    (let [[scrollTop _ clientHeight scrollLeft _ clientWidth] (e/input (scroll-state node))]
       (concat
         (compute-scroll-window row-height record-count clientHeight scrollTop overquery-factor)
         ;; Horizontal axis may window a different item set (transposed tables);
