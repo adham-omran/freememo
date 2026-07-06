@@ -1013,10 +1013,26 @@ html, body {
 }
 
 /* ── Virtual Scroll ────────────────────────────────────────────── */
+/* Disable browser scroll-anchoring on the virtual-scroll container. The Tape
+   repositions rows (table `top` / `grid-row`) as the window shifts; scroll
+   anchoring misreads that as content moving above the viewport and "corrects"
+   scrollTop by ~one row, which re-shifts the window — a self-sustaining ±row
+   oscillation (observed: scrollTop bouncing 606↔647 for ~400ms after input
+   stops, scrollHeight constant). The virtual scroll owns its position, so
+   anchoring must be off. */
+.tape-scroll,
+.tape-scroll * { overflow-anchor: none; }
+
 .tape-scroll table {
     display: grid;
     position: relative;
-    top: calc(var(--offset) * var(--row-height));
+    /* Move the window via `transform` (GPU-composited), NOT `top`. `top` is a
+       layout property: changing it every scroll step relayouts + repaints the
+       whole table each frame, which paints as flashing (zebra/rows appearing to
+       redraw). `transform: translateY` shifts the table on the compositor with
+       no repaint of its contents. */
+    transform: translateY(calc(var(--offset) * var(--row-height)));
+    will-change: transform;
 }
 .tape-scroll table tr { display: contents; }
 .tape-scroll table td {

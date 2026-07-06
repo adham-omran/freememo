@@ -187,6 +187,25 @@
            cmp (if (= sort-dir :asc) compare (fn [a b] (compare b a)))]
        (vec (sort-by key-fn cmp cards)))))
 
+;; Per-row projection for the virtual-scrolled list. The full flashcard row
+;; carries ~20 keys (io_fields jsonb, occlusion/score/mask, root_topic_id, raw
+;; timestamps) but LibraryCardRow renders only these ten. Every windowed row
+;; crosses the wire on scroll, so shipping the full row is pure per-scroll waste
+;; — this trims it to exactly what the row reads. question/answer/cloze stay:
+;; the row renders them and seeds the edit/diff modals from them.
+#?(:clj
+   (defn- card-list-summary [c]
+     {:flashcards/id           (:flashcards/id c)
+      :flashcards/kind         (:flashcards/kind c)
+      :flashcards/question     (:flashcards/question c)
+      :flashcards/answer       (:flashcards/answer c)
+      :flashcards/cloze        (:flashcards/cloze c)
+      :flashcards/topic_id     (:flashcards/topic_id c)
+      :flashcards/anki_note_id (:flashcards/anki_note_id c)
+      :root_title              (:root_title c)
+      :formatted_date          (:formatted_date c)
+      :sync-state              (:sync-state c)}))
+
 ;; Query wrapper — _rev creates the Electric reactive dependency.
 ;; opts: {:text str :kind str :status str :sort-col kw :sort-dir kw}
 ;; Returns {:success true :cards [...] :count N :unpushed N :modified N}
@@ -204,7 +223,9 @@
                         (filter-cards-text text))
              sorted (sort-user-cards filtered sort-col sort-dir)]
          {:success true
-          :cards sorted
+          ;; Only the trimmed summary crosses the wire; counts/ids/manifest
+          ;; below still derive from the full `sorted`/`all` rows.
+          :cards (mapv card-list-summary sorted)
           :count (count sorted)
           ;; ids of the filtered+sorted set — drives the header select-all.
           ;; Ints only; content stays server-side.
@@ -997,8 +1018,7 @@
                         user-id anki-overlay]
   (e/client
     (dom/div
-      (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"
-                          :scrollbar-gutter "stable"}})
+      (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
       (let [[offset limit] (Scroll-window row-height card-count dom/node {:overquery-factor 2})
             occluded-height (clamp-left (* row-height (- card-count limit)) 0)]
         (dom/props {:class "tape-scroll table-frame-body"
