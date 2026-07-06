@@ -3,7 +3,8 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
+   [hyperfiddle.electric-scroll0 :refer [Tape]]
+   [freememo.scroll :refer [Scroll-window]]
    [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
    [freememo.navigation :as nav]
@@ -211,17 +212,14 @@
           open-topic! (fn [_] (navigate! :viewer (nav/nav-topic id :library)))
           toggle-children! (fn [e]
                              (.stopPropagation e)
-                             (let [sn @!scroll-node
-                                   st (when sn (.-scrollTop sn))]
-                               ;; toggling id flips expansion in either mode: it is an
-                               ;; exception in :all mode, an expansion in :set mode
-                               (swap! !expansion
-                                 (fn [{:keys [ids] :as ex}]
-                                   (assoc ex :ids (if (contains? ids id) (disj ids id) (conj ids id)))))
-                               ;; Anchor scroll across the async server re-render: a single
-                               ;; rAF fires before the new rows land and scrollTop resets to
-                               ;; 0; re-apply over a few frames so the toggled row stays put.
-                               (util/restore-scroll-after-render! sn st)))]
+                             ;; toggling id flips expansion in either mode: it is an
+                             ;; exception in :all mode, an expansion in :set mode.
+                             ;; No scroll anchoring needed — Scroll-window keys its reset
+                             ;; on filters/sort, not record-count, so growing the list
+                             ;; in place leaves scrollTop untouched.
+                             (swap! !expansion
+                               (fn [{:keys [ids] :as ex}]
+                                 (assoc ex :ids (if (contains? ids id) (disj ids id) (conj ids id))))))]
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt")
                     :role "row"
@@ -526,7 +524,12 @@
                 (dom/props {:role "rowgroup"
                             :style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
                 (reset! !scroll-node dom/node)
-                (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 2})
+                (let [[offset limit] (Scroll-window row-height row-count dom/node
+                                       {:overquery-factor 2
+                                        ;; Reset to top on filter/sort change only.
+                                        ;; Excludes expansion + tree mutations so
+                                        ;; expand/collapse/delete hold scroll position.
+                                        :reset-key [filter-text kind-filter status-filter sort-col sort-dir]})
                       occluded-height (clamp-left (* row-height (- row-count limit)) 0)]
                   (dom/props {:class "tape-scroll"
                               :style {:--offset offset :--row-height (str row-height "px")}})
