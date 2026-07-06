@@ -22,40 +22,11 @@
    [java.io ByteArrayOutputStream]
    [java.util Base64]))
 
-(defn pdf-page->image
-  "Extract a single page from PDF bytes as BufferedImage.
-   Page numbers are 0-indexed. DPI defaults to 150 if not provided."
-  ([pdf-bytes page-number] (pdf-page->image pdf-bytes page-number 150))
-  ([pdf-bytes page-number dpi]
-   (let [doc (Loader/loadPDF pdf-bytes)
-         renderer (PDFRenderer. doc)
-         image (.renderImageWithDPI renderer page-number (float dpi))]
-     (.close doc)
-     image)))
-
 (defn get-page-count
   "Return the number of pages in a PDF byte array using PDFBox."
   [pdf-bytes]
   (let [doc (Loader/loadPDF pdf-bytes)]
     (try (.getNumberOfPages doc)
-      (finally (.close doc)))))
-
-(defn pdf-page->single-page-pdf-bytes
-  "Extract one page (1-based) of `pdf-bytes` as a standalone single-page PDF.
-   The Mistral OCR lane consumes a PDF (not an image); this is its page input.
-   Pre:  1 <= page-number <= (get-page-count pdf-bytes).
-   Post: a byte[] that loads as a 1-page PDF. importPage deep-copies the page's
-         resources, so the output carries only that page's fonts/images."
-  [pdf-bytes page-number]
-  (let [doc (Loader/loadPDF pdf-bytes)]
-    (try
-      (let [out (PDDocument.)]
-        (try
-          (.importPage out (.getPage doc (dec page-number)))
-          (let [baos (ByteArrayOutputStream.)]
-            (.save out baos)
-            (.toByteArray baos))
-          (finally (.close out))))
       (finally (.close doc)))))
 
 (defn mistral-ocr-text
@@ -154,12 +125,39 @@
     (str/replace #"\n?```\s*$" "")
     str/trim))
 
+(defn prepare-ocr-page
+  "Render page `page-idx` (0-based) of `pdf-bytes` ONCE into the OCR encodings the
+   given `shapes` consume, decoding the PDF a single time. Lets the compare modal
+   load+render a page once and share it across every model, instead of re-reading
+   and re-decoding the whole document per model.
+   Pre:  0 <= page-idx < page count; dpi > 0; shapes ⊆ #{:chat :plugin}, non-empty.
+   Post: {:image-url <png-data-url|nil> :pdf-file-b64 <base64|nil>}; each key is
+         non-nil iff its shape ∈ shapes. Decodes `pdf-bytes` exactly once."
+  [pdf-bytes page-idx dpi shapes]
+  (let [doc (Loader/loadPDF pdf-bytes)]
+    (try
+      {:image-url
+       (when (contains? shapes :chat)
+         (image->base64 (.renderImageWithDPI (PDFRenderer. doc) page-idx (float dpi))))
+       :pdf-file-b64
+       (when (contains? shapes :plugin)
+         (let [out (PDDocument.)]
+           (try
+             (.importPage out (.getPage doc page-idx))
+             (let [baos (ByteArrayOutputStream.)]
+               (.save out baos)
+               (.encodeToString (Base64/getEncoder) (.toByteArray baos)))
+             (finally (.close out)))))}
+      (finally (.close doc)))))
+
 (defn- run-ocr
-  "OCR one page via OpenRouter per registry `entry`. No credits/DB side effects.
-   Pre:  api-key non-nil; 0 <= page-idx < (get-page-count pdf-bytes).
+  "OCR one pre-rendered page via OpenRouter per registry `entry`. No credits/DB
+   side effects and no PDF decode — `prepare-ocr-page` did that.
+   Pre:  api-key non-nil; `prepared` carries the encoding for (:shape entry)
+         (:image-url for :chat, :pdf-file-b64 for :plugin), non-nil.
    Post: {:text <sanitized-html> :cost-usd <double-or-nil> :usage <map>}; throws
          ex-info on a non-200 status or an empty/absent OCR result."
-  [entry api-key pdf-bytes page-idx dpi prompt]
+  [entry api-key prepared prompt]
   (let [resp (case (:shape entry)
                :chat
                (openrouter-post! api-key
@@ -167,7 +165,7 @@
                   :messages [{:role "user"
                               :content [{:type "text" :text prompt}
                                         {:type "image_url"
-                                         :image_url {:url (image->base64 (pdf-page->image pdf-bytes page-idx dpi))}}]}]})
+                                         :image_url {:url (:image-url prepared)}}]}]})
                :plugin
                (openrouter-post! api-key
                  {:model plugin-downstream-model
@@ -176,8 +174,7 @@
                                         {:type "file"
                                          :file {:filename "page.pdf"
                                                 :file_data (str "data:application/pdf;base64,"
-                                                             (.encodeToString (Base64/getEncoder)
-                                                               (pdf-page->single-page-pdf-bytes pdf-bytes (inc page-idx))))}}]}]
+                                                             (:pdf-file-b64 prepared))}}]}]
                   :plugins [{:id "file-parser" :pdf {:engine "mistral-ocr"}}]}))
         body (:body resp)]
     (when-not (= 200 (:status resp))
@@ -196,9 +193,10 @@
    Bills from OpenRouter's reported cost; does NOT save. The shared OCR path for
    both the normal scan (model resolved by the caller) and the compare modal
    (each candidate model run explicitly).
-   Pre:  model-id is a registry id; 0 <= page-idx < page count; page-idx 0-based.
+   Pre:  model-id is a registry id; `prepared` (from prepare-ocr-page) carries
+         (:shape entry)'s encoding, non-nil.
    Post: {:success true :text html} or {:success false :error msg [:error-type]}."
-  [user-id model-id pdf-bytes page-idx dpi]
+  [user-id model-id prepared]
   (try
     (let [entry (or (models/resolve-model model-id)
                     (throw (ex-info (str "Unknown OCR model: " model-id) {})))
@@ -210,7 +208,7 @@
                 (throw (ex-info (:error gate) {:type ::insufficient-credits}))))
           prompt (settings/get-ocr-prompt user-id)
           t-start (System/nanoTime)
-          {:keys [text cost-usd usage]} (run-ocr entry api-key pdf-bytes page-idx dpi prompt)
+          {:keys [text cost-usd usage]} (run-ocr entry api-key prepared prompt)
           duration-ms (long (/ (- (System/nanoTime) t-start) 1000000))]
       (tel/log! {:level :info :id ::ocr-completion
                  :data {:user-id user-id :model (:id entry) :shape (:shape entry)
@@ -252,5 +250,6 @@
   ([user-id topic-id pdf-bytes page-idx enc-key]
    (extract-text user-id topic-id pdf-bytes page-idx enc-key 150))
   ([user-id topic-id pdf-bytes page-idx _enc-key dpi]
-   (extract-text-with-model user-id (:id (effective-ocr-model user-id topic-id))
-     pdf-bytes page-idx dpi)))
+   (let [entry (effective-ocr-model user-id topic-id)
+         prepared (prepare-ocr-page pdf-bytes page-idx dpi #{(:shape entry)})]
+     (extract-text-with-model user-id (:id entry) prepared))))

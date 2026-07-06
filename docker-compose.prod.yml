@@ -37,6 +37,11 @@ services:
         VERSION: "${APP_VERSION:?APP_VERSION required — pass e.g. $(git describe --tags --long --always --dirty)}"
     image: freememo:latest
     restart: unless-stopped
+    # Hard container memory ceiling. The app JVM sets no -Xmx (runtime is a bare
+    # `java` CMD that ignores deps.edn), so MaxRAMPercentage sizes the heap against
+    # THIS cap rather than full host RAM. Tune to the host's free memory — the box
+    # is shared with postgres, ontop (also a JVM), and valkey. See U3.
+    mem_limit: 3g
     depends_on:
       postgres:
         condition: service_healthy
@@ -46,6 +51,12 @@ services:
       # Server
       PORT: "8080"
       PROD: "1"
+      # JVM heap + OOM policy. Without this the JVM defaulted to 25% of host RAM
+      # (~1.9 GiB) and, on a heap OOM, limped in a degraded state emitting the
+      # cascading Electric websocket assertions. Size the heap off mem_limit, and
+      # exit-on-OOM so `restart: unless-stopped` recovers cleanly. Heap dump aids
+      # post-mortem sizing.
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp"
       # Database — host is the base file's service name; creds are pgdata's
       # init-time values and must not change.
       DB_HOST: postgres

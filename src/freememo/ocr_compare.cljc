@@ -16,10 +16,13 @@
    #?(:clj [freememo.page-ocr :as page])
    #?(:clj [freememo.settings :as settings])))
 
-(defn ocr-preview!*
-  "Run one model's OCR on a page WITHOUT saving (bills the call). Server-only."
-  [user-id root model-id page dpi]
-  #?(:clj (page/ocr-preview-with-model user-id root model-id page dpi) :cljs nil))
+(defn compare-ocr-page!*
+  "OCR the page with every model for the compare modal, WITHOUT saving (bills each
+   call). The page is rendered once server-side and shared across models (C); the
+   fan-out is concurrency-bounded (B). Server-only. Returns a vector of
+   {:model-id id :result {:success ..}}; the heavy render never reaches the client."
+  [user-id root model-ids page dpi]
+  #?(:clj (page/compare-ocr-page user-id root model-ids page dpi) :cljs nil))
 
 (defn commit-and-remember!*
   "Save the chosen OCR text to the page; when `remember?`, also persist `model-id`
@@ -130,16 +133,19 @@
             (dom/text "drag to move")))
         (dom/div
           (dom/props {:style {:display "flex" :gap "12px" :align-items "stretch" :overflow-x "auto"}})
-          (e/for [mid (e/diff-by identity model-ids)]
-            (dom/div
-              (dom/props {:style {:flex "1" :min-width "260px" :display "flex" :flex-direction "column" :gap "8px"}})
-              (loading/WithLoading
-                (e/fn [] (e/server (e/Offload #(ocr-preview!* user-id root-topic-id mid page dpi))))
-                (e/fn [res]
+          ;; C: render the page once server-side and OCR every model from it (the
+          ;; render payload stays on the server); columns appear when the batch
+          ;; resolves. Fan-out is concurrency-bounded server-side (B).
+          (loading/WithLoading
+            (e/fn [] (e/server (e/Offload #(compare-ocr-page!* user-id root-topic-id model-ids page dpi))))
+            (e/fn [results]
+              (e/for [{:keys [model-id result]} (e/diff-by :model-id results)]
+                (dom/div
+                  (dom/props {:style {:flex "1" :min-width "260px" :display "flex" :flex-direction "column" :gap "8px"}})
                   (e/amb
-                    (OcrResultColumn mid res)
-                    (UseOcrButton user-id root-topic-id page mid res !remember !open)))
-                (e/fn [] (OcrResultColumn mid nil))))))
+                    (OcrResultColumn model-id result)
+                    (UseOcrButton user-id root-topic-id page model-id result !remember !open)))))
+            (e/fn [] (loading/Spinner "Running OCR on every model…"))))
         (dom/label
           (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "13px"}})
           (dom/input

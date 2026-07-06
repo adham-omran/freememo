@@ -3,8 +3,11 @@
   (:require
    [freememo.db :as db]
    [freememo.ocr :as ocr]
+   [freememo.ocr-models :as ocr-models]
    [freememo.text :as text]
-   [taoensso.telemere :as tel]))
+   [taoensso.telemere :as tel])
+  (:import
+   [java.util.concurrent Semaphore]))
 
 (def empty-text-message "No text extracted — try OCR")
 
@@ -31,21 +34,66 @@
        (tel/error! {:id ::extract-page-text} e)
        {:success false :error (str "Failed to extract text: " (.getMessage e))}))))
 
-(defn ocr-preview-with-model
-  "Run OCR for a page with an explicit model-id and return the text WITHOUT
-   saving — for the OCR compare modal. Bills the call (like a normal scan).
-   topic-id is the root PDF topic ID; page-number is 1-based.
-   Returns {:success true :text html} or {:success false :error ...}."
-  [user-id topic-id model-id page-number dpi]
+(defonce ^:private compare-ocr-limiter
+  ;; Caps concurrent compare-modal OCR API calls (fan-out bound). The modal runs
+  ;; one call per allowed model; unbounded, N models hit OpenRouter — and the JVM
+  ;; heap — all at once. 2 keeps the compare feeling live without a stampede.
+  (Semaphore. 2))
+
+(defn prepare-compare-page
+  "Load the topic file ONCE and render page `page-number` (1-based) into the OCR
+   encodings the `model-ids` need, decoding the PDF a single time. Shared across
+   the compare modal's models, so the document is read+decoded once per open — not
+   once per model.
+   Pre:  topic-id has a 'main' file; 1 <= page-number <= page count; dpi > 0.
+   Post: {:success true :prepared {:image-url .. :pdf-file-b64 ..}}
+         | {:success false :error msg}. The :prepared payload stays server-side."
+  [topic-id model-ids page-number dpi]
   (try
     (let [file-row (db/get-topic-file topic-id)]
       (if-not file-row
         {:success false :error "Document not found"}
-        (ocr/extract-text-with-model user-id model-id
-          (:topic_files/file_data file-row) (dec page-number) dpi)))
+        (let [shapes (into #{} (keep #(:shape (ocr-models/resolve-model %)) model-ids))]
+          {:success true
+           :prepared (ocr/prepare-ocr-page (:topic_files/file_data file-row)
+                       (dec page-number) dpi shapes)})))
     (catch Exception e
-      (tel/error! {:id ::ocr-preview-with-model} e)
+      (tel/error! {:id ::prepare-compare-page} e)
+      {:success false :error (str "Failed to render page: " (.getMessage e))})))
+
+(defn ocr-preview-prepared
+  "Run one model's OCR on an already-rendered page WITHOUT saving (bills the call,
+   like a normal scan). Bounded by `compare-ocr-limiter` so the modal's N models
+   don't OCR all at once.
+   Pre:  `prepared` (from prepare-compare-page) carries model-id's shape encoding.
+   Post: {:success true :text html} | {:success false :error msg}."
+  [user-id model-id prepared]
+  (try
+    (.acquire compare-ocr-limiter)
+    (try
+      (ocr/extract-text-with-model user-id model-id prepared)
+      (finally (.release compare-ocr-limiter)))
+    (catch Exception e
+      (tel/error! {:id ::ocr-preview-prepared} e)
       {:success false :error (str "Failed to OCR: " (.getMessage e))})))
+
+(defn compare-ocr-page
+  "OCR page `page-number` (1-based) of `topic-id` with every model in `model-ids`,
+   for the compare modal. Renders the page ONCE (prepare-compare-page) and shares
+   it across models (C); each model runs concurrently but bounded by
+   `compare-ocr-limiter` (B). WITHOUT saving; each model call bills like a scan.
+   Pre:  topic-id has a 'main' file; 1 <= page-number <= page count.
+   Post: a vector of {:model-id id :result {:success ..}} in `model-ids` order."
+  [user-id topic-id model-ids page-number dpi]
+  (let [prep (prepare-compare-page topic-id model-ids page-number dpi)]
+    (if-not (:success prep)
+      (mapv (fn [mid] {:model-id mid :result prep}) model-ids)
+      (let [prepared (:prepared prep)]
+        (->> model-ids
+          (mapv (fn [mid]
+                  (future {:model-id mid
+                           :result (ocr-preview-prepared user-id mid prepared)})))
+          (mapv deref))))))
 
 (defn extract-page-text-pdfbox
   "Extract text from a page via PDFBox (no LLM). Wraps the result in <p> blocks
