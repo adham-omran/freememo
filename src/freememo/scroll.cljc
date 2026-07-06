@@ -13,11 +13,17 @@
    3. Offset is a pure per-frame function of scrollTop (no cross-frame state), so
       it survives Electric frame re-mounts (WS reconnect / hot reload).
 
-   Flicker-free rendering depends on two CSS companions on `.tape-scroll` in
-   index.css: `overflow-anchor: none` (browser scroll-anchoring otherwise fights
-   the row repositioning into a ±row oscillation) and the table offset applied via
-   `transform: translateY` NOT `top` (transform is GPU-composited; `top` relayouts
-   + repaints the whole table every scroll step → visible flashing).
+   Flicker-free rendering depends on CSS companions in index.css. Always:
+   `overflow-anchor: none` on `.tape-scroll` (browser scroll-anchoring otherwise
+   fights the row repositioning into a ±row oscillation). For this ns's two
+   callers (Cards, Documents) the window is positioned PER ROW (C1c): each row
+   carries its own `transform: translateY(var(--order) * var(--row-height))` and
+   the table sets `height: calc(var(--count) * var(--row-height))` for the scroll
+   range — so a row's position and content live on the same element and commit in
+   one frame. The older container-level `--offset` transform put position and
+   content on different elements; they committed a frame apart and snapped one
+   row at each boundary. (electric-scroll0's own callers still use that container
+   scheme via the generic `.tape-scroll table` rules.)
 
    `Tape` / `IndexRing` are unchanged and still referred from electric-scroll0."
   (:require [clojure.math :as math]

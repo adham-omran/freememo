@@ -227,7 +227,8 @@
                             :height (str row-height "px")
                             :opacity (case topic-status "done" "0.6" "1")
                             :cursor "pointer"
-                            :--order (inc i)}})
+                            ;; 0-based absolute index → per-row translateY (C1c)
+                            :--order i}})
         (dom/On "click" open-topic! nil)
         ;; Column 1: Document (arrow + badge + title)
         ;; --row-indent carries the depth indent as a custom property so the
@@ -529,14 +530,16 @@
                                         ;; Reset to top on filter/sort change only.
                                         ;; Excludes expansion + tree mutations so
                                         ;; expand/collapse/delete hold scroll position.
-                                        :reset-key [filter-text kind-filter status-filter sort-col sort-dir]})
-                      occluded-height (clamp-left (* row-height (- row-count limit)) 0)]
+                                        :reset-key [filter-text kind-filter status-filter sort-col sort-dir]})]
                   (dom/props {:class "tape-scroll"
-                              :style {:--offset offset :--row-height (str row-height "px")}})
+                              ;; C1c: --count drives table height (scroll range); each row
+                              ;; self-positions via transform (see .library-table-body in index.css).
+                              :style {:--count row-count :--row-height (str row-height "px")}})
                   (dom/table
                     (dom/props {:class "library-table library-table-body"
                                 :role "presentation"
-                                :style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
+                                ;; display:block + column template live in index.css (C1c).
+                                :style {:width "100%" :font-size "13px"}})
                     (if (pos? row-count)
                       (e/for [i (Tape offset limit)]
                         (let [row (e/server (nth flat-rows i nil))]
@@ -546,13 +549,14 @@
                               !expansion !editing-id !show-confirm !scroll-node
                               !drag-src drag-src forbidden !drop-cmd))))
                       (dom/tr
-                        (dom/props {:role "row"})
+                        ;; Opt out of the fixed row-height so the message isn't clipped (C1c).
+                        (dom/props {:role "row" :style {:height "auto"}})
                         (dom/td
                           (dom/props {:role "cell"
                                       :style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
                                               :color "var(--color-text-secondary)" :font-size "13px"}})
                           (dom/text "No content yet. Import content from the Import tab.")))))
-                  (dom/div (dom/props {:aria-hidden "true" :style {:height (str occluded-height "px")}}))))
+                  ))
 
               (DeleteConfirmModal user-id show-confirm !show-confirm !scroll-node)))))
 

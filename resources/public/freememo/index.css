@@ -1049,6 +1049,45 @@ html, body {
 .tape-scroll table tr.row-alt td { background: light-dark(#eef2f7, #243044); }
 .tape-scroll table tr:hover td { background: light-dark(#e2e8f0, #2f3d52); }
 
+/* ── Virtual Scroll · per-row positioning (Library body tables) ──────
+   Cards + Documents scroll far more than the other Scroll-window sites, and the
+   container-transform scheme above skews for one frame at each row boundary: the
+   row window (`--order`, via the Tape) and the table transform (`--offset`)
+   commit in different frames, so the table sits one row off for a frame — the
+   visible snap. Fix: each row carries its OWN absolute position via `transform`,
+   written atomically with its content — no container `--offset`, no occluded
+   spacer; the table's own height provides the scroll range. The generic
+   `.tape-scroll table` rules above are left intact for the 9 jar Scroll-window
+   sites (still container-transform). Scoped by body class (not `.tape-scroll
+   table`) and kept at specificity (0,2,1) so the phone media query (same
+   specificity, later + in @media) still wins. Column templates MUST match the
+   header tables' `grid-cols` in the cljc (library_cards/knowledge_tree). */
+.tape-scroll .cards-table-body,
+.tape-scroll .library-table-body {
+    display: block;
+    transform: none;
+    will-change: auto;
+    height: calc(var(--count) * var(--row-height));
+}
+.tape-scroll .cards-table-body tr,
+.tape-scroll .library-table-body tr {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: var(--row-height);
+    box-sizing: border-box;
+    display: grid;
+    transform: translateY(calc(var(--order, 0) * var(--row-height)));
+}
+.tape-scroll .cards-table-body tr { grid-template-columns: 32px 44px 64px 1fr 1fr 200px 80px 44px; }
+.tape-scroll .library-table-body tr { grid-template-columns: 1fr 70px 80px 80px 110px; }
+.tape-scroll .cards-table-body td,
+.tape-scroll .library-table-body td {
+    grid-row: auto;
+    height: auto;
+}
+
 /* Always-visible scrollbar indicator on all virtual-scroll tables.
    Defining ::-webkit-scrollbar width opts the element out of macOS overlay
    rendering, so the thumb persists when idle. The standard scrollbar-width/
@@ -1082,11 +1121,12 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
     /* Drag grip is desktop-only: native HTML5 DnD ignores touch, and the phone
        layout flattens the depth indent so the fixed left gutter would collide. */
     .drag-grip { display: none; }
-    /* Selectors prefixed with `.tape-scroll` so specificity beats the default
-       `.tape-scroll table tr { display: contents }` / `.tape-scroll table td
-       { grid-row: var(--order); height: var(--row-height) }` rules above. */
+    /* Reshapes each Documents row into a 2-row card. Absolute positioning +
+       per-row transform are inherited from the C1c `.tape-scroll
+       .library-table-body tr` rule above; this only overrides the column/row
+       template. Same specificity (0,2,1) as that rule but later + inside
+       @media, so it wins on phone. */
     .tape-scroll .library-table-body tr {
-        display: grid;
         grid-template-columns: 1fr 1fr 1fr auto;
         grid-template-rows: auto auto;
         column-gap: 8px;
@@ -1095,7 +1135,6 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
         padding: 8px 12px;
         height: var(--row-height);
         box-sizing: border-box;
-        grid-row: var(--order);
         border-bottom: 1px solid var(--color-bg-subtle);
     }
     .tape-scroll .library-table-body td {
