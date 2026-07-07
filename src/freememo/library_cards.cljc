@@ -1022,9 +1022,10 @@
       (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
       (let [[offset limit] (Scroll-window row-height card-count dom/node {:overquery-factor 2})]
         (dom/props {:class "tape-scroll table-frame-body"
-                    ;; C1c: --count drives table height (scroll range); each row
-                    ;; self-positions via transform (see .cards-table-body in index.css).
-                    :style {:--count card-count :--row-height (str row-height "px")}})
+                    ;; C1c per-row transform positioning (see .tape-scroll in index.css):
+                    ;; --count → table height (scroll range), --grid-cols → the row grid.
+                    :style {:--count card-count :--row-height (str row-height "px")
+                            :--grid-cols grid-cols}})
         (dom/table
           (dom/props {:class "cards-table-body"
                       ;; display:block + column template live in index.css (C1c).

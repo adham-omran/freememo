@@ -82,22 +82,24 @@
                 (dom/text (str card-count " card" (when (not= card-count 1) "s")
                             (when (pos? unsynced-count) (str " (" unsynced-count " unsynced)"))))))
             (let [[offset limit] (Scroll-window row-height card-count dom/node {:overquery-factor 2})
-                  occluded-height (clamp-left (* row-height (- card-count limit)) 0)
                   first-card (e/server (first cards-vec))
                   rtl? (e/server (rtl-text? (or (:flashcards/question first-card)
                                               (:flashcards/cloze first-card))))]
               (dom/props {:class "tape-scroll"
-                          :style {:--offset offset :--row-height (str row-height "px")}})
+                          ;; C1c per-row transform positioning (see .tape-scroll in index.css):
+                          ;; --count → table height (scroll range), --grid-cols → the row grid.
+                          :style {:--count card-count :--row-height (str row-height "px")
+                                  :--grid-cols "24px 1fr 1fr 40px"}})
               (dom/table
                 (dom/props {:dir (if rtl? "rtl" "ltr")
                             :class "card-table"
+                            ;; display:block + column template live in index.css (C1c).
                             :style {:width "100%"
                                     :border-collapse "separate"
                                     :border-spacing "0"
                                     :table-layout "fixed"
                                     :font-size (str font-sz "px")
-                                    :direction (if rtl? "rtl" "ltr")
-                                    :grid-template-columns "24px 1fr 1fr 40px"}})
+                                    :direction (if rtl? "rtl" "ltr")}})
                 ;; Optimistic pending/error rows above the real cards.
                 (e/for [entry (e/server (e/diff-by :tempid overlay-entries))]
                   (PendingCardRow entry user-id))
@@ -105,14 +107,15 @@
                   (e/for [i (Tape offset limit)]
                     (let [card (e/server (nth cards-vec i nil))]
                       (when card
-                        (CardRow card !editing-card user-id (inc i)))))
+                        (CardRow card !editing-card user-id i))))
                   (when (empty? overlay-entries)
                     (dom/tr
+                      ;; Opt out of the fixed row-height so the message isn't clipped (C1c).
+                      (dom/props {:style {:height "auto"}})
                       (dom/td
                         (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
                                             :color "var(--color-text-hint)" :font-size "13px"}})
-                        (dom/text "No cards yet. Use the Generate button above to create flashcards from this content."))))))
-              (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))
+                        (dom/text "No cards yet. Use the Generate button above to create flashcards from this content.")))))))))
         (dom/div
           (dom/props {:style {:color "var(--color-danger-text)" :font-size "13px" :padding "8px 12px"}})
           (dom/text "Error loading cards: " (:error cards-result)))))))

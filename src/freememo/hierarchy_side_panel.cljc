@@ -238,13 +238,12 @@
                             :style {:flex "1" :overflow-y "auto" :min-height "0"
                                     :scrollbar-gutter "stable"}})
                 (reset! !scroll-node dom/node)
-                (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 2})
-                      occluded-height (clamp-left (* row-height (- row-count limit)) 0)]
-                  (dom/props {:style {:--offset offset
+                (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 2})]
+                  (dom/props {:style {:--count row-count
+                                      :--grid-cols "1fr"
                                       :--row-height (str row-height "px")}})
                   (dom/table
                     (dom/props {:style {:width "100%"
-                                        :grid-template-columns "1fr"
                                         :font-size "13px"}})
                     (if (pos? row-count)
                       (e/for [i (Tape offset limit)]
@@ -261,7 +260,7 @@
                                   expanded? expanded-display?
                                   badge (side-panel-badge kind)]
                               (dom/tr
-                                (dom/props {:style {:--order (inc i)}})
+                                (dom/props {:style {:--order i}})
                                 (dom/td
                                   (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
                                                       ;; Base 20 reserves the fixed left gutter for the
@@ -338,9 +337,9 @@
                                                         :text-decoration (when done? "line-through")}})
                                     (dom/text title))))))))
                       (dom/tr
-                        (dom/props {:style {:--order 1}})
+                        (dom/props {:style {:--order 1 :height "auto"}})
                         (dom/td
                           (dom/props {:style {:padding "16px 12px" :text-align "center"
                                               :color "var(--color-text-secondary)" :font-size "13px"}})
                           (dom/text "No items.")))))
-                  (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))))))))))
+                  ))))))))))))

@@ -319,7 +319,7 @@
               visible-rows 12]
           ;; ONE ARIA table spans the two native tables (header + virtual-
           ;; scrolled body). A physical merge would put the thead inside the
-          ;; tape-scroll table, whose --offset translation breaks sticky
+          ;; tape-scroll table, whose absolutely-positioned rows break sticky
           ;; headers — so the natives become role=presentation and explicit
           ;; row/columnheader/cell roles restore the header-cell association
           ;; (WCAG 1.3.1) under this wrapper's role=table.
@@ -345,13 +345,12 @@
             (dom/div
               (dom/props {:role "rowgroup"
                           :style {:max-height (str (* row-height visible-rows) "px") :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
-              (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 2})
-                    occluded-height (clamp-left (* row-height (- item-count limit)) 0)]
+              (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 2})]
                 (dom/props {:class "tape-scroll"
-                            :style {:--offset offset :--row-height (str row-height "px")}})
+                            :style {:--count item-count :--grid-cols grid-cols :--row-height (str row-height "px")}})
                 (dom/table
                   (dom/props {:role "presentation"
-                              :style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
+                              :style {:width "100%" :font-size "13px"}})
                   (if (pos? item-count)
                     (e/for [i (Tape offset limit)]
                       (let [item (e/server (nth items-vec i nil))]
@@ -371,7 +370,7 @@
                                             :role "row"
                                             :style {:border-bottom "1px solid var(--color-bg-subtle)" :height (str row-height "px")
                                                     :opacity (if inactive? "0.6" "1")
-                                                    :cursor "pointer" :--order (inc i)}})
+                                                    :cursor "pointer" :--order i}})
                                 (dom/On "click" open-topic! nil)
                               ;; Document (badge + title). Row opens via the tr's
                               ;; click handler; rows are not keyboard-focusable.
@@ -398,7 +397,7 @@
                                                     :color "var(--color-text-secondary)"}})
                                 (dom/text (or due-date "—")))))))))
                     (dom/tr
-                      (dom/props {:role "row"})
+                      (dom/props {:role "row" :style {:height "auto"}})
                       (dom/td
                         (dom/props {:role "cell"
                                     :style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
@@ -406,7 +405,7 @@
                         (dom/text (if (pos? (:total summary))
                                     "Nothing due — you're all caught up."
                                     "No topics yet. Import a document from the Import tab to start learning."))))))
-                (dom/div (dom/props {:aria-hidden "true" :style {:height (str occluded-height "px")}}))))))
+                ))))
 
         (Dashboard dash due-today (:due-week summary))))))
 

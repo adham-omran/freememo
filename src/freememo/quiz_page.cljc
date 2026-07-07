@@ -9,7 +9,6 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
-   [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
    [freememo.command-bus :as bus]
    [freememo.icons :as icons]
@@ -212,25 +211,25 @@
           (dom/div
             ;; Virtualized 1-col material list (Scroll-window/Tape; shared by quiz+exam
             ;; modes). Bounded height gives the virtual viewport its bounds; reuses the
-            ;; .tape-scroll table CSS (grid-row via --order, --offset translation).
+            ;; .tape-scroll table CSS (per-row transform via --order; --count table height).
             (dom/div
               (dom/props {:style {:max-height "40vh" :overflow-y "auto" :min-height "0"
                                   :border "1px solid var(--color-border)"
                                   :border-radius "var(--radius-sm)"}})
               (let [row-count (count docs)
                     [offset limit] (Scroll-window quiz-material-row-height row-count dom/node
-                                     {:overquery-factor 2})
-                    occluded (clamp-left (* quiz-material-row-height (- row-count limit)) 0)]
+                                     {:overquery-factor 2})]
                 (dom/props {:class "tape-scroll"
-                            :style {:--offset offset
+                            :style {:--count row-count
+                                    :--grid-cols "1fr"
                                     :--row-height (str quiz-material-row-height "px")}})
                 (dom/table
-                  (dom/props {:style {:width "100%" :display "grid" :grid-template-columns "1fr"}})
+                  (dom/props {:style {:width "100%"}})
                   (e/for [i (Tape offset limit)]
                     (when-let [{:keys [id title questions]} (nth docs i nil)]
                       (dom/tr
                         (dom/props {:class (when (even? i) "row-alt")
-                                    :style {:--order (inc i)
+                                    :style {:--order i
                                             :height (str quiz-material-row-height "px")}})
                         (dom/td
                           (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
@@ -245,8 +244,7 @@
                             (dom/span (dom/text title))
                             (dom/span (dom/props {:style {:color "var(--color-text-secondary)"
                                                           :font-size "12px" :margin-left "auto"}})
-                              (dom/text (str questions " questions")))))))))
-                (dom/div (dom/props {:style {:height (str occluded "px")}}))))
+                              (dom/text (str questions " questions")))))))))))
             (dom/div
               (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :margin-top "12px"}})
               (dom/label (dom/props {:style {:font-size "13px"}}) (dom/text "Questions:"))
@@ -719,20 +717,19 @@
                                                :color "var(--color-text-secondary)"}})
                       (dom/text "No finished sessions yet."))
                     (let [[offset limit] (Scroll-window quiz-history-row-height row-count dom/node
-                                           {:overquery-factor 2})
-                          occluded (clamp-left (* quiz-history-row-height (- row-count limit)) 0)]
+                                           {:overquery-factor 2})]
                       (dom/props {:class "tape-scroll"
-                                  :style {:--offset offset
+                                  :style {:--count row-count
+                                          :--grid-cols "1fr"
                                           :--row-height (str quiz-history-row-height "px")}})
                       (dom/table
-                        (dom/props {:style {:width "100%" :display "grid"
-                                            :grid-template-columns "1fr"}})
+                        (dom/props {:style {:width "100%"}})
                         (e/for [i (Tape offset limit)]
                           (when-let [{:keys [id kind total started correct partial incorrect]}
                                      (nth sessions i nil)]
                             (dom/tr
                               (dom/props {:class (when (even? i) "row-alt")
-                                          :style {:--order (inc i)
+                                          :style {:--order i
                                                   :height (str quiz-history-row-height "px")}})
                               (dom/td
                                 (dom/props {:role "button" :tabindex "0"
@@ -753,8 +750,7 @@
                                   (dom/text (str (+ correct partial incorrect) " / " total " answered")))
                                 (dom/span (dom/props {:style {:font-size "14px" :font-weight "600"
                                                               :margin-left "auto"}})
-                                  (dom/text (str (or (session-score correct partial total) "—") "%"))))))))
-                      (dom/div (dom/props {:style {:height (str occluded "px")}})))))))))))))
+                                  (dom/text (str (or (session-score correct partial total) "—") "%")))))))))))))))))))
 
 (defonce !pending-preset
   ;; Palette → QuizPage handoff ({:mode "quiz"|"exam"} or {:view :history}),

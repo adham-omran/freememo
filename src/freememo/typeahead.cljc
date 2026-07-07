@@ -112,9 +112,8 @@
                                   :max-height "240px" :overflow-y "auto"
                                   :box-shadow "0 2px 4px rgba(0,0,0,0.15)"
                                   :--row-height (str row-height "px")}})
-              (let [[offset limit] (Scroll-window row-height n dom/node {:overquery-factor 2})
-                    occluded (clamp-left (* row-height (- n limit)) 0)]
-                (dom/props {:style {:--offset offset}})
+              (let [[offset limit] (Scroll-window row-height n dom/node {:overquery-factor 2})]
+                (dom/props {:style {:--count n :--grid-cols "1fr"}})
                 ;; Keep the keyboard-active row on screen (case forces the call —
                 ;; a bare unused-value statement would be work-skipped).
                 (case (scroll-row-into-view! dom/node active-idx row-height) nil)
@@ -126,7 +125,7 @@
                         (dom/tr
                           (dom/td
                             (dom/props {:title item
-                                        :style {:--order (inc i)
+                                        :style {:--order i
                                                 :padding "5px 8px" :cursor "pointer" :font-size "14px"
                                                 :white-space "nowrap" :overflow "hidden" :text-overflow "ellipsis"
                                                 :background (when (= i active-idx) "var(--color-highlight)")}})
@@ -139,5 +138,4 @@
                                 (reset! !search nil)
                                 (reset! !open? false)
                                 (reset! !active-idx -1))
-                              nil)))))))
-                (dom/div (dom/props {:style {:height (str occluded "px")}}))))))))))
+                              nil)))))))))))))))
