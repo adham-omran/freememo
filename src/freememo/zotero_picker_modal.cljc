@@ -15,7 +15,6 @@
      :error                   — terminal; retry returns to :loading"
   (:require
    [clojure.string :as str]
-   [contrib.data :refer [clamp-left]]
    [freememo.modal-shell :as modal]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -202,29 +201,28 @@
                             :border "1px solid var(--color-border)"
                             :border-radius "var(--radius-sm)"}})
         (let [[offset limit] (Scroll-window row-height row-count dom/node
-                               {:overquery-factor 2})
-              occluded (clamp-left (* row-height (- row-count limit)) 0)]
+                               {:overquery-factor 2})]
           (dom/props {:class "tape-scroll"
-                      :style {:--offset offset :--row-height (str row-height "px")}})
+                      :style {:--count row-count :--grid-cols "1fr"
+                              :--row-height (str row-height "px")}})
           (dom/table
-            (dom/props {:style {:width "100%" :display "grid"
-                                :grid-template-columns "1fr"}})
+            (dom/props {:style {:width "100%"}})
             (if (pos? row-count)
               (e/for [i (Tape offset limit)]
                 (let [item (nth filtered i nil)]
                   (when item
                     (dom/tr
-                      (dom/props {:style {:--order (inc i)
+                      (dom/props {:style {:--order i
                                           :height (str row-height "px")
                                           :border-bottom "1px solid var(--color-bg-subtle)"}})
                       (ItemCell item i on-pick)))))
               (dom/tr
+                (dom/props {:style {:height "auto"}})
                 (dom/td
                   (dom/props {:style {:padding "24px 12px" :text-align "center"
                                       :color "var(--color-text-secondary)"
                                       :font-size "13px"}})
-                  (dom/text empty-message)))))
-          (dom/div (dom/props {:style {:height (str occluded "px")}})))))))
+                  (dom/text empty-message))))))))))
 
 (e/defn AttachmentChooser [candidates on-pick on-cancel]
   (e/client

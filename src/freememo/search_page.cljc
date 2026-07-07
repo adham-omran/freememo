@@ -6,7 +6,6 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [hyperfiddle.router5 :as r]
-   [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
    [freememo.navigation :as nav]
    #?(:clj [freememo.search :as search])))
@@ -84,7 +83,7 @@
         (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)"
                             :height (str row-height "px")
                             :cursor "pointer"
-                            :--order (inc i)}})
+                            :--order i}})
         (dom/On "click" (fn [_] (click-nav! navigate! row)) nil)
         ;; Column 1: kind badge + title
         (dom/td
@@ -162,17 +161,15 @@
         ;; Scrollable body — permanently mounted; empties to 0 rows, never unmounts
         (dom/div
           (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
-          (let [[offset limit] (Scroll-window row-height rc dom/node {:overquery-factor 2})
-                occluded-height (clamp-left (* row-height (- rc limit)) 0)]
+          (let [[offset limit] (Scroll-window row-height rc dom/node {:overquery-factor 2})]
             (dom/props {:class "tape-scroll"
-                        :style {:--offset offset :--row-height (str row-height "px")}})
+                        :style {:--count rc :--grid-cols grid-cols :--row-height (str row-height "px")}})
             (dom/table
-              (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
+              (dom/props {:style {:width "100%" :font-size "13px"}})
               (e/for [i (Tape offset limit)]
                 (let [row (e/server (nth results i nil))]
                   (when row
-                    (ResultRow row i row-height navigate!)))))
-            (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))))
+                    (ResultRow row i row-height navigate!)))))))))))
 
 (e/defn SearchPage [user-id navigate!]
   (e/client

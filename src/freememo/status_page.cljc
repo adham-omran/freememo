@@ -163,12 +163,11 @@
             ;; Scrollable body
             (dom/div
               (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
-              (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 2})
-                    occluded-height (clamp-left (* row-height (- item-count limit)) 0)]
+              (let [[offset limit] (Scroll-window row-height item-count dom/node {:overquery-factor 2})]
                 (dom/props {:class "tape-scroll"
-                            :style {:--offset offset :--row-height (str row-height "px")}})
+                            :style {:--count item-count :--grid-cols grid-cols :--row-height (str row-height "px")}})
                 (dom/table
-                  (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols :font-size "13px"}})
+                  (dom/props {:style {:width "100%" :font-size "13px"}})
                   (if (pos? item-count)
                     (e/for [i (Tape offset limit)]
                       (let [item (nth sorted i nil)]
@@ -178,7 +177,7 @@
                                 is-pdf? (= kind "pdf")]
                             (dom/tr
                               (dom/props {:style {:border-bottom "1px solid var(--color-bg-subtle)" :height (str row-height "px")
-                                                  :cursor "pointer" :--order (inc i)}})
+                                                  :cursor "pointer" :--order i}})
                               (dom/On "click"
                                 (fn [_]
                                   (navigate! :viewer (nav/nav-topic id :status)))
@@ -209,8 +208,9 @@
                                             (str synced-cards " / " total-cards)
                                             "\u2013"))))))))
                     (dom/tr
+                      (dom/props {:style {:height "auto"}})
                       (dom/td
                         (dom/props {:style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
                                             :color "var(--color-text-secondary)" :font-size "13px"}})
                         (dom/text "No documents yet")))))
-                (dom/div (dom/props {:style {:height (str occluded-height "px")}}))))))))))
+                ))))))))

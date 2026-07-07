@@ -1012,65 +1012,35 @@ html, body {
     border-radius: 0 0 var(--radius-md) var(--radius-md);
 }
 
-/* ── Virtual Scroll ────────────────────────────────────────────── */
-/* Disable browser scroll-anchoring on the virtual-scroll container. The Tape
-   repositions rows (table `top` / `grid-row`) as the window shifts; scroll
-   anchoring misreads that as content moving above the viewport and "corrects"
-   scrollTop by ~one row, which re-shifts the window — a self-sustaining ±row
-   oscillation (observed: scrollTop bouncing 606↔647 for ~400ms after input
-   stops, scrollHeight constant). The virtual scroll owns its position, so
-   anchoring must be off. */
+/* ── Virtual Scroll (Tape idiom · per-row positioning, "C1c") ──────────
+   EVERY `.tape-scroll` table positions each row by its OWN absolute index via
+   `transform`, and the table's height provides the scroll range. Callers set, on
+   the `.tape-scroll` container: `--count` (record count), `--row-height`, and
+   `--grid-cols` (column template); and `--order` (0-based absolute index) on each
+   row.
+
+   Why per-row, not one container transform: the older scheme moved the whole
+   table with `transform: translateY(var(--offset) * ...)` while the row window
+   (`--order`) shifted separately — two DOM writes from the same offset that
+   commit in DIFFERENT Electric frames, so at each row boundary the table sat one
+   row off for one frame: a visible snap (confirmed cross-browser Safari+Chrome).
+   Here a row's position and content are on the SAME element, so they commit in
+   one frame. Never use `top` for the shift (layout property → relayouts+repaints
+   the whole table each step → flashing); `transform` is composited and only the
+   recycled row repaints.
+
+   `overflow-anchor: none`: browser scroll-anchoring otherwise reads the row
+   repositioning as content moving above the viewport and "corrects" scrollTop by
+   ~one row — a self-sustaining ±row oscillation. The scroll owns its position. */
 .tape-scroll,
 .tape-scroll * { overflow-anchor: none; }
 
 .tape-scroll table {
-    display: grid;
-    position: relative;
-    /* Move the window via `transform` (GPU-composited), NOT `top`. `top` is a
-       layout property: changing it every scroll step relayouts + repaints the
-       whole table each frame, which paints as flashing (zebra/rows appearing to
-       redraw). `transform: translateY` shifts the table on the compositor with
-       no repaint of its contents. */
-    transform: translateY(calc(var(--offset) * var(--row-height)));
-    will-change: transform;
-}
-.tape-scroll table tr { display: contents; }
-.tape-scroll table td {
-    grid-row: var(--order);
-    height: var(--row-height);
-    overflow: hidden;
-}
-.tape-scroll table td:has([data-tooltip]:hover) {
-    overflow: visible;
-}
-/* Zebra striping (opt-in via .row-alt on the tr; tr has display:contents so the
-   stripe must paint on the td). Placed before :hover so hover wins on equal
-   specificity. */
-.tape-scroll table tr.row-alt td { background: light-dark(#eef2f7, #243044); }
-.tape-scroll table tr:hover td { background: light-dark(#e2e8f0, #2f3d52); }
-
-/* ── Virtual Scroll · per-row positioning (Library body tables) ──────
-   Cards + Documents scroll far more than the other Scroll-window sites, and the
-   container-transform scheme above skews for one frame at each row boundary: the
-   row window (`--order`, via the Tape) and the table transform (`--offset`)
-   commit in different frames, so the table sits one row off for a frame — the
-   visible snap. Fix: each row carries its OWN absolute position via `transform`,
-   written atomically with its content — no container `--offset`, no occluded
-   spacer; the table's own height provides the scroll range. The generic
-   `.tape-scroll table` rules above are left intact for the 9 jar Scroll-window
-   sites (still container-transform). Scoped by body class (not `.tape-scroll
-   table`) and kept at specificity (0,2,1) so the phone media query (same
-   specificity, later + in @media) still wins. Column templates MUST match the
-   header tables' `grid-cols` in the cljc (library_cards/knowledge_tree). */
-.tape-scroll .cards-table-body,
-.tape-scroll .library-table-body {
     display: block;
-    transform: none;
-    will-change: auto;
+    position: relative;
     height: calc(var(--count) * var(--row-height));
 }
-.tape-scroll .cards-table-body tr,
-.tape-scroll .library-table-body tr {
+.tape-scroll table tr {
     position: absolute;
     top: 0;
     left: 0;
@@ -1078,15 +1048,17 @@ html, body {
     height: var(--row-height);
     box-sizing: border-box;
     display: grid;
+    grid-template-columns: var(--grid-cols, 1fr);
     transform: translateY(calc(var(--order, 0) * var(--row-height)));
 }
-.tape-scroll .cards-table-body tr { grid-template-columns: 32px 44px 64px 1fr 1fr 200px 80px 44px; }
-.tape-scroll .library-table-body tr { grid-template-columns: 1fr 70px 80px 80px 110px; }
-.tape-scroll .cards-table-body td,
-.tape-scroll .library-table-body td {
-    grid-row: auto;
-    height: auto;
+.tape-scroll table td { overflow: hidden; }
+.tape-scroll table td:has([data-tooltip]:hover) {
+    overflow: visible;
 }
+/* Zebra striping (opt-in via .row-alt on the tr). Placed before :hover so hover
+   wins on equal specificity. */
+.tape-scroll table tr.row-alt td { background: light-dark(#eef2f7, #243044); }
+.tape-scroll table tr:hover td { background: light-dark(#e2e8f0, #2f3d52); }
 
 /* Always-visible scrollbar indicator on all virtual-scroll tables.
    Defining ::-webkit-scrollbar width opts the element out of macOS overlay

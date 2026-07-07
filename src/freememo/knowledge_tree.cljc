@@ -532,9 +532,10 @@
                                         ;; expand/collapse/delete hold scroll position.
                                         :reset-key [filter-text kind-filter status-filter sort-col sort-dir]})]
                   (dom/props {:class "tape-scroll"
-                              ;; C1c: --count drives table height (scroll range); each row
-                              ;; self-positions via transform (see .library-table-body in index.css).
-                              :style {:--count row-count :--row-height (str row-height "px")}})
+                              ;; C1c per-row transform positioning (see .tape-scroll in index.css):
+                              ;; --count → table height (scroll range), --grid-cols → the row grid.
+                              :style {:--count row-count :--row-height (str row-height "px")
+                                      :--grid-cols grid-cols}})
                   (dom/table
                     (dom/props {:class "library-table library-table-body"
                                 :role "presentation"

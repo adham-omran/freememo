@@ -13,7 +13,6 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [hyperfiddle.router5 :as r]
-   [contrib.data :refer [clamp-left]]
    [clojure.string :as str]
    [freememo.icons :as icons]
    [freememo.commands :as commands]
@@ -151,16 +150,14 @@
         (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"
                             :scrollbar-gutter "stable"}})
         (let [[offset limit] (Scroll-window fact-row-height item-count dom/node
-                               {:overquery-factor 2})
-              occluded-height (clamp-left (* fact-row-height (- item-count limit)) 0)]
+                               {:overquery-factor 2})]
           (dom/props {:class "tape-scroll"
-                      :style {:--offset offset :--row-height (str fact-row-height "px")}})
+                      :style {:--count item-count :--grid-cols grid-cols
+                              :--row-height (str fact-row-height "px")}})
           (dom/table
-            (dom/props {:style {:width "100%" :display "grid"
-                                :grid-template-columns grid-cols}})
+            (dom/props {:style {:width "100%"}})
             (e/for [i (Tape offset limit)]
-              (Row i)))
-          (dom/div (dom/props {:style {:height (str occluded-height "px")}})))))))
+              (Row i))))))))
 
 (e/defn SubViewTabs [navigate! view]
   ;; Settings-style horizontal nav (see settings-page/SettingsNav). Copies the
@@ -255,7 +252,7 @@
   (e/client
     (let [{:keys [id title kind facts distilled?]} doc]
       (dom/tr
-        (dom/props {:class (when (even? i) "row-alt") :style {:--order (inc i)}})
+        (dom/props {:class (when (even? i) "row-alt") :style {:--order i}})
         (dom/td (dom/props {:style fact-cell-style})
           (dom/span (dom/props {:style fact-text-style}) (dom/text title))
           (dom/span (dom/props {:style {:color "var(--color-text-secondary)" :font-size "11px"
@@ -391,7 +388,7 @@
                   object_label object_literal page_number]} fact]
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt")
-                    :style {:--order (inc i)}})
+                    :style {:--order i}})
         (dom/td (dom/props {:style fact-cell-style})
           (dom/span (dom/props {:style fact-text-style}) (dom/text subject_label)))
         (dom/td (dom/props {:style (merge fact-cell-style
@@ -531,7 +528,7 @@
           open! (fn [_] (reset! !editing q))]  ; click a row cell → open the editor modal
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt")
-                    :style {:--order (inc i)}})
+                    :style {:--order i}})
         (dom/td (dom/props {:style (merge fact-cell-style {:cursor "pointer"})})
           (dom/On "click" open! nil)
           (dom/span (dom/props {:style fact-text-style :data-tooltip question})
@@ -632,7 +629,7 @@
   (e/client
     (let [{:keys [id label aliases fact_count]} entity]
       (dom/tr
-        (dom/props {:class (when (even? i) "row-alt") :style {:--order (inc i)}})
+        (dom/props {:class (when (even? i) "row-alt") :style {:--order i}})
         (dom/td (dom/props {:style fact-cell-style})
           (if (= renaming id)
             (dom/input
