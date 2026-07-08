@@ -23,6 +23,10 @@
     :label "Google · Gemini 3 Flash"
     :shape :chat
     :openrouter-model "google/gemini-3-flash-preview"}
+   {:id "gemini-3.5-flash"
+    :label "Google · Gemini 3.5 Flash"
+    :shape :chat
+    :openrouter-model "google/gemini-3.5-flash"}
    {:id "mistral-ocr-4"
     :label "Mistral · OCR 4"
     :shape :plugin

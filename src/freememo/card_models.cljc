@@ -18,12 +18,18 @@
    {:id "gemini-3-flash"
     :label "Google · Gemini 3 Flash"
     :openrouter-model "google/gemini-3-flash-preview"}
+   {:id "gemini-3.5-flash"
+    :label "Google · Gemini 3.5 Flash"
+    :openrouter-model "google/gemini-3.5-flash"}
    {:id "claude-haiku-4.5"
     :label "Anthropic · Claude Haiku 4.5"
     :openrouter-model "anthropic/claude-haiku-4.5"}
    {:id "claude-sonnet-5"
     :label "Anthropic · Claude Sonnet 5"
-    :openrouter-model "anthropic/claude-sonnet-5"}])
+    :openrouter-model "anthropic/claude-sonnet-5"}
+   {:id "deepseek-v4-flash"
+    :label "DeepSeek · V4 Flash"
+    :openrouter-model "deepseek/deepseek-v4-flash"}])
 
 (def default-id
   "System-wide default card model when a user has no saved selection and no prod
