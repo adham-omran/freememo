@@ -28,14 +28,6 @@
   #?(:cljs (bus/dispatch! :quick-sync)
      :clj nil))
 
-(defn get-source-display-mode* [user-id]
-  #?(:clj (settings/get-source-display-mode user-id)
-     :cljs nil))
-
-(defn get-bibliography-display-mode* [user-id]
-  #?(:clj (settings/get-bibliography-display-mode user-id)
-     :cljs nil))
-
 (defn get-anki-auto-load-mode* [user-id]
   #?(:clj (settings/get-anki-auto-load-mode user-id)
      :cljs nil))
@@ -66,8 +58,6 @@
         allow-dupes (e/watch (:!allow-dupes form))
         use-tags (e/watch (:!use-tags form))
         tags (e/watch (:!tags form))
-        source-display-mode (e/server (get-source-display-mode* user-id))
-        bibliography-display-mode (e/server (get-bibliography-display-mode* user-id))
         auto-load-mode (e/server (get-anki-auto-load-mode* user-id))
         root-id (e/server (get-root-topic-id* selected-doc))
         ;; Header is per-PDF, resolved server-side (override → global) — the
@@ -85,8 +75,6 @@
                   :use-header use-header
                   :header-text header-text
                   :tags tags
-                  :source-display-mode source-display-mode
-                  :bibliography-display-mode bibliography-display-mode
                   :topic-kind (:kind topic-info)
                   :topic-title (:title topic-info)
                   :root-topic-id selected-doc

@@ -32,8 +32,6 @@
 (def ANKI_USE_TAGS "anki_use_tags")
 (def ANKI_TAGS "anki_tags")
 (def ANKI_AUTO_LOAD_MODE "anki_auto_load_mode")
-(def SOURCE_DISPLAY_MODE "source_display_mode")
-(def BIBLIOGRAPHY_DISPLAY_MODE "bibliography_display_mode")
 (def LLM_ENABLED "llm_enabled")
 (def LAST_DOCUMENT "last_document")
 (def PRE_PROMPT_HISTORY "pre_prompt_history")
@@ -173,32 +171,6 @@
     (catch Exception e
       (tel/error! {:id ::get-card-type} e)
       "basic")))
-
-(defn get-source-display-mode [user-id]
-  (or (db/get-setting user-id SOURCE_DISPLAY_MODE) "append"))
-
-(defn save-source-display-mode [user-id mode]
-  (try
-    (when-not (#{"append" "field"} mode)
-      (throw (Exception. "Invalid source display mode")))
-    (db/set-setting user-id SOURCE_DISPLAY_MODE mode)
-    {:success true}
-    (catch Exception e
-      (tel/error! {:id ::save-source-display-mode} e)
-      {:success false :error "Failed to save source display mode"})))
-
-(defn get-bibliography-display-mode [user-id]
-  (or (db/get-setting user-id BIBLIOGRAPHY_DISPLAY_MODE) "append"))
-
-(defn save-bibliography-display-mode [user-id mode]
-  (try
-    (when-not (#{"off" "append" "field"} mode)
-      (throw (Exception. "Invalid bibliography display mode")))
-    (db/set-setting user-id BIBLIOGRAPHY_DISPLAY_MODE mode)
-    {:success true}
-    (catch Exception e
-      (tel/error! {:id ::save-bibliography-display-mode} e)
-      {:success false :error "Failed to save bibliography display mode"})))
 
 (defn get-llm-enabled [user-id]
   (let [v (db/get-setting user-id LLM_ENABLED)]
