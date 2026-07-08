@@ -42,6 +42,9 @@
     (re-find #"(?i)timeout|timed.?out" (str msg))
     "Request timed out. Try again."
 
+    (re-find #"(?i)parse.*model response" (str msg))
+    "The AI returned an unreadable response. Please try again."
+
     :else (str msg)))
 
 ;; Prompt template loading
