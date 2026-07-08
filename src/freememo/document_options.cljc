@@ -1,9 +1,12 @@
 (ns freememo.document-options
   "\"Document options\" — per-content processing preferences (Forms5).
-   PDF: quick-text-extraction Style (Client = PDF.js / Remote = PDFBox) + a
-   disabled Custom Prompt (future). Other kinds: only the disabled Custom Prompt.
-   Style persists per-PDF via copy-text/save-style!* (bumps :settings-refresh so
-   Copy-text re-reads)."
+   PDF: quick-text-extraction Style (Client = PDF.js / Remote = PDFBox), per-document
+   OCR model, and a per-item Custom Prompt. Other kinds: only the Custom Prompt.
+   Style/OCR persist per-PDF (keyed by root-topic-id); the Custom Prompt persists
+   per-item (keyed by item-topic-id) via settings/save-custom-prompt and is appended
+   to the effective system prompt at card-generation time, inherited nearest-first
+   down the topic tree. Style persists via copy-text/save-style!* (bumps
+   :settings-refresh so Copy-text re-reads)."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -58,15 +61,21 @@
     (e/amb)))
 
 (e/defn CustomPromptField
-  "Disabled Custom Prompt placeholder — future feature, no typing."
-  []
-  (dom/div
-    (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-    (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
-      (dom/text "Custom Prompt"))
-    (dom/textarea
-      (dom/props {:class "input" :style {:width "100%" :min-height "72px" :resize "vertical"}
-                  :disabled true :placeholder "Coming soon — a custom card-generation prompt for this item."}))
+  "Editable per-item Custom Prompt, appended to the effective system prompt for
+   this item and everything under it. Atom is the truth; the Form's :Parse reads
+   (e/watch !prompt). Blank = inherit the nearest ancestor's (or the global) prompt."
+  [!prompt]
+  (let [current (e/watch !prompt)]
+    (dom/div
+      (dom/props {:style {:margin-bottom "var(--sp-3)"}})
+      (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
+        (dom/text "Custom Prompt"))
+      (dom/textarea
+        (dom/props {:class "input" :style {:width "100%" :min-height "72px" :resize "vertical"}
+                    :maxlength "5000"
+                    :placeholder "Extra card-generation instructions for this item (and anything under it)."})
+        (set! (.-value dom/node) current)
+        (dom/On "change" (fn [e] (reset! !prompt (-> e .-target .-value))) nil)))
     (e/amb)))
 
 ;; ---------------------------------------------------------------------------
@@ -167,17 +176,20 @@
           (PushToChildrenButton user-id bib-topic-id eff-source?))))))
 
 (e/defn DocumentOptionsDialog
-  "PDF: Forms5 Style select + OCR-model select + disabled Custom Prompt + Submit
-   (saves both the quick-extract style and the per-document OCR model)."
-  [user-id root-topic-id current-style current-ocr-model !open]
+  "PDF: Forms5 Style select + OCR-model select + per-item Custom Prompt + Submit.
+   Style and OCR model are document-scoped (keyed by root-topic-id); the prompt is
+   item-scoped (keyed by item-topic-id). A save that fails the prompt length check
+   surfaces the error and leaves style/OCR untouched."
+  [user-id root-topic-id item-topic-id current-style current-ocr-model current-prompt !open]
   (let [!style (atom (e/snapshot (or current-style "ask")))
         !ocr-model (atom (e/snapshot (or current-ocr-model "")))
+        !prompt (atom (e/snapshot (or current-prompt "")))
         commits (forms/Form! {}
                   (e/fn Fields [_fields]
                     (e/amb
                       (StyleSelect !style)
                       (OcrModelSelect !ocr-model)
-                      (CustomPromptField)
+                      (CustomPromptField !prompt)
                       (dom/div
                         (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
                         (e/amb
@@ -188,18 +200,47 @@
                             (dom/On "click" (fn [_] (reset! !open false)) nil))))))
                   :Parse (e/fn [_merged _tempid]
                            [`SaveDocOptions {:style (e/watch !style)
-                                             :ocr-model (e/watch !ocr-model)}])
+                                             :ocr-model (e/watch !ocr-model)
+                                             :prompt (e/watch !prompt)}])
                   :type :command
                   :show-buttons false)]
     (e/for [[token cmd] (e/diff-by first (e/as-vec commits))]
-      (let [{:keys [style ocr-model]} (nth cmd 1)
-            r (e/server (e/Offload #(do (copy/save-style!* user-id root-topic-id style)
-                                        (settings/save-ocr-model user-id root-topic-id ocr-model)
-                                        {:success true})))]
+      (let [{:keys [style ocr-model prompt]} (nth cmd 1)
+            r (e/server (e/Offload #(let [pr (settings/save-custom-prompt user-id item-topic-id prompt)]
+                                      (when (:success pr)
+                                        (copy/save-style!* user-id root-topic-id style)
+                                        (settings/save-ocr-model user-id root-topic-id ocr-model))
+                                      pr)))]
         (when (some? r)
           (if (:success r) (do (reset! !open false) (token)) (token (:error r))))))))
 
-(e/defn DocumentOptionsModal [user-id bib-topic-id is-pdf? root-topic-id priority-topic-id !open !show-bib show-edit?]
+(e/defn CustomPromptDialog
+  "Non-PDF: a Forms5 form with just the per-item Custom Prompt + Save."
+  [user-id item-topic-id current-prompt !open]
+  (let [!prompt (atom (e/snapshot (or current-prompt "")))
+        commits (forms/Form! {}
+                  (e/fn Fields [_fields]
+                    (e/amb
+                      (CustomPromptField !prompt)
+                      (dom/div
+                        (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
+                        (e/amb
+                          (forms/SubmitButton! :label "Save" :class "btn btn-primary" :style {:order "1"})
+                          (dom/button
+                            (dom/props {:class "btn btn-secondary" :type "button"})
+                            (dom/text "Cancel")
+                            (dom/On "click" (fn [_] (reset! !open false)) nil))))))
+                  :Parse (e/fn [_merged _tempid]
+                           [`SaveCustomPrompt {:prompt (e/watch !prompt)}])
+                  :type :command
+                  :show-buttons false)]
+    (e/for [[token cmd] (e/diff-by first (e/as-vec commits))]
+      (let [{:keys [prompt]} (nth cmd 1)
+            r (e/server (e/Offload #(settings/save-custom-prompt user-id item-topic-id prompt)))]
+        (when (some? r)
+          (if (:success r) (do (reset! !open false) (token)) (token (:error r))))))))
+
+(e/defn DocumentOptionsModal [user-id bib-topic-id is-pdf? root-topic-id item-topic-id priority-topic-id !open !show-bib show-edit?]
   (e/client
     (when (e/watch !open)
       (dom/div
@@ -230,20 +271,24 @@
           (if is-pdf?
             (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
                   current (e/server (copy/get-extract-style* settings-refresh user-id root-topic-id))
-                  current-ocr (e/server (do settings-refresh (settings/get-ocr-model user-id root-topic-id)))]
-              (DocumentOptionsDialog user-id root-topic-id current current-ocr !open))
-            ;; non-PDF: only the disabled Custom Prompt; nothing to save, so
-            ;; no Save button — a permanently disabled one is unreachable by
-            ;; Tab (correctly) yet looks operable, which reads as a broken
-            ;; keyboard path.
-            (CustomPromptField)))))))
+                  current-ocr (e/server (do settings-refresh (settings/get-ocr-model user-id root-topic-id)))
+                  current-prompt (e/server (do settings-refresh (settings/get-custom-prompt user-id item-topic-id)))]
+              (DocumentOptionsDialog user-id root-topic-id item-topic-id current current-ocr current-prompt !open))
+            ;; non-PDF: per-item Custom Prompt only, in its own Forms5 form.
+            (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
+                  current-prompt (e/server (do settings-refresh (settings/get-custom-prompt user-id item-topic-id)))]
+              (CustomPromptDialog user-id item-topic-id current-prompt !open))))))))
 
+;; item-topic-id — the topic the Custom Prompt attaches to: the viewed page/extract
+;;                 in the toolbar, the row's id in the library. Distinct from
+;;                 root-topic-id (document-scoped style/OCR); equals the enqueue
+;;                 :topic-id so the edited prompt is the one generation resolves.
 ;; show-edit?    — render BibliographySection's Edit button (needs the viewer's
 ;;                 bibliography modal); false on surfaces without it.
 ;; trigger-class — CSS class for the trigger button; lets a caller (e.g. the
 ;;                 library row menu) restyle it as a dropdown row. Defaults to
 ;;                 the toolbar's secondary-button look.
-(e/defn DocumentOptionsButton [user-id bib-topic-id is-pdf? root-topic-id priority-topic-id !show-bib show-edit? trigger-class]
+(e/defn DocumentOptionsButton [user-id bib-topic-id is-pdf? root-topic-id item-topic-id priority-topic-id !show-bib show-edit? trigger-class]
   (e/client
     (let [!open (atom false)]
       (dom/button
@@ -255,4 +300,4 @@
         ;; stop propagation so a click doesn't reach an ancestor row handler
         ;; (the library tree row navigates on click); inert in the toolbar.
         (dom/On "click" (fn [e] (.stopPropagation e) (reset! !open true)) nil))
-      (DocumentOptionsModal user-id bib-topic-id is-pdf? root-topic-id priority-topic-id !open !show-bib show-edit?))))
+      (DocumentOptionsModal user-id bib-topic-id is-pdf? root-topic-id item-topic-id priority-topic-id !open !show-bib show-edit?))))

@@ -1679,6 +1679,25 @@
         topic-id]
        {:builder-fn rs/as-unqualified-maps}))))
 
+(defn get-ancestor-ids
+  "Topic ids from `topic-id` up to its root, nearest-first (self at depth 0).
+   Pre:  topic-id may be nil.
+   Post: [self parent … root] ordered by depth ascending; [] when topic-id nil
+         or unknown. Used to resolve per-item settings that inherit up the tree."
+  [topic-id]
+  (if (nil? topic-id)
+    []
+    (mapv :id
+      (jdbc/execute! ds
+        ["WITH RECURSIVE anc(id, parent_id, depth) AS (
+            SELECT id, parent_id, 0 FROM topics WHERE id = ?
+            UNION ALL
+            SELECT t.id, t.parent_id, a.depth + 1
+              FROM topics t JOIN anc a ON t.id = a.parent_id)
+          SELECT id FROM anc ORDER BY depth"
+         topic-id]
+        {:builder-fn rs/as-unqualified-maps}))))
+
 (defn clone-source!
   "Duplicate sources row `source-id` into a NEW row owned by user-id, so later
    edits to either row stay independent. Copies csl/csl_type/url/title.

@@ -81,11 +81,13 @@
              gen-result (if (= card-type "basic")
                           (cards/generate-basic-cards
                             (cond-> {:content content :context context
-                                     :card-count card-count :user-id user-id :enc-key enc-key}
+                                     :card-count card-count :user-id user-id :enc-key enc-key
+                                     :topic-id topic-id}
                               pre-prompt (assoc :pre-prompt pre-prompt)))
                           (cards/generate-cloze-cards
                             (cond-> {:content content :context context
-                                     :card-count card-count :user-id user-id :enc-key enc-key}
+                                     :card-count card-count :user-id user-id :enc-key enc-key
+                                     :topic-id topic-id}
                               pre-prompt (assoc :pre-prompt pre-prompt))))]
          (if-not (:success gen-result)
            gen-result

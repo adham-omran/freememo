@@ -899,6 +899,43 @@ IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return
       (tel/error! {:id ::reset-ocr-prompt} e)
       {:success false :error "Failed to reset OCR prompt"})))
 
+;; ── Per-item custom prompt ──
+;; Stored per-topic in the settings KV table, keyed "custom_prompt_<topic-id>".
+;; Blank = inherit. Mirrors get/save-ocr-model: no refresh bump — the editor
+;; re-reads on modal mount and generation reads fresh server-side.
+(defn get-custom-prompt
+  "This topic's OWN custom card-generation prompt (no ancestor walk). nil = unset."
+  [user-id topic-id]
+  (db/get-setting user-id (str "custom_prompt_" topic-id)))
+
+(defn save-custom-prompt [user-id topic-id value]
+  (try
+    (input/check-length! :custom-prompt value input/prompt-max)
+    (db/set-setting user-id (str "custom_prompt_" topic-id) value)
+    {:success true}
+    (catch clojure.lang.ExceptionInfo e
+      (if (input/length-error? (ex-data e))
+        {:success false :error (.getMessage e)}
+        (do (tel/error! {:id ::save-custom-prompt} e)
+            {:success false :error "Failed to save custom prompt"})))
+    (catch Exception e
+      (tel/error! {:id ::save-custom-prompt} e)
+      {:success false :error "Failed to save custom prompt"})))
+
+(defn get-effective-system-prompt
+  "Global system prompt with this topic's nearest per-item custom prompt appended.
+   Walks topic-id's ancestor chain (self→root) and appends the first non-blank
+   custom prompt found; topic-id nil or no override → global prompt unchanged."
+  [user-id topic-id]
+  (let [base (get-system-prompt user-id)
+        override (some (fn [tid]
+                         (let [v (db/get-setting user-id (str "custom_prompt_" tid))]
+                           (when-not (str/blank? v) v)))
+                   (db/get-ancestor-ids topic-id))]
+    (if (str/blank? override)
+      base
+      (str base "\n\n## Document-specific instructions\n\n" override))))
+
 ;; ── Zotero (per-user; values are stored as strings) ─────────────────
 
 (defn zotero-enabled?

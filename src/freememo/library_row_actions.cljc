@@ -132,5 +132,5 @@
               ;; surface; !show-bib is then unused, so nil). At root the viewer's
               ;; bib/root/priority targets all collapse to this row's id.
               (when is-root
-                (DocumentOptionsButton user-id id (= kind "pdf") id id nil false
+                (DocumentOptionsButton user-id id (= kind "pdf") id id id nil false
                   "toolbar-dropdown-item")))))))))

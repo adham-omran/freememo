@@ -63,9 +63,10 @@
 ;; Prompt building
 (defn build-basic-prompt
   "Build prompt for basic Q&A cards.
-   Concatenates system prompt + optional pre-prompt + basic.md + optional context.md."
-  [card-count has-context? pre-prompt user-id]
-  (let [system (settings/get-system-prompt user-id)
+   Concatenates effective system prompt (global + nearest per-item prompt for
+   topic-id) + optional pre-prompt + basic.md + optional context.md."
+  [card-count has-context? pre-prompt user-id topic-id]
+  (let [system (settings/get-effective-system-prompt user-id topic-id)
         basic (load-prompt-template "basic.md")
         context (when has-context? (load-prompt-template "context.md"))]
     (when (and system basic)
@@ -84,9 +85,10 @@
 
 (defn build-cloze-prompt
   "Build prompt for cloze deletion cards.
-   Concatenates system prompt + optional pre-prompt + cloze.md + optional context-cloze.md."
-  [card-count has-context? pre-prompt user-id]
-  (let [system (settings/get-system-prompt user-id)
+   Concatenates effective system prompt (global + nearest per-item prompt for
+   topic-id) + optional pre-prompt + cloze.md + optional context-cloze.md."
+  [card-count has-context? pre-prompt user-id topic-id]
+  (let [system (settings/get-effective-system-prompt user-id topic-id)
         cloze (load-prompt-template "cloze.md")
         context (when has-context? (load-prompt-template "context-cloze.md"))]
     (when (and system cloze)
@@ -140,7 +142,7 @@
          to a card-models entry; the OpenRouter key is configured.
    Post: {:success true :cards v} with (count v) = card-count, else
          {:success false :error s}."
-  [{:keys [content context card-count model user-id pre-prompt]} prompt-builder-fn endpoint-tag]
+  [{:keys [content context card-count model user-id pre-prompt topic-id]} prompt-builder-fn endpoint-tag]
   (let [api-key (settings/get-openrouter-api-key user-id)
         _ (when (empty? api-key) (throw (ex-info "OpenRouter API key not configured" {})))
         _ (when (empty? content) (throw (ex-info "No content provided" {})))
@@ -156,7 +158,7 @@
         reasoning (settings/get-reasoning user-id)
         verbosity (settings/get-verbosity user-id)
         has-context? (not (empty? context))
-        prompt (prompt-builder-fn card-count has-context? pre-prompt user-id)
+        prompt (prompt-builder-fn card-count has-context? pre-prompt user-id topic-id)
         _ (when-not prompt (throw (ex-info "Failed to load prompt templates" {})))
         content-text (if has-context? (pr-str {:content content :context context}) content)]
     (loop [attempt 1

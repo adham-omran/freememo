@@ -170,7 +170,7 @@
             ;; Hosts the Priority field (C5), so it targets review-topic-id.
                 (dom/div
                   (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-bib"})
-                  (DocumentOptionsButton user-id biblio-target-id is-pdf? (or root-topic-id topic-id) review-topic-id !show-bib true nil))
+                  (DocumentOptionsButton user-id biblio-target-id is-pdf? (or root-topic-id topic-id) topic-id review-topic-id !show-bib true nil))
 
             ;; DocumentMeta proxy (.toolbar-overflow-docmeta, reveals T2+) —
             ;; actions only (Edit-Bibliography + Mark-PDF-Done); citation and
@@ -308,7 +308,7 @@
                 (when (= context-mode :extract)
                   (JumpToSourcePageButton topic-id navigate!))
                 (AutoExtractButton)
-                (DocumentOptionsButton user-id biblio-target-id is-pdf? (or root-topic-id topic-id) review-topic-id !show-bib true nil))
+                (DocumentOptionsButton user-id biblio-target-id is-pdf? (or root-topic-id topic-id) topic-id review-topic-id !show-bib true nil))
 
           ;; Divider hides with the document-meta group at tier 2.
               (dom/div (dom/props {:class "toolbar-group-divider toolbar-collapse-docmeta"}))
