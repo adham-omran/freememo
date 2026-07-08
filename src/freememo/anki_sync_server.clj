@@ -46,23 +46,18 @@
       nil)))
 
 (defn load-anki-preferences
-  "Load saved Anki sync preferences for a user (global).
-   :basic-fields / :cloze-fields are user-level field ordering defaults; they
-   feed run-fetch-fields! after AnkiConnect returns the model's actual fields."
+  "Load saved Anki sync preferences for a user (global). Note types are
+   app-owned (Basic/Cloze FreeMemo), so no model/field ordering is stored."
   [user-id]
   (try
     {:success true
      :prefs {:scope (settings/get-anki-scope user-id)
              :deck (settings/get-anki-deck user-id)
-             :basic-model (settings/get-anki-basic-model user-id)
-             :cloze-model (settings/get-anki-cloze-model user-id)
              :allow-dupes (settings/get-anki-allow-dupes user-id)
              :use-header (settings/get-anki-use-header user-id)
              :header-text (settings/get-anki-header-text user-id)
              :use-tags (settings/get-anki-use-tags user-id)
-             :tags (settings/get-anki-tags user-id)
-             :basic-fields (settings/get-anki-basic-fields user-id)
-             :cloze-fields (settings/get-anki-cloze-fields user-id)}}
+             :tags (settings/get-anki-tags user-id)}}
     (catch Exception e
       (tel/error! {:id ::load-anki-preferences} e)
       {:success false :prefs {}})))
@@ -82,19 +77,16 @@
    scope / dupes / tags), so the form paints once with correct values instead
    of first-defaulting then overriding.
 
-   Precedence (the first list item is applied client-side, since deck/model
-   lists come from AnkiConnect and need validation there):
+   Precedence (deck is applied client-side, since the deck list comes from
+   AnkiConnect and needs validation there):
      deck         : per-doc preset > last-used (skipped in 'none')
-     basic/cloze  : per-doc preset > Settings default
      dupes/tags   : per-doc preset > global last-used
      scope        : global last-used only (per-push choice, not per-item —
                     the modal saves it to global at handoff and it must win)
-   Settings note-type/field defaults always seed (even in 'none'); 'none' only
-   skips the per-doc preset and the last-used deck.
+   'none' only skips the per-doc preset and the last-used deck.
 
    :preset? reports whether a per-doc preset was applied (drives the
-   'saved settings for this document' indicator). Field ordering is resolved
-   separately by resolve-preferred-fields."
+   'saved settings for this document' indicator)."
   [user-id root-topic-id]
   (try
     (let [mode   (settings/get-anki-auto-load-mode user-id)
@@ -110,35 +102,12 @@
        :scope       (settings/normalize-scope (:scope global))
        :deck        (or (:deck preset)
                       (when (not= mode "none") (:deck global)))
-       :basic-model (or (:basic-model preset) (:basic-model global))
-       :cloze-model (or (:cloze-model preset) (:cloze-model global))
        :allow-dupes (if (some? (:allow-dupes preset)) (:allow-dupes preset) (:allow-dupes global))
        :use-tags    (if (some? (:use-tags preset)) (:use-tags preset) (:use-tags global))
        :tags        (or (:tags preset) (:tags global))})
     (catch Exception e
       (tel/error! {:id ::resolve-modal-prefs} e)
       {:mode "global" :preset? false})))
-
-(defn resolve-preferred-fields
-  "Resolve preferred field ordering for a doc. Lookup order:
-     per-doc preset → user-level setting → empty.
-   kind is :basic or :cloze. Called ONCE at modal open from
-   AnkiSyncSyncBody; the result is passed into run-fetch-fields! so it
-   overrides the fetched ordering when valid against the model's fields."
-  [user-id root-topic-id kind]
-  (try
-    (let [preset (when root-topic-id (settings/get-anki-preset user-id root-topic-id))
-          from-preset (case kind
-                        :basic (:basic-fields preset)
-                        :cloze (:cloze-fields preset))]
-      (if (seq from-preset)
-        (vec from-preset)
-        (case kind
-          :basic (settings/get-anki-basic-fields user-id)
-          :cloze (settings/get-anki-cloze-fields user-id))))
-    (catch Exception e
-      (tel/error! {:id ::resolve-preferred-fields :data {:kind kind}} e)
-      [])))
 
 (defn- attach-card-bibliography
   "Assoc :fm/bibliography-html onto each card, resolved from the card's OWN
@@ -285,9 +254,7 @@
                     :pair-count (count pairs)
                     :auto-load-mode auto-load-mode
                     :prefs-keys (vec (keys prefs-map))
-                    :deck (:deck prefs-map)
-                    :basic-model (:basic-model prefs-map)
-                    :cloze-model (:cloze-model prefs-map)}}
+                    :deck (:deck prefs-map)}}
     "finalize-push! invoked")
   (try
     (db/set-anki-note-ids
@@ -413,11 +380,10 @@
    post: {:success true
           :bundles [{:root-topic-id N :cards [...] :settings {...}}]
           :skipped-unpushed n}
-   Settings carry everything build-update-fields reads (fields, header,
-   source/bibliography/image modes, topic title/kind, app-base-url) plus
-   :tags and the model names (client falls back to modelFieldNames when a
-   stored field ordering is empty). Deck is omitted — updateNote does not
-   move cards between decks."
+   Settings carry everything build-update-fields reads (header,
+   source/bibliography display modes, topic title/kind, app-base-url, :tags).
+   Note types are app-owned, so no model/field config is carried. Deck is
+   omitted — update does not move cards between decks."
   [user-id card-ids]
   (try
     (let [global (:prefs (load-anki-preferences user-id))
@@ -436,21 +402,12 @@
                     bib-html (helpers/format-bibliography-html (:sources/csl source))]
                 {:root-topic-id root-id
                  :cards (attach-card-bibliography (vec cards))
-                 :settings {:basic-model (pick :basic-model)
-                            :cloze-model (pick :cloze-model)
-                            :basic-fields (vec (resolve-preferred-fields user-id root-id :basic))
-                            :cloze-fields (vec (resolve-preferred-fields user-id root-id :cloze))
-                            :use-header (pick :use-header)
+                 :settings {:use-header (pick :use-header)
                             :header-text (pick :header-text)
                             :tags (vec (or (pick :tags) []))
                             :source-display-mode (settings/get-source-display-mode user-id)
-                            :source-field (settings/get-anki-source-field user-id)
                             :bibliography-display-mode (settings/get-bibliography-display-mode user-id)
-                            :bibliography-field-name (settings/get-bibliography-field-name user-id)
                             :bibliography-html bib-html
-                            :images-front-field (settings/get-anki-images-front-field user-id)
-                            :images-back-field (settings/get-anki-images-back-field user-id)
-                            :image-display-mode (settings/get-image-display-mode user-id)
                             :topic-title (:topics/title root-topic)
                             :topic-kind (:topics/kind root-topic)
                             :root-topic-id root-id

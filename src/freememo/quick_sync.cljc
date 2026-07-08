@@ -63,16 +63,9 @@
           prefs-applied? (e/watch !prefs-applied?)
           conn-status (e/watch (:!status conn))
           decks (e/watch (:!decks conn))
-          models (e/watch (:!models conn))
-          basic-model (e/watch (:!basic-model conn))
-          cloze-model (e/watch (:!cloze-model conn))
-          basic-fields (e/watch (:!basic-fields form))
-          cloze-fields (e/watch (:!cloze-fields form))
           sync-phase (e/watch (:!phase sync))
           root-id (e/server (panels/get-root-topic-id* selected-doc))
-          prefs (e/server (load-prefs* user-id root-id))
-          preferred-basic-fields (e/server (panels/resolve-preferred-fields* user-id root-id :basic))
-          preferred-cloze-fields (e/server (panels/resolve-preferred-fields* user-id root-id :cloze))]
+          prefs (e/server (load-prefs* user-id root-id))]
 
       ;; (a) Connect — fetch decks/models/tags once per trigger.
       (when (pos? trigger)
@@ -80,34 +73,20 @@
           (when t
             (case (helpers/run-fetch-config! conn) (t)))))
 
-      ;; (b) Connected → apply last-used prefs once (fields owned by step c).
+      ;; (b) Connected → apply last-used prefs once. Note types are app-owned,
+      ;; so there is no field resolution — the push starts as soon as prefs land.
       (when (and (= conn-status :connected) (not prefs-applied?))
         (let [[t _] (e/Token [:qs-prefs trigger])]
           (when t
             ;; Nested case sequences + forces each effect (bare statements in a
             ;; do would be work-skipped by Electric).
-            (case (panels/apply-prefs! prefs conn form decks models)
+            (case (panels/apply-prefs! prefs conn form decks nil)
               (case (reset! !prefs-applied? true)
                 (t))))))
 
-      ;; (c) Resolve field ordering against the (now final) models.
-      (when (and prefs-applied? (= conn-status :connected) basic-model)
-        (let [[t _] (e/Token [:qs-basic-fields trigger basic-model])]
-          (when t
-            (case (helpers/run-fetch-fields! basic-model (:!basic-fields form)
-                    preferred-basic-fields) (t)))))
-      (when (and prefs-applied? (= conn-status :connected) cloze-model)
-        (let [[t _] (e/Token [:qs-cloze-fields trigger cloze-model])]
-          (when t
-            (case (helpers/run-fetch-fields! cloze-model (:!cloze-fields form)
-                    preferred-cloze-fields) (t)))))
-
-      ;; (d) Barrier — start push only after fields resolve to non-empty vectors
-      ;; (initial [] / :loading both block; see plans/quick-sync.md risk note).
-      (when (and prefs-applied?
-              (vector? basic-fields) (seq basic-fields)
-              (vector? cloze-fields) (seq cloze-fields)
-              (nil? sync-phase))
+      ;; (c) Barrier — start push once prefs are applied and the connection is
+      ;; live. No field-fetch gate remains (owned models).
+      (when (and prefs-applied? (= conn-status :connected) (nil? sync-phase))
         (let [[t _] (e/Token [:qs-push trigger])]
           (when t
             (reset! (:!phase sync) :pushing)
@@ -165,10 +144,9 @@
   (e/client
     (let [conn {:!status (atom :idle) :!error (atom nil) :!decks (atom [])
                 :!models (atom []) :!selected-deck (atom nil)
-                :!basic-model (atom nil) :!cloze-model (atom nil) :!all-tags (atom [])}
+                :!all-tags (atom [])}
           form {:!scope (atom "self") :!allow-dupes (atom false)
-                :!use-tags (atom false)
-                :!tags (atom []) :!basic-fields (atom []) :!cloze-fields (atom [])}
+                :!use-tags (atom false) :!tags (atom [])}
           sync {:!phase (atom nil) :!result (atom nil) :!error (atom nil) :!push-pairs (atom nil)}
           !trigger (atom 0)
           !running? (atom false)
@@ -193,8 +171,6 @@
                 (reset! (:!decks conn) [])
                 (reset! (:!models conn) [])
                 (reset! (:!all-tags conn) [])
-                (reset! (:!basic-fields form) [])
-                (reset! (:!cloze-fields form) [])
                 (reset! (:!phase sync) nil)
                 (reset! (:!result sync) nil)
                 (reset! (:!error sync) nil)

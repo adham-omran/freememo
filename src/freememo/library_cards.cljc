@@ -367,8 +367,7 @@
    the client-side conflict-exclusion count.
    post (async): !bulk-pairs ← all pairs and !bulk-phase ← :recording-push,
    or (nothing pushed / failure) !action-result set and !bulk-phase ← nil.
-   Stored field orderings can be empty (never pushed via modal with that
-   model) — falls back to live modelFieldNames per model."
+   Note types are app-owned; do-anki-push! reads no model/field config."
   [bundles-resp skips !bulk-pairs !bulk-skips !bulk-phase !action-result]
   #?(:cljs
      (let [g (swap! !bulk-run-gen inc)
@@ -378,23 +377,8 @@
           (let [results
                 (m/? (m/reduce conj []
                        (m/ap
-                         (let [{:keys [cards settings]} (m/?> 1 (m/seed bundles))
-                               need-basic? (and (some #(= "basic" (:flashcards/kind %)) cards)
-                                             (empty? (:basic-fields settings)))
-                               need-cloze? (and (some #(= "cloze" (:flashcards/kind %)) cards)
-                                             (empty? (:cloze-fields settings)))
-                               basic-fields (if need-basic?
-                                              (vec (js->clj (m/? (helpers/anki-call! "modelFieldNames"
-                                                                   {:modelName (:basic-model settings)}))))
-                                              (:basic-fields settings))
-                               cloze-fields (if need-cloze?
-                                              (vec (js->clj (m/? (helpers/anki-call! "modelFieldNames"
-                                                                   {:modelName (:cloze-model settings)}))))
-                                              (:cloze-fields settings))]
-                           (m/? (helpers/do-anki-push! cards
-                                  (assoc settings
-                                    :basic-fields basic-fields
-                                    :cloze-fields cloze-fields)))))))]
+                         (let [{:keys [cards settings]} (m/?> 1 (m/seed bundles))]
+                           (m/? (helpers/do-anki-push! cards settings))))))]
             {:pairs (vec (mapcat :pairs results))
              :errors (vec (mapcat :errors results))}))
         (fn [{:keys [pairs errors]}]

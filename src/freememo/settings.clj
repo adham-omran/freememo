@@ -26,23 +26,14 @@
 (def ACTIVE_TAB "active_tab")
 (def ANKI_SCOPE "anki_scope")
 (def ANKI_DECK "anki_deck")
-(def ANKI_BASIC_MODEL "anki_basic_model")
-(def ANKI_CLOZE_MODEL "anki_cloze_model")
 (def ANKI_ALLOW_DUPES "anki_allow_dupes")
 (def ANKI_USE_HEADER "anki_use_header")
 (def ANKI_HEADER_TEXT "anki_header_text")
 (def ANKI_USE_TAGS "anki_use_tags")
 (def ANKI_TAGS "anki_tags")
-(def ANKI_BASIC_FIELDS "anki_basic_fields")
-(def ANKI_CLOZE_FIELDS "anki_cloze_fields")
-(def ANKI_SOURCE_FIELD "anki_source_field")
-(def ANKI_IMAGES_FRONT_FIELD "anki_images_front_field")
-(def ANKI_IMAGES_BACK_FIELD "anki_images_back_field")
-(def IMAGE_DISPLAY_MODE "image_display_mode")
 (def ANKI_AUTO_LOAD_MODE "anki_auto_load_mode")
 (def SOURCE_DISPLAY_MODE "source_display_mode")
 (def BIBLIOGRAPHY_DISPLAY_MODE "bibliography_display_mode")
-(def ANKI_BIBLIOGRAPHY_FIELD "anki_bibliography_field")
 (def LLM_ENABLED "llm_enabled")
 (def LAST_DOCUMENT "last_document")
 (def PRE_PROMPT_HISTORY "pre_prompt_history")
@@ -209,17 +200,6 @@
       (tel/error! {:id ::save-bibliography-display-mode} e)
       {:success false :error "Failed to save bibliography display mode"})))
 
-(defn get-bibliography-field-name [user-id]
-  (or (db/get-setting user-id ANKI_BIBLIOGRAPHY_FIELD) "Bibliography"))
-
-(defn save-bibliography-field-name [user-id value]
-  (try
-    (db/set-setting user-id ANKI_BIBLIOGRAPHY_FIELD (or value "Bibliography"))
-    {:success true}
-    (catch Exception e
-      (tel/error! {:id ::save-bibliography-field-name} e)
-      {:success false :error "Failed to save Anki bibliography field name"})))
-
 (defn get-llm-enabled [user-id]
   (let [v (db/get-setting user-id LLM_ENABLED)]
     (or (nil? v) (= "true" v))))
@@ -249,12 +229,6 @@
 (defn get-anki-deck [user-id]
   (db/get-setting user-id ANKI_DECK))
 
-(defn get-anki-basic-model [user-id]
-  (db/get-setting user-id ANKI_BASIC_MODEL))
-
-(defn get-anki-cloze-model [user-id]
-  (db/get-setting user-id ANKI_CLOZE_MODEL))
-
 (defn get-anki-allow-dupes [user-id]
   (= "true" (or (db/get-setting user-id ANKI_ALLOW_DUPES) "false")))
 
@@ -272,89 +246,6 @@
     (let [raw (db/get-setting user-id ANKI_TAGS)]
       (if (seq raw) (clojure.edn/read-string raw) []))
     (catch Exception _ [])))
-
-(defn get-anki-basic-fields
-  "User-level default field ordering for basic cards. Vector of field names
-   (e.g. [\"Front\" \"Back\"]). Empty vector when unset."
-  [user-id]
-  (try
-    (let [raw (db/get-setting user-id ANKI_BASIC_FIELDS)]
-      (if (seq raw) (vec (clojure.edn/read-string raw)) []))
-    (catch Exception _ [])))
-
-(defn save-anki-basic-fields [user-id fields]
-  (try
-    (db/set-setting user-id ANKI_BASIC_FIELDS (pr-str (vec (or fields []))))
-    {:success true}
-    (catch Exception e
-      (tel/error! {:id ::save-anki-basic-fields} e)
-      {:success false :error "Failed to save Anki basic fields"})))
-
-(defn get-anki-cloze-fields
-  "User-level default field ordering for cloze cards. Vector of field names
-   (e.g. [\"Text\"]). Empty vector when unset."
-  [user-id]
-  (try
-    (let [raw (db/get-setting user-id ANKI_CLOZE_FIELDS)]
-      (if (seq raw) (vec (clojure.edn/read-string raw)) []))
-    (catch Exception _ [])))
-
-(defn save-anki-cloze-fields [user-id fields]
-  (try
-    (db/set-setting user-id ANKI_CLOZE_FIELDS (pr-str (vec (or fields []))))
-    {:success true}
-    (catch Exception e
-      (tel/error! {:id ::save-anki-cloze-fields} e)
-      {:success false :error "Failed to save Anki cloze fields"})))
-
-(defn get-anki-source-field [user-id]
-  (or (db/get-setting user-id ANKI_SOURCE_FIELD) "Source"))
-
-(defn save-anki-source-field [user-id value]
-  (try
-    (db/set-setting user-id ANKI_SOURCE_FIELD (or value "Source"))
-    {:success true}
-    (catch Exception e
-      (tel/error! {:id ::save-anki-source-field} e)
-      {:success false :error "Failed to save Anki source field name"})))
-
-(defn get-anki-images-front-field [user-id]
-  (or (db/get-setting user-id ANKI_IMAGES_FRONT_FIELD) "Images Front"))
-
-(defn save-anki-images-front-field [user-id value]
-  (try
-    (db/set-setting user-id ANKI_IMAGES_FRONT_FIELD (or value "Images Front"))
-    {:success true}
-    (catch Exception e
-      (tel/error! {:id ::save-anki-images-front-field} e)
-      {:success false :error "Failed to save Anki front images field name"})))
-
-(defn get-anki-images-back-field [user-id]
-  (or (db/get-setting user-id ANKI_IMAGES_BACK_FIELD) "Images Back"))
-
-(defn save-anki-images-back-field [user-id value]
-  (try
-    (db/set-setting user-id ANKI_IMAGES_BACK_FIELD (or value "Images Back"))
-    {:success true}
-    (catch Exception e
-      (tel/error! {:id ::save-anki-images-back-field} e)
-      {:success false :error "Failed to save Anki back images field name"})))
-
-(defn get-image-display-mode
-  "Returns \"inline\" (default; images stay in front/back/cloze HTML) or
-   \"field\" (images extracted to dedicated Anki fields on push)."
-  [user-id]
-  (or (db/get-setting user-id IMAGE_DISPLAY_MODE) "inline"))
-
-(defn save-image-display-mode [user-id mode]
-  (try
-    (when-not (#{"inline" "field"} mode)
-      (throw (Exception. "Invalid image display mode")))
-    (db/set-setting user-id IMAGE_DISPLAY_MODE mode)
-    {:success true}
-    (catch Exception e
-      (tel/error! {:id ::save-image-display-mode} e)
-      {:success false :error "Failed to save image display mode"})))
 
 (defn get-anki-auto-load-mode
   "Returns one of \"per-item\", \"global\", or \"none\". Defaults to \"per-item\"."
@@ -732,12 +623,10 @@
       {:success false :error "Failed to save theme"})))
 
 ;; Extraction button visibility toggles.
-(defn save-anki-sync-settings [user-id {:keys [scope deck basic-model cloze-model allow-dupes use-tags tags]}]
+(defn save-anki-sync-settings [user-id {:keys [scope deck allow-dupes use-tags tags]}]
   (try
     (when scope (db/set-setting user-id ANKI_SCOPE scope))
     (when deck (db/set-setting user-id ANKI_DECK deck))
-    (when basic-model (db/set-setting user-id ANKI_BASIC_MODEL basic-model))
-    (when cloze-model (db/set-setting user-id ANKI_CLOZE_MODEL cloze-model))
     (db/set-setting user-id ANKI_ALLOW_DUPES (str (boolean allow-dupes)))
     ;; Header is a per-PDF setting (see save-anki-header-for-topic!), persisted
     ;; on edit — NOT written here, so a push can't clobber the global fallback.

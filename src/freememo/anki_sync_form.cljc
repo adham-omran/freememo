@@ -30,26 +30,6 @@
       "document" "Entire Document"
       scope)))
 
-(e/defn AnkiSyncModelSelect
-  "Reusable model typeahead with field mapping hint.
-   fields = :loading | [] | vector of field names. format-hint = fn from non-empty vector to string."
-  [label !model models fields format-hint]
-  (e/client
-    (dom/div
-      (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-      (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
-        (dom/text label))
-      (Typeahead !model models "Start typing..." nil nil)
-      (if (= fields :loading)
-        (dom/div
-          (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)" :margin-top "var(--sp-1)"}})
-          (dom/span (dom/props {:class "spinner"}))
-          (dom/text "Loading fields..."))
-        (when (and (coll? fields) (seq fields))
-          (dom/div
-            (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)" :margin-top "var(--sp-1)"}})
-            (dom/text (format-hint fields))))))))
-
 (e/defn TagInput
   "Multi-tag input with chip display and autocomplete from all-tags."
   [!tags all-tags]
@@ -250,16 +230,14 @@
           (TagInput (:!tags form) all-tags))))))
 
 (e/defn AnkiSyncForm
-  "The connected-state form: scope, deck, model selection, field mapping, custom header, tags.
-   conn = {:!decks :!models :!selected-deck :!basic-model :!cloze-model :!all-tags ...}
-   form = {:!scope :!basic-fields :!cloze-fields ...}"
+  "The connected-state form: scope, deck, custom header, tags. Note types are
+   app-owned (Basic/Cloze FreeMemo), so there is no model/field selection.
+   conn = {:!decks :!selected-deck :!all-tags ...}
+   form = {:!scope ...}"
   [user-id root-id conn form]
   (e/client
     (let [scope (e/watch (:!scope form))
           decks (e/watch (:!decks conn))
-          models (e/watch (:!models conn))
-          basic-fields (e/watch (:!basic-fields form))
-          cloze-fields (e/watch (:!cloze-fields form))
           scope-ctx (e/server (topic-scope-context* dctx/topic-id))
           kind (:kind scope-ctx)
           has-children? (:has-children? scope-ctx)
@@ -294,27 +272,20 @@
           (dom/text "Deck"))
         (Typeahead (:!selected-deck conn) decks "Start typing deck name..." nil nil))
 
-      ;; Note Type selectors
-      (AnkiSyncModelSelect "Note Type (Basic)" (:!basic-model conn) models basic-fields
-        (fn [fs] (str "question \u2192 " (first fs) ", answer \u2192 " (second fs))))
-      (AnkiSyncModelSelect "Note Type (Cloze)" (:!cloze-model conn) models cloze-fields
-        (fn [fs] (str "cloze \u2192 " (first fs))))
-
       ;; Options
       (AnkiSyncOptions user-id root-id conn form))))
 
 (e/defn AnkiSyncStatus
   "Sync status display and Push/Cancel buttons. Pull lives in the toolbar.
    sync = {:!phase :!result :!error :!push-pairs :!push-btn}
-   conn = {:!selected-deck :!basic-model :!cloze-model ...} — for the push gate."
+   conn = {:!selected-deck ...} — for the push gate (deck-only; note types are
+   app-owned)."
   [sync !show-modal conn]
   (e/client
     (let [sync-phase (e/watch (:!phase sync))
           sync-result (e/watch (:!result sync))
           sync-error (e/watch (:!error sync))
-          can-push? (helpers/pushable? (e/watch (:!selected-deck conn))
-                      (e/watch (:!basic-model conn))
-                      (e/watch (:!cloze-model conn)))
+          can-push? (helpers/pushable? (e/watch (:!selected-deck conn)))
           {:keys [!phase !result !error !push-pairs !push-btn]} sync]
 
       ;; Auto-close after a brief "Pushed to Anki" confirmation. Token-guarded
