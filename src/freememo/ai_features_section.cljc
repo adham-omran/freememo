@@ -177,7 +177,7 @@
             (dom/select
               (dom/props {:value model :class "select"})
               (e/for [id (e/diff-by identity card-model-ids)]
-                (dom/option (dom/props {:value id}) (dom/text (get card-label-of id id))))
+                (dom/option (dom/props {:value id :selected (= id model)}) (dom/text (get card-label-of id id))))
               (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
                     [t _] (e/Token change-event)]
                 (when (some? change-event)
@@ -266,7 +266,7 @@
               (dom/select
                 (dom/props {:value ocr-model :class "select"})
                 (e/for [id (e/diff-by identity allowed-ids)]
-                  (dom/option (dom/props {:value id}) (dom/text (get label-of id id))))
+                  (dom/option (dom/props {:value id :selected (= id ocr-model)}) (dom/text (get label-of id id))))
                 (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
                       [t ?error] (e/Token change-event)]
                   (when (some? change-event)
