@@ -490,3 +490,32 @@ pre > code {
 .nightMode .score-back img {
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
 }
+
+/* ================================================================
+   Basic FreeMemo / Cloze FreeMemo note types — app-owned. This file
+   is pushed as each model's Styling on every push (ensure-and-enforce);
+   edits made in Anki are overwritten.
+   fm-basic-cloze-css v1
+   ================================================================ */
+
+.fm-front,
+.fm-back {
+    margin: 0.4em auto;
+}
+
+/* Source / Bibliography / Remarks under the answer — same font treatment
+   as the score extras (and the user's .extra-entry / .extra-descr). */
+.fm-extra {
+    max-width: 40em;
+    margin: 1.2em auto 0;
+    padding-top: 0.8em;
+    border-top: 1px solid rgba(128, 128, 128, 0.35);
+    font-size: 0.9em;
+    text-align: left;
+}
+
+.fm-field-descr {
+    margin-bottom: 0.2em;
+    font-weight: bold;
+    font-size: 1em;
+}

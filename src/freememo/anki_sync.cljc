@@ -12,22 +12,20 @@
 
 (e/defn AnkiSyncInnerBody
   "Form-config state (scope, fields, options, tags) + delegate to AnkiSyncSyncBody.
-   conn = {:!status :!error :!decks :!models :!selected-deck :!basic-model :!cloze-model :!all-tags}"
+   conn = {:!status :!error :!decks :!models :!selected-deck :!all-tags}"
   [user-id selected-doc !show-modal conn]
   (e/client
     (let [form {:!scope (atom "self")
                 :!allow-dupes (atom false)
                 ;; Custom header is per-PDF, owned by HeaderSettings (not here).
                 :!use-tags (atom false)
-                :!tags (atom [])
-                :!basic-fields (atom [])
-                :!cloze-fields (atom [])}]
+                :!tags (atom [])}]
       (panels/AnkiSyncSyncBody
         user-id selected-doc !show-modal conn form))))
 
 (e/defn AnkiSyncModalBody
   "Delegates to AnkiSyncInnerBody — split point to stay below JVM 64KB method limit.
-   conn = {:!status :!error :!decks :!models :!selected-deck :!basic-model :!cloze-model :!all-tags}"
+   conn = {:!status :!error :!decks :!models :!selected-deck :!all-tags}"
   [user-id selected-doc !show-modal conn]
   (AnkiSyncInnerBody user-id selected-doc !show-modal conn))
 
@@ -40,8 +38,6 @@
                 :!decks (atom [])
                 :!models (atom [])
                 :!selected-deck (atom nil)
-                :!basic-model (atom nil)
-                :!cloze-model (atom nil)
                 :!all-tags (atom [])}]
 
       ;; On mount: fetch decks, models, and tags

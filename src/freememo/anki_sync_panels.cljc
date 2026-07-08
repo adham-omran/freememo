@@ -32,35 +32,12 @@
   #?(:clj (settings/get-source-display-mode user-id)
      :cljs nil))
 
-(defn get-anki-source-field* [user-id]
-  #?(:clj (settings/get-anki-source-field user-id)
-     :cljs nil))
-
 (defn get-bibliography-display-mode* [user-id]
   #?(:clj (settings/get-bibliography-display-mode user-id)
      :cljs nil))
 
-(defn get-bibliography-field-name* [user-id]
-  #?(:clj (settings/get-bibliography-field-name user-id)
-     :cljs nil))
-
 (defn get-anki-auto-load-mode* [user-id]
   #?(:clj (settings/get-anki-auto-load-mode user-id)
-     :cljs nil))
-
-(defn get-anki-images-front-field* [user-id]
-  #?(:clj (when-let [f (requiring-resolve 'freememo.settings/get-anki-images-front-field)]
-            (f user-id))
-     :cljs nil))
-
-(defn get-anki-images-back-field* [user-id]
-  #?(:clj (when-let [f (requiring-resolve 'freememo.settings/get-anki-images-back-field)]
-            (f user-id))
-     :cljs nil))
-
-(defn get-image-display-mode* [user-id]
-  #?(:clj (when-let [f (requiring-resolve 'freememo.settings/get-image-display-mode)]
-            (f user-id))
      :cljs nil))
 
 (defn get-root-topic-id* [selected-doc]
@@ -71,10 +48,6 @@
   #?(:clj settings/app-base-url
      :cljs nil))
 
-(defn resolve-preferred-fields* [user-id root-topic-id kind]
-  #?(:clj (sync/resolve-preferred-fields user-id root-topic-id kind)
-     :cljs nil))
-
 (defn resolve-modal-prefs* [user-id root-topic-id]
   #?(:clj (sync/resolve-modal-prefs user-id root-topic-id)
      :cljs nil))
@@ -82,29 +55,20 @@
 (e/defn AnkiSyncExecutor
   "Handles push execution and server recording. Pull is handled by the
    toolbar Pull button (content_toolbar_actions), not the modal.
-   conn = {:!status :!decks :!models :!selected-deck :!basic-model :!cloze-model ...}
-   form = {:!scope :!allow-dupes :!use-tags :!tags :!basic-fields :!cloze-fields}
+   conn = {:!status :!decks :!models :!selected-deck ...}
+   form = {:!scope :!allow-dupes :!use-tags :!tags}
    sync = {:!phase :!result :!error :!push-pairs}"
   [user-id selected-doc conn form sync]
   (let [{:keys [!phase !error !push-pairs]} sync
         sync-phase (e/watch (:!phase sync))
         scope (e/watch (:!scope form))
         selected-deck (e/watch (:!selected-deck conn))
-        basic-model (e/watch (:!basic-model conn))
-        cloze-model (e/watch (:!cloze-model conn))
-        basic-fields (e/watch (:!basic-fields form))
-        cloze-fields (e/watch (:!cloze-fields form))
         allow-dupes (e/watch (:!allow-dupes form))
         use-tags (e/watch (:!use-tags form))
         tags (e/watch (:!tags form))
         source-display-mode (e/server (get-source-display-mode* user-id))
-        source-field (e/server (get-anki-source-field* user-id))
         bibliography-display-mode (e/server (get-bibliography-display-mode* user-id))
-        bibliography-field-name (e/server (get-bibliography-field-name* user-id))
         auto-load-mode (e/server (get-anki-auto-load-mode* user-id))
-        images-front-field (e/server (get-anki-images-front-field* user-id))
-        images-back-field (e/server (get-anki-images-back-field* user-id))
-        image-display-mode (e/server (get-image-display-mode* user-id))
         root-id (e/server (get-root-topic-id* selected-doc))
         ;; Header is per-PDF, resolved server-side (override → global) — the
         ;; authoritative source for push. Not read from form atoms (decoupled).
@@ -117,21 +81,12 @@
                                   :title (:topics/title t)})))
         app-base-url (e/server (get-app-base-url*))
         settings {:deck selected-deck
-                  :basic-model basic-model
-                  :cloze-model cloze-model
-                  :basic-fields basic-fields
-                  :cloze-fields cloze-fields
                   :allow-dupes allow-dupes
                   :use-header use-header
                   :header-text header-text
                   :tags tags
                   :source-display-mode source-display-mode
-                  :source-field source-field
                   :bibliography-display-mode bibliography-display-mode
-                  :bibliography-field-name bibliography-field-name
-                  :images-front-field images-front-field
-                  :images-back-field images-back-field
-                  :image-display-mode image-display-mode
                   :topic-kind (:kind topic-info)
                   :topic-title (:title topic-info)
                   :root-topic-id selected-doc
@@ -139,11 +94,8 @@
         ;; Header is NOT in prefs-map — it's per-PDF (own rows), never the
         ;; global last-used or the per-item preset blob.
         prefs-map {:scope scope :deck selected-deck
-                   :basic-model basic-model :cloze-model cloze-model
                    :allow-dupes allow-dupes
-                   :use-tags use-tags :tags tags
-                   :basic-fields (if (vector? basic-fields) basic-fields [])
-                   :cloze-fields (if (vector? cloze-fields) cloze-fields [])}]
+                   :use-tags use-tags :tags tags}]
 
     ;; All post-push server work in a single e/server call whose result is
     ;; observed below — Electric drops unused intermediate side effects when
@@ -155,9 +107,7 @@
           (log/log-info (str "[anki-sync] record branch firing pairs=" (count pairs)
                           " auto-load-mode=" auto-load-mode
                           " root-id=" root-id
-                          " deck=" selected-deck
-                          " basic-model=" basic-model
-                          " cloze-model=" cloze-model))
+                          " deck=" selected-deck))
           (let [result (e/server (sync/finalize-push! user-id root-id pairs prefs-map auto-load-mode))]
             (log/log-info (str "[anki-sync] finalize-push! returned success=" (:success result)
                             " error=" (:error result)))
@@ -196,7 +146,7 @@
 
 (e/defn AnkiSyncErrorPanel
   "Error state with retry and cancel buttons.
-   conn = {:!status :!error :!decks :!models :!selected-deck :!basic-model :!cloze-model :!all-tags}"
+   conn = {:!status :!error :!decks :!models :!selected-deck :!all-tags}"
   [conn !show-modal]
   (e/client
     (let [conn-error (e/watch (:!error conn))]
@@ -229,20 +179,14 @@
   (if (some #{preferred} options) preferred (first options)))
 
 (defn apply-prefs!
-  "Apply a resolved preferences map to form/conn atoms. deck/basic-model/
-   cloze-model are set to the preferred value if valid against the available
-   lists, else the first list item (pick) — run-fetch-config! no longer defaults
-   them. Source-field lives on the settings page; any legacy key is ignored.
-
-   :basic-fields/:cloze-fields are applied directly here only as a fallback for
-   the rare case where the model picker hasn't triggered run-fetch-fields! yet.
-   Authoritative loading happens through run-fetch-fields!'s preferred-fields
-   argument so the ordering is validated against the model's actual fields."
-  [prefs conn form decks models]
+  "Apply a resolved preferences map to form/conn atoms. deck is set to the
+   preferred value if valid against the available list, else the first list
+   item (pick) — run-fetch-config! no longer defaults it. Note types are
+   app-owned, so no model/field selection is applied.
+   `models` is accepted (call-site symmetry) but unused."
+  [prefs conn form decks _models]
   (when (:scope prefs) (reset! (:!scope form) (:scope prefs)))
   (reset! (:!selected-deck conn) (pick (:deck prefs) decks))
-  (reset! (:!basic-model conn) (pick (:basic-model prefs) models))
-  (reset! (:!cloze-model conn) (pick (:cloze-model prefs) models))
   (when (some? (:allow-dupes prefs))
     (reset! (:!allow-dupes form) (:allow-dupes prefs)))
   ;; Header is no longer a form atom — it's per-PDF, loaded/saved by
@@ -250,33 +194,28 @@
   (when (some? (:use-tags prefs))
     (reset! (:!use-tags form) (:use-tags prefs)))
   (when (:tags prefs)
-    (reset! (:!tags form) (:tags prefs)))
-  (when (some? (:basic-fields prefs))
-    (reset! (:!basic-fields form) (vec (:basic-fields prefs))))
-  (when (some? (:cloze-fields prefs))
-    (reset! (:!cloze-fields form) (vec (:cloze-fields prefs)))))
+    (reset! (:!tags form) (:tags prefs))))
 
 (e/defn AnkiSyncConnectedPanel
   "Connected state: preset auto-load (per the user's auto-load mode), form, and status.
-   conn = {:!decks :!models :!selected-deck :!basic-model :!cloze-model ...}
+   conn = {:!decks :!selected-deck ...}
    form = {:!scope :!allow-dupes :!use-tags :!tags ...}
    sync = {:!phase :!result :!error :!push-pairs}"
   [user-id selected-doc conn form sync !show-modal]
   (e/client
     (let [decks (e/watch (:!decks conn))
-          models (e/watch (:!models conn))
           root-id (e/server (get-root-topic-id* selected-doc))
           ;; One-shot resolved prefs (preset/Settings/last-used) — single read.
           prefs (e/server (resolve-modal-prefs* user-id root-id))
           !ready? (atom false)
           ready? (e/watch !ready?)]
 
-      ;; Resolve once both lists (AnkiConnect) and prefs (server) are present;
+      ;; Resolve once the deck list (AnkiConnect) and prefs (server) are present;
       ;; apply the resolved selection, then release the readiness gate. The
       ;; `case` forces apply-prefs! to evaluate — as a bare non-last statement
       ;; its discarded return value is work-skipped by Electric (CLAUDE.md).
-      (when (and (not ready?) (seq decks) (seq models))
-        (case (apply-prefs! prefs conn form decks models)
+      (when (and (not ready?) (seq decks))
+        (case (apply-prefs! prefs conn form decks nil)
           (reset! !ready? true)))
 
       (if-not ready?
@@ -340,9 +279,10 @@
             (AnkiSyncConnectedPanel user-id selected-doc conn form sync !show-modal)))))))
 
 (e/defn AnkiSyncSyncBody
-  "Sync state, field-fetch tokens, executor, and modal DOM.
-   conn = {:!status :!basic-model :!cloze-model ...}
-   form = {:!basic-fields :!cloze-fields ...}"
+  "Sync state, executor, and modal DOM. Note types are app-owned, so there is
+   no model/field resolution here.
+   conn = {:!status :!selected-deck ...}
+   form = {:!scope :!allow-dupes :!use-tags :!tags ...}"
   [user-id selected-doc !show-modal conn form]
   (e/client
     (let [!sync-phase (atom nil)
@@ -354,27 +294,7 @@
                 :!result !sync-result
                 :!error !sync-error
                 :!push-pairs !push-pairs
-                :!push-btn !push-btn}
-          conn-status (e/watch (:!status conn))
-          basic-model (e/watch (:!basic-model conn))
-          cloze-model (e/watch (:!cloze-model conn))
-          ;; Resolve preferred field ordering ONCE at modal open.
-          ;; Lookup order: per-doc preset → user-level setting → empty.
-          ;; root-id derives from a stable selected-doc, so this e/server is
-          ;; effectively resolved-once per modal session.
-          root-id (e/server (get-root-topic-id* selected-doc))
-          preferred-basic-fields (e/server (resolve-preferred-fields* user-id root-id :basic))
-          preferred-cloze-fields (e/server (resolve-preferred-fields* user-id root-id :cloze))]
-      (let [[t _] (e/Token [:anki-sync-basic-fields conn-status basic-model])]
-        (when (and basic-model (= conn-status :connected))
-          (when t
-            (case (helpers/run-fetch-fields! basic-model (:!basic-fields form)
-                    preferred-basic-fields) (t)))))
-      (let [[t _] (e/Token [:anki-sync-cloze-fields conn-status cloze-model])]
-        (when (and cloze-model (= conn-status :connected))
-          (when t
-            (case (helpers/run-fetch-fields! cloze-model (:!cloze-fields form)
-                    preferred-cloze-fields) (t)))))
+                :!push-btn !push-btn}]
       ;; §4 optimistic: the Push button sets :pushing; instead of running the
       ;; executor in-modal, persist the modal's prefs as last-used, close, and
       ;; fire the headless QuickSync (re-connects, pushes, toasts the outcome).
@@ -388,8 +308,6 @@
             ;; are unserializable. (Mirrors AnkiSyncExecutor's prefs-map handling.)
             (let [prefs {:scope @(:!scope form)
                          :deck @(:!selected-deck conn)
-                         :basic-model @(:!basic-model conn)
-                         :cloze-model @(:!cloze-model conn)
                          :allow-dupes @(:!allow-dupes form)
                          :use-tags @(:!use-tags form)
                          :tags @(:!tags form)}]
