@@ -43,13 +43,13 @@
             #?(:clj [freememo.user-state :as us])))
 
 ;; ── Invalidation channels ──────────────────────────────────────────────────
-;; The 11 per-user counter atoms in freememo.user-state. Views e/watch these;
+;; The per-user counter atoms in freememo.user-state. Views e/watch these;
 ;; bumping re-runs their queries.
 
 (def invalidation-channels
   #{:refresh :credits-refresh :meta-refresh :settings-refresh
     :card-mutations :sync-mutations :tree-mutations
-    :queue-mutations :pin-mutations :undo-mutations :kg-mutations})
+    :queue-mutations :pin-mutations :assistant-mutations :undo-mutations :kg-mutations})
 
 ;; ── Channel groups ─────────────────────────────────────────────────────────
 ;; Named unions used by entries below and by dynamic bumpers (freememo.undo
