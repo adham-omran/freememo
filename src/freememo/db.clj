@@ -286,6 +286,32 @@
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_pins_topic ON topic_pins(topic_id)"])
 
+  ;; Socratic AI assistant — per-document chats + their message transcripts.
+  ;; A chat is scoped to (user_id, root_topic_id): the document being read.
+  ;; Message #1 (lowest id) of every chat is the persisted page-context turn
+  ;; captured at chat creation (see freememo.assistant/start-chat!).
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS assistant_chats (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      root_topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      title TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT NULL
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_chats_user_topic
+                      ON assistant_chats(user_id, root_topic_id)"])
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS assistant_messages (
+      id SERIAL PRIMARY KEY,
+      chat_id INTEGER NOT NULL REFERENCES assistant_chats(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK (role IN ('user','assistant')),
+      content TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_messages_chat
+                      ON assistant_messages(chat_id, id)"])
+
   ;; Occlusion groups — one row per image-occlusion authoring session.
   ;; geometry JSONB = {:width :height :rects [{:x :y :w :h :ordinal} ...]}
   ;; in natural-image pixels. next_ordinal is the single ordinal authority:
@@ -923,6 +949,78 @@
                  :where [:and
                          [:= :user_id user-id]
                          [:= :key key]]})))
+
+;; ---------------------------------------------------------------------------
+;; Assistant chats (Socratic AI assistant)
+;; ---------------------------------------------------------------------------
+
+(defn create-assistant-chat!
+  "Insert a chat for (user-id, root-topic-id) with `title`. Returns new id."
+  [user-id root-topic-id title]
+  (-> (jdbc/execute-one! ds
+        (sql/format {:insert-into :assistant_chats
+                     :values [{:user_id user-id
+                               :root_topic_id root-topic-id
+                               :title title}]
+                     :returning [:id]}))
+    :assistant_chats/id))
+
+(defn get-assistant-chat
+  "Chat row for `chat-id` IFF owned by `user-id`, else nil (ownership gate).
+   Post: {:assistant_chats/id … :assistant_chats/title …} or nil."
+  [user-id chat-id]
+  (jdbc/execute-one! ds
+    (sql/format {:select [:id :root_topic_id :title]
+                 :from [:assistant_chats]
+                 :where [:and [:= :id chat-id] [:= :user_id user-id]]})))
+
+(defn get-assistant-chats
+  "Chats for (user-id, root-topic-id), newest-touched first, without bodies."
+  [user-id root-topic-id]
+  (jdbc/execute! ds
+    (sql/format {:select [:id :title :updated_at]
+                 :from [:assistant_chats]
+                 :where [:and [:= :user_id user-id] [:= :root_topic_id root-topic-id]]
+                 :order-by [[[:coalesce :updated_at :created_at] :desc] [:id :desc]]})))
+
+(defn insert-assistant-message!
+  "Append a message and touch the parent chat's updated_at. Returns new id.
+   Pre: role ∈ {\"user\",\"assistant\"} (enforced by table CHECK)."
+  [chat-id role content]
+  (let [id (-> (jdbc/execute-one! ds
+                 (sql/format {:insert-into :assistant_messages
+                              :values [{:chat_id chat-id :role role :content content}]
+                              :returning [:id]}))
+             :assistant_messages/id)]
+    (jdbc/execute! ds
+      (sql/format {:update :assistant_chats
+                   :set {:updated_at [:now]}
+                   :where [:= :id chat-id]}))
+    id))
+
+(defn get-assistant-messages
+  "Transcript for `chat-id`, oldest first (message #1 = page context)."
+  [chat-id]
+  (jdbc/execute! ds
+    (sql/format {:select [:id :role :content]
+                 :from [:assistant_messages]
+                 :where [:= :chat_id chat-id]
+                 :order-by [[:id :asc]]})))
+
+(defn set-assistant-chat-title!
+  "Rename a chat."
+  [chat-id title]
+  (jdbc/execute! ds
+    (sql/format {:update :assistant_chats
+                 :set {:title title}
+                 :where [:= :id chat-id]})))
+
+(defn delete-assistant-chat!
+  "Delete a chat (cascades to messages) IFF owned by `user-id`."
+  [user-id chat-id]
+  (jdbc/execute! ds
+    (sql/format {:delete-from :assistant_chats
+                 :where [:and [:= :id chat-id] [:= :user_id user-id]]})))
 
 (defn list-email-update-recipients
   "Email addresses of users who opted into email updates (settings key

@@ -99,6 +99,9 @@
           model (e/watch !model)
           card-model-ids (e/server (settings/card-model-ids))
           card-label-of (into {} (map (juxt :id :label)) card-models/registry)
+          server-assistant-model (e/server (settings/get-assistant-model user-id))
+          !assistant-model (atom server-assistant-model)
+          assistant-model (e/watch !assistant-model)
           server-reasoning (e/server (settings/get-reasoning user-id))
           !reasoning (atom server-reasoning)
           reasoning (e/watch !reasoning)
@@ -188,6 +191,26 @@
                       (if (:success r) (t) (t (:error r))))))))
             (dom/div (dom/props {:class "hint"})
               (dom/text "Model used for flashcard generation.")))
+
+          ;; Assistant model — Socratic reading-view chatbot. Same registry as
+          ;; card generation; defaults to Gemini 3 Flash.
+          (dom/div
+            (dom/props {:class "field"})
+            (dom/label (dom/props {:class "label"}) (dom/text "Assistant Model"))
+            (dom/select
+              (dom/props {:value assistant-model :class "select"})
+              (e/for [id (e/diff-by identity card-model-ids)]
+                (dom/option (dom/props {:value id}) (dom/text (get card-label-of id id))))
+              (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                    [t _] (e/Token change-event)]
+                (when (some? change-event)
+                  (reset! !assistant-model change-event))
+                (when t
+                  (let [r (e/server (e/Offload #(settings/save-assistant-model user-id change-event)))]
+                    (case r
+                      (if (:success r) (t) (t (:error r))))))))
+            (dom/div (dom/props {:class "hint"})
+              (dom/text "Model used by the Socratic AI assistant in the reading view.")))
 
           ;; Reasoning
           (dom/div

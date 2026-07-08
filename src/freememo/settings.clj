@@ -55,6 +55,7 @@
 (def THEME "theme")
 (def ZOTERO_ENABLED "zotero_enabled")
 (def CARD_SPLIT "card_split")
+(def ASSISTANT_MODEL "assistant_model")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
 
 (defn get-email-updates [user-id]
@@ -114,6 +115,23 @@
     (cond
       (some #{saved} allowed) saved
       (some #{default} allowed) default
+      :else (first allowed))))
+
+(def assistant-default-model-id
+  "Default assistant model when the user has no saved selection. Distinct from
+   card-models/default-id (the card-generation default) by product decision."
+  "gemini-3-flash")
+
+(defn get-assistant-model
+  "Effective assistant-chat model :id for a user: saved id if allowed, else
+   gemini-3-flash if allowed, else the first allowed id.
+   Post: an :id present in (card-model-ids)."
+  [user-id]
+  (let [allowed (card-model-ids)
+        saved (db/get-setting user-id ASSISTANT_MODEL)]
+    (cond
+      (some #{saved} allowed) saved
+      (some #{assistant-default-model-id} allowed) assistant-default-model-id
       :else (first allowed))))
 
 (defn get-card-count [user-id]
@@ -368,6 +386,19 @@
         (tel/error! {:id ::save-model} e)
         {:success false :error "Failed to save model"}))))
 
+(defn save-assistant-model
+  "Persist an assistant model selection. Pre: `value` is a card-models :id
+   (else rejected — caller bug). Post: ASSISTANT_MODEL stored, or {:success false}."
+  [user-id value]
+  (if-not (card-models/resolve-model value)
+    {:success false :error (str "Unknown assistant model: " value)}
+    (try
+      (db/set-setting user-id ASSISTANT_MODEL value)
+      {:success true}
+      (catch Exception e
+        (tel/error! {:id ::save-assistant-model} e)
+        {:success false :error "Failed to save assistant model"}))))
+
 (defn save-reasoning [user-id value]
   (try
     (db/set-setting user-id REASONING value)
@@ -579,6 +610,23 @@
 
 (defn save-pins-width [user-id topic-id px]
   (save-pane-width user-id topic-id "pins_width_" px ::save-pins-width))
+
+;; Right-panel active tab ("pins" | "assistant"), scoped per document like the
+;; pane open/width state above. Missing key → "pins".
+(defn get-assistant-tab [user-id topic-id]
+  (try
+    (let [v (db/get-setting user-id (str "assistant_tab_" (pane-scope-id topic-id)))]
+      (if (#{"pins" "assistant"} v) v "pins"))
+    (catch Exception _ "pins")))
+
+(defn save-assistant-tab [user-id topic-id tab]
+  (try
+    (db/set-setting user-id (str "assistant_tab_" (pane-scope-id topic-id))
+      (if (#{"pins" "assistant"} tab) tab "pins"))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-assistant-tab} e)
+      {:success false})))
 
 (defn add-to-history [history new-prompt]
   (->> (cons new-prompt history)

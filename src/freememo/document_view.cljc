@@ -9,7 +9,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.hierarchy-side-panel :refer [HierarchySidePanel]]
-   [freememo.pin-side-panel :refer [PinSidePanel]]
+   [freememo.right-side-panel :refer [RightSidePanel]]
    [freememo.pdf-pane :refer [PdfPane]]
    [freememo.pdf-toolbar :refer [PdfToolbar]]
    [freememo.score-toolbar :refer [ScoreToolbar ScoreWaveformStrip]]
@@ -145,9 +145,10 @@
         ;; MIDDLE: content column.
         (ContentColumn)
 
-        ;; RIGHT: pin side panel (collapsible). Hidden in reading-mode?.
+        ;; RIGHT: side panel with Pins + AI Assistant tabs (collapsible).
+        ;; Hidden in reading-mode?.
         (when-not reading-mode?
-          (PinSidePanel page-topic-id root-topic-id user-id))))))
+          (RightSidePanel page-topic-id root-topic-id user-id))))))
 
 
 ;; TopicPage shell

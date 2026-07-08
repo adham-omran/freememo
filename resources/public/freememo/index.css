@@ -2352,6 +2352,137 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     flex: 1;
 }
 
+/* Right-panel tab switch (Pins | Assistant), sits in the header when open. */
+.side-panel__tabs {
+    display: flex;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+    padding: 4px 6px;
+}
+
+.side-panel__tab {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 4px 6px;
+    border-radius: var(--radius-sm, 4px);
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.side-panel__tab:hover { background: var(--color-bg-subtle); }
+
+.side-panel__tab--active {
+    background: var(--color-primary, #2563eb);
+    border-color: var(--color-primary, #2563eb);
+    color: #fff;
+}
+
+/* AI assistant tab body: fills the panel, transcript scrolls, composer pinned. */
+.assistant-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.assistant-panel__bar {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 8px 8px 4px;
+    flex-shrink: 0;
+}
+
+.assistant-panel__new { flex-shrink: 0; padding: 4px 8px; font-size: 12px; }
+.assistant-panel__chats { flex: 1; min-width: 0; font-size: 12px; }
+
+.assistant-panel__model {
+    padding: 0 8px 6px;
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+}
+
+.assistant-panel__transcript {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+}
+
+.assistant-panel__hint {
+    color: var(--color-text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.assistant-msg {
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 8px 10px;
+    border-radius: 10px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-width: 92%;
+}
+
+.assistant-msg--user {
+    align-self: flex-end;
+    background: var(--color-primary, #2563eb);
+    color: #fff;
+    border-bottom-right-radius: 3px;
+}
+
+.assistant-msg--assistant {
+    align-self: flex-start;
+    background: var(--color-bg-subtle, #f1f5f9);
+    color: var(--color-text-primary);
+    border-bottom-left-radius: 3px;
+}
+
+.assistant-panel__thinking {
+    align-self: flex-start;
+    font-size: 12px;
+    font-style: italic;
+    color: var(--color-text-secondary);
+}
+
+.assistant-panel__error {
+    margin: 0 8px 6px;
+    padding: 6px 8px;
+    font-size: 12px;
+    color: var(--color-danger-text, #b91c1c);
+    background: var(--color-danger-bg, #fef2f2);
+    border-radius: var(--radius-sm, 4px);
+    flex-shrink: 0;
+}
+
+.assistant-panel__composer {
+    display: flex;
+    gap: 6px;
+    align-items: flex-end;
+    padding: 8px;
+    border-top: 1px solid var(--color-border);
+    flex-shrink: 0;
+}
+
+.assistant-panel__input { flex: 1; min-width: 0; resize: none; font-size: 13px; }
+.assistant-panel__send { flex-shrink: 0; }
+
 .pin-thumb {
     position: relative;
     width: 100%;

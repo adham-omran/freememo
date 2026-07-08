@@ -1,21 +1,19 @@
 (ns freememo.pin-side-panel
-  "Right-side collapsible panel showing pinned images for the current topic.
+  "Pinned-image content for the right side panel's Pins tab.
    Each pin renders a thumbnail with an F/B placement badge and a × remove button.
    Badge click cycles placement front↔back. Remove button deletes the pin row.
 
    Reactivity: subscribes to :pin-mutations (bumped by pin insert/remove/update)
-   so the panel re-queries without touching the wider :refresh channel.
+   so the list re-queries without touching the wider :refresh channel.
 
-   Open/collapsed state is persisted per-topic via freememo.settings."
+   The collapsible/resizable panel chrome that hosts this body lives in
+   freememo.right-side-panel (shared with the AI assistant tab)."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
-   [freememo.util :as util]
-   [freememo.viewport :as viewport]
    [freememo.commands :as commands]
    #?(:clj [freememo.db :as db])
-   #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])))
 
@@ -106,105 +104,21 @@
               (case (e/server (e/Offload #(remove-pin!* user-id pin-id))) (t)))))))))
 
 ;; ---------------------------------------------------------------------------
-;; PinSidePanel — exported component
+;; PinsBody — the Pins tab content (scrollable thumbnail list)
 ;; ---------------------------------------------------------------------------
 
-(e/defn PinSidePanel [topic-id root-topic-id user-id]
+(e/defn PinsBody
+  "Scrollable pin-thumbnail list for `topic-id`. Re-queries on :pin-mutations.
+   Rendered inside the shared right-side-panel body; owns no panel chrome."
+  [topic-id user-id]
   (e/client
-    ;; Frame isolation — remounts only when root-topic-id changes (i.e. when
-    ;; navigating between documents). Page navigation within one document
-    ;; updates topic-id reactively without remount, so !open? state and the
-    ;; DOM subtree persist across page scrolls. Pin data still queries by
-    ;; topic-id since pins are per-topic.
-    (e/for-by identity [_k [root-topic-id]]
-      (let [phone?          (e/watch viewport/!phone?)
-            persisted-open? (e/server (settings/get-pins-open user-id root-topic-id))
-            ;; Phone defaults to collapsed; desktop persisted pref preserved.
-            initial-open?   (and (not phone?) persisted-open?)
-            !open? (atom initial-open?)
-            open? (e/watch !open?)
-            !save (atom nil)
-            save-val (e/watch !save)
-            [t _] (e/Token save-val)
-            persisted-width (e/server (settings/get-pins-width user-id root-topic-id))
-            !width-px (atom persisted-width)
-            width-px (e/watch !width-px)
-            !width-save (atom nil)
-            width-save (e/watch !width-save)
-            [tw _] (e/Token width-save)]
-
-        (when t
-          (let [r (e/server (e/Offload #(settings/save-pins-open user-id root-topic-id save-val)))]
-            (case r
-              (if (:success r) (t) (t (:error r))))))
-
-        (when tw
-          (let [r (e/server (e/Offload #(settings/save-pins-width user-id root-topic-id width-save)))]
-            (case r
-              (if (:success r) (tw) (tw (:error r))))))
-
-        (dom/div
-          (dom/props {:class (str "pin-side-panel"
-                               (when-not open? " pin-side-panel--collapsed"))
-                      :style (merge {:position "relative"}
-                               (when open? {:width (str width-px "px")}))})
-
-          ;; Header row — toggle (always visible) + title (only when open).
-          ;; CSS flips this row's direction so the toggle anchors to the
-          ;; panel's right (outer) edge, mirroring the left pane.
-          (dom/div
-            (dom/props {:class "side-panel__header"})
-            (dom/button
-              (dom/props {:class "side-panel__toggle"
-                          :aria-label "Toggle pins panel"
-                          :aria-expanded (str (boolean open?))})
-              (dom/text "☰")
-              (dom/On "click"
-                (fn [_]
-                  (let [next-open? (not @!open?)]
-                    (reset! !open? next-open?)
-                    (reset! !save next-open?)))
-                nil))
-            (when open?
-              (dom/span
-                (dom/props {:class "side-panel__title"})
-                (dom/text "Pins"))))
-
-          ;; Resize handle on the inner (left) edge; only when open.
-          (when open?
-            (dom/div
-              (dom/props {:class "side-panel__resize side-panel__resize--left"
-                          :title "Drag to resize"
-                          :role "separator" :aria-orientation "vertical"
-                          :aria-label "Resize pins panel" :tabindex "0"
-                          :aria-valuenow (str (int (or width-px 0)))})
-              (dom/On "pointerdown"
-                (fn [e]
-                  (util/start-drag-px! e !width-px
-                    {:min 120
-                     :max (max 120 (util/panel-resize-max (.-currentTarget e) :before 320))
-                     :invert? true
-                     :on-commit #(reset! !width-save %)}))
-                nil)
-              (dom/On "keydown"
-                (fn [e]
-                  (util/key-resize-px! e !width-px
-                    {:min 120
-                     :max (max 120 (util/panel-resize-max (.-currentTarget e) :before 320))
-                     :invert? true
-                     :on-commit #(reset! !width-save %)}))
-                nil)))
-
-          (when open?
-            (dom/div
-              (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"
-                                  :display "flex" :flex-direction "column"
-                                  :gap "8px" :padding "8px"}})
-
-              ;; Thumbnail list (re-queries on :pin-mutations bump)
-              (if (nil? topic-id)
-                nil
-                (let [pin-rev (e/server (e/watch (us/get-atom user-id :pin-mutations)))
-                      pins (e/server (vec (get-pins-for-topic* pin-rev topic-id)))]
-                  (e/for-by :topic_pins/id [pin pins]
-                    (PinThumbnail user-id pin)))))))))))
+    (dom/div
+      (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"
+                          :display "flex" :flex-direction "column"
+                          :gap "8px" :padding "8px"}})
+      (if (nil? topic-id)
+        nil
+        (let [pin-rev (e/server (e/watch (us/get-atom user-id :pin-mutations)))
+              pins (e/server (vec (get-pins-for-topic* pin-rev topic-id)))]
+          (e/for-by :topic_pins/id [pin pins]
+            (PinThumbnail user-id pin)))))))
