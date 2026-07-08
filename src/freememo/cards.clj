@@ -364,6 +364,41 @@
        (tel/error! {:id ::save-cards} e)
        {:success false :error (.getMessage e)}))))
 
+;; Compare-models: generate the same content with several models, unsaved, for
+;; the compare modal (client-held staging — nothing persists until the user picks).
+
+(defn compare-card-gen
+  "Run one card generation per model-id on the same `opts` content, WITHOUT
+   saving. Each model is a real billed generation — the credit gate + charge
+   happen inside generate-cards*. Fans out concurrently (the model subset is
+   small) with a per-model timeout so one slow/hung model can't stall the batch.
+   Pre:  opts has :content/:card-type/:card-count/:user-id (…); model-ids non-empty.
+   Post: [{:model-id id :result {:success bool :cards [...] :error str}}] — nothing
+         written to the flashcards table."
+  [opts model-ids]
+  (let [gen-one (fn [mid]
+                  (let [o (assoc opts :model mid)]
+                    (if (= (:card-type opts) "cloze")
+                      (generate-cloze-cards o)
+                      (generate-basic-cards o))))
+        futs (mapv (fn [mid] [mid (future (gen-one mid))]) model-ids)]
+    (mapv (fn [[mid f]]
+            {:model-id mid
+             :result (deref f 60000 {:success false :error "Timed out"})})
+      futs)))
+
+(defn commit-card-set!
+  "Persist one model's generated set (the chosen compare candidate) via the same
+   save path as normal generation, then bump the card table. Returns the save
+   result {:success :ids}.
+   Pre:  cards is a non-empty seq of generated card maps.
+   Post: rows inserted; :card-mutations bumped (via :generate) on success."
+  [user-id topic-id root-topic-id card-type cards]
+  (let [r (save-cards topic-id root-topic-id card-type cards)]
+    (when (:success r)
+      (commands/bump! user-id :generate))
+    r))
+
 (defn add-card
   "Manually add a single flashcard.
    topic-id: the page or extract topic.

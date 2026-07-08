@@ -11,19 +11,7 @@
    [freememo.content-toolbar-helpers :as helpers]
    [freememo.icons :as icons]
    [freememo.command-bus :as bus]
-   #?(:clj [freememo.db :as db])
-   #?(:clj [freememo.html-cleaner :as cleaner])
    #?(:clj [freememo.settings :as settings])))
-
-(defn get-parent-content*
-  "Parent topic's content for extract-mode generation context. Fetched
-   server-side at the point of use — threading it down from TopicPage's
-   overview shipped the parent's full HTML to the client and back for a
-   value only ever read inside e/server blocks."
-  [topic-id]
-  #?(:clj (when-let [pid (:topics/parent_id (db/get-topic topic-id))]
-            (or (:topics/content (db/get-topic pid)) ""))
-     :cljs nil))
 
 (e/defn ToolbarGenerate []
   (e/client
@@ -133,17 +121,16 @@
       (let [[t _] (e/Token gen-click)]
         (when t
           (case (e/server
-                  (let [sel-html (cleaner/clean-html (:selection-html gen-click))
-                        context (when use-context
-                                  (case context-mode
-                                    :extract (if sel-html content-text (or (get-parent-content* topic-id) ""))
-                                    :page (let [prev (helpers/get-context-pages* root-topic-id page-number context-window)]
-                                            (if sel-html
-                                              (if prev (str prev "\n\n---\n\n" content-text) content-text)
-                                              prev))))]
+                  (let [{:keys [content context]}
+                        (helpers/build-gen-context*
+                          {:selection-html (:selection-html gen-click)
+                           :content-text content-text :context-mode context-mode
+                           :use-context use-context :topic-id topic-id
+                           :root-topic-id root-topic-id :page-number page-number
+                           :context-window context-window})]
                     (helpers/enqueue-card-gen!
                       {:id (:id gen-click)
-                       :content (or sel-html content-text)
+                       :content content
                        :context context
                        :card-type card-type
                        :card-count card-count-val
@@ -171,17 +158,16 @@
           (case (e/server
                   (let [{:keys [selection pre-prompt kind]} submit
                         ct (or kind card-type)
-                        sel-html (cleaner/clean-html selection)
-                        context (when use-context
-                                  (case context-mode
-                                    :extract (if sel-html content-text (or (get-parent-content* topic-id) ""))
-                                    :page (let [prev (helpers/get-context-pages* root-topic-id page-number context-window)]
-                                            (if sel-html
-                                              (if prev (str prev "\n\n---\n\n" content-text) content-text)
-                                              prev))))]
+                        {:keys [content context]}
+                        (helpers/build-gen-context*
+                          {:selection-html selection
+                           :content-text content-text :context-mode context-mode
+                           :use-context use-context :topic-id topic-id
+                           :root-topic-id root-topic-id :page-number page-number
+                           :context-window context-window})]
                     (helpers/enqueue-card-gen!
                       {:id (str (random-uuid))
-                       :content (or sel-html content-text)
+                       :content content
                        :context context
                        :card-type ct
                        :card-count card-count-val
