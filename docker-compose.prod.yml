@@ -86,6 +86,10 @@ services:
       # from the working dir (/app) by freememo.config/load-config. Gitignored;
       # must exist on the host at deploy time.
       - ./config.edn:/app/config.edn:ro
+      # Persist Telemere's rotating file logs (freememo.logging/init! →
+      # logs/app.log, 4MB × 8 gz, monthly × 6) across container rebuilds.
+      # Without this the writable-layer logs vanish on every `up --build`.
+      - ./logs:/app/logs
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080"]
       interval: 30s
