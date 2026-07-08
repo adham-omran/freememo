@@ -405,8 +405,6 @@
                  :settings {:use-header (pick :use-header)
                             :header-text (pick :header-text)
                             :tags (vec (or (pick :tags) []))
-                            :source-display-mode (settings/get-source-display-mode user-id)
-                            :bibliography-display-mode (settings/get-bibliography-display-mode user-id)
                             :bibliography-html bib-html
                             :topic-title (:topics/title root-topic)
                             :topic-kind (:topics/kind root-topic)

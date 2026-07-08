@@ -41,37 +41,14 @@
       (str/replace #"<[^>]*>" "") ;; strip all remaining tags
       str/trim)))
 
-(defn append-source
-  "Append source reference HTML to card content when source-display-mode is 'append'."
-  [content source-ref]
-  (if (and (not (str/blank? source-ref)))
-    (str content "\n<hr class=\"fm-source\"><small style='color:#999'>Source: " source-ref "</small>")
-    content))
-
-(defn wrap-fm-source
-  "Wrap source-anchor HTML in <p class=\"fm-source\"> for separate-field emission. No-op on blank input."
-  [source-html]
-  (if (str/blank? source-html)
-    source-html
-    (str "<p class=\"fm-source\">" source-html "</p>")))
-
-(defn wrap-fm-bibliography
-  "Wrap bibliography body HTML in <p class=\"fm-bibliography\"> for separate-field emission. No-op on blank input."
-  [bib-html]
-  (if (str/blank? bib-html)
-    bib-html
-    (str "<p class=\"fm-bibliography\">" bib-html "</p>")))
-
 (declare html-escape)
 
 #?(:clj
    (defn format-bibliography-html
      "Render a CSL map as the bibliography body HTML — title link + author + year.
-      Returns nil for a blank citation. No presentation wrapper, no
-      \"Bibliography: \" prefix — callers add those when appending. Mirrors the
-      source/append-source split: field mode writes the raw body, append mode
-      wraps it. Server-side only — title/author/URL are HTML-escaped here, so
-      callers must NOT double-escape."
+      Returns nil for a blank citation. No presentation wrapper. Server-side
+      only — title/author/URL are HTML-escaped here, so callers must NOT
+      double-escape."
      [csl]
      (when (map? csl)
        (let [title (some-> (:title csl) str/trim not-empty)
@@ -93,16 +70,6 @@
                     (or author-html "")
                     (or year-html ""))]
          (when (seq body) body)))))
-
-(defn append-bibliography
-  "Append bibliography body to card content when bibliography-display-mode is
-   'append'. Wraps with the fm-bibliography <hr> divider and the
-   <small>Bibliography: …</small> presentation. Pull-side strip-html removes
-   this same wrapper."
-  [content bib-body]
-  (if (str/blank? bib-body)
-    content
-    (str content "\n<hr class=\"fm-bibliography\"><small style='color:#999'>Bibliography: " bib-body "</small>")))
 
 #?(:cljs
    (defn to-future! [token task]
@@ -262,22 +229,22 @@
 ;; Score FreeMemo note type — app-owned like IO FreeMemo. One template; the
 ;; direction is baked into which field carries the [sound:...] clip vs the
 ;; stacked notation crops, so "Both" is two independent notes.
-;; Field ownership: ID/Front/Back/Source/Bibliography are FM-generated and
-;; overwritten on every push; Remarks is the user's Anki-side annotation
-;; space — addNote seeds it empty, updateNote never touches it.
+;; Field ownership: ID/Front/Back/Links are FM-generated and overwritten on
+;; every push; Remarks is the user's Anki-side annotation space — addNote seeds
+;; it empty, updateNote never touches it.
 ;; ---------------------------------------------------------------------------
 
 (def score-model-name "Score FreeMemo")
 (def score-template-name "Score Card")
 
 (def score-field-names
-  ["ID (hidden)" "Front" "Back" "Source" "Bibliography" "Remarks"])
+  ["ID (hidden)" "Front" "Back" "Links" "Remarks"])
 
 (def score-card-front
   "<div class=\"score-front\">{{Front}}</div>\n")
 
 (def score-card-back
-  "{{FrontSide}}\n<hr id=answer>\n<div class=\"score-back\">{{Back}}</div>\n{{#Remarks}}<div class=\"score-extra\"><div class=\"score-field-descr\">Remarks</div>{{Remarks}}</div>{{/Remarks}}\n{{#Source}}<div class=\"score-extra\"><div class=\"score-field-descr\">Source</div>{{Source}}</div>{{/Source}}\n{{#Bibliography}}<div class=\"score-extra\"><div class=\"score-field-descr\">Bibliography</div>{{Bibliography}}</div>{{/Bibliography}}\n")
+  "{{FrontSide}}\n<hr id=answer>\n<div class=\"score-back\">{{Back}}</div>\n{{#Remarks}}<div class=\"score-extra\"><div class=\"score-field-descr\">Remarks</div>{{Remarks}}</div>{{/Remarks}}\n{{#Links}}<div class=\"score-extra\">{{Links}}</div>{{/Links}}\n")
 
 (defn score-card? [card]
   (= "score" (:flashcards/kind card)))
@@ -302,23 +269,23 @@
 
 (def basic-model-name "Basic FreeMemo")
 (def basic-template-name "Basic Card")
-(def basic-field-names ["Front" "Back" "Source" "Bibliography" "Remarks"])
+(def basic-field-names ["Front" "Back" "Links" "Remarks"])
 
 (def cloze-model-name "Cloze FreeMemo")
 (def cloze-template-name "Cloze Card")
-(def cloze-field-names ["Text" "Back Extra" "Source" "Bibliography" "Remarks"])
+(def cloze-field-names ["Text" "Back Extra" "Links" "Remarks"])
 
 (def basic-card-front
   "<div class=\"fm-front\">{{Front}}</div>\n")
 
 (def basic-card-back
-  "{{FrontSide}}\n<hr id=answer>\n<div class=\"fm-back\">{{Back}}</div>\n{{#Source}}<div class=\"fm-extra\"><div class=\"fm-field-descr\">Source</div>{{Source}}</div>{{/Source}}\n{{#Bibliography}}<div class=\"fm-extra\"><div class=\"fm-field-descr\">Bibliography</div>{{Bibliography}}</div>{{/Bibliography}}\n{{#Remarks}}<div class=\"fm-extra\"><div class=\"fm-field-descr\">Remarks</div>{{Remarks}}</div>{{/Remarks}}\n")
+  "{{FrontSide}}\n<hr id=answer>\n<div class=\"fm-back\">{{Back}}</div>\n{{#Links}}<div class=\"fm-extra\">{{Links}}</div>{{/Links}}\n{{#Remarks}}<div class=\"fm-extra\"><div class=\"fm-field-descr\">Remarks</div>{{Remarks}}</div>{{/Remarks}}\n")
 
 (def cloze-card-front
   "<div class=\"fm-front\">{{cloze:Text}}</div>\n")
 
 (def cloze-card-back
-  "<div class=\"fm-front\">{{cloze:Text}}</div>\n{{#Back Extra}}<div class=\"fm-back\">{{Back Extra}}</div>{{/Back Extra}}\n{{#Source}}<div class=\"fm-extra\"><div class=\"fm-field-descr\">Source</div>{{Source}}</div>{{/Source}}\n{{#Bibliography}}<div class=\"fm-extra\"><div class=\"fm-field-descr\">Bibliography</div>{{Bibliography}}</div>{{/Bibliography}}\n{{#Remarks}}<div class=\"fm-extra\"><div class=\"fm-field-descr\">Remarks</div>{{Remarks}}</div>{{/Remarks}}\n")
+  "<div class=\"fm-front\">{{cloze:Text}}</div>\n{{#Back Extra}}<div class=\"fm-back\">{{Back Extra}}</div>{{/Back Extra}}\n{{#Links}}<div class=\"fm-extra\">{{Links}}</div>{{/Links}}\n{{#Remarks}}<div class=\"fm-extra\"><div class=\"fm-field-descr\">Remarks</div>{{Remarks}}</div>{{/Remarks}}\n")
 
 #?(:cljs
    (defn fetch-text!
@@ -372,27 +339,54 @@
          true))))
 
 #?(:cljs
+   (defn migrate-fields!
+     "Missionary task: reconcile an app-owned model's field NAMES toward canon.
+      Renames then removes, each op guarded so it is idempotent and safe to run
+      on every push: a rename fires only when the old field is present and the
+      new absent; a removal only when the field is present. Name-based — robust
+      to the field-order drift seen across historical model versions.
+      pre:  renames = [[old new] …]; removals = [name …].
+      post: for each [old new] the model has new and lacks old (when old existed);
+            for each name in removals the model lacks name.
+      invariant: MUST run before the missing-field append step — appending the
+      new field first makes the rename guard skip and strands the old field."
+     [model-name renames removals]
+     (m/sp
+       (let [present (fn [] (set (js->clj (m/? (anki-call! "modelFieldNames"
+                                                 {:modelName model-name})))))]
+         (loop [[[old new] & more] (seq renames)]
+           (when old
+             (let [fields (present)]
+               (when (and (fields old) (not (fields new)))
+                 (log/log-debug (str "[anki-push] " model-name ": renaming field " old " → " new))
+                 (m/? (anki-call! "modelFieldRename"
+                        {:modelName model-name :oldFieldName old :newFieldName new}))))
+             (recur more)))
+         (loop [[nm & more] (seq removals)]
+           (when nm
+             (when ((present) nm)
+               (log/log-debug (str "[anki-push] " model-name ": removing field " nm))
+               (m/? (anki-call! "modelFieldRemove"
+                      {:modelName model-name :fieldName nm})))
+             (recur more)))
+         true))))
+
+#?(:cljs
    (defn ensure-score-model!
      "Missionary task: create the Score FreeMemo model if missing, else
       re-assert its styling/template against canon — same strict-drift policy
-      as ensure-io-model! — and reconcile its FIELDS: 'Sources' (shipped
-      briefly) renames to 'Source', and any canonical field the model lacks
-      is appended. Existing note content survives both operations."
+      as ensure-io-model! — and migrate its FIELDS toward canon: legacy
+      'Bibliography' renames to 'Links', legacy 'Source'/'Sources' are removed,
+      and any canonical field the model lacks is appended. Existing Remarks
+      content survives."
      []
      (m/sp
        (let [css (m/? (fetch-text! app-anki-css-url))
              models (vec (js->clj (m/? (anki-call! "modelNames" nil))))]
          (if (some #{score-model-name} models)
            (do
-             (let [fields (vec (js->clj (m/? (anki-call! "modelFieldNames"
-                                               {:modelName score-model-name}))))]
-               (when (and (some #{"Sources"} fields)
-                       (not (some #{"Source"} fields)))
-                 (log/log-debug "[anki-push] Score FreeMemo: renaming field Sources → Source")
-                 (m/? (anki-call! "modelFieldRename"
-                        {:modelName score-model-name
-                         :oldFieldName "Sources"
-                         :newFieldName "Source"}))))
+             (m/? (migrate-fields! score-model-name
+                    [["Bibliography" "Links"]] ["Source" "Sources"]))
              (let [fields (set (js->clj (m/? (anki-call! "modelFieldNames"
                                                {:modelName score-model-name}))))
                    missing (vec (remove fields score-field-names))]
@@ -429,16 +423,19 @@
 #?(:cljs
    (defn- ensure-owned-model!
      "Create an app-owned model if absent, else reconcile it toward canon:
-      append any missing owned fields, then restore styling + template on
-      strict-equality drift (same policy as ensure-io-model!/ensure-score-model!).
-      Field appends land after the existing fields, so Front/Back (index 0/1)
-      and Text (index 0) — created first via :inOrderFields — keep their
+      apply field-name migrations (renames/removals), append any missing owned
+      fields, then restore styling + template on strict-equality drift (same
+      policy as ensure-io-model!/ensure-score-model!). Migrations run BEFORE the
+      append so a rename lands before the new field would otherwise be added
+      empty. Field appends land after the existing fields, so Front/Back (index
+      0/1) and Text (index 0) — created first via :inOrderFields — keep their
       order-based-pull positions. Resolves to true; throws on AnkiConnect error."
-     [{:keys [model-name template-name field-names is-cloze front back]} css]
+     [{:keys [model-name template-name field-names is-cloze front back renames removals]} css]
      (m/sp
        (let [models (vec (js->clj (m/? (anki-call! "modelNames" nil))))]
          (if (some #{model-name} models)
            (do
+             (m/? (migrate-fields! model-name renames removals))
              (let [fields (set (js->clj (m/? (anki-call! "modelFieldNames"
                                                {:modelName model-name}))))
                    missing (vec (remove fields field-names))]
@@ -479,7 +476,8 @@
          (m/? (ensure-owned-model!
                 {:model-name basic-model-name :template-name basic-template-name
                  :field-names basic-field-names :is-cloze false
-                 :front basic-card-front :back basic-card-back}
+                 :front basic-card-front :back basic-card-back
+                 :renames [["Bibliography" "Links"]] :removals ["Source"]}
                 css))))))
 
 #?(:cljs
@@ -492,7 +490,8 @@
          (m/? (ensure-owned-model!
                 {:model-name cloze-model-name :template-name cloze-template-name
                  :field-names cloze-field-names :is-cloze true
-                 :front cloze-card-front :back cloze-card-back}
+                 :front cloze-card-front :back cloze-card-back
+                 :renames [["Bibliography" "Links"]] :removals ["Source"]}
                 css))))))
 
 (defn io-mask-uploads
@@ -602,23 +601,31 @@
     (str/replace "\"" "&quot;")
     (str/replace "'" "&#39;")))
 
-(defn build-source-anchor
-  "Build an HTML anchor linking back to the source item in FreeMemo.
-   Links unconditionally to <app-base-url>/viewer/topic/<topic-id>.
-   Anchor text is '<title> - <page>' when the card has a :page_number, else '<title>'.
-   Returns nil when title is blank.
-   Pre: caller supplies `:app-base-url` in `settings`; falls back to default if absent."
+(defn build-links-field
+  "FM-owned 'Links' field for a Basic/Cloze/Score FreeMemo note: the resolved
+   citation (linked iff the CSL carried a URL) stacked over an 'Open in FreeMemo'
+   deep-link to <app-base-url>/viewer/topic/<topic-id>. FreeMemo owns this field
+   unconditionally and overwrites it on every push. Returns {\"Links\" html}.
+   pre:  citation pre-resolved in :fm/bibliography-html (card) or
+         :bibliography-html (settings); already HTML-escaped by
+         format-bibliography-html, so it is NOT re-escaped here. :app-base-url
+         in settings, else default-app-base-url.
+   post: the FreeMemo link renders whenever :flashcards/topic_id is present
+         (independent of topic title); value is \"\" only when topic_id is nil
+         AND citation is blank."
   [card settings]
-  (let [{:keys [topic-kind root-topic-id topic-title app-base-url]} settings
-        base (or app-base-url default-app-base-url)
-        title topic-title
-        page (:page_number card)
-        url (str base "/viewer/topic/" (:flashcards/topic_id card))
-        anchor-text (if page
-                      (str title " - " page)
-                      title)]
-    (when-not (str/blank? title)
-      (str "<a href=\"" (html-escape url) "\">" (html-escape anchor-text) "</a>"))))
+  (let [citation (or (:fm/bibliography-html card) (:bibliography-html settings))
+        topic-id (:flashcards/topic_id card)
+        base (or (:app-base-url settings) default-app-base-url)
+        fm-link (when topic-id
+                  (str "<a href=\"" (html-escape (str base "/viewer/topic/" topic-id))
+                    "\">Open in FreeMemo</a>"))
+        body (cond
+               (and (not (str/blank? citation)) fm-link) (str citation "<br>" fm-link)
+               fm-link fm-link
+               (not (str/blank? citation)) citation
+               :else nil)]
+    {"Links" (if body (str "<p class=\"fm-links\">" body "</p>") "")}))
 
 (defn build-io-fields
   "Field map for an IO FreeMemo note: generated media references plus the six
@@ -675,25 +682,22 @@
 
 (defn build-score-fields
   "FM-owned fields for a score note, direction-baked: audio-front puts the
-   clip on the Front and the crops on the Back; sheet-front mirrors. Source
-   and Bibliography fill exactly like basic cards' field mode (topic anchor +
-   the card's own resolved bibliography). Remarks is deliberately absent —
-   it is the user's Anki-side annotation space and updateNote must never
-   clobber it.
+   clip on the Front and the crops on the Back; sheet-front mirrors. Links
+   fills exactly like basic cards (citation + FreeMemo deep-link). Remarks is
+   deliberately absent — it is the user's Anki-side annotation space and
+   updateNote must never clobber it.
    Pre: card carries :score-group and :flashcards/score_direction; settings
-   carries the source-anchor inputs (:topic-title :app-base-url ...)."
+   carries the link inputs (:app-base-url :bibliography-html ...)."
   [card settings filename-map]
   (let [{:keys [anki-key clip-media-id geometry]} (:score-group card)
         direction (:flashcards/score_direction card)
         sound (score-sound-html clip-media-id filename-map)
-        sheet (score-sheet-html geometry filename-map)
-        source-ref (build-source-anchor card settings)
-        bibliography-html (or (:fm/bibliography-html card) (:bibliography-html settings))]
-    {"ID (hidden)" (str "fm-score-" anki-key "-" direction)
-     "Front" (if (= direction "audio-front") sound sheet)
-     "Back" (if (= direction "audio-front") sheet sound)
-     "Source" (wrap-fm-source (or source-ref ""))
-     "Bibliography" (wrap-fm-bibliography (or bibliography-html ""))}))
+        sheet (score-sheet-html geometry filename-map)]
+    (merge
+      {"ID (hidden)" (str "fm-score-" anki-key "-" direction)
+       "Front" (if (= direction "audio-front") sound sheet)
+       "Back" (if (= direction "audio-front") sheet sound)}
+      (build-links-field card settings))))
 
 (defn build-score-note
   "AnkiConnect note map for a score card. Remarks seeded empty on create;
@@ -715,56 +719,28 @@
     {:allowDuplicate true}
     {:allowDuplicate false :duplicateScope "deck"}))
 
-(defn fm-source-bib-fields
-  "FM-owned Source/Bibliography field values. FreeMemo owns both fields
-   unconditionally: the citation text under 'field' display mode, else \"\"
-   (the value lives inline in Front/Back/Text under 'append', or nowhere under
-   'off'). Writing \"\" is intentional so toggling display mode clears the
-   stale field."
-  [settings source-ref bibliography-html]
-  {"Source" (if (and (= (:source-display-mode settings) "field")
-                  (not (str/blank? source-ref)))
-              (wrap-fm-source source-ref) "")
-   "Bibliography" (if (and (= (:bibliography-display-mode settings) "field")
-                        (not (str/blank? bibliography-html)))
-                    (wrap-fm-bibliography bibliography-html) "")})
-
 (defn build-basic-content-fields
-  "FM-owned content fields for a Basic FreeMemo note: Front, Back, Source,
-   Bibliography. Excludes Remarks (user Anki-side space). Header prepends to
-   Front; source/bibliography append to Back under 'append' mode. Images stay
-   inline in Front/Back (no field split). Shared by add + update."
+  "FM-owned content fields for a Basic FreeMemo note: Front, Back, Links.
+   Excludes Remarks (user Anki-side space). Header prepends to Front. Images
+   stay inline in Front/Back (no field split). Shared by add + update."
   [card settings filename-map]
-  (let [{:keys [use-header header-text source-display-mode bibliography-display-mode]} settings
-        bibliography-html (or (:fm/bibliography-html card) (:bibliography-html settings))
-        source-ref (build-source-anchor card settings)
-        append-source? (and (= source-display-mode "append") (not (str/blank? source-ref)))
-        append-bib? (and (= bibliography-display-mode "append") (not (str/blank? bibliography-html)))
+  (let [{:keys [use-header header-text]} settings
         rw-front (rewrite-media-srcs (wrap-p (or (:flashcards/question card) "")) filename-map)
         rw-back (rewrite-media-srcs (wrap-p (or (:flashcards/answer card) "")) filename-map)
-        front-html (prepend-header rw-front use-header header-text)
-        back-html (cond-> rw-back
-                    append-source? (append-source source-ref)
-                    append-bib? (append-bibliography bibliography-html))]
-    (merge {"Front" front-html "Back" back-html}
-      (fm-source-bib-fields settings source-ref bibliography-html))))
+        front-html (prepend-header rw-front use-header header-text)]
+    (merge {"Front" front-html "Back" rw-back}
+      (build-links-field card settings))))
 
 (defn build-cloze-content-fields
-  "FM-owned content fields for a Cloze FreeMemo note: Text, Source,
-   Bibliography. Excludes Back Extra + Remarks (user Anki-side space). All
-   <img> stay in the Text field. Shared by add + update."
+  "FM-owned content fields for a Cloze FreeMemo note: Text, Links. Excludes
+   Back Extra + Remarks (user Anki-side space). All <img> stay in the Text
+   field. Shared by add + update."
   [card settings filename-map]
-  (let [{:keys [use-header header-text source-display-mode bibliography-display-mode]} settings
-        bibliography-html (or (:fm/bibliography-html card) (:bibliography-html settings))
-        source-ref (build-source-anchor card settings)
-        append-source? (and (= source-display-mode "append") (not (str/blank? source-ref)))
-        append-bib? (and (= bibliography-display-mode "append") (not (str/blank? bibliography-html)))
+  (let [{:keys [use-header header-text]} settings
         rw-cloze (rewrite-media-srcs (or (:flashcards/cloze card) "") filename-map)
-        cloze-html (cond-> (prepend-header rw-cloze use-header header-text)
-                     append-source? (append-source source-ref)
-                     append-bib? (append-bibliography bibliography-html))]
+        cloze-html (prepend-header rw-cloze use-header header-text)]
     (merge {"Text" cloze-html}
-      (fm-source-bib-fields settings source-ref bibliography-html))))
+      (build-links-field card settings))))
 
 (defn build-basic-note
   "AnkiConnect addNote map for a basic card → Basic FreeMemo. Remarks seeded
@@ -820,14 +796,13 @@
       cloze→Cloze FreeMemo, basic→Basic FreeMemo); no note-type/field config is
       read from settings.
       settings = {:deck :allow-dupes :use-header :header-text :tags
-                  :source-display-mode :bibliography-display-mode :bibliography-html}"
+                  :bibliography-html :app-base-url}"
      [cards settings]
      (let [new-cards (vec (filter #(nil? (:flashcards/anki_note_id %)) cards))
            ;; Re-push every previously-synced card on every push so changes to
-           ;; header text / use-header / source mode / tags propagate even when
-           ;; card body content was not edited. Anki-side timestamp checks
-           ;; can't see these settings, so optimizing here would silently drop
-           ;; legitimate updates.
+           ;; header text / use-header / tags propagate even when card body
+           ;; content was not edited. Anki-side timestamp checks can't see these
+           ;; settings, so optimizing here would silently drop legitimate updates.
            changed-cards (vec (filter #(some? (:flashcards/anki_note_id %)) cards))
            ;; Occlusion cards that actually carry group data (attached by
            ;; get-cards-for-sync); the same re-push-everything rule regenerates
@@ -842,7 +817,6 @@
                         " update=" (count changed-cards)
                         " occlusion=" (count io-cards)
                         " score=" (count score-cards)
-                        " mode=" (:source-display-mode settings)
                         " topic-title=" (pr-str (:topic-title settings))
                         " topic-kind=" (pr-str (:topic-kind settings))))
        (m/sp
@@ -1102,7 +1076,7 @@
    Always transitions to :recording — finalize-push! must run even when
    there are no new pairs, so settings/per-item preset still persist.
    settings = {:deck :allow-dupes :use-header :header-text :tags
-               :source-display-mode :bibliography-display-mode ...}
+               :bibliography-html :app-base-url ...}
    sync     = {:!phase :!result :!error :!push-pairs}"
   [cards settings sync]
   (let [{:keys [!phase !result !error !push-pairs]} sync]
