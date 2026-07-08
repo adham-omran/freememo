@@ -112,6 +112,8 @@
                       :table #{:flashcards} :views #{:card-mutations}}
      :gen-prompt     {:label "Generate with prompt…" :class :mutation :exec :ui-button
                       :when #{:viewer} :views #{}} ; opens dialog; the run bumps :generate
+     :compare-card-gen {:label "Compare card models" :class :mutation :exec :ui-button
+                        :when #{:viewer} :table #{:flashcards} :views #{:card-mutations}}
      :scan           {:label "Scan page (OCR)" :class :mutation :exec :ui-button
                       :bind "meta+shift+s" :when #{:viewer}
                       :table #{:topics} :views #{:refresh}}

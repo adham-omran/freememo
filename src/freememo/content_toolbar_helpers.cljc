@@ -37,6 +37,33 @@
                (str/join "\n\n---\n\n"))))))
      :cljs nil))
 
+;; Parent topic content for extract-mode context (moved here from
+;; content_toolbar_generate so build-gen-context* can share it).
+#?(:clj
+   (defn get-parent-content* [topic-id]
+     (when-let [pid (:topics/parent_id (db/get-topic topic-id))]
+       (or (:topics/content (db/get-topic pid)) ""))))
+
+;; Build {:content :context} for one card-generation run. Single source for the
+;; Generate / Generate-with-Prompt token blocks and the compare-models modal —
+;; the logic was previously duplicated at each token site.
+;; :content = cleaned selection HTML, else the full content-text.
+;; :context = prior-page (page mode) or parent (extract mode) content, or nil
+;;            when use-context is false.
+(defn build-gen-context* [{:keys [selection-html content-text context-mode use-context
+                                  topic-id root-topic-id page-number context-window]}]
+  #?(:clj
+     (let [sel-html (cleaner/clean-html selection-html)
+           context (when use-context
+                     (case context-mode
+                       :extract (if sel-html content-text (or (get-parent-content* topic-id) ""))
+                       :page (let [prev (get-context-pages* root-topic-id page-number context-window)]
+                               (if sel-html
+                                 (if prev (str prev "\n\n---\n\n" content-text) content-text)
+                                 prev))))]
+       {:content (or sel-html content-text) :context context})
+     :cljs nil))
+
 ;; Create an extract child topic — wrapped in try/catch outside e/defn.
 ;; Sanitize content: a manual extract creates a new topic from selected HTML;
 ;; the selection comes from the editor but may include pasted external content.

@@ -18,6 +18,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.content-toolbar-generate :refer [ToolbarGenerate]]
+   [freememo.card-compare :refer [CardCompareButton]]
    [freememo.content-toolbar-settings :as settings]
    [freememo.icons :as icons]
    [freememo.command-bus :as bus]))
@@ -82,7 +83,8 @@
       ;; rule hides the inline buttons but leaves the modal (a div) visible.
       (dom/div
         (dom/props {:class "toolbar-dropdown-sources"})
-        (ToolbarGenerate))
+        (ToolbarGenerate)
+        (CardCompareButton))
 
       ;; Visible dropdown — gated on llm-enabled so the trigger disappears
       ;; when LLM is unavailable (same gating as the original buttons).
@@ -176,5 +178,20 @@
                   (dom/On "click"
                     (fn [_]
                       (bus/dispatch! :gen-prompt)
+                      (reset! !open false))
+                    nil))
+
+                ;; Compare models — generate the same content with several
+                ;; models and pick the best set (bills per model).
+                (dom/button
+                  (dom/props {:class "toolbar-dropdown-item"
+                              :role "menuitem"
+                              :disabled no-content?
+                              :aria-label "Compare card models"})
+                  (icons/Icon :sparkles :size 16)
+                  (dom/span (dom/text "Compare models..."))
+                  (dom/On "click"
+                    (fn [_]
+                      (bus/dispatch! :compare-card-gen)
                       (reset! !open false))
                     nil))))))))))
