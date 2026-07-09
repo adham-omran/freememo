@@ -6,6 +6,7 @@
    [freememo.logging :as log]
    [freememo.commands :as commands]
    #?(:clj [freememo.cards :as cards])
+   #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.html-cleaner :as cleaner])
    #?(:clj [freememo.toasts :as toasts])
@@ -105,16 +106,19 @@
      (try
        (let [{:keys [content context card-type card-count user-id enc-key
                      topic-id root-topic-id pre-prompt]} item
+             ;; Per-document model override; falls back to the user's global
+             ;; default when the document has no selection (effective-card-model).
+             model (settings/effective-card-model user-id root-topic-id)
              gen-result (if (= card-type "basic")
                           (cards/generate-basic-cards
                             (cond-> {:content content :context context
                                      :card-count card-count :user-id user-id :enc-key enc-key
-                                     :topic-id topic-id}
+                                     :topic-id topic-id :model model}
                               pre-prompt (assoc :pre-prompt pre-prompt)))
                           (cards/generate-cloze-cards
                             (cond-> {:content content :context context
                                      :card-count card-count :user-id user-id :enc-key enc-key
-                                     :topic-id topic-id}
+                                     :topic-id topic-id :model model}
                               pre-prompt (assoc :pre-prompt pre-prompt))))]
          (if-not (:success gen-result)
            gen-result
