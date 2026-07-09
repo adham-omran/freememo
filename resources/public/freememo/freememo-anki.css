@@ -514,6 +514,12 @@ pre > code {
     text-align: left;
 }
 
+/* Links overrides the extra-block default to center, matching the card's
+   Front/Back/title; Remarks keeps the left-aligned .fm-extra default. */
+.fm-extra.fm-links {
+    text-align: center;
+}
+
 .fm-field-descr {
     margin-bottom: 0.2em;
     font-weight: bold;
