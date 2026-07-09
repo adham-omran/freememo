@@ -125,8 +125,12 @@
                       :style {:display "flex" :align-items "center" :gap "8px"}})
           (dom/span (dom/text "Socratic tutor ·"))
           (let [current (e/server (settings/get-assistant-model-for user-id root-topic-id))
+                default-id (e/server (settings/get-assistant-model user-id))
                 choices (e/server (settings/card-model-choices))
-                options (into [["" "Use my default"]] choices)
+                ;; Name the global default that "" resolves to, minus the
+                ;; "Provider · " prefix (registry labels are "Google · Gemini 3 Flash").
+                default-name (str/trim (last (str/split (get (into {} choices) default-id default-id) #"·")))
+                options (into [["" (str "Use my default (" default-name ")")]] choices)
                 !amodel (atom (e/snapshot (or current "")))
                 amodel (e/watch !amodel)]
             (dom/select
