@@ -352,11 +352,17 @@
       new field first makes the rename guard skip and strands the old field."
      [model-name renames removals]
      (m/sp
-       (let [present (fn [] (set (js->clj (m/? (anki-call! "modelFieldNames"
-                                                 {:modelName model-name})))))]
+       ;; current-fields! returns a TASK yielding the model's current field-name
+       ;; set — it must return a task, not the set directly. m/? only parks in
+       ;; the enclosing m/sp body; missionary does NOT rewrite ? across a fn
+       ;; boundary, so a bare (fn [] … (m/? …) …) never awaits the anki-call!
+       ;; task, and the un-awaited task flows into js->clj/set and throws
+       ;; "[object Object] is not ISeqable". Await with (m/? (current-fields!)).
+       (let [current-fields! (fn [] (m/sp (set (js->clj (m/? (anki-call! "modelFieldNames"
+                                                               {:modelName model-name}))))))]
          (loop [[[old new] & more] (seq renames)]
            (when old
-             (let [fields (present)]
+             (let [fields (m/? (current-fields!))]
                (when (and (fields old) (not (fields new)))
                  (log/log-debug (str "[anki-push] " model-name ": renaming field " old " → " new))
                  (m/? (anki-call! "modelFieldRename"
@@ -364,7 +370,7 @@
              (recur more)))
          (loop [[nm & more] (seq removals)]
            (when nm
-             (when ((present) nm)
+             (when ((m/? (current-fields!)) nm)
                (log/log-debug (str "[anki-push] " model-name ": removing field " nm))
                (m/? (anki-call! "modelFieldRemove"
                       {:modelName model-name :fieldName nm})))
