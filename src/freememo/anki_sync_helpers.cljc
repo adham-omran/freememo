@@ -279,13 +279,13 @@
   "<div class=\"fm-front\">{{Front}}</div>\n")
 
 (def basic-card-back
-  "{{FrontSide}}\n<hr id=answer>\n<div class=\"fm-back\">{{Back}}</div>\n{{#Links}}<div class=\"fm-extra\">{{Links}}</div>{{/Links}}\n{{#Remarks}}<div class=\"fm-extra\"><div class=\"fm-field-descr\">Remarks</div>{{Remarks}}</div>{{/Remarks}}\n")
+  "{{FrontSide}}\n<hr id=answer>\n<div class=\"fm-back\">{{Back}}</div>\n{{#Links}}<div class=\"fm-extra fm-links\">{{Links}}</div>{{/Links}}\n{{#Remarks}}<div class=\"fm-extra\"><div class=\"fm-field-descr\">Remarks</div>{{Remarks}}</div>{{/Remarks}}\n")
 
 (def cloze-card-front
   "<div class=\"fm-front\">{{cloze:Text}}</div>\n")
 
 (def cloze-card-back
-  "<div class=\"fm-front\">{{cloze:Text}}</div>\n{{#Back Extra}}<div class=\"fm-back\">{{Back Extra}}</div>{{/Back Extra}}\n{{#Links}}<div class=\"fm-extra\">{{Links}}</div>{{/Links}}\n{{#Remarks}}<div class=\"fm-extra\"><div class=\"fm-field-descr\">Remarks</div>{{Remarks}}</div>{{/Remarks}}\n")
+  "<div class=\"fm-front\">{{cloze:Text}}</div>\n{{#Back Extra}}<div class=\"fm-back\">{{Back Extra}}</div>{{/Back Extra}}\n{{#Links}}<div class=\"fm-extra fm-links\">{{Links}}</div>{{/Links}}\n{{#Remarks}}<div class=\"fm-extra\"><div class=\"fm-field-descr\">Remarks</div>{{Remarks}}</div>{{/Remarks}}\n")
 
 #?(:cljs
    (defn fetch-text!

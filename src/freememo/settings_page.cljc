@@ -56,91 +56,6 @@
   [active section-id]
   {:display (if (= active section-id) "block" "none")})
 
-(def ^:private anki-stylesheet-url "/freememo/freememo-anki.css")
-
-(e/defn AnkiCardStylesheetSection
-  "Settings → Anki Sync → Card Stylesheet sub-section. Surfaces
-   `freememo-anki.css` as a download / copy-to-clipboard / preview triple.
-
-   The stylesheet adds syntax-highlighted code-block rendering to Anki cards
-   produced from FreeMemo content (light + .nightMode dark palette).
-
-   Pre:  none (no user-id needed — the asset is static).
-   Post: download anchor triggers a save dialog; Copy CSS button writes the
-         text to clipboard; Show preview toggles an inline <pre> of the file."
-  []
-  (e/client
-    (let [!css-text (atom nil)
-          css-text (e/watch !css-text)
-          !copied? (atom false)
-          copied? (e/watch !copied?)
-          !preview-open? (atom false)
-          preview-open? (e/watch !preview-open?)
-          fetch-and-set! (fn [on-text]
-                           (-> (js/fetch anki-stylesheet-url)
-                             (.then #(.text %))
-                             (.then (fn [text]
-                                      (reset! !css-text text)
-                                      (when on-text (on-text text))))))]
-      (dom/div
-        (dom/props {:class "anki-settings-section"})
-        (dom/h4 (dom/props {:class "anki-settings-section-title"})
-          (dom/text "Card Stylesheet"))
-        (dom/div
-          (dom/props {:class "hint" :style {:margin-bottom "var(--sp-3)"}})
-          (dom/text "Styles code blocks in your Anki cards. Manually-edited cards keep per-token colours from highlight.js; LLM-generated cards fall back to a per-language tint. Includes light + .nightMode dark palettes. Paste into your note type's Styling box."))
-
-        (dom/div
-          (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :flex-wrap "wrap"}})
-
-          (dom/a
-            (dom/props {:href anki-stylesheet-url
-                        :download "freememo-anki.css"
-                        :class "btn btn-primary"
-                        :style {:text-decoration "none"}})
-            (dom/text "Download freememo-anki.css"))
-
-          (dom/button
-            (dom/props {:class "btn btn-secondary"})
-            (dom/text (if copied? "Copied!" "Copy CSS"))
-            (dom/On "click"
-              (fn [_]
-                (fetch-and-set!
-                  (fn [text]
-                    (-> (js/navigator.clipboard.writeText text)
-                      (.then (fn [_]
-                               (reset! !copied? true)
-                               (js/setTimeout #(reset! !copied? false) 2000)))))))
-              nil))
-
-          (dom/button
-            (dom/props {:class "btn btn-secondary"})
-            (dom/text (if preview-open? "Hide preview" "Show preview"))
-            (dom/On "click"
-              (fn [_]
-                (when (nil? @!css-text)
-                  (fetch-and-set! nil))
-                (swap! !preview-open? not))
-              nil)))
-
-        (dom/div
-          (dom/props {:class "hint" :style {:margin-top "10px"}})
-          (dom/text "Install: Anki → Tools → Manage Note Types → select your note type → Cards → Styling → paste."))
-
-        (when preview-open?
-          (dom/pre
-            (dom/props {:style {:max-height "400px"
-                                :overflow "auto"
-                                :background "var(--color-bg-subtle)"
-                                :padding "12px"
-                                :border "1px solid var(--color-border)"
-                                :border-radius "4px"
-                                :font-size "12px"
-                                :line-height "1.4"
-                                :margin-top "10px"
-                                :white-space "pre-wrap"}})
-            (dom/text (or css-text "Loading…"))))))))
-
 ;; Plugin .xpi download URL — points at the committed artifact in the repo.
 ;; /raw/ (not /blob/) so the browser downloads the binary instead of rendering
 ;; GitHub's HTML "binary file" preview page. Bump the version segment in the
@@ -489,11 +404,7 @@
                         (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
                           (dom/text "None (Manual)"))
                         (dom/div (dom/props {:class "hint"})
-                          (dom/text "Open the modal with default values; you set everything fresh each time.")))))))
-
-            ;; ── Card Stylesheet sub-section ──
-            ;; Downloadable CSS for users to paste into their Anki note type.
-              (AnkiCardStylesheetSection)))
+                          (dom/text "Open the modal with default values; you set everything fresh each time.")))))))))
 
       ;; ── Zotero section ─────────────────────────────────────────
           (dom/div
