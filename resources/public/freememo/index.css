@@ -1453,15 +1453,14 @@ textarea:hover {
    both themes: snow (card fields) and bubble (main doc editor). */
 .ql-editor { text-align: start; }
 
-/* Bubble floating toolbar (main doc editor, E1). It is positioned absolute
-   inside .ql-container, which scrolls (overflow-y:auto → overflow-x computes to
-   auto too), so a wide single-row tooltip overflows the narrow editor pane and
-   is clipped by the PDF pane. Cap it to the container width and wrap its
-   formats so it always fits — multi-row in a narrow pane, never clipped. */
+/* Bubble floating toolbar (main doc editor, E1). JS pins it to position:fixed
+   at paint time (install-unclipped-tooltip-positioning! in rich_text_editor) so
+   it escapes the editor's overflow ancestors (.ql-container overflow-y:auto, the
+   editor host/area and document-view row overflow:hidden) and is never clipped
+   by the hierarchy / pins / PDF panes. This cap keeps the box compact — formats
+   wrap into a squarish grid (~5/row) instead of a full-width strip — and the
+   z-index paints it over the pane toolbars. */
 .ql-bubble .ql-tooltip {
-    /* Cap to a compact box so the formats wrap into a squarish grid (~5/row)
-       instead of stretching to a full-width strip; still clamped to the pane
-       on narrow screens. */
     max-width: min(232px, calc(100% - 8px));
     white-space: normal;
     z-index: 20;
