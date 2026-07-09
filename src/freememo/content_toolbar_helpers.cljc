@@ -6,6 +6,7 @@
    [freememo.logging :as log]
    [freememo.commands :as commands]
    #?(:clj [freememo.cards :as cards])
+   #?(:clj [freememo.cards-from-facts :as cff])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.html-cleaner :as cleaner])
@@ -101,6 +102,40 @@
 ;; card-gen-status is per-user via (us/get-atom user-id :card-gen-status)
 ;; Shape: {topic-id {:active-id nil, :error nil, :pending 0}}
 
+;; Fact-aware routing — the KG→cards bridge. When the document has approved KG
+;; facts, Generate sources cards from the facts the passage supports, rendered
+;; to statement text; otherwise (no facts, or none relevant) it falls back to
+;; the passage's raw text — today's behavior, unchanged.
+#?(:clj
+   (defn resolve-gen-content
+     "Decide the text a Generate run feeds the card generator.
+      Pre:  `content` is the passage (cleaned selection HTML, else page text).
+      Post: {:content text :from-facts? bool} — :from-facts? true when the text
+            is rendered KG facts (context is then dropped); or a
+            {:success false :error … :error-type kw?} passthrough when fact
+            selection fails (e.g. out of credits)."
+     [content user-id root-topic-id]
+     (let [approved (db/get-kg-facts user-id root-topic-id "approved" nil)]
+       (if (empty? approved)
+         (do (log/log-info (str "Card gen: no KG facts for root=" root-topic-id "; raw-text path"))
+           {:content content :from-facts? false})
+         (let [sel (cff/select-relevant-facts user-id root-topic-id content approved)]
+           (cond
+             (not (:success sel))
+             (do (log/log-info (str "Card gen: fact selection failed root=" root-topic-id
+                                 " error=" (:error sel) "; no cards"))
+               sel)
+             (empty? (:facts sel))
+             (do (log/log-info (str "Card gen: " (count approved) " fact(s) present but none matched"
+                                 " passage root=" root-topic-id "; raw-text fallback"))
+               {:content content :from-facts? false})
+             :else
+             (let [rendered (cff/render-facts (:facts sel))]
+               (log/log-info (str "Card gen: sourcing cards from " (count (:facts sel)) "/"
+                               (count approved) " fact(s) root=" root-topic-id
+                               " ids=" (mapv :id (:facts sel)) "\n" rendered))
+               {:content rendered :from-facts? true})))))))
+
 #?(:clj
    (defn generate-and-save! [item]
      (try
@@ -109,20 +144,23 @@
              ;; Per-document model override; falls back to the user's global
              ;; default when the document has no selection (effective-card-model).
              model (settings/effective-card-model user-id root-topic-id)
-             gen-result (if (= card-type "basic")
-                          (cards/generate-basic-cards
-                            (cond-> {:content content :context context
-                                     :card-count card-count :user-id user-id :enc-key enc-key
-                                     :topic-id topic-id :model model}
-                              pre-prompt (assoc :pre-prompt pre-prompt)))
-                          (cards/generate-cloze-cards
-                            (cond-> {:content content :context context
-                                     :card-count card-count :user-id user-id :enc-key enc-key
-                                     :topic-id topic-id :model model}
-                              pre-prompt (assoc :pre-prompt pre-prompt))))]
-         (if-not (:success gen-result)
-           gen-result
-           (save-cards-for-topic topic-id root-topic-id card-type (:cards gen-result))))
+             resolved (resolve-gen-content content user-id root-topic-id)]
+         (if (false? (:success resolved))
+           resolved ;; fact-selection failure — carries :error-type for the toast
+           (let [gen-content (:content resolved)
+                 ;; Facts are self-contained; page/parent context would dilute
+                 ;; the facts-only source, so drop it on the fact path.
+                 gen-context (when-not (:from-facts? resolved) context)
+                 opts (cond-> {:content gen-content :context gen-context
+                               :card-count card-count :user-id user-id :enc-key enc-key
+                               :topic-id topic-id :model model}
+                        pre-prompt (assoc :pre-prompt pre-prompt))
+                 gen-result (if (= card-type "basic")
+                              (cards/generate-basic-cards opts)
+                              (cards/generate-cloze-cards opts))]
+             (if-not (:success gen-result)
+               gen-result
+               (save-cards-for-topic topic-id root-topic-id card-type (:cards gen-result))))))
        (catch Exception e
          {:success false :error (.getMessage e)}))))
 
@@ -154,9 +192,12 @@
                 uid (:user-id item)
                 !status (us/get-atom uid :card-gen-status)]
             (swap! !status update tid assoc :active-id (:id item) :error nil)
+            ;; 120s: the fact path (KG→cards bridge) runs a fact-selection call
+            ;; before the card-gen call + its retries — two LLM round-trips must
+            ;; fit the budget. Raw-text gen uses only the first half.
             (let [result (m/? (m/timeout
                                 (m/via m/blk (generate-and-save! item))
-                                60000
+                                120000
                                 {:success false :error "Card generation timed out"}))]
               (swap! !status update tid
                 (fn [s] (-> s
