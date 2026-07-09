@@ -49,6 +49,14 @@
        (attempt 50))
      :clj nil))
 
+(defn scroll-to-bottom!
+  "CLJS-only: pin `node`'s scroll position to its bottom. CLJ no-op.
+   `_dep` is a value Electric watches so the call re-fires when the transcript
+   changes (message added, thinking toggled). Plain defn for signal parity."
+  [node _dep]
+  #?(:cljs (set! (.-scrollTop node) (.-scrollHeight node))
+     :clj nil))
+
 (e/defn AssistantPanel [page-topic-id root-topic-id user-id]
   (e/client
     (let [!active (atom nil)
@@ -81,16 +89,21 @@
         (let [{:keys [text chat]} submit]
           (if (str/blank? text)
             (t)
-            (let [r (e/server (e/Offload
-                                #(assistant/ensure-and-send!
-                                   user-id root-topic-id page-topic-id chat text)))]
-              (case r
-                (do
-                  (reset! !active (:chat-id r)) ; select the (possibly new) chat
-                  (if (:ok r)
-                    (do (reset! !draft "") (reset! !error nil))
-                    (reset! !error (:error r)))
-                  (t)))))))
+            ;; Clear the composer immediately — the text is already snapshot in
+            ;; `submit`. Restored below if the send fails, so nothing is lost.
+            (do
+              (reset! !draft "")
+              (let [r (e/server (e/Offload
+                                  #(assistant/ensure-and-send!
+                                     user-id root-topic-id page-topic-id chat text)))]
+                (case r
+                  (do
+                    (reset! !active (:chat-id r)) ; select the (possibly new) chat
+                    (if (:ok r)
+                      (reset! !error nil)
+                      (do (reset! !error (:error r))
+                          (reset! !draft text)))
+                    (t))))))))
 
       (dom/div
         (dom/props {:class "assistant-panel"})
@@ -170,7 +183,10 @@
           (when sending?
             (dom/div
               (dom/props {:class "assistant-panel__thinking"})
-              (dom/text "Thinking…"))))
+              (dom/text "Thinking…")))
+          ;; Scroll to bottom when a message lands or "Thinking…" toggles —
+          ;; follows the user's turn down and then the reply.
+          (scroll-to-bottom! dom/node [(count messages) sending?]))
 
         (when error
           (dom/div
