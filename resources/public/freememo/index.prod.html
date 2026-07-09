@@ -40,6 +40,15 @@
 	<script src="https://cdn.jsdelivr.net/npm/wavesurfer.js@7.8.6/dist/plugins/regions.min.js"></script>
 	<script src="https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js"></script>
 
+	<!-- MathJax — renders $$…$$ display math in the AI assistant chat
+	     (freememo.assistant-panel). Config MUST precede the script; inline
+	     $…$ is disabled so prose dollar signs ("$5") aren't taken as math. -->
+	<script>
+	    window.MathJax = { tex: { displayMath: [['$$', '$$']], inlineMath: [] },
+			       options: { enableMenu: false } };
+	</script>
+	<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js"></script>
+
 	<!-- Ensure cache busting on deployment – inject main.BUILD-HASH.js -->
 	<!-- $key$ is a template string. See src-prod/prod.cljc/wrap-prod-index-page -->
 	<script defer type="text/javascript" src="/freememo/$:hyperfiddle.client.module/main$"></script>
