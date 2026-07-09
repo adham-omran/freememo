@@ -58,7 +58,7 @@
   #?(:clj nil
      :cljs
      (do
-       (when-let [{:keys [editor container toolbar import-popover-teardown a11y-observer]} @!editor-state]
+       (when-let [{:keys [editor container toolbar import-popover-teardown tooltip-teardown a11y-observer]} @!editor-state]
          (let [^js ed editor
                ^js ct container
                ^js tb toolbar]
@@ -67,6 +67,8 @@
            ;; Tear down the wiki-link import popover (element + document/window
            ;; listeners + status watch). Must run before innerHTML clear below.
            (when import-popover-teardown (import-popover-teardown))
+           ;; Remove the bubble-tooltip fixed-positioning scroll/resize listeners.
+           (when tooltip-teardown (tooltip-teardown))
            ;; Tear down the table action bar (appended to document.body)
            ;; and its window scroll/resize listeners. Idempotent; safe
            ;; even if table-ui/init! never ran.
@@ -193,64 +195,86 @@
          (when (.-parentNode pop) (.remove pop))))
      :clj nil))
 
-(defn- override-bubble-tooltip-position!
-  "Keep the bubble format tooltip visible for tall/multi-line selections.
+(defn- install-unclipped-tooltip-positioning!
+  "Make the bubble format tooltip escape every ancestor's overflow clipping.
 
-   Quill 2.0.3 anchors a multi-line selection's tooltip to the selection's LAST
-   line and places it just below (ui/tooltip.ts `position`, themes/bubble.ts
-   `EDITOR_CHANGE`). Cmd-A on a long document then drops the tooltip at the
-   bottom — often scrolled out of view. This wraps `tooltip.position` so that,
-   for multi-line selections, it re-anchors to the FIRST selected line (top of
-   selection) and clamps the tooltip into the editor pane's visible rect,
-   re-aiming the pointer arrow toward the (possibly off-screen) selection.
-   Single-line and empty selections keep Quill's native positioning.
+   Quill's `.ql-tooltip` is position:absolute inside `.ql-container`, which has
+   overflow-y:auto (→ overflow-x:auto per CSS spec); every editor ancestor up to
+   the document-view row is overflow:hidden. So any part of the tooltip past the
+   editor column is clipped — including the top edge, which Quill's native
+   position() never guards: it flips a container-bottom-overflowing tooltip ABOVE
+   the selection (themes/bubble.ts) but never clamps that flipped box against the
+   container top. A first-line or Cmd-A selection then shows a clipped toolbar.
+
+   Fix: after Quill positions the tooltip in its native (absolute) frame, freeze
+   the placed box into position:fixed at the same viewport coordinates and clamp
+   it on-screen. Fixed elements are not clipped by overflow ancestors — none of
+   the four clip boxes is a transform/filter/contain containing block — so the
+   tooltip floats freely over the panes/toolbars, fully visible, without covering
+   the document text below the selection. Quill's horizontal clamp to `bounds`
+   (the container) keeps it over the editor column; its arrow/flip are untouched.
+
+   Fixed no longer rides the container's scroll, so this also re-positions the
+   tooltip on editor scroll and window resize while it is visible.
 
    Pre:  `editor` is an initialized bubble-theme Quill whose theme.tooltip.position
          is a fn (init-editor! just constructed it).
-   Post: that method is replaced; the original is delegated to for the horizontal
-         shift + arrow-marginLeft alignment. No teardown — the tooltip element is
-         destroyed with the editor in destroy-editor!."
+   Post: tooltip.position is wrapped; a capture-phase document `scroll` and a
+         window `resize` listener are installed. Returns a teardown fn removing
+         both; the tooltip element itself dies with the editor in destroy-editor!."
   [editor]
   #?(:clj nil
      :cljs
      (let [^js ed      editor
            ^js theme   (.-theme ed)
            ^js tooltip (and theme (.-tooltip theme))]
-       (when (and tooltip (fn? (.-position tooltip)))
+       (if-not (and tooltip (fn? (.-position tooltip)))
+         (fn [])                                       ; nothing installed → no-op teardown
          (let [^js orig-position (.-position tooltip)
                ^js root          (.-root tooltip)
-               margin            8]                    ; px gap kept from the pane edge
+               margin            8                     ; px kept from the viewport edge
+               freeze-to-fixed!  ; absolute placement → fixed viewport coords, on-screen
+               (fn []
+                 (let [^js rr (.getBoundingClientRect root)
+                       vw     (.-innerWidth js/window)
+                       vh     (.-innerHeight js/window)
+                       w      (.-width rr)
+                       h      (.-height rr)
+                       left   (max margin (min (.-left rr) (- vw w margin)))
+                       top    (max margin (min (.-top rr)  (- vh h margin)))]
+                   (set! (.. root -style -position) "fixed")
+                   (set! (.. root -style -left) (str left "px"))
+                   (set! (.. root -style -top)  (str top "px"))))]
            (set! (.-position tooltip)
              (fn [reference]
                (this-as this
+                 ;; Revert last frame's fixed override so Quill's own clamp math
+                 ;; (getBoundingClientRect vs bounds) runs in the absolute frame
+                 ;; it assumes.
+                 (set! (.. root -style -position) "")
                  (let [^js range (.getSelection ed)
                        ^js lines (when (and range (pos? (.-length range)))
-                                   (.getLines ed (.-index range) (.-length range)))]
-                   (if-not (and lines (> (.-length lines) 1))
-                     ;; Single-line / no selection: Quill's native positioning.
-                     (.call orig-position this reference)
-                     ;; Multi-line: anchor to the first selected line, then clamp
-                     ;; the placed box into the editor pane's visible rect.
-                     (let [^js top-ref (.getBounds ed (.-index range) 0)
-                           shift       (.call orig-position this top-ref)
-                           ^js rr      (.getBoundingClientRect root)
-                           ^js cr      (.getBoundingClientRect (.-container ed))
-                           cur-top     (js/parseFloat (.. root -style -top))
-                           over-top    (- (+ (.-top cr) margin) (.-top rr))       ; >0 ⇒ box above view
-                           over-bottom (- (.-bottom rr) (- (.-bottom cr) margin)) ; >0 ⇒ box below view
-                           delta       (cond
-                                         (pos? over-top)    over-top
-                                         (pos? over-bottom) (- over-bottom)
-                                         :else              0)]
-                       (when-not (zero? delta)
-                         (set! (.. root -style -top) (str (+ cur-top delta) "px"))
-                         ;; Re-aim arrow toward the off-view selection:
-                         ;; pushed down ⇒ selection above ⇒ arrow up (no flip);
-                         ;; pushed up   ⇒ selection below ⇒ arrow down (flip).
-                         (if (pos? delta)
-                           (.remove (.-classList root) "ql-flip")
-                           (.add (.-classList root) "ql-flip")))
-                       shift)))))))))))
+                                   (.getLines ed (.-index range) (.-length range)))
+                       ;; Multi-line: anchor to the FIRST selected line so a tall
+                       ;; selection (Cmd-A) doesn't drop the tooltip off the last.
+                       ^js the-ref (if (and lines (> (.-length lines) 1))
+                                     (.getBounds ed (.-index range) 0)
+                                     reference)
+                       shift (.call orig-position this the-ref)]
+                   (freeze-to-fixed!)
+                   shift))))
+           (let [reposition!
+                 (fn [_]
+                   (when-not (.contains (.-classList root) "ql-hidden")
+                     (let [^js range (.getSelection ed)]
+                       (when (and range (pos? (.-length range)))
+                         (let [^js b (.getBounds ed (.-index range) (.-length range))]
+                           (.position tooltip b))))))]
+             (.addEventListener js/document "scroll" reposition! true) ; capture: catch editor-pane scroll
+             (.addEventListener js/window "resize" reposition!)
+             (fn teardown []
+               (.removeEventListener js/document "scroll" reposition! true)
+               (.removeEventListener js/window "resize" reposition!))))))))
 
 (defn- setup-mobile-keyboard-suppression!
   "On touch devices, suppress virtual keyboard until double-tap.
@@ -478,10 +502,10 @@
          (reset! !editor-state {:editor editor :container container
                                 :topic-id topic-id :toolbar nil
                                 :a11y-observer (install-content-a11y! editor)
-                                :import-popover-teardown (setup-link-import-popover! editor)})
+                                :import-popover-teardown (setup-link-import-popover! editor)
+                                :tooltip-teardown (install-unclipped-tooltip-positioning! editor)})
          (setup-mobile-keyboard-suppression! editor)
          (table-ui/init! editor)
-         (override-bubble-tooltip-position! editor)
          ;; Bubble's toolbar lives in the floating .ql-tooltip inside the
          ;; container — label its pickers/buttons.
          (a11y/label-quill-toolbar! container)
