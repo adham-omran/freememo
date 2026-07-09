@@ -15,7 +15,6 @@
    [clojure.string :as str]
    #?(:clj [freememo.assistant :as assistant])
    #?(:clj [freememo.settings :as settings])
-   #?(:clj [freememo.card-models :as card-models])
    #?(:clj [freememo.user-state :as us])))
 
 (defn- submit-edit
@@ -39,8 +38,6 @@
           assistant-rev (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
           chats (e/server (vec (assistant/chats* assistant-rev user-id root-topic-id)))
           messages (e/server (vec (or (assistant/messages* assistant-rev user-id active) [])))
-          model-label (e/server (:label (card-models/resolve-model
-                                          (settings/get-assistant-model user-id))))
           sending? (some? t)]
 
       ;; Send effect: fires when a submit payload is produced (Send / Enter).
@@ -88,9 +85,28 @@
               (when (some? v)
                 (reset! !active (when (seq v) (js/parseInt v 10)))
                 (reset! !error nil)))))
+        ;; Per-document assistant model. "" = use my global default.
         (dom/div
-          (dom/props {:class "assistant-panel__model"})
-          (dom/text (str "Socratic tutor · " (or model-label "AI"))))
+          (dom/props {:class "assistant-panel__model"
+                      :style {:display "flex" :align-items "center" :gap "8px"}})
+          (dom/span (dom/text "Socratic tutor ·"))
+          (let [current (e/server (settings/get-assistant-model-for user-id root-topic-id))
+                choices (e/server (settings/card-model-choices))
+                options (into [["" "Use my default"]] choices)
+                !amodel (atom (e/snapshot (or current "")))
+                amodel (e/watch !amodel)]
+            (dom/select
+              (dom/props {:class "select"})
+              (e/for [[v label] (e/diff-by first options)]
+                (dom/option (dom/props {:value v :selected (= v amodel)}) (dom/text label)))
+              (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                    [mt _] (e/Token change-event)]
+                (when (some? change-event)
+                  (reset! !amodel change-event))
+                (when mt
+                  (let [r (e/server (e/Offload #(settings/save-assistant-model-for user-id root-topic-id change-event)))]
+                    (case r
+                      (if (:success r) (mt) (mt (:error r))))))))))
 
         ;; Transcript (message #1, the page context, is skipped via rest).
         (dom/div

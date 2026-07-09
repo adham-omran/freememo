@@ -89,7 +89,8 @@
           (do
             (db/insert-assistant-message! chat-id "user" user-text)
             (bump! user-id) ; show the learner's turn immediately
-            (let [model-id (settings/get-assistant-model user-id)
+            (let [model-id (settings/effective-assistant-model
+                             user-id (:assistant_chats/root_topic_id chat))
                   entry (or (card-models/resolve-model model-id)
                           (card-models/resolve-model settings/assistant-default-model-id))
                   slug (:openrouter-model entry)]

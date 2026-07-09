@@ -60,6 +60,36 @@
           (dom/option (dom/props {:value v :selected (= v current)}) (dom/text label)))))
     (e/amb)))
 
+(e/defn DocCardModelSelect
+  "Per-document card-generation model. \"\" = use my global default. Document-scoped
+   (keyed by root-topic-id), applies to every kind. Autosaves on change — sits in
+   the modal's shared section beside the priority stepper, which also autosaves,
+   so it is not part of the PDF/non-PDF Forms."
+  [user-id root-topic-id]
+  (e/client
+    (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
+          current (e/server (do settings-refresh (settings/get-card-model user-id root-topic-id)))
+          choices (e/server (settings/card-model-choices))
+          options (into [["" "Use my default"]] choices)
+          !model (atom (e/snapshot (or current "")))
+          model (e/watch !model)]
+      (dom/div
+        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
+        (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
+          (dom/text "Card generation model"))
+        (dom/select
+          (dom/props {:class "input" :style {:width "100%"}})
+          (e/for [[v label] (e/diff-by first options)]
+            (dom/option (dom/props {:value v :selected (= v model)}) (dom/text label)))
+          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                [t _] (e/Token change-event)]
+            (when (some? change-event)
+              (reset! !model change-event))
+            (when t
+              (let [r (e/server (e/Offload #(settings/save-card-model user-id root-topic-id change-event)))]
+                (case r
+                  (if (:success r) (t) (t (:error r))))))))))))
+
 (e/defn CustomPromptField
   "Editable per-item Custom Prompt, appended to the effective system prompt for
    this item and everything under it. Atom is the truth; the Form's :Parse reads
@@ -267,6 +297,9 @@
 
           ;; Bibliography — item-scoped Edit / Refetch / Push-to-children.
           (BibliographySection user-id bib-topic-id !open !show-bib show-edit?)
+
+          ;; Card-generation model — document-scoped (root-topic-id), all kinds.
+          (DocCardModelSelect user-id root-topic-id)
 
           (if is-pdf?
             (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
