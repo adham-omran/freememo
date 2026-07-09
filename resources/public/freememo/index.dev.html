@@ -42,12 +42,16 @@
 
         <!-- MathJax — renders $…$ and $$…$$ math in the AI assistant chat
              (freememo.assistant-panel). Config MUST precede the script.
-             processEscapes lets a literal \$ stay a dollar sign. -->
+             processEscapes lets a literal \$ stay a dollar sign.
+             startup.typeset=false disables the initial whole-page typeset: the
+             transcript is empty at load and messages arrive later over the wire,
+             so assistant-panel's typeset! is the sole (idempotent) renderer. -->
         <script>
             window.MathJax = { tex: { inlineMath: [['$', '$'], ['\\(', '\\)']],
                                       displayMath: [['$$', '$$'], ['\\[', '\\]']],
                                       processEscapes: true },
-                               options: { enableMenu: false } };
+                               options: { enableMenu: false },
+                               startup: { typeset: false } };
         </script>
         <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js"></script>
 

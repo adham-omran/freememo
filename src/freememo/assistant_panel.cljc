@@ -26,18 +26,27 @@
       {:id (str (random-uuid)) :text text :chat @active-atom})))
 
 (defn typeset!
-  "CLJS-only: (re)typeset MathJax `$$…$$` display math over `node`. CLJ no-op.
-   Call AFTER node's innerHTML is set — re-typeset re-reads the source `$$…$$`
+  "CLJS-only: render MathJax math ($…$ inline, $$…$$ display) in `node`. CLJ no-op.
+   Call AFTER node's innerHTML is set; re-typeset re-reads the source delimiters
    (which the fresh innerHTML restored), so re-renders never nest math.
+
+   MathJax loads async from a CDN and Electric mounts each message frame once
+   (work-skipping), so a one-shot typeset silently no-ops for any message already
+   on screen while the script is still loading — the common case when an existing
+   chat is opened on page load. Retry on a short timer until MathJax is ready,
+   bounded (~5s) so a blocked CDN can't leak a forever-timer.
+
    Plain defn so the reader conditional stays invisible to Electric's reactive
-   compiler (CLJ/CLJS signal parity). No-ops until the async MathJax CDN script
-   has defined window.MathJax.typesetPromise; a message shown before that loads
-   stays unparsed until its next typeset (reply latency ≫ script load, so first
-   paint is effectively always post-load)."
+   compiler (CLJ/CLJS signal parity)."
   [node]
-  #?(:cljs (when-let [mj (.-MathJax js/window)]
-             (when (fn? (.-typesetPromise mj))
-               (.typesetPromise mj #js [node])))
+  #?(:cljs
+     (letfn [(attempt [tries]
+               (let [mj (.-MathJax js/window)]
+                 (cond
+                   (and mj (fn? (.-typesetPromise mj))) (.typesetPromise mj #js [node])
+                   (pos? tries) (js/setTimeout #(attempt (dec tries)) 100)
+                   :else nil)))]
+       (attempt 50))
      :clj nil))
 
 (e/defn AssistantPanel [page-topic-id root-topic-id user-id]
