@@ -216,6 +216,27 @@
                         :card-count (count cards)
                         :has-bibliography (some? bib-text)}}
         "get-cards-for-sync resolved")
+      ;; TEMP (anki-sync-bug): dump outgoing payload SHAPE (types + presence,
+      ;; no bodies) so a client-side seq-on-JS-object crash can be traced to the
+      ;; offending field. A JSON column arriving unparsed (String/PGobject
+      ;; instead of a map) is the prime suspect. Remove once the crash is found.
+      ;; Self-contained try: a diagnostic must never fail the fetch it observes.
+      (try
+        (tel/log! {:level :info
+                   :id ::get-cards-for-sync.payload
+                   :data {:card-shapes
+                          (mapv (fn [c]
+                                  {:id (:flashcards/id c)
+                                   :kind (:flashcards/kind c)
+                                   :io-fields-type (some-> (:flashcards/io_fields c) type .getName)
+                                   :has-occlusion-group (contains? c :occlusion-group)
+                                   :has-score-group (contains? c :score-group)
+                                   :bib-html-type (some-> (:fm/bibliography-html c) type .getName)})
+                            cards)
+                          :bibliography-html-type (some-> bib-html type .getName)
+                          :bibliography-text-type (some-> bib-text type .getName)}}
+          "get-cards-for-sync payload shape")
+        (catch Exception _ nil))
       {:success true
        :cards cards
        :topic-title (:topics/title root-topic)
@@ -225,6 +246,22 @@
     (catch Exception e
       (tel/error! {:id ::get-cards-for-sync} e)
       {:success false :error (.getMessage e)})))
+
+(defn log-client-sync-error!
+  "Record a client-side Anki sync exception in the server log. Push/pull run
+   entirely in the browser, so a CLJS throw never reaches server logs on its
+   own — the client ships the caught error here from its failure handler.
+   Gates on :source :client: server-origin failures are already logged at
+   their throw site and must NOT be re-recorded, so a :server (or nil) detail
+   is a no-op. Returns nil.
+   detail: {:message :stack :source :phase :deck :card-count :topic-kind ...}"
+  [user-id topic-id detail]
+  (when (= :client (:source detail))
+    (tel/log! {:level :error
+               :id ::client-sync-error
+               :data (assoc detail :user-id user-id :topic-id topic-id)}
+      "client sync error"))
+  nil)
 
 (defn record-pushed-notes
   "After push, bulk-save Anki note IDs.

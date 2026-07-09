@@ -1096,7 +1096,13 @@
               (reset! !push-pairs (vec (:pairs result)))
               (reset! !phase :recording))
             (fn [err]
-              (reset! !error (.-message err))
+              (reset! !error {:message (.-message err)
+                              :stack (.-stack err)
+                              :source :client
+                              :phase :push
+                              :deck (:deck settings)
+                              :card-count (count cards)
+                              :topic-kind (:topic-kind settings)})
               (reset! !phase :error)))
          nil)
        :clj nil)))
@@ -1117,7 +1123,11 @@
                                          :deleted (:deleted result)})
                   (reset! !phase :recording))))
             (fn [err]
-              (reset! !error (.-message err))
+              (reset! !error {:message (.-message err)
+                              :stack (.-stack err)
+                              :source :client
+                              :phase :pull
+                              :card-count (count cards)})
               (reset! !phase :error)))
          nil)
        :clj nil)))

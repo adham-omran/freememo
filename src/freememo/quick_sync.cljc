@@ -95,7 +95,7 @@
 (e/defn QuickSyncOutcome
   "Steps f–g: success/error outcome toasts and connection-failure toast. Each
    clears !running? so the next shortcut press can start a fresh run."
-  [user-id conn sync !trigger !running?]
+  [user-id selected-doc conn sync !trigger !running?]
   (e/client
     (let [trigger (e/watch !trigger)
           conn-status (e/watch (:!status conn))
@@ -113,8 +113,12 @@
       (when (= sync-phase :error)
         (let [[t _] (e/Token [:qs-error trigger])]
           (when t
-            (case (e/server (push-toast!* user-id :error (str "Anki sync failed: " sync-error)))
-              (do (reset! !running? false) (t))))))
+            ;; Nested case sequences the two server effects — sibling e/server
+            ;; calls in a do get their intermediate side-effects work-skipped.
+            ;; log-client-sync-error! no-ops unless the error is :client-origin.
+            (case (e/server (sync/log-client-sync-error! user-id selected-doc sync-error))
+              (case (e/server (push-toast!* user-id :error (str "Anki sync failed: " (:message sync-error))))
+                (do (reset! !running? false) (t)))))))
       (when (= conn-status :error)
         (let [[t _] (e/Token [:qs-conn-error trigger])]
           (when t
@@ -135,7 +139,7 @@
     (QuickSyncConnectAndPush user-id selected-doc conn form sync !trigger !prefs-applied?)
     ;; (e) Reuse the modal's DOM-free phase machine: fetch cards → push → finalize.
     (panels/AnkiSyncExecutor user-id selected-doc conn form sync)
-    (QuickSyncOutcome user-id conn sync !trigger !running?)))
+    (QuickSyncOutcome user-id selected-doc conn sync !trigger !running?)))
 
 (e/defn QuickSyncButton
   "Hidden host button for the :quick-sync command (Cmd-Shift-Opt-X or palette).
