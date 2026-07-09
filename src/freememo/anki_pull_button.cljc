@@ -30,7 +30,7 @@
                             (and (pos? u) (pos? d)) (str "Pulled — " u " updated, " d " deleted")
                             (pos? u) (str "Pulled — " u " updated")
                             :else (str "Pulled — " d " deleted")))
-                  :error (str "Pull failed: " (or pull-error "error"))
+                  :error (str "Pull failed: " (or (:message pull-error) "error"))
                   "Pull from Anki")]
 
       (dom/button
@@ -41,7 +41,7 @@
                     :disabled in-flight?
                     :aria-label "Pull from Anki"
                     :data-tooltip (case pull-phase
-                                    :error (or pull-error "Pull failed")
+                                    :error (or (:message pull-error) "Pull failed")
                                     "Pull edits from Anki for this document.")})
         (icons/Icon :cloud-download :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text label))
@@ -63,13 +63,24 @@
                                         :topic-id nil
                                         :root-topic-id root-topic-id}))]
           (if-not (:success cards-result)
-            (do (reset! !pull-error (:error cards-result))
+            (do (reset! !pull-error {:message (:error cards-result) :source :server})
               (reset! !pull-phase :error))
             (anki/run-pull! (:cards cards-result)
               {:!phase !pull-phase
                :!result !pull-result
                :!error !pull-error
                :!pull-updates !pull-updates}))))
+
+      ;; Phase :error — ship a client-origin pull exception (browser stack +
+      ;; context) to the server log. Re-fires per error episode: the block
+      ;; unmounts when pull-phase leaves :error, so a fresh Token is minted on
+      ;; the next failure. No-op for server-origin errors (logger gates on
+      ;; :source :client).
+      (when (= pull-phase :error)
+        (let [[t _] (e/Token ::pull-error-report)]
+          (when t
+            (case (e/server (sync/log-client-sync-error! user-id root-topic-id pull-error))
+              (t)))))
 
       ;; Phase :recording — single e/server call applies updates and bumps
       ;; sync-mutations atomically (Electric drops sibling intermediate
@@ -84,6 +95,6 @@
               (when (some? result)
                 (if (:success result)
                   (case (e/client (reset! !pull-phase :done)) (t))
-                  (case (e/client (reset! !pull-error (:error result))
+                  (case (e/client (reset! !pull-error {:message (:error result) :source :server})
                           (reset! !pull-phase :error))
                     (t)))))))))))

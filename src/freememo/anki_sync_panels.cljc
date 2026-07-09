@@ -102,7 +102,7 @@
             (if (:success result)
               (do (reset! !phase :done)
                 (token))
-              (do (reset! !error (:error result))
+              (do (reset! !error {:message (:error result) :source :server})
                 (reset! !phase :error)
                 (token)))))))
 
@@ -118,7 +118,7 @@
                                         :topic-id dctx/topic-id
                                         :root-topic-id selected-doc}))]
           (if-not (:success cards-result)
-            (do (reset! !error (:error cards-result))
+            (do (reset! !error {:message (:error cards-result) :source :server})
               (reset! !phase :error))
             (let [cards (:cards cards-result)
                   ;; Override mount-time topic info with fresh values from
