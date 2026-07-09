@@ -216,27 +216,6 @@
                         :card-count (count cards)
                         :has-bibliography (some? bib-text)}}
         "get-cards-for-sync resolved")
-      ;; TEMP (anki-sync-bug): dump outgoing payload SHAPE (types + presence,
-      ;; no bodies) so a client-side seq-on-JS-object crash can be traced to the
-      ;; offending field. A JSON column arriving unparsed (String/PGobject
-      ;; instead of a map) is the prime suspect. Remove once the crash is found.
-      ;; Self-contained try: a diagnostic must never fail the fetch it observes.
-      (try
-        (tel/log! {:level :info
-                   :id ::get-cards-for-sync.payload
-                   :data {:card-shapes
-                          (mapv (fn [c]
-                                  {:id (:flashcards/id c)
-                                   :kind (:flashcards/kind c)
-                                   :io-fields-type (some-> (:flashcards/io_fields c) type .getName)
-                                   :has-occlusion-group (contains? c :occlusion-group)
-                                   :has-score-group (contains? c :score-group)
-                                   :bib-html-type (some-> (:fm/bibliography-html c) type .getName)})
-                            cards)
-                          :bibliography-html-type (some-> bib-html type .getName)
-                          :bibliography-text-type (some-> bib-text type .getName)}}
-          "get-cards-for-sync payload shape")
-        (catch Exception _ nil))
       {:success true
        :cards cards
        :topic-title (:topics/title root-topic)
