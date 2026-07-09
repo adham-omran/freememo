@@ -8,6 +8,7 @@
    down the topic tree. Style persists via copy-text/save-style!* (bumps
    :settings-refresh so Copy-text re-reads)."
   (:require
+   [clojure.string :as str]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
@@ -69,8 +70,12 @@
   (e/client
     (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
           current (e/server (do settings-refresh (settings/get-card-model user-id root-topic-id)))
+          default-id (e/server (settings/get-model user-id))
           choices (e/server (settings/card-model-choices))
-          options (into [["" "Use my default"]] choices)
+          ;; Name the global default that "" resolves to, minus the
+          ;; "Provider · " prefix (registry labels are "OpenAI · GPT-5.1").
+          default-name (str/trim (last (str/split (get (into {} choices) default-id default-id) #"·")))
+          options (into [["" (str "Use my default (" default-name ")")]] choices)
           !model (atom (e/snapshot (or current "")))
           model (e/watch !model)]
       (dom/div
