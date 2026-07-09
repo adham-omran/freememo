@@ -2435,16 +2435,17 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     line-height: 1.5;
     padding: 8px 10px;
     border-radius: 10px;
-    white-space: pre-wrap;
     word-break: break-word;
     max-width: 92%;
 }
 
+/* User messages are literal typed text — preserve their newlines. */
 .assistant-msg--user {
     align-self: flex-end;
     background: var(--color-primary, #2563eb);
     color: #fff;
     border-bottom-right-radius: 3px;
+    white-space: pre-wrap;
 }
 
 .assistant-msg--assistant {
@@ -2453,6 +2454,22 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     color: var(--color-text-primary);
     border-bottom-left-radius: 3px;
 }
+
+/* Assistant messages are rendered Markdown (block elements). Let the blocks
+   own the spacing; white-space:normal (the base default) drops the source
+   newlines flexmark emits between tags, which otherwise stacked as blank
+   lines on top of each block's margins. */
+.assistant-msg--assistant > :first-child { margin-top: 0; }
+.assistant-msg--assistant > :last-child { margin-bottom: 0; }
+.assistant-msg--assistant p,
+.assistant-msg--assistant ul,
+.assistant-msg--assistant ol,
+.assistant-msg--assistant pre,
+.assistant-msg--assistant blockquote { margin: 0.5em 0; }
+.assistant-msg--assistant ul,
+.assistant-msg--assistant ol { padding-left: 1.4em; }
+.assistant-msg--assistant li { margin: 0.15em 0; }
+.assistant-msg--assistant pre { white-space: pre-wrap; overflow-x: auto; }
 
 .assistant-panel__thinking {
     align-self: flex-start;
