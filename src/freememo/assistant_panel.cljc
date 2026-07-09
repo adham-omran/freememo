@@ -14,6 +14,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
    #?(:clj [freememo.assistant :as assistant])
+   #?(:clj [freememo.markdown :as markdown])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])))
 
@@ -23,6 +24,21 @@
   (let [text (str/trim @draft-atom)]
     (when-not (str/blank? text)
       {:id (str (random-uuid)) :text text :chat @active-atom})))
+
+(defn typeset!
+  "CLJS-only: (re)typeset MathJax `$$…$$` display math over `node`. CLJ no-op.
+   Call AFTER node's innerHTML is set — re-typeset re-reads the source `$$…$$`
+   (which the fresh innerHTML restored), so re-renders never nest math.
+   Plain defn so the reader conditional stays invisible to Electric's reactive
+   compiler (CLJ/CLJS signal parity). No-ops until the async MathJax CDN script
+   has defined window.MathJax.typesetPromise; a message shown before that loads
+   stays unparsed until its next typeset (reply latency ≫ script load, so first
+   paint is effectively always post-load)."
+  [node]
+  #?(:cljs (when-let [mj (.-MathJax js/window)]
+             (when (fn? (.-typesetPromise mj))
+               (.typesetPromise mj #js [node])))
+     :clj nil))
 
 (e/defn AssistantPanel [page-topic-id root-topic-id user-id]
   (e/client
@@ -37,7 +53,16 @@
           error (e/watch !error)
           assistant-rev (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
           chats (e/server (vec (assistant/chats* assistant-rev user-id root-topic-id)))
-          messages (e/server (vec (or (assistant/messages* assistant-rev user-id active) [])))
+          ;; Assistant replies are Markdown + `$$…$$` display math; render them
+          ;; as HTML (client injects + MathJax typesets). User rows are the
+          ;; learner's own literal text — left untouched, shown via dom/text.
+          messages (e/server
+                     (mapv (fn [m]
+                             (if (= "assistant" (:assistant_messages/role m))
+                               (assoc m :assistant_messages/content-html
+                                 (markdown/parse-markdown (:assistant_messages/content m)))
+                               m))
+                       (or (assistant/messages* assistant-rev user-id active) [])))
           sending? (some? t)]
 
       ;; Send effect: fires when a submit payload is produced (Send / Enter).
@@ -117,10 +142,18 @@
                 (dom/props {:class "assistant-panel__hint"})
                 (dom/text "Ask a question about this page and I'll help you think it through."))
               (e/for-by :assistant_messages/id [m visible]
-                (dom/div
-                  (dom/props {:class (str "assistant-msg assistant-msg--"
-                                       (:assistant_messages/role m))})
-                  (dom/text (:assistant_messages/content m))))))
+                (if (= "assistant" (:assistant_messages/role m))
+                  ;; Assistant: inject rendered Markdown HTML, then typeset math.
+                  ;; dir="auto" keeps RTL replies right-aligned.
+                  (dom/div
+                    (dom/props {:class "assistant-msg assistant-msg--assistant" :dir "auto"})
+                    (set! (.-innerHTML dom/node) (or (:assistant_messages/content-html m) ""))
+                    (typeset! dom/node))
+                  ;; User: literal text, no Markdown/math.
+                  (dom/div
+                    (dom/props {:class (str "assistant-msg assistant-msg--"
+                                         (:assistant_messages/role m))})
+                    (dom/text (:assistant_messages/content m)))))))
           (when sending?
             (dom/div
               (dom/props {:class "assistant-panel__thinking"})
