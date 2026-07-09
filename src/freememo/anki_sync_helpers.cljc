@@ -289,13 +289,20 @@
 
 #?(:cljs
    (defn fetch-text!
-     "Missionary task: GET a same-origin URL, resolve to the body text."
+     "Missionary task: GET a same-origin URL, resolve to the body text.
+
+      Uses cache: no-store so the request always hits the network. The sole
+      caller fetches the app-owned stylesheet for the ensure-*-model! drift
+      check; that check is only correct against the CURRENT served CSS. The
+      asset is served with Cache-Control max-age, so a plain fetch would read
+      a stale browser-cached copy — which the check would then push to Anki,
+      silently reverting a freshly deployed stylesheet."
      [url]
      (from-future
        (fn [token]
          (let [ctrl (js/AbortController.)]
            (.finally token #(.abort ctrl))
-           (-> (js/fetch url (clj->js {:signal (.-signal ctrl)}))
+           (-> (js/fetch url (clj->js {:signal (.-signal ctrl) :cache "no-store"}))
              (.then (fn [resp]
                       (when-not (.-ok resp)
                         (throw (js/Error. (str "HTTP " (.-status resp) " fetching " url))))
