@@ -998,13 +998,13 @@
                 (dom/text "")))))))))
 
 ;; Virtual-scrolled body
-(e/defn CardsTableBody [cards-vec card-count row-height font-sz filters-active?
+(e/defn CardsTableBody [cards-vec card-count row-height font-sz filters-active? scroll-reset-key
                         navigate! !editing-card !diff-card !selected selected
                         user-id anki-overlay]
   (e/client
     (dom/div
       (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
-      (let [[offset limit] (Scroll-window row-height card-count dom/node {:overquery-factor 2})]
+      (let [[offset limit] (Scroll-window row-height card-count dom/node {:overquery-factor 2 :reset-key scroll-reset-key})]
         (dom/props {:class "tape-scroll table-frame-body"
                     ;; C1c per-row transform positioning (see .tape-scroll in index.css):
                     ;; --count → table height (scroll range), --grid-cols → the row grid.
@@ -1064,7 +1064,7 @@
       (BulkDeleteConfirmModal user-id !confirm-bulk-delete !selected !action-result))))
 
 ;; Fixed header + virtual-scrolled body pair.
-(e/defn CardsTables [user-id navigate! result row-height font-sz filters-active?
+(e/defn CardsTables [user-id navigate! result row-height font-sz filters-active? scroll-reset-key
                      anki-overlay selected !selected !sort-col !sort-dir
                      !editing-card !diff-card]
   (e/client
@@ -1074,13 +1074,13 @@
 
       (CardsTableHeader filtered-ids selected !selected !sort-col !sort-dir)
 
-      (CardsTableBody cards-vec card-count row-height font-sz filters-active?
+      (CardsTableBody cards-vec card-count row-height font-sz filters-active? scroll-reset-key
         navigate! !editing-card !diff-card !selected selected
         user-id anki-overlay))))
 
 ;; Phase 3: selection + diff modal + bulk action state, plus the tables.
 ;; Owns the selection/bulk atoms; mounted on the query success branch.
-(e/defn CardsSelectionRegion [user-id navigate! result row-height font-sz filters-active?
+(e/defn CardsSelectionRegion [user-id navigate! result row-height font-sz filters-active? scroll-reset-key
                               anki-overlay ov-status !sort-col !sort-dir !editing-card]
   (e/client
     (let [!selected (atom #{}) selected (e/watch !selected)
@@ -1106,14 +1106,14 @@
         !selected !include-conflicts !action-result
         !bulk-args !bulk-skips !bulk-phase !confirm-bulk-delete)
 
-      (CardsTables user-id navigate! result row-height font-sz filters-active?
+      (CardsTables user-id navigate! result row-height font-sz filters-active? scroll-reset-key
         anki-overlay selected !selected !sort-col !sort-dir
         !editing-card !diff-card))))
 
 ;; Everything downstream of the query result: edit modal, error branch,
 ;; selection region. Takes `result` from LibraryCardsView's gate — the query
 ;; runs there so the whole view mounts in one batch (see CardsFilterBar).
-(e/defn CardsResultRegion [user-id navigate! result filters-active?
+(e/defn CardsResultRegion [user-id navigate! result filters-active? scroll-reset-key
                            !sort-col !sort-dir !editing-card
                            !ov-status !ov-payload !check-tick]
   (e/client
@@ -1134,7 +1134,7 @@
         (dom/div
           (dom/props {:style {:color "var(--color-danger-text)" :font-size "13px" :padding "8px 12px"}})
           (dom/text "Error loading cards: " (e/server (:error result))))
-        (CardsSelectionRegion user-id navigate! result row-height font-sz filters-active?
+        (CardsSelectionRegion user-id navigate! result row-height font-sz filters-active? scroll-reset-key
           anki-overlay ov-status !sort-col !sort-dir !editing-card)))))
 
 (e/defn LibraryCardsView [user-id navigate! refresh]
@@ -1151,6 +1151,11 @@
           opts {:text text :kind kind :status status
                 :sort-col sort-col :sort-dir sort-dir}
           filters-active? (or (not (str/blank? text)) (not= kind "all") (not= status "all"))
+          ;; Scroll resets to top only when the user navigates the list (search /
+          ;; filter / sort), NOT on row-count churn from delete. Mirrors
+          ;; knowledge-tree/DocumentTreeView's reset-key. Threaded down to the
+          ;; CardsTableBody Scroll-window call.
+          scroll-reset-key [text kind status sort-col sort-dir]
           ;; Server-FORM binding, deliberately not an e/defn call: an e/defn's
           ;; return value materializes at the (client) call site, which shipped
           ;; the entire result map — every card row — to the browser on each
@@ -1173,6 +1178,6 @@
       ;; filter changes.
       (when (some? success?)
         (CardsFilterBar navigate! ov-status !text !kind !status !check-tick)
-        (CardsResultRegion user-id navigate! result filters-active?
+        (CardsResultRegion user-id navigate! result filters-active? scroll-reset-key
           !sort-col !sort-dir !editing-card
           !ov-status !ov-payload !check-tick)))))
