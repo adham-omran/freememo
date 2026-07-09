@@ -40,11 +40,13 @@
         <script src="https://cdn.jsdelivr.net/npm/wavesurfer.js@7.8.6/dist/plugins/regions.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js"></script>
 
-        <!-- MathJax — renders $$…$$ display math in the AI assistant chat
-             (freememo.assistant-panel). Config MUST precede the script; inline
-             $…$ is disabled so prose dollar signs ("$5") aren't taken as math. -->
+        <!-- MathJax — renders $…$ and $$…$$ math in the AI assistant chat
+             (freememo.assistant-panel). Config MUST precede the script.
+             processEscapes lets a literal \$ stay a dollar sign. -->
         <script>
-            window.MathJax = { tex: { displayMath: [['$$', '$$']], inlineMath: [] },
+            window.MathJax = { tex: { inlineMath: [['$', '$'], ['\\(', '\\)']],
+                                      displayMath: [['$$', '$$'], ['\\[', '\\]']],
+                                      processEscapes: true },
                                options: { enableMenu: false } };
         </script>
         <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.js"></script>
