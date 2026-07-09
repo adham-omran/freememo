@@ -76,7 +76,8 @@
   [model-id result]
   (e/client
     (let [label (or (:label (card-models/resolve-model model-id)) model-id)
-          ok? (:success result)]
+          ok? (:success result)
+          cost-credits (:cost-credits result)]
       (dom/div
         (dom/props {:style {:flex "1" :min-width "240px" :display "flex" :flex-direction "column"
                             :border "1px solid var(--color-border)" :border-radius "var(--radius-md)"
@@ -88,8 +89,15 @@
                               :display "flex" :justify-content "space-between" :gap "8px"}})
           (dom/span (dom/text label))
           (when ok?
-            (dom/span (dom/props {:style {:font-weight "400" :color "var(--color-text-hint)"}})
-              (dom/text (str (count (:cards result)) " cards")))))
+            (dom/span
+              (dom/props {:style {:font-weight "400" :color "var(--color-text-hint)"
+                                  :display "flex" :gap "8px"}})
+              (dom/span (dom/text (str (count (:cards result)) " cards")))
+              ;; Credits omitted when nil — credits disabled (self-host) or a
+              ;; debit failure; the figure is retry-inclusive (see tooltip).
+              (when cost-credits
+                (dom/span (dom/props {:data-tooltip "Includes retries"})
+                  (dom/text (str cost-credits " credits")))))))
         (dom/div
           (dom/props {:style {:padding "8px" :overflow "auto" :max-height "55vh"
                               :display "flex" :flex-direction "column" :gap "8px"}})
@@ -134,6 +142,7 @@
     (let [!selected (atom #{}) selected (e/watch !selected)
           !run (atom nil) run (e/watch !run)
           !set-default (atom false)
+          !done (atom false) done (e/watch !done)
           !pos (atom {:x 60 :y 60}) pos (e/watch !pos)]
       (dom/div
         (dom/props {:class "modal-content"
@@ -187,6 +196,9 @@
               (loading/WithLoading
                 (e/fn [] (e/server (e/Offload #(run-card-compare!* ctx (:models run)))))
                 (e/fn [results]
+                  ;; Results resolved → enable the set-default checkbox. `case`
+                  ;; forces the reactive write (WithLatestLoading idiom).
+                  (case results (reset! !done true))
                   (e/for [{:keys [model-id result]} (e/diff-by :model-id results)]
                     (dom/div
                       (dom/props {:style {:flex "1" :min-width "260px" :display "flex"
@@ -198,7 +210,7 @@
             (dom/label
               (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "13px"}})
               (dom/input
-                (dom/props {:type "checkbox"})
+                (dom/props {:type "checkbox" :disabled (not done)})
                 (dom/On "change" (fn [e] (reset! !set-default (-> e .-target .-checked))) nil))
               (dom/text "Set the picked model as my card-gen default"))))
 
