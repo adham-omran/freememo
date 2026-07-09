@@ -18,6 +18,29 @@
 (defonce ^:private parser (.build (Parser/builder options)))
 (defonce ^:private renderer (.build (HtmlRenderer/builder options)))
 
+;; A "plain number" is a bare quantity — digits with optional sign, thousands
+;; separators / decimal point, and a trailing percent. NOT math: no letter,
+;; operator, exponent (^), subscript (_), or LaTeX command (\).
+(def ^:private plain-number-re #"^[+-]?\d[\d.,]*%?$")
+
+(defn- plain-number? [s]
+  (boolean (re-matches plain-number-re (str/trim s))))
+
+(defn unwrap-non-math-dollars
+  "Strip `$…$` / `$$…$$` math delimiters that merely wrap a plain number, so a
+   writer's habit of dollar-wrapping bare numbers doesn't render them as italic
+   math (where e.g. `$6,245$` mis-spaces to \"6, 245\"). Real math — anything
+   containing a letter, exponent, subscript, operator, or LaTeX command — is
+   left wrapped and untouched.
+   Pre: `s` is a Markdown string or nil. Post: nil in → nil out; otherwise the
+   same string with plain-number math spans replaced by their bare text."
+  [s]
+  (when s
+    (let [unwrap (fn [[whole inner]] (if (plain-number? inner) (str/trim inner) whole))]
+      (-> s
+        (str/replace #"\$\$([^$\n]+?)\$\$" unwrap)   ; display first
+        (str/replace #"\$([^$\n]+?)\$" unwrap)))))    ; then inline
+
 (defn parse-markdown
   "Convert a Markdown string to sanitized HTML.
    Strips <img> tags. Converts task list checkboxes to text markers.

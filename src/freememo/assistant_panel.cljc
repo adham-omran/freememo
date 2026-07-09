@@ -77,7 +77,9 @@
                      (mapv (fn [m]
                              (if (= "assistant" (:assistant_messages/role m))
                                (assoc m :assistant_messages/content-html
-                                 (markdown/parse-markdown (:assistant_messages/content m)))
+                                 (-> (:assistant_messages/content m)
+                                   markdown/unwrap-non-math-dollars
+                                   markdown/parse-markdown))
                                m))
                        (or (assistant/messages* assistant-rev user-id active) [])))
           sending? (some? t)]
