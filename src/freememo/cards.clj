@@ -193,8 +193,11 @@
           ;; Success — bill the summed cost of all attempts (§5.4.5).
           ;; record-cost-charge! is total: a billing failure logs
           ;; ::credit-charge-failed and returns nil, never discarding cards.
-          (do (credits/record-cost-charge! user-id endpoint-tag (:id entry) cost-acc')
-            {:success true :cards cards})
+          ;; Its return is the charged IQD — reflecting the summed retry cost,
+          ;; nil when credits are disabled or the debit failed — surfaced as
+          ;; :cost-credits for the compare UI (the normal gen path ignores it).
+          (let [charged (credits/record-cost-charge! user-id endpoint-tag (:id entry) cost-acc')]
+            {:success true :cards cards :cost-credits charged})
 
           (>= attempt max-retries)
           (do (tel/log! {:level :error :id ::generate-cards-count-mismatch
@@ -373,8 +376,9 @@
    happen inside generate-cards*. Fans out concurrently (the model subset is
    small) with a per-model timeout so one slow/hung model can't stall the batch.
    Pre:  opts has :content/:card-type/:card-count/:user-id (…); model-ids non-empty.
-   Post: [{:model-id id :result {:success bool :cards [...] :error str}}] — nothing
-         written to the flashcards table."
+   Post: [{:model-id id :result {:success bool :cards [...] :cost-credits long-or-nil
+         :error str}}] — :cost-credits rides through unchanged from generate-cards*;
+         nothing written to the flashcards table."
   [opts model-ids]
   (let [gen-one (fn [mid]
                   (let [o (assoc opts :model mid)]
