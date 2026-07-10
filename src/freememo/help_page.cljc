@@ -16,18 +16,23 @@
             ["Extract the text (⌘⇧S)" "Scan Page runs OCR on the current page into clean, editable HTML. Copy-text pulls the PDF's own text layer when it has one."]
             ["Edit & split (⌘⇧E)" "Fix the text in the editor. Select a passage and Extract turns it into a child topic linked back to the page."]
             ["Mark done (⌘⇧D)" "Mark a page Done to drop it from your review queue while keeping the content."]]}
+   {:title "Asking the AI tutor"
+    :intro "Think a page through with a Socratic assistant that asks rather than answers."
+    :steps [["Open it" "Right side panel → AI Assistant tab. New Chat starts a conversation scoped to the current document; your chats and transcripts are saved."]
+            ["Ask about the page" "Type a question about what you're reading. The tutor replies with questions to guide you, grounded in the page — it won't just hand you the answer. Markdown and math render inline."]
+            ["Pick its model" "The panel's model selector sets the tutor's model for this document; leave it on your default otherwise."]]}
    {:title "Making a deck"
     :intro "Generate flashcards from the page you're reading, then curate them."
-    :steps [["Generate (⌘⇧G)" "Pick Basic or Cloze, a card count, and whether to include previous-page context, then generate from the current page."]
+    :steps [["Generate (⌘⇧G)" "Pick Basic or Cloze, a card count, and whether to include previous-page context, then generate from the current page. If the document has approved knowledge-graph facts, cards are built from those facts instead of the raw text."]
             ["Generate with a prompt" "Add a custom instruction (e.g. \"focus on definitions\") — recent prompts autocomplete."]
+            ["Compare models" "Run the same content through two or more card models side by side and keep the set you prefer; each model is a separate, billed generation."]
             ["Curate" "Add a card from a text selection, edit any card's question/answer or cloze, or delete the weak ones."]
             ["Export" "Export to Anki-compatible CSV by scope (current page or whole document) and kind (Basic, Cloze, or both)."]]}
    {:title "Syncing to Anki"
     :intro "Push curated cards into your own Anki collection over AnkiConnect."
-    :steps [["Push (⌘⇧X)" "Choose scope (this topic, its subtree, or the whole document), deck, note types and field mapping, tags, and header, then push."]
+    :steps [["Push (⌘⇧X)" "Choose scope (this topic, its subtree, or the whole document), deck, tags, and a custom header, then push. FreeMemo owns the Basic and Cloze note types, so there's nothing to map."]
             ["Quick Sync (⌘⌥⇧X)" "Re-push with your last-used settings in the background — no modal."]
-            ["Pull" "Bring edits made in Anki back into FreeMemo; a diff shows what changed."]
-            ["Tune it" "Settings → Anki Sync sets source, bibliography, and image field modes plus default note types."]]}
+            ["Pull" "Bring edits made in Anki back into FreeMemo; a diff shows what changed."]]}
    {:title "Reviewing (Learn)"
     :intro "Study what's due on a spaced-repetition schedule."
     :steps [["Start Learning" "The Learn tab opens the day's due queue as a single-file session."]
