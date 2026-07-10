@@ -199,6 +199,7 @@ html, body {
     padding: 7px 10px;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
+    font-family: inherit;
     font-size: 14px;
     background: var(--color-bg-card);
     color: var(--color-text-primary);
@@ -2470,6 +2471,33 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 .assistant-msg--assistant li { margin: 0.15em 0; }
 .assistant-msg--assistant pre { white-space: pre-wrap; overflow-x: auto; }
 
+/* Assistant reply + its per-reply ✦ card-gen button, left-aligned as a group. */
+.assistant-msg-group {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    align-self: flex-start;
+    max-width: 92%;
+}
+.assistant-msg-group .assistant-msg--assistant { max-width: 100%; }
+.assistant-msg-actions { display: flex; }
+.assistant-msg-card {
+    font-size: 12px;
+    line-height: 1;
+    padding: 2px 7px;
+    background: none;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm, 4px);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+}
+.assistant-msg-card:hover:not(:disabled) {
+    color: var(--color-primary);
+    border-color: var(--color-primary);
+}
+.assistant-msg-card:disabled { opacity: 0.6; cursor: default; }
+
 .assistant-panel__thinking {
     align-self: flex-start;
     font-size: 12px;
@@ -2489,16 +2517,17 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 
 .assistant-panel__composer {
     display: flex;
+    flex-direction: column;
+    align-items: stretch;
     gap: 6px;
-    align-items: flex-end;
     padding: 8px;
     border-top: 1px solid var(--color-border);
     flex-shrink: 0;
 }
 
-.assistant-panel__input { flex: 1; min-width: 0; resize: none; font-size: 13px; }
+.assistant-panel__input { min-width: 0; resize: none; font-size: 13px; }
+.assistant-panel__composer-actions { display: flex; justify-content: flex-end; }
 .assistant-panel__send { flex-shrink: 0; }
-.assistant-panel__capture { flex-shrink: 0; }
 
 /* Empty-state starter prompts. */
 .assistant-panel__suggestions {
