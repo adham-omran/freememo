@@ -4804,7 +4804,7 @@
              COUNT(*) FILTER (WHERE rating = 1) AS again,
              COUNT(*) FILTER (WHERE reps_before = 0) AS new
       FROM kg_reviews
-      WHERE user_id = ? AND reviewed_at >= CURRENT_DATE - make_interval(days => ?)
+      WHERE user_id = ? AND reviewed_at >= CURRENT_DATE - make_interval(days => ?::int)
       GROUP BY day ORDER BY day DESC"
      user-id days]
     {:builder-fn rs/as-unqualified-maps}))
