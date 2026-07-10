@@ -13,17 +13,28 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
+   [freememo.typeahead :refer [Typeahead]]
    #?(:clj [freememo.assistant :as assistant])
    #?(:clj [freememo.markdown :as markdown])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])))
 
+(def ^:private suggested-prompts
+  "First-message starters shown on an empty chat. The first is the learner's
+   own seed; the rest cover prerequisites, plain-language recall and connection."
+  ["What prerequisites do I need to understand this material?"
+   "Explain the core idea of this page in simple terms."
+   "What questions should I be able to answer after reading this?"
+   "How does this connect to things I might already know?"])
+
 (defn- submit-edit
-  "Snapshot the composer state into a one-shot submit token payload."
-  [draft-atom active-atom]
+  "Snapshot the composer state into a one-shot submit token payload, including
+   the current @-referenced document ids."
+  [draft-atom active-atom refs-atom]
   (let [text (str/trim @draft-atom)]
     (when-not (str/blank? text)
-      {:id (str (random-uuid)) :text text :chat @active-atom})))
+      {:id (str (random-uuid)) :text text :chat @active-atom
+       :refs (mapv :id @refs-atom)})))
 
 (defn typeset!
   "CLJS-only: render MathJax math ($…$ inline, $$…$$ display) in `node`. CLJ no-op.
@@ -57,6 +68,17 @@
   #?(:cljs (set! (.-scrollTop node) (.-scrollHeight node))
      :clj nil))
 
+(defn focus!
+  "CLJS-only: focus `node` when `armed?` is true. Called in the reactive body so
+   Electric re-fires it only when `armed?` changes value — i.e. once when a send
+   completes and the composer re-enables (armed? = (not sending?) rises), not on
+   every frame, so it never fights the learner's own focus. Defers a tick so the
+   `disabled` prop has cleared before focus. CLJ no-op; plain defn for parity."
+  [node armed?]
+  #?(:cljs (when (and node armed?)
+             (js/setTimeout (fn [] (.focus node)) 0))
+     :clj nil))
+
 (e/defn AssistantPanel [page-topic-id root-topic-id user-id]
   (e/client
     (let [!active (atom nil)
@@ -68,8 +90,27 @@
           [t _] (e/Token submit)
           !error (atom nil)
           error (e/watch !error)
+          ;; @-referenced documents queued for the next send (shown as chips);
+          ;; their ids ride the submit payload and clear on a successful send.
+          !refs (atom [])
+          refs (e/watch !refs)
+          !at-open? (atom false)
+          at-open? (e/watch !at-open?)
+          !pick-search (atom "")
+          !picked (atom nil)
+          picked (e/watch !picked)
+          ;; Capture the latest reply into cards. Unique payload per click so a
+          ;; repeat capture of the same reply still re-fires the token.
+          !capture (atom nil)
+          capture (e/watch !capture)
+          [ct _] (e/Token capture)
+          capturing? (some? ct)
           assistant-rev (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
           chats (e/server (vec (assistant/chats* assistant-rev user-id root-topic-id)))
+          ;; Other documents the learner can @-reference (current doc excluded).
+          docs (e/server (vec (assistant/referenceable-docs user-id root-topic-id)))
+          doc-titles (mapv :title docs)
+          by-title (into {} (map (juxt :title identity)) docs)
           ;; Assistant replies are Markdown + `$$…$$` display math; render them
           ;; as HTML (client injects + MathJax typesets). User rows are the
           ;; learner's own literal text — left untouched, shown via dom/text.
@@ -82,13 +123,15 @@
                                    markdown/parse-markdown))
                                m))
                        (or (assistant/messages* assistant-rev user-id active) [])))
-          sending? (some? t)]
+          sending? (some? t)
+          ;; The most recent assistant reply — the card-capture source.
+          last-reply (last (filter #(= "assistant" (:assistant_messages/role %)) messages))]
 
       ;; Send effect: fires when a submit payload is produced (Send / Enter).
       ;; ensure-and-send! creates the chat when :chat is nil, so the very first
       ;; message auto-creates a chat carrying this page's context.
       (when t
-        (let [{:keys [text chat]} submit]
+        (let [{:keys [text chat] ref-ids :refs} submit]
           (if (str/blank? text)
             (t)
             ;; Clear the composer immediately — the text is already snapshot in
@@ -97,15 +140,40 @@
               (reset! !draft "")
               (let [r (e/server (e/Offload
                                   #(assistant/ensure-and-send!
-                                     user-id root-topic-id page-topic-id chat text)))]
+                                     user-id root-topic-id page-topic-id chat text ref-ids)))]
                 (case r
                   (do
                     (reset! !active (:chat-id r)) ; select the (possibly new) chat
                     (if (:ok r)
-                      (reset! !error nil)
+                      (do (reset! !error nil)
+                          (reset! !refs [])) ; references consumed by this turn
                       (do (reset! !error (:error r))
                           (reset! !draft text)))
                     (t))))))))
+
+      ;; Capture effect: latest reply → basic cards. reply->cards! toasts the
+      ;; outcome server-side, so the client only acks the token.
+      (when ct
+        (let [r (e/server (e/Offload
+                            #(assistant/reply->cards!
+                               user-id page-topic-id root-topic-id (:text capture))))]
+          (case r (ct))))
+
+      ;; @-reference commit: Typeahead wrote the chosen title to !picked. Add the
+      ;; matching doc as a chip (dedup by id), strip the trailing `@token` the
+      ;; trigger left in the draft, and close the picker.
+      (let [[pt _] (e/Token picked)]
+        (when pt
+          (when-let [doc (get by-title picked)]
+            (swap! !refs (fn [rs]
+                           (if (some #(= (:id doc) (:id %)) rs)
+                             rs
+                             (conj rs {:id (:id doc) :title (:title doc)})))))
+          (reset! !draft (str/replace draft #"@\S*$" ""))
+          (reset! !pick-search "")
+          (reset! !at-open? false)
+          (reset! !picked nil)
+          (pt)))
 
       (dom/div
         (dom/props {:class "assistant-panel"})
@@ -168,7 +236,20 @@
             (if (empty? visible)
               (dom/div
                 (dom/props {:class "assistant-panel__hint"})
-                (dom/text "Ask a question about this page and I'll help you think it through."))
+                (dom/text "Ask a question about this page and I'll help you think it through.")
+                (dom/div
+                  (dom/props {:class "assistant-panel__suggestions"})
+                  (e/for [p (e/diff-by identity suggested-prompts)]
+                    (dom/button
+                      (dom/props {:class "assistant-panel__suggestion" :type "button"})
+                      (dom/text p)
+                      (let [ev (dom/On "click" identity nil)
+                            [st _] (e/Token ev)]
+                        (when st
+                          ;; Send immediately as the chat's first message.
+                          (reset! !submit {:id (str (random-uuid)) :text p
+                                           :chat @!active :refs (mapv :id @!refs)})
+                          (st)))))))
               (e/for-by :assistant_messages/id [m visible]
                 (if (= "assistant" (:assistant_messages/role m))
                   ;; Assistant: inject rendered Markdown HTML, then typeset math.
@@ -195,27 +276,69 @@
             (dom/props {:class "assistant-panel__error"})
             (dom/text error)))
 
-        ;; Composer: Enter sends, Shift+Enter newlines, button sends.
+        ;; `@` picker: reuses Typeahead over other documents' titles. Committing
+        ;; a pick is handled by the @-reference effect above (writes to !picked).
+        (when at-open?
+          (dom/div
+            (dom/props {:class "assistant-panel__at-popover"})
+            (Typeahead !pick-search doc-titles "Reference a document…" !picked true)))
+
+        ;; Reference chips — one per queued @-document, removable.
+        (when (seq refs)
+          (dom/div
+            (dom/props {:class "assistant-panel__refs"})
+            (e/for-by :id [r refs]
+              (dom/span
+                (dom/props {:class "assistant-panel__ref-chip"})
+                (dom/text (str "@" (:title r)))
+                (dom/button
+                  (dom/props {:class "assistant-panel__ref-remove" :type "button"
+                              :title "Remove reference" :aria-label "Remove reference"})
+                  (dom/text "×")
+                  (let [ev (dom/On "click" identity nil)
+                        [rt _] (e/Token ev)]
+                    (when rt
+                      (swap! !refs (fn [rs] (into [] (remove #(= (:id r) (:id %))) rs)))
+                      (rt))))))))
+
+        ;; Composer: Enter sends, Shift+Enter newlines, `@` opens the doc picker,
+        ;; ＋ Card captures the latest reply, Send button sends.
         (dom/div
           (dom/props {:class "assistant-panel__composer"})
           (dom/textarea
             (dom/props {:class "input assistant-panel__input" :dir "auto" :rows "2"
-                        :placeholder "Ask about this page…"
+                        :placeholder "Ask about this page… (@ to reference a document)"
                         :value draft :disabled sending?})
             (let [v (dom/On "input" #(-> % .-target .-value) nil)]
               (when (some? v) (reset! !draft v)))
             (dom/On "keydown"
               (fn [e]
-                (when (and (= (.-key e) "Enter") (not (.-shiftKey e)))
-                  (.preventDefault e)
-                  (when-let [ed (submit-edit !draft !active)]
-                    (reset! !submit ed))))
+                (cond
+                  (and (= (.-key e) "Enter") (not (.-shiftKey e)))
+                  (do (.preventDefault e)
+                    (when-let [ed (submit-edit !draft !active !refs)]
+                      (reset! !submit ed)))
+                  (= (.-key e) "@")
+                  (reset! !at-open? true))) ; the `@` still types into the draft
+              nil)
+            ;; Return the caret to the composer once a reply lands (edge-fired).
+            (case (focus! dom/node (not sending?)) nil))
+          (dom/button
+            (dom/props {:class "btn btn-secondary assistant-panel__capture"
+                        :type "button"
+                        :title "Generate a flashcard from the latest reply"
+                        :disabled (or sending? capturing? (nil? last-reply))})
+            (dom/text (if capturing? "Adding…" "＋ Card"))
+            (dom/On "click"
+              (fn [_] (when last-reply
+                        (reset! !capture {:id (str (random-uuid))
+                                          :text (:assistant_messages/content last-reply)})))
               nil))
           (dom/button
             (dom/props {:class "btn btn-primary assistant-panel__send"
                         :type "button" :disabled (or sending? (str/blank? draft))})
             (dom/text "Send")
             (dom/On "click"
-              (fn [_] (when-let [ed (submit-edit !draft !active)]
+              (fn [_] (when-let [ed (submit-edit !draft !active !refs)]
                         (reset! !submit ed)))
               nil)))))))
