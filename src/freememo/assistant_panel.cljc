@@ -99,12 +99,11 @@
           !pick-search (atom "")
           !picked (atom nil)
           picked (e/watch !picked)
-          ;; Capture the latest reply into cards. Unique payload per click so a
-          ;; repeat capture of the same reply still re-fires the token.
-          !capture (atom nil)
-          capture (e/watch !capture)
-          [ct _] (e/Token capture)
-          capturing? (some? ct)
+          ;; Optimistic echo of the just-sent user turn: {:id :text :baseline-count}
+          ;; or nil. Rendered as a user bubble until the server transcript grows
+          ;; past :baseline-count (send! persists + bumps the row before the reply).
+          !echo (atom nil)
+          echo (e/watch !echo)
           assistant-rev (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
           chats (e/server (vec (assistant/chats* assistant-rev user-id root-topic-id)))
           ;; Other documents the learner can @-reference (current doc excluded).
@@ -123,21 +122,23 @@
                                    markdown/parse-markdown))
                                m))
                        (or (assistant/messages* assistant-rev user-id active) [])))
-          sending? (some? t)
-          ;; The most recent assistant reply — the card-capture source.
-          last-reply (last (filter #(= "assistant" (:assistant_messages/role %)) messages))]
+          sending? (some? t)]
 
-      ;; Send effect: fires when a submit payload is produced (Send / Enter).
-      ;; ensure-and-send! creates the chat when :chat is nil, so the very first
-      ;; message auto-creates a chat carrying this page's context.
+      ;; Send effect: fires when a submit payload is produced (Send / Enter /
+      ;; suggested prompt). ensure-and-send! creates the chat when :chat is nil,
+      ;; so the very first message auto-creates a chat carrying this page context.
       (when t
-        (let [{:keys [text chat] ref-ids :refs} submit]
+        (let [{:keys [text chat] ref-ids :refs} submit
+              refs-snapshot (e/snapshot refs)] ; frozen at mount for failure-restore
           (if (str/blank? text)
             (t)
-            ;; Clear the composer immediately — the text is already snapshot in
-            ;; `submit`. Restored below if the send fails, so nothing is lost.
+            ;; Optimistic: clear composer + chips and echo the turn immediately.
+            ;; All are restored below if the send fails, so nothing is lost.
             (do
               (reset! !draft "")
+              (reset! !refs [])
+              (reset! !echo {:id (:id submit) :text text
+                             :baseline-count (count messages)})
               (let [r (e/server (e/Offload
                                   #(assistant/ensure-and-send!
                                      user-id root-topic-id page-topic-id chat text ref-ids)))]
@@ -145,19 +146,19 @@
                   (do
                     (reset! !active (:chat-id r)) ; select the (possibly new) chat
                     (if (:ok r)
-                      (do (reset! !error nil)
-                          (reset! !refs [])) ; references consumed by this turn
+                      (reset! !error nil) ; chips consumed; echo clears on transcript growth
                       (do (reset! !error (:error r))
-                          (reset! !draft text)))
+                          (reset! !draft text)
+                          (reset! !refs refs-snapshot)
+                          (reset! !echo nil)))
                     (t))))))))
 
-      ;; Capture effect: latest reply → basic cards. reply->cards! toasts the
-      ;; outcome server-side, so the client only acks the token.
-      (when ct
-        (let [r (e/server (e/Offload
-                            #(assistant/reply->cards!
-                               user-id page-topic-id root-topic-id (:text capture))))]
-          (case r (ct))))
+      ;; Retire the optimistic echo once the server transcript reflects the turn
+      ;; (send! persists the user row + bumps before the reply), so the echo and
+      ;; the real row never both render.
+      (when-let [{:keys [baseline-count]} echo]
+        (when (> (count messages) baseline-count)
+          (reset! !echo nil)))
 
       ;; @-reference commit: Typeahead wrote the chosen title to !picked. Add the
       ;; matching doc as a chip (dedup by id), strip the trailing `@token` the
@@ -234,42 +235,73 @@
           (dom/props {:class "assistant-panel__transcript"})
           (let [visible (vec (rest messages))]
             (if (empty? visible)
-              (dom/div
-                (dom/props {:class "assistant-panel__hint"})
-                (dom/text "Ask a question about this page and I'll help you think it through.")
+              ;; Empty state: starters — hidden once a send is in flight (echo up
+              ;; or awaiting reply) so they don't sit beside the echoed turn.
+              (when (and (not sending?) (nil? echo))
                 (dom/div
-                  (dom/props {:class "assistant-panel__suggestions"})
-                  (e/for [p (e/diff-by identity suggested-prompts)]
-                    (dom/button
-                      (dom/props {:class "assistant-panel__suggestion" :type "button"})
-                      (dom/text p)
-                      (let [ev (dom/On "click" identity nil)
-                            [st _] (e/Token ev)]
-                        (when st
-                          ;; Send immediately as the chat's first message.
-                          (reset! !submit {:id (str (random-uuid)) :text p
-                                           :chat @!active :refs (mapv :id @!refs)})
-                          (st)))))))
+                  (dom/props {:class "assistant-panel__hint"})
+                  (dom/text "Ask a question about this page and I'll help you think it through.")
+                  (dom/div
+                    (dom/props {:class "assistant-panel__suggestions"})
+                    (e/for [p (e/diff-by identity suggested-prompts)]
+                      (dom/button
+                        (dom/props {:class "assistant-panel__suggestion" :type "button"})
+                        (dom/text p)
+                        (let [ev (dom/On "click" identity nil)
+                              [st _] (e/Token ev)]
+                          (when st
+                            ;; Send immediately as the chat's first message.
+                            (reset! !submit {:id (str (random-uuid)) :text p
+                                             :chat @!active :refs (mapv :id @!refs)})
+                            (st))))))))
               (e/for-by :assistant_messages/id [m visible]
                 (if (= "assistant" (:assistant_messages/role m))
-                  ;; Assistant: inject rendered Markdown HTML, then typeset math.
-                  ;; dir="auto" keeps RTL replies right-aligned.
+                  ;; Assistant: rendered Markdown HTML (math typeset) + a per-reply
+                  ;; ✦ card-gen button. innerHTML is set on a dedicated child so it
+                  ;; never clobbers the sibling button; dir="auto" keeps RTL right.
                   (dom/div
-                    (dom/props {:class "assistant-msg assistant-msg--assistant" :dir "auto"})
-                    (set! (.-innerHTML dom/node) (or (:assistant_messages/content-html m) ""))
-                    (typeset! dom/node))
+                    (dom/props {:class "assistant-msg-group"})
+                    (dom/div
+                      (dom/props {:class "assistant-msg assistant-msg--assistant" :dir "auto"})
+                      (set! (.-innerHTML dom/node) (or (:assistant_messages/content-html m) ""))
+                      (typeset! dom/node))
+                    (dom/div
+                      (dom/props {:class "assistant-msg-actions"})
+                      (dom/button
+                        (dom/props {:class "assistant-msg-card" :type "button"
+                                    :title "Generate a flashcard from this reply"
+                                    :aria-label "Generate a flashcard from this reply"})
+                        ;; Per-bubble token (this row's frame): captures run
+                        ;; concurrently across bubbles, disabling only their own.
+                        (let [click (dom/On "click" identity nil)
+                              [gt _] (e/Token click)
+                              gen-active? (some? gt)]
+                          (dom/props {:disabled gen-active?})
+                          (dom/text (if gen-active? "✦…" "✦"))
+                          (when gt
+                            (let [content (:assistant_messages/content m)]
+                              (case (e/server (e/Offload
+                                                #(assistant/reply->cards!
+                                                   user-id page-topic-id root-topic-id content)))
+                                (gt))))))))
                   ;; User: literal text, no Markdown/math.
                   (dom/div
                     (dom/props {:class (str "assistant-msg assistant-msg--"
                                          (:assistant_messages/role m))})
                     (dom/text (:assistant_messages/content m)))))))
+          ;; Optimistic echo of the just-sent turn (user bubble), shown until the
+          ;; server row lands (see the echo-retire effect above).
+          (when-let [e-text (:text echo)]
+            (dom/div
+              (dom/props {:class "assistant-msg assistant-msg--user"})
+              (dom/text e-text)))
           (when sending?
             (dom/div
               (dom/props {:class "assistant-panel__thinking"})
               (dom/text "Thinking…")))
-          ;; Scroll to bottom when a message lands or "Thinking…" toggles —
-          ;; follows the user's turn down and then the reply.
-          (scroll-to-bottom! dom/node [(count messages) sending?]))
+          ;; Scroll to bottom when a message lands, "Thinking…" toggles, or the
+          ;; optimistic echo appears — follows the user's turn down, then the reply.
+          (scroll-to-bottom! dom/node [(count messages) sending? (:id echo)]))
 
         (when error
           (dom/div
@@ -301,8 +333,8 @@
                       (swap! !refs (fn [rs] (into [] (remove #(= (:id r) (:id %))) rs)))
                       (rt))))))))
 
-        ;; Composer: Enter sends, Shift+Enter newlines, `@` opens the doc picker,
-        ;; ＋ Card captures the latest reply, Send button sends.
+        ;; Composer: Enter sends, Shift+Enter newlines, `@` opens the doc picker.
+        ;; The Send (↑) button sits in a row beneath the input.
         (dom/div
           (dom/props {:class "assistant-panel__composer"})
           (dom/textarea
@@ -323,22 +355,14 @@
               nil)
             ;; Return the caret to the composer once a reply lands (edge-fired).
             (case (focus! dom/node (not sending?)) nil))
-          (dom/button
-            (dom/props {:class "btn btn-secondary assistant-panel__capture"
-                        :type "button"
-                        :title "Generate a flashcard from the latest reply"
-                        :disabled (or sending? capturing? (nil? last-reply))})
-            (dom/text (if capturing? "Adding…" "＋ Card"))
-            (dom/On "click"
-              (fn [_] (when last-reply
-                        (reset! !capture {:id (str (random-uuid))
-                                          :text (:assistant_messages/content last-reply)})))
-              nil))
-          (dom/button
-            (dom/props {:class "btn btn-primary assistant-panel__send"
-                        :type "button" :disabled (or sending? (str/blank? draft))})
-            (dom/text "Send")
-            (dom/On "click"
-              (fn [_] (when-let [ed (submit-edit !draft !active !refs)]
-                        (reset! !submit ed)))
-              nil)))))))
+          (dom/div
+            (dom/props {:class "assistant-panel__composer-actions"})
+            (dom/button
+              (dom/props {:class "btn btn-primary assistant-panel__send"
+                          :type "button" :title "Send" :aria-label "Send"
+                          :disabled (or sending? (str/blank? draft))})
+              (dom/text "↑")
+              (dom/On "click"
+                (fn [_] (when-let [ed (submit-edit !draft !active !refs)]
+                          (reset! !submit ed)))
+                nil))))))))
