@@ -219,7 +219,8 @@ Schema auto-creates on first startup (no migration framework). Configure via env
 | `LOG_LEVEL` | `info` (prod) / `debug` (dev) | `trace`, `debug`, `info`, `warn`, `error`, `fatal` |
 | `PORT` | `8080` | HTTP port |
 | `STORAGE_QUOTA_BYTES` | `1073741824` (1 GB) | Total per-user storage. `0` = unlimited. |
-| `STORAGE_PER_FILE_MAX_BYTES` | `104857600` (100 MB) | Per-file upload cap. `0` = unlimited. Also drives Jetty body + WebSocket size limits. |
+| `STORAGE_PER_FILE_MAX_BYTES` | `104857600` (100 MB) | Default per-upload cap (per-user override via `users.upload_max_bytes`). `0` = unlimited. Also sizes the WebSocket message limit. |
+| `STORAGE_REQUEST_MAX_BYTES` | `104857600` (100 MB) | Absolute HTTP request-body ceiling for upload routes (per-user-blind). `0` = unlimited. A per-user cap above this is still bounded here — raise this too to allow larger uploads. |
 | `APP_BASE_URL` | `https://freememo.net` | Public base URL embedded in Anki card source anchors. Set to your domain when self-hosting. |
 | `GOOGLE_CLIENT_ID` | _(none)_ | Google OAuth client ID. Required when `AUTH_MODE` is `google`/`both`. |
 | `GOOGLE_CLIENT_SECRET` | _(none)_ | Google OAuth client secret. |
@@ -270,6 +271,7 @@ later will **not** reset it.
 
 Override the published port with `APP_PORT` (default 8080).
 Storage caps default to **unlimited**; set `STORAGE_QUOTA_BYTES` / `STORAGE_PER_FILE_MAX_BYTES` in `.env`.
+To accept uploads larger than 100 MB, also raise `STORAGE_REQUEST_MAX_BYTES` (the HTTP request-body ceiling) — it caps upload requests regardless of the per-user limit.
 
 > **⚠️ Security — plain HTTP over a LAN.** `COOKIE_SECURE=false` is needed to log in
 > without HTTPS, but it means the login password and session cookie travel **unencrypted**.
@@ -307,7 +309,7 @@ location / {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_read_timeout 300s;
-    client_max_body_size 100M;  # must be ≥ STORAGE_PER_FILE_MAX_BYTES (or 0/large when unlimited)
+    client_max_body_size 100M;  # must be ≥ STORAGE_REQUEST_MAX_BYTES (or 0/large when unlimited)
 }
 ```
 

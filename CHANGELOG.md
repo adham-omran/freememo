@@ -9,6 +9,105 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
+## v20260710-770a44e
+
+### For users
+
+- **AI assistant — a Socratic tutor for what you're reading.** A chat panel on
+  the right side panel's new **AI Assistant** tab that helps you think a page
+  through by asking questions rather than handing you answers.
+  - Grounded in the page you're on; start a new chat per document, and your
+    chats and their transcripts are saved.
+  - Replies render as Markdown with real math — inline `$...$` and display
+    `$$...$$` both typeset.
+  - Pick the tutor's model per document from the panel, or leave it on your
+    global default.
+- **Generate cards from your knowledge graph.** When a document has approved
+  facts, Generate now builds cards from those facts — a model picks the ones the
+  current page supports — instead of raw page text; documents with no facts fall
+  back to the old text path automatically.
+- **Compare card-generation models side by side.** The Generate dropdown gains
+  **Compare models**: run the same content through two or more models, see the
+  candidate cards and each run's cost next to each other, and keep one.
+- **FreeMemo now owns the Basic and Cloze Anki note types.** Like Score and
+  Image Occlusion, Basic/Cloze are app-managed models, created and kept correct
+  on every push, so cards always render the way FreeMemo intends.
+  - The old Source and Bibliography fields collapse into one centered **Links**
+    field — the citation stacked over an "Open in FreeMemo" link.
+  - The per-type note-type pickers, the Field Defaults section, and the Card
+    Stylesheet section are gone; the app manages all of that now.
+- **Per-document models for card generation and the assistant.** Choose a card
+  model (Document Options) or an assistant model (assistant panel) for one
+  document without touching your global default; "Use my default" now names the
+  model it resolves to, e.g. "Use my default (Gemini 3 Flash)".
+- **A model per knowledge-graph step.** Settings exposes a model selector for
+  each of the six KG steps — fact extraction, entity linking, atomic and
+  synthesis questions, grading, and the card fact-selector.
+- **Two more models to choose from.** Gemini 3.5 Flash and DeepSeek V4 Flash are
+  now selectable for OCR and card generation.
+- Bug fix: pushing Basic or Cloze cards to Anki crashed for everyone
+  (`[object Object] is not ISeqable`); fixed.
+- Bug fix: uploads between 10 and 100 MiB were rejected even when your quota
+  allowed them; the real upload routes are no longer capped at 10 MiB.
+- Bug fix: the format toolbar (bubble menu) is no longer clipped when your
+  selection sits near the side panels.
+- Bug fix: long lists (Library cards, the knowledge tree) no longer jump to the
+  top when a row count changes under you — e.g. deleting a card — and no longer
+  flicker at row boundaries while scrolling.
+
+### Known issues
+
+- **Comparing models costs credits per model.** Each model in a Compare run is a
+  real, billed generation, so comparing N models spends credits N times. By
+  design.
+- **Cards from facts are not deduplicated or reviewed.** A fact can back both a
+  quiz question and a card, and generated cards are inserted straight into the
+  card table — prune the ones you don't want.
+- **Your knowledge-graph work moves to Gemini 3 Flash.** Each KG step now
+  defaults to Gemini 3 Flash rather than your card model, since these steps are
+  high-volume and want a cheap, fast model. Choose a different model per step in
+  Settings if you'd rather. Intended change.
+- **The first Anki push migrates old Basic/Cloze notes.** A previously-pushed
+  note on a foreign note type is moved onto the app-owned model on its next push,
+  which clears fields the app doesn't own; your Remarks / Back Extra are
+  preserved and scheduling survives. Customizing these note types in Anki is no
+  longer supported.
+- **The assistant's inline math can catch stray dollar signs.** Two `$` in one
+  line render the text between them as math — acceptable for a math tutor, and
+  plain numbers and money are handled so they don't trip it.
+- **Per-user upload caps are bounded by a server ceiling.** An upload limit
+  above `STORAGE_REQUEST_MAX_BYTES` is still capped there at the HTTP layer; if
+  you self-host and want larger uploads, raise that env too. Contact me if you
+  hit an upload limit on freememo.net.
+
+### Technical
+
+- **Assistant persistence.** New `assistant_chats` / `assistant_messages` tables
+  (per-`(user_id, root_topic_id)` chats, cascade-deleted with the user and
+  topic); server helpers in `freememo.assistant` / `freememo.db`; Socratic system
+  prompt at `resources/prompts/assistant-socratic.md`.
+- **Upload routing.** The `freememo.api` route table is now the single source of
+  truth for both dispatch and body-size classification (`:upload`/`:small`); the
+  divergent dev/prod whitelists that named deleted routes are removed. Adds the
+  per-user `users.upload_max_bytes` column and `STORAGE_REQUEST_MAX_BYTES` as the
+  absolute request-body ceiling.
+- **Virtual scroll.** Vendored `freememo.scroll` (a copy of `electric-scroll0`
+  with `:reset-key`) so in-place row-count changes no longer reset `scrollTop`;
+  the reset key is derived from filter/sort state.
+- **Memory / OOM.** `docker-compose.prod.yml` sets `mem_limit 3g`, sizes the JVM
+  heap with `-XX:MaxRAMPercentage=70`, exits on OOM so `restart` recovers, dumps
+  the heap on OOM, and persists `./logs` across rebuilds.
+- **Anki sync observability.** Client-side sync exceptions are now logged
+  server-side via `log-client-sync-error!` (message, source, browser stack, push
+  context); the temporary payload-shape diagnostic is removed. The push crash
+  was an un-awaited `m/?` inside a nested `fn` in `migrate-fields!`.
+- **Enforced CSS.** The drift-check fetch of `freememo-anki.css` now uses
+  `cache: no-store`, so a freshly deployed stylesheet is no longer silently
+  reverted to a stale CDN copy on the next push.
+- **Card-gen robustness.** `freememo.llm-edn` parse-error hardening with the
+  repo's first test file (`test/freememo/llm_edn_test.clj`); new
+  `resources/prompts/select-facts.md` prompt for the fact selector.
+
 ## v20260705-bfa0de2
 
 ### For users
