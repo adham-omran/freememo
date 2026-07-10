@@ -92,6 +92,7 @@
     (jdbc/with-transaction [tx ds]
       (jdbc/execute! tx ["ALTER TABLE users ADD COLUMN IF NOT EXISTS usage_bytes BIGINT NOT NULL DEFAULT 0"])
       (jdbc/execute! tx ["ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_bytes BIGINT"])
+      (jdbc/execute! tx ["ALTER TABLE users ADD COLUMN IF NOT EXISTS upload_max_bytes BIGINT"])
       (when (and (not had-usage?) topic-files-exists?)
         (tel/log! :info "Backfilling users.usage_bytes from topic_files.file_size")
         (jdbc/execute! tx

@@ -54,11 +54,11 @@
    :session nil})
 
 (defn- upload-byte-cap
-  "Per-request size cap from `quota/per-file-max-bytes`; nil when unlimited (env=0).
-   Backstop in case the Ring middleware is bypassed."
-  []
-  (when-not (quota/unlimited? quota/per-file-max-bytes)
-    quota/per-file-max-bytes))
+  "Per-upload size cap for `user-id`: their effective `upload_max_bytes`;
+   nil when unlimited (0). Backstop in case the Ring middleware is bypassed."
+  [user-id]
+  (let [cap (quota/get-user-upload-max db/ds user-id)]
+    (when-not (quota/unlimited? cap) cap)))
 
 (defn log-upload-failure!
   "Emit :warn so upload failures are diagnosable from app.log. Always
@@ -167,7 +167,7 @@
               tempfile (:tempfile file)
               ^bytes bytes (read-multipart-bytes tempfile)
               size (alength bytes)
-              cap (upload-byte-cap)]
+              cap (upload-byte-cap user-id)]
           (cond
             (and cap (> size cap))
             (do (log-upload-failure! ::upload-file-too-large request
@@ -388,7 +388,7 @@
                 web-biblio  (csl/csljson->web-biblio csljson)
                 ^bytes bytes (read-multipart-bytes (:tempfile file))
                 size        (alength bytes)
-                cap         (upload-byte-cap)]
+                cap         (upload-byte-cap user-id)]
             (cond
               (and cap (> size cap))
               (do (log-upload-failure! ::zotero-stage-too-large request
@@ -496,7 +496,7 @@
           :else
           (let [images (mapv #(read-multipart-bytes (:tempfile %)) parts)
                 total (reduce + (map alength images))
-                cap (upload-byte-cap)]
+                cap (upload-byte-cap user-id)]
             (if (and cap (> total cap))
               (do (log-upload-failure! ::append-images-too-large request
                     {:user-id user-id :doc-id doc-id :batch-size total :limit cap})
@@ -555,7 +555,7 @@
                         (io/copy in baos)
                         (.toByteArray baos)))
               size (alength bytes)
-              cap (upload-byte-cap)
+              cap (upload-byte-cap user-id)
               media-kind (cond
                            (re-find #"^image/" mime-type) "image"
                            (= "audio/mpeg" mime-type) "audio"
@@ -855,65 +855,50 @@
           (tel/error! {:id ::wayl-webhook} e)
           (json-response 500 {:success false :error "Webhook processing failed"}))))))
 
-(defn api-routes [request]
-  (let [uri (:uri request)
-        method (:request-method request)]
-    (cond
-      (and (= uri "/api/logout") (= method :post))
-      (logout-handler request)
+(def routes
+  "Single source of truth for API dispatch and HTTP body-size classification.
+   `:body` ∈ {:upload, :small, nil}; `wrap-route-body-size` resolves it to a
+   byte ceiling, `api-routes` resolves `:handler`. Adding an upload route here
+   body-caps it automatically — the middleware carries no separate route list."
+  [{:method :post :path "/api/logout"           :handler #'logout-handler           :body :small}
+   {:method :post :path "/api/upload-file"      :handler #'upload-file-handler      :body :upload}
+   {:method :post :path "/api/upload-paste"     :handler #'upload-paste-handler     :body :small}
+   {:method :post :path "/api/upload-staged"    :handler #'upload-staged-handler    :body :small}
+   {:method :post :path "/api/zotero/stage"     :handler #'zotero-stage-handler     :body :upload}
+   {:method :post :path "/api/create-topic"     :handler #'create-topic-handler     :body :small}
+   {:method :post :path "/api/create-live-doc"  :handler #'create-live-doc-handler  :body :small}
+   {:method :post :path "/api/append-images"    :handler #'append-images-handler    :body :upload}
+   {:method :post :path "/api/heic-preview"     :handler #'heic-preview-handler     :body :upload}
+   {:method :post :path "/api/upload-media"     :handler #'upload-media-handler     :body :upload}
+   {:method :post :path "/api/save-page-text"   :handler #'save-page-text-handler   :body :small}
+   {:method :post :path "/api/credits/checkout" :handler #'credits-checkout-handler :body :small}
+   {:method :post :path "/api/wayl/webhook"     :handler #'wayl-webhook-handler     :body :small}
+   {:method :post :path "/login"                :handler #'login-post-handler       :body :small}
+   {:method :get  :pattern #"/api/pdf/\d+"      :handler #'get-pdf-handler}
+   {:method :get  :pattern #"/api/audio/\d+"    :handler #'get-audio-handler}
+   {:method :get  :pattern #"/api/media/\d+"    :handler #'get-media-handler}
+   {:method :get  :path "/auth/google"          :handler #'google-auth-handler}
+   {:method :get  :path "/auth/google/callback" :handler #'google-callback-handler}])
 
-(and (= uri "/api/upload-file") (= method :post))
-      (upload-file-handler request)
+(defn- match-route
+  "First route whose method and path/pattern match, else nil.
+   Pre: uri is a string, method a keyword. Post: a route map or nil."
+  [uri method]
+  (some (fn [r]
+          (when (= method (:method r))
+            (if-let [p (:path r)]
+              (when (= uri p) r)
+              (when (re-matches (:pattern r) uri) r))))
+    routes))
 
-      (and (= uri "/api/upload-paste") (= method :post))
-      (upload-paste-handler request)
+(defn api-routes
+  "Dispatch to the matching route handler; nil when no route matches (→ 404)."
+  [request]
+  (when-let [r (match-route (:uri request) (:request-method request))]
+    ((:handler r) request)))
 
-      (and (= uri "/api/upload-staged") (= method :post))
-      (upload-staged-handler request)
-
-      (and (= uri "/api/zotero/stage") (= method :post))
-      (zotero-stage-handler request)
-
-      (and (= uri "/api/create-topic") (= method :post))
-      (create-topic-handler request)
-
-      (and (= uri "/api/create-live-doc") (= method :post))
-      (create-live-doc-handler request)
-
-      (and (= uri "/api/append-images") (= method :post))
-      (append-images-handler request)
-
-      (and (= uri "/api/heic-preview") (= method :post))
-      (heic-preview-handler request)
-
-      (and (re-matches #"/api/pdf/\d+" uri) (= method :get))
-      (get-pdf-handler request)
-
-      (and (re-matches #"/api/audio/\d+" uri) (= method :get))
-      (get-audio-handler request)
-
-      (and (= uri "/api/upload-media") (= method :post))
-      (upload-media-handler request)
-
-      (and (re-matches #"/api/media/\d+" uri) (= method :get))
-      (get-media-handler request)
-
-      (and (= uri "/api/save-page-text") (= method :post))
-      (save-page-text-handler request)
-
-      (and (= uri "/api/credits/checkout") (= method :post))
-      (credits-checkout-handler request)
-
-      (and (= uri "/api/wayl/webhook") (= method :post))
-      (wayl-webhook-handler request)
-
-      (and (= uri "/login") (= method :post))
-      (login-post-handler request)
-
-      (and (= uri "/auth/google") (= method :get))
-      (google-auth-handler request)
-
-      (and (= uri "/auth/google/callback") (= method :get))
-      (google-callback-handler request)
-
-      :else nil)))
+(defn body-class
+  "HTTP body-size class for (uri, method): :upload, :small, or nil.
+   Consulted by `wrap-route-body-size`; the sole source of the upload set."
+  [uri method]
+  (:body (match-route uri method)))

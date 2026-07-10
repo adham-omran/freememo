@@ -74,10 +74,6 @@
            (handler request)))))
 
 #?(:clj
-   (def upload-routes #{"/api/upload-pdf" "/api/upload-epub"
-                        "/api/append-images" "/api/heic-preview"}))
-
-#?(:clj
    (defn- parse-content-length
      "Parse a Content-Length header. Returns Long for digit-only values, nil otherwise."
      [header]
@@ -86,20 +82,21 @@
 
 #?(:clj
    (defn wrap-route-body-size
-     "Cap request body size on /api/*. Upload routes use `quota/per-file-max-bytes`
-      (nil when env=0 → unlimited); 10 MB on other /api/* (request-shape guard).
+     "Cap request body size, keyed on `api/body-class`. `:upload` routes use
+      `quota/request-max-bytes` (nil when env=0 → unlimited); `:small` and any
+      other /api/* POST get 10 MB (request-shape guard).
       Returns 411 for chunked uploads, 413 when Content-Length exceeds the cap."
      [handler]
      (fn [request]
        (let [uri (:uri request)
              method (:request-method request)
-             max-bytes (cond
-                         (and (= method :post) (upload-routes uri))
-                         (when-not (quota/unlimited? quota/per-file-max-bytes)
-                           quota/per-file-max-bytes)
-
-                         (and (= method :post) (.startsWith ^String uri "/api/")) 10485760
-                         :else nil)
+             max-bytes (when (= method :post)
+                         (case (api/body-class uri method)
+                           :upload (when-not (quota/unlimited? quota/request-max-bytes)
+                                     quota/request-max-bytes)
+                           :small 10485760
+                           ;; Unclassified /api/* POST keeps the legacy guard.
+                           (when (.startsWith ^String uri "/api/") 10485760)))
              transfer-encoding (some-> (get-in request [:headers "transfer-encoding"])
                                  clojure.string/lower-case)
              content-length (parse-content-length (get-in request [:headers "content-length"]))]
@@ -172,10 +169,10 @@
                           :cookie-attrs {:max-age 2592000 :same-site :lax :secure (config/cookie-secure?) :http-only true}}))
          {:host (:host config), :port (:port config), :join? false
           :ws-idle-timeout (* 60 1000)          ; 60 seconds in milliseconds
-          :ws-max-binary-size (if (quota/unlimited? quota/per-file-max-bytes)
-                                Long/MAX_VALUE quota/per-file-max-bytes)
-          :ws-max-text-size   (if (quota/unlimited? quota/per-file-max-bytes)
-                                Long/MAX_VALUE quota/per-file-max-bytes)
+          :ws-max-binary-size (if (quota/unlimited? quota/default-upload-max-bytes)
+                                Long/MAX_VALUE quota/default-upload-max-bytes)
+          :ws-max-text-size   (if (quota/unlimited? quota/default-upload-max-bytes)
+                                Long/MAX_VALUE quota/default-upload-max-bytes)
           :configurator (fn [server]
                           ;; Gzip served assets
                           (.setHandler server (doto (new org.eclipse.jetty.server.handler.gzip.GzipHandler)
