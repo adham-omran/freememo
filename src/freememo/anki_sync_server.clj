@@ -346,11 +346,11 @@
                             anki-modified?
                             (cond
                               ;; Occlusion content diff is owned by the pull
-                              ;; path (io_fields); score fields are FM-generated
-                              ;; media (or Anki-owned Remarks/Sources). The
-                              ;; overlay only surfaces marked/suspended for
-                              ;; these rows.
-                              (contains? #{"occlusion" "score"} kind) false
+                              ;; path (io_fields); score + overlapping fields are
+                              ;; FM-derived (media, or the expanded list) with no
+                              ;; single-field inverse. The overlay only surfaces
+                              ;; marked/suspended for these rows.
+                              (contains? #{"occlusion" "score" "overlapping"} kind) false
                               basic? (or (not (stripped= (first stripped-fields) (:flashcards/question card)))
                                        (not (stripped= (second stripped-fields) (:flashcards/answer card))))
                               :else (not (stripped= (first stripped-fields) (:flashcards/cloze card))))

@@ -371,7 +371,7 @@
 
 (defn save-card-type [user-id value]
   (try
-    (when-not (#{"basic" "cloze"} value)
+    (when-not (#{"basic" "cloze" "overlapping"} value)
       (throw (Exception. "Invalid card type")))
     (db/set-setting user-id CARD_TYPE value)
     {:success true}

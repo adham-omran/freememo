@@ -287,6 +287,49 @@
 (def cloze-card-back
   "<div class=\"fm-front\">{{cloze:Text}}</div>\n{{#Back Extra}}<div class=\"fm-back\">{{Back Extra}}</div>{{/Back Extra}}\n{{#Links}}<div class=\"fm-extra fm-links\">{{Links}}</div>{{/Links}}\n{{#Remarks}}<div class=\"fm-extra\"><div class=\"fm-field-descr\">Remarks</div>{{Remarks}}</div>{{/Remarks}}\n")
 
+;; ---------------------------------------------------------------------------
+;; Overlapping Cloze FreeMemo note type — app-owned, cloze-typed. One authored
+;; list is one note; Anki fans it into one card per item (Text1..TextN, item k
+;; is the active {{ck::}}) plus a reveal-all card (Full = c21). Direction is a
+;; per-note field driving RTL from a single model. Title/Text*/Full/Original/
+;; Direction/Links are FM-generated and overwritten every push; Remarks is the
+;; user's Anki-side space — seeded empty, never clobbered.
+;; ---------------------------------------------------------------------------
+
+(def overlapping-model-name "Overlapping Cloze FreeMemo")
+(def overlapping-template-name "Overlapping Card")
+
+(def overlapping-field-names
+  (into ["Title"]
+    (concat (map #(str "Text" %) (range 1 21))
+      ["Full" "Original" "Direction" "Links" "Remarks"])))
+
+(def ^:private overlapping-cloze-refs
+  "The cloze-field references, in order, shared by front and back templates.
+   Anki renders {{cloze:TextK}} empty unless TextK holds the current card's
+   cloze number, so exactly one block shows per card."
+  (str/join "\n    "
+    (concat (map #(str "{{cloze:Text" % "}}") (range 1 21))
+      ["{{cloze:Full}}"])))
+
+(def overlapping-card-front
+  (str "<div class=\"fm-ol\" dir=\"{{Direction}}\">\n"
+    "  {{#Title}}<div class=\"fm-ol-title\">{{Title}}</div>{{/Title}}\n"
+    "  <div class=\"fm-ol-text\">\n    " overlapping-cloze-refs "\n  </div>\n"
+    "</div>\n"))
+
+(def overlapping-card-back
+  (str "<div class=\"fm-ol\" dir=\"{{Direction}}\">\n"
+    "  {{#Title}}<div class=\"fm-ol-title\">{{Title}}</div>{{/Title}}\n"
+    "  <div class=\"fm-ol-text\">\n    " overlapping-cloze-refs "\n  </div>\n"
+    "  {{#Original}}<div class=\"fm-ol-original\"><hr>{{Original}}</div>{{/Original}}\n"
+    "  {{#Links}}<div class=\"fm-ol-extra fm-links\">{{Links}}</div>{{/Links}}\n"
+    "  {{#Remarks}}<div class=\"fm-ol-extra\"><div class=\"fm-ol-field-descr\">Remarks</div>{{Remarks}}</div>{{/Remarks}}\n"
+    "</div>\n"))
+
+(defn overlapping-card? [card]
+  (= "overlapping" (:flashcards/kind card)))
+
 #?(:cljs
    (defn fetch-text!
      "Missionary task: GET a same-origin URL, resolve to the body text.
@@ -505,6 +548,21 @@
                  :field-names cloze-field-names :is-cloze true
                  :front cloze-card-front :back cloze-card-back
                  :renames [["Bibliography" "Links"]] :removals ["Source"]}
+                css))))))
+
+#?(:cljs
+   (defn ensure-overlapping-model!
+     "Missionary task: create-or-restore the Overlapping Cloze FreeMemo model
+      (cloze-typed via :isCloze true). Mandatory before any overlapping note
+      lands — a failure fails the whole push."
+     []
+     (m/sp
+       (let [css (m/? (fetch-text! app-anki-css-url))]
+         (m/? (ensure-owned-model!
+                {:model-name overlapping-model-name :template-name overlapping-template-name
+                 :field-names overlapping-field-names :is-cloze true
+                 :front overlapping-card-front :back overlapping-card-back
+                 :renames [] :removals []}
                 css))))))
 
 (defn io-mask-uploads
@@ -776,6 +834,39 @@
    :tags (:tags settings)
    :options (note-dupe-options settings)})
 
+(defn build-overlapping-content-fields
+  "FM-owned content fields for an Overlapping Cloze FreeMemo note: Title, the
+   materialized Text1..Text20 (items beyond the list blank), Full, Original,
+   Direction, Links. Excludes Remarks (user Anki-side space). Shared by add +
+   update. Pre: card carries :flashcards/overlapping (parsed JSONB w/ :fields)."
+  [card settings filename-map]
+  (let [ol (:flashcards/overlapping card)
+        fields (:fields ol)
+        direction (or (get-in ol [:settings :direction]) "ltr")
+        rw (fn [s] (rewrite-media-srcs (or s "") filename-map))
+        text-fields (into {}
+                      (map (fn [k]
+                             [(str "Text" k)
+                              (rw (get fields (keyword (str "Text" k))))]))
+                      (range 1 21))]
+    (merge
+      {"Title" (rw (:title ol))
+       "Full" (rw (:Full fields))
+       "Original" (rw (:Original fields))
+       "Direction" direction}
+      text-fields
+      (build-links-field card settings))))
+
+(defn build-overlapping-note
+  "AnkiConnect addNote map for an overlapping card → Overlapping Cloze FreeMemo.
+   Remarks seeded empty (user Anki-side space)."
+  [card settings filename-map]
+  {:deckName (:deck settings)
+   :modelName overlapping-model-name
+   :fields (merge {"Remarks" ""} (build-overlapping-content-fields card settings filename-map))
+   :tags (:tags settings)
+   :options (note-dupe-options settings)})
+
 #?(:cljs
    (defn build-note
      "Build an AnkiConnect addNote map, routing by card kind to the app-owned
@@ -786,6 +877,7 @@
      (cond
        (occlusion-card? card) (build-io-note card settings filename-map)
        (score-card? card) (build-score-note card settings filename-map)
+       (overlapping-card? card) (build-overlapping-note card settings filename-map)
        (= "cloze" (:flashcards/kind card)) (build-cloze-note card settings filename-map)
        :else (build-basic-note card settings filename-map))))
 
@@ -799,6 +891,7 @@
      (cond
        (occlusion-card? card) (build-io-fields card filename-map)
        (score-card? card) (build-score-fields card settings filename-map)
+       (overlapping-card? card) (build-overlapping-content-fields card settings filename-map)
        (= "cloze" (:flashcards/kind card)) (build-cloze-content-fields card settings filename-map)
        :else (build-basic-content-fields card settings filename-map))))
 
@@ -824,7 +917,8 @@
            io-cards (vec (filter :occlusion-group cards))
            score-cards (vec (filter :score-group cards))
            has-basic? (some #(= "basic" (:flashcards/kind %)) cards)
-           has-cloze? (some #(= "cloze" (:flashcards/kind %)) cards)]
+           has-cloze? (some #(= "cloze" (:flashcards/kind %)) cards)
+           has-overlapping? (some #(= "overlapping" (:flashcards/kind %)) cards)]
        (log/log-debug (str "[anki-push] do-anki-push! starting"
                         " new=" (count new-cards)
                         " update=" (count changed-cards)
@@ -845,6 +939,8 @@
            (m/? (ensure-basic-model!)))
          (when has-cloze?
            (m/? (ensure-cloze-model!)))
+         (when has-overlapping?
+           (m/? (ensure-overlapping-model!)))
          ;; Phase 0: collect all unique media IDs across every card, upload each once,
          ;; build filename-map {id -> "<id>.<ext>"} for src rewriting.
          (let [all-media-ids (reduce (fn [acc card] (into acc (collect-card-media-ids card)))
@@ -888,7 +984,7 @@
                ;; field-updates (updateNote) already-owned ones. updateNoteModel
                ;; wipes omitted fields, so it must not run on an owned note lest
                ;; Remarks/Back Extra be cleared.
-               owned-changed (filterv #(contains? #{"basic" "cloze"} (:flashcards/kind %))
+               owned-changed (filterv #(contains? #{"basic" "cloze" "overlapping"} (:flashcards/kind %))
                                changed-cards)
                model-by-note
                (if (empty? owned-changed)
@@ -926,8 +1022,11 @@
                               (log/log-debug (str "[anki-push] update card-id=" (:flashcards/id card)
                                                " kind=" kind " note-id=" note-id
                                                " field-keys=" (vec (keys field-map))))
-                              (if (contains? #{"basic" "cloze"} kind)
-                                (let [owned-model (if (= kind "cloze") cloze-model-name basic-model-name)]
+                              (if (contains? #{"basic" "cloze" "overlapping"} kind)
+                                (let [owned-model (case kind
+                                                    "cloze" cloze-model-name
+                                                    "overlapping" overlapping-model-name
+                                                    basic-model-name)]
                                   (if (= (get model-by-note note-id) owned-model)
                                     ;; Already owned — field-only update preserves
                                     ;; Remarks/Back Extra (updateNote leaves omitted
@@ -1014,13 +1113,15 @@
                                        basic? (= kind "basic")
                                        occlusion? (= kind "occlusion")
                                        score? (= kind "score")
+                                       overlapping? (= kind "overlapping")
                                        ordered-vals (ordered-field-values (:fields anki-note))
                                        update-map
                                        (cond
-                                         ;; Score: Front/Back are FM-generated media
-                                         ;; references and Remarks/Sources are
-                                         ;; Anki-owned — nothing to pull.
-                                         score? nil
+                                         ;; Score/overlapping: fields are FM-derived
+                                         ;; (media refs, or the expanded list) — the
+                                         ;; Anki→FM inverse is lossy, so nothing is
+                                         ;; pulled.
+                                         (or score? overlapping?) nil
                                          ;; Occlusion: diff the six text fields by the
                                          ;; app-owned field order; masks/Image/ID are
                                          ;; FM-owned and ignored. Both sides stripped so

@@ -15,7 +15,7 @@
    [freememo.logging :as log]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.card-components :refer [card-row-html set-inner-html! DeleteCardButton
-                                     try-delete-anki-notes!]]
+                                     overlapping-row-html try-delete-anki-notes!]]
    [freememo.card-modals :refer [EditCardModal]]
    #?(:clj [freememo.anki-sync-server :as sync-server])
    #?(:clj [freememo.cards :as cards])
@@ -536,12 +536,14 @@
           question (e/server (:flashcards/question card))
           answer (e/server (:flashcards/answer card))
           cloze (e/server (:flashcards/cloze card))
+          ol (e/server (:flashcards/overlapping card))
           topic-id (e/server (:flashcards/topic_id card))
           note-id (e/server (:flashcards/anki_note_id card))
           root-title (e/server (:root_title card))
           added (e/server (:formatted_date card))
           sync-st (e/server (:sync-state card))
           cloze? (= kind "cloze")
+          overlapping? (= kind "overlapping")
           cell-style {:padding-block "6px" :padding-inline "8px"
                       :display "flex" :align-items "center"
                       :border-bottom "1px solid var(--color-bg-subtle)"}]
@@ -549,8 +551,11 @@
             ;; the occlusion modal in the topic view. Ignore the activation
             ;; rather than open EditCardModal with empty fields.
             edit-card! (fn [_] (when (not= kind "occlusion")
-                                 (reset! !editing-card {:id id :kind kind :question question
-                                                        :answer answer :cloze cloze})))]
+                                 (reset! !editing-card
+                                   (if overlapping?
+                                     {:id id :kind kind :overlapping ol}
+                                     {:id id :kind kind :question question
+                                      :answer answer :cloze cloze}))))]
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt")
                     ;; 0-based absolute index → per-row translateY (C1c)
@@ -566,9 +571,12 @@
           (dom/props {:style (merge cell-style {:padding-inline "4px"})})
           (dom/span
             (dom/props {:class "type-badge"
-                        :style {:background (if cloze? "var(--color-badge-epub)" "var(--color-badge-pdf)")}})
-            (dom/text (if cloze? "Cloze" "Basic"))))
-        (RowContentCells cell-style cloze? id question answer cloze)
+                        :style {:background (cond overlapping? "var(--color-badge-web, #7c5cbf)"
+                                             cloze? "var(--color-badge-epub)"
+                                             :else "var(--color-badge-pdf)")}})
+            (dom/text (cond overlapping? "Overlap" cloze? "Cloze" :else "Basic"))))
+        (RowContentCells cell-style (or cloze? overlapping?) id question answer
+          (if overlapping? (overlapping-row-html ol) cloze))
         (RowDocCell cell-style root-title topic-id navigate!)
         ;; Added
         (dom/td
@@ -918,6 +926,7 @@
         (dom/option (dom/props {:value "all"}) (dom/text "All kinds"))
         (dom/option (dom/props {:value "basic"}) (dom/text "Basic"))
         (dom/option (dom/props {:value "cloze"}) (dom/text "Cloze"))
+        (dom/option (dom/props {:value "overlapping"}) (dom/text "Overlapping"))
         (dom/On "change" (fn [e] (reset! !kind (-> e .-target .-value))) nil))
       (dom/select
         (dom/props {:class "input" :aria-label "Filter by sync status"})

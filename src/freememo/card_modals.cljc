@@ -58,6 +58,21 @@
          :else nil))
      :clj nil))
 
+(defn ol-items-from-text
+  "Split the items-textarea value into a trimmed, blank-free vector of list
+   items — one item per line."
+  [text]
+  (->> (str/split-lines (or text ""))
+    (map str/trim)
+    (remove str/blank?)
+    vec))
+
+(defn ol-before-int
+  "Parse the 'context lines before' input to a non-negative int (default 1)."
+  [s]
+  #?(:cljs (let [n (js/parseInt (str s) 10)] (if (js/isNaN n) 1 (max 0 n)))
+     :clj (max 0 (or (parse-long (str s)) 1))))
+
 ;; ---------------------------------------------------------------------------
 ;; Modal Tab navigation — Tab moves focus editor→editor→Save→Cancel instead of
 ;; letting Quill insert a tab character. Toolbar buttons are excluded (they
@@ -334,6 +349,58 @@
               (dom/On "click" (fn [_] (reset! !show false)) nil))))))))
 
 ;; Edit card modal
+(e/defn OverlappingPane
+  "Authoring inputs for an overlapping-cloze card, shared by Add + Edit. Writes
+   to the caller's atoms; renders their current (e/watch'd) values. Plain DOM
+   inputs (no Quill) — items are short list entries, one per line."
+  [!title !items-text !before !reveal !direction modal-font]
+  (e/client
+    (let [title (e/watch !title)
+          items-text (e/watch !items-text)
+          before (e/watch !before)
+          reveal (e/watch !reveal)
+          direction (e/watch !direction)]
+      (dom/div
+        (dom/label (dom/text "Title / prompt:"))
+        (dom/div (dom/props {:style {:margin-bottom "var(--sp-3)"}})
+          (dom/input
+            (dom/props {:type "text" :value title
+                        :placeholder "What the list enumerates"
+                        :style {:width "100%" :font-size modal-font}})
+            (dom/On "input" (fn [e] (reset! !title (-> e .-target .-value))) nil)))
+        (dom/label (dom/text "List items (one per line):"))
+        (dom/div (dom/props {:style {:margin-bottom "var(--sp-3)"}})
+          (dom/textarea
+            (dom/props {:value items-text :rows "6"
+                        :placeholder "First item\nSecond item\nThird item"
+                        :dir (if (= direction "rtl") "rtl" "ltr")
+                        :style {:width "100%" :font-size modal-font}})
+            (dom/On "input" (fn [e] (reset! !items-text (-> e .-target .-value))) nil)))
+        (dom/div
+          (dom/props {:style {:display "flex" :align-items "center"
+                              :gap "var(--sp-4)" :flex-wrap "wrap" :font-size "13px"}})
+          (dom/label
+            (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-1)"}})
+            (dom/text "Context lines before:")
+            (dom/input
+              (dom/props {:type "number" :min "0" :max "5" :value (str before)
+                          :style {:width "3.5em"}})
+              (dom/On "input" (fn [e] (reset! !before (-> e .-target .-value))) nil)))
+          (dom/label
+            (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-1)"}})
+            (dom/input
+              (dom/props {:type "checkbox" :checked reveal})
+              (dom/On "change" (fn [e] (reset! !reveal (-> e .-target .-checked))) nil))
+            (dom/text "Reveal-all card"))
+          (dom/label
+            (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-1)"}})
+            (dom/text "Direction:")
+            (dom/select
+              (dom/props {:value direction})
+              (dom/On "change" (fn [e] (reset! !direction (-> e .-target .-value))) nil)
+              (dom/option (dom/props {:value "ltr"}) (dom/text "LTR"))
+              (dom/option (dom/props {:value "rtl"}) (dom/text "RTL (Arabic)")))))))))
+
 (e/defn EditCardModal [!editing-card user-id]
   (e/client
     (let [editing-card (e/watch !editing-card)
@@ -342,15 +409,26 @@
           init-q (or (:question editing-card) "")
           init-a (or (:answer editing-card) "")
           init-c (or (:cloze editing-card) "")
+          init-ol (:overlapping editing-card)
           !question (atom init-q)
           !answer (atom init-a)
           !cloze (atom init-c)
+          !ol-title (atom (or (:title init-ol) ""))
+          !ol-items-text (atom (str/join "\n" (:items init-ol)))
+          !ol-before (atom (str (get-in init-ol [:settings :before] 1)))
+          !ol-reveal (atom (get-in init-ol [:settings :reveal-all?] true))
+          !ol-direction (atom (or (get-in init-ol [:settings :direction]) "ltr"))
           !q-editor (atom nil)
           !a-editor (atom nil)
           !c-editor (atom nil)
           question (e/watch !question)
           answer (e/watch !answer)
           cloze (e/watch !cloze)
+          ol-title (e/watch !ol-title)
+          ol-items-text (e/watch !ol-items-text)
+          ol-before (e/watch !ol-before)
+          ol-reveal (e/watch !ol-reveal)
+          ol-direction (e/watch !ol-direction)
           card-font-sz (e/server (settings/get-card-font-size user-id))
           modal-font (str (or card-font-sz 14) "px")
           !primary-btn (atom nil)]
@@ -409,8 +487,12 @@
           (dom/h3 (dom/props {:style {:margin-top "0" :cursor "move" :user-select "none"
                                       :padding-bottom "var(--sp-2)" :margin-bottom "var(--sp-3)"
                                       :border-bottom "1px solid var(--color-border)"}})
-            (dom/text "Edit " (if (= kind "basic") "Basic" "Cloze") " Card"))
-          (if (= kind "basic")
+            (dom/text "Edit " (cond (= kind "overlapping") "Overlapping"
+                                (= kind "basic") "Basic" :else "Cloze") " Card"))
+          (cond
+            (= kind "overlapping")
+            (OverlappingPane !ol-title !ol-items-text !ol-before !ol-reveal !ol-direction modal-font)
+            (= kind "basic")
             (dom/div
               (dom/label (dom/text "Question:"))
               (dom/div
@@ -424,6 +506,7 @@
                 (QuillField init-a
                   (fn [html] (reset! !answer html))
                   "Answer..." [:edit-a card-id] !a-editor nil nil)))
+            :else
             (dom/div
               (dom/label (dom/text "Cloze:"))
               (dom/div
@@ -468,23 +551,37 @@
                 (dom/div (dom/props {:style {:order "-1" :margin-right "auto" :color "var(--color-danger-text)" :font-size "12px"}})
                   (dom/text "Error: " ?error)))
               (when t
-                (let [validation-error (when (= kind "cloze") (validate-cloze cloze))]
-                  (if validation-error
-                    (t validation-error)
-                    (let [clean-q (e/server (sanitize-card-field question))
-                          clean-a (e/server (sanitize-card-field answer))
-                          clean-c (e/server (sanitize-card-field cloze))
-                          fields (if (= kind "basic")
-                                   {:question clean-q :answer clean-a}
-                                   (cond-> {:cloze clean-c}
-                                     (and clean-a (not (str/blank? clean-a)))
-                                     (assoc :answer clean-a)))
-                          result (e/server (cards/update-card card-id fields))]
-                      (if (:success result)
-                        (do (e/on-unmount #(reset! !editing-card nil))
-                            (case (e/server (commands/bump! user-id :edit-card))
-                              (t)))
-                        (t (:error result))))))))
+                (if (= kind "overlapping")
+                  (let [items (ol-items-from-text ol-items-text)]
+                    (if (empty? items)
+                      (t "Add at least one list item")
+                      (let [result (e/server (cards/update-overlapping-card card-id
+                                               {:title ol-title :items items
+                                                :settings {:before (ol-before-int ol-before)
+                                                           :after 0 :reveal-all? ol-reveal
+                                                           :direction ol-direction}}))]
+                        (if (:success result)
+                          (do (e/on-unmount #(reset! !editing-card nil))
+                              (case (e/server (commands/bump! user-id :edit-card))
+                                (t)))
+                          (t (:error result))))))
+                  (let [validation-error (when (= kind "cloze") (validate-cloze cloze))]
+                    (if validation-error
+                      (t validation-error)
+                      (let [clean-q (e/server (sanitize-card-field question))
+                            clean-a (e/server (sanitize-card-field answer))
+                            clean-c (e/server (sanitize-card-field cloze))
+                            fields (if (= kind "basic")
+                                     {:question clean-q :answer clean-a}
+                                     (cond-> {:cloze clean-c}
+                                       (and clean-a (not (str/blank? clean-a)))
+                                       (assoc :answer clean-a)))
+                            result (e/server (cards/update-card card-id fields))]
+                        (if (:success result)
+                          (do (e/on-unmount #(reset! !editing-card nil))
+                              (case (e/server (commands/bump! user-id :edit-card))
+                                (t)))
+                          (t (:error result)))))))))
             (dom/button
               (dom/props {:class "btn btn-secondary"})
               (dom/text "Cancel")
@@ -541,8 +638,18 @@
           !answer (atom back-pin-html)
           !primary-editor (atom nil)
           !a-editor (atom nil)
+          !ol-title (atom "")
+          !ol-items-text (atom "")
+          !ol-before (atom "1")
+          !ol-reveal (atom true)
+          !ol-direction (atom "ltr")
           primary (e/watch !primary)
           answer (e/watch !answer)
+          ol-title (e/watch !ol-title)
+          ol-items-text (e/watch !ol-items-text)
+          ol-before (e/watch !ol-before)
+          ol-reveal (e/watch !ol-reveal)
+          ol-direction (e/watch !ol-direction)
           card-font-sz (e/server (settings/get-card-font-size user-id))
           modal-font (str (or card-font-sz 14) "px")
           !primary-btn (atom nil)]
@@ -617,8 +724,18 @@
                 (dom/props {:type "radio" :name "add-card-kind" :value "cloze"
                             :checked (= kind "cloze")})
                 (dom/On "change" (fn [_] (reset! !card-kind "cloze")) nil))
-              (dom/text "Cloze")))
-          (if (= kind "basic")
+              (dom/text "Cloze"))
+            (dom/label
+              (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-1)" :font-size "14px" :cursor "pointer"}})
+              (dom/input
+                (dom/props {:type "radio" :name "add-card-kind" :value "overlapping"
+                            :checked (= kind "overlapping")})
+                (dom/On "change" (fn [_] (reset! !card-kind "overlapping")) nil))
+              (dom/text "Overlapping")))
+          (cond
+            (= kind "overlapping")
+            (OverlappingPane !ol-title !ol-items-text !ol-before !ol-reveal !ol-direction modal-font)
+            (= kind "basic")
             (dom/div
               (dom/label (dom/text "Question:"))
               (dom/div
@@ -632,6 +749,7 @@
                 (QuillField answer
                   (fn [html] (reset! !answer html))
                   "Answer..." [:add-a] !a-editor nil nil)))
+            :else
             (dom/div
               (dom/label (dom/text "Cloze:"))
               (dom/div
@@ -672,7 +790,19 @@
                 (dom/div (dom/props {:style {:order "-1" :margin-right "auto" :color "var(--color-danger-text)" :font-size "12px"}})
                   (dom/text "Error: " ?error)))
               (when t
-                (let [validation-error (when (= kind "cloze") (validate-cloze primary))]
+                (if (= kind "overlapping")
+                  (let [items (ol-items-from-text ol-items-text)]
+                    (if (empty? items)
+                      (t "Add at least one list item")
+                      (let [card-data [{:title ol-title :items items
+                                        :settings {:before (ol-before-int ol-before)
+                                                   :after 0 :reveal-all? ol-reveal
+                                                   :direction ol-direction}}]]
+                        (case (e/server (opt/enqueue-add-card! user-id
+                                          {:topic-id topic-id :root-topic-id root-topic-id
+                                           :kind "overlapping" :card-data card-data}))
+                          (do (e/on-unmount #(reset! !show-add false)) (t))))))
+                  (let [validation-error (when (= kind "cloze") (validate-cloze primary))]
                   (if validation-error
                     (t validation-error)
                     (let [clean-primary (e/server (sanitize-card-field primary))
@@ -691,7 +821,7 @@
                       (case (e/server (opt/enqueue-add-card! user-id
                                         {:topic-id topic-id :root-topic-id root-topic-id
                                          :kind kind :card-data card-data}))
-                        (do (e/on-unmount #(reset! !show-add false)) (t))))))))
+                        (do (e/on-unmount #(reset! !show-add false)) (t)))))))))
             (dom/button
               (dom/props {:class "btn btn-secondary"})
               (dom/text "Cancel")
