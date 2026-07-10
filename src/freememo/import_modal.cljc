@@ -15,13 +15,14 @@
    [freememo.loading :as loading]
    [freememo.modal-shell :as modal]
    [freememo.navigation :as nav]
+   #?(:clj [freememo.db :as db])
    #?(:clj [freememo.quota :as quota])
    #?(:clj [freememo.web-import :as web-import])))
 
 ;; ── Server helpers ─────────────────────────────────────────────────
 
-(defn upload-cap-bytes* []
-  #?(:clj (long quota/per-file-max-bytes)
+(defn upload-cap-bytes* [user-id]
+  #?(:clj (long (quota/get-user-upload-max db/ds user-id))
      :cljs 0))
 
 ;; ── CLJS helpers ───────────────────────────────────────────────────
@@ -759,7 +760,7 @@
           !busy-msg (atom nil)
           source (e/watch !source)
           stage (e/watch !stage)
-          cap-bytes (e/server (upload-cap-bytes*))
+          cap-bytes (e/server (upload-cap-bytes* user-id))
           navigate-to-viewer! (fn [doc-id]
                                 (reset! !show false)
                                 (navigate! :viewer (nav/nav-topic doc-id nil)))
