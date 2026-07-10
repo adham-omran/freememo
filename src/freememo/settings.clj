@@ -4,6 +4,7 @@
    [freememo.db :as db]
    [freememo.card-models :as card-models]
    [freememo.config :as config]
+   [freememo.fsrs :as fsrs]
    [freememo.input-check :as input]
    [freememo.toasts :as toasts]
    [taoensso.telemere :as tel]
@@ -45,6 +46,10 @@
 (def ZOTERO_ENABLED "zotero_enabled")
 (def CARD_SPLIT "card_split")
 (def ASSISTANT_MODEL "assistant_model")
+(def FSRS_RETENTION "fsrs_retention")
+(def FSRS_NEW_PER_DAY "fsrs_new_per_day")
+(def FSRS_REVIEW_PER_DAY "fsrs_review_per_day")
+(def FSRS_FUZZ "fsrs_fuzz")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
 
 (def kg-default-model-id
@@ -679,6 +684,49 @@
     (catch Exception e
       (tel/error! {:id ::save-card-split} e)
       {:success false :error "Failed to save card split"})))
+
+;; --- FSRS scheduling config (quiz Review flow) ---------------------------
+;; Only retention / daily caps / fuzz are user-tunable; learning steps and
+;; maximum interval stay at the FSRS-6 defaults baked into fsrs/make-scheduler.
+
+(defn get-fsrs-retention
+  "Desired retention in [0.7, 0.99]; default 0.9."
+  [user-id]
+  (try (-> (or (db/get-setting user-id FSRS_RETENTION) "0.9")
+         Double/parseDouble (max 0.7) (min 0.99))
+    (catch Exception _ 0.9)))
+
+(defn get-fsrs-new-per-day
+  "New cards introduced per day, in [0, 9999]; default 20."
+  [user-id]
+  (try (-> (or (db/get-setting user-id FSRS_NEW_PER_DAY) "20")
+         Integer/parseInt (max 0) (min 9999))
+    (catch Exception _ 20)))
+
+(defn get-fsrs-review-per-day
+  "Review cards per day, in [0, 99999]; default 9999 (effectively uncapped)."
+  [user-id]
+  (try (-> (or (db/get-setting user-id FSRS_REVIEW_PER_DAY) "9999")
+         Integer/parseInt (max 0) (min 99999))
+    (catch Exception _ 9999)))
+
+(defn get-fsrs-fuzz
+  "Whether interval fuzzing is on; default true."
+  [user-id]
+  (not= "false" (db/get-setting user-id FSRS_FUZZ)))
+
+(defn fsrs-config
+  "A user's FSRS scheduler + daily caps, resolved from settings (defaults when
+   unset). Single owner of config assembly for the Review flow.
+   Post: {:scheduler <fsrs scheduler map> :enable-fuzzing bool
+          :new-per-day int :review-per-day int}."
+  [user-id]
+  (let [fuzz (get-fsrs-fuzz user-id)]
+    {:scheduler (fsrs/make-scheduler {:desired-retention (get-fsrs-retention user-id)
+                                      :enable-fuzzing fuzz})
+     :enable-fuzzing fuzz
+     :new-per-day (get-fsrs-new-per-day user-id)
+     :review-per-day (get-fsrs-review-per-day user-id)}))
 
 (defn get-scan-dpi [user-id]
   (try
