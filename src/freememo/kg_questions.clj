@@ -59,7 +59,7 @@
          batch is skipped, never aborts the run."
   [user-id graph-topic-id]
   (try
-    (let [{:keys [api-key entry model-slug]} (llm/resolve-model+gate! user-id)
+    (let [{:keys [api-key entry model-slug]} (llm/resolve-model+gate! user-id :atomic)
           facts (db/facts-without-atomic-question user-id graph-topic-id)
           _ (when (empty? facts)
               (throw (ex-info "Every fact already has a question." {})))
@@ -122,7 +122,7 @@
               {:level :error
                :message "Needs at least two facts touching this entity."})
           {:success true :questions 0})
-        (let [{:keys [api-key entry model-slug]} (llm/resolve-model+gate! user-id)
+        (let [{:keys [api-key entry model-slug]} (llm/resolve-model+gate! user-id :synthesis)
               {:keys [parsed cost]} (llm/chat! api-key model-slug
                                       (cards/load-prompt-template "kg-question-synthesis.md")
                                       (pr-str {:entity entity-label

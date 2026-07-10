@@ -153,7 +153,12 @@
          failures skip the page, never abort the run."
   [user-id root-topic-id]
   (try
-    (let [{:keys [api-key entry model-slug]} (llm/resolve-model+gate! user-id)
+    ;; Extraction and entity-linking are independently configurable steps
+    ;; (:extract / :link). model-slug drives extraction; link-slug drives
+    ;; linking. entry (the extraction model) is what facts record as
+    ;; :source_model and what the summed distill cost bills under.
+    (let [{:keys [api-key entry model-slug]} (llm/resolve-model+gate! user-id :extract)
+          link-slug (:model-slug (llm/resolve-model+gate! user-id :link))
           pages (or (seq (document-pages root-topic-id))
                     (throw (ex-info "No page text. Extract text first." {})))
           prompt (extraction-prompt (db/get-kg-approved-predicates user-id))
@@ -173,7 +178,7 @@
           entity-labels (into [] (comp (mapcat (juxt :s :o)) (remove nil?)) triples)
           {:keys [by-label] link-cost :cost}
           (if (seq entity-labels)
-            (link-entities! api-key model-slug user-id entity-labels)
+            (link-entities! api-key link-slug user-id entity-labels)
             {:by-label {} :cost 0.0})
           entity-id #(get by-label (str/lower-case (str/trim %)))
           predicate-id (memoize
