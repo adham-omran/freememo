@@ -40,7 +40,7 @@
     (try
       (when-not answer-id
         (throw (ex-info "Session not found" {})))
-      (let [{:keys [api-key entry model-slug]} (llm/resolve-model+gate! user-id)
+      (let [{:keys [api-key entry model-slug]} (llm/resolve-model+gate! user-id :grade)
             {:keys [facts keywords question reference-answer]}
             (or (db/get-kg-question-for-session user-id question-id)
                 (throw (ex-info "Question not found" {})))

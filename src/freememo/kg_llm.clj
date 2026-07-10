@@ -25,17 +25,19 @@
     (throw (InterruptedException. "run cancelled"))))
 
 (defn resolve-model+gate!
-  "Shared pipeline preamble: OpenRouter key present, credit gate passed,
-   model resolved from the user's card-model setting (one knob steers every
-   KG lane). Post: {:api-key :entry :model-slug}; throws on any failure —
+  "Shared pipeline preamble: OpenRouter key present, credit gate passed, model
+   resolved from the user's per-step KG model setting (settings/get-kg-model) —
+   each KG lane carries its own knob.
+   Pre:  step ∈ the KG step registry (settings/kg-model-steps).
+   Post: {:api-key :entry :model-slug}; throws on any failure —
    ::insufficient-credits typed for the gate."
-  [user-id]
+  [user-id step]
   (let [api-key (settings/get-openrouter-api-key user-id)]
     (when (empty? api-key) (throw (ex-info "OpenRouter API key not configured" {})))
     (let [gate (credits/check-cost-billed-balance! user-id)]
       (when-not (:ok gate)
         (throw (ex-info (:error gate) {:type ::insufficient-credits}))))
-    (let [model-id (settings/get-model user-id)
+    (let [model-id (settings/get-kg-model user-id step)
           entry (or (card-models/resolve-model model-id)
                     (throw (ex-info (str "Unknown model: " model-id) {})))]
       {:api-key api-key :entry entry :model-slug (:openrouter-model entry)})))

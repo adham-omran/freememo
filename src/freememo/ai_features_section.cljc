@@ -85,6 +85,31 @@
             (dom/props {:style {:margin-top "8px" :font-size "13px" :color "var(--color-danger-text)"}})
             (dom/text checkout-error)))))))
 
+(e/defn KgModelField
+  "One per-step KG model selector. Owns its value atom + server read/save so the
+   six steps render from data (kg-model-step-choices) without six copied blocks.
+   card-model-ids/card-label-of are passed in from the parent (built once)."
+  [user-id step label card-model-ids card-label-of]
+  (e/client
+    (let [server-val (e/server (settings/get-kg-model user-id step))
+          !val (atom server-val)
+          val (e/watch !val)]
+      (dom/div
+        (dom/props {:class "field" :style {:margin-left "12px"}})
+        (dom/label (dom/props {:class "label"}) (dom/text label))
+        (dom/select
+          (dom/props {:value val :class "select"})
+          (e/for [id (e/diff-by identity card-model-ids)]
+            (dom/option (dom/props {:value id :selected (= id val)}) (dom/text (get card-label-of id id))))
+          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                [t _] (e/Token change-event)]
+            (when (some? change-event)
+              (reset! !val change-event))
+            (when t
+              (let [r (e/server (e/Offload #(settings/save-kg-model user-id step change-event)))]
+                (case r
+                  (if (:success r) (t) (t (:error r))))))))))))
+
 (e/defn AIFeaturesSection [user-id enc-key base-url client-country]
   (e/client
     (let [server-llm-enabled (e/server (settings/get-llm-enabled user-id))
@@ -211,6 +236,19 @@
                       (if (:success r) (t) (t (:error r))))))))
             (dom/div (dom/props {:class "hint"})
               (dom/text "Model used by the Socratic AI assistant in the reading view.")))
+
+          ;; Knowledge-graph models — one model per KG pipeline step, rendered
+          ;; from the step registry (settings/kg-model-step-choices). Same
+          ;; registry as card generation; each defaults to Gemini 3 Flash.
+          (let [kg-steps (e/server (settings/kg-model-step-choices))]
+            (dom/div
+              (dom/props {:class "field"})
+              (dom/label (dom/props {:class "label"}) (dom/text "Knowledge-graph models"))
+              (dom/div (dom/props {:class "hint" :style {:margin-bottom "8px"}})
+                (dom/text "Model used for each knowledge-graph step. Defaults to Gemini 3 Flash."))
+              (e/for [pair (e/diff-by first kg-steps)]
+                (let [[step label] pair]
+                  (KgModelField user-id step label card-model-ids card-label-of)))))
 
           ;; Reasoning
           (dom/div

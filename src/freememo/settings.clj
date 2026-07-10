@@ -47,6 +47,26 @@
 (def ASSISTANT_MODEL "assistant_model")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
 
+(def kg-default-model-id
+  "Default model for every knowledge-graph step when the user has no saved
+   selection (product decision — a cheap, fast model for high-volume KG work)."
+  "gemini-3-flash")
+
+(def kg-model-steps
+  "Per-step KG model knobs — the single source for both resolution
+   (get/save-kg-model) and the Settings selectors; order = display order.
+   :step is the id threaded through kg-llm/resolve-model+gate!; :setting is the
+   db/get-setting key."
+  [{:step :extract     :setting "kg_extract_model"            :label "Fact extraction (distill)"}
+   {:step :link        :setting "kg_link_model"               :label "Entity linking"}
+   {:step :atomic      :setting "kg_atomic_question_model"    :label "Atomic questions"}
+   {:step :synthesis   :setting "kg_synthesis_question_model" :label "Synthesis questions"}
+   {:step :grade       :setting "kg_grade_model"              :label "Answer grading"}
+   {:step :fact-select :setting "kg_fact_select_model"        :label "Fact selection (cards)"}])
+
+(def ^:private kg-step->setting
+  (into {} (map (juxt :step :setting)) kg-model-steps))
+
 (defn get-email-updates [user-id]
   (= "true" (db/get-setting user-id EMAIL_UPDATES)))
 
@@ -130,6 +150,27 @@
   []
   (let [labels (into {} (map (juxt :id :label)) card-models/registry)]
     (mapv (fn [id] [id (labels id id)]) (card-model-ids))))
+
+(defn get-kg-model
+  "Effective model :id for KG pipeline `step`. Saved id if ∈ (card-model-ids),
+   else kg-default-model-id if allowed, else first allowed.
+   Pre:  step ∈ (map :step kg-model-steps) — else caller bug.
+   Post: an :id ∈ (card-model-ids); never nil."
+  [user-id step]
+  (let [setting (or (kg-step->setting step)
+                    (throw (ex-info (str "Unknown KG model step: " step) {:step step})))
+        allowed (card-model-ids)
+        saved (db/get-setting user-id setting)]
+    (cond
+      (some #{saved} allowed) saved
+      (some #{kg-default-model-id} allowed) kg-default-model-id
+      :else (first allowed))))
+
+(defn kg-model-step-choices
+  "[[step-keyword label] …] in display order — ships the KG step list + labels
+   to the Settings UI (kg-model-steps is server-only)."
+  []
+  (mapv (juxt :step :label) kg-model-steps))
 
 (defn get-card-count [user-id]
   (try
@@ -269,6 +310,25 @@
       (catch Exception e
         (tel/error! {:id ::save-assistant-model} e)
         {:success false :error "Failed to save assistant model"}))))
+
+(defn save-kg-model
+  "Persist a KG step model selection. Pre: `step` known and `value` a
+   card-models :id (else rejected — caller bug). Post: the step's setting
+   stored, or {:success false}."
+  [user-id step value]
+  (let [setting (kg-step->setting step)]
+    (cond
+      (nil? setting)
+      {:success false :error (str "Unknown KG model step: " step)}
+      (not (card-models/resolve-model value))
+      {:success false :error (str "Unknown model: " value)}
+      :else
+      (try
+        (db/set-setting user-id setting value)
+        {:success true}
+        (catch Exception e
+          (tel/error! {:id ::save-kg-model} e)
+          {:success false :error "Failed to save KG model"})))))
 
 (defn save-reasoning [user-id value]
   (try
