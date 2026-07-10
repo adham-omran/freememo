@@ -105,7 +105,20 @@
               (when e (SaveCardType t user-id !card-type "cloze")))
             (e/for [[t e] (dom/On-all "keydown" radio-activation-key)]
               (when e (SaveCardType t user-id !card-type "cloze")))
-            (dom/text "Cloze")))))))
+            (dom/text "Cloze"))
+          (dom/span
+            (dom/props {:role "radio" :tabindex "0"
+                        :aria-checked (str (= card-type "overlapping"))
+                        :style {:display "flex" :align-items "center" :gap "4px" :cursor "pointer"}})
+            (dom/On "mousedown" (fn [e] (.preventDefault e)) nil)
+            (dom/span
+              (dom/props {:class (str "radio-dot" (when (= card-type "overlapping") " radio-dot--checked"))})
+              (dom/text (if (= card-type "overlapping") "◉" "○")))
+            (e/for [[t e] (dom/On-all "click")]
+              (when e (SaveCardType t user-id !card-type "overlapping")))
+            (e/for [[t e] (dom/On-all "keydown" radio-activation-key)]
+              (when e (SaveCardType t user-id !card-type "overlapping")))
+            (dom/text "Overlapping")))))))
 
 (def ^:private card-count-min 1)
 (def ^:private card-count-max 20)

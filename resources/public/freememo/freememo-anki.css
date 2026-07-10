@@ -525,3 +525,73 @@ pre > code {
     font-weight: bold;
     font-size: 1em;
 }
+
+/* ================================================================
+   Overlapping Cloze FreeMemo note type — app-owned, cloze-typed.
+   One model serves LTR and RTL via the per-note Direction field
+   (dir="ltr"|"rtl" on .fm-ol). Pushed as Styling on every push.
+   fm-overlapping-css v1
+   ================================================================ */
+
+.fm-ol {
+    margin: 0.4em auto;
+    max-width: 40em;
+}
+
+.fm-ol-title {
+    font-weight: bold;
+    margin-bottom: 0.8em;
+    text-align: center;
+}
+
+.fm-ol-text {
+    text-align: left;
+}
+
+/* The active deletion, highlighted like Anki's default cloze. */
+.fm-ol .cloze {
+    font-weight: bold;
+    color: #0048ff;
+}
+
+/* Fully-revealed list, shown on the back. */
+.fm-ol-original {
+    margin-top: 0.8em;
+    color: rgba(128, 128, 128, 0.95);
+}
+
+.fm-ol-original hr {
+    border: none;
+    border-top: 1px solid rgba(128, 128, 128, 0.35);
+    margin: 0.6em 0;
+}
+
+.fm-ol-extra {
+    max-width: 40em;
+    margin: 1.2em auto 0;
+    padding-top: 0.8em;
+    border-top: 1px solid rgba(128, 128, 128, 0.35);
+    font-size: 0.9em;
+    text-align: left;
+}
+
+.fm-ol-extra.fm-links {
+    text-align: center;
+}
+
+.fm-ol-field-descr {
+    margin-bottom: 0.2em;
+    font-weight: bold;
+    font-size: 1em;
+}
+
+/* RTL / Arabic — driven by the per-note Direction field. Amiri is used when
+   the reviewer has it installed; no external @import so offline Anki is fine. */
+.fm-ol[dir="rtl"] {
+    font-family: "Amiri", "Helvetica LT Std", Helvetica, Arial, sans-serif;
+}
+
+.fm-ol[dir="rtl"] .fm-ol-text,
+.fm-ol[dir="rtl"] .fm-ol-extra {
+    text-align: right;
+}

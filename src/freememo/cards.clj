@@ -9,6 +9,7 @@
    [freememo.openrouter :as openrouter]
    [freememo.card-models :as card-models]
    [freememo.llm-edn :as llm-edn]
+   [freememo.overlapping :as overlap]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
    [clojure.string :as str]))
@@ -103,6 +104,29 @@
         "\n\n# Instructions\n\n"
         "Generate EXACTLY " card-count " flashcards from the provided text. "
         "Return EXACTLY " card-count " items in the EDN vector — no more, no fewer. "
+        "Do not exceed this count even if the content seems to warrant more cards."))))
+
+(defn build-overlapping-prompt
+  "Build prompt for overlapping-cloze cards.
+   Concatenates effective system prompt + optional pre-prompt + overlapping.md.
+   card-count is the number of LISTS to produce (each becomes one note that
+   Anki fans out into N+1 cards)."
+  [card-count has-context? pre-prompt user-id topic-id]
+  (let [system (settings/get-effective-system-prompt user-id topic-id)
+        overlapping (load-prompt-template "overlapping.md")
+        context (when has-context? (load-prompt-template "context.md"))]
+    (when (and system overlapping)
+      (str system
+        (when (and pre-prompt (not (str/blank? pre-prompt)))
+          (str "\n\n## Custom Question Format\n\n"
+            "Use the following pattern for your questions:\n\n"
+            pre-prompt
+            "\n\n"))
+        overlapping
+        (when context (str "\n\n" context))
+        "\n\n# Instructions\n\n"
+        "Generate EXACTLY " card-count " overlapping-cloze cards from the provided text. "
+        "Return EXACTLY " card-count " maps in the EDN vector — no more, no fewer. "
         "Do not exceed this count even if the content seems to warrant more cards."))))
 
 ;; Context retrieval
@@ -254,6 +278,23 @@
        :error (humanize-error (.getMessage (root-cause e)))
        :error-type (error-type e)})))
 
+(defn generate-overlapping-cards
+  "Generate overlapping-cloze cards via OpenRouter.
+   Each returned map is {:title s :items [s ...]}. Options as generate-basic-cards.
+   Returns {:success true :cards [...]} or {:success false :error \"msg\"}."
+  [opts]
+  (try
+    (tel/trace! {:id ::generate-overlapping}
+      (generate-cards* opts build-overlapping-prompt :cards.overlapping))
+    (catch Exception e
+      (if (= :insufficient-credits (error-type e))
+        (tel/log! {:level :info :id ::spend-refused :data {:user-id (:user-id opts)}}
+          "Card generation refused: out of credits")
+        (tel/error! {:id ::generate-overlapping-cards} e))
+      {:success false
+       :error (humanize-error (.getMessage (root-cause e)))
+       :error-type (error-type e)})))
+
 ;; Card persistence
 
 (defn effective-pins-for-bake
@@ -347,20 +388,33 @@
   ([topic-id root-topic-id kind cards bake?]
    (try
      (let [rows (map (fn [card]
-                       (let [baked (if bake? (bake-card-html topic-id kind card) card)]
-                         (if (= kind "basic")
-                           {:topic_id topic-id
-                            :root_topic_id root-topic-id
-                            :kind kind
-                            :question (:q baked)
-                            :answer (:a baked)
-                            :cloze nil}
+                       (if (= kind "overlapping")
+                         (let [items (vec (:items card))
+                               settings (merge overlap/default-settings (:settings card))]
                            {:topic_id topic-id
                             :root_topic_id root-topic-id
                             :kind kind
                             :question nil
-                            :answer (:a baked)
-                            :cloze (:c baked)})))
+                            :answer nil
+                            :cloze nil
+                            :overlapping {:title (:title card)
+                                          :items items
+                                          :settings settings
+                                          :fields (overlap/expand items settings)}})
+                         (let [baked (if bake? (bake-card-html topic-id kind card) card)]
+                           (if (= kind "basic")
+                             {:topic_id topic-id
+                              :root_topic_id root-topic-id
+                              :kind kind
+                              :question (:q baked)
+                              :answer (:a baked)
+                              :cloze nil}
+                             {:topic_id topic-id
+                              :root_topic_id root-topic-id
+                              :kind kind
+                              :question nil
+                              :answer (:a baked)
+                              :cloze (:c baked)}))))
                   cards)]
        {:success true :ids (vec (db/insert-flashcards! rows))})
      (catch Exception e
@@ -382,8 +436,9 @@
   [opts model-ids]
   (let [gen-one (fn [mid]
                   (let [o (assoc opts :model mid)]
-                    (if (= (:card-type opts) "cloze")
-                      (generate-cloze-cards o)
+                    (case (:card-type opts)
+                      "cloze" (generate-cloze-cards o)
+                      "overlapping" (generate-overlapping-cards o)
                       (generate-basic-cards o))))
         futs (mapv (fn [mid] [mid (future (gen-one mid))]) model-ids)]
     (mapv (fn [[mid f]]
@@ -409,8 +464,11 @@
    root-topic-id: the root topic."
   [topic-id root-topic-id kind fields]
   (try
-    (let [cards (if (= kind "basic")
-                  [{:q (:question fields) :a (:answer fields)}]
+    (let [cards (case kind
+                  "basic" [{:q (:question fields) :a (:answer fields)}]
+                  "overlapping" [{:title (:title fields)
+                                  :items (:items fields)
+                                  :settings (:settings fields)}]
                   [{:c (:cloze fields)}])]
       (save-cards topic-id root-topic-id kind cards))
     (catch Exception e
@@ -531,6 +589,25 @@
 
     (catch Exception e
       (tel/error! {:id ::update-card} e)
+      {:success false :error (.getMessage e)})))
+
+(defn update-overlapping-card
+  "Re-derive an overlapping card's Anki fields from an edited list + settings
+   and persist the whole overlapping JSONB.
+   Pre:  items non-empty and ≤ overlapping/max-items (expand enforces both).
+   Post: the row's :overlapping is {:title :items :settings :fields}, :fields
+         consistent with :items/:settings; updated_at bumped for sync.
+   Returns {:success bool :error string}."
+  [card-id {:keys [title items settings]}]
+  (try
+    (let [items (vec items)
+          settings (merge overlap/default-settings settings)
+          ol {:title title :items items :settings settings
+              :fields (overlap/expand items settings)}]
+      (db/update-flashcard! card-id {:overlapping ol})
+      {:success true})
+    (catch Exception e
+      (tel/error! {:id ::update-overlapping-card} e)
       {:success false :error (.getMessage e)})))
 
 ;; CSV Export

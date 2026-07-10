@@ -155,8 +155,9 @@
                                :card-count card-count :user-id user-id :enc-key enc-key
                                :topic-id topic-id :model model}
                         pre-prompt (assoc :pre-prompt pre-prompt))
-                 gen-result (if (= card-type "basic")
-                              (cards/generate-basic-cards opts)
+                 gen-result (case card-type
+                              "basic" (cards/generate-basic-cards opts)
+                              "overlapping" (cards/generate-overlapping-cards opts)
                               (cards/generate-cloze-cards opts))]
              (if-not (:success gen-result)
                gen-result

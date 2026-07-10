@@ -362,6 +362,13 @@
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_score_group
                       ON flashcards(score_group_id) WHERE score_group_id IS NOT NULL"])
 
+  ;; Overlapping cloze — one row per authored list. The overlapping JSONB is the
+  ;; whole card: {:title :items [...] :settings {...} :fields {:Original :Full
+  ;; :Text1 ...}}. :items+:settings are the source edits write to; :fields is
+  ;; the materialized Anki-field expansion (freememo.overlapping/expand),
+  ;; re-derived on every save. question/answer/cloze stay NULL for this kind.
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS overlapping JSONB"])
+
   ;; Drop deprecated source_reference columns — title is the single source of truth.
   (jdbc/execute! ds ["ALTER TABLE topics DROP COLUMN IF EXISTS source_reference"])
   (jdbc/execute! ds ["ALTER TABLE flashcards DROP COLUMN IF EXISTS source_reference"])
@@ -2316,6 +2323,7 @@
   [row]
   (-> row
     (update :flashcards/io_fields pgobject->clj)
+    (update :flashcards/overlapping pgobject->clj)
     (assoc :occlusion_image_media_id (or (:occlusion_image_media_id row)
                                        (:occlusion_groups/occlusion_image_media_id row))
       :occlusion_mode (or (:occlusion_mode row)
@@ -2339,13 +2347,19 @@
       (input/check-length! :question (:question row) input/card-max)
       (input/check-length! :answer (:answer row) input/card-max)
       (input/check-length! :cloze (:cloze row) input/card-max))
-    (mapv :flashcards/id
-      (jdbc/execute! ds
-        (sql/format {:insert-into :flashcards
-                     :values rows
-                     :on-conflict []
-                     :do-nothing true
-                     :returning [:id]})))))
+    ;; :overlapping is a plain map at the call site; convert to jsonb here so
+    ;; callers never touch PGobject (same ownership as the io_fields path).
+    (let [rows (mapv (fn [row]
+                       (cond-> row
+                         (some? (:overlapping row)) (update :overlapping ->jsonb)))
+                 rows)]
+      (mapv :flashcards/id
+        (jdbc/execute! ds
+          (sql/format {:insert-into :flashcards
+                       :values rows
+                       :on-conflict []
+                       :do-nothing true
+                       :returning [:id]}))))))
 
 (defn- strip-foreign-jsonb
   "Remove map entries whose value is an unparsed org.postgresql.util.PGobject.
@@ -2501,7 +2515,8 @@
   (jdbc/execute-one! ds
     (sql/format {:update :flashcards
                  :set (cond-> (assoc fields :updated_at [:now])
-                        (contains? fields :io_fields) (update :io_fields ->jsonb))
+                        (contains? fields :io_fields) (update :io_fields ->jsonb)
+                        (contains? fields :overlapping) (update :overlapping ->jsonb))
                  :where [:= :id card-id]})))
 
 (defn get-anki-note-ids

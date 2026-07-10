@@ -118,6 +118,18 @@
     " · " (format-ms-brief start-ms) "–" (format-ms-brief end-ms)
     "</span>"))
 
+(defn overlapping-row-html
+  "Compact front-cell HTML for an overlapping row: title (or first item) plus
+   the item count."
+  [ol]
+  (let [items (:items ol)
+        n (count items)
+        label (or (not-empty (some-> (:title ol) (str/replace #"<[^>]+>" "") str/trim))
+                (first items)
+                "Overlapping list")]
+    (str "<span>Overlapping · " (truncate-html-for-row label 80)
+      " · " n " item" (when (not= 1 n) "s") "</span>")))
+
 (e/defn CardRow [card !editing-card user-id order]
   (e/client
     (let [id (e/server (:flashcards/id card))
@@ -125,6 +137,7 @@
           question (e/server (:flashcards/question card))
           answer (e/server (:flashcards/answer card))
           cloze (e/server (:flashcards/cloze card))
+          ol (e/server (:flashcards/overlapping card))
           group-id (e/server (:flashcards/occlusion_group_id card))
           mask-ordinal (e/server (:flashcards/mask_ordinal card))
           occ-image-id (e/server (:occlusion_image_media_id card))
@@ -139,7 +152,8 @@
       (let [occ? (= kind "occlusion")
             score? (= kind "score")
             cloze? (= kind "cloze")
-            span2? (or cloze? occ? score?)]
+            overlapping? (= kind "overlapping")
+            span2? (or cloze? occ? score? overlapping?)]
         (let [edit-card! (fn [_]
                            (let [data (cond
                                         occ?
@@ -150,6 +164,11 @@
                                         ;; Routes to ScoreEditLoader — loads the
                                         ;; pair into the in-view score editor.
                                         {:kind "score" :group-id score-group-id}
+                                        overlapping?
+                                        ;; Routes to EditCardModal (default case)
+                                        ;; carrying the parsed list so the
+                                        ;; overlapping pane can pre-fill.
+                                        {:id id :kind kind :overlapping ol}
                                         :else
                                         {:id id :kind kind :question question :answer answer :cloze cloze})]
                              (log/log-debug (str "Edit card clicked id=" id " kind=" kind))
@@ -177,6 +196,7 @@
           (let [front-html (cond
                              occ? (occlusion-row-html occ-image-id mask-ordinal occ-mode io-header)
                              score? (score-row-html score-direction score-start-ms score-end-ms)
+                             overlapping? (overlapping-row-html ol)
                              :else (card-row-html (if cloze? cloze question)))]
             (dom/td
               (dom/props {:dir "auto"
@@ -224,6 +244,10 @@
                 (str "Score · " (count directions) " card"
                   (when (not= 1 (count directions)) "s")
                   " · " n " rect" (when (not= 1 n) "s")))
+      "overlapping" (let [items (:items c)
+                          n (count items)]
+                      (str "Overlapping · " (or (not-empty (:title c)) (first items) "list")
+                        " · " n " item" (when (not= 1 n) "s")))
       "cloze" (:c c)
       (:q c))))
 
@@ -264,7 +288,7 @@
     (let [tempid (:tempid entry)
           status (:status entry)
           ;; cloze and occlusion rows both span the two content columns
-          cloze? (contains? #{"cloze" "occlusion"} (get-in entry [:payload :kind]))
+          cloze? (contains? #{"cloze" "occlusion" "overlapping"} (get-in entry [:payload :kind]))
           front-html (card-row-html (overlay-front-text entry))
           back-html (card-row-html (overlay-back-text entry))
           bg (case status
