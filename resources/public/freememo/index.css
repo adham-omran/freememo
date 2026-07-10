@@ -2498,6 +2498,65 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 
 .assistant-panel__input { flex: 1; min-width: 0; resize: none; font-size: 13px; }
 .assistant-panel__send { flex-shrink: 0; }
+.assistant-panel__capture { flex-shrink: 0; }
+
+/* Empty-state starter prompts. */
+.assistant-panel__suggestions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    margin-top: 10px;
+}
+.assistant-panel__suggestion {
+    text-align: left;
+    font-size: 12px;
+    line-height: 1.4;
+    padding: 6px 10px;
+    color: var(--color-text-primary);
+    background: var(--color-bg-subtle, #f1f5f9);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm, 4px);
+    cursor: pointer;
+}
+.assistant-panel__suggestion:hover { background: var(--color-highlight, #e2e8f0); }
+
+/* @-reference picker popover, sits above the composer. */
+.assistant-panel__at-popover {
+    padding: 8px;
+    border-top: 1px solid var(--color-border);
+    flex-shrink: 0;
+}
+
+/* Queued @-reference chips. */
+.assistant-panel__refs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 8px 6px;
+    flex-shrink: 0;
+}
+.assistant-panel__ref-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    padding: 2px 4px 2px 8px;
+    background: var(--color-bg-subtle, #f1f5f9);
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    max-width: 100%;
+}
+.assistant-panel__ref-remove {
+    border: none;
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+    cursor: pointer;
+}
+.assistant-panel__ref-remove:hover { color: var(--color-danger-text, #b91c1c); }
 
 .pin-thumb {
     position: relative;
