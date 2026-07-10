@@ -9,6 +9,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [clojure.string :as str]
    [freememo.icons :as icons]
    [freememo.command-bus :as bus]
    [freememo.modal-shell :as modal]
@@ -66,6 +67,26 @@
          (if cnt (str head " · " cnt " card" (when (not= 1 cnt) "s")) head)))))
 
 #?(:clj
+   (defn- card-cell
+     "Plain-text prompt of an entry's first snapshot card — cloze text or
+      question, tags stripped, clamped to 80 chars, with a '+N more' suffix for
+      multi-card entries. nil for entries that snapshot no card (pins, prompts,
+      topic moves, kg rejects)."
+     [e]
+     (let [cards (case (:entity_type e)
+                   "flashcard" (:snapshot e)
+                   "document"  (:cards (:snapshot e))
+                   nil)]
+       (when-let [c (first cards)]
+         (let [cloze   (:cloze c)
+               prompt  (if (seq cloze) cloze (:question c))
+               text    (-> (or prompt "") (str/replace #"<[^>]+>" "") str/trim)
+               clamped (if (> (count text) 80) (str (subs text 0 80) "…") text)
+               extra   (dec (count cards))]
+           (when (seq clamped)
+             (if (pos? extra) (str clamped " +" extra " more") clamped)))))))
+
+#?(:clj
    (defn- annotate-views
      "Project DB entries (newest-first) to slim, wire-friendly view rows:
       label, time, superseded flag, and a source string (deleted cards' document
@@ -83,6 +104,7 @@
                :rows (conj rows {:id (:id e)
                                  :label (action-label (:action_type e) (:entity_refs e))
                                  :time-str (format-ts (:occurred_at e))
+                                 :card-text (card-cell e)
                                  :source (source-cell titles (entry-source-ids e) (entry-card-count e))
                                  :superseded? sup?})}))
           {:seen {} :rows []}
@@ -123,6 +145,11 @@
         (dom/props {:style {:padding "8px 12px"
                             :border-bottom "0.5px solid var(--color-border-light)"}})
         (dom/text (:label row)))
+      (dom/td
+        (dom/props {:style {:padding "8px 12px" :color "var(--color-text-secondary)"
+                            :word-break "break-word"
+                            :border-bottom "0.5px solid var(--color-border-light)"}})
+        (dom/text (or (:card-text row) "")))
       (dom/td
         (dom/props {:style {:padding "8px 12px" :color "var(--color-text-secondary)"
                             :word-break "break-word"
@@ -186,7 +213,7 @@
               (if (pos? n)
                 (dom/table
                   (dom/props {:style {:width "100%" :display "grid"
-                                      :grid-template-columns "110px 1fr 1.4fr 100px"
+                                      :grid-template-columns "110px 1fr 1fr 1.4fr 100px"
                                       :font-size "13px"}})
                   (e/for [row (e/diff-by :id rows)]
                     (UndoRow row user-id)))
