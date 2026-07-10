@@ -1,0 +1,227 @@
+{:params [0.212
+  1.2931
+  2.3065
+  8.2956
+  6.4133
+  0.8334
+  3.0194
+  0.001
+  1.8722
+  0.1666
+  0.796
+  1.4835
+  0.0614
+  0.2629
+  1.6483
+  0.6014
+  1.8729
+  0.5425
+  0.0912
+  0.0658
+  0.1542]
+ :decay 0.1542
+ :initial [{:rating 1 :stability 0.212 :difficulty 6.4133}
+  {:rating 2 :stability 1.2931 :difficulty 5.112170705601056}
+  {:rating 3 :stability 2.3065 :difficulty 2.118103970459016}
+  {:rating 4 :stability 8.2956 :difficulty 1.0}]
+ :next-difficulty [{:difficulty 1.0 :rating 1 :d_out 7.0269895692968385}
+  {:difficulty 1.0 :rating 2 :d_out 4.010608969296839}
+  {:difficulty 1.0 :rating 3 :d_out 1.0}
+  {:difficulty 1.0 :rating 4 :d_out 1.0}
+  {:difficulty 2.1187 :rating 1 :d_out 7.394698652136839}
+  {:difficulty 2.1187 :rating 2 :d_out 4.753254160716839}
+  {:difficulty 2.1187 :rating 3 :d_out 2.1118096692968384}
+  {:difficulty 2.1187 :rating 4 :d_out 1.0}
+  {:difficulty 5.0 :rating 1 :d_out 8.341762369296838}
+  {:difficulty 5.0 :rating 2 :d_out 6.665995369296838}
+  {:difficulty 5.0 :rating 3 :d_out 4.9902283692968386}
+  {:difficulty 5.0 :rating 4 :d_out 3.3144613692968385}
+  {:difficulty 8.5 :rating 1 :d_out 9.492188569296838}
+  {:difficulty 8.5 :rating 2 :d_out 8.989458469296839}
+  {:difficulty 8.5 :rating 3 :d_out 8.486728369296838}
+  {:difficulty 8.5 :rating 4 :d_out 7.983998269296839}
+  {:difficulty 10.0 :rating 1 :d_out 9.985228369296838}
+  {:difficulty 10.0 :rating 2 :d_out 9.985228369296838}
+  {:difficulty 10.0 :rating 3 :d_out 9.985228369296838}
+  {:difficulty 10.0 :rating 4 :d_out 9.985228369296838}]
+ :retrievability [{:stability 0.4 :elapsed_days 0 :r 1.0}
+  {:stability 0.4 :elapsed_days 1 :r 0.8261358773620447}
+  {:stability 0.4 :elapsed_days 5 :r 0.6713243878040526}
+  {:stability 0.4 :elapsed_days 30 :r 0.5143871927711734}
+  {:stability 0.4 :elapsed_days 365 :r 0.3505795161637529}
+  {:stability 2.3065 :elapsed_days 0 :r 1.0}
+  {:stability 2.3065 :elapsed_days 1 :r 0.9468474993825461}
+  {:stability 2.3065 :elapsed_days 5 :r 0.8388614268145294}
+  {:stability 2.3065 :elapsed_days 30 :r 0.6675263338730357}
+  {:stability 2.3065 :elapsed_days 365 :r 0.45894521558406376}
+  {:stability 10.0 :elapsed_days 0 :r 1.0}
+  {:stability 10.0 :elapsed_days 1 :r 0.9856824087775146}
+  {:stability 10.0 :elapsed_days 5 :r 0.9403442888929227}
+  {:stability 10.0 :elapsed_days 30 :r 0.8093881035731708}
+  {:stability 10.0 :elapsed_days 365 :r 0.5735586746235102}
+  {:stability 50.0 :elapsed_days 0 :r 1.0}
+  {:stability 50.0 :elapsed_days 1 :r 0.9970103472148596}
+  {:stability 50.0 :elapsed_days 5 :r 0.9856824087775146}
+  {:stability 50.0 :elapsed_days 30 :r 0.9311509409583194}
+  {:stability 50.0 :elapsed_days 365 :r 0.7235122127567452}]
+ :recall-stability [{:difficulty 2.0 :stability 1.0 :retrievability 0.7 :rating 2 :s_out 10.493198580769956}
+  {:difficulty 2.0 :stability 1.0 :retrievability 0.7 :rating 3 :s_out 16.785165581592878}
+  {:difficulty 2.0 :stability 1.0 :retrievability 0.7 :rating 4 :s_out 30.564036617765296}
+  {:difficulty 2.0 :stability 1.0 :retrievability 0.9 :rating 2 :s_out 3.916115363203231}
+  {:difficulty 2.0 :stability 1.0 :retrievability 0.9 :rating 3 :s_out 5.848878222818808}
+  {:difficulty 2.0 :stability 1.0 :retrievability 0.9 :rating 4 :s_out 10.081464023517345}
+  {:difficulty 2.0 :stability 1.0 :retrievability 0.95 :rating 2 :s_out 2.429046163253772}
+  {:difficulty 2.0 :stability 1.0 :retrievability 0.95 :rating 3 :s_out 3.3761991407611767}
+  {:difficulty 2.0 :stability 1.0 :retrievability 0.95 :rating 4 :s_out 5.450383370731608}
+  {:difficulty 2.0 :stability 5.0 :retrievability 0.7 :rating 2 :s_out 41.302302156756134}
+  {:difficulty 2.0 :stability 5.0 :retrievability 0.7 :rating 3 :s_out 65.36298995137369}
+  {:difficulty 2.0 :stability 5.0 :retrievability 0.7 :rating 4 :s_out 118.05384387992777}
+  {:difficulty 2.0 :stability 5.0 :retrievability 0.9 :rating 2 :s_out 16.15132061530902}
+  {:difficulty 2.0 :stability 5.0 :retrievability 0.9 :rating 3 :s_out 23.542269064364852}
+  {:difficulty 2.0 :stability 5.0 :retrievability 0.9 :rating 4 :s_out 39.727815730648935}
+  {:difficulty 2.0 :stability 5.0 :retrievability 0.95 :rating 2 :s_out 10.464719311726846}
+  {:difficulty 2.0 :stability 5.0 :retrievability 0.95 :rating 3 :s_out 14.086663305166024}
+  {:difficulty 2.0 :stability 5.0 :retrievability 0.95 :rating 4 :s_out 22.018411704245445}
+  {:difficulty 2.0 :stability 20.0 :retrievability 0.7 :rating 2 :s_out 135.26327736152868}
+  {:difficulty 2.0 :stability 20.0 :retrievability 0.7 :rating 3 :s_out 211.65825966333333}
+  {:difficulty 2.0 :stability 20.0 :retrievability 0.7 :rating 4 :s_out 378.956754523457}
+  {:difficulty 2.0 :stability 20.0 :retrievability 0.9 :rating 2 :s_out 55.40650825612957}
+  {:difficulty 2.0 :stability 20.0 :retrievability 0.9 :rating 3 :s_out 78.8734756503651}
+  {:difficulty 2.0 :stability 20.0 :retrievability 0.9 :rating 4 :s_out 130.26413254556877}
+  {:difficulty 2.0 :stability 20.0 :retrievability 0.95 :rating 2 :s_out 37.351005867633326}
+  {:difficulty 2.0 :stability 20.0 :retrievability 0.95 :rating 3 :s_out 48.85102405659016}
+  {:difficulty 2.0 :stability 20.0 :retrievability 0.95 :rating 4 :s_out 74.03508295558771}
+  {:difficulty 5.0 :stability 1.0 :retrievability 0.7 :rating 2 :s_out 7.3287990538466365}
+  {:difficulty 5.0 :stability 1.0 :retrievability 0.7 :rating 3 :s_out 11.523443721061916}
+  {:difficulty 5.0 :stability 1.0 :retrievability 0.7 :rating 4 :s_out 20.709357745176863}
+  {:difficulty 5.0 :stability 1.0 :retrievability 0.9 :rating 2 :s_out 2.944076908802154}
+  {:difficulty 5.0 :stability 1.0 :retrievability 0.9 :rating 3 :s_out 4.232585481879205}
+  {:difficulty 5.0 :stability 1.0 :retrievability 0.9 :rating 4 :s_out 7.054309349011563}
+  {:difficulty 5.0 :stability 1.0 :retrievability 0.95 :rating 2 :s_out 1.952697442169181}
+  {:difficulty 5.0 :stability 1.0 :retrievability 0.95 :rating 3 :s_out 2.584132760507451}
+  {:difficulty 5.0 :stability 1.0 :retrievability 0.95 :rating 4 :s_out 3.966922247154405}
+  {:difficulty 5.0 :stability 5.0 :retrievability 0.7 :rating 2 :s_out 29.20153477117076}
+  {:difficulty 5.0 :stability 5.0 :retrievability 0.7 :rating 3 :s_out 45.241993300915794}
+  {:difficulty 5.0 :stability 5.0 :retrievability 0.7 :rating 4 :s_out 80.36922925328518}
+  {:difficulty 5.0 :stability 5.0 :retrievability 0.9 :rating 2 :s_out 12.434213743539349}
+  {:difficulty 5.0 :stability 5.0 :retrievability 0.9 :rating 3 :s_out 17.361512709576566}
+  {:difficulty 5.0 :stability 5.0 :retrievability 0.9 :rating 4 :s_out 28.151877153765952}
+  {:difficulty 5.0 :stability 5.0 :retrievability 0.95 :rating 2 :s_out 8.643146207817898}
+  {:difficulty 5.0 :stability 5.0 :retrievability 0.95 :rating 3 :s_out 11.05777553677735}
+  {:difficulty 5.0 :stability 5.0 :retrievability 0.95 :rating 4 :s_out 16.3456078028303}
+  {:difficulty 5.0 :stability 20.0 :retrievability 0.7 :rating 2 :s_out 96.84218490768579}
+  {:difficulty 5.0 :stability 20.0 :retrievability 0.7 :rating 3 :s_out 147.7721731088889}
+  {:difficulty 5.0 :stability 20.0 :retrievability 0.7 :rating 4 :s_out 259.30450301563803}
+  {:difficulty 5.0 :stability 20.0 :retrievability 0.9 :rating 2 :s_out 43.604338837419704}
+  {:difficulty 5.0 :stability 20.0 :retrievability 0.9 :rating 3 :s_out 59.24898376691006}
+  {:difficulty 5.0 :stability 20.0 :retrievability 0.9 :rating 4 :s_out 93.50942169704584}
+  {:difficulty 5.0 :stability 20.0 :retrievability 0.95 :rating 2 :s_out 31.567337245088886}
+  {:difficulty 5.0 :stability 20.0 :retrievability 0.95 :rating 3 :s_out 39.234016037726775}
+  {:difficulty 5.0 :stability 20.0 :retrievability 0.95 :rating 4 :s_out 56.023388637058474}
+  {:difficulty 8.0 :stability 1.0 :retrievability 0.7 :rating 2 :s_out 4.164399526923319}
+  {:difficulty 8.0 :stability 1.0 :retrievability 0.7 :rating 3 :s_out 6.261721860530958}
+  {:difficulty 8.0 :stability 1.0 :retrievability 0.7 :rating 4 :s_out 10.854678872588432}
+  {:difficulty 8.0 :stability 1.0 :retrievability 0.9 :rating 2 :s_out 1.972038454401077}
+  {:difficulty 8.0 :stability 1.0 :retrievability 0.9 :rating 3 :s_out 2.6162927409396026}
+  {:difficulty 8.0 :stability 1.0 :retrievability 0.9 :rating 4 :s_out 4.027154674505781}
+  {:difficulty 8.0 :stability 1.0 :retrievability 0.95 :rating 2 :s_out 1.4763487210845905}
+  {:difficulty 8.0 :stability 1.0 :retrievability 0.95 :rating 3 :s_out 1.7920663802537256}
+  {:difficulty 8.0 :stability 1.0 :retrievability 0.95 :rating 4 :s_out 2.4834611235772024}
+  {:difficulty 8.0 :stability 5.0 :retrievability 0.7 :rating 2 :s_out 17.10076738558538}
+  {:difficulty 8.0 :stability 5.0 :retrievability 0.7 :rating 3 :s_out 25.120996650457897}
+  {:difficulty 8.0 :stability 5.0 :retrievability 0.7 :rating 4 :s_out 42.68461462664259}
+  {:difficulty 8.0 :stability 5.0 :retrievability 0.9 :rating 2 :s_out 8.717106871769674}
+  {:difficulty 8.0 :stability 5.0 :retrievability 0.9 :rating 3 :s_out 11.180756354788283}
+  {:difficulty 8.0 :stability 5.0 :retrievability 0.9 :rating 4 :s_out 16.575938576882976}
+  {:difficulty 8.0 :stability 5.0 :retrievability 0.95 :rating 2 :s_out 6.821573103908949}
+  {:difficulty 8.0 :stability 5.0 :retrievability 0.95 :rating 3 :s_out 8.028887768388675}
+  {:difficulty 8.0 :stability 5.0 :retrievability 0.95 :rating 4 :s_out 10.672803901415149}
+  {:difficulty 8.0 :stability 20.0 :retrievability 0.7 :rating 2 :s_out 58.421092453842896}
+  {:difficulty 8.0 :stability 20.0 :retrievability 0.7 :rating 3 :s_out 83.88608655444445}
+  {:difficulty 8.0 :stability 20.0 :retrievability 0.7 :rating 4 :s_out 139.65225150781902}
+  {:difficulty 8.0 :stability 20.0 :retrievability 0.9 :rating 2 :s_out 31.802169418709852}
+  {:difficulty 8.0 :stability 20.0 :retrievability 0.9 :rating 3 :s_out 39.62449188345503}
+  {:difficulty 8.0 :stability 20.0 :retrievability 0.9 :rating 4 :s_out 56.75471084852292}
+  {:difficulty 8.0 :stability 20.0 :retrievability 0.95 :rating 2 :s_out 25.783668622544443}
+  {:difficulty 8.0 :stability 20.0 :retrievability 0.95 :rating 3 :s_out 29.617008018863388}
+  {:difficulty 8.0 :stability 20.0 :retrievability 0.95 :rating 4 :s_out 38.01169431852924}]
+ :forget-stability [{:difficulty 2.0 :stability 1.0 :retrievability 0.7 :s_out 0.46595691931360417}
+  {:difficulty 2.0 :stability 1.0 :retrievability 0.9 :s_out 0.33510140316178394}
+  {:difficulty 2.0 :stability 1.0 :retrievability 0.95 :s_out 0.3085914340303727}
+  {:difficulty 2.0 :stability 5.0 :retrievability 0.7 :s_out 1.402570579686735}
+  {:difficulty 2.0 :stability 5.0 :retrievability 0.9 :s_out 1.0086841718732669}
+  {:difficulty 2.0 :stability 5.0 :retrievability 0.95 :s_out 0.9288868746748619}
+  {:difficulty 2.0 :stability 20.0 :retrievability 0.7 :s_out 2.858944488383247}
+  {:difficulty 2.0 :stability 20.0 :retrievability 0.9 :s_out 2.05606198751195}
+  {:difficulty 2.0 :stability 20.0 :retrievability 0.95 :s_out 1.8934063277417201}
+  {:difficulty 5.0 :stability 1.0 :retrievability 0.7 :s_out 0.4404658562802993}
+  {:difficulty 5.0 :stability 1.0 :retrievability 0.9 :s_out 0.31676904101309167}
+  {:difficulty 5.0 :stability 1.0 :retrievability 0.95 :s_out 0.29170935036479695}
+  {:difficulty 5.0 :stability 5.0 :retrievability 0.7 :s_out 1.325840277863723}
+  {:difficulty 5.0 :stability 5.0 :retrievability 0.9 :s_out 0.953502178130594}
+  {:difficulty 5.0 :stability 5.0 :retrievability 0.95 :s_out 0.8780703444513666}
+  {:difficulty 5.0 :stability 20.0 :retrievability 0.7 :s_out 2.702540470884264}
+  {:difficulty 5.0 :stability 20.0 :retrievability 0.9 :s_out 1.94358119035745}
+  {:difficulty 5.0 :stability 20.0 :retrievability 0.95 :s_out 1.7898239190520473}
+  {:difficulty 8.0 :stability 1.0 :retrievability 0.7 :s_out 0.42793645214203274}
+  {:difficulty 8.0 :stability 1.0 :retrievability 0.9 :s_out 0.30775829187838816}
+  {:difficulty 8.0 :stability 1.0 :retrievability 0.95 :s_out 0.28341144420585546}
+  {:difficulty 8.0 :stability 5.0 :retrievability 0.7 :s_out 1.2881256890317232}
+  {:difficulty 8.0 :stability 5.0 :retrievability 0.9 :s_out 0.9263790448248582}
+  {:difficulty 8.0 :stability 5.0 :retrievability 0.95 :s_out 0.8530929300829372}
+  {:difficulty 8.0 :stability 20.0 :retrievability 0.7 :s_out 2.625664542189846}
+  {:difficulty 8.0 :stability 20.0 :retrievability 0.9 :s_out 1.8882944663984766}
+  {:difficulty 8.0 :stability 20.0 :retrievability 0.95 :s_out 1.7389109438500185}]
+ :short-term [{:stability 0.4 :rating 1 :s_out 0.1508419314997332}
+  {:stability 0.4 :rating 2 :s_out 0.2594937136002488}
+  {:stability 0.4 :rating 3 :s_out 0.44640761841588505}
+  {:stability 0.4 :rating 4 :s_out 0.7679560287411578}
+  {:stability 2.3065 :rating 1 :s_out 0.7750839828558984}
+  {:stability 2.3065 :rating 2 :s_out 1.3333787168039835}
+  {:stability 2.3065 :rating 3 :s_out 2.3065}
+  {:stability 2.3065 :rating 4 :s_out 3.946054067969477}
+  {:stability 10.0 :rating 1 :s_out 3.051248935571638}
+  {:stability 10.0 :rating 2 :s_out 5.249070397986061}
+  {:stability 10.0 :rating 3 :s_out 10.0}
+  {:stability 10.0 :rating 4 :s_out 15.534307947166699}]
+ :next-interval [{:stability 0.1 :retention 0.8 :interval 1}
+  {:stability 0.1 :retention 0.9 :interval 1}
+  {:stability 0.1 :retention 0.97 :interval 1}
+  {:stability 1.0 :retention 0.8 :interval 3}
+  {:stability 1.0 :retention 0.9 :interval 1}
+  {:stability 1.0 :retention 0.97 :interval 1}
+  {:stability 2.3065 :retention 0.8 :interval 8}
+  {:stability 2.3065 :retention 0.9 :interval 2}
+  {:stability 2.3065 :retention 0.97 :interval 1}
+  {:stability 15.0 :retention 0.8 :interval 50}
+  {:stability 15.0 :retention 0.9 :interval 15}
+  {:stability 15.0 :retention 0.97 :interval 3}
+  {:stability 100.0 :retention 0.8 :interval 332}
+  {:stability 100.0 :retention 0.9 :interval 100}
+  {:stability 100.0 :retention 0.97 :interval 22}
+  {:stability 5000.0 :retention 0.8 :interval 16580}
+  {:stability 5000.0 :retention 0.9 :interval 5000}
+  {:stability 5000.0 :retention 0.97 :interval 1114}]
+ :sequences [{:name "binary-good-good-graduate" :steps [{:rating 3 :days_since -1 :elapsed_days 0 :state_out 1 :step_out 1 :stability_out 2.3065 :difficulty_out 2.118103970459016 :interval_seconds 600}
+  {:rating 3 :days_since 0 :elapsed_days 0 :state_out 2 :step_out -1 :stability_out 2.3065 :difficulty_out 2.111214235785395 :interval_seconds 172800}
+  {:rating 3 :days_since 0 :elapsed_days 0 :state_out 2 :step_out -1 :stability_out 2.3065 :difficulty_out 2.1043313908464483 :interval_seconds 172800}]}
+  {:name "binary-again-then-good" :steps [{:rating 1 :days_since -1 :elapsed_days 0 :state_out 1 :step_out 0 :stability_out 0.212 :difficulty_out 6.4133 :interval_seconds 60}
+  {:rating 3 :days_since 0 :elapsed_days 0 :state_out 1 :step_out 1 :stability_out 0.24668918777567272 :difficulty_out 6.402115069296838 :interval_seconds 600}
+  {:rating 3 :days_since 0 :elapsed_days 0 :state_out 2 :step_out -1 :stability_out 0.2842063592758949 :difficulty_out 6.3909413235243795 :interval_seconds 86400}
+  {:rating 3 :days_since 2 :elapsed_days 2 :state_out 2 :step_out -1 :stability_out 2.832753410952738 :difficulty_out 6.379778751497693 :interval_seconds 259200}]}
+  {:name "review-lapse-relearn" :steps [{:rating 3 :days_since -1 :elapsed_days 0 :state_out 1 :step_out 1 :stability_out 2.3065 :difficulty_out 2.118103970459016 :interval_seconds 600}
+  {:rating 3 :days_since 0 :elapsed_days 0 :state_out 2 :step_out -1 :stability_out 2.3065 :difficulty_out 2.111214235785395 :interval_seconds 172800}
+  {:rating 3 :days_since 1 :elapsed_days 1 :state_out 2 :step_out -1 :stability_out 7.319186097840142 :difficulty_out 2.1043313908464483 :interval_seconds 604800}
+  {:rating 1 :days_since 3 :elapsed_days 3 :state_out 3 :step_out 0 :stability_out 1.1485632549486482 :difficulty_out 7.389975788014609 :interval_seconds 600}
+  {:rating 3 :days_since 0 :elapsed_days 0 :state_out 2 :step_out -1 :stability_out 1.1958697443160085 :difficulty_out 7.377814181523433 :interval_seconds 86400}
+  {:rating 3 :days_since 6 :elapsed_days 6 :state_out 2 :step_out -1 :stability_out 6.946106041456058 :difficulty_out 7.365664736638748 :interval_seconds 604800}]}
+  {:name "easy-graduates-immediately" :steps [{:rating 4 :days_since -1 :elapsed_days 0 :state_out 2 :step_out -1 :stability_out 8.2956 :difficulty_out 1.0 :interval_seconds 691200}
+  {:rating 3 :days_since 10 :elapsed_days 10 :state_out 2 :step_out -1 :stability_out 44.09694244251397 :difficulty_out 1.0 :interval_seconds 3801600}]}
+  {:name "hard-path" :steps [{:rating 2 :days_since -1 :elapsed_days 0 :state_out 1 :step_out 0 :stability_out 1.2931 :difficulty_out 5.112170705601056 :interval_seconds 330}
+  {:rating 2 :days_since 0 :elapsed_days 0 :state_out 1 :step_out 0 :stability_out 0.7765494494075704 :difficulty_out 6.7404595108297 :interval_seconds 330}
+  {:rating 3 :days_since 0 :elapsed_days 0 :state_out 1 :step_out 1 :stability_out 0.8296275051643506 :difficulty_out 6.728947420615708 :interval_seconds 600}
+  {:rating 2 :days_since 3 :elapsed_days 3 :state_out 1 :step_out 1 :stability_out 3.406483255588648 :difficulty_out 7.813751236051346 :interval_seconds 600}]}
+  {:name "same-day-repeats" :steps [{:rating 3 :days_since -1 :elapsed_days 0 :state_out 1 :step_out 1 :stability_out 2.3065 :difficulty_out 2.118103970459016 :interval_seconds 600}
+  {:rating 3 :days_since 0 :elapsed_days 0 :state_out 2 :step_out -1 :stability_out 2.3065 :difficulty_out 2.111214235785395 :interval_seconds 172800}
+  {:rating 3 :days_since 0 :elapsed_days 0 :state_out 2 :step_out -1 :stability_out 2.3065 :difficulty_out 2.1043313908464483 :interval_seconds 172800}
+  {:rating 3 :days_since 0 :elapsed_days 0 :state_out 2 :step_out -1 :stability_out 2.3065 :difficulty_out 2.0974554287524403 :interval_seconds 172800}]}]}

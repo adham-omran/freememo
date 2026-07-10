@@ -14,6 +14,7 @@
    [freememo.input-check :as input]
    [freememo.quota :as quota]
    [freememo.config :as config]
+   [freememo.fsrs :as fsrs]
    [freememo.text :as text])
   (:import [org.postgresql.util PGobject]))
 
@@ -610,6 +611,22 @@
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_questions_user_status
                       ON kg_questions(user_id, status)"])
+  ;; FSRS-6 per-question scheduling state (see freememo.fsrs). fsrs_state:
+  ;; 1=Learning 2=Review 3=Relearning. fsrs_due NULL = never introduced — a
+  ;; "new" card, eligible only through the daily new-card cap. Cold-start (no
+  ;; backfill): every existing question keeps NULL memory + NULL due and so is
+  ;; treated as new. The Review quiz is the only writer; custom quiz/exam skip it.
+  (doseq [col ["fsrs_stability REAL"
+               "fsrs_difficulty REAL"
+               "fsrs_due TIMESTAMPTZ"
+               "fsrs_state SMALLINT NOT NULL DEFAULT 1"
+               "fsrs_step SMALLINT DEFAULT 0"
+               "fsrs_reps INTEGER NOT NULL DEFAULT 0"
+               "fsrs_lapses INTEGER NOT NULL DEFAULT 0"
+               "fsrs_last_review TIMESTAMPTZ"]]
+    (jdbc/execute! ds [(str "ALTER TABLE kg_questions ADD COLUMN IF NOT EXISTS " col)]))
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_questions_fsrs_due
+                      ON kg_questions(user_id, fsrs_due)"])
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS kg_question_facts (
       question_id INTEGER NOT NULL REFERENCES kg_questions(id) ON DELETE CASCADE,
@@ -657,6 +674,32 @@
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_answers_session
                       ON kg_answers(session_id, position)"])
+
+  ;; FSRS review log — append-only, one row per graded Review-quiz answer. Source
+  ;; of truth for scheduling history + daily caps (mirrors topic_repetitions).
+  ;; Custom quiz and exam never write here (practice / no-FSRS). reps_before = the
+  ;; card's fsrs_reps at review time, so reps_before = 0 marks a card's first-ever
+  ;; review — i.e. a "new" introduction — for the new-per-day cap.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS kg_reviews (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      question_id INTEGER NOT NULL REFERENCES kg_questions(id) ON DELETE CASCADE,
+      rating SMALLINT NOT NULL CHECK (rating IN (1,2,3,4)),
+      verdict TEXT CHECK (verdict IN ('correct','partial','incorrect')),
+      state_before SMALLINT NOT NULL,
+      state_after SMALLINT NOT NULL,
+      reps_before INTEGER NOT NULL,
+      stability_after REAL,
+      difficulty_after REAL,
+      elapsed_days INTEGER,
+      scheduled_days INTEGER,
+      reviewed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_reviews_user_time
+                      ON kg_reviews(user_id, reviewed_at DESC)"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_reviews_question
+                      ON kg_reviews(question_id, reviewed_at DESC)"])
 
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
   (run-grandfather-migration!)
@@ -4625,6 +4668,145 @@
         GROUP BY a.verdict"
        session-id user-id]
       {:builder-fn rs/as-unqualified-maps})))
+
+;; ---------------------------------------------------------------------------
+;; FSRS review scheduling (freememo.fsrs). The Review quiz is the sole writer;
+;; custom quiz/exam never touch these. "Today" is server-local (CURRENT_DATE),
+;; matching every other due-query in this file.
+;; ---------------------------------------------------------------------------
+
+(defn fsrs-daily-counts
+  "Today's FSRS tallies for cap enforcement, from the append-only log.
+   Post: {:new-today n :reviews-today n} — new = first-ever reviews
+   (reps_before = 0); reviews = reviews of cards already in Review state."
+  [user-id]
+  (let [row (jdbc/execute-one! ds
+              ["SELECT COUNT(*) FILTER (WHERE reps_before = 0)  AS new_today,
+                       COUNT(*) FILTER (WHERE state_before = 2) AS reviews_today
+                FROM kg_reviews
+                WHERE user_id = ? AND reviewed_at::date = CURRENT_DATE"
+               user-id]
+              {:builder-fn rs/as-unqualified-maps})]
+    {:new-today (long (:new_today row)) :reviews-today (long (:reviews_today row))}))
+
+(defn draw-fsrs-due-queue
+  "Ordered question ids for a Review session: learning/relearning due now
+   (uncapped), then Review cards due today (capped at review-limit − reviews so
+   far), then never-seen cards (capped at new-limit − new so far). The client
+   holds this as a live queue and re-enqueues cards that fall due again today.
+   Post: vector of ids, order learning → review → new."
+  [user-id new-limit review-limit]
+  (let [{:keys [new-today reviews-today]} (fsrs-daily-counts user-id)
+        review-room (max 0 (- review-limit reviews-today))
+        new-room    (max 0 (- new-limit new-today))
+        q (fn [where order limit]
+            (mapv :id
+              (jdbc/execute! ds
+                (into [(str "SELECT id FROM kg_questions
+                             WHERE user_id = ? AND status = 'approved' AND " where
+                            " ORDER BY " order (when limit " LIMIT ?"))]
+                  (cond-> [user-id] limit (conj limit)))
+                {:builder-fn rs/as-unqualified-maps})))
+        learning (q "fsrs_state IN (1,3) AND fsrs_due IS NOT NULL AND fsrs_due <= now()"
+                   "fsrs_due ASC" nil)
+        reviews  (if (pos? review-room)
+                   (q "fsrs_state = 2 AND fsrs_due IS NOT NULL AND fsrs_due::date <= CURRENT_DATE"
+                     "fsrs_due ASC" review-room)
+                   [])
+        news     (if (pos? new-room)
+                   (q "fsrs_due IS NULL" "id ASC" new-room)
+                   [])]
+    (vec (concat learning reviews news))))
+
+(defn apply-fsrs-review!
+  "Advance a question's FSRS schedule by `rating` and append a kg_reviews row,
+   in one transaction. `verdict` is logged for history (may be nil). Postgres
+   now() is the transaction clock, so the elapsed gap and the new due date are
+   computed against a single consistent instant.
+   Pre:  question belongs to user-id (else returns nil, no write).
+   Post: kg_questions FSRS cols advanced; exactly one kg_reviews row inserted;
+         returns {:state :reps :lapses :scheduled-days :due-today?}."
+  [user-id question-id rating verdict scheduler enable-fuzzing]
+  (jdbc/with-transaction [tx ds]
+    (when-let [row (jdbc/execute-one! tx
+                     ["SELECT fsrs_state, fsrs_step, fsrs_stability, fsrs_difficulty,
+                              fsrs_reps, fsrs_lapses,
+                              EXTRACT(EPOCH FROM (now() - fsrs_last_review)) AS gap_secs
+                       FROM kg_questions
+                       WHERE id = ? AND user_id = ? FOR UPDATE"
+                      question-id user-id]
+                     {:builder-fn rs/as-unqualified-maps})]
+      (let [state-before (long (:fsrs_state row))
+            reps-before  (long (:fsrs_reps row))
+            gap          (:gap_secs row)
+            days-since   (when gap (long (Math/floor (/ (double gap) 86400.0))))
+            elapsed      (max 0 (or days-since 0))
+            card {:state state-before
+                  :step (some-> (:fsrs_step row) long)
+                  :stability (some-> (:fsrs_stability row) double)
+                  :difficulty (some-> (:fsrs_difficulty row) double)}
+            res (fsrs/review-card scheduler card rating elapsed days-since)
+            state-after (:state res)
+            base-secs (:interval-seconds res)
+            secs (if (and enable-fuzzing (= 2 state-after) (>= base-secs 86400))
+                   (* 86400 (fsrs/fuzz-interval-days scheduler (quot base-secs 86400) (rand)))
+                   base-secs)
+            scheduled-days (quot secs 86400)
+            lapse? (and (= 2 state-before) (= 1 rating))
+            upd (jdbc/execute-one! tx
+                  ["UPDATE kg_questions
+                    SET fsrs_state = ?, fsrs_step = ?, fsrs_stability = ?,
+                        fsrs_difficulty = ?, fsrs_reps = fsrs_reps + 1,
+                        fsrs_lapses = fsrs_lapses + ?, fsrs_last_review = now(),
+                        fsrs_due = now() + make_interval(secs => ?)
+                    WHERE id = ? AND user_id = ?
+                    RETURNING (fsrs_due::date <= CURRENT_DATE) AS due_today"
+                   state-after (:step res) (:stability res) (:difficulty res)
+                   (if lapse? 1 0) (double secs) question-id user-id]
+                  {:builder-fn rs/as-unqualified-maps})]
+        (jdbc/execute-one! tx
+          ["INSERT INTO kg_reviews
+             (user_id, question_id, rating, verdict, state_before, state_after,
+              reps_before, stability_after, difficulty_after, elapsed_days,
+              scheduled_days, reviewed_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?, now())"
+           user-id question-id rating verdict state-before state-after
+           reps-before (:stability res) (:difficulty res) elapsed scheduled-days])
+        {:state state-after
+         :reps (inc reps-before)
+         :lapses (+ (long (:fsrs_lapses row)) (if lapse? 1 0))
+         :scheduled-days scheduled-days
+         :due-today? (boolean (:due_today upd))}))))
+
+(defn fsrs-review-history-daily
+  "Per-day Review tallies over the last `days` days (server-local).
+   Post: [{:day date :reviews n :good n :again n :new n}] newest first."
+  [user-id days]
+  (jdbc/execute! ds
+    ["SELECT reviewed_at::date AS day,
+             COUNT(*)                          AS reviews,
+             COUNT(*) FILTER (WHERE rating = 3) AS good,
+             COUNT(*) FILTER (WHERE rating = 1) AS again,
+             COUNT(*) FILTER (WHERE reps_before = 0) AS new
+      FROM kg_reviews
+      WHERE user_id = ? AND reviewed_at >= CURRENT_DATE - make_interval(days => ?)
+      GROUP BY day ORDER BY day DESC"
+     user-id days]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn fsrs-question-states
+  "Per-question FSRS snapshot for the history browser — reviewed questions,
+   most-lapsed first. Post: ≤ `limit` rows with schedule state + due date."
+  [user-id limit]
+  (jdbc/execute! ds
+    ["SELECT id, question, fsrs_state, fsrs_reps, fsrs_lapses,
+             fsrs_stability, fsrs_due
+      FROM kg_questions
+      WHERE user_id = ? AND status = 'approved' AND fsrs_reps > 0
+      ORDER BY fsrs_lapses DESC, fsrs_reps DESC
+      LIMIT ?"
+     user-id limit]
+    {:builder-fn rs/as-unqualified-maps}))
 
 (defn kg-fact-alternates
   "Approved facts that share a predicate+object or subject+predicate with any

@@ -15,6 +15,7 @@
    [freememo.modal-shell :as modal]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.kg-grade :as grade])
+   #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])))
 
@@ -160,6 +161,37 @@
    (defn entity-card* [user-id entity-id]
      (db/kg-entity-card user-id entity-id)))
 
+;; --- FSRS Review (default quiz) --------------------------------------------
+
+#?(:clj
+   (defn review-queue*
+     "Ordered question ids due today, capped per the user's FSRS settings.
+      Post: vector of ids (learning → review → new)."
+     [_kg-bump user-id]
+     (let [{:keys [new-per-day review-per-day]} (settings/fsrs-config user-id)]
+       (db/draw-fsrs-due-queue user-id new-per-day review-per-day))))
+
+#?(:clj
+   (defn review-answer!*
+     "Grade one Review answer and advance its FSRS schedule (no session row).
+      Post: {:result <grade map> :schedule {:due-today? …}|nil}."
+     [user-id question-id answer]
+     (grade/review-question! user-id question-id answer)))
+
+#?(:clj
+   (defn review-history*
+     "Data for the FSRS review-history view.
+      Post: {:daily [per-day rows] :questions [per-question rows]}."
+     [user-id]
+     {:daily (mapv #(-> % (update :day str)
+                        (update :reviews long) (update :good long)
+                        (update :again long) (update :new long))
+                (db/fsrs-review-history-daily user-id 30))
+      :questions (mapv #(-> % (update :fsrs_due str)
+                            (update :fsrs_state long) (update :fsrs_reps long)
+                            (update :fsrs_lapses long))
+                   (db/fsrs-question-states user-id 50))}))
+
 ;; ---------------------------------------------------------------------------
 ;; Views
 ;; ---------------------------------------------------------------------------
@@ -174,7 +206,7 @@
 ;; Fixed row height for the virtualized session-history list in QuizHistoryModal.
 (def ^:private quiz-history-row-height 52)
 
-(e/defn QuizSetup [user-id !session !history-open? initial-mode]
+(e/defn QuizSetup [user-id !session !history-open? initial-mode !view]
   (e/client
     (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
           docs (e/server (quiz-docs* kg-bump user-id))
@@ -188,8 +220,14 @@
         (dom/div
           (dom/props {:style {:display "flex" :justify-content "space-between"
                               :align-items "center"}})
-          (dom/h2 (dom/props {:style {:font-size "18px" :margin "0"}})
-            (dom/text (if (= mode "exam") "Start an exam" "Start a quiz")))
+          (dom/div
+            (dom/props {:style {:display "flex" :gap "8px" :align-items "center"}})
+            (dom/button
+              (dom/props {:class "btn btn-sm" :aria-label "Back to Review"})
+              (dom/text "← Review")
+              (dom/On "click" (fn [_] (reset! !view :review)) nil))
+            (dom/h2 (dom/props {:style {:font-size "18px" :margin "0"}})
+              (dom/text (if (= mode "exam") "Start an exam" "Custom quiz"))))
           (dom/button
             (dom/props {:class "btn btn-sm" :aria-label "Session history"})
             (icons/Icon :history :size 14)
@@ -752,6 +790,176 @@
                                                               :margin-left "auto"}})
                                   (dom/text (str (or (session-score correct partial total) "—") "%")))))))))))))))))))
 
+;; ---------------------------------------------------------------------------
+;; FSRS Review — the default quiz: a live queue of everything due today. Answers
+;; grade instantly and advance the schedule (freememo.kg-grade/review-question!);
+;; a card that stays due today (learning steps) is re-enqueued for this sitting.
+;; No kg_sessions row — the queue is recomputed from FSRS due on every mount.
+;; ---------------------------------------------------------------------------
+
+(def ^:private fsrs-state-label {1 "Learning" 2 "Review" 3 "Relearning"})
+
+(e/defn ReviewDone [reviewed !view]
+  (e/client
+    (dom/div
+      (dom/props {:style {:padding "24px 8px" :text-align "center"}})
+      (dom/p (dom/props {:style {:font-size "15px" :margin "0 0 6px"}})
+        (dom/text (if (pos? reviewed)
+                    (str "Done for today — " reviewed " reviewed.")
+                    "Nothing due right now.")))
+      (dom/p (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
+        (dom/text "New questions surface here as you generate them and as cards come due."))
+      (dom/div
+        (dom/props {:style {:display "flex" :gap "8px" :justify-content "center" :margin-top "12px"}})
+        (dom/button (dom/props {:class "btn"})
+          (dom/text "Custom quiz")
+          (dom/On "click" (fn [_] (reset! !view :custom)) nil))
+        (dom/button (dom/props {:class "btn"})
+          (dom/text "Review history")
+          (dom/On "click" (fn [_] (reset! !view :fsrs-history)) nil))))))
+
+(e/defn ReviewHistory [user-id !view]
+  (e/client
+    (let [{:keys [daily questions]} (e/server (review-history* user-id))]
+      (dom/div
+        (dom/props {:style panel-style})
+        (dom/div
+          (dom/props {:style {:display "flex" :gap "8px" :align-items "center"}})
+          (dom/button (dom/props {:class "btn btn-sm"})
+            (dom/text "← Review")
+            (dom/On "click" (fn [_] (reset! !view :review)) nil))
+          (dom/h2 (dom/props {:style {:font-size "18px" :margin "0"}})
+            (dom/text "Review history")))
+        (dom/h3 (dom/props {:style {:font-size "14px" :margin "16px 0 4px"}})
+          (dom/text "Last 30 days"))
+        (if (empty? daily)
+          (dom/p (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px"}})
+            (dom/text "No reviews yet."))
+          (dom/table
+            (dom/props {:style {:width "100%" :font-size "13px"}})
+            (dom/thead
+              (dom/tr
+                (e/for [h (e/diff-by identity ["Day" "Reviews" "Good" "Again" "New"])]
+                  (dom/th (dom/props {:style {:text-align "left" :padding "2px 8px"}})
+                    (dom/text h)))))
+            (dom/tbody
+              (e/for [{:keys [day reviews good again new]} (e/diff-by :day daily)]
+                (dom/tr
+                  (dom/td (dom/props {:style {:padding "2px 8px"}}) (dom/text (str day)))
+                  (dom/td (dom/props {:style {:padding "2px 8px"}}) (dom/text (str reviews)))
+                  (dom/td (dom/props {:style {:padding "2px 8px"}}) (dom/text (str good)))
+                  (dom/td (dom/props {:style {:padding "2px 8px"}}) (dom/text (str again)))
+                  (dom/td (dom/props {:style {:padding "2px 8px"}}) (dom/text (str new))))))))
+        (dom/h3 (dom/props {:style {:font-size "14px" :margin "18px 0 4px"}})
+          (dom/text "Questions"))
+        (if (empty? questions)
+          (dom/p (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px"}})
+            (dom/text "No reviewed questions yet."))
+          (dom/table
+            (dom/props {:style {:width "100%" :font-size "13px"}})
+            (dom/thead
+              (dom/tr
+                (e/for [h (e/diff-by identity ["Question" "State" "Reps" "Lapses"])]
+                  (dom/th (dom/props {:style {:text-align "left" :padding "2px 8px"}})
+                    (dom/text h)))))
+            (dom/tbody
+              (e/for [{:keys [id question fsrs_state fsrs_reps fsrs_lapses]}
+                      (e/diff-by :id questions)]
+                (let [_ id]
+                  (dom/tr
+                    (dom/td (dom/props {:style {:padding "2px 8px" :max-width "340px"
+                                                :white-space "nowrap" :overflow "hidden"
+                                                :text-overflow "ellipsis"}})
+                      (dom/text (str question)))
+                    (dom/td (dom/props {:style {:padding "2px 8px"}})
+                      (dom/text (get fsrs-state-label fsrs_state "?")))
+                    (dom/td (dom/props {:style {:padding "2px 8px"}}) (dom/text (str fsrs_reps)))
+                    (dom/td (dom/props {:style {:padding "2px 8px"}}) (dom/text (str fsrs_lapses)))))))))))))
+
+(e/defn ReviewFlow
+  "Live FSRS due-today queue. `!queue` holds the remaining question ids; a
+   graded card that is still due today is appended back (learning steps)."
+  [user-id !view]
+  (e/client
+    (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
+          initial (e/server (review-queue* kg-bump user-id))
+          !queue (atom ::unset) queue (e/watch !queue)
+          !feedback (atom nil) feedback (e/watch !feedback)
+          !draft (atom "")
+          !reviewed (atom 0) reviewed (e/watch !reviewed)
+          !entity-card (atom nil) entity-card (e/watch !entity-card)]
+      (dom/div
+        (dom/props {:style panel-style})
+        (dom/div
+          (dom/props {:style {:display "flex" :justify-content "space-between"
+                              :align-items "center"}})
+          (dom/h2 (dom/props {:style {:font-size "18px" :margin "0"}}) (dom/text "Review"))
+          (dom/div
+            (dom/props {:style {:display "flex" :gap "6px"}})
+            (dom/button (dom/props {:class "btn btn-sm"})
+              (dom/text "Custom quiz")
+              (dom/On "click" (fn [_] (reset! !view :custom)) nil))
+            (dom/button (dom/props {:class "btn btn-sm" :aria-label "Review history"})
+              (icons/Icon :history :size 14) (dom/text " History")
+              (dom/On "click" (fn [_] (reset! !view :fsrs-history)) nil))))
+        (cond
+          (= ::unset queue) (do (reset! !queue (vec initial)) nil)
+          (empty? queue) (ReviewDone reviewed !view)
+          :else
+          (let [qid (first queue)
+                remaining (count queue)
+                qdata (e/server (quiz-question* user-id qid))]
+            (dom/div
+              (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"
+                                  :margin "10px 0"}})
+              (dom/text (str remaining " due · " reviewed " reviewed")))
+            (dom/h3 (dom/props {:style {:font-size "16px" :margin "14px 0"}})
+              (dom/text (str (:question qdata))))
+            (if (nil? feedback)
+              (dom/div
+                (dom/textarea
+                  (dom/props {:class "form-input" :rows 4 :placeholder "Answer in your own words…"
+                              :aria-label "Your answer" :style {:width "100%" :resize "vertical"}})
+                  (dom/On "input" (fn [ev] (reset! !draft (.. ev -target -value))) nil))
+                (dom/button
+                  (dom/props {:class "btn btn-primary" :style {:margin-top "8px"}})
+                  (let [click (dom/On "click"
+                                (fn [_]
+                                  (let [a (str/trim (str @!draft))]
+                                    (when-not (str/blank? a)
+                                      {:id (str (random-uuid)) :answer a})))
+                                nil)
+                        [t _] (e/Token click)]
+                    (dom/props {:disabled (some? t)})
+                    (dom/text (if (some? t) "Grading…" "Submit"))
+                    (when t
+                      (let [res (e/server
+                                  (e/Offload #(review-answer!* user-id qid (:answer click))))]
+                        (case res ; wait on the value — do would race the token
+                          (do (when (:success (:result res))
+                                (reset! !feedback {:result (:result res)
+                                                   :answer (:answer click)
+                                                   :schedule (:schedule res)}))
+                            (t))))))))
+              (dom/div
+                (QuizFeedback (:result feedback) (:answer feedback)
+                  (:entities qdata) !entity-card)
+                (dom/button
+                  (dom/props {:class "btn btn-primary" :style {:margin-top "12px"}})
+                  (dom/text "Next")
+                  (dom/On "click"
+                    (fn [_]
+                      (let [again-today? (get-in feedback [:schedule :due-today?])]
+                        (swap! !reviewed inc)
+                        (reset! !feedback nil)
+                        (reset! !draft "")
+                        (swap! !queue (fn [q]
+                                        (let [rest-q (into [] (rest q))]
+                                          (if again-today? (conj rest-q qid) rest-q))))))
+                    nil))))
+            ;; Sibling of the answer/feedback `if` — must mount for the session.
+            (EntityCardPopover user-id !entity-card entity-card)))))))
+
 (defonce !pending-preset
   ;; Palette → QuizPage handoff ({:mode "quiz"|"exam"} or {:view :history}),
   ;; set by GlobalQuizInvokers, consumed ONCE on QuizPage mount. A resumable
@@ -794,12 +1002,18 @@
           ;; History is a modal overlay, not a view branch: seeded open from the
           ;; :quiz-history preset handoff, and QuizSetup's History button opens it.
           !history-open? (atom (= :history (:view preset)))
-          !history-result-sid (atom nil)]  ; modal-local drill-down, independent of the page result
+          !history-result-sid (atom nil)  ; modal-local drill-down, independent of the page result
+          ;; Default landing is the FSRS Review queue; an explicit start-quiz/
+          ;; start-exam invoker (preset :mode) jumps to the custom setup instead.
+          !view (atom (if (:mode preset) :custom :review)) view (e/watch !view)]
       (QuizHistoryModal user-id !history-open? !history-result-sid)
       (cond
         (= ::unset session) (do (reset! !session resume) nil)
         (some? result-sid) (SessionResult user-id result-sid !result-sid)
         (some? summary) (QuizSummary !session !summary summary)
-        (nil? session) (QuizSetup user-id !session !history-open? (:mode preset))
-        (= "exam" (:kind session)) (ExamActive user-id !session session !result-sid)
-        :else (QuizActive user-id !session session !summary)))))
+        (some? session) (if (= "exam" (:kind session))
+                          (ExamActive user-id !session session !result-sid)
+                          (QuizActive user-id !session session !summary))
+        (= :custom view) (QuizSetup user-id !session !history-open? (:mode preset) !view)
+        (= :fsrs-history view) (ReviewHistory user-id !view)
+        :else (ReviewFlow user-id !view)))))
