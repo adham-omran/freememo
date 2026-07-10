@@ -123,10 +123,10 @@
                     (let [item (nth filtered i nil)]
                       (when item
                         (dom/tr
+                          (dom/props {:style {:--order i}})
                           (dom/td
                             (dom/props {:title item
-                                        :style {:--order i
-                                                :padding "5px 8px" :cursor "pointer" :font-size "14px"
+                                        :style {:padding "5px 8px" :cursor "pointer" :font-size "14px"
                                                 :white-space "nowrap" :overflow "hidden" :text-overflow "ellipsis"
                                                 :background (when (= i active-idx) "var(--color-highlight)")}})
                             (dom/text item)
