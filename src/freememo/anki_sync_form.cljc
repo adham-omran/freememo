@@ -231,7 +231,7 @@
 
 (e/defn AnkiSyncForm
   "The connected-state form: scope, deck, custom header, tags. Note types are
-   app-owned (Basic/Cloze FreeMemo), so there is no model/field selection.
+   app-owned (FreeMemo Basic/Cloze), so there is no model/field selection.
    conn = {:!decks :!selected-deck :!all-tags ...}
    form = {:!scope ...}"
   [user-id root-id conn form]

@@ -338,7 +338,7 @@ pre > code {
 .nightMode .ql-code-block:not(:has(span.ql-token))[data-language="sql"]        { color: #d19a66; }
 
 /* ================================================================
-   Image Occlusion — required by the "IO FreeMemo" note type.
+   Image Occlusion — required by the "FreeMemo IO" note type.
    This entire file is pushed as that note type's Styling on every
    IO push (ensure-and-enforce); edits made in Anki are overwritten.
    fm-io-css v3
@@ -434,7 +434,7 @@ pre > code {
 }
 
 /* ================================================================
-   Score — required by the "Score FreeMemo" note type.
+   Score — required by the "FreeMemo Score" note type.
    This entire file is pushed as that note type's Styling on every
    Score push (ensure-and-enforce); edits made in Anki are overwritten.
    fm-score-css v1
@@ -492,7 +492,7 @@ pre > code {
 }
 
 /* ================================================================
-   Basic FreeMemo / Cloze FreeMemo note types — app-owned. This file
+   FreeMemo Basic / FreeMemo Cloze note types — app-owned. This file
    is pushed as each model's Styling on every push (ensure-and-enforce);
    edits made in Anki are overwritten.
    fm-basic-cloze-css v1
@@ -527,7 +527,7 @@ pre > code {
 }
 
 /* ================================================================
-   Overlapping Cloze FreeMemo note type — app-owned, cloze-typed.
+   FreeMemo Overlapping Cloze note type — app-owned, cloze-typed.
    One model serves LTR and RTL via the per-note Direction field
    (dir="ltr"|"rtl" on .fm-ol). Pushed as Styling on every push.
    fm-overlapping-css v1

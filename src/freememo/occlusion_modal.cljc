@@ -1,6 +1,6 @@
 (ns freememo.occlusion-modal
   "Image-occlusion authoring modal: Masks Editor tab (Konva, rects only) +
-   Fields tab (the six IO FreeMemo text fields). Create mode ends with two
+   Fields tab (the six FreeMemo IO text fields). Create mode ends with two
    generate actions — Hide All, Guess One / Hide One, Guess One — each saving
    one card per mask through the optimistic command queue (:add-occlusion).
    Edit mode reopens a whole group and saves a full reconcile
@@ -188,7 +188,7 @@
         placeholder [k field-key] nil nil nil))))
 
 (e/defn OcclusionFieldsTab
-  "The six IO FreeMemo text fields. Values live in the shared !fields atom so
+  "The six FreeMemo IO text fields. Values live in the shared !fields atom so
    they survive tab switches and feed the save payload."
   [initial-fields !fields field-key modal-font]
   (e/client

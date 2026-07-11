@@ -47,7 +47,7 @@
 
 (defn load-anki-preferences
   "Load saved Anki sync preferences for a user (global). Note types are
-   app-owned (Basic/Cloze FreeMemo), so no model/field ordering is stored."
+   app-owned (FreeMemo Basic/Cloze), so no model/field ordering is stored."
   [user-id]
   (try
     {:success true
