@@ -212,16 +212,20 @@
    the four clip boxes is a transform/filter/contain containing block — so the
    tooltip floats freely over the panes/toolbars, fully visible, without covering
    the document text below the selection. Quill's horizontal clamp to `bounds`
-   (the container) keeps it over the editor column; its arrow/flip are untouched.
+   (the container) keeps it over the editor column; its arrow is untouched and
+   the flip is preserved (its negative margin-top is folded into the frozen
+   `top`, then zeroed — see freeze-to-fixed! — so it is not applied twice).
 
    Fixed no longer rides the container's scroll, so this also re-positions the
    tooltip on editor scroll and window resize while it is visible.
 
    Pre:  `editor` is an initialized bubble-theme Quill whose theme.tooltip.position
          is a fn (init-editor! just constructed it).
-   Post: tooltip.position is wrapped; a capture-phase document `scroll` and a
-         window `resize` listener are installed. Returns a teardown fn removing
-         both; the tooltip element itself dies with the editor in destroy-editor!."
+   Post: tooltip.position is wrapped; three listeners are installed — a bubble-
+         phase `scroll` on ed.root (runs after Quill's own to re-zero its
+         margin), a capture-phase document `scroll` (outer-ancestor scroll), and
+         a window `resize`. Returns a teardown fn removing all three; the tooltip
+         element itself dies with the editor in destroy-editor!."
   [editor]
   #?(:clj nil
      :cljs
@@ -244,7 +248,18 @@
                        top    (max margin (min (.-top rr)  (- vh h margin)))]
                    (set! (.. root -style -position) "fixed")
                    (set! (.. root -style -left) (str left "px"))
-                   (set! (.. root -style -top)  (str top "px"))))]
+                   (set! (.. root -style -top)  (str top "px"))
+                   ;; Quill's Tooltip installs a `.ql-editor` scroll listener that
+                   ;; sets margin-top = -scrollTop, keeping its position:absolute
+                   ;; tooltip glued as the editor scrolls (ui/tooltip.ts). On our
+                   ;; frozen position:fixed box that margin is a spurious shift: it
+                   ;; grows with scrollTop and drives the tooltip off-screen. `rr`
+                   ;; already reflects the correct on-screen box (read while the
+                   ;; margin is applied), so `top` alone places it — zero the margin
+                   ;; here. The editor-scroll listener below re-pins after Quill
+                   ;; re-writes the margin, so its write never survives a tick. The
+                   ;; flip lives in `top`, not margin, so it is unaffected.
+                   (set! (.. root -style -margin) "0")))]
            (set! (.-position tooltip)
              (fn [reference]
                (this-as this
@@ -252,6 +267,17 @@
                  ;; (getBoundingClientRect vs bounds) runs in the absolute frame
                  ;; it assumes.
                  (set! (.. root -style -position) "")
+                 ;; Restore Quill's scroll-compensation margin (margin-top =
+                 ;; -scrollTop) BEFORE orig-position runs its flip check. Quill's
+                 ;; flip reads root.getBoundingClientRect() to decide whether the
+                 ;; box overflows the container; that read is only in the correct
+                 ;; frame when this margin is present. Quill sets it via a scroll
+                 ;; listener, so it is stale on any non-scroll re-pin (resize, a
+                 ;; same-tick second call). Setting it here makes the flip decision
+                 ;; — and thus the frozen `top` — deterministic on EVERY re-pin;
+                 ;; freeze-to-fixed! zeros it again after reading the placed box.
+                 (set! (.. root -style -marginTop)
+                   (str (- (.-scrollTop (.-root ed))) "px"))
                  (let [^js range (.getSelection ed)
                        ^js lines (when (and range (pos? (.-length range)))
                                    (.getLines ed (.-index range) (.-length range)))
@@ -270,9 +296,16 @@
                        (when (and range (pos? (.-length range)))
                          (let [^js b (.getBounds ed (.-index range) (.-length range))]
                            (.position tooltip b))))))]
-             (.addEventListener js/document "scroll" reposition! true) ; capture: catch editor-pane scroll
+             ;; Editor-scroll listener on ed.root (.ql-editor), registered HERE —
+             ;; after Quill's constructor scroll listener that sets
+             ;; margin-top = -scrollTop. Same target + bubble phase ⇒ insertion
+             ;; order ⇒ ours runs last, re-pinning (and re-zeroing the margin) so
+             ;; Quill's write never survives the tick.
+             (.addEventListener (.-root ed) "scroll" reposition! false)
+             (.addEventListener js/document "scroll" reposition! true) ; capture: catch outer-ancestor scroll
              (.addEventListener js/window "resize" reposition!)
              (fn teardown []
+               (.removeEventListener (.-root ed) "scroll" reposition! false)
                (.removeEventListener js/document "scroll" reposition! true)
                (.removeEventListener js/window "resize" reposition!))))))))
 
