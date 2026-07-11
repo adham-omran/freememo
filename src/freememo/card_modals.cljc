@@ -367,24 +367,22 @@
 
 ;; Overlapping-cloze authoring pane — shared by Add + Edit
 (e/defn OverlappingPane
-  "Authoring inputs for an overlapping-cloze card, shared by Add + Edit. Writes
-   to the caller's atoms; renders their current (e/watch'd) values. The list is
-   a QuillField (rich text + list toolbar + images) like Basic/Cloze — its HTML
-   is parsed into items on save via quill-html->items. items-key MUST be unique
-   per instance (QuillField frame isolation)."
-  [!question !items-html !items-editor init-items-html items-key !before !reveal modal-font]
+  "Authoring inputs for an overlapping-cloze card, shared by Add + Edit. The
+   question and the list are QuillField editors (rich text + toolbar + images)
+   like Basic/Cloze; the list's HTML is parsed into items on save via
+   quill-html->items. question-key/items-key MUST each be unique per instance
+   (QuillField frame isolation)."
+  [!question !question-editor init-question-html question-key
+   !items-html !items-editor init-items-html items-key !before !reveal modal-font]
   (e/client
-    (let [question (e/watch !question)
-          before (e/watch !before)
+    (let [before (e/watch !before)
           reveal (e/watch !reveal)]
       (dom/div
         (dom/label (dom/text "Question:"))
-        (dom/div (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-          (dom/input
-            (dom/props {:type "text" :value question :dir "auto"
-                        :placeholder "e.g. What are the steps of X?"
-                        :style {:width "100%" :font-size modal-font}})
-            (dom/On "input" (fn [e] (reset! !question (-> e .-target .-value))) nil)))
+        (dom/div (dom/props {:style {:margin-bottom "var(--sp-3)" :font-size modal-font}})
+          (QuillField init-question-html
+            (fn [html] (reset! !question html))
+            "e.g. What are the steps of X?" question-key !question-editor nil true))
         (dom/label (dom/text "List items (one per line):"))
         (dom/div (dom/props {:style {:margin-bottom "var(--sp-3)" :font-size modal-font}})
           (QuillField init-items-html
@@ -420,10 +418,12 @@
           !answer (atom init-a)
           !cloze (atom init-c)
           !ol-question (atom (or (:question init-ol) ""))
+          !ol-question-editor (atom nil)
           !ol-items-html (atom (ol-items->html (:items init-ol)))
           !ol-items-editor (atom nil)
           !ol-before (atom (str (get-in init-ol [:settings :before] 1)))
-          !ol-reveal (atom (get-in init-ol [:settings :reveal-all?] true))          !q-editor (atom nil)
+          !ol-reveal (atom (get-in init-ol [:settings :reveal-all?] true))
+          !q-editor (atom nil)
           !a-editor (atom nil)
           !c-editor (atom nil)
           question (e/watch !question)
@@ -432,7 +432,8 @@
           ol-question (e/watch !ol-question)
           ol-items-html (e/watch !ol-items-html)
           ol-before (e/watch !ol-before)
-          ol-reveal (e/watch !ol-reveal)          card-font-sz (e/server (settings/get-card-font-size user-id))
+          ol-reveal (e/watch !ol-reveal)
+          card-font-sz (e/server (settings/get-card-font-size user-id))
           modal-font (str (or card-font-sz 14) "px")
           !primary-btn (atom nil)]
       (dom/div
@@ -494,8 +495,9 @@
                                 (= kind "basic") "Basic" :else "Cloze") " Card"))
           (cond
             (= kind "overlapping")
-            (OverlappingPane !ol-question !ol-items-html !ol-items-editor
-              (ol-items->html (:items init-ol)) [:edit-ol card-id] !ol-before !ol-reveal modal-font)
+            (OverlappingPane !ol-question !ol-question-editor (or (:question init-ol) "") [:edit-ol-q card-id]
+              !ol-items-html !ol-items-editor (ol-items->html (:items init-ol)) [:edit-ol card-id]
+              !ol-before !ol-reveal modal-font)
             (= kind "basic")
             (dom/div
               (dom/label (dom/text "Question:"))
@@ -550,6 +552,8 @@
                           (reset! !cloze html))
                         (when-let [html (flush-syntax-tokens! @!ol-items-editor)]
                           (reset! !ol-items-html html))
+                        (when-let [html (flush-syntax-tokens! @!ol-question-editor)]
+                          (reset! !ol-question html))
                         e)
                       nil))
                   [t ?error] (e/Token click-event)]
@@ -644,15 +648,18 @@
           !primary-editor (atom nil)
           !a-editor (atom nil)
           !ol-question (atom "")
+          !ol-question-editor (atom nil)
           !ol-items-html (atom "")
           !ol-items-editor (atom nil)
           !ol-before (atom "1")
-          !ol-reveal (atom true)          primary (e/watch !primary)
+          !ol-reveal (atom true)
+          primary (e/watch !primary)
           answer (e/watch !answer)
           ol-question (e/watch !ol-question)
           ol-items-html (e/watch !ol-items-html)
           ol-before (e/watch !ol-before)
-          ol-reveal (e/watch !ol-reveal)          card-font-sz (e/server (settings/get-card-font-size user-id))
+          ol-reveal (e/watch !ol-reveal)
+          card-font-sz (e/server (settings/get-card-font-size user-id))
           modal-font (str (or card-font-sz 14) "px")
           !primary-btn (atom nil)]
       (dom/div
@@ -736,8 +743,9 @@
               (dom/text "Overlapping")))
           (cond
             (= kind "overlapping")
-            (OverlappingPane !ol-question !ol-items-html !ol-items-editor
-              "" [:add-ol] !ol-before !ol-reveal modal-font)
+            (OverlappingPane !ol-question !ol-question-editor "" [:add-ol-q]
+              !ol-items-html !ol-items-editor "" [:add-ol]
+              !ol-before !ol-reveal modal-font)
             (= kind "basic")
             (dom/div
               (dom/label (dom/text "Question:"))
@@ -788,6 +796,8 @@
                           (reset! !answer html))
                         (when-let [html (flush-syntax-tokens! @!ol-items-editor)]
                           (reset! !ol-items-html html))
+                        (when-let [html (flush-syntax-tokens! @!ol-question-editor)]
+                          (reset! !ol-question html))
                         e)
                       nil))
                   [t ?error] (e/Token click-event)]

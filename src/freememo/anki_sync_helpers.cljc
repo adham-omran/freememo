@@ -290,11 +290,12 @@
 ;; ---------------------------------------------------------------------------
 ;; Overlapping Cloze FreeMemo note type — app-owned, cloze-typed. One authored
 ;; list is one note; Anki fans it into one card per item (Text1..TextN, item k
-;; is the active {{ck::}}) plus a reveal-all card (Full = c21). Text direction
-;; is auto-detected in the template (dir="auto"), so one model serves LTR and
-;; RTL with no per-note flag. Question/Text*/Full/Original/Links are FM-generated
-;; and overwritten every push; Remarks is the user's Anki-side space — seeded
-;; empty, never clobbered.
+;; is the active {{ck::}}) plus a reveal-all card (Full = c21). The question and
+;; the items blocks each carry dir="auto", so direction is detected per block
+;; from its own content — an English question stays LTR while an Arabic list
+;; goes RTL — with no direction field or control. Question/Text*/Full/Original/
+;; Links are FM-generated and overwritten every push; Remarks is the user's
+;; Anki-side space — seeded empty, never clobbered.
 ;; ---------------------------------------------------------------------------
 
 (def overlapping-model-name "Overlapping Cloze FreeMemo")
@@ -314,16 +315,16 @@
       ["{{cloze:Full}}"])))
 
 (def overlapping-card-front
-  (str "<div class=\"fm-ol\" dir=\"auto\">\n"
-    "  {{#Question}}<div class=\"fm-ol-question\">{{Question}}</div>{{/Question}}\n"
-    "  <div class=\"fm-ol-text\">\n    " overlapping-cloze-refs "\n  </div>\n"
+  (str "<div class=\"fm-ol\">\n"
+    "  {{#Question}}<div class=\"fm-ol-question\" dir=\"auto\">{{Question}}</div>{{/Question}}\n"
+    "  <div class=\"fm-ol-text\" dir=\"auto\">\n    " overlapping-cloze-refs "\n  </div>\n"
     "</div>\n"))
 
 (def overlapping-card-back
-  (str "<div class=\"fm-ol\" dir=\"auto\">\n"
-    "  {{#Question}}<div class=\"fm-ol-question\">{{Question}}</div>{{/Question}}\n"
-    "  <div class=\"fm-ol-text\">\n    " overlapping-cloze-refs "\n  </div>\n"
-    "  {{#Original}}<div class=\"fm-ol-original\"><hr>{{Original}}</div>{{/Original}}\n"
+  (str "<div class=\"fm-ol\">\n"
+    "  {{#Question}}<div class=\"fm-ol-question\" dir=\"auto\">{{Question}}</div>{{/Question}}\n"
+    "  <div class=\"fm-ol-text\" dir=\"auto\">\n    " overlapping-cloze-refs "\n  </div>\n"
+    "  {{#Original}}<div class=\"fm-ol-original\" dir=\"auto\"><hr>{{Original}}</div>{{/Original}}\n"
     "  {{#Links}}<div class=\"fm-ol-extra fm-links\">{{Links}}</div>{{/Links}}\n"
     "  {{#Remarks}}<div class=\"fm-ol-extra\"><div class=\"fm-ol-field-descr\">Remarks</div>{{Remarks}}</div>{{/Remarks}}\n"
     "</div>\n"))

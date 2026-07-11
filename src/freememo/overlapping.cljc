@@ -24,7 +24,8 @@
 (def default-settings
   "Window defaults reproducing the observed Cloze-Overlapper output: one line of
    prior context shown as text, none after, a reveal-all card. Text direction is
-   auto-detected at render time (dir=\"auto\"), so it is not a setting."
+   not stored — the card template's question and items blocks each carry
+   dir=\"auto\" and detect it independently from their own content."
   {:before 1 :after 0 :reveal-all? true})
 
 (defn- div [s] (str "<div>" s "</div>"))
