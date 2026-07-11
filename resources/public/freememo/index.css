@@ -1451,8 +1451,11 @@ textarea:hover {
 .ql-toolbar.ql-snow { border-color: var(--color-border) !important; }
 .ql-editor.ql-blank::before { color: var(--color-text-hint) !important; }
 /* dir="auto" + text-align:start → RTL imports render right-aligned. Applies to
-   both themes: snow (card fields) and bubble (main doc editor). */
+   both themes: snow (card fields) and bubble (main doc editor).
+   Chromium does not resolve `text-align:start` against a dir="auto"-computed
+   rtl direction when the property is set explicitly, so pin it with :dir(rtl). */
 .ql-editor { text-align: start; }
+.ql-editor:dir(rtl) { text-align: right; }
 
 /* Bubble floating toolbar (main doc editor, E1). JS pins it to position:fixed
    at paint time (install-unclipped-tooltip-positioning! in rich_text_editor) so

@@ -552,6 +552,14 @@ pre > code {
     text-align: start;
 }
 
+/* Chromium (Anki's webview) does not resolve text-align:start against a
+   dir="auto"-computed rtl direction when set explicitly, so pin RTL blocks
+   right. An Arabic list right-aligns; an English one stays left. */
+.fm-ol-text:dir(rtl),
+.fm-ol-original:dir(rtl) {
+    text-align: right;
+}
+
 /* The active deletion, highlighted like Anki's default cloze. */
 .fm-ol .cloze {
     font-weight: bold;
