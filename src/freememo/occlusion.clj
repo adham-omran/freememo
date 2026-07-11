@@ -19,7 +19,7 @@
    [taoensso.telemere :as tel]))
 
 (def io-field-keys
-  "The six user-editable IO FreeMemo text fields, as io_fields JSONB keys.
+  "The six user-editable FreeMemo IO text fields, as io_fields JSONB keys.
    Order matches the Anki model's field order (Header, Footer, Remarks,
    Sources, Extra 1, Extra 2)."
   [:header :footer :remarks :sources :extra1 :extra2])
