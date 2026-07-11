@@ -363,7 +363,7 @@
                       ON flashcards(score_group_id) WHERE score_group_id IS NOT NULL"])
 
   ;; Overlapping cloze — one row per authored list. The overlapping JSONB is the
-  ;; whole card: {:title :items [...] :settings {...} :fields {:Original :Full
+  ;; whole card: {:question :items [...] :settings {...} :fields {:Original :Full
   ;; :Text1 ...}}. :items+:settings are the source edits write to; :fields is
   ;; the materialized Anki-field expansion (freememo.overlapping/expand),
   ;; re-derived on every save. question/answer/cloze stay NULL for this kind.

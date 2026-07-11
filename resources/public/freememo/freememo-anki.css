@@ -536,16 +536,20 @@ pre > code {
 .fm-ol {
     margin: 0.4em auto;
     max-width: 40em;
+    /* Latin glyphs use the earlier fonts; Arabic falls through to Amiri when
+       installed. Direction is auto-detected via dir="auto" on the container. */
+    font-family: "Helvetica LT Std", Helvetica, Arial, "Amiri", sans-serif;
 }
 
-.fm-ol-title {
+.fm-ol-question {
     font-weight: bold;
     margin-bottom: 0.8em;
     text-align: center;
 }
 
 .fm-ol-text {
-    text-align: left;
+    /* logical alignment follows the container's resolved direction */
+    text-align: start;
 }
 
 /* The active deletion, highlighted like Anki's default cloze. */
@@ -572,7 +576,7 @@ pre > code {
     padding-top: 0.8em;
     border-top: 1px solid rgba(128, 128, 128, 0.35);
     font-size: 0.9em;
-    text-align: left;
+    text-align: start;
 }
 
 .fm-ol-extra.fm-links {
@@ -583,15 +587,4 @@ pre > code {
     margin-bottom: 0.2em;
     font-weight: bold;
     font-size: 1em;
-}
-
-/* RTL / Arabic — driven by the per-note Direction field. Amiri is used when
-   the reviewer has it installed; no external @import so offline Anki is fine. */
-.fm-ol[dir="rtl"] {
-    font-family: "Amiri", "Helvetica LT Std", Helvetica, Arial, sans-serif;
-}
-
-.fm-ol[dir="rtl"] .fm-ol-text,
-.fm-ol[dir="rtl"] .fm-ol-extra {
-    text-align: right;
 }

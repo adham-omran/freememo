@@ -58,14 +58,31 @@
          :else nil))
      :clj nil))
 
-(defn ol-items-from-text
-  "Split the items-textarea value into a trimmed, blank-free vector of list
-   items — one item per line."
-  [text]
-  (->> (str/split-lines (or text ""))
-    (map str/trim)
-    (remove str/blank?)
-    vec))
+(defn quill-html->items
+  "Parse a QuillField's HTML into an ordered vector of list items — the inner
+   HTML of each block line (<p> or <li>), trimmed, dropping blank lines (an
+   empty Quill line is <p><br></p>). Inline formatting and <img> within a line
+   are preserved. CLJS only; CLJ returns []."
+  [html]
+  #?(:cljs
+     (let [tmp (.createElement js/document "div")]
+       (set! (.-innerHTML tmp) (or html ""))
+       (->> (array-seq (.querySelectorAll tmp "p, li"))
+         (keep (fn [el]
+                 (let [inner   (str/trim (.-innerHTML el))
+                       text    (str/trim (.-textContent el))
+                       has-img (pos? (.-length (.querySelectorAll el "img")))]
+                   (when (and (not (str/blank? inner))
+                           (or (not (str/blank? text)) has-img))
+                     inner))))
+         vec))
+     :clj []))
+
+(defn ol-items->html
+  "Build QuillField mount HTML from a stored items vector — one <p> block per
+   item so Quill renders each item on its own line."
+  [items]
+  (apply str (map #(str "<p>" % "</p>") items)))
 
 (defn ol-before-int
   "Parse the 'context lines before' input to a non-negative int (default 1)."
@@ -348,34 +365,31 @@
               (dom/text "Cancel")
               (dom/On "click" (fn [_] (reset! !show false)) nil))))))))
 
-;; Edit card modal
+;; Overlapping-cloze authoring pane — shared by Add + Edit
 (e/defn OverlappingPane
   "Authoring inputs for an overlapping-cloze card, shared by Add + Edit. Writes
-   to the caller's atoms; renders their current (e/watch'd) values. Plain DOM
-   inputs (no Quill) — items are short list entries, one per line."
-  [!title !items-text !before !reveal !direction modal-font]
+   to the caller's atoms; renders their current (e/watch'd) values. The list is
+   a QuillField (rich text + list toolbar + images) like Basic/Cloze — its HTML
+   is parsed into items on save via quill-html->items. items-key MUST be unique
+   per instance (QuillField frame isolation)."
+  [!question !items-html !items-editor init-items-html items-key !before !reveal modal-font]
   (e/client
-    (let [title (e/watch !title)
-          items-text (e/watch !items-text)
+    (let [question (e/watch !question)
           before (e/watch !before)
-          reveal (e/watch !reveal)
-          direction (e/watch !direction)]
+          reveal (e/watch !reveal)]
       (dom/div
-        (dom/label (dom/text "Title / prompt:"))
+        (dom/label (dom/text "Question:"))
         (dom/div (dom/props {:style {:margin-bottom "var(--sp-3)"}})
           (dom/input
-            (dom/props {:type "text" :value title
-                        :placeholder "What the list enumerates"
+            (dom/props {:type "text" :value question :dir "auto"
+                        :placeholder "e.g. What are the steps of X?"
                         :style {:width "100%" :font-size modal-font}})
-            (dom/On "input" (fn [e] (reset! !title (-> e .-target .-value))) nil)))
+            (dom/On "input" (fn [e] (reset! !question (-> e .-target .-value))) nil)))
         (dom/label (dom/text "List items (one per line):"))
-        (dom/div (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-          (dom/textarea
-            (dom/props {:value items-text :rows "6"
-                        :placeholder "First item\nSecond item\nThird item"
-                        :dir (if (= direction "rtl") "rtl" "ltr")
-                        :style {:width "100%" :font-size modal-font}})
-            (dom/On "input" (fn [e] (reset! !items-text (-> e .-target .-value))) nil)))
+        (dom/div (dom/props {:style {:margin-bottom "var(--sp-3)" :font-size modal-font}})
+          (QuillField init-items-html
+            (fn [html] (reset! !items-html html))
+            "One item per line…" items-key !items-editor nil nil))
         (dom/div
           (dom/props {:style {:display "flex" :align-items "center"
                               :gap "var(--sp-4)" :flex-wrap "wrap" :font-size "13px"}})
@@ -391,15 +405,7 @@
             (dom/input
               (dom/props {:type "checkbox" :checked reveal})
               (dom/On "change" (fn [e] (reset! !reveal (-> e .-target .-checked))) nil))
-            (dom/text "Reveal-all card"))
-          (dom/label
-            (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-1)"}})
-            (dom/text "Direction:")
-            (dom/select
-              (dom/props {:value direction})
-              (dom/On "change" (fn [e] (reset! !direction (-> e .-target .-value))) nil)
-              (dom/option (dom/props {:value "ltr"}) (dom/text "LTR"))
-              (dom/option (dom/props {:value "rtl"}) (dom/text "RTL (Arabic)")))))))))
+            (dom/text "Reveal-all card")))))))
 
 (e/defn EditCardModal [!editing-card user-id]
   (e/client
@@ -413,23 +419,20 @@
           !question (atom init-q)
           !answer (atom init-a)
           !cloze (atom init-c)
-          !ol-title (atom (or (:title init-ol) ""))
-          !ol-items-text (atom (str/join "\n" (:items init-ol)))
+          !ol-question (atom (or (:question init-ol) ""))
+          !ol-items-html (atom (ol-items->html (:items init-ol)))
+          !ol-items-editor (atom nil)
           !ol-before (atom (str (get-in init-ol [:settings :before] 1)))
-          !ol-reveal (atom (get-in init-ol [:settings :reveal-all?] true))
-          !ol-direction (atom (or (get-in init-ol [:settings :direction]) "ltr"))
-          !q-editor (atom nil)
+          !ol-reveal (atom (get-in init-ol [:settings :reveal-all?] true))          !q-editor (atom nil)
           !a-editor (atom nil)
           !c-editor (atom nil)
           question (e/watch !question)
           answer (e/watch !answer)
           cloze (e/watch !cloze)
-          ol-title (e/watch !ol-title)
-          ol-items-text (e/watch !ol-items-text)
+          ol-question (e/watch !ol-question)
+          ol-items-html (e/watch !ol-items-html)
           ol-before (e/watch !ol-before)
-          ol-reveal (e/watch !ol-reveal)
-          ol-direction (e/watch !ol-direction)
-          card-font-sz (e/server (settings/get-card-font-size user-id))
+          ol-reveal (e/watch !ol-reveal)          card-font-sz (e/server (settings/get-card-font-size user-id))
           modal-font (str (or card-font-sz 14) "px")
           !primary-btn (atom nil)]
       (dom/div
@@ -491,7 +494,8 @@
                                 (= kind "basic") "Basic" :else "Cloze") " Card"))
           (cond
             (= kind "overlapping")
-            (OverlappingPane !ol-title !ol-items-text !ol-before !ol-reveal !ol-direction modal-font)
+            (OverlappingPane !ol-question !ol-items-html !ol-items-editor
+              (ol-items->html (:items init-ol)) [:edit-ol card-id] !ol-before !ol-reveal modal-font)
             (= kind "basic")
             (dom/div
               (dom/label (dom/text "Question:"))
@@ -544,6 +548,8 @@
                           (reset! !answer html))
                         (when-let [html (flush-syntax-tokens! @!c-editor)]
                           (reset! !cloze html))
+                        (when-let [html (flush-syntax-tokens! @!ol-items-editor)]
+                          (reset! !ol-items-html html))
                         e)
                       nil))
                   [t ?error] (e/Token click-event)]
@@ -552,14 +558,13 @@
                   (dom/text "Error: " ?error)))
               (when t
                 (if (= kind "overlapping")
-                  (let [items (ol-items-from-text ol-items-text)]
+                  (let [items (quill-html->items ol-items-html)]
                     (if (empty? items)
                       (t "Add at least one list item")
                       (let [result (e/server (cards/update-overlapping-card card-id
-                                               {:title ol-title :items items
+                                               {:question ol-question :items items
                                                 :settings {:before (ol-before-int ol-before)
-                                                           :after 0 :reveal-all? ol-reveal
-                                                           :direction ol-direction}}))]
+                                                           :after 0 :reveal-all? ol-reveal}}))]
                         (if (:success result)
                           (do (e/on-unmount #(reset! !editing-card nil))
                               (case (e/server (commands/bump! user-id :edit-card))
@@ -638,19 +643,16 @@
           !answer (atom back-pin-html)
           !primary-editor (atom nil)
           !a-editor (atom nil)
-          !ol-title (atom "")
-          !ol-items-text (atom "")
+          !ol-question (atom "")
+          !ol-items-html (atom "")
+          !ol-items-editor (atom nil)
           !ol-before (atom "1")
-          !ol-reveal (atom true)
-          !ol-direction (atom "ltr")
-          primary (e/watch !primary)
+          !ol-reveal (atom true)          primary (e/watch !primary)
           answer (e/watch !answer)
-          ol-title (e/watch !ol-title)
-          ol-items-text (e/watch !ol-items-text)
+          ol-question (e/watch !ol-question)
+          ol-items-html (e/watch !ol-items-html)
           ol-before (e/watch !ol-before)
-          ol-reveal (e/watch !ol-reveal)
-          ol-direction (e/watch !ol-direction)
-          card-font-sz (e/server (settings/get-card-font-size user-id))
+          ol-reveal (e/watch !ol-reveal)          card-font-sz (e/server (settings/get-card-font-size user-id))
           modal-font (str (or card-font-sz 14) "px")
           !primary-btn (atom nil)]
       (dom/div
@@ -734,7 +736,8 @@
               (dom/text "Overlapping")))
           (cond
             (= kind "overlapping")
-            (OverlappingPane !ol-title !ol-items-text !ol-before !ol-reveal !ol-direction modal-font)
+            (OverlappingPane !ol-question !ol-items-html !ol-items-editor
+              "" [:add-ol] !ol-before !ol-reveal modal-font)
             (= kind "basic")
             (dom/div
               (dom/label (dom/text "Question:"))
@@ -783,6 +786,8 @@
                           (reset! !primary html))
                         (when-let [html (flush-syntax-tokens! @!a-editor)]
                           (reset! !answer html))
+                        (when-let [html (flush-syntax-tokens! @!ol-items-editor)]
+                          (reset! !ol-items-html html))
                         e)
                       nil))
                   [t ?error] (e/Token click-event)]
@@ -791,13 +796,12 @@
                   (dom/text "Error: " ?error)))
               (when t
                 (if (= kind "overlapping")
-                  (let [items (ol-items-from-text ol-items-text)]
+                  (let [items (quill-html->items ol-items-html)]
                     (if (empty? items)
                       (t "Add at least one list item")
-                      (let [card-data [{:title ol-title :items items
+                      (let [card-data [{:question ol-question :items items
                                         :settings {:before (ol-before-int ol-before)
-                                                   :after 0 :reveal-all? ol-reveal
-                                                   :direction ol-direction}}]]
+                                                   :after 0 :reveal-all? ol-reveal}}]]
                         (case (e/server (opt/enqueue-add-card! user-id
                                           {:topic-id topic-id :root-topic-id root-topic-id
                                            :kind "overlapping" :card-data card-data}))
