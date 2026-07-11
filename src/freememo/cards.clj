@@ -280,7 +280,7 @@
 
 (defn generate-overlapping-cards
   "Generate overlapping-cloze cards via OpenRouter.
-   Each returned map is {:title s :items [s ...]}. Options as generate-basic-cards.
+   Each returned map is {:question s :items [s ...]}. Options as generate-basic-cards.
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}."
   [opts]
   (try
@@ -397,7 +397,7 @@
                             :question nil
                             :answer nil
                             :cloze nil
-                            :overlapping {:title (:title card)
+                            :overlapping {:question (:question card)
                                           :items items
                                           :settings settings
                                           :fields (overlap/expand items settings)}})
@@ -466,7 +466,7 @@
   (try
     (let [cards (case kind
                   "basic" [{:q (:question fields) :a (:answer fields)}]
-                  "overlapping" [{:title (:title fields)
+                  "overlapping" [{:question (:question fields)
                                   :items (:items fields)
                                   :settings (:settings fields)}]
                   [{:c (:cloze fields)}])]
@@ -595,14 +595,14 @@
   "Re-derive an overlapping card's Anki fields from an edited list + settings
    and persist the whole overlapping JSONB.
    Pre:  items non-empty and ≤ overlapping/max-items (expand enforces both).
-   Post: the row's :overlapping is {:title :items :settings :fields}, :fields
+   Post: the row's :overlapping is {:question :items :settings :fields}, :fields
          consistent with :items/:settings; updated_at bumped for sync.
    Returns {:success bool :error string}."
-  [card-id {:keys [title items settings]}]
+  [card-id {:keys [question items settings]}]
   (try
     (let [items (vec items)
           settings (merge overlap/default-settings settings)
-          ol {:title title :items items :settings settings
+          ol {:question question :items items :settings settings
               :fields (overlap/expand items settings)}]
       (db/update-flashcard! card-id {:overlapping ol})
       {:success true})

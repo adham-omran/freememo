@@ -290,19 +290,20 @@
 ;; ---------------------------------------------------------------------------
 ;; Overlapping Cloze FreeMemo note type — app-owned, cloze-typed. One authored
 ;; list is one note; Anki fans it into one card per item (Text1..TextN, item k
-;; is the active {{ck::}}) plus a reveal-all card (Full = c21). Direction is a
-;; per-note field driving RTL from a single model. Title/Text*/Full/Original/
-;; Direction/Links are FM-generated and overwritten every push; Remarks is the
-;; user's Anki-side space — seeded empty, never clobbered.
+;; is the active {{ck::}}) plus a reveal-all card (Full = c21). Text direction
+;; is auto-detected in the template (dir="auto"), so one model serves LTR and
+;; RTL with no per-note flag. Question/Text*/Full/Original/Links are FM-generated
+;; and overwritten every push; Remarks is the user's Anki-side space — seeded
+;; empty, never clobbered.
 ;; ---------------------------------------------------------------------------
 
 (def overlapping-model-name "Overlapping Cloze FreeMemo")
 (def overlapping-template-name "Overlapping Card")
 
 (def overlapping-field-names
-  (into ["Title"]
+  (into ["Question"]
     (concat (map #(str "Text" %) (range 1 21))
-      ["Full" "Original" "Direction" "Links" "Remarks"])))
+      ["Full" "Original" "Links" "Remarks"])))
 
 (def ^:private overlapping-cloze-refs
   "The cloze-field references, in order, shared by front and back templates.
@@ -313,14 +314,14 @@
       ["{{cloze:Full}}"])))
 
 (def overlapping-card-front
-  (str "<div class=\"fm-ol\" dir=\"{{Direction}}\">\n"
-    "  {{#Title}}<div class=\"fm-ol-title\">{{Title}}</div>{{/Title}}\n"
+  (str "<div class=\"fm-ol\" dir=\"auto\">\n"
+    "  {{#Question}}<div class=\"fm-ol-question\">{{Question}}</div>{{/Question}}\n"
     "  <div class=\"fm-ol-text\">\n    " overlapping-cloze-refs "\n  </div>\n"
     "</div>\n"))
 
 (def overlapping-card-back
-  (str "<div class=\"fm-ol\" dir=\"{{Direction}}\">\n"
-    "  {{#Title}}<div class=\"fm-ol-title\">{{Title}}</div>{{/Title}}\n"
+  (str "<div class=\"fm-ol\" dir=\"auto\">\n"
+    "  {{#Question}}<div class=\"fm-ol-question\">{{Question}}</div>{{/Question}}\n"
     "  <div class=\"fm-ol-text\">\n    " overlapping-cloze-refs "\n  </div>\n"
     "  {{#Original}}<div class=\"fm-ol-original\"><hr>{{Original}}</div>{{/Original}}\n"
     "  {{#Links}}<div class=\"fm-ol-extra fm-links\">{{Links}}</div>{{/Links}}\n"
@@ -562,7 +563,7 @@
                 {:model-name overlapping-model-name :template-name overlapping-template-name
                  :field-names overlapping-field-names :is-cloze true
                  :front overlapping-card-front :back overlapping-card-back
-                 :renames [] :removals []}
+                 :renames [["Title" "Question"]] :removals ["Direction"]}
                 css))))))
 
 (defn io-mask-uploads
@@ -835,14 +836,13 @@
    :options (note-dupe-options settings)})
 
 (defn build-overlapping-content-fields
-  "FM-owned content fields for an Overlapping Cloze FreeMemo note: Title, the
+  "FM-owned content fields for an Overlapping Cloze FreeMemo note: Question, the
    materialized Text1..Text20 (items beyond the list blank), Full, Original,
-   Direction, Links. Excludes Remarks (user Anki-side space). Shared by add +
+   Links. Excludes Remarks (user Anki-side space). Shared by add +
    update. Pre: card carries :flashcards/overlapping (parsed JSONB w/ :fields)."
   [card settings filename-map]
   (let [ol (:flashcards/overlapping card)
         fields (:fields ol)
-        direction (or (get-in ol [:settings :direction]) "ltr")
         rw (fn [s] (rewrite-media-srcs (or s "") filename-map))
         text-fields (into {}
                       (map (fn [k]
@@ -850,10 +850,9 @@
                               (rw (get fields (keyword (str "Text" k))))]))
                       (range 1 21))]
     (merge
-      {"Title" (rw (:title ol))
+      {"Question" (rw (:question ol))
        "Full" (rw (:Full fields))
-       "Original" (rw (:Original fields))
-       "Direction" direction}
+       "Original" (rw (:Original fields))}
       text-fields
       (build-links-field card settings))))
 

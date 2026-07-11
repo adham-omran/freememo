@@ -124,7 +124,7 @@
   [ol]
   (let [items (:items ol)
         n (count items)
-        label (or (not-empty (some-> (:title ol) (str/replace #"<[^>]+>" "") str/trim))
+        label (or (not-empty (some-> (:question ol) (str/replace #"<[^>]+>" "") str/trim))
                 (first items)
                 "Overlapping list")]
     (str "<span>Overlapping · " (truncate-html-for-row label 80)
@@ -246,7 +246,7 @@
                   " · " n " rect" (when (not= 1 n) "s")))
       "overlapping" (let [items (:items c)
                           n (count items)]
-                      (str "Overlapping · " (or (not-empty (:title c)) (first items) "list")
+                      (str "Overlapping · " (or (not-empty (:question c)) (first items) "list")
                         " · " n " item" (when (not= 1 n) "s")))
       "cloze" (:c c)
       (:q c))))

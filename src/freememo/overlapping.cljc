@@ -23,8 +23,9 @@
 
 (def default-settings
   "Window defaults reproducing the observed Cloze-Overlapper output: one line of
-   prior context shown as text, none after, a reveal-all card, left-to-right."
-  {:before 1 :after 0 :reveal-all? true :direction "ltr"})
+   prior context shown as text, none after, a reveal-all card. Text direction is
+   auto-detected at render time (dir=\"auto\"), so it is not a setting."
+  {:before 1 :after 0 :reveal-all? true})
 
 (defn- div [s] (str "<div>" s "</div>"))
 
