@@ -279,12 +279,22 @@
                  (set! (.. root -style -marginTop)
                    (str (- (.-scrollTop (.-root ed))) "px"))
                  (let [^js range (.getSelection ed)
-                       ^js lines (when (and range (pos? (.-length range)))
-                                   (.getLines ed (.-index range) (.-length range)))
-                       ;; Multi-line: anchor to the FIRST selected line so a tall
-                       ;; selection (Cmd-A) doesn't drop the tooltip off the last.
-                       ^js the-ref (if (and lines (> (.-length lines) 1))
-                                     (.getBounds ed (.-index range) 0)
+                       ;; A tall selection makes Quill anchor the tooltip to the
+                       ;; selection's BOTTOM, dropping it far from where the
+                       ;; selection starts (detached, and off-screen for very tall
+                       ;; spans). getLines counts only BLOCK lines — 1 for a
+                       ;; soft-wrapped paragraph — so it misses multi-visual-line
+                       ;; selections inside one <p>. Compare the whole selection's
+                       ;; box height to a single caret's height instead: taller
+                       ;; than ~1.5 lines ⇒ multi-line ⇒ anchor to the FIRST line
+                       ;; (selection top) so the tooltip stays by where the user
+                       ;; began selecting. Covers Cmd-A and multi-block too.
+                       ^js sel-box (when (and range (pos? (.-length range)))
+                                     (.getBounds ed (.-index range) (.-length range)))
+                       ^js first-line (when sel-box (.getBounds ed (.-index range) 0))
+                       ^js the-ref (if (and sel-box first-line
+                                         (> (.-height sel-box) (* 1.5 (.-height first-line))))
+                                     first-line
                                      reference)
                        shift (.call orig-position this the-ref)]
                    (freeze-to-fixed!)
