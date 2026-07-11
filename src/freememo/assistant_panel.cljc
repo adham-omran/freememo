@@ -146,19 +146,12 @@
                   (do
                     (reset! !active (:chat-id r)) ; select the (possibly new) chat
                     (if (:ok r)
-                      (reset! !error nil) ; chips consumed; echo clears on transcript growth
+                      (reset! !error nil) ; chips consumed by this turn
                       (do (reset! !error (:error r))
                           (reset! !draft text)
-                          (reset! !refs refs-snapshot)
-                          (reset! !echo nil)))
+                          (reset! !refs refs-snapshot)))
+                    (reset! !echo nil) ; echo already stopped rendering on transcript growth
                     (t))))))))
-
-      ;; Retire the optimistic echo once the server transcript reflects the turn
-      ;; (send! persists the user row + bumps before the reply), so the echo and
-      ;; the real row never both render.
-      (when-let [{:keys [baseline-count]} echo]
-        (when (> (count messages) baseline-count)
-          (reset! !echo nil)))
 
       ;; @-reference commit: Typeahead wrote the chosen title to !picked. Add the
       ;; matching doc as a chip (dedup by id), strip the trailing `@token` the
@@ -289,9 +282,13 @@
                     (dom/props {:class (str "assistant-msg assistant-msg--"
                                          (:assistant_messages/role m))})
                     (dom/text (:assistant_messages/content m)))))))
-          ;; Optimistic echo of the just-sent turn (user bubble), shown until the
-          ;; server row lands (see the echo-retire effect above).
-          (when-let [e-text (:text echo)]
+          ;; Optimistic echo of the just-sent turn (user bubble). Rendered only
+          ;; while the server transcript hasn't grown past the send baseline — a
+          ;; pure guard, so the echo and the real row never both show and no
+          ;; reactive write is needed (the atom is cleared at token completion).
+          (when-let [e-text (and echo
+                              (<= (count messages) (:baseline-count echo))
+                              (:text echo))]
             (dom/div
               (dom/props {:class "assistant-msg assistant-msg--user"})
               (dom/text e-text)))
