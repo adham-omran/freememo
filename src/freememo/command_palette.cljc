@@ -14,8 +14,7 @@
             [hyperfiddle.electric-dom3 :as dom]
             [freememo.commands :as commands]
             [freememo.command-bus :as bus]
-            [freememo.modal-shell :as modal-shell]
-            [freememo.util :as util]))
+            [freememo.modal-shell :as modal-shell]))
 
 (defonce !open? (atom false))
 
@@ -67,25 +66,11 @@
 
 ;; ── Platform-split helpers (top-level, frame-safe) ─────────────────────────
 
-#?(:cljs
-   (defn format-bind
-     "Registry [id bind] → display chord for this platform+browser:
-      \"⌘⇧E\" on macOS, \"Ctrl+Shift+E\" / \"Ctrl+/\" elsewhere. Renders the
-      resolved chord (commands/effective-bind), so the shown key always matches
-      the key that actually fires."
-     [id bind]
-     (when bind
-       (let [mac? (util/mac-platform?)
-             eff  (commands/effective-bind id bind)
-             part (fn [p] (case p
-                            "meta"  "⌘"
-                            "ctrl"  (if mac? "⌃" "Ctrl")
-                            "shift" (if mac? "⇧" "Shift")
-                            "alt"   (if mac? "⌥" "Alt")
-                            (str/upper-case p)))]
-         (str/join (if mac? "" "+") (map part (str/split eff #"\+"))))))
-   :clj
-   (defn format-bind [_id _bind] nil))
+(defn format-bind
+  "Registry [id bind] → display chord for this platform+browser. Thin alias for
+   commands/display-chord (the single formatter)."
+  [id bind]
+  (commands/display-chord id bind))
 
 #?(:cljs
    (defn- on-palette-key

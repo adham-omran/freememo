@@ -280,6 +280,27 @@
     (= id :toggle-palette) (if (util/firefox-browser?) "ctrl+/" "ctrl+shift+p")
     :else                  (str/replace bind "meta" "ctrl")))
 
+(defn display-chord
+  "Human-readable chord for command `id` (registry `bind`), for the current
+   platform+browser. Renders the resolved chord (effective-bind), so the shown
+   key always matches the key that actually fires: \"⌘⇧E\" on macOS (glyphs,
+   joined tight), \"Ctrl+Shift+E\" (or \"Ctrl+/\" for the palette on Firefox)
+   elsewhere.
+
+   Pre : `bind` is a goog spec string or nil.
+   Post: display string, or nil when `bind` is nil."
+  [id bind]
+  (when bind
+    (let [mac? (util/mac-platform?)
+          eff  (effective-bind id bind)
+          part (fn [p] (case p
+                         "meta"  "⌘"
+                         "ctrl"  (if mac? "⌃" "Ctrl")
+                         "shift" (if mac? "⇧" "Shift")
+                         "alt"   (if mac? "⌥" "Alt")
+                         (str/upper-case p)))]
+      (str/join (if mac? "" "+") (map part (str/split eff #"\+"))))))
+
 (defn palette-listed
   "Entries the palette shows on `active-tab`: not :palette-hidden and
    :when either nil or containing the tab. Availability beyond this
