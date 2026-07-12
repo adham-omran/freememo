@@ -22,6 +22,14 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_DIR"
 
+# --- preconditions: bind-mount sources must exist as FILES ----------------
+# A missing host file makes Docker create a directory in its place, silently
+# breaking the container (config.edn → credits fail closed; Caddyfile → proxy
+# won't start). Fail fast with a clear message instead.
+for required in config.edn Caddyfile; do
+  [[ -f "$REPO_DIR/$required" ]] || { echo "deploy: FATAL — $required missing in $REPO_DIR"; exit 1; }
+done
+
 # --- tunables -------------------------------------------------------------
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"   # seconds to wait for the new color to become healthy
 DRAIN_SECONDS="${DRAIN_SECONDS:-90}"      # keep old color alive post-flip (>= app ws-idle-timeout 60s)
