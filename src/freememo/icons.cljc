@@ -19,7 +19,8 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-svg3 :as svg]))
+   [hyperfiddle.electric-svg3 :as svg]
+   [freememo.tooltip :as tooltip]))
 
 ;; SVG inner content per icon. Each entry is a sequence of inner-SVG element
 ;; descriptors that Icon below renders as children of the <svg>.
@@ -238,8 +239,9 @@
                  :stroke-linecap "round"
                  :stroke-linejoin "round"
                  :aria-hidden (if title "false" "true")}
-          class (assoc :class class)
-          title (assoc :aria-label title :data-tooltip title)))
+          class (assoc :class class)))
+      ;; Icon-only trigger: the tooltip text also names the element for a11y.
+      (when title (tooltip/Tooltip! title :aria? true))
       (when (icon-known? name)
         (e/for [[tag attrs] (e/diff-by hash (get icon-paths name))]
           (case tag

@@ -6,7 +6,8 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
    [freememo.card-modals :refer [ExportModal]]
-   [freememo.command-bus :as bus]))
+   [freememo.command-bus :as bus]
+   [freememo.tooltip :as tooltip]))
 
 (e/defn ExportButton [user-id topic-id root-topic-id unsynced-count]
   (e/client
@@ -14,9 +15,8 @@
           show-export (e/watch !show-export)]
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary"
-                    :style {:font-weight "500"}
-                    :aria-label "Export"
-                    :data-tooltip "Export"})
+                    :style {:font-weight "500"}})
+        (tooltip/Tooltip! "Export" :aria? true)
         (icons/Icon :download :size 16)
         (dom/span (dom/props {:class "icon-label"})
           (dom/text (if (pos? unsynced-count)

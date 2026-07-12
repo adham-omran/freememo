@@ -17,6 +17,7 @@
    [freememo.card-components :refer [card-row-html set-inner-html! DeleteCardButton
                                      overlapping-row-html try-delete-anki-notes!]]
    [freememo.card-modals :refer [EditCardModal]]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.anki-sync-server :as sync-server])
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.db :as db])
@@ -468,8 +469,8 @@
       (dom/td
         (dom/props {:style (merge cell-style {:justify-content "center" :gap "3px"
                                               :padding-inline "4px" :font-size "11px"
-                                              :cursor "pointer"})
-                    :data-tooltip (direction-tooltip direction)})
+                                              :cursor "pointer"})})
+        (tooltip/Tooltip! (direction-tooltip direction))
         (let [show-diff! (fn [e]
                            (.stopPropagation e)
                            (reset! !diff-card diff-payload))]
@@ -479,17 +480,17 @@
           (dom/text (direction-glyph direction)))
         (when (:marked flags)
           (dom/span
-            (dom/props {:style {:color "var(--color-primary-text)" :font-size "9px"}
-                        :data-tooltip "Marked in Anki"})
+            (dom/props {:style {:color "var(--color-primary-text)" :font-size "9px"}})
+            (tooltip/Tooltip! "Marked in Anki")
             (dom/text "★")))
         (when (and susp (pos? (:suspended susp)))
           (dom/span
             (dom/props {:style {:color "var(--color-text-secondary)" :font-size "9px"
                                 ;; I3 tri-state: solid = all suspended, dimmed = partial
-                                :opacity (if (= (:suspended susp) (:total susp)) "1" "0.45")}
-                        :data-tooltip (str (:suspended susp) " of " (:total susp)
-                                        " card" (when (not= (:total susp) 1) "s")
-                                        " suspended")})
+                                :opacity (if (= (:suspended susp) (:total susp)) "1" "0.45")}})
+            (tooltip/Tooltip! (str (:suspended susp) " of " (:total susp)
+                                " card" (when (not= (:total susp) 1) "s")
+                                " suspended"))
             (dom/text "⏸")))))))
 
 ;; Front + Back cells — cloze spans both content columns, back hidden for cloze
@@ -525,8 +526,8 @@
         (dom/On "click" open-document! nil))
       (dom/span
         (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
-                            :font-size "12px" :color "var(--color-text-secondary)"}
-                    :data-tooltip root-title})
+                            :font-size "12px" :color "var(--color-text-secondary)"}})
+        (tooltip/Tooltip! root-title)
         (dom/text (or root-title ""))))))
 
 (e/defn LibraryCardRow [card navigate! !editing-card !diff-card !selected selected user-id i anki-overlay]
@@ -799,11 +800,11 @@
   (e/client
     (dom/button
       (dom/props {:class "btn btn-sm btn-primary"
-                  :disabled (or none-selected? busy? (not anki-ready?))
-                  :data-tooltip (cond
-                                  none-selected? "Select cards first"
-                                  (not anki-ready?) "Requires Anki connection"
-                                  :else "Update the Anki notes of selected pushed cards")})
+                  :disabled (or none-selected? busy? (not anki-ready?))})
+      (tooltip/Tooltip! (cond
+                         none-selected? "Select cards first"
+                         (not anki-ready?) "Requires Anki connection"
+                         :else "Update the Anki notes of selected pushed cards"))
       (dom/text "Push updates")
       (dom/On "click"
         (fn [_]
@@ -823,11 +824,11 @@
   (e/client
     (dom/button
       (dom/props {:class "btn btn-sm btn-secondary"
-                  :disabled (or none-selected? busy? (not anki-ready?))
-                  :data-tooltip (cond
-                                  none-selected? "Select cards first"
-                                  (not anki-ready?) "Requires Anki connection"
-                                  :else "Apply Anki's content to selected cards")})
+                  :disabled (or none-selected? busy? (not anki-ready?))})
+      (tooltip/Tooltip! (cond
+                         none-selected? "Select cards first"
+                         (not anki-ready?) "Requires Anki connection"
+                         :else "Apply Anki's content to selected cards"))
       (dom/text "Pull")
       (dom/On "click"
         (fn [_]
@@ -870,8 +871,8 @@
           (dom/On "click" (fn [_] (reset! !confirm-bulk-delete true)) nil))
         (dom/label
           (dom/props {:style {:display "flex" :align-items "center" :gap "4px"
-                              :cursor "pointer" :user-select "none"}
-                      :data-tooltip "Conflicted cards (edited on both sides) are skipped unless checked"})
+                              :cursor "pointer" :user-select "none"}})
+          (tooltip/Tooltip! "Conflicted cards (edited on both sides) are skipped unless checked")
           (dom/input
             (dom/props {:type "checkbox"})
             (set! (.-checked dom/node) (boolean include-conflicts))
@@ -937,8 +938,8 @@
         (dom/On "change" (fn [e] (reset! !status (-> e .-target .-value))) nil))
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary"
-                    :disabled (= ov-status :checking)
-                    :data-tooltip "Re-check Anki for edits, marks, suspensions and deletions"})
+                    :disabled (= ov-status :checking)})
+        (tooltip/Tooltip! "Re-check Anki for edits, marks, suspensions and deletions")
         (dom/text (if (= ov-status :checking) "Checking…" "Check Anki"))
         (dom/On "click" (fn [_] (swap! !check-tick inc)) nil)))))
 
@@ -969,9 +970,9 @@
               (dom/th
                 (dom/props {:style (merge th-style {:text-align "center" :padding "8px 4px"})})
                 (dom/input
-                  (dom/props {:type "checkbox" :aria-label "Select all filtered"
-                              :style {:cursor "pointer"}
-                              :data-tooltip "Select all filtered"})
+                  (dom/props {:type "checkbox"
+                              :style {:cursor "pointer"}})
+                  (tooltip/Tooltip! "Select all filtered" :aria? true)
                   (set! (.-checked dom/node)
                     (boolean (and (seq filtered-ids) (every? selected filtered-ids))))
                   (dom/On "click"
@@ -981,8 +982,8 @@
                         (swap! !selected into filtered-ids)))
                     nil)))
               (dom/th
-                (dom/props {:style (merge th-style {:text-align "center" :cursor "pointer"})
-                            :data-tooltip "Sync direction (▲ push pending · ▼ pull pending · ▲▼ conflict · ○ unpushed) — sorts by DB state"})
+                (dom/props {:style (merge th-style {:text-align "center" :cursor "pointer"})})
+                (tooltip/Tooltip! "Sync direction (▲ push pending · ▼ pull pending · ▲▼ conflict · ○ unpushed) — sorts by DB state")
                 (dom/text (str "Δ" (arrow :status)))
                 (dom/On "click" (sort-click :status :asc) nil))
               (dom/th

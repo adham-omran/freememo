@@ -1056,6 +1056,15 @@ html, body {
 .tape-scroll table td:has([data-tooltip]:hover) {
     overflow: visible;
 }
+/* Paint the tooltip IN FRONT of the rows below it. Each row is transformed
+   (see `transform` above), and `transform` makes every row its own stacking
+   context — so the tooltip's z-index is trapped inside its row and later rows
+   (later in DOM order) paint over it. Rows are position:absolute, so raising
+   the hovered row's z-index reorders it ahead of its auto-z-index siblings,
+   carrying the escaped tooltip above them. */
+.tape-scroll table tr:has([data-tooltip]:hover) {
+    z-index: 1;
+}
 /* Zebra striping (opt-in via .row-alt on the tr). Placed before :hover so hover
    wins on equal specificity. */
 .tape-scroll table tr.row-alt td { background: light-dark(#eef2f7, #243044); }
@@ -2318,7 +2327,12 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     pointer-events: none;
     opacity: 0;
     visibility: hidden;
-    transition: opacity 0.15s ease, visibility 0.15s ease;
+    /* No transition: show and hide are both instant. A fade-OUT would keep a
+       stale bubble painted for its duration, and in a virtual-scroll list the
+       cursor re-enters the next recycled row's trigger before the previous
+       bubble finishes fading — stacking several detached tooltips over the
+       rows. Instant hide guarantees at most one bubble, only while genuinely
+       hovered. */
     /* Above .modal-backdrop (1000) so a tooltip on a button inside a modal
        is never painted under the backdrop. */
     z-index: 1100;

@@ -30,6 +30,7 @@
    [freememo.pdf-viewer-component :refer [LiveDocAddPhotos]]
    [freememo.score-toolbar :refer [ScoreRectButton]]
    [freememo.toolbar-overflow :refer [install-overflow-detector!]]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])))
 
@@ -152,10 +153,10 @@
       (when on-layout-toggle!
         (dom/button
           (dom/props {:class "btn btn-sm btn-secondary"
-                      :style {:font-size "14px"}
-                      :data-tooltip (if (= layout "top-bottom")
-                                      "Switch to side-by-side layout"
-                                      "Switch to stacked layout")})
+                      :style {:font-size "14px"}})
+          (tooltip/Tooltip! (if (= layout "top-bottom")
+                              "Switch to side-by-side layout"
+                              "Switch to stacked layout"))
           (dom/text (if (= layout "top-bottom") "⇅" "⇄"))
           (dom/On "click" (fn [_] (on-layout-toggle!)) nil)))))))
 
@@ -175,8 +176,8 @@
           (dom/props {:class "btn btn-sm btn-secondary"
                       :aria-label (if page-done?
                                     (str "Restore page " page-number)
-                                    (str "Mark page " page-number " as done"))
-                      :data-tooltip "Mark this page as completed to track your extraction progress"})
+                                    (str "Mark page " page-number " as done"))})
+          (tooltip/Tooltip! "Mark this page as completed to track your extraction progress")
           (icons/Icon (if page-done? :rotate-ccw :check) :size 16)
           (dom/span (dom/props {:class "icon-label"})
             (dom/text (if page-done?
@@ -274,8 +275,9 @@
                             :style {:display "flex" :margin-left "auto"}})
                 (dom/button
                   (dom/props {:class "btn btn-sm btn-secondary"
-                              :aria-label "More PDF controls" :data-tooltip "More"
+                              :aria-label "More PDF controls"
                               :style {:font-weight "bold" :font-size "16px" :line-height "1"}})
+                  (tooltip/Tooltip! "More")
                   (icons/Icon :more-vertical :size 16)
                   (dom/On "click" (fn [_] (swap! !overflow-open not)) nil)))
               ;; Overflow panel — secondary controls, one tap away.

@@ -13,6 +13,7 @@
    [freememo.icons :as icons]
    [freememo.command-bus :as bus]
    [freememo.modal-shell :as modal]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])
    ;; Loads the :undo-newest / :undo-entry run-command! methods server-side.
    #?(:clj [freememo.undo :as undo])
@@ -160,8 +161,8 @@
                             :border-bottom "0.5px solid var(--color-border-light)"}})
         (if (:superseded? row)
           (dom/span
-            (dom/props {:style {:font-size "12px" :color "var(--color-text-hint)"}
-                        :data-tooltip "A newer action changed the same item"})
+            (dom/props {:style {:font-size "12px" :color "var(--color-text-hint)"}})
+            (tooltip/Tooltip! "A newer action changed the same item")
             (dom/text "Superseded"))
           (dom/button
             (dom/props {:class "btn btn-sm btn-secondary"})

@@ -5,14 +5,15 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [freememo.icons :as icons]))
+   [freememo.icons :as icons]
+   [freememo.tooltip :as tooltip]))
 
 (e/defn AutoExtractButton []
   (e/client
     (dom/button
       (dom/props {:class "btn btn-sm btn-secondary"
                   :aria-label "Auto-extract (future feature)"
-                  :data-tooltip "Future Feature"
                   :disabled true})
+      (tooltip/Tooltip! "Future Feature")
       (icons/Icon :scan-text :size 16)
       (dom/span (dom/props {:class "icon-label"}) (dom/text "Auto-extract")))))

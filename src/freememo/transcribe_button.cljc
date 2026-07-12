@@ -10,6 +10,7 @@
    [freememo.rich-text-editor :as editor]
    [freememo.icons :as icons]
    [freememo.modal-shell :as modal]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.transcribe :as transcribe])))
 
@@ -27,8 +28,8 @@
         (dom/props {:class "btn btn-sm btn-primary"
                     :style {:font-weight "500"}
                     :aria-label "Transcribe"
-                    :data-tooltip "Transcribe the audio into the editor"
                     :disabled transcribing?})
+        (tooltip/Tooltip! "Transcribe the audio into the editor")
         (icons/Icon :mic :size 16)
         (dom/span (dom/props {:class "icon-label"})
           (dom/text (if transcribing? "Transcribing…" "Transcribe")))

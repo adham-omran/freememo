@@ -8,7 +8,8 @@
    [freememo.icons :as icons]
    [freememo.rich-text-editor :as editor]
    [freememo.card-modals :refer [AddCardModal]]
-   [freememo.command-bus :as bus]))
+   [freememo.command-bus :as bus]
+   [freememo.tooltip :as tooltip]))
 
 (e/defn AddCardButton [user-id topic-id root-topic-id card-type]
   (e/client
@@ -18,9 +19,8 @@
           !captured-selection (atom "")]
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-item"
-                    :style {:font-weight "500"}
-                    :aria-label "Add new card"
-                    :data-tooltip "Add new card"})
+                    :style {:font-weight "500"}})
+        (tooltip/Tooltip! "Add new card" :aria? true)
         (icons/Icon :plus :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Add new card"))
         (let [node dom/node]

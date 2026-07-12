@@ -7,6 +7,7 @@
    [contrib.data :refer [clamp-left]]
    [freememo.navigation :as nav]
    [freememo.bibliography-form :as bibform]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])))
 
@@ -190,8 +191,8 @@
                                   (dom/props {:class "type-badge" :style {:background badge-color :flex-shrink "0"}})
                                   (dom/text badge-text))
                                 (dom/span
-                                  (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}
-                                              :data-tooltip title})
+                                  (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"}})
+                                  (tooltip/Tooltip! title)
                                   (dom/text title)))
                               ;; Done
                               (dom/td

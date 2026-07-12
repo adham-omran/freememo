@@ -25,6 +25,7 @@
    [freememo.icons :as icons]
    [freememo.command-bus :as bus]
    [freememo.toolbar-overflow :refer [install-overflow-detector!]]
+   [freememo.tooltip :as tooltip]
    [freememo.util :refer [mac-platform?]]))
 
 ;; State map keys:
@@ -161,8 +162,8 @@
                   (dom/button
                     (dom/props {:class "btn btn-sm btn-secondary"
                                 :aria-label "Auto-extract (future feature)"
-                                :data-tooltip "Future Feature"
                                 :disabled true})
+                    (tooltip/Tooltip! "Future Feature")
                     (icons/Icon :scan-text :size 16)
                     (dom/span (dom/props {:class "icon-label"}) (dom/text "Auto-extract"))))
 
@@ -327,9 +328,8 @@
                 (dom/props {:class "toolbar-overflow-trigger"})
                 (dom/button
                   (dom/props {:class "btn btn-sm btn-secondary"
-                              :style {:font-weight "bold" :padding "4px 10px" :font-size "16px" :line-height "1"}
-                              :aria-label "More"
-                              :data-tooltip "More"})
+                              :style {:font-weight "bold" :padding "4px 10px" :font-size "16px" :line-height "1"}})
+                  (tooltip/Tooltip! "More" :aria? true)
                   (icons/Icon :more-vertical :size 16)
                   (dom/span (dom/props {:class "icon-label"}) (dom/text "More"))
                   (dom/On "click" (fn [_] (swap! !overflow-open not)) nil))))

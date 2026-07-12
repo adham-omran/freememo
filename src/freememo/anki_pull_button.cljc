@@ -7,6 +7,7 @@
    [freememo.anki-sync-helpers :as anki]
    [freememo.icons :as icons]
    [freememo.command-bus :as bus]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.anki-sync-server :as sync])))
 
 (e/defn PullFromAnkiButton [user-id root-topic-id]
@@ -39,10 +40,10 @@
                             :color "var(--color-text-primary)"
                             :font-weight "500"}
                     :disabled in-flight?
-                    :aria-label "Pull from Anki"
-                    :data-tooltip (case pull-phase
-                                    :error (or (:message pull-error) "Pull failed")
-                                    "Pull edits from Anki for this document.")})
+                    :aria-label "Pull from Anki"})
+        (tooltip/Tooltip! (case pull-phase
+                            :error (or (:message pull-error) "Pull failed")
+                            "Pull edits from Anki for this document."))
         (icons/Icon :cloud-download :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text label))
         (let [node dom/node]

@@ -17,6 +17,7 @@
    [freememo.icons :as icons]
    [freememo.commands :as commands]
    [freememo.modal-shell :as modal]
+   [freememo.tooltip :as tooltip]
    [freememo.typeahead :as typeahead]
    [freememo.loading :as loading]
    #?(:clj [freememo.db :as db])
@@ -194,8 +195,8 @@
     (dom/button
       (dom/props {:class "btn btn-sm btn-secondary"
                   :disabled distilling?
-                  :aria-label "Distill facts"
-                  :data-tooltip "Extract facts from this document into the knowledge graph"})
+                  :aria-label "Distill facts"})
+      (tooltip/Tooltip! "Extract facts from this document into the knowledge graph")
       (if distilling?
         (icons/Icon :loader-2 :size 14 :class "spin")
         (icons/Icon :pen-sparkles :size 14))
@@ -227,8 +228,8 @@
     (dom/button
       (dom/props {:class "btn btn-sm btn-secondary" :style {:margin-left "6px"}
                   :disabled generating?
-                  :aria-label "Generate questions"
-                  :data-tooltip "One question per fact that doesn't have one yet"})
+                  :aria-label "Generate questions"})
+      (tooltip/Tooltip! "One question per fact that doesn't have one yet")
       (if generating?
         (icons/Icon :loader-2 :size 14 :class "spin")
         (icons/Icon :graduation-cap :size 14))
@@ -328,8 +329,8 @@
   [user-id fact-id]
   (e/client
     (dom/button
-      (dom/props {:class "btn-delete-x" :aria-label "Reject fact"
-                  :data-tooltip "Reject — removes this fact from the graph"})
+      (dom/props {:class "btn-delete-x" :aria-label "Reject fact"})
+      (tooltip/Tooltip! "Reject — removes this fact from the graph")
       (dom/text "×")
       (let [click (dom/On "click" (fn [e] #?(:cljs (.stopPropagation e)) fact-id) nil)
             [t _] (e/Token click)]
@@ -403,10 +404,10 @@
                                      {:justify-content "flex-end" :gap "4px"})})
           (when (not= editing id)
             (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary" :aria-label "Edit object"
-                          :data-tooltip (if object_literal
-                                          "Edit value"
-                                          "Relink this fact's object (other facts unaffected)")})
+              (dom/props {:class "btn btn-sm btn-secondary" :aria-label "Edit object"})
+              (tooltip/Tooltip! (if object_literal
+                                  "Edit value"
+                                  "Relink this fact's object (other facts unaffected)"))
               (icons/Icon :pen-line :size 14)
               (dom/On "click" (fn [_] (reset! !editing id)) nil)))
           (RejectFactButton user-id id))))))
@@ -452,8 +453,8 @@
   [user-id question-id]
   (e/client
     (dom/button
-      (dom/props {:class "btn-delete-x" :aria-label "Reject question"
-                  :data-tooltip "Reject — removes this question from the bank"})
+      (dom/props {:class "btn-delete-x" :aria-label "Reject question"})
+      (tooltip/Tooltip! "Reject — removes this question from the bank")
       (dom/text "×")
       (let [click (dom/On "click" (fn [e] #?(:cljs (.stopPropagation e)) question-id) nil)
             [t _] (e/Token click)]
@@ -531,7 +532,8 @@
                     :style {:--order i}})
         (dom/td (dom/props {:style (merge fact-cell-style {:cursor "pointer"})})
           (dom/On "click" open! nil)
-          (dom/span (dom/props {:style fact-text-style :data-tooltip question})
+          (dom/span (dom/props {:style fact-text-style})
+            (tooltip/Tooltip! question)
             (dom/text question)))
         (dom/td (dom/props {:style (merge fact-cell-style
                                      {:color "var(--color-text-secondary)" :cursor "pointer"})})
@@ -611,8 +613,8 @@
   (e/client
     (dom/button
       (dom/props {:class "btn btn-sm btn-secondary" :style {:margin-left "4px"}
-                  :aria-label (str "Synthesize questions for " label)
-                  :data-tooltip "Generate questions spanning this entity's facts"})
+                  :aria-label (str "Synthesize questions for " label)})
+      (tooltip/Tooltip! "Generate questions spanning this entity's facts")
       (icons/Icon :graduation-cap :size 14)
       (let [click (dom/On "click" (fn [e] #?(:cljs (.stopPropagation e)) entity-id) nil)
             [t _] (e/Token click)]

@@ -15,6 +15,7 @@
    [freememo.command-bus :as bus]
    [freememo.loading :as loading]
    [freememo.icons :as icons]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.commands :as commands])
@@ -96,7 +97,7 @@
               ;; Credits omitted when nil — credits disabled (self-host) or a
               ;; debit failure; the figure is retry-inclusive (see tooltip).
               (when cost-credits
-                (dom/span (dom/props {:data-tooltip "Includes retries"})
+                (dom/span (tooltip/Tooltip! "Includes retries")
                   (dom/text (str cost-credits " credits")))))))
         (dom/div
           (dom/props {:style {:padding "8px" :overflow "auto" :max-height "55vh"
@@ -236,8 +237,8 @@
           model-ids (e/server (settings/card-model-ids))]
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary"
-                    :aria-label "Compare card models"
-                    :data-tooltip "Generate with several models and compare (uses credits per model)"})
+                    :aria-label "Compare card models"})
+        (tooltip/Tooltip! "Generate with several models and compare (uses credits per model)")
         (icons/Icon :sparkles :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Compare models"))
         (let [node dom/node]

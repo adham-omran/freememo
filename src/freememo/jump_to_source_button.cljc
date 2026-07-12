@@ -7,6 +7,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
    [freememo.navigation :as nav]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])))
 
 (defn get-extract-source-page* [extract-id]
@@ -22,8 +23,8 @@
           (dom/button
             (dom/props {:class "btn btn-sm btn-secondary"
                         :style {:font-weight "500"}
-                        :aria-label "Go to source page"
-                        :data-tooltip "Open the source page in the PDF"})
+                        :aria-label "Go to source page"})
+            (tooltip/Tooltip! "Open the source page in the PDF")
             (icons/Icon :link :size 16)
             (dom/span (dom/props {:class "icon-label"})
               (dom/text (str "Go to page " page)))

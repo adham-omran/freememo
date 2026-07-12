@@ -21,7 +21,8 @@
    [freememo.card-compare :refer [CardCompareButton]]
    [freememo.content-toolbar-settings :as settings]
    [freememo.icons :as icons]
-   [freememo.command-bus :as bus]))
+   [freememo.command-bus :as bus]
+   [freememo.tooltip :as tooltip]))
 
 ;; Pre:  `!open` is a CLJS atom holding the menu open state.
 ;;       `trigger-class` / `menu-class` are bare CSS class names (no leading dot).
@@ -106,10 +107,10 @@
                         :disabled no-content?
                         :aria-haspopup "menu"
                         :aria-expanded (if open "true" "false")
-                        :aria-label (str action-summary " menu")
-                        :data-tooltip (if no-content?
-                                        "Extract text first to generate flashcards"
-                                        action-summary)})
+                        :aria-label (str action-summary " menu")})
+            (tooltip/Tooltip! (if no-content?
+                                "Extract text first to generate flashcards"
+                                action-summary))
             (if (and gen-active? (nil? gen-error))
               (icons/Icon :loader-2 :size 16 :class "spin")
               (icons/Icon :sparkles :size 16))
