@@ -1,0 +1,27 @@
+name: deploy-unstable
+
+# Rebuild + zero-downtime redeploy on every push to unstable. The webhook stays
+# on the box: Forgejo (same host) triggers act_runner, which runs deploy.sh.
+on:
+  push:
+    branches: [unstable]
+
+jobs:
+  deploy:
+    # Must match a label your act_runner registered with. This assumes a HOST
+    # executor (jobs run directly on the box as the runner user, which is in the
+    # `docker` group). If your runner uses the DOCKER executor instead, change
+    # this label accordingly AND mount /var/run/docker.sock into the job so
+    # `docker compose` reaches the host daemon.
+    runs-on: host
+    steps:
+      - name: Rebuild and redeploy on the box
+        run: |
+          set -euo pipefail
+          # The PERSISTENT working tree on the box — it holds the gitignored
+          # config.edn, .env, logs/, and caddy/ deploy state. This is NOT the
+          # runner's ephemeral workspace, so we cd into it explicitly.
+          cd "${DEPLOY_DIR:-$HOME/electric-card-maker}"
+          git fetch origin unstable
+          git reset --hard origin/unstable
+          ./deploy.sh
