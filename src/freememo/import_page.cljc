@@ -138,7 +138,7 @@
           ;; it; the user adds camera/upload image pages from the viewer toolbar.
           ;; Same effect as the :create-live-doc palette command.
           (ImportCard :scan-text "Live Document"
-            "Snap photos of pages — appended to a PDF you keep adding to"
+            "Snap photos of pages, appended to a PDF you keep adding to"
             (fn [] (create-live-doc! navigate!)))
 
           (let [show-zotero (e/watch !show-zotero)]
