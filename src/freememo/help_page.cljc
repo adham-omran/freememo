@@ -3,8 +3,24 @@
    Pure client-side prose — no server fetch, no markdown runtime. Content is
    data-driven so a new workflow is a map, not more markup."
   (:require
+   [clojure.string :as str]
+   [freememo.commands :as commands]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]))
+
+(def binds
+  "command-id → registry bind string, for shortcut-token resolution."
+  (into {} (commands/bindings)))
+
+(defn resolve-chords
+  "Replace `{command-id}` tokens in `s` with the platform display chord
+   (commands/display-chord) — \"⌘⇧S\" on macOS, \"Ctrl+Shift+S\" elsewhere.
+   Unknown or unbound ids stay as literal text."
+  [s]
+  (str/replace s #"\{([a-z-]+)\}"
+    (fn [[whole id]]
+      (or (commands/display-chord (keyword id) (get binds (keyword id)))
+          whole))))
 
 (def workflows
   "Comprehensive tour of FreeMemo, section by section: importing, reading,
@@ -21,9 +37,9 @@
     :intro "Turn a PDF into studied, card-ready material, one page at a time."
     :steps [["Import it" "Import tab → Upload (PDF or EPUB) or Link (a web or Wikipedia URL). Drag-and-drop works too."]
             ["Read & navigate" "Open it from Library or the Viewer. The page arrows or the page box move you; the zoom menu fits width or whole page."]
-            ["Extract the text (⌘⇧S)" "Scan Page runs OCR on the current page into clean, editable HTML. Copy-text pulls the PDF's own text layer when it has one."]
-            ["Edit & split (⌘⇧E)" "Fix the text in the editor. Select a passage and Extract turns it into a child topic linked back to the page."]
-            ["Mark done (⌘⇧D)" "Mark a page Done to drop it from your review queue while keeping the content."]]}
+            ["Extract the text ({scan})" "Scan Page runs OCR on the current page into clean, editable HTML. Copy-text pulls the PDF's own text layer when it has one."]
+            ["Edit & split ({extract})" "Fix the text in the editor. Select a passage and Extract turns it into a child topic linked back to the page."]
+            ["Mark done ({done})" "Mark a page Done to drop it from your review queue while keeping the content."]]}
    {:title "Asking the AI tutor"
     :intro "Think a page through with a Socratic assistant that asks rather than answers."
     :steps [["Open it" "Right side panel → AI Assistant tab. New Chat starts a conversation scoped to the current document; your chats and transcripts are saved."]
@@ -31,7 +47,7 @@
             ["Pick its model" "The panel's model selector sets the tutor's model for this document; leave it on your default otherwise."]]}
    {:title "Making a deck"
     :intro "Generate flashcards from the page you're reading, then curate them."
-    :steps [["Generate (⌘⇧G)" "Pick Basic or Cloze, a card count, and whether to include previous-page context, then generate from the current page. If the document has approved knowledge-graph facts, cards are built from those facts instead of the raw text."]
+    :steps [["Generate ({generate})" "Pick Basic or Cloze, a card count, and whether to include previous-page context, then generate from the current page. If the document has approved knowledge-graph facts, cards are built from those facts instead of the raw text."]
             ["Generate with a prompt" "Add a custom instruction (e.g. \"focus on definitions\") — recent prompts autocomplete."]
             ["Compare models" "Run the same content through two or more card models side by side and keep the set you prefer; each model is a separate, billed generation."]
             ["Curate" "Add a card from a text selection, edit any card's question/answer or cloze, or delete the weak ones."]
@@ -50,8 +66,8 @@
             ["Create the cards" "Hide One, Guess One makes one card per mask; Hide All, Guess One hides them all on every card. Push to Anki as image-occlusion notes."]]}
    {:title "Syncing to Anki"
     :intro "Push curated cards into your own Anki collection over AnkiConnect."
-    :steps [["Push (⌘⇧X)" "Choose scope (this topic, its subtree, or the whole document), deck, tags, and a custom header, then push. FreeMemo owns the Basic and Cloze note types, so there's nothing to map."]
-            ["Quick Sync (⌘⇧⌥X)" "Re-push with your last-used settings in the background — no modal."]
+    :steps [["Push ({anki-sync})" "Choose scope (this topic, its subtree, or the whole document), deck, tags, and a custom header, then push. FreeMemo owns the Basic and Cloze note types, so there's nothing to map."]
+            ["Quick Sync ({quick-sync})" "Re-push with your last-used settings in the background — no modal."]
             ["Pull" "Bring edits made in Anki back into FreeMemo; a diff shows what changed."]]}
    {:title "Reviewing (Learn)"
     :intro "Study what's due on a spaced-repetition schedule."
@@ -62,7 +78,7 @@
    {:title "Building a knowledge graph"
     :intro "Distill a document into a fact graph you can curate and quiz against."
     :steps [["Distill" "Knowledge → Documents → Distill on a document. It runs in the background with a spinner and a Cancel; Re-distill re-runs it. Facts land approved — you curate by exception, not one by one."]
-            ["Generate questions" "Questions turns each fact into an atomic question; both actions are also in the ⌘K palette."]
+            ["Generate questions" "Questions turns each fact into an atomic question; both actions are also in the {toggle-palette} palette."]
             ["Fix the facts" "Facts (N) opens the fact table — edit or relink an object, or × to reject a fact."]
             ["Curate entities" "Entities: Rename one, Merge… two that name the same thing (irreversible), or Synthesize questions for one."]
             ["Curate questions" "Questions: click a row to edit its question and reference answer, or × to reject it."]]}
@@ -80,10 +96,10 @@
             ["Review a subset" "In Library → Documents, a document's ⋯ menu → Review studies just that topic's children."]]}
    {:title "Keyboard & command palette"
     :intro "Reach any action without hunting for its button."
-    :steps [["Command palette (⌘K)" "Open the palette, type to fuzzy-search every action — including ones with no shortcut, like Distill facts or Start quiz — and press Enter to run it."]
-            ["While reading" "⌘⇧S Scan page · ⌘⇧E Extract selection · ⌘⇧G Generate cards · ⌘⇧D Mark done."]
-            ["Anki" "⌘⇧X Push to Anki · ⌘⇧⌥X Quick push."]
-            ["Undo" "⌘⇧Z undoes your last action."]]}])
+    :steps [["Command palette ({toggle-palette})" "Open the palette, type to fuzzy-search every action — including ones with no shortcut, like Distill facts or Start quiz — and press Enter to run it."]
+            ["While reading" "{scan} Scan page · {extract} Extract selection · {generate} Generate cards · {done} Mark done."]
+            ["Anki" "{anki-sync} Push to Anki · {quick-sync} Quick push."]
+            ["Undo" "{undo-newest} undoes your last action."]]}])
 
 (e/defn HelpPage []
   (e/client
@@ -107,7 +123,7 @@
           (dom/p
             (dom/props {:style {:font-size "14px" :color "var(--color-text-secondary)"
                                 :margin-bottom "10px"}})
-            (dom/text (:intro wf)))
+            (dom/text (resolve-chords (:intro wf))))
           (dom/ol
             (dom/props {:style {:padding-left "20px" :display "flex"
                                 :flex-direction "column" :gap "8px"}})
@@ -116,6 +132,6 @@
                 (dom/li
                   (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"
                                       :line-height "1.5"}})
-                  (dom/strong (dom/text label))
+                  (dom/strong (dom/text (resolve-chords label)))
                   (dom/text " — ")
-                  (dom/text detail))))))))))
+                  (dom/text (resolve-chords detail)))))))))))
