@@ -1,18 +1,81 @@
 # Prod app overlay — layered on top of docker-compose.yml (which defines the
-# `postgres` service + `pgdata` volume). Run prod with BOTH files so the app and
-# the existing DB share one project/network:
+# `postgres` service + `pgdata` volume). Zero-downtime blue-green deploy: a
+# `caddy` reverse proxy owns the host port and forwards to exactly one of two
+# interchangeable app colors (`app-blue` / `app-green`). `./deploy.sh` builds
+# the idle color, waits for its healthcheck, flips Caddy's upstream, then drains
+# and stops the old color. deploy.sh is the supported entrypoint — it runs
+# compose with BOTH files and derives the version:
 #
-#   APP_VERSION=$(git describe --tags --long --always --dirty) \
-#     docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#   ./deploy.sh   # computes APP_VERSION from `git describe` and deploys
 #
 # Reuses the existing `pgdata` volume — DB creds match docker-compose.yml's
 # init-time values (cardmaker / cardmaker / dev), which Postgres fixed at first
 # init and cannot be rotated via env.
+
+# Shared definition for both app colors — byte-identical except for
+# container_name and the per-color log dir (two JVMs must not rotate one
+# app.log). Only one color serves at a time; both run briefly during a deploy.
+x-app-common: &app-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      VERSION: "${APP_VERSION:?APP_VERSION required — pass e.g. $(git describe --tags --long --always --dirty)}"
+  image: "freememo:${APP_VERSION:?APP_VERSION required}"
+  restart: unless-stopped
+  # Hard container memory ceiling. The app JVM sets no -Xmx (runtime is a bare
+  # `java` CMD that ignores deps.edn), so MaxRAMPercentage sizes the heap against
+  # THIS cap rather than full host RAM. During a deploy BOTH colors run, so the
+  # box must hold 2× this plus the on-box build.
+  mem_limit: 3g
+  depends_on:
+    postgres:
+      condition: service_healthy
+  environment:
+    # Server
+    PORT: "8080"
+    PROD: "1"
+    # JVM heap + OOM policy. Without this the JVM defaulted to 25% of host RAM
+    # (~1.9 GiB) and, on a heap OOM, limped in a degraded state emitting the
+    # cascading Electric websocket assertions. Size the heap off mem_limit, and
+    # exit-on-OOM so `restart: unless-stopped` recovers cleanly. Heap dump aids
+    # post-mortem sizing.
+    JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp"
+    # Database — host is the base file's service name; creds are pgdata's
+    # init-time values and must not change.
+    DB_HOST: postgres
+    DB_PORT: "5432"
+    DB_NAME: cardmaker
+    DB_USER: cardmaker
+    DB_PASSWORD: dev
+    # Official billing deployment. CREDITS_ENABLED turns on the credits/platform
+    # path; the economic tunables + Wayl secrets + platform key come from the
+    # mounted config.edn below. Without that mount, credits fail closed.
+    CREDITS_ENABLED: "${CREDITS_ENABLED:-true}"
+    # Google OAuth sign-in for the hosted site (env wins over config.edn).
+    AUTH_MODE: "${AUTH_MODE:-google}"
+    # Secrets / config — sourced from .env (compose auto-loads it).
+    ENC_KEY_SECRET: "${ENC_KEY_SECRET:?ENC_KEY_SECRET required — generate: openssl rand -hex 32}"
+    OPENAI_DEMO_KEY: "${OPENAI_DEMO_KEY:-}"
+    GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
+    GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
+    GOOGLE_REDIRECT_URI: "${GOOGLE_REDIRECT_URI:-}"
+    APP_BASE_URL: "${APP_BASE_URL:-http://localhost:8080}"
+    LOG_LEVEL: "${LOG_LEVEL:-info}"
+    STORAGE_QUOTA_BYTES: "${STORAGE_QUOTA_BYTES:-0}"
+    STORAGE_PER_FILE_MAX_BYTES: "${STORAGE_PER_FILE_MAX_BYTES:-0}"
+  healthcheck:
+    test: ["CMD", "curl", "-fsS", "http://localhost:8080"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 60s
+
 services:
   # SPARQL facade over the knowledge graph (read-only). No ports: reachable
   # only on the compose network — the Cloudflare tunnel fronts the app alone,
   # and this endpoint has no user auth. Query from the host via:
-  #   docker compose exec app curl http://ontop:8080/sparql ...
+  #   docker compose exec app-blue curl http://ontop:8080/sparql ...
   ontop:
     build: ./ontop
     restart: unless-stopped
@@ -29,70 +92,42 @@ services:
       postgres:
         condition: service_healthy
 
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        VERSION: "${APP_VERSION:?APP_VERSION required — pass e.g. $(git describe --tags --long --always --dirty)}"
-    image: freememo:latest
+  # Reverse proxy that owns the public port. cloudflared (tunnel.sh,
+  # --network=host) reaches the app at localhost:8080 → this Caddy → the active
+  # color. Caddy is never recreated during a deploy, so the host port never
+  # drops; deploy.sh flips the upstream by rewriting ./caddy/upstream.caddy and
+  # running `caddy reload` (graceful — in-flight requests and live WebSockets
+  # are preserved). TLS is terminated by the Cloudflare tunnel, so Caddy serves
+  # plain HTTP (auto_https off in the Caddyfile).
+  caddy:
+    image: caddy:2-alpine
+    container_name: freememo-caddy
     restart: unless-stopped
-    # Hard container memory ceiling. The app JVM sets no -Xmx (runtime is a bare
-    # `java` CMD that ignores deps.edn), so MaxRAMPercentage sizes the heap against
-    # THIS cap rather than full host RAM. Tune to the host's free memory — the box
-    # is shared with postgres, ontop (also a JVM), and valkey. See U3.
-    mem_limit: 3g
-    depends_on:
-      postgres:
-        condition: service_healthy
     ports:
       - "${APP_PORT:-8080}:8080"
-    environment:
-      # Server
-      PORT: "8080"
-      PROD: "1"
-      # JVM heap + OOM policy. Without this the JVM defaulted to 25% of host RAM
-      # (~1.9 GiB) and, on a heap OOM, limped in a degraded state emitting the
-      # cascading Electric websocket assertions. Size the heap off mem_limit, and
-      # exit-on-OOM so `restart: unless-stopped` recovers cleanly. Heap dump aids
-      # post-mortem sizing.
-      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp"
-      # Database — host is the base file's service name; creds are pgdata's
-      # init-time values and must not change.
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_NAME: cardmaker
-      DB_USER: cardmaker
-      DB_PASSWORD: dev
-      # Official billing deployment. CREDITS_ENABLED turns on the credits/platform
-      # path; the economic tunables (:markup, :models, rates, grants — no env
-      # fallback) + Wayl secrets + platform key come from the mounted config.edn
-      # below. Without that mount, credits fail closed (get-model throws).
-      CREDITS_ENABLED: "${CREDITS_ENABLED:-true}"
-      # Google OAuth sign-in for the hosted site (env wins over config.edn).
-      AUTH_MODE: "${AUTH_MODE:-google}"
-      # Secrets / config — sourced from .env (compose auto-loads it).
-      ENC_KEY_SECRET: "${ENC_KEY_SECRET:?ENC_KEY_SECRET required — generate: openssl rand -hex 32}"
-      OPENAI_DEMO_KEY: "${OPENAI_DEMO_KEY:-}"
-      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
-      GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
-      GOOGLE_REDIRECT_URI: "${GOOGLE_REDIRECT_URI:-}"
-      APP_BASE_URL: "${APP_BASE_URL:-http://localhost:8080}"
-      LOG_LEVEL: "${LOG_LEVEL:-info}"
-      STORAGE_QUOTA_BYTES: "${STORAGE_QUOTA_BYTES:-0}"
-      STORAGE_PER_FILE_MAX_BYTES: "${STORAGE_PER_FILE_MAX_BYTES:-0}"
     volumes:
-      # Economic tunables + Wayl secrets + platform OpenAI/OpenRouter keys. Read
-      # from the working dir (/app) by freememo.config/load-config. Gitignored;
-      # must exist on the host at deploy time.
-      - ./config.edn:/app/config.edn:ro
-      # Persist Telemere's rotating file logs (freememo.logging/init! →
-      # logs/app.log, 4MB × 8 gz, monthly × 6) across container rebuilds.
-      # Without this the writable-layer logs vanish on every `up --build`.
-      - ./logs:/app/logs
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/upstream.caddy:/etc/caddy/upstream.caddy:ro
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8080"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:2019/config/"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
-      start_period: 60s
+
+  # Two interchangeable app colors behind Caddy. Neither publishes a host port.
+  # The config.edn mount carries the economic tunables + Wayl secrets + platform
+  # keys (gitignored; must exist on the host). Logs go to a per-color subdir so
+  # the two JVMs never rotate the same app.log during an overlap.
+  app-blue:
+    <<: *app-common
+    container_name: freememo-blue
+    volumes:
+      - ./config.edn:/app/config.edn:ro
+      - ./logs/blue:/app/logs
+
+  app-green:
+    <<: *app-common
+    container_name: freememo-green
+    volumes:
+      - ./config.edn:/app/config.edn:ro
+      - ./logs/green:/app/logs

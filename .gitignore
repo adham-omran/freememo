@@ -32,3 +32,8 @@ logs/
 /backup-1774968994.sql
 /.claude/
 /scripts/
+# Blue-green deploy runtime state (deploy.sh owns these).
+/caddy/upstream.caddy
+/.deploy.lock
+# Cloudflare tunnel launcher — contains the tunnel TOKEN; never commit.
+/tunnel.sh

@@ -1,0 +1,15 @@
+# Front proxy for the blue-green app stack (see docker-compose.prod.yml).
+# The Cloudflare tunnel terminates TLS and dials localhost:8080, so Caddy only
+# needs plain HTTP here. The active upstream lives in a separate file that
+# deploy.sh rewrites and then hot-reloads — Caddy is never restarted mid-deploy,
+# so :8080 stays bound and in-flight requests / live WebSockets survive.
+{
+	auto_https off
+	admin localhost:2019
+}
+
+:8080 {
+	# `reverse_proxy` upgrades WebSockets transparently (Electric v3 requires
+	# persistent WS). No request-body cap — upload limits are enforced by the app.
+	import /etc/caddy/upstream.caddy
+}
