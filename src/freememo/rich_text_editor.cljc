@@ -250,23 +250,25 @@
                        ;; Quill's flipped box. Quill flips against the (non-scrolling)
                        ;; .ql-container, so on a short pane or a soft-wrapped block it
                        ;; mis-decides and drops the tooltip far from the selection
-                       ;; (detached — sometimes below WITH ql-flip set). Place below
-                       ;; the first line if the box fits the viewport, else above;
-                       ;; ql-flip (the arrow side) is set to match. No selection rect
-                       ;; ⇒ fall back to Quill's clamped top.
+                       ;; (detached — sometimes below WITH ql-flip set).
+                       ;; Prefer ABOVE the first line (bubble-toolbar convention —
+                       ;; Medium/Docs/Notion — so the selection and the text below it
+                       ;; stay visible instead of being covered); drop below only when
+                       ;; there is no room above. ql-flip (the arrow side) matches: set
+                       ;; when placed above. No selection rect ⇒ Quill's clamped top.
                        gap    10
                        ^js selection  (.getSelection js/window)
                        ^js range      (when (pos? (.-rangeCount selection)) (.getRangeAt selection 0))
                        ^js line-rects (when range (.getClientRects range))
                        ^js first-line (when (and line-rects (pos? (.-length line-rects)))
                                         (aget line-rects 0))
-                       below? (and first-line (<= (+ (.-bottom first-line) gap h) (- vh margin)))
                        above? (and first-line (>= (- (.-top first-line) gap h) margin))
-                       flip?  (boolean (and first-line (not below?) above?))
+                       below? (and first-line (<= (+ (.-bottom first-line) gap h) (- vh margin)))
+                       flip?  (boolean above?)
                        top    (cond
                                 (nil? first-line) (max margin (min (.-top rr) (- vh h margin)))
-                                below?            (+ (.-bottom first-line) gap)
                                 above?            (- (.-top first-line) gap h)
+                                below?            (+ (.-bottom first-line) gap)
                                 :else             (max margin (min (+ (.-bottom first-line) gap)
                                                                  (- vh h margin))))]
                    (set! (.. root -style -position) "fixed")
