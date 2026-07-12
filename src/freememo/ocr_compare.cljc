@@ -12,6 +12,7 @@
    [freememo.command-bus :as bus]
    [freememo.loading :as loading]
    [freememo.ocr-models :as ocr-models]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.ocr :as ocr])
    #?(:clj [freememo.page-ocr :as page])
    #?(:clj [freememo.settings :as settings])))
@@ -168,8 +169,8 @@
           model-ids (e/server (ocr/allowed-ocr-model-ids))]
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary"
-                    :aria-label "Compare OCR models"
-                    :data-tooltip "Run every OCR model on this page and compare (uses credits)"})
+                    :aria-label "Compare OCR models"})
+        (tooltip/Tooltip! "Run every OCR model on this page and compare (uses credits)")
         (icons/Icon :scan-text :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Compare OCR"))
         (let [node dom/node]

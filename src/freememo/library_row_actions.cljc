@@ -15,7 +15,8 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.navigation :as nav]
    [freememo.icons :as icons]
-   [freememo.document-options :refer [DocumentOptionsButton]]))
+   [freememo.document-options :refer [DocumentOptionsButton]]
+   [freememo.tooltip :as tooltip]))
 
 ;; Escape + click-outside + body-scroll → close. Kept a plain (defn) so the
 ;; addEventListener calls run once per (when open …) mount/unmount cycle, never
@@ -62,7 +63,8 @@
           (dom/props {:class "btn btn-sm btn-secondary row-actions-trigger"
                       :style {:padding "2px 8px" :font-size "14px" :line-height "1"}
                       :aria-haspopup "menu" :aria-expanded (if open "true" "false")
-                      :aria-label "Row actions" :data-tooltip "Actions"})
+                      :aria-label "Row actions"})
+          (tooltip/Tooltip! "Actions")
           (dom/text "⋯")
           (dom/On "click"
             (fn [e]
@@ -76,6 +78,11 @@
         (when open
           (let [cleanup (install-row-menu-listeners! !open !scroll-node)]
             (e/on-unmount cleanup)
+            ;; Portal into <body>. The row carries a transform (virtual-scroll
+            ;; positioning), which makes position:fixed resolve against the ROW
+            ;; box, not the viewport — so the trigger-rect coords land far off.
+            ;; Mounting in body escapes the transformed containing block.
+            (binding [dom/node js/document.body]
             (dom/div
               (dom/props {:class "toolbar-dropdown-menu row-actions-menu"
                           :role "menu"
@@ -133,4 +140,4 @@
               ;; bib/root/priority targets all collapse to this row's id.
               (when is-root
                 (DocumentOptionsButton user-id id (= kind "pdf") id id id nil false
-                  "toolbar-dropdown-item")))))))))
+                  "toolbar-dropdown-item"))))))))))

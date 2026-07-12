@@ -19,6 +19,7 @@
    [freememo.priority-control :refer [PriorityControl get-topic-priority*]]
    [freememo.bibliography-button :as bib-btn]
    [freememo.commands :as commands]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])))
@@ -154,7 +155,6 @@
             [t ?error] (e/Token click-event)]
         (dom/props {:class "btn btn-sm btn-secondary" :type "button"
                     :aria-label "Push bibliography to children"
-                    :data-tooltip "Copy this bibliography to all descendant extracts"
                     :disabled (or (not enabled?) (some? t))
                     :aria-busy (some? t)
                     :style (when flash-success?
@@ -162,6 +162,7 @@
                               :border-color "var(--color-success)"
                               :color "var(--color-success-dark)"
                               :transition "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease"})})
+        (tooltip/Tooltip! "Copy this bibliography to all descendant extracts")
         (icons/Icon :download :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Push to children"))
         (when ?error
@@ -202,8 +203,8 @@
           ;; gated off on surfaces that don't mount it (e.g. the library tree).
           (when show-edit?
             (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary" :type "button"
-                          :aria-label "Edit bibliography" :data-tooltip "Edit bibliography"})
+              (dom/props {:class "btn btn-sm btn-secondary" :type "button"})
+              (tooltip/Tooltip! "Edit bibliography" :aria? true)
               (icons/Icon :book-open :size 16)
               (dom/span (dom/props {:class "icon-label"}) (dom/text "Edit"))
               (dom/On "click" (fn [_] (reset! !open false) (reset! !show-bib true)) nil)))
@@ -331,8 +332,8 @@
     (let [!open (atom false)]
       (dom/button
         (dom/props {:class (or trigger-class "btn btn-sm btn-secondary")
-                    :aria-label "Document options"
-                    :data-tooltip "Per-document options"})
+                    :aria-label "Document options"})
+        (tooltip/Tooltip! "Per-document options")
         (icons/Icon :settings :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Document options"))
         ;; stop propagation so a click doesn't reach an ancestor row handler

@@ -21,7 +21,8 @@
    [freememo.anki-pull-button :refer [PullFromAnkiButton]]
    [freememo.export-button :refer [ExportButton]]
    [freememo.icons :as icons]
-   [freememo.command-bus :as bus]))
+   [freememo.command-bus :as bus]
+   [freememo.tooltip :as tooltip]))
 
 ;; See `toolbar_generate_dropdown.cljc:install-dropdown-listeners!` for
 ;; rationale on keeping this as a plain (defn) outside e/defn bodies. We
@@ -84,8 +85,8 @@
                               :font-weight "500"}
                       :aria-haspopup "menu"
                       :aria-expanded (if open "true" "false")
-                      :aria-label "Sync menu"
-                      :data-tooltip "Sync with Anki, or export cards"})
+                      :aria-label "Sync menu"})
+          (tooltip/Tooltip! "Sync with Anki, or export cards")
           (icons/Icon :refresh-cw :size 16)
           (dom/span (dom/props {:class "icon-label"}) (dom/text trigger-label))
           (icons/Icon :chevron-down :size 14)

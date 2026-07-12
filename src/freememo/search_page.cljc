@@ -8,6 +8,7 @@
    [hyperfiddle.router5 :as r]
    [clojure.string :as str]
    [freememo.navigation :as nav]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.search :as search])))
 
 ;; Server wrapper — plain defn with reader conditional, so :refer works from cljs
@@ -95,8 +96,8 @@
           (dom/span
             (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
                                 :font-size "13px" :font-weight "500"
-                                :color "var(--color-text-primary)"}
-                        :data-tooltip (or title "(untitled)")})
+                                :color "var(--color-text-primary)"}})
+            (tooltip/Tooltip! (or title "(untitled)"))
             (dom/text (or title "(untitled)"))))
         ;; Column 2: source (root topic's title)
         (dom/td
@@ -106,8 +107,8 @@
                               :white-space "nowrap" :text-overflow "ellipsis"}})
           (dom/span
             (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
-                                :width "100%"}
-                        :data-tooltip (or source-title "")})
+                                :width "100%"}})
+            (tooltip/Tooltip! (or source-title ""))
             (dom/text (or source-title ""))))
         ;; Column 3: snippet (HTML with <mark>; scroll-centered on mark)
         (dom/td

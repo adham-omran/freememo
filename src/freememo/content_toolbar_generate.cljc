@@ -11,6 +11,7 @@
    [freememo.content-toolbar-helpers :as helpers]
    [freememo.icons :as icons]
    [freememo.command-bus :as bus]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.settings :as settings])))
 
 (e/defn ToolbarGenerate []
@@ -69,10 +70,10 @@
                                   :cursor (if no-content? "not-allowed" "pointer")
                                   :font-weight "bold"}
                           :disabled no-content?
-                          :aria-label action-summary
-                          :data-tooltip (if no-content?
-                                          "Extract text first to generate flashcards"
-                                          (str action-summary " (" mod-key "+Shift+G)"))})
+                          :aria-label action-summary})
+              (tooltip/Tooltip! (if no-content?
+                                  "Extract text first to generate flashcards"
+                                  (str action-summary " (" mod-key "+Shift+G)")))
               (if (and gen-active? (nil? gen-error))
                 (icons/Icon :loader-2 :size 16 :class "spin")
                 (icons/Icon :sparkles :size 16))
@@ -100,8 +101,8 @@
           (dom/button
             (dom/props {:class "btn btn-sm btn-secondary"
                         :style {:font-weight "500"}
-                        :aria-label "Generate with Prompt"
-                        :data-tooltip "Add custom instructions to guide card generation"})
+                        :aria-label "Generate with Prompt"})
+            (tooltip/Tooltip! "Add custom instructions to guide card generation")
             (icons/Icon :pen-sparkles :size 16)
             (dom/span (dom/props {:class "icon-label"}) (dom/text "Generate with Prompt..."))
             (let [node dom/node]

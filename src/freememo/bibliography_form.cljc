@@ -10,6 +10,7 @@
    [freememo.loading :as loading]
    [clojure.string :as str]
    [freememo.icons :as icons]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.optimistic :as opt])
    #?(:clj [freememo.toasts :as toasts])
@@ -312,9 +313,8 @@
             :type "text" :placeholder "Given" :class "input" :style {:flex "1"})
           (do
             (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary" :type "button"
-                          :data-tooltip "Remove author"
-                          :aria-label "Remove author"})
+              (dom/props {:class "btn btn-sm btn-secondary" :type "button"})
+              (tooltip/Tooltip! "Remove author" :aria? true)
               (icons/Icon :x :size 12 :title "Remove author")
               (dom/On "click"
                 (fn [_]

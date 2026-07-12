@@ -9,6 +9,7 @@
    [freememo.doc-context :as dctx]
    [freememo.icons :as icons]
    [freememo.commands :as commands]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])))
 
 (defn toggle-pdf-done!*
@@ -48,10 +49,10 @@
       (when pdf-root?
         (dom/button
           (dom/props {:class "btn btn-sm btn-secondary"
-                      :aria-label (if done? "Restore PDF" "Mark PDF Done")
-                      :data-tooltip (if done?
-                                      "Restore this PDF to the active queue"
-                                      "Mark this PDF as completed")})
+                      :aria-label (if done? "Restore PDF" "Mark PDF Done")})
+          (tooltip/Tooltip! (if done?
+                              "Restore this PDF to the active queue"
+                              "Mark this PDF as completed"))
           (icons/Icon (if done? :rotate-ccw :check) :size 16)
           (dom/span (dom/props {:class "icon-label"})
             (dom/text (if done? "Restore PDF" "Mark PDF Done")))
@@ -72,8 +73,8 @@
                       :style {:font-size "12px" :font-style "italic"
                               :color "var(--color-text-hint)" :max-width "240px"
                               :overflow "hidden" :text-overflow "ellipsis"
-                              :white-space "nowrap"}
-                      :data-tooltip citation})
+                              :white-space "nowrap"}})
+          (tooltip/Tooltip! citation)
           (dom/text citation)))
 
       ;; Page-progress X/Y — inline only, PDF only.
@@ -85,6 +86,6 @@
                               :font-variant-numeric "tabular-nums" :letter-spacing "0.04em"
                               :white-space "nowrap" :padding "3px 8px"
                               :background "var(--color-bg-card)"
-                              :border "1px solid var(--color-border)" :border-radius "10px"}
-                      :data-tooltip (:remaining-tooltip page-info)})
+                              :border "1px solid var(--color-border)" :border-radius "10px"}})
+          (tooltip/Tooltip! (:remaining-tooltip page-info))
           (dom/text (:done page-info) "/" (:total page-info)))))))

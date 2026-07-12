@@ -13,6 +13,7 @@
    [freememo.command-bus :as bus]
    [freememo.logging :as log]
    [freememo.navigation :as nav]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.staged-delete :as staged-delete])
    #?(:clj [freememo.user-state :as us])))
@@ -60,8 +61,8 @@
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary"
                     :style {:font-weight "500"}
-                    :aria-label "History"
-                    :data-tooltip "View repetition history for this topic"})
+                    :aria-label "History"})
+        (tooltip/Tooltip! "View repetition history for this topic")
         (icons/Icon :history :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text "History"))
         (dom/On "click" (fn [_] (reset! !history-open? true)) nil))
@@ -92,8 +93,8 @@
                             :style {:color "var(--color-success-dark)" :border "1px solid var(--color-success-dark)"
                                     :font-weight "500"}
                             :disabled busy
-                            :aria-label "Done"
-                            :data-tooltip "Mark as fully processed (extracted/carded everything useful)"})
+                            :aria-label "Done"})
+                (tooltip/Tooltip! "Mark as fully processed (extracted/carded everything useful)")
                 (icons/Icon :check :size 16)
                 (dom/span (dom/props {:class "icon-label"}) (dom/text "Done"))
                 (let [node dom/node]
@@ -123,8 +124,8 @@
               (dom/props {:class "btn btn-sm btn-secondary toolbar-restore-btn"
                           :style {:color "var(--color-primary-text)" :border "1px solid var(--color-primary)"
                                   :font-weight "500"}
-                          :aria-label "Restore"
-                          :data-tooltip "Restore to active review queue"})
+                          :aria-label "Restore"})
+              (tooltip/Tooltip! "Restore to active review queue")
               (icons/Icon :rotate-ccw :size 16)
               (dom/span (dom/props {:class "icon-label"}) (dom/text "Restore"))
               (let [node dom/node]
@@ -153,8 +154,8 @@
           (dom/button
             (dom/props {:class "btn btn-sm btn-danger-fill toolbar-overflow-item"
                         :style {:padding "4px 10px" :font-size "12px"}
-                        :aria-label "Delete"
-                        :data-tooltip "Delete this extract and its cards"})
+                        :aria-label "Delete"})
+            (tooltip/Tooltip! "Delete this extract and its cards")
             (icons/Icon :trash-2 :size 16)
             (dom/span (dom/props {:class "icon-label"}) (dom/text "Delete"))
             (let [node dom/node]

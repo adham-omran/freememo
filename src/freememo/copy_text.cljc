@@ -16,6 +16,7 @@
    [freememo.command-bus :as bus]
    [freememo.loading :as loading]
    [freememo.pdf-viewer :as pdfviewer]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.page-ocr :as page])
    #?(:clj [freememo.settings :as settings])
@@ -225,8 +226,8 @@
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary"
                     :aria-label "Copy text"
-                    :data-tooltip "Copy the PDF's own text (no AI)"
                     :disabled busy?})
+        (tooltip/Tooltip! "Copy the PDF's own text (no AI)")
         (icons/Icon :clipboard :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text (if busy? "Copying…" "Copy text")))
         (let [node dom/node]
@@ -318,8 +319,8 @@
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary"
                     :aria-label "Copy text for all pages"
-                    :data-tooltip "Copy the PDF's own text for all pages (no AI)"
                     :disabled busy?})
+        (tooltip/Tooltip! "Copy the PDF's own text for all pages (no AI)")
         (icons/Icon :library :size 16)
         (dom/span (dom/props {:class "icon-label"})
           (dom/text (if busy? "Copying…" "Copy all text")))

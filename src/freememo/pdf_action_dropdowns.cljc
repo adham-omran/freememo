@@ -20,6 +20,7 @@
    [freememo.command-bus :as bus]
    [freememo.copy-text :as copy]
    [freememo.ocr-compare :as ocr-compare]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.page-ocr :as page])
    #?(:clj [freememo.kg-extract :as kg])
    #?(:clj [freememo.kg-questions :as kgq])
@@ -190,8 +191,8 @@
           (dom/props {:class "btn btn-sm btn-secondary toolbar-dropdown-trigger toolbar-scan-trigger"
                       :aria-haspopup "menu"
                       :aria-expanded (if open "true" "false")
-                      :aria-label "Scan menu"
-                      :data-tooltip "Scan this page with AI OCR, or compare OCR models"})
+                      :aria-label "Scan menu"})
+          (tooltip/Tooltip! "Scan this page with AI OCR, or compare OCR models")
           (if scanning?
             (icons/Icon :loader-2 :size 16 :class "spin")
             (icons/Icon :sparkles :size 16))
@@ -244,8 +245,8 @@
           (dom/props {:class "btn btn-sm btn-secondary toolbar-dropdown-trigger toolbar-copy-trigger"
                       :aria-haspopup "menu"
                       :aria-expanded (if open "true" "false")
-                      :aria-label "Copy menu"
-                      :data-tooltip "Copy the PDF's own text (no AI)"})
+                      :aria-label "Copy menu"})
+          (tooltip/Tooltip! "Copy the PDF's own text (no AI)")
           (icons/Icon :clipboard :size 16)
           (dom/span (dom/props {:class "icon-label"}) (dom/text "Copy text"))
           (icons/Icon :chevron-down :size 14)

@@ -6,6 +6,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.biblio-import :as biblio-import])
    #?(:clj [freememo.db :as db])))
 
@@ -53,8 +54,6 @@
             click-event (dom/On "click" (fn [e] e) nil)
             [t ?error] (e/Token click-event)]
         (dom/props {:class "btn btn-sm btn-secondary"
-                    :aria-label "Refetch bibliography"
-                    :data-tooltip "Refetch bibliography"
                     :disabled (or (not has-source?) (some? t))
                     :aria-busy (some? t)
                     :style (when flash-success?
@@ -62,6 +61,7 @@
                               :border-color "var(--color-success)"
                               :color "var(--color-success-dark)"
                               :transition "background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease"})})
+        (tooltip/Tooltip! "Refetch bibliography" :aria? true)
         (icons/Icon :library :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Refetch bibliography"))
         (when ?error

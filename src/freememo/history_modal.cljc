@@ -10,6 +10,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
    [freememo.modal-shell :as modal]
+   [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])))
 
 ;; Server bridge — same-namespace wrapper keeps `e/server` codepaths short
@@ -187,7 +188,8 @@
           mono (assoc td :font-family "ui-monospace, monospace")]
       (dom/tr
         (dom/props {:style {:display "contents"}})
-        (dom/td (dom/props {:style mono :data-tooltip (str (:event_at row))})
+        (dom/td (dom/props {:style mono})
+          (tooltip/Tooltip! (str (:event_at row)))
           (dom/text (or (:event_at row) "—")))
         (dom/td (dom/props {:style td})
           (ActionPill (:event_type row)))

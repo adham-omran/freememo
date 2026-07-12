@@ -15,6 +15,7 @@
    [freememo.doc-context :as dctx]
    [freememo.icons :as icons]
    [freememo.score-rect-modal :refer [ScoreRectModal]]
+   [freememo.tooltip :as tooltip]
    #?(:cljs [freememo.score-wavesurfer :as ws])
    #?(:cljs [freememo.score-audio :as score-audio])
    #?(:cljs [freememo.score-pdf :as score-pdf])
@@ -233,8 +234,8 @@
                     :style {:padding-left "12px"
                             :border-left "1px solid var(--color-border)"}})
         (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary"
-                      :data-tooltip "Draw rectangles around the notation for the pending card"})
+          (dom/props {:class "btn btn-sm btn-secondary"})
+          (tooltip/Tooltip! "Draw rectangles around the notation for the pending card")
           (icons/Icon :rect-select :size 16)
           (dom/span (dom/props {:class "icon-label"})
             (dom/text (if (pos? total-rects)
@@ -325,9 +326,9 @@
                 nil)))
           (dom/button
             (dom/props {:class "btn btn-sm btn-primary"
-                        :disabled (or (not ready?) (some? busy) (some? t))
-                        :data-tooltip (when-not ready?
-                                        "Select an audio region and draw at least one notation rectangle")})
+                        :disabled (or (not ready?) (some? busy) (some? t))})
+            (tooltip/Tooltip! (when-not ready?
+                                "Select an audio region and draw at least one notation rectangle"))
             (dom/text "Add card ▾")
             (dom/On "click" (fn [_] (swap! !menu-open? not)) nil)))
         (when (and menu-open? ready? (not edit))
