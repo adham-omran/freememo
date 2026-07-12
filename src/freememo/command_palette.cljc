@@ -14,7 +14,8 @@
             [hyperfiddle.electric-dom3 :as dom]
             [freememo.commands :as commands]
             [freememo.command-bus :as bus]
-            [freememo.modal-shell :as modal-shell]))
+            [freememo.modal-shell :as modal-shell]
+            [freememo.util :as util]))
 
 (defonce !open? (atom false))
 
@@ -68,19 +69,23 @@
 
 #?(:cljs
    (defn format-bind
-     "\"meta+shift+e\" → \"⌘⇧E\" on macOS, \"Ctrl+Shift+E\" elsewhere."
-     [bind]
+     "Registry [id bind] → display chord for this platform+browser:
+      \"⌘⇧E\" on macOS, \"Ctrl+Shift+E\" / \"Ctrl+/\" elsewhere. Renders the
+      resolved chord (commands/effective-bind), so the shown key always matches
+      the key that actually fires."
+     [id bind]
      (when bind
-       (let [mac? (boolean (re-find #"(?i)mac" (str js/navigator.platform)))
+       (let [mac? (util/mac-platform?)
+             eff  (commands/effective-bind id bind)
              part (fn [p] (case p
-                            "meta" (if mac? "⌘" "Ctrl")
-                            "ctrl" "Ctrl"
+                            "meta"  "⌘"
+                            "ctrl"  (if mac? "⌃" "Ctrl")
                             "shift" (if mac? "⇧" "Shift")
-                            "alt" (if mac? "⌥" "Alt")
+                            "alt"   (if mac? "⌥" "Alt")
                             (str/upper-case p)))]
-         (str/join (if mac? "" "+") (map part (str/split bind #"\+"))))))
+         (str/join (if mac? "" "+") (map part (str/split eff #"\+"))))))
    :clj
-   (defn format-bind [_bind] nil))
+   (defn format-bind [_id _bind] nil))
 
 #?(:cljs
    (defn- on-palette-key
@@ -167,7 +172,7 @@
                                                       "var(--color-bg-hover, rgba(127,127,127,.15))"
                                                       "transparent")}})
                     (dom/span (dom/text (:label row)))
-                    (when-let [b (format-bind (:bind row))]
+                    (when-let [b (format-bind (:id row) (:bind row))]
                       (dom/span
                         (dom/props {:style {:font-size "12px"
                                             :color "var(--color-text-hint)"}})

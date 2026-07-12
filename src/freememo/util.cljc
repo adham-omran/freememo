@@ -35,6 +35,10 @@
   #?(:cljs (boolean (re-find #"(?i)mac" (str (.-platform js/navigator))))
      :clj false))
 
+(defn firefox-browser? []
+  #?(:cljs (boolean (re-find #"(?i)firefox" (str (.-userAgent js/navigator))))
+     :clj false))
+
 ;; Drag helper for split-pane dividers (PointerEvent API — works for mouse, touch, and stylus)
 (defn start-drag!
   "Begin a split-pane drag. Call from a pointerdown handler.
