@@ -1457,24 +1457,195 @@ textarea:hover {
 .ql-editor { text-align: start; }
 .ql-editor:dir(rtl) { text-align: right; }
 
-/* Bubble floating toolbar (main doc editor, E1). JS pins it to position:fixed
-   at paint time (install-unclipped-tooltip-positioning! in rich_text_editor) so
-   it escapes the editor's overflow ancestors (.ql-container overflow-y:auto, the
-   editor host/area and document-view row overflow:hidden) and is never clipped
-   by the hierarchy / pins / PDF panes. This cap keeps the box compact — formats
-   wrap into a squarish grid (~5/row) instead of a full-width strip — and the
-   z-index paints it over the pane toolbars. */
-.ql-bubble .ql-tooltip {
-    max-width: min(232px, calc(100% - 8px));
-    white-space: normal;
-    z-index: 20;
+/* The bubble editor's native tooltip is replaced by our own floating card
+   (freememo.format-menu). Hide Quill's — we keep the bubble theme only for its
+   format wiring, not its (colliding) tooltip placement. */
+.ql-bubble .ql-tooltip { display: none !important; }
+
+/* Custom floating format menu (Notion-inspired). position:fixed is set inline
+   by format-menu/place!; this is presentation only. */
+.format-menu {
+    position: fixed;
+    z-index: 1000;
+    box-sizing: border-box;
+    max-width: min(320px, calc(100vw - 16px));
+    padding: 6px;
+    display: none;
+    /* visible so dropdown popups aren't clipped; place! switches to overflow-y
+       auto only when it has to cap the card height to the viewport region. */
+    overflow: visible;
+    background: var(--color-bg-card, light-dark(#fff, #1f1f1f));
+    border: 1px solid var(--color-border, light-dark(#e5e5e5, #3a3a3a));
+    border-radius: 12px;
+    box-shadow: 0 8px 28px light-dark(rgba(0,0,0,0.16), rgba(0,0,0,0.5));
+    color: var(--color-text-primary, light-dark(#1a1a1a, #eaeaea));
+    font-size: 14px;
 }
-.ql-bubble .ql-tooltip .ql-toolbar {
+.format-menu .fmt-row {
     display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    row-gap: 2px;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
 }
+.format-menu .fmt-divider {
+    height: 1px;
+    margin: 4px 2px;
+    background: var(--color-border, light-dark(#ececec, #333));
+}
+.format-menu .fmt-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 30px;
+    height: 30px;
+    padding: 0 7px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: inherit;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    position: relative;
+}
+.format-menu .fmt-btn:hover { background: light-dark(rgba(0,0,0,0.06), rgba(255,255,255,0.09)); }
+.format-menu .fmt-btn.active { background: light-dark(rgba(35,131,226,0.14), rgba(35,131,226,0.32)); }
+.format-menu .fmt-btn b, .format-menu .fmt-btn i,
+.format-menu .fmt-btn u, .format-menu .fmt-btn s { font-style: inherit; }
+.format-menu .fmt-btn i { font-style: italic; }
+
+/* Colour presets: the "A" trigger opens a popup of Text + Background swatches. */
+.format-menu .fmt-colour-trigger { font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.format-menu .fmt-colour-popup { padding: 10px; min-width: 210px; }
+.format-menu .fmt-colour-section + .fmt-colour-section { margin-top: 10px; }
+.format-menu .fmt-section-label {
+    font-size: 12px;
+    color: light-dark(#6b6b6b, #9a9a9a);
+    margin: 0 2px 6px;
+}
+.format-menu .fmt-swatch-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 6px;
+}
+.format-menu .fmt-swatch {
+    width: 30px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid light-dark(rgba(0,0,0,0.12), rgba(255,255,255,0.16));
+    border-radius: 7px;
+    background: transparent;
+    color: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+}
+.format-menu .fmt-swatch:hover { outline: 2px solid light-dark(rgba(35,131,226,0.4), rgba(35,131,226,0.6)); outline-offset: 1px; }
+.format-menu .fmt-swatch-default { position: relative; }
+.format-menu .fmt-swatch-default.fmt-swatch-bg::after {
+    content: "";
+    position: absolute;
+    inset: 5px;
+    border-radius: 3px;
+    background: linear-gradient(to top left, transparent calc(50% - 1px), light-dark(#c0392b, #e06c65) 50%, transparent calc(50% + 1px));
+}
+
+/* Dropdowns (block type, size, align). */
+.format-menu .fmt-dd { position: relative; }
+.format-menu .fmt-dd-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 30px;
+    padding: 0 8px;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: inherit;
+    font-size: 14px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.format-menu .fmt-dd-trigger:hover { background: light-dark(rgba(0,0,0,0.06), rgba(255,255,255,0.09)); }
+.format-menu .fmt-dd-caret { font-size: 11px; opacity: 0.6; }
+.format-menu .fmt-dd-popup {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    min-width: 148px;
+    padding: 4px;
+    background: var(--color-bg-card, light-dark(#fff, #1f1f1f));
+    border: 1px solid var(--color-border, light-dark(#e5e5e5, #3a3a3a));
+    border-radius: 9px;
+    box-shadow: 0 8px 24px light-dark(rgba(0,0,0,0.16), rgba(0,0,0,0.5));
+    z-index: 1;
+}
+.format-menu .fmt-dd-popup.open { display: block; }
+.format-menu .fmt-dd-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font-size: 14px;
+    cursor: pointer;
+}
+.format-menu .fmt-dd-item:hover { background: light-dark(rgba(0,0,0,0.06), rgba(255,255,255,0.09)); }
+
+/* Custom code-block language picker (freememo.code-lang-picker). Hide Quill's
+   native <select> — its open options list renders as detached browser chrome —
+   and style our overlay trigger + popup instead. */
+.ql-code-block-container > select.ql-ui { display: none !important; }
+.ql-code-block-container { position: relative; }
+.ql-lang-trigger {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    z-index: 1;
+    padding: 2px 8px;
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 6px;
+    background: rgba(255,255,255,0.10);
+    color: #eaeaea;
+    font-size: 12px;
+    line-height: 1.4;
+    cursor: pointer;
+}
+.ql-lang-trigger:hover { background: rgba(255,255,255,0.18); }
+.ql-lang-popup {
+    position: fixed;
+    z-index: 1000;
+    display: none;
+    max-height: 320px;
+    overflow-y: auto;
+    padding: 4px;
+    min-width: 160px;
+    background: var(--color-bg-card, light-dark(#fff, #1f1f1f));
+    border: 1px solid var(--color-border, light-dark(#e5e5e5, #3a3a3a));
+    border-radius: 9px;
+    box-shadow: 0 8px 24px light-dark(rgba(0,0,0,0.16), rgba(0,0,0,0.5));
+    color: var(--color-text-primary, light-dark(#1a1a1a, #eaeaea));
+}
+.ql-lang-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font-size: 14px;
+    cursor: pointer;
+}
+.ql-lang-item:hover { background: light-dark(rgba(0,0,0,0.06), rgba(255,255,255,0.09)); }
+.ql-lang-item.active { background: light-dark(rgba(35,131,226,0.14), rgba(35,131,226,0.32)); }
 
 /* Quill tooltip — Import button for Wikipedia links. Theme-agnostic: the main
    editor uses bubble (dark tooltip), so the button is light for contrast. */
