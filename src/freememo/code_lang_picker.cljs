@@ -44,9 +44,13 @@
   "The `.ql-code-block-container` enclosing the line at `index`, or nil when
    that line is not code. Resolves via the line blot's DOM node."
   [^js editor index]
-  (let [line (aget (.getLine editor index) 0)]
-    (when line
-      (.closest (.-domNode line) ".ql-code-block-container"))))
+  ;; `^js line` keeps `.domNode` out of closure's rename set (`:infer-externs
+  ;; :auto`); without the hint, advanced compilation renames the prop and
+  ;; `.closest` throws on every selection-change in the prod build.
+  (let [^js line (aget (.getLine editor index) 0)
+        dom      (when line (.-domNode line))]
+    (when dom
+      (.closest dom ".ql-code-block-container"))))
 
 (defn install!
   "Wire the custom code-language picker for `editor`. Returns a teardown fn.
