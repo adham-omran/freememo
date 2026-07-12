@@ -9,6 +9,143 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
+## v20260712-cb16479
+
+### For users
+
+- **Overlapping cloze cards — one card type for ordered lists.** A new card
+  kind for enumerations (steps, sequences, ranked lists) that reproduces the
+  review presentation of Anki's Cloze Overlapper add-on without needing the
+  add-on — each item becomes its own card, with the earlier items shown as
+  context and the rest hidden.
+  - Generate them with the LLM, or add and edit them by hand.
+  - The top field is a **question** the list answers; the items are edited in a
+    full rich-text editor (bold/italic, ordered and bullet lists, pasted images)
+    just like the Basic and Cloze editors — no more one-line-per-item textarea.
+  - Direction is automatic: an Arabic list renders right-to-left and an English
+    one left-to-right, with no toggle to remember.
+- **Spaced-repetition quiz (FSRS-6).** The Quiz tab now opens on **Review**: a
+  live queue of every question due today, graded instantly, where each answer
+  schedules its next review with the FSRS-6 algorithm — so review timing tracks
+  what you actually recall instead of chance.
+  - A daily cap keeps sessions bounded (20 new questions/day; reviews are
+    effectively uncapped).
+  - The old scope + count picker becomes **Custom quiz** — practice-only, and it
+    never touches your schedule. Exams are unchanged.
+- **The AI assistant now works with the rest of FreeMemo.**
+  - **Capture a reply into cards** - one button turns the latest assistant reply
+    straight into Basic cards.
+  - Each message is grounded in the document's approved knowledge-graph facts,
+    and still steers you with questions rather than reciting answers.
+  - **@-mention other documents** in the composer (via a typeahead picker) to
+    pull them into that message's context for the reply.
+  - Empty chats offer starter prompts you can send with a click, and the
+    composer re-focuses itself once a reply lands.
+- **Anki note types renamed to a `FreeMemo …` prefix.** "Basic FreeMemo" becomes
+  "FreeMemo Basic" (and the same for Cloze, Score, Image Occlusion, and
+  Overlapping Cloze), so all five app-owned types sort together. Your existing
+  notes are migrated onto the renamed types in place on the next push — note
+  ids, tags, and review history are preserved.
+- **Rebuilt formatting toolbar.** The bubble menu that pops up when you select
+  text in the editor is a new custom toolbar (Notion-style): it no longer
+  collides with the top command bar or covers the text you're reading, and it
+  stays put while you scroll. Code blocks now have a language picker.
+- **Keyboard shortcuts work off macOS.** Every shortcut was silently doing
+  nothing on Windows and Linux; they now fire there too (`Cmd` maps to `Ctrl`,
+  and the command palette is `Ctrl+Shift+P`, or `Ctrl+/` on Firefox).
+- **Command palette reaches every tab.** Knowledge and Quiz are now openable
+  from the palette (⌘K), alongside Home, Learn, Viewer, and Library.
+- **The Help page shows your real shortcuts.** Each workflow step names the
+  actual keyboard chord for your platform (⌘⇧E on macOS, `Ctrl+Shift+E`
+  elsewhere) rather than a hard-coded key, so the instructions can no longer
+  drift out of sync with what the keys actually do.
+- **Undo / Actions modal shows card content.** A new **Card** column shows each
+  entry's card text (cloze text or question, with a "+N more" for bulk
+  deletes), so rows for deleted cards are no longer indistinguishable.
+- Cloze deletions are now colored (red / light-blue in night mode) in the Anki
+  cards FreeMemo pushes, matching every other cloze type.
+- Bug fix: a bulk push from the Library cards view was overwriting each PDF's
+  header with a stale, wrong global value, corrupting cards that had been pushed
+  with the correct per-PDF header. Header now always resolves per-PDF; run one
+  bulk push to re-apply your real headers.
+- Bug fix: the code-block language picker was permanently hidden in production
+  (a bug that only appeared in the optimized prod build); it works now.
+- Bug fix: the ⋯ row-actions menu in the document list opened far from its
+  button, mid-page; it now appears under the button where you clicked.
+- Bug fix: hovering rows while scrolling could stack several stale tooltips over
+  the list, and a tooltip could paint behind the rows below it; both fixed.
+- Bug fix: the typeahead autocomplete dropdown rendered all its rows stacked on
+  one line; rows are laid out correctly again.
+- Bug fix: Arabic (and other right-to-left) text stayed left-aligned in every
+  editor; it is now right-aligned throughout, and on pushed cards.
+- Bug fix: the assistant echoed your message twice and could stall before
+  replying; the echo now retires cleanly when the real reply arrives.
+
+### Known issues
+
+- **The note-type rename leaves the old models behind.** After the rename, the
+  empty old-named note types (e.g. "Basic FreeMemo") stay in Anki — AnkiConnect
+  offers no reliable way to delete a model, so remove them by hand if you want a
+  clean list. Migrating a previously-synced note onto the renamed model also
+  clears any fields FreeMemo doesn't own; your Remarks / Back Extra are kept and
+  scheduling survives. By design.
+- **Fixing the bulk-push header bug needs one corrective push.** The stale
+  per-user global header rows are left inert in the database; a single bulk push
+  after upgrading re-applies each PDF's real header. Contact me if a topic's
+  header still looks wrong afterward.
+- **FSRS scheduling isn't tunable from Settings yet.** Target retention, new
+  cards/day, reviews/day, and interval fuzzing use fixed defaults for now (90%
+  retention, 20 new/day, reviews uncapped, fuzz on). Contact me if you want
+  these changed for your account.
+- **Your existing quiz questions start fresh.** Every question that predates this
+  release cold-starts as a *new* card and enters the queue through the daily
+  new-card cap, so it may take a few days for a large backlog to fully surface.
+- **Overlapping cloze doesn't pull back from Anki.** Editing an overlapping card
+  in Anki won't sync back to FreeMemo — the Anki→list conversion is lossy, so
+  pull is a deliberate no-op, same as Score cards. Edit these in FreeMemo.
+
+### Technical
+
+- **FSRS-6.** From-scratch port in `freememo.fsrs` (no new dependency), pinned to
+  the py-fsrs reference by 303 conformance assertions over generated vectors
+  (`test/freememo/fsrs_test.clj`, `fsrs_integration_test.clj`,
+  `fsrs_vectors.edn`). Adds FSRS state columns to `kg_questions`, an append-only
+  `kg_reviews` log (source of truth for daily caps + history), and supporting
+  indexes; `db/draw-fsrs-due-queue` builds the learning→review→new queue.
+  Grading was refactored into a session-less `grade-question!` core shared by the
+  session quiz/exam path and the new Review path.
+- **Overlapping cloze.** New `overlapping` JSONB column on `flashcards`;
+  `freememo.overlapping/expand` purely derives the add-on's field layout
+  (`Text1..TextN`, `Full` under `c21`, `Original`); clean-room "FreeMemo
+  Overlapping Cloze" model (cloze-typed, 25 fields after dropping the Direction
+  field, self-heals on push via `ensure-overlapping-model!`); new
+  `resources/prompts/overlapping.md`.
+- **Tooltip standardization.** A single `Tooltip!` wrapper (`freememo.tooltip`)
+  owns the `data-tooltip` attribute and its aria coupling across ~60 call sites;
+  `Icon` delegates to it. Hover z-index lift + instant hide fix the
+  virtual-scroll stale/behind-row defects.
+- **New CLJS modules.** `format_menu.cljs` (custom floating bubble toolbar
+  replacing Quill's `.ql-tooltip`) and `code_lang_picker.cljs` (code-block
+  language dropdown).
+- **Prod build fix.** `^js` hint on the code-block line blot so shadow's
+  `:infer-externs` keeps `.domNode` under advanced compilation (this was the
+  cause of the picker being hidden only in prod), plus a nil-guard on the DOM
+  node.
+- **Note-type migration.** The push path reads each changed note's current model
+  and field values in one `notesInfo` batch, field-updates notes already on the
+  owned model, and `updateNoteModel`s foreign / old-named notes, re-supplying
+  user-owned fields from current values.
+- **Deployment.** Forgejo CI (`.forgejo/workflows/deploy.yml`) rebuilds and
+  redeploys on every push to `unstable` by running `deploy.sh` on the box; a
+  blue-green stack fronted by Caddy (`Caddyfile`) hot-reloads the active upstream
+  so `:8080` stays bound and in-flight requests / live WebSockets survive a
+  deploy. `docker-compose.prod.yml` reworked to match.
+- **Shared chord display.** `commands/display-chord` resolves a command id +
+  registry bind to its platform/browser display string; the Help page
+  (`resolve-chords`, replacing `{command-id}` tokens) and the command palette now
+  render from this one source, so the palette, the help text, and the key that
+  actually fires can't diverge.
+
 ## v20260710-770a44e
 
 ### For users
