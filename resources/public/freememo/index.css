@@ -1600,14 +1600,13 @@ textarea:hover {
 
 /* Custom code-block language picker (freememo.code-lang-picker). Hide Quill's
    native <select> — its open options list renders as detached browser chrome —
-   and style our overlay trigger + popup instead. */
+   and style our own trigger + popup instead. Both are mounted on document.body
+   and positioned (fixed) over the active code block, never inside it. */
 .ql-code-block-container > select.ql-ui { display: none !important; }
-.ql-code-block-container { position: relative; }
 .ql-lang-trigger {
-    position: absolute;
-    top: 6px;
-    right: 8px;
-    z-index: 1;
+    position: fixed;
+    z-index: 1000;
+    display: none;
     padding: 2px 8px;
     border: 1px solid rgba(255,255,255,0.25);
     border-radius: 6px;
