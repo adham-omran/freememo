@@ -72,6 +72,12 @@ x-app-common: &app-common
     start_period: 60s
 
 services:
+  # postgres is defined in docker-compose.yml; this overlay only adds a restart
+  # policy so the DB returns after a box reboot (the base file leaves it unset).
+  # On boot the app colors restart-loop until postgres is healthy, then boot.
+  postgres:
+    restart: unless-stopped
+
   # SPARQL facade over the knowledge graph (read-only). No ports: reachable
   # only on the compose network — the Cloudflare tunnel fronts the app alone,
   # and this endpoint has no user auth. Query from the host via:
@@ -108,8 +114,10 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy/upstream.caddy:/etc/caddy/upstream.caddy:ro
+    # Probe the admin API on 127.0.0.1 (not "localhost" — the image's wget
+    # resolves localhost to ::1 first, where the IPv4-only admin listener refuses).
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:2019/config/"]
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:2019/config/"]
       interval: 30s
       timeout: 5s
       retries: 3
