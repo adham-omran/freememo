@@ -495,7 +495,7 @@ pre > code {
    FreeMemo Basic / FreeMemo Cloze note types — app-owned. This file
    is pushed as each model's Styling on every push (ensure-and-enforce);
    edits made in Anki are overwritten.
-   fm-basic-cloze-css v1
+   fm-basic-cloze-css v2
    ================================================================ */
 
 .fm-front,
@@ -526,11 +526,15 @@ pre > code {
     font-size: 1em;
 }
 
+/* Cloze deletions — matches _anki.css (bold, red; lightblue in nightMode). */
+.fm-front .cloze { font-weight: bold; color: red; }
+.nightMode .fm-front .cloze { color: lightblue; }
+
 /* ================================================================
    FreeMemo Overlapping Cloze note type — app-owned, cloze-typed.
    One model serves LTR and RTL via the per-note Direction field
    (dir="ltr"|"rtl" on .fm-ol). Pushed as Styling on every push.
-   fm-overlapping-css v1
+   fm-overlapping-css v2
    ================================================================ */
 
 .fm-ol {
@@ -560,10 +564,13 @@ pre > code {
     text-align: right;
 }
 
-/* The active deletion, highlighted like Anki's default cloze. */
+/* The active deletion — same accent as regular cloze (red; lightblue night). */
 .fm-ol .cloze {
     font-weight: bold;
-    color: #0048ff;
+    color: red;
+}
+.nightMode .fm-ol .cloze {
+    color: lightblue;
 }
 
 /* Fully-revealed list, shown on the back. */
