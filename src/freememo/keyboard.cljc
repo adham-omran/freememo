@@ -34,6 +34,6 @@
        ;; form elements (input/textarea/select), not contentEditable.
        (.setAllShortcutsAreGlobal h true)
        (doseq [[id bind] (commands/bindings)]
-         (.registerShortcut h (name id) bind))
+         (.registerShortcut h (name id) (commands/effective-bind id bind)))
        (gevents/listen h "shortcut" on-shortcut)
        h)))

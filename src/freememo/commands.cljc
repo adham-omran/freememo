@@ -40,6 +40,8 @@
    3. :views values are the existing freememo.user-state counter channels;
       no other reactivity mechanism."
   (:require [clojure.set :as set]
+            [clojure.string :as str]
+            [freememo.util :as util]
             #?(:clj [freememo.user-state :as us])))
 
 ;; ── Invalidation channels ──────────────────────────────────────────────────
@@ -218,6 +220,8 @@
      :go-learn      {:label "Go to Learn"    :class :nav :nav-tab :learn}
      :go-viewer     {:label "Go to Viewer"   :class :nav :nav-tab :viewer}
      :go-library    {:label "Go to Library"  :class :nav :nav-tab :library}
+     :go-knowledge  {:label "Go to Knowledge" :class :nav :nav-tab :knowledge}
+     :go-quiz       {:label "Go to Quiz"     :class :nav :nav-tab :quiz}
      :go-search     {:label "Go to Search"   :class :nav :nav-tab :search}
      :go-import     {:label "Go to Import"   :class :nav :nav-tab :import}
      :go-settings   {:label "Go to Settings" :class :nav :nav-tab :settings}
@@ -257,6 +261,24 @@
   "Seq of [command-id bind-string] for all bound commands."
   []
   (for [[id {:keys [bind]}] registry :when bind] [id bind]))
+
+(defn effective-bind
+  "The chord actually registered and displayed for command `id` on this
+   platform+browser, given its registry `bind`.
+
+   macOS keeps `meta` (Cmd). Everywhere else `meta`→`ctrl`, because a page
+   never receives `meta` (Windows/Super) key strokes. The palette is special:
+   its `meta+k` would translate to `ctrl+k`, which the browser reserves for
+   the address bar, so it gets a non-reserved chord instead — `ctrl+shift+p`,
+   or `ctrl+/` on Firefox (which reserves `ctrl+shift+p` for private windows).
+
+   Pre : `bind` is a goog KeyboardShortcutHandler spec string.
+   Post: goog-parseable spec string; on macOS returns `bind` unchanged."
+  [id bind]
+  (cond
+    (util/mac-platform?)   bind
+    (= id :toggle-palette) (if (util/firefox-browser?) "ctrl+/" "ctrl+shift+p")
+    :else                  (str/replace bind "meta" "ctrl")))
 
 (defn palette-listed
   "Entries the palette shows on `active-tab`: not :palette-hidden and
