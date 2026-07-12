@@ -28,8 +28,6 @@
 (def ANKI_SCOPE "anki_scope")
 (def ANKI_DECK "anki_deck")
 (def ANKI_ALLOW_DUPES "anki_allow_dupes")
-(def ANKI_USE_HEADER "anki_use_header")
-(def ANKI_HEADER_TEXT "anki_header_text")
 (def ANKI_USE_TAGS "anki_use_tags")
 (def ANKI_TAGS "anki_tags")
 (def ANKI_AUTO_LOAD_MODE "anki_auto_load_mode")
@@ -257,12 +255,6 @@
 
 (defn get-anki-allow-dupes [user-id]
   (= "true" (or (db/get-setting user-id ANKI_ALLOW_DUPES) "false")))
-
-(defn get-anki-use-header [user-id]
-  (= "true" (or (db/get-setting user-id ANKI_USE_HEADER) "false")))
-
-(defn get-anki-header-text [user-id]
-  (or (db/get-setting user-id ANKI_HEADER_TEXT) ""))
 
 (defn get-anki-use-tags [user-id]
   (= "true" (or (db/get-setting user-id ANKI_USE_TAGS) "false")))
@@ -780,7 +772,7 @@
     (when deck (db/set-setting user-id ANKI_DECK deck))
     (db/set-setting user-id ANKI_ALLOW_DUPES (str (boolean allow-dupes)))
     ;; Header is a per-PDF setting (see save-anki-header-for-topic!), persisted
-    ;; on edit — NOT written here, so a push can't clobber the global fallback.
+    ;; on edit — NOT written here; it has no account-wide/global row.
     (db/set-setting user-id ANKI_USE_TAGS (str (boolean use-tags)))
     (db/set-setting user-id ANKI_TAGS (pr-str (or tags [])))
     {:success true}
@@ -813,8 +805,9 @@
 ;;
 ;; Header (use-header + header-text) persists per root topic in its own
 ;; settings rows, independent of the per-item preset blob. An absent row means
-;; "no per-PDF override" (nil), so callers fall back to the global header.
-;; Saved on edit (blur/toggle), on modal close, and on push.
+;; "no per-PDF override" (nil), which resolve-anki-header treats as header off —
+;; there is no account-wide/global header. Saved on edit (blur/toggle), on
+;; modal close, and on push.
 
 (defn anki-use-header-key [root-topic-id]
   (str "anki_use_header_" root-topic-id))
@@ -825,7 +818,7 @@
 (defn get-anki-header-for-topic
   "Per-PDF header override for root-topic-id.
    {:use-header bool-or-nil, :header-text string-or-nil}; nil for a field means
-   no override (caller falls back to the global header)."
+   no override (resolve-anki-header treats this as header off)."
   [user-id root-topic-id]
   (let [raw-use (db/get-setting user-id (anki-use-header-key root-topic-id))
         raw-text (db/get-setting user-id (anki-header-text-key root-topic-id))]
@@ -845,12 +838,13 @@
       {:success false :error "Failed to save per-PDF header"})))
 
 (defn resolve-anki-header
-  "Effective header for a topic: per-PDF override when set, else the global
-   header. Single source of truth for both the modal's display and push."
+  "Effective header for a topic: the per-PDF override, else no header.
+   A missing override (nil field) means header off — there is no account-wide
+   default. Single source of truth for the modal's display and every push path."
   [user-id root-topic-id]
   (let [pdf (get-anki-header-for-topic user-id root-topic-id)]
-    {:use-header  (if (some? (:use-header pdf))  (:use-header pdf)  (get-anki-use-header user-id))
-     :header-text (if (some? (:header-text pdf)) (:header-text pdf) (get-anki-header-text user-id))}))
+    {:use-header  (boolean (:use-header pdf))
+     :header-text (or (:header-text pdf) "")}))
 
 ;; ── Prompt overrides ──
 

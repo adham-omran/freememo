@@ -151,7 +151,7 @@
                   nil)))))))))
 
 (defn resolve-anki-header*
-  "Effective header (per-PDF override → global). {:use-header bool :header-text str}."
+  "Effective header (per-PDF override, else off). {:use-header bool :header-text str}."
   [user-id root-topic-id]
   #?(:clj (settings/resolve-anki-header user-id root-topic-id)
      :cljs nil))
@@ -164,7 +164,7 @@
 (e/defn HeaderSettings
   "Per-PDF custom header: Forms5 standalone Checkbox! + Input!, auto-saving each
    edit to the topic's header rows. Loaded value comes from a server query
-   (per-PDF override → global), seeded into local atoms via e/snapshot so the
+   (per-PDF override, else off), seeded into local atoms via e/snapshot so the
    managed widgets reflect it without depending on apply-prefs!. Decoupled from
    the form map; push resolves the header server-side independently."
   [user-id root-id]

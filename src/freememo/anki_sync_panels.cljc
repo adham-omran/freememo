@@ -60,7 +60,7 @@
         tags (e/watch (:!tags form))
         auto-load-mode (e/server (get-anki-auto-load-mode* user-id))
         root-id (e/server (get-root-topic-id* selected-doc))
-        ;; Header is per-PDF, resolved server-side (override → global) — the
+        ;; Header is per-PDF, resolved server-side (override, else off) — the
         ;; authoritative source for push. Not read from form atoms (decoupled).
         resolved-header (e/server (form/resolve-anki-header* user-id root-id))
         use-header (boolean (:use-header resolved-header))
