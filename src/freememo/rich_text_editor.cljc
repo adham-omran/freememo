@@ -237,7 +237,8 @@
          (let [^js orig-position (.-position tooltip)
                ^js root          (.-root tooltip)
                margin            8                     ; px kept from the viewport edge
-               freeze-to-fixed!  ; absolute placement → fixed viewport coords, on-screen
+               freeze-to-fixed!  ; pin fixed at viewport coords: horizontal from
+                                 ; Quill's clamp, vertical from the selection itself
                (fn []
                  (let [^js rr (.getBoundingClientRect root)
                        vw     (.-innerWidth js/window)
@@ -245,20 +246,40 @@
                        w      (.-width rr)
                        h      (.-height rr)
                        left   (max margin (min (.-left rr) (- vw w margin)))
-                       top    (max margin (min (.-top rr)  (- vh h margin)))]
+                       ;; Vertical: anchor to the selection's FIRST visual line, not
+                       ;; Quill's flipped box. Quill flips against the (non-scrolling)
+                       ;; .ql-container, so on a short pane or a soft-wrapped block it
+                       ;; mis-decides and drops the tooltip far from the selection
+                       ;; (detached — sometimes below WITH ql-flip set). Place below
+                       ;; the first line if the box fits the viewport, else above;
+                       ;; ql-flip (the arrow side) is set to match. No selection rect
+                       ;; ⇒ fall back to Quill's clamped top.
+                       gap    10
+                       ^js selection  (.getSelection js/window)
+                       ^js range      (when (pos? (.-rangeCount selection)) (.getRangeAt selection 0))
+                       ^js line-rects (when range (.getClientRects range))
+                       ^js first-line (when (and line-rects (pos? (.-length line-rects)))
+                                        (aget line-rects 0))
+                       below? (and first-line (<= (+ (.-bottom first-line) gap h) (- vh margin)))
+                       above? (and first-line (>= (- (.-top first-line) gap h) margin))
+                       flip?  (boolean (and first-line (not below?) above?))
+                       top    (cond
+                                (nil? first-line) (max margin (min (.-top rr) (- vh h margin)))
+                                below?            (+ (.-bottom first-line) gap)
+                                above?            (- (.-top first-line) gap h)
+                                :else             (max margin (min (+ (.-bottom first-line) gap)
+                                                                 (- vh h margin))))]
                    (set! (.. root -style -position) "fixed")
                    (set! (.. root -style -left) (str left "px"))
                    (set! (.. root -style -top)  (str top "px"))
-                   ;; Quill's Tooltip installs a `.ql-editor` scroll listener that
-                   ;; sets margin-top = -scrollTop, keeping its position:absolute
-                   ;; tooltip glued as the editor scrolls (ui/tooltip.ts). On our
-                   ;; frozen position:fixed box that margin is a spurious shift: it
-                   ;; grows with scrollTop and drives the tooltip off-screen. `rr`
-                   ;; already reflects the correct on-screen box (read while the
-                   ;; margin is applied), so `top` alone places it — zero the margin
-                   ;; here. The editor-scroll listener below re-pins after Quill
-                   ;; re-writes the margin, so its write never survives a tick. The
-                   ;; flip lives in `top`, not margin, so it is unaffected.
+                   ;; Point the arrow at the side we placed on.
+                   (if flip?
+                     (.add (.-classList root) "ql-flip")
+                     (.remove (.-classList root) "ql-flip"))
+                   ;; Quill's scroll listener writes margin-top = -scrollTop for its
+                   ;; native absolute tooltip; on our fixed box that is a spurious
+                   ;; shift, so zero it (the editor-scroll listener re-pins after
+                   ;; Quill re-writes it).
                    (set! (.. root -style -margin) "0")))]
            (set! (.-position tooltip)
              (fn [reference]
