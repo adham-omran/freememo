@@ -54,8 +54,6 @@
      :prefs {:scope (settings/get-anki-scope user-id)
              :deck (settings/get-anki-deck user-id)
              :allow-dupes (settings/get-anki-allow-dupes user-id)
-             :use-header (settings/get-anki-use-header user-id)
-             :header-text (settings/get-anki-header-text user-id)
              :use-tags (settings/get-anki-use-tags user-id)
              :tags (settings/get-anki-tags user-id)}}
     (catch Exception e
@@ -412,14 +410,15 @@
             (fn [[root-id cards]]
               (let [preset (or (load-item-preset user-id root-id) {})
                     pick (fn [k] (let [v (get preset k)] (if (some? v) v (get global k))))
+                    header (settings/resolve-anki-header user-id root-id)
                     root-topic (db/get-topic-for-user user-id root-id)
                     source (when-let [sid (:topics/source_id root-topic)]
                              (db/get-source sid))
                     bib-html (helpers/format-bibliography-html (:sources/csl source))]
                 {:root-topic-id root-id
                  :cards (attach-card-bibliography (vec cards))
-                 :settings {:use-header (pick :use-header)
-                            :header-text (pick :header-text)
+                 :settings {:use-header (:use-header header)
+                            :header-text (:header-text header)
                             :tags (vec (or (pick :tags) []))
                             :bibliography-html bib-html
                             :topic-title (:topics/title root-topic)
