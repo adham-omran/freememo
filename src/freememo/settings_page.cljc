@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.util :refer [mac-platform?]]
    [freememo.storage-section :refer [StorageSection]]
+   [freememo.cost-history :refer [CostHistorySection]]
    [freememo.ai-features-section :refer [AIFeaturesSection]]
    [freememo.zotero-client :as zc]
    [freememo.commands :as commands]
@@ -260,7 +261,10 @@
                     (dom/text "Subscribe to email updates")))))
 
         ;; Storage usage (formerly its own tab; now part of Account)
-            (StorageSection user-id))
+            (StorageSection user-id)
+
+        ;; AI cost history — the user's credit ledger (searchable/filterable)
+            (CostHistorySection user-id))
 
 
           (dom/div
