@@ -60,6 +60,15 @@
 (def ^:private preset->days
   (into {} (map (fn [[v _ d]] [v d])) date-presets))
 
+(defn parse-min-amount
+  "Parse the min-amount input to a non-negative long, or nil for blank/invalid.
+   Takes the magnitude, so a user-typed '-500' and '500' both mean
+   |amount_iqd| >= 500."
+  [s]
+  #?(:cljs (let [n (js/parseInt (str s) 10)]
+             (when-not (js/isNaN n) (js/Math.abs n)))
+     :clj nil))
+
 ;; ── Server reads (plain defns w/ reader conditional so :refer works in cljs) ──
 
 (defn list-transactions*
@@ -127,18 +136,20 @@
           !endpoint (atom "") endpoint (e/watch !endpoint)
           !model (atom "")    model (e/watch !model)
           !preset (atom "all") preset (e/watch !preset)
+          !min-amount (atom "") min-amount (e/watch !min-amount)
           !q (atom "")        q (e/watch !q)
           refresh (e/server (e/watch (us/get-atom user-id :credits-refresh)))
           facets (e/server (facets* refresh user-id))
           endpoints (:endpoints facets)
           models (:models facets)
           filters {:kind kind :endpoint endpoint :model model :q q
-                   :since-days (get preset->days preset)}
+                   :since-days (get preset->days preset)
+                   :min-amount (parse-min-amount min-amount)}
           results (e/server (e/Offload #(list-transactions* refresh user-id filters)))
           result-count (e/server (count results))
           loading? (nil? result-count)
           rc (or result-count 0)
-          reset-key [kind endpoint model preset q]
+          reset-key [kind endpoint model preset min-amount q]
           row-height 36
           min-width "830px"
           grid-cols "90px 150px minmax(120px,1fr) minmax(120px,1fr) 110px 110px 130px"]
@@ -175,6 +186,12 @@
               (dom/option (dom/props {:value v}) (dom/text label)))
             (set! (.-value dom/node) preset)
             (dom/On "change" (fn [e] (reset! !preset (-> e .-target .-value))) nil))
+          (dom/input (dom/props {:type "number" :class "input" :min "0"
+                                 :placeholder "Min amount"
+                                 :aria-label "Minimum amount (IQD)"
+                                 :style {:width "120px"}})
+            (set! (.-value dom/node) min-amount)
+            (dom/On "input" (fn [e] (reset! !min-amount (-> e .-target .-value))) nil))
           (dom/input (dom/props {:type "text" :class "input"
                                  :placeholder "Search feature or model…"
                                  :style {:flex "1" :min-width "160px"}})
