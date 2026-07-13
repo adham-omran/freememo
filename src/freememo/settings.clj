@@ -23,6 +23,7 @@
 (def VERBOSITY "verbosity")
 (def CONTEXT_ENABLED "context_enabled")
 (def CONTEXT_PAGES "context_pages")
+(def ASSISTANT_PDF_WINDOW "assistant_pdf_window")
 (def CARD_TYPE "card_type")
 (def ACTIVE_TAB "active_tab")
 (def ANKI_SCOPE "anki_scope")
@@ -202,6 +203,17 @@
       (tel/error! {:id ::get-context-pages} e)
       1)))
 
+(defn get-assistant-pdf-window
+  "Pages before AND after the current PDF page the assistant reads as context.
+   Default 20. Post: integer in [0,50] (clamped defensively on read)."
+  [user-id]
+  (try
+    (let [v (Integer/parseInt (or (db/get-setting user-id ASSISTANT_PDF_WINDOW) "20"))]
+      (max 0 (min 50 v)))
+    (catch Exception e
+      (tel/error! {:id ::get-assistant-pdf-window} e)
+      20)))
+
 (defn get-active-tab [user-id]
   (try
     (let [raw (db/get-setting user-id ACTIVE_TAB)
@@ -360,6 +372,16 @@
     (catch Exception e
       (tel/error! {:id ::save-context-pages} e)
       {:success false :error "Failed to save context pages"})))
+
+(defn save-assistant-pdf-window [user-id value]
+  (try
+    (let [parsed (Integer/parseInt (str value))
+          clamped (max 0 (min 50 parsed))] ; Enforce 0-50 range
+      (db/set-setting user-id ASSISTANT_PDF_WINDOW (str clamped))
+      {:success true})
+    (catch Exception e
+      (tel/error! {:id ::save-assistant-pdf-window} e)
+      {:success false :error "Failed to save assistant PDF context"})))
 
 (defn save-card-type [user-id value]
   (try
