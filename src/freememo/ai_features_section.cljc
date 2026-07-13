@@ -315,6 +315,36 @@
               (dom/div (dom/props {:class "hint"})
                 (dom/text "Higher quality improves text recognition but increases processing time and API cost"))))
 
+          ;; Assistant PDF context — pages before AND after the current page the
+          ;; Socratic assistant reads (0 = current page only).
+          (let [server-window (e/server (settings/get-assistant-pdf-window user-id))
+                !window (atom server-window)
+                window (e/watch !window)]
+            (dom/div
+              (dom/props {:class "field"})
+              (dom/label
+                (dom/props {:style {:display "flex" :align-items "center" :gap "10px"}})
+                (dom/span (dom/props {:class "label" :style {:margin-bottom "0"}})
+                  (dom/text "Assistant PDF context"))
+                (e/for-by identity [_k [:assistant-pdf-window-input]]
+                  (dom/input
+                    (dom/props {:type "number" :min "0" :max "50"
+                                :style {:width "56px" :font-size "13px" :padding "4px 6px"
+                                        :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"}})
+                    (set! (.-value dom/node) (str window))
+                    (let [change-event (dom/On "change" #(-> % .-target .-value js/parseInt) nil)
+                          [t _] (e/Token change-event)]
+                      (when (some? change-event)
+                        (reset! !window change-event))
+                      (when t
+                        (let [r (e/server (e/Offload #(settings/save-assistant-pdf-window user-id change-event)))]
+                          (case r
+                            (if (:success r) (t) (t (:error r)))))))))
+                (dom/span (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
+                  (dom/text "pages")))
+              (dom/div (dom/props {:class "hint"})
+                (dom/text "Pages before and after the current page the assistant reads (0-50)"))))
+
           ;; Default OCR Model (Scan Page) — a document may override it in Document options
           (let [server-ocr-model (e/server (settings/get-ocr-model-default user-id))
                 allowed-ids (e/server (ocr/allowed-ocr-model-ids))

@@ -290,8 +290,9 @@
 
   ;; Socratic AI assistant — per-document chats + their message transcripts.
   ;; A chat is scoped to (user_id, root_topic_id): the document being read.
-  ;; Message #1 (lowest id) of every chat is the persisted page-context turn
-  ;; captured at chat creation (see freememo.assistant/start-chat!).
+  ;; The transcript holds learner/assistant turns only; the learner's live
+  ;; reading context is injected transiently per send, never persisted
+  ;; (see freememo.assistant/current-context-messages).
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS assistant_chats (
       id SERIAL PRIMARY KEY,
@@ -1050,7 +1051,8 @@
     id))
 
 (defn get-assistant-messages
-  "Transcript for `chat-id`, oldest first (message #1 = page context)."
+  "Transcript for `chat-id`, oldest first (learner/assistant turns only —
+   reading context is injected transiently per send, not stored here)."
   [chat-id]
   (jdbc/execute! ds
     (sql/format {:select [:id :role :content]
@@ -4117,6 +4119,38 @@
                               [:ilike :o.label q] [:ilike :f.object_literal q]])]
                    :order-by [[:f.page_number :asc] [:f.id :asc]]})
       {:builder-fn rs/as-unqualified-maps})))
+
+(defn get-kg-facts-context
+  "Approved facts for assistant grounding — same display-join as get-kg-facts,
+   with an optional inclusive page range and an optional row limit so a large
+   document or code repo cannot return unbounded rows.
+   Pre: graph-topic-id owned by user-id. Post: rows shaped like get-kg-facts,
+   all status='approved'; page_number ∈ [start-page,end-page] when both given
+   (NULL-page rows are excluded by the range); ≤ limit rows when limit given."
+  [user-id graph-topic-id {:keys [start-page end-page limit]}]
+  (jdbc/execute! ds
+    (sql/format
+      (cond-> {:select [[:f.id :id] [:f.status :status]
+                        [:f.page_number :page_number]
+                        [:f.object_literal :object_literal]
+                        [:f.subject_entity_id :subject_entity_id]
+                        [:f.object_entity_id :object_entity_id]
+                        [:f.predicate_id :predicate_id]
+                        [:s.label :subject_label]
+                        [:o.label :object_label]
+                        [:p.label :predicate_label] [:p.slug :predicate_slug]]
+               :from [[:kg_facts :f]]
+               :join [[:kg_entities :s] [:= :s.id :f.subject_entity_id]
+                      [:kg_predicates :p] [:= :p.id :f.predicate_id]]
+               :left-join [[:kg_entities :o] [:= :o.id :f.object_entity_id]]
+               :where [:and [:= :f.user_id user-id]
+                       [:= :f.graph_topic_id graph-topic-id]
+                       [:= :f.status "approved"]
+                       (when (and start-page end-page)
+                         [:between :f.page_number start-page end-page])]
+               :order-by [[:f.page_number :asc] [:f.id :asc]]}
+        limit (assoc :limit limit)))
+      {:builder-fn rs/as-unqualified-maps}))
 
 (defn kg-fact-stats
   "Per-document fact counts by status — feeds the Knowledge page badges.
