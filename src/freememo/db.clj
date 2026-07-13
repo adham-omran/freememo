@@ -4063,17 +4063,30 @@
    :source_model :status}. ON CONFLICT DO NOTHING — the partial unique
    indexes drop same-document s/p/o duplicates (including rows already
    reviewed: a re-distill never resurrects a rejected fact).
+   Chunked to stay under Postgres' 65 535 bind-parameter cap per statement:
+   one multi-row INSERT emits cols×rows params, and a repo distill can produce
+   tens of thousands of facts (the prose path never approached the cap). Chunks
+   are independent statements, not one transaction — acceptable because ON
+   CONFLICT DO NOTHING + a re-distill make the insert idempotent, so a partial
+   run self-heals on retry.
    Post: vector of inserted ids (shorter than rows when duplicates skipped)."
   [rows]
   (when (seq rows)
-    (mapv :id
-      (jdbc/execute! ds
-        (sql/format {:insert-into :kg_facts
-                     :values (map #(update % :object_literal sanitize-utf8) rows)
-                     :on-conflict []
-                     :do-nothing true
-                     :returning [:id]})
-        {:builder-fn rs/as-unqualified-maps}))))
+    (let [rows (map #(update % :object_literal sanitize-utf8) rows)
+          cols (count (keys (first rows)))
+          ;; 60 000 leaves margin below the 65 535 driver cap.
+          per-chunk (max 1 (quot 60000 (max 1 cols)))]
+      (into []
+        (mapcat (fn [chunk]
+                  (mapv :id
+                    (jdbc/execute! ds
+                      (sql/format {:insert-into :kg_facts
+                                   :values chunk
+                                   :on-conflict []
+                                   :do-nothing true
+                                   :returning [:id]})
+                      {:builder-fn rs/as-unqualified-maps}))))
+        (partition-all per-chunk rows)))))
 
 (defn get-kg-facts
   "Facts for a root document, display-joined (subject/object/predicate labels).
