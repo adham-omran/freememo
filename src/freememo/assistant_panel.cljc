@@ -36,28 +36,33 @@
       {:id (str (random-uuid)) :text text :chat @active-atom
        :refs (mapv :id @refs-atom)})))
 
-(defn typeset!
-  "CLJS-only: render MathJax math ($…$ inline, $$…$$ display) in `node`. CLJ no-op.
-   Call AFTER node's innerHTML is set; re-typeset re-reads the source delimiters
-   (which the fresh innerHTML restored), so re-renders never nest math.
+(defn render-math!
+  "CLJS-only: render KaTeX math (`\\(…\\)` inline, `\\[…\\]` display) in `node`.
+   CLJ no-op. Call AFTER node's innerHTML is set.
 
-   MathJax loads async from a CDN and Electric mounts each message frame once
-   (work-skipping), so a one-shot typeset silently no-ops for any message already
-   on screen while the script is still loading — the common case when an existing
-   chat is opened on page load. Retry on a short timer until MathJax is ready,
-   bounded (~5s) so a blocked CDN can't leak a forever-timer.
+   KaTeX's auto-render script loads async from a CDN; `window.__katexReady`
+   (defined in index.html) resolves with `renderMathInElement` once it is
+   available. Chaining each message's render on that promise means a message
+   mounted before KaTeX loads still renders the instant it arrives — no polling,
+   and no bounded timer that could lose the race or leak. A blocked CDN simply
+   leaves the promise pending, so math stays literal (no crash, no hang).
+
+   The client carries no `$` delimiter: `freememo.markdown/dollar-math->tex` has
+   already rewritten real math to `\\(…\\)`/`\\[…\\]` server-side, so a currency
+   `$` can never open math here. `throwOnError:false` shows a bad expression as
+   source instead of throwing. Code/`pre` are skipped (KaTeX default ignoredTags).
 
    Plain defn so the reader conditional stays invisible to Electric's reactive
    compiler (CLJ/CLJS signal parity)."
   [node]
   #?(:cljs
-     (letfn [(attempt [tries]
-               (let [mj (.-MathJax js/window)]
-                 (cond
-                   (and mj (fn? (.-typesetPromise mj))) (.typesetPromise mj #js [node])
-                   (pos? tries) (js/setTimeout #(attempt (dec tries)) 100)
-                   :else nil)))]
-       (attempt 50))
+     (when-let [ready (.-__katexReady js/window)]
+       (.then ready
+         (fn [render]
+           (render node
+             #js {:delimiters #js [#js {:left "\\[" :right "\\]" :display true}
+                                   #js {:left "\\(" :right "\\)" :display false}]
+                  :throwOnError false}))))
      :clj nil))
 
 (defn scroll-to-bottom!
@@ -110,16 +115,18 @@
           docs (e/server (vec (assistant/referenceable-docs user-id root-topic-id)))
           doc-titles (mapv :title docs)
           by-title (into {} (map (juxt :title identity)) docs)
-          ;; Assistant replies are Markdown + `$$…$$` display math; render them
-          ;; as HTML (client injects + MathJax typesets). User rows are the
-          ;; learner's own literal text — left untouched, shown via dom/text.
+          ;; Assistant replies are Markdown + dollar-delimited math; render to
+          ;; HTML, then rewrite real math to `\(…\)`/`\[…\]` so the client (KaTeX)
+          ;; needs no `$` delimiter and currency `$` never opens math. User rows
+          ;; are the learner's own literal text — untouched, shown via dom/text.
           messages (e/server
                      (mapv (fn [m]
                              (if (= "assistant" (:assistant_messages/role m))
                                (assoc m :assistant_messages/content-html
                                  (-> (:assistant_messages/content m)
                                    markdown/unwrap-non-math-dollars
-                                   markdown/parse-markdown))
+                                   markdown/parse-markdown
+                                   markdown/dollar-math->tex))
                                m))
                        (or (assistant/messages* assistant-rev user-id active) [])))
           sending? (some? t)]
@@ -257,7 +264,7 @@
                     (dom/div
                       (dom/props {:class "assistant-msg assistant-msg--assistant" :dir "auto"})
                       (set! (.-innerHTML dom/node) (or (:assistant_messages/content-html m) ""))
-                      (typeset! dom/node))
+                      (render-math! dom/node))
                     (dom/div
                       (dom/props {:class "assistant-msg-actions"})
                       (dom/button

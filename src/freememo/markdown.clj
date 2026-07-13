@@ -7,7 +7,9 @@
            [com.vladsch.flexmark.util.data MutableDataSet]
            [com.vladsch.flexmark.ext.tables TablesExtension]
            [com.vladsch.flexmark.ext.gfm.strikethrough StrikethroughExtension]
-           [com.vladsch.flexmark.ext.gfm.tasklist TaskListExtension]))
+           [com.vladsch.flexmark.ext.gfm.tasklist TaskListExtension]
+           [org.jsoup Jsoup]
+           [org.jsoup.nodes Element TextNode]))
 
 (defonce ^:private options
   (doto (MutableDataSet.)
@@ -40,6 +42,53 @@
       (-> s
         (str/replace #"\$\$([^$\n]+?)\$\$" unwrap)   ; display first
         (str/replace #"\$([^$\n]+?)\$" unwrap)))))    ; then inline
+
+;; A dollar-delimited *display* span is any `$$…$$` — currency never doubles the
+;; sign, so `$$` is unambiguous math.
+(def ^:private display-math-re #"(?s)\$\$(.+?)\$\$")
+
+;; A dollar-delimited *inline* span is real math only when it opens AND closes on
+;; a non-space, non-`$` character and the closing `$` is not immediately followed
+;; by a digit. That pandoc-style rule is what separates math from currency:
+;; `$5 and $10` and `$p = $10` fail it (space before / digit after the close), so
+;; their `$` are left literal, while `$x_i$` and `$x \geq 0$` pass.
+(def ^:private inline-math-re #"\$([^\s$](?:[^$\n]*[^\s$])?)\$(?!\d)")
+
+(defn- dollar->tex-str
+  "Rewrite dollar-delimited math in one text run to TeX bracket/paren delimiters:
+   `$$…$$` → `\\[…\\]`, real-math `$…$` → `\\(…\\)`. Currency and other bare `$`
+   are left untouched (see `inline-math-re`). Display is rewritten first so its
+   inner `$` can't be mistaken for inline delimiters."
+  [s]
+  (-> s
+    (str/replace display-math-re "\\\\[$1\\\\]")
+    (str/replace inline-math-re "\\\\($1\\\\)")))
+
+(defn dollar-math->tex
+  "Rewrite dollar-delimited math to TeX `\\(…\\)` / `\\[…\\]` delimiters in already-
+   rendered HTML, skipping `<code>`/`<pre>` so `$` in code samples stays literal.
+   Run this AFTER `parse-markdown`: flexmark escapes a leading `\\(`/`\\[` to a bare
+   `(`/`[`, so the delimiters must be introduced past the Markdown parser, whereas
+   `$…$` survives it intact.
+
+   Rationale: KaTeX pairs `$…$` context-free and would mis-render currency, so the
+   client carries no `$` delimiter — this server pass owns all `$` interpretation.
+
+   Pre : `html` is a string or nil. Post: nil in → nil out; otherwise the same
+   HTML with math delimiters rewritten and every bare/currency `$` preserved.
+   Inv : only text nodes outside code/pre change; element structure is untouched."
+  [html]
+  (when html
+    (let [doc (Jsoup/parseBodyFragment html)]
+      (.prettyPrint (.outputSettings doc) false)
+      (doseq [^Element el (.select doc "*")]
+        (when-not (.closest el "code, pre")
+          (doseq [^TextNode tn (vec (.textNodes el))]
+            (let [orig (.getWholeText tn)
+                  conv (dollar->tex-str orig)]
+              (when (not= orig conv)
+                (.text tn conv))))))
+      (.html (.body doc)))))
 
 (defn parse-markdown
   "Convert a Markdown string to sanitized HTML.
