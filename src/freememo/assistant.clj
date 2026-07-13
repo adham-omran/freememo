@@ -1,12 +1,14 @@
 (ns freememo.assistant
   "Server-side Socratic AI assistant for the reading view.
 
-   One chat is a conversation about one document (root topic). At chat creation
-   the current page's text is resolved server-side and persisted as message #1
-   (role 'user') so the context is established once and frozen to that page.
-   Each send assembles [system persona] ++ stored transcript, calls OpenRouter,
-   persists the reply, and bills usage.cost through the same credit path as card
-   generation (no-op on self-host). No streaming (v1)."
+   One chat is a conversation about one document (root topic). Each send
+   assembles [system persona (+ approved KG facts)] ++ a transient turn holding
+   the learner's LIVE reading context (breadcrumb + the current page, or a
+   ±window page span for PDFs) ++ any @-referenced documents ++ the stored
+   transcript, calls OpenRouter, persists the reply, and bills usage.cost through
+   the same credit path as card generation (no-op on self-host). The reading
+   context is recomputed per send (never persisted), so it tracks the page on
+   screen. No streaming (v1)."
   (:require
    [clojure.java.io :as io]
    [clojure.string :as str]
@@ -30,17 +32,108 @@
 
 ;; ── Context resolution ─────────────────────────────────────────────────────
 
-(defn page-context-text
-  "The current page's text for `page-topic-id`, resolved server-side and wrapped
-   in a fixed preamble. Works for any topic kind: a PDF page topic and a
-   basic/wiki/web/epub topic both carry their content in topics.content.
-   Post: a non-blank string (a placeholder when no text is extracted yet)."
+(def ^:private max-context-facts
+  "Upper bound on KG facts injected into one send's grounding — keeps a large
+   document (or code repo) from overflowing the prompt. Nearest facts win."
+  50)
+
+(def ^:private max-window-chars
+  "Upper bound on the combined characters of the PDF page window in one send.
+   Farthest pages are dropped first; the current page is never dropped."
+  40000)
+
+(defn- resolve-context
+  "Resolve the learner's live reading context for one send, from the currently
+   open topic. Single lookup point so grounding and the context turn agree.
+   Pre: root-topic-id owned by user-id; page-topic-id is the on-screen topic
+   (a PDF page topic, or the topic itself for non-PDF kinds).
+   Post: {:root-id :root-kind :pdf? :page-topic-id :center-page :window};
+   :center-page is the 1-based page number for a PDF page, else nil."
+  [user-id root-topic-id page-topic-id]
+  (let [root (db/get-topic root-topic-id)
+        pdf? (= "pdf" (:topics/kind root))
+        center-page (when pdf?
+                      (:topics/page_number (db/get-topic page-topic-id)))]
+    {:root-id root-topic-id
+     :root-kind (:topics/kind root)
+     :pdf? pdf?
+     :page-topic-id page-topic-id
+     :center-page center-page
+     :window (settings/get-assistant-pdf-window user-id)}))
+
+(defn- breadcrumb-line
+  "One line locating the open node within its document tree, root→node, so the
+   model knows it is reading a section rather than the whole document.
+   Pre: page-topic-id may be nil. Post: a non-blank string when the node has ≥1
+   ancestor (path length > 1), else nil (nothing useful to say for a bare root)."
   [page-topic-id]
-  (let [content (some-> page-topic-id db/get-topic :topics/content str/trim)]
-    (str "Material the learner is currently reading:\n\n"
-      (if (str/blank? content)
-        "(This page has no extracted text yet.)"
-        content))))
+  (let [ids (db/get-ancestor-ids page-topic-id)] ; [self … root], nearest-first
+    (when (> (count ids) 1)
+      (let [titles (db/get-topic-titles ids)
+            path (mapv #(or (get titles %) "Untitled") (reverse ids))]
+        (str "You are reading a section of the document \"" (first path) "\".\n"
+          "Location (root → current): " (str/join " › " path) ".")))))
+
+(defn- pdf-window-text
+  "Text of the PDF pages within ±window of `center-page`, in reading order, each
+   page delimited and the current page marked. Blank/unextracted pages are
+   skipped. The combined length is capped at `max-window-chars`, dropping the
+   pages farthest from center first; the center page is always kept.
+   Pre: center-page is a 1-based page number; window ≥ 0.
+   Post: a non-blank string, or nil when no page in range has extracted text."
+  [root-id center-page window]
+  (when (and root-id center-page)
+    (let [start (max 1 (- center-page window))
+          end   (+ center-page window)
+          pages (->> (db/get-context-pages root-id start end)
+                  (keep (fn [row]
+                          (when-let [c (some-> (:topics/content row) str/trim not-empty)]
+                            {:page (:topics/page_number row) :text c}))))
+          ;; nearest-first so the farthest pages fall off the char budget first
+          ordered (sort-by #(Math/abs (- (int (:page %)) (int center-page))) pages)
+          {:keys [kept omitted]}
+          (reduce (fn [{:keys [kept total omitted]} {:keys [text] :as p}]
+                    (let [len (count text)]
+                      (if (or (empty? kept) (<= (+ total len) max-window-chars))
+                        {:kept (conj kept p) :total (+ total len) :omitted omitted}
+                        {:kept kept :total total :omitted (inc omitted)})))
+            {:kept [] :total 0 :omitted 0} ordered)]
+      (when (seq kept)
+        (let [body (->> kept
+                     (sort-by :page)
+                     (map (fn [{:keys [page text]}]
+                            (str "--- Page " page
+                              (when (= page center-page) " (current page)") " ---\n"
+                              text)))
+                     (str/join "\n\n"))]
+          (if (pos? omitted)
+            (str body "\n\n(" omitted " nearby page(s) omitted for length.)")
+            body))))))
+
+(defn- reading-material
+  "The text the learner is currently reading: a ±window page span for a PDF,
+   else the open topic's own content. Post: non-blank string or nil."
+  [ctx]
+  (if (:pdf? ctx)
+    (pdf-window-text (:root-id ctx) (:center-page ctx) (:window ctx))
+    (some-> (:page-topic-id ctx) db/get-topic :topics/content str/trim not-empty)))
+
+(defn- current-context-messages
+  "The learner's live reading context as a single transient user turn: a
+   breadcrumb locating the open node plus the reading material. Recomputed each
+   send and never persisted, so it always reflects the page on screen now.
+   Pre: ctx from resolve-context. Post: [] when nothing locatable, else a
+   one-element vector [{:role \"user\" :content s}]."
+  [ctx]
+  (let [crumb    (breadcrumb-line (:page-topic-id ctx))
+        material (reading-material ctx)
+        sections (remove str/blank?
+                   [crumb
+                    (when material
+                      (str "Material the learner is currently reading:\n\n" material))])]
+    (if (empty? sections)
+      []
+      [{:role "user" :content (str/join "\n\n" sections)}])))
 
 (defn- title-from
   "A short chat title derived from the learner's first message."
@@ -52,12 +145,22 @@
 
 (defn- grounding-system-suffix
   "System-prompt suffix grounding the tutor in the document's approved KG facts.
-   The persona forbids direct answers, so the suffix instructs the model to use
-   the facts to steer its questions, not to recite them.
-   Pre: user-id owns root-topic-id's document. Post: a non-blank string iff the
-   document has ≥1 approved fact, else nil (persona left unchanged)."
-  [user-id root-topic-id]
-  (let [facts (db/get-kg-facts user-id root-topic-id "approved" nil)]
+   For a PDF the facts are limited to the current ±window pages (nearest first);
+   otherwise the whole document's facts are used. Either way the count is capped
+   at max-context-facts so a large document or code repo cannot overflow the
+   prompt. The persona forbids direct answers, so the suffix says to steer with
+   the facts, not recite them.
+   Pre: ctx from resolve-context (root owned by user-id).
+   Post: a non-blank string iff ≥1 fact selected, else nil (persona unchanged)."
+  [user-id ctx]
+  (let [facts (if (and (:pdf? ctx) (:center-page ctx))
+                (let [c (:center-page ctx) w (:window ctx)]
+                  (->> (db/get-kg-facts-context user-id (:root-id ctx)
+                         {:start-page (max 1 (- c w)) :end-page (+ c w)})
+                    (sort-by #(Math/abs (- (int (or (:page_number %) c)) (int c))))
+                    (take max-context-facts)))
+                (db/get-kg-facts-context user-id (:root-id ctx)
+                  {:limit max-context-facts}))]
     (when (seq facts)
       (str "\n\n# Facts established in this document\n\n"
         "Use these only to ground and steer your questions — do not recite them "
@@ -100,26 +203,29 @@
 ;; ── Commands ───────────────────────────────────────────────────────────────
 
 (defn start-chat!
-  "Create a chat for (user-id, root-topic-id) and persist the page context as
-   message #1. Returns the new chat id. Bumps :assistant-mutations."
-  [user-id root-topic-id page-topic-id]
+  "Create a chat for (user-id, root-topic-id). Returns the new chat id and bumps
+   :assistant-mutations. The page context is no longer frozen here — each send
+   injects the learner's live reading context (see current-context-messages)."
+  [user-id root-topic-id]
   (let [chat-id (db/create-assistant-chat! user-id root-topic-id "New chat")]
-    (db/insert-assistant-message! chat-id "user" (page-context-text page-topic-id))
     (bump! user-id)
     chat-id))
 
 (defn send!
   "Send `user-text` to `chat-id` and return {:ok true :reply s} or {:error s}.
-   `ref-topic-ids` (seq, may be empty/nil) are @-referenced documents injected as
-   transient context for this turn only. Approved KG facts for the document are
-   injected into the system prompt each send.
+   `page-topic-id` is the learner's on-screen topic NOW (a PDF page topic or a
+   plain topic); its live reading context (breadcrumb + page/window) is injected
+   as a transient turn this send. `ref-topic-ids` (seq, may be empty/nil) are
+   @-referenced documents, also transient. Approved KG facts (page-windowed for
+   PDFs) ground the system prompt each send.
    Order: ownership gate → key/blank checks → credit gate → persist user turn →
-   call model → persist reply → charge usage.cost → title backfill → bump.
+   resolve live context → call model → persist reply → charge usage.cost →
+   title backfill → bump.
    Pre: chat-id owned by user-id (else {:error}). Post: on success exactly one
    assistant row is appended and one usage charge recorded; on model failure the
-   user turn persists but no assistant row is added; referenced docs and facts
-   are never persisted to the transcript."
-  [user-id chat-id user-text ref-topic-ids]
+   user turn persists but no assistant row is added; reading context, referenced
+   docs, and facts are never persisted to the transcript."
+  [user-id chat-id page-topic-id user-text ref-topic-ids]
   (let [chat (db/get-assistant-chat user-id chat-id)
         api-key (settings/get-openrouter-api-key user-id)]
     (cond
@@ -133,8 +239,11 @@
           (do
             (db/insert-assistant-message! chat-id "user" user-text)
             (bump! user-id) ; show the learner's turn immediately
-            (let [model-id (settings/effective-assistant-model
-                             user-id (:assistant_chats/root_topic_id chat))
+            (let [root-topic-id (:assistant_chats/root_topic_id chat)
+                  ctx (resolve-context user-id root-topic-id page-topic-id)
+                  context-msgs (into (current-context-messages ctx)
+                                 (reference-context-messages user-id ref-topic-ids))
+                  model-id (settings/effective-assistant-model user-id root-topic-id)
                   entry (or (card-models/resolve-model model-id)
                           (card-models/resolve-model settings/assistant-default-model-id))
                   slug (:openrouter-model entry)]
@@ -142,8 +251,8 @@
                 (let [body (openrouter/chat-completion! api-key
                              {:model slug
                               :messages (assemble-messages chat-id
-                                          (grounding-system-suffix user-id (:assistant_chats/root_topic_id chat))
-                                          (reference-context-messages user-id ref-topic-ids))})
+                                          (grounding-system-suffix user-id ctx)
+                                          context-msgs)})
                       reply (-> body :choices first :message :content)
                       cost (double (or (-> body :usage :cost) 0))]
                   (if (str/blank? reply)
@@ -165,8 +274,8 @@
    documents for this turn. Returns the send result plus the :chat-id actually
    used, so the client can select it."
   [user-id root-topic-id page-topic-id chat-id user-text ref-topic-ids]
-  (let [cid (or chat-id (start-chat! user-id root-topic-id page-topic-id))]
-    (assoc (send! user-id cid user-text ref-topic-ids) :chat-id cid)))
+  (let [cid (or chat-id (start-chat! user-id root-topic-id))]
+    (assoc (send! user-id cid page-topic-id user-text ref-topic-ids) :chat-id cid)))
 
 (defn reply->cards!
   "Generate basic flashcards from an assistant `reply-text` and save them under

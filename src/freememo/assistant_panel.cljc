@@ -3,8 +3,9 @@
    transcript, and composer.
 
    Chats are per-document (root-topic-id). Sending with no active chat creates
-   one first, whose message #1 is the current page context (server-resolved).
-   Message #1 is hidden from the transcript — it is machinery, not conversation.
+   one first. The learner's reading context is not stored in the transcript —
+   it is injected transiently per send server-side, so the transcript shown here
+   is exactly the learner/assistant turns.
 
    Reactivity: subscribes to :assistant-mutations (bumped on chat create + each
    message insert) so the list and transcript re-query. The learner's own turn
@@ -190,7 +191,7 @@
                   [nt _] (e/Token ev)]
               (when nt
                 (let [cid (e/server (e/Offload
-                                      #(assistant/start-chat! user-id root-topic-id page-topic-id)))]
+                                      #(assistant/start-chat! user-id root-topic-id)))]
                   (case cid
                     (do (reset! !active cid) (reset! !draft "") (reset! !error nil) (nt)))))))
           (dom/select
@@ -230,10 +231,11 @@
                     (case r
                       (if (:success r) (mt) (mt (:error r))))))))))
 
-        ;; Transcript (message #1, the page context, is skipped via rest).
+        ;; Transcript — every stored row is a real learner/assistant turn now
+        ;; (reading context is injected transiently server-side, not persisted).
         (dom/div
           (dom/props {:class "assistant-panel__transcript"})
-          (let [visible (vec (rest messages))]
+          (let [visible (vec messages)]
             (if (empty? visible)
               ;; Empty state: starters — hidden once a send is in flight (echo up
               ;; or awaiting reply) so they don't sit beside the echoed turn.
