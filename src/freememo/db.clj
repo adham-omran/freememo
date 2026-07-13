@@ -1110,16 +1110,17 @@
 (defn list-credit-transactions
   "User's credit ledger newest-first, for the Settings → Account 'AI costs' view.
    Optional filters (nil/blank = no constraint): `kind`/`endpoint`/`model`
-   exact-match; `since-days` keeps rows newer than N days; `q` case-insensitive
-   substring over endpoint OR model. Selects only display columns (no
-   reasoning_tokens/attempts/order ref — out of scope for this view).
-   Pre:  user-id identifies a user; since-days nil or positive int.
+   exact-match; `since-days` keeps rows newer than N days; `min-amount` keeps
+   rows whose magnitude |amount_iqd| >= min-amount (e.g. 500 finds 500+ debits
+   or credits); `q` case-insensitive substring over endpoint OR model. Selects
+   only display columns (no reasoning_tokens/attempts/order ref — out of scope).
+   Pre:  user-id identifies a user; since-days/min-amount nil or non-negative.
    Post: ≤ 5000 unqualified-key maps ordered created_at DESC, id DESC (stable
          window tiebreak for same-timestamp rows). Over-cap ledgers are
          truncated with a :warn log.
    Note: the since-days boundary uses the app JVM clock, which is colocated with
          Postgres in this deployment; a cross-tz split would shift it by hours."
-  [user-id {:keys [kind endpoint model since-days q]}]
+  [user-id {:keys [kind endpoint model since-days min-amount q]}]
   (let [cap 5000
         like (when-not (str/blank? q) (str "%" (str/trim q) "%"))
         cutoff (when since-days
@@ -1130,6 +1131,7 @@
                 (not (str/blank? endpoint)) (conj [:= :endpoint endpoint])
                 (not (str/blank? model))    (conj [:= :model model])
                 cutoff                      (conj [:>= :created_at cutoff])
+                (and min-amount (pos? min-amount)) (conj [:>= [:abs :amount_iqd] min-amount])
                 like                        (conj [:or [:ilike :endpoint like]
                                                    [:ilike :model like]]))
         rows (jdbc/execute! ds
