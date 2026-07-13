@@ -14,8 +14,41 @@
        height + scrolls when neither side fits.
 
    `install!` wires the selection / scroll / resize / dismiss listeners, builds
-   the card once, and returns a teardown fn that removes them and the card."
-  (:require [clojure.string :as str]))
+   the card once, and returns a teardown fn that removes them and the card.
+
+   `opts` (2-arity install!) turns on card-editor-only controls: `:image?`
+   adds an image-insert button, `:cloze?` adds a cloze-deletion row. Both drive
+   freememo.editor-actions; the document editor calls the no-opts arity."
+  (:require [clojure.string :as str]
+            [freememo.editor-actions :as editor-actions]))
+
+;; ---------------------------------------------------------------------------
+;; Glyphs for the opt-in controls. Inline SVG with stroke="currentColor" (NOT
+;; the toolbar's `.ql-stroke` class — that resolves only inside `.ql-toolbar`,
+;; and the format-menu is not one) so they inherit the button's text colour
+;; like the HTML glyphs on the other buttons. The cloze braces reproduce the
+;; { } design formerly registered as Quill toolbar icons in quill_field.
+;; ---------------------------------------------------------------------------
+
+(def ^:private cloze-braces
+  (str "<path d=\"M6.5 3.5 Q4.5 3.5 4.5 6.5 Q4.5 8 3 9 Q4.5 10 4.5 11.5 Q4.5 14.5 6.5 14.5\"/>"
+    "<path d=\"M11.5 3.5 Q13.5 3.5 13.5 6.5 Q13.5 8 15 9 Q13.5 10 13.5 11.5 Q13.5 14.5 11.5 14.5\"/>"))
+
+(def ^:private cloze-inc-glyph
+  (str "<svg viewBox=\"0 0 18 18\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\">"
+    cloze-braces
+    "<line x1=\"9\" y1=\"6.5\" x2=\"9\" y2=\"11.5\"/><line x1=\"6.8\" y1=\"9\" x2=\"11.2\" y2=\"9\"/></svg>"))
+
+(def ^:private cloze-eq-glyph
+  (str "<svg viewBox=\"0 0 18 18\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\">"
+    cloze-braces
+    "<line x1=\"6.8\" y1=\"7.5\" x2=\"11.2\" y2=\"7.5\"/><line x1=\"6.8\" y1=\"10.5\" x2=\"11.2\" y2=\"10.5\"/></svg>"))
+
+(def ^:private image-glyph
+  (str "<svg viewBox=\"0 0 18 18\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\">"
+    "<rect x=\"2.5\" y=\"3.5\" width=\"13\" height=\"11\" rx=\"1.5\"/>"
+    "<circle cx=\"6.3\" cy=\"7.3\" r=\"1.3\" fill=\"currentColor\" stroke=\"none\"/>"
+    "<path d=\"M3 13 L7 9 L9.5 11.5 L12 9 L15 12.5\"/></svg>"))
 
 ;; ---------------------------------------------------------------------------
 ;; Quill format actions — all operate on a cached range so focus/selection
@@ -208,8 +241,9 @@
    mutating the document, calls `(@!sync)` — install! sets that to
    refresh + re-place, so active-state and geometry stay current after a format
    (e.g. a heading changes line height). `get-rng` returns the cached
-   {:index :length}."
-  [^js q get-rng]
+   {:index :length}. `opts` = {:image? :cloze?} toggles the card-editor-only
+   controls (§ ns docstring)."
+  [^js q get-rng opts]
   (let [card    (el "div" "format-menu")
         section (fn [] (el "div" "fmt-row"))
         toggles (atom [])            ; [{:fmt :el}] inline toggle buttons
@@ -258,11 +292,30 @@
     (.appendChild row-blockfmt (:wrap align-dd))
     (.appendChild row-blockfmt (glyph-button "⇄" "Right-to-left" (after #(toggle-value! q (get-rng) "direction" "rtl"))))
     (.appendChild row-blockfmt (glyph-button "⊞" "Insert table" (after #(insert-table! q (get-rng)))))
+    ;; Image insert (card editors only). Uploads via the picker → /api/media,
+    ;; inserting at the cached range index; never embeds a data-URI.
+    (when (:image? opts)
+      (.appendChild row-blockfmt
+        (glyph-button image-glyph "Insert image"
+          (after #(editor-actions/insert-image! q (:index (get-rng)))))))
     (.appendChild card row-block)
     (.appendChild card (el "div" "fmt-divider"))
     (.appendChild card row-inline)
     (.appendChild card (el "div" "fmt-divider"))
     (.appendChild card row-blockfmt)
+    ;; Cloze deletion row (cloze card only). reselect! restores the cached
+    ;; range before insert-cloze! reads the live selection — focus moved to the
+    ;; button, so the editor's own getSelection would otherwise be stale.
+    (when (:cloze? opts)
+      (let [cloze-row (section)]
+        (.appendChild cloze-row
+          (glyph-button cloze-inc-glyph "New cloze deletion"
+            (after #(do (reselect! q (get-rng)) (editor-actions/insert-cloze! q :inc)))))
+        (.appendChild cloze-row
+          (glyph-button cloze-eq-glyph "Same cloze deletion"
+            (after #(do (reselect! q (get-rng)) (editor-actions/insert-cloze! q :eq)))))
+        (.appendChild card (el "div" "fmt-divider"))
+        (.appendChild card cloze-row)))
     {:card card
      :!sync !sync
      :refresh
@@ -328,12 +381,17 @@
          is hidden by CSS.
    Post: a non-empty user selection shows the card near the selection; a
          collapse / Escape / outside-click hides it; scroll & resize keep it
-         placed. Teardown leaves no listeners or DOM behind."
-  [^js editor]
-  (let [q editor
+         placed. Teardown leaves no listeners or DOM behind.
+
+   `opts` (default {}) = {:image? :cloze?}; see the ns docstring. Multiple
+   editors each build their own card — the card carries no id, only the
+   `.format-menu` class, so N instances never collide."
+  ([^js editor] (install! editor {}))
+  ([^js editor opts]
+   (let [q editor
         container (.-container q)
         !rng (atom nil)                                   ; cached selection
-        {:keys [card refresh !sync]} (build-card q #(deref !rng))
+        {:keys [card refresh !sync]} (build-card q #(deref !rng) opts)
         visible? #(= "block" (.. card -style -display))
         hide! (fn [] (set! (.. card -style -display) "none"))
         show! (fn [] (set! (.. card -style -display) "block") (refresh) (place! card container))
@@ -354,7 +412,6 @@
                               (not (.contains (.-root q) (.-target e))))
                         (hide!)))
         on-key (fn [^js e] (when (and (visible?) (= "Escape" (.-key e))) (hide!)))]
-    (set! (.-id card) "format-menu")
     (set! (.. card -style -display) "none")
     (.appendChild js/document.body card)
     (.on q "selection-change" on-selection)
@@ -370,4 +427,4 @@
       (.removeEventListener js/window "resize" reposition)
       (.removeEventListener js/document "mousedown" on-doc-down true)
       (.removeEventListener js/document "keydown" on-key)
-      (when (.-parentNode card) (.remove card)))))
+      (when (.-parentNode card) (.remove card))))))
