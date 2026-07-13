@@ -4024,6 +4024,23 @@
           user-id (sanitize-utf8 label)]
          {:builder-fn rs/as-unqualified-maps})))
 
+(defn get-or-create-kg-entity!
+  "Exact get-or-create of an entity by (user-id, label) — the DETERMINISTIC
+   linker for code facts, whose labels are canonical fully-qualified names, so
+   the prose path's fuzzy trigram/LLM merge (find-entity-link-candidates) is
+   neither needed nor wanted.
+   Select-then-insert (no UNIQUE(user_id,label): the prose path relies on
+   dup-tolerant fuzzy merge, so a global constraint would regress it). A race
+   could insert a duplicate — acceptable: a dup entity is reviewable, and
+   single-user ingest is low-concurrency.
+   Pre:  label non-blank. Post: entity id (existing or freshly inserted)."
+  [user-id label]
+  (or (:id (jdbc/execute-one! ds
+             ["SELECT id FROM kg_entities WHERE user_id = ? AND label = ? LIMIT 1"
+              user-id (sanitize-utf8 label)]
+             {:builder-fn rs/as-unqualified-maps}))
+    (insert-kg-entity! user-id label)))
+
 (defn get-or-create-kg-predicate!
   "Upsert a predicate by (user-id, slug); new rows land status='approved' —
    the graph curates by exception (edit/reject in the facts browser), not by

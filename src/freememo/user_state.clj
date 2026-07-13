@@ -33,6 +33,8 @@
           :scan-cancellers  (atom {})
           :distilling-docs  (atom #{})      ; root topic ids with a distill run in flight
           :distill-cancellers (atom {})     ; root topic id -> missionary cancel fn
+          :distilling-repos (atom #{})      ; repo root topic ids with a code-distill run in flight
+          :repo-distill-cancellers (atom {}); repo root topic id -> missionary cancel fn
           :generating-questions (atom #{})  ; root topic ids with a question run in flight
           :question-cancellers (atom {})    ; root topic id -> missionary cancel fn
           :exam-grading     (atom {})       ; session id -> [graded total] during end-of-exam grading
