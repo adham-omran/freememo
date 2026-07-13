@@ -1107,6 +1107,67 @@
            ["SELECT credit_balance_iqd FROM users WHERE id = ?" user-id]))
      0)))
 
+(defn list-credit-transactions
+  "User's credit ledger newest-first, for the Settings → Account 'AI costs' view.
+   Optional filters (nil/blank = no constraint): `kind`/`endpoint`/`model`
+   exact-match; `since-days` keeps rows newer than N days; `q` case-insensitive
+   substring over endpoint OR model. Selects only display columns (no
+   reasoning_tokens/attempts/order ref — out of scope for this view).
+   Pre:  user-id identifies a user; since-days nil or positive int.
+   Post: ≤ 5000 unqualified-key maps ordered created_at DESC, id DESC (stable
+         window tiebreak for same-timestamp rows). Over-cap ledgers are
+         truncated with a :warn log.
+   Note: the since-days boundary uses the app JVM clock, which is colocated with
+         Postgres in this deployment; a cross-tz split would shift it by hours."
+  [user-id {:keys [kind endpoint model since-days q]}]
+  (let [cap 5000
+        like (when-not (str/blank? q) (str "%" (str/trim q) "%"))
+        cutoff (when since-days
+                 (java.sql.Timestamp/valueOf
+                   (.minusDays (java.time.LocalDateTime/now) (long since-days))))
+        where (cond-> [:and [:= :user_id user-id]]
+                (not (str/blank? kind))     (conj [:= :kind kind])
+                (not (str/blank? endpoint)) (conj [:= :endpoint endpoint])
+                (not (str/blank? model))    (conj [:= :model model])
+                cutoff                      (conj [:>= :created_at cutoff])
+                like                        (conj [:or [:ilike :endpoint like]
+                                                   [:ilike :model like]]))
+        rows (jdbc/execute! ds
+               (sql/format {:select [:id :kind :amount_iqd :balance_after
+                                     :endpoint :model :input_tokens :cached_tokens
+                                     :output_tokens :created_at]
+                            :from [:credit_transactions]
+                            :where where
+                            :order-by [[:created_at :desc] [:id :desc]]
+                            :limit (inc cap)})
+               {:builder-fn rs/as-unqualified-maps})]
+    (when (> (count rows) cap)
+      (tel/log! {:level :warn :id ::credit-history-truncated
+                 :data {:user-id user-id :cap cap}}
+        "Credit history exceeded display cap; truncated"))
+    (vec (take cap rows))))
+
+(defn credit-transaction-facets
+  "Distinct non-empty endpoints and models across a user's whole ledger — the
+   'AI costs' filter dropdown options. Filter-independent by design so options
+   never vanish as the user narrows.
+   Pre:  user-id. Post: {:endpoints [str…] :models [str…]}, each sorted asc,
+         no nils/blanks."
+  [user-id]
+  (let [distinct-col (fn [col]
+                       (->> (jdbc/execute! ds
+                              (sql/format {:select-distinct [col]
+                                           :from [:credit_transactions]
+                                           :where [:and [:= :user_id user-id]
+                                                   [:<> col nil] [:<> col ""]]
+                                           :order-by [[col :asc]]})
+                              {:builder-fn rs/as-unqualified-maps})
+                         (map col)
+                         (remove str/blank?)
+                         vec))]
+    {:endpoints (distinct-col :endpoint)
+     :models    (distinct-col :model)}))
+
 (defn get-user-markup
   "Per-user markup override, or nil when unset (caller falls back to config).
    Returns a BigDecimal (Postgres DECIMAL)."
