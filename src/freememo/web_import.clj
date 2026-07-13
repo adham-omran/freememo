@@ -20,6 +20,8 @@
             [freememo.pdf :as pdf]
             [freememo.quota :as quota]
             [freememo.commands :as commands]
+            [freememo.kg-code :as kg-code]
+            [clojure.string :as str]
             [freememo.wikipedia :as wiki]))
 
 (defn- attach-biblio-best-effort!
@@ -119,6 +121,22 @@
               (do (commands/bump! user-id :import-document)
                   {:ok true :topic-id (:id result)})
               {:ok false :error (:error result)}))
+
+          :repo
+          ;; Topics are created synchronously (fast — caller navigates to the
+          ;; root immediately); fact distillation runs async and owns/deletes
+          ;; the temp dir. If topic creation fails before the async job starts,
+          ;; delete the dir here — ownership hasn't transferred yet.
+          (let [dir (kg-code/unzip-repo! bytes)]
+            (try
+              (let [repo-name (str/replace (or filename "repo") #"(?i)\.zip$" "")
+                    {:keys [root-id]} (kg-code/create-repo-topics! user-id repo-name dir)]
+                (kg-code/start-repo-distill! user-id root-id dir)
+                (commands/bump! user-id :import-document)
+                {:ok true :topic-id root-id})
+              (catch Throwable t
+                (kg-code/delete-dir! dir)
+                (throw t))))
 
           {:ok false :error (str "Unknown flow: " flow)}))
       {:ok false :error "Upload not found or expired"})

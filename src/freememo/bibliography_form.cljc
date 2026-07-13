@@ -137,6 +137,7 @@
     (= kind "markdown")              ["MD"        "var(--color-badge-web)"]
     (= kind "audio")                 ["Audio"     "var(--color-badge-web)"]
     (= kind "score")                 ["Score"     "var(--color-badge-pdf)"]
+    (= kind "code")                  ["Code"      "var(--color-badge-web)"]
     :else                            ["Topic"     "var(--color-badge-epub)"]))
 
 ;; ---------------------------------------------------------------------------
