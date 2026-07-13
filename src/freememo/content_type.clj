@@ -93,7 +93,7 @@
   [content-disposition url flow]
   (let [from-cd (parse-content-disposition-filename content-disposition)
         from-url (url-path-tail url)
-        ext (case flow :pdf ".pdf" :epub ".epub" :html ".html" :markdown ".md" "")
+        ext (case flow :pdf ".pdf" :epub ".epub" :html ".html" :markdown ".md" :repo ".zip" "")
         fallback (str "Untitled" ext)]
     (or from-cd from-url fallback)))
 
@@ -131,6 +131,7 @@
               (str/ends-with? lower-name ".htm") :html
               (str/ends-with? lower-name ".md") :markdown
               (str/ends-with? lower-name ".markdown") :markdown
+              (str/ends-with? lower-name ".zip") :repo
               (some #(str/ends-with? lower-name %)
                     [".mp3" ".m4a" ".mp4" ".wav" ".webm" ".ogg" ".oga" ".flac" ".mpeg" ".mpga"]) :audio
               :else nil)
@@ -148,6 +149,11 @@
                      :else nil)
         kind (or magic-kind ext ct-kind)]
     (cond
+      ;; A .zip archive with ZIP magic → code repo. Checked before :epub, which
+      ;; also matches ZIP magic; .epub keeps its own branch via ext/magic below.
+      (and (= ext :repo) (zip-magic? bytes))
+      [:repo nil]
+
       (= kind :pdf)
       (if (pdf-magic? bytes) [:pdf nil] [:reject "Not a valid PDF file."])
 
@@ -164,4 +170,4 @@
       [:audio nil]
 
       :else
-      [:reject "Unsupported file type. Supported: PDF, EPUB, HTML, Markdown, audio."])))
+      [:reject "Unsupported file type. Supported: PDF, EPUB, HTML, Markdown, audio, code repo (.zip)."])))

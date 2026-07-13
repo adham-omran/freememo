@@ -60,6 +60,7 @@
        "web" "Web Article"
        "audio" "Audio"
        "score" "Score"
+       "repo" "Code Repository"
        "Item")))
 
 ;; ── Paste-source detection ─────────────────────────────────────────
@@ -901,10 +902,10 @@
                              !stage !staged !flow !error !quota-error? !busy-msg)
               :file (let [cap-label (when (pos? cap-bytes) (format-mb cap-bytes))]
                       (FilePicker !file !file-input handle-file
-                                  ".pdf,.epub,.html,.htm,.md,.markdown"
+                                  ".pdf,.epub,.html,.htm,.md,.markdown,.zip"
                                   (if cap-label
-                                    (str "PDF, EPUB, HTML, or Markdown — file extension picks the flow. Maximum " cap-label ".")
-                                    "PDF, EPUB, HTML, or Markdown — file extension picks the flow.")))
+                                    (str "PDF, EPUB, HTML, Markdown, or a code repo (.zip) — file extension picks the flow. Maximum " cap-label ".")
+                                    "PDF, EPUB, HTML, Markdown, or a code repo (.zip) — file extension picks the flow.")))
               :audio (FilePicker !file !file-input handle-file
                                  ".mp3,.m4a,.mp4,.wav,.webm,.ogg,.oga,.flac,.mpeg,.mpga"
                                  "Audio file (mp3, m4a, wav, webm, ogg, flac). Maximum 25 MB.")

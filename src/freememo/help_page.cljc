@@ -29,7 +29,7 @@
    Each step's label names the real control (with its shortcut where one exists)."
   [{:title "Importing content"
     :intro "Get PDFs, EPUBs, articles, and photos in. Everything starts on the Import tab."
-    :steps [["Upload a file" "Import → Upload. Drop a PDF, EPUB, HTML, or Markdown file (or click to browse); PDFs and EPUBs ask \"Import as …\" first. Drag-and-drop onto the modal works too."]
+    :steps [["Upload a file" "Import → Upload. Drop a PDF, EPUB, HTML, Markdown, or code-repo (.zip) file (or click to browse); PDFs, EPUBs, and code repos ask \"Import as …\" first. Drag-and-drop onto the modal works too."]
             ["Import from a link" "Import → Link, paste a web or Wikipedia URL, and Fetch. A URL that resolves to a PDF or EPUB is offered for import."]
             ["Import from Zotero" "Import → Zotero opens your library; filter and click an item to pull its PDF. First turn it on in Settings → Zotero (Enable Zotero import, then Test Connection) with the FreeMemo for Zotero plugin installed."]
             ["Live Document" "Import → Live Document makes a PDF you keep adding to. In its viewer use Upload images or Take photo, then Add pages; HEIC photos convert automatically."]]}
@@ -82,6 +82,12 @@
             ["Fix the facts" "Facts (N) opens the fact table — edit or relink an object, or × to reject a fact."]
             ["Curate entities" "Entities: Rename one, Merge… two that name the same thing (irreversible), or Synthesize questions for one."]
             ["Curate questions" "Questions: click a row to edit its question and reference answer, or × to reject it."]]}
+   {:title "Learning a codebase"
+    :intro "Turn a code repository into a topic tree and a fact graph you can browse and quiz. v1 analyzes Clojure sources (.clj/.cljc/.cljs)."
+    :steps [["Zip the source" "Make a .zip of the repo. `git archive --format=zip -o repo.zip HEAD` is cleanest — tracked files only, no .git or build output. Only Clojure files are analyzed; anything else is ignored."]
+            ["Upload it" "Import → Upload, pick the .zip, and confirm \"Import as Code Repository\". Drag-and-drop works too."]
+            ["What you get" "A root topic named after the repo, one child topic per source file (source shown as a syntax-highlighted code block), and code facts distilled in the background — a toast reports when they're ready."]
+            ["Browse & quiz" "Facts (defined-in, calls, requires, arglists, docstrings) land under Knowledge → Facts for the repo. Generate questions and quiz against them like any other graph."]]}
    {:title "Testing yourself — Quiz & Exam"
     :intro "Test recall against the fact graph, graded by the model."
     :steps [["Set it up" "Quiz tab → toggle Quiz or Exam, check the source documents, set Questions (and Minutes for an exam), then Start."]

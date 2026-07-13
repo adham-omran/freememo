@@ -194,6 +194,11 @@
                       (json-response 400 {:success false :error "Not a valid EPUB file"
                                           :code "invalid-file-type"})))
 
+                :repo
+                (let [upload-id (staging/stage! user-id bytes filename :repo)]
+                  (json-response 200 {:success true :upload_id upload-id :flow "repo"
+                                      :filename filename :size size}))
+
                 :html
                 (let [content (String. bytes "UTF-8")
                       default-title (html-default-title content filename)]
