@@ -47,4 +47,7 @@ Write in Markdown. Reserve the `$` character for math delimiters only:
 
 Never wrap a plain number, digit, count, or amount of money in `$ … $` — write
 it as ordinary text (6,245 — not $6{,}245$; "5 ones" — not "$5$ ones"). For
-money, write the amount in words ("5 dollars") so a stray `$` never opens math.
+money, write the amount in words ("5 dollars", "10 dollars") — never with a `$`
+sign — so a stray `$` never opens math. Never abut a variable and a price as
+`$p = $10`; write `$p$ = 10 dollars`. Every `$ … $` you open MUST close on the
+same line with a matching `$`.
