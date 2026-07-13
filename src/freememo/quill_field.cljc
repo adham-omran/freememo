@@ -13,6 +13,9 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.quill-table-ui :as table-ui]
    [freememo.a11y :as a11y]
+   [freememo.editor-actions :as editor-actions]
+   #?(:cljs [freememo.format-menu :as format-menu])
+   #?(:cljs [freememo.code-lang-picker :as code-lang-picker])
    [clojure.string :as str]))
 
 ;; ---------------------------------------------------------------------------
@@ -32,187 +35,66 @@
            "</svg>"))
        true)))
 
-;; Cloze toolbar glyphs — a brace pair { } framing + (new cloze) and = (same
-;; cloze), mirroring the {{cN::}} markup. Same convention as the code-block
-;; override: ql-stroke paths in an 18x18 viewbox so they inherit toolbar
-;; hover/active theming. Buttons are wired to handlers in init-quill-field!.
-#?(:cljs
-   (defonce ^:private cloze-icons-installed?
-     (let [icons  (.import js/Quill "ui/icons")
-           braces (str "<path class=\"ql-stroke\" fill=\"none\" d=\"M6.5 3.5 Q4.5 3.5 4.5 6.5 Q4.5 8 3 9 Q4.5 10 4.5 11.5 Q4.5 14.5 6.5 14.5\"/>"
-                    "<path class=\"ql-stroke\" fill=\"none\" d=\"M11.5 3.5 Q13.5 3.5 13.5 6.5 Q13.5 8 15 9 Q13.5 10 13.5 11.5 Q13.5 14.5 11.5 14.5\"/>")]
-       (aset icons "cloze-inc"
-         (str "<svg viewbox=\"0 0 18 18\">" braces
-           "<line class=\"ql-stroke\" x1=\"9\" y1=\"6.5\" x2=\"9\" y2=\"11.5\"/>"
-           "<line class=\"ql-stroke\" x1=\"6.8\" y1=\"9\" x2=\"11.2\" y2=\"9\"/>"
-           "</svg>"))
-       (aset icons "cloze-eq"
-         (str "<svg viewbox=\"0 0 18 18\">" braces
-           "<line class=\"ql-stroke\" x1=\"6.8\" y1=\"7.5\" x2=\"11.2\" y2=\"7.5\"/>"
-           "<line class=\"ql-stroke\" x1=\"6.8\" y1=\"10.5\" x2=\"11.2\" y2=\"10.5\"/>"
-           "</svg>"))
-       true)))
-
-;; ---------------------------------------------------------------------------
-;; Cloze deletion — number tracking + selection wrapping (CLJS).
-;; Defined before quill-config because the toolbar handlers there call
-;; insert-cloze! (avoids a CLJS undeclared-var warning on a forward ref).
-;; ---------------------------------------------------------------------------
-
-(defn cloze-max-n
-  "Highest existing cloze index in `text` (scans for {{cN::); 0 if none."
-  [text]
-  #?(:cljs
-     (let [matches (re-seq #"\{\{c(\d+)::" (or text ""))]
-       (if (seq matches)
-         (apply max (map #(js/parseInt (second %) 10) matches))
-         0))
-     :clj 0))
-
-(defn insert-cloze!
-  "Wrap the current Quill selection in an Anki cloze deletion {{cN::...}}.
-     mode :inc → next cloze number (inc of the current max in the editor);
-     mode :eq  → reuse the current max (min 1).
-   Collapsed selection inserts an empty {{cN::}} with the cursor between
-   :: and }}. No selection (editor never focused) → no-op. CLJS only.
-
-   Pre  : `ed` is a Quill instance or nil; `mode` ∈ {:inc :eq}.
-   Post : on a live selection, editor text gains the wrapper and the cursor
-          sits after }} (selection) or inside (collapsed); the user-source
-          edit fires text-change → the field's :on-change → !cloze sync."
-  [ed mode]
-  #?(:cljs
-     (when ed
-       (let [^js ed ed
-             sel (.getSelection ed)]
-         (js/console.log "[cloze] insert-cloze!" (name mode) "selection:" sel)
-         (when sel
-           (let [n      (case mode
-                          :inc (inc (cloze-max-n (.getText ed)))
-                          :eq  (max 1 (cloze-max-n (.getText ed))))
-                 index  (.-index sel)
-                 length (.-length sel)
-                 prefix (str "{{c" n "::")
-                 suffix "}}"]
-             (if (pos? length)
-               (let [selected (.getText ed index length)]
-                 (.deleteText ed index length "user")
-                 (.insertText ed index (str prefix selected suffix) "user")
-                 (.setSelection ed (+ index (count prefix) (count selected) (count suffix)) 0 "user"))
-               (do
-                 (.insertText ed index (str prefix suffix) "user")
-                 (.setSelection ed (+ index (count prefix)) 0 "user")))))))
-     :clj nil))
-
 (defn quill-config
   "Returns the Quill constructor options map (passed via clj->js).
-   Same toolbar, syntax module, and modules as the main editor so the card
-   modals offer the identical formatting surface, including code-block with
-   highlight.js syntax colouring.
-   When `cloze?` is true, the toolbar gains a cloze-deletion button group
-   (cloze-inc / cloze-eq) with construction-time handlers that wrap the
-   current selection via insert-cloze!. The handlers MUST be supplied here,
-   not added after construction: Quill's toolbar refuses to attach a click
-   listener to a button whose format is unknown AND has no handler at
-   construction time (logs \"ignoring attaching to nonexistent format\")."
-  [placeholder cloze?]
-  (let [base [["bold" "italic" "underline" "strike"]
-              [{"header" 1} {"header" 2} {"header" 3}]
-              [{"size" ["small" false "large" "huge"]}]
-              [{"color" []} {"background" []}]
-              [{"list" "ordered"} {"list" "bullet"}]
-              [{"align" []}]
-              [{"direction" "rtl"}]
-              ["code" "code-block"]
-              ["clean"]
-              ["image"]
-              ["table"]]]
-    {:theme "snow"
-     :modules {:toolbar (if cloze?
-                          {:container (conj base ["cloze-inc" "cloze-eq"])
-                           :handlers #?(:cljs {"cloze-inc" (fn [_] (this-as ^js tb (insert-cloze! (.-quill tb) :inc)))
-                                               "cloze-eq"  (fn [_] (this-as ^js tb (insert-cloze! (.-quill tb) :eq)))}
-                                        :clj {})}
-                          base)
-               ;; Syntax module — requires window.hljs + clojure pack (loaded in
-               ;; index*.html). Same `:languages` list as the main editor for
-               ;; consistent picker UX across modals and the page editor.
-               :syntax {:languages [{:key "plain" :label "Plain"}
-                                    {:key "bash" :label "Bash"}
-                                    {:key "cpp" :label "C++"}
-                                    {:key "cs" :label "C#"}
-                                    {:key "clojure" :label "Clojure"}
-                                    {:key "css" :label "CSS"}
-                                    {:key "diff" :label "Diff"}
-                                    {:key "xml" :label "HTML/XML"}
-                                    {:key "java" :label "Java"}
-                                    {:key "javascript" :label "JavaScript"}
-                                    {:key "markdown" :label "Markdown"}
-                                    {:key "php" :label "PHP"}
-                                    {:key "python" :label "Python"}
-                                    {:key "ruby" :label "Ruby"}
-                                    {:key "rust" :label "Rust"}
-                                    {:key "sql" :label "SQL"}]}
-               :table true}
-     :placeholder (or placeholder "Enter text...")}))
-
-;; ---------------------------------------------------------------------------
-;; Image-upload paste helper — CLJS only, defined at the module level.
-;; ---------------------------------------------------------------------------
-
-(defn upload-pasted-image!
-  "Upload a data-URI blob to /api/upload-media.
-   Calls on-uploaded with the /api/media/<id> URL on success, nil on error.
-   CLJS only."
-  [data-uri on-uploaded]
-  #?(:cljs
-     (let [parts (str/split data-uri #",")
-           header (first parts)
-           b64 (second parts)
-           mime (-> header
-                  (str/replace "data:" "")
-                  (str/replace ";base64" ""))
-           bin-str (js/atob b64)
-           n (count bin-str)
-           buf (js/Uint8Array. n)
-           _ (dotimes [i n]
-               (aset buf i (.charCodeAt bin-str i)))
-           blob (js/Blob. (clj->js [buf]) (clj->js {:type mime}))
-           ext (last (str/split mime #"/"))
-           form (js/FormData.)]
-       (.append form "file" blob (str "image." ext))
-       (-> (js/fetch "/api/upload-media"
-             (clj->js {:method "POST"
-                       :credentials "same-origin"
-                       :body form}))
-         (.then (fn [r]
-                  (if (.-ok r)
-                    (.json r)
-                    (throw (js/Error. (str "Upload failed: " (.-status r)))))))
-         (.then (fn [json]
-                  (let [id (.-id json)]
-                    (when id
-                      (on-uploaded (str "/api/media/" id))))))
-         (.catch (fn [err]
-                   (js/console.warn "[QuillField] image upload failed:" (str err))
-                   (on-uploaded nil)))))
-     :clj nil))
+   Bubble theme with the SAME modules as the main document editor
+   (freememo.rich-text-editor) so a card field offers the identical formatting
+   surface via the custom format-menu, including code-block highlight.js
+   colouring and tables. Image insertion and cloze deletion are provided by
+   format-menu opts in init-quill-field! (not the Quill toolbar), so the hidden
+   bubble toolbar carries neither."
+  [placeholder]
+  {:theme "bubble"
+   :modules {:toolbar [["bold" "italic" "underline" "strike"]
+                       [{"header" 1} {"header" 2} {"header" 3}]
+                       [{"size" ["small" false "large" "huge"]}]
+                       [{"color" []} {"background" []}]
+                       [{"list" "ordered"} {"list" "bullet"}]
+                       [{"align" []}]
+                       [{"direction" "rtl"}]
+                       ["code" "code-block"]
+                       ["clean"]
+                       ["table"]]
+             ;; Syntax module — requires window.hljs + clojure pack (loaded in
+             ;; index*.html). Same `:languages` list as the main editor for
+             ;; consistent picker UX across modals and the page editor.
+             :syntax {:languages [{:key "plain" :label "Plain"}
+                                  {:key "bash" :label "Bash"}
+                                  {:key "cpp" :label "C++"}
+                                  {:key "cs" :label "C#"}
+                                  {:key "clojure" :label "Clojure"}
+                                  {:key "css" :label "CSS"}
+                                  {:key "diff" :label "Diff"}
+                                  {:key "xml" :label "HTML/XML"}
+                                  {:key "java" :label "Java"}
+                                  {:key "javascript" :label "JavaScript"}
+                                  {:key "markdown" :label "Markdown"}
+                                  {:key "php" :label "PHP"}
+                                  {:key "python" :label "Python"}
+                                  {:key "ruby" :label "Ruby"}
+                                  {:key "rust" :label "Rust"}
+                                  {:key "sql" :label "SQL"}]}
+             :table true}
+   :placeholder (or placeholder "Enter text...")})
 
 ;; ---------------------------------------------------------------------------
 ;; Quill instance lifecycle — plain defns so side effects are stable.
 ;; ---------------------------------------------------------------------------
 
 (defn init-quill-field!
-  "Initialize a standalone Quill editor in container with initial-html.
-   Wires text-change to call on-change with updated innerHTML on each user edit.
-   Wires a clipboard matcher that uploads data-URI images before inserting them.
-   Returns the Quill instance (CLJS) or nil (CLJ).
+  "Initialize a standalone Quill editor (bubble theme) in container with
+   initial-html. Wires text-change → on-change on each user edit, a clipboard
+   matcher that uploads data-URI images, and the custom format-menu +
+   code-lang-picker (the same components as the main document editor). When
+   `cloze?` is true the format-menu gains the cloze-deletion row.
+   Returns {:editor <Quill> :teardowns [fn ...]} (CLJS) or nil (CLJ); the
+   teardowns remove the format-menu / code-lang picker on destroy.
    No ^js on parameters — CLJ compiler sees the parameter list."
   [container initial-html placeholder on-change cloze?]
   #?(:cljs
      (when (and container (.-Quill js/window))
        (let [Quill (.-Quill js/window)
-             cfg (clj->js (quill-config placeholder cloze?))
+             cfg (clj->js (quill-config placeholder))
              ed (new Quill container cfg)
              cb (.-clipboard ed)
              ;; Tell Quill's clipboard pipeline to ignore the syntax module's
@@ -285,7 +167,7 @@
                    (let [src (.getAttribute img "src")]
                      (when (and src (str/starts-with? src "data:image/"))
                        (.setAttribute img "src" placeholder-gif)
-                       (upload-pasted-image!
+                       (editor-actions/upload-pasted-image!
                          src
                          (fn [new-src]
                            (when new-src
@@ -302,35 +184,49 @@
          ;; this the button is rendered but inert. Cleanup is paired in
          ;; destroy-quill-field! via table-ui/teardown!.
          (table-ui/init! ed)
-         ;; Snow renders its toolbar as a sibling of the container — label
-         ;; its pickers/custom buttons from the shared parent.
+         ;; Bubble hides its native tooltip (CSS); the custom format-menu is
+         ;; the formatting UI and the code-lang-picker owns code-block language
+         ;; selection. label-quill-toolbar! stays for the (hidden) tooltip
+         ;; pickers — inert but harmless.
          (a11y/label-quill-toolbar! (.-parentElement container))
          ;; Tab moves focus out (Quill's indent bindings removed); Escape
          ;; also blurs, as belt-and-suspenders for nested contexts.
          (a11y/free-quill-tab! ed)
          (a11y/install-quill-tab-escape! ed)
-         ed))
+         ;; Custom components — image on every card field, cloze row only when
+         ;; cloze?. Teardowns are returned so destroy-quill-field! can remove
+         ;; the body cards + document listeners on modal close.
+         {:editor ed
+          :teardowns [(format-menu/install! ed {:image? true :cloze? (boolean cloze?)})
+                      (code-lang-picker/install! ed)]}))
      :clj nil))
 
 (defn destroy-quill-field!
-  "Destroy a QuillField Quill instance and clean up its DOM. No ^js params —
-   ^js hints live on let-bindings inside the :cljs branch."
-  [ed]
+  "Destroy a QuillField instance and clean up its DOM + custom components.
+   Takes the map init-quill-field! returned ({:editor :teardowns}) or nil.
+   Pre  : `state` is that map or nil.
+   Post : format-menu + code-lang picker cards/listeners removed, table action
+          bar torn down, editor listeners detached, container emptied."
+  [state]
   #?(:cljs
-     (when ed
-       (let [^js ed ed]
-         ;; Remove table action bar from document.body and unregister
-         ;; window scroll/resize listeners. Idempotent.
-         (table-ui/teardown! ed)
-         (.off ed "text-change")
-         (let [^js container (.-container ed)]
-           (when container
-             (let [^js parent (.-parentNode container)]
-               (when parent
-                 (let [^js toolbar (.querySelector parent ".ql-toolbar")]
-                   (when toolbar
-                     (.remove toolbar)))))
-             (set! (.-innerHTML container) "")))))
+     (when-let [^js ed (:editor state)]
+       ;; Remove the custom format-menu + code-lang picker (body cards +
+       ;; document listeners) before the editor DOM is torn down.
+       (doseq [teardown (:teardowns state)]
+         (when teardown (teardown)))
+       ;; Remove table action bar from document.body and unregister
+       ;; window scroll/resize listeners. Idempotent.
+       (table-ui/teardown! ed)
+       (.off ed "text-change")
+       (.off ed "selection-change")
+       (let [^js container (.-container ed)]
+         (when container
+           (let [^js parent (.-parentNode container)]
+             (when parent
+               (let [^js toolbar (.querySelector parent ".ql-toolbar")]
+                 (when toolbar
+                   (.remove toolbar)))))
+           (set! (.-innerHTML container) ""))))
      :clj nil))
 
 (defn schedule-quill-init!
@@ -341,13 +237,16 @@
   [!ed-state container value-string placeholder on-change !editor-atom cloze? autofocus?]
   #?(:cljs (js/setTimeout
              (fn []
-               (let [ed (init-quill-field! container value-string placeholder on-change cloze?)]
-                 (reset! !ed-state ed)
+               (let [result (init-quill-field! container value-string placeholder on-change cloze?)
+                     ^js ed (:editor result)]
+                 ;; !ed-state holds the {:editor :teardowns} map for destroy;
+                 ;; !editor-atom + focus use the raw Quill instance.
+                 (reset! !ed-state result)
                  (when !editor-atom (reset! !editor-atom ed))
                  ;; Focus after construction — Quill has no autofocus option and
                  ;; is built on this deferred tick, so the modal can't focus it at
                  ;; mount. Focusing here lands the cursor in the editor on open.
-                 (when (and autofocus? ed) (.focus ^js ed))))
+                 (when (and autofocus? ed) (.focus ed))))
              0)
      :clj nil))
 
@@ -399,10 +298,10 @@
                              captured HTML — necessary when the user may
                              click Save inside the syntax module's 1 s
                              debounce window.
-     :cloze?        bool    OPTIONAL. When true, the toolbar shows the
-                             cloze-deletion buttons (c+ / c=) wired to
-                             insert-cloze!. Used by the card modals' cloze
-                             field only.
+     :cloze?        bool    OPTIONAL. When true, the format-menu shows the
+                             cloze-deletion buttons wired to
+                             editor-actions/insert-cloze!. Used by the card
+                             modals' cloze field only.
      :autofocus?    bool    OPTIONAL. When true, focus the editor once it is
                              constructed (cursor lands in the field on open).
 
