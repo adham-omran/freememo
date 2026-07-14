@@ -15,6 +15,7 @@
             [freememo.learn-session :refer [LearnSession]]
             [freememo.topic-page :refer [TopicPage]]
             [freememo.knowledge-page :refer [KnowledgePage]]
+            [freememo.graph-page :refer [GraphPage]]
             [freememo.quiz-page :refer [QuizPage GlobalQuizInvokers]]
             [freememo.search-page :refer [SearchPage]]
             [freememo.help-page :refer [HelpPage]]
@@ -288,6 +289,12 @@
                     (dom/On "click" (fn [_] (navigate! :knowledge)) nil))
 
                   (dom/button
+                    (dom/props {:class "nav-tab" :style (tab-style :graph)})
+                    (icons/Icon :share-2 :size 18)
+                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Graph"))
+                    (dom/On "click" (fn [_] (navigate! :graph)) nil))
+
+                  (dom/button
                     (dom/props {:class "nav-tab" :style (tab-style :quiz)})
                     (icons/Icon :clipboard :size 18)
                     (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Quiz"))
@@ -340,7 +347,7 @@
                 ;; Tab content
                 (dom/main
                   (dom/props {:id "main-content"
-                              :style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :search} active-tab) "hidden" "auto")}})
+                              :style {:flex "1" :min-height "0" :overflow (if (#{:viewer :learn :library :search :graph} active-tab) "hidden" "auto")}})
                   (when (= active-tab :home) (HomePage navigate! user-id enc-key))
                   (when (= active-tab :library)
                     (r/pop ; consume 'library from route; LibraryPage reads the sub-view segment
@@ -353,6 +360,7 @@
                   (when (= active-tab :knowledge)
                     (r/pop ; consume 'knowledge from route; KnowledgePage reads the sub-view segment
                       (KnowledgePage user-id navigate!)))
+                  (when (= active-tab :graph) (GraphPage user-id navigate!))
                   (when (= active-tab :quiz) (QuizPage user-id))
                   (when (= active-tab :help) (HelpPage))
                   (when (= active-tab :settings) (SettingsPage user-id username enc-key base-url client-country))

@@ -34,6 +34,12 @@
         <script src="https://cdn.jsdelivr.net/npm/konva@9.3.16/konva.min.js"></script>
         <!-- Quill overrides now in index.css (with dark mode support) -->
 
+        <!-- graphology + sigma.js — WebGL knowledge-graph view (freememo.graph-render).
+             UMD globals window.graphology / window.Sigma. graphology MUST load first
+             (sigma's Graph model). -->
+        <script src="https://cdn.jsdelivr.net/npm/graphology@0.26.0/dist/graphology.umd.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/sigma@3.0.2/dist/sigma.min.js"></script>
+
         <!-- Score kind: waveform + regions (freememo.score-wavesurfer) and
              client-side MP3 clip encoding (freememo.score-audio) -->
         <script src="https://cdn.jsdelivr.net/npm/wavesurfer.js@7.8.6/dist/wavesurfer.min.js"></script>
