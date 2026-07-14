@@ -252,7 +252,8 @@
                              {:model slug
                               :messages (assemble-messages chat-id
                                           (grounding-system-suffix user-id ctx)
-                                          context-msgs)})
+                                          context-msgs)
+                              :reasoning_effort (settings/get-reasoning user-id)})
                       reply (-> body :choices first :message :content)
                       cost (double (or (-> body :usage :cost) 0))]
                   (if (str/blank? reply)
@@ -277,20 +278,47 @@
   (let [cid (or chat-id (start-chat! user-id root-topic-id))]
     (assoc (send! user-id cid page-topic-id user-text ref-topic-ids) :chat-id cid)))
 
+(def ^:private feedback-anchor
+  "Verbatim heading the persona emits to open the feedback section. The parser
+   keys on it so card capture uses only the feedback, never the Socratic
+   question that follows under the question anchor."
+  "**Where you are**")
+
+(def ^:private question-anchor
+  "Verbatim heading that ends the feedback section (start of the question)."
+  "**Consider next**")
+
+(defn- extract-feedback
+  "The feedback body from a structured assistant reply, or nil when the reply
+   lacks the feedback anchor. Pre: `reply` is a non-blank assistant reply. Post:
+   returns the trimmed text between the feedback anchor and the question anchor
+   (or end-of-string when the question anchor is absent); returns nil when the
+   feedback anchor is missing — an unstructured reply the caller must not card."
+  [reply]
+  (when-let [start (some-> reply (str/index-of feedback-anchor))]
+    (let [after (subs reply (+ start (count feedback-anchor)))
+          end (str/index-of after question-anchor)]
+      (str/trim (if end (subs after 0 end) after)))))
+
 (defn reply->cards!
-  "Generate basic flashcards from an assistant `reply-text` and save them under
-   the reading page (`page-topic-id`). Uses the reply as the card source
-   verbatim — it bypasses the KG fact-routing detour that the toolbar Generate
-   applies — and reports the outcome via a toast.
+  "Generate basic flashcards from the FEEDBACK section of an assistant reply
+   (the `**Where you are**` body) and save them under the reading page
+   (`page-topic-id`). Cards only the feedback — never the Socratic question —
+   and bypasses the KG fact-routing detour that the toolbar Generate applies,
+   reporting the outcome via a toast.
    Pre: page-topic-id / root-topic-id are the learner's current reading topic;
-   reply-text is an assistant reply. Post: on success (count :ids) basic cards
-   exist under page-topic-id and :card-mutations is bumped; on failure nothing
-   is saved. Returns {:success true :ids v :count n} | {:success false :error s}."
+   reply-text is a structured assistant reply. Post: on success (count :ids)
+   basic cards exist under page-topic-id and :card-mutations is bumped; when the
+   reply has no feedback anchor or an empty feedback body, nothing is saved and
+   a toast says so; on failure nothing is saved. Returns
+   {:success true :ids v :count n} | {:success false :error s}."
   [user-id page-topic-id root-topic-id reply-text]
-  (let [result (if (str/blank? reply-text)
-                 {:success false :error "Nothing to capture — the reply is empty."}
+  (let [feedback (extract-feedback reply-text)
+        result (if (str/blank? feedback)
+                 {:success false
+                  :error "No feedback to capture yet — the reply is only a question."}
                  (let [gen (cards/generate-basic-cards
-                             {:content reply-text
+                             {:content feedback
                               :card-count (settings/get-card-count user-id)
                               :model (settings/effective-card-model user-id root-topic-id)
                               :user-id user-id
