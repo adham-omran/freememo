@@ -1164,14 +1164,182 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
 }
 
 /* ── Nav (top tabs) ─────────────────────────────────────────────
-   Each button is `Icon + .nav-tab-label`. The phone media query below
-   hides the label so all 7 tabs fit on a 414px viewport as icons. */
+   Content-aware overflow, mirroring the ContentToolbar. The tabs live in a
+   measured `.tab-bar` (flex-nowrap, clipped) inside `.tab-bar-container`;
+   install-overflow-detector! writes `.collapse-N` on the container to find the
+   smallest tier where the tabs fit, hiding the lowest-priority tabs (right to
+   left, nav-collapse-1 first) into the ⋮ dropdown. Brand, the Import CTA, and
+   the right-cluster utilities sit outside `.tab-bar` and never collapse. */
+.tab-bar-container {
+    position: relative;
+    display: flex;
+    align-items: center;
+    /* Vertical padding so the filled pills (Import CTA, active tab, utilities)
+       don't touch the bar's top/bottom edges. */
+    padding: 5px 0;
+    border-bottom: 2px solid var(--color-border);
+    flex-shrink: 0;
+    /* min-width: 0 lets the container shrink below intrinsic content width so
+       the ResizeObserver can detect overflow (see .toolbar-container). */
+    min-width: 0;
+    /* Stacking context for the overflow dropdown. As top-level app chrome the
+       nav must outrank in-page sticky headers (e.g. `.settings-nav` z:5) so the
+       dropdown paints over page content, while staying below true overlays
+       (`.modal-backdrop` z:1000, tooltips z:1100 — the Actions modal still
+       covers the nav). */
+    z-index: 20;
+}
+.tab-bar {
+    display: flex;
+    align-items: center;
+    flex: 1 1 auto;
+    min-width: 0;
+    flex-wrap: nowrap;
+    /* clip (not hidden/auto) so the detector reads overflow via scrollWidth
+       while overflow-y stays visible for the escaping dropdown — see .toolbar. */
+    overflow-x: clip;
+    overflow-y: visible;
+}
+.tab-bar > * { flex-shrink: 0; }
 .nav-tab {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    min-height: 38px;              /* tap target (trimmed from 44 to keep the bar compact) */
+    padding: 6px 14px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--color-text-secondary);
+    border-radius: var(--radius-pill);
 }
 .nav-tab-label { display: inline; }
+.nav-tab:not(.is-active):hover { background: var(--color-bg-subtle); }
+/* Active = filled pill (item 4 — survives color-blindness; replaces underline). */
+.nav-tab.is-active {
+    background: var(--color-primary);
+    color: #fff;
+    font-weight: 600;
+}
+
+/* ── Import CTA (primary create, pinned left) ────────────────────── */
+.nav-import-cta {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    min-height: 38px;
+    margin: 0 16px;
+    padding: 6px 14px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    color: var(--color-primary-text);
+    background: none;
+    border: 1px solid var(--color-primary-text);
+    border-radius: var(--radius-pill);
+}
+.nav-import-cta:hover { background: var(--color-bg-subtle); }
+.nav-import-cta.is-active {
+    color: #fff;
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+}
+
+/* ── Right-cluster utilities (icon-only, pinned) ─────────────────── */
+.nav-utils {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    padding-right: 8px;
+}
+.nav-utils .nav-tab-label { display: none; }   /* Actions → icon-only here */
+.nav-util { padding: 6px 10px; }
+
+/* ── Content · Discovery group divider ───────────────────────────── */
+.nav-group-divider {
+    width: 1px;
+    height: 22px;
+    align-self: center;
+    margin: 0 8px;
+    background: var(--color-border);
+    flex-shrink: 0;
+}
+
+/* ── Nav overflow trigger + dropdown ─────────────────────────────
+   Panel is an invisible wrapper by default (proxies flow inline, hidden);
+   `.overflow-open` on the container turns it into a dropdown card. */
+.nav-overflow-trigger { display: none; align-items: center; flex-shrink: 0; padding-left: 4px; }
+.nav-overflow-panel { display: contents; }
+.nav-overflow-item {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: none;
+    border: none;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--color-text-primary);
+    text-align: left;
+    white-space: nowrap;
+}
+.nav-overflow-item:hover { background: var(--color-bg-subtle); }
+.nav-overflow-backdrop { display: none; }
+
+.tab-bar-container.overflow-open .nav-overflow-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 99;
+}
+.tab-bar-container.overflow-open .nav-overflow-panel {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 100;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-modal);
+    padding: var(--sp-2);
+    gap: 2px;
+    min-width: 200px;
+}
+.tab-bar-container.overflow-open .nav-overflow-item { width: 100%; }
+
+/* Tier classes — content-aware. `.collapse-N` on .tab-bar-container is written
+   imperatively by install-overflow-detector!. Trigger shows from tier 1 (the
+   menu is non-empty as soon as one tab collapses); its width is counted at each
+   trialled tier, so there is no boundary oscillation. */
+.tab-bar-container:is(.collapse-1,.collapse-2,.collapse-3,.collapse-4,.collapse-5,.collapse-6,.collapse-7) .nav-overflow-trigger {
+    display: flex;
+}
+/* Inline tabs hide lowest-priority first (cumulative). */
+.tab-bar-container:is(.collapse-1,.collapse-2,.collapse-3,.collapse-4,.collapse-5,.collapse-6,.collapse-7) .nav-collapse-1 { display: none; }
+.tab-bar-container:is(.collapse-2,.collapse-3,.collapse-4,.collapse-5,.collapse-6,.collapse-7) .nav-collapse-2 { display: none; }
+.tab-bar-container:is(.collapse-3,.collapse-4,.collapse-5,.collapse-6,.collapse-7) .nav-collapse-3 { display: none; }
+.tab-bar-container:is(.collapse-4,.collapse-5,.collapse-6,.collapse-7) .nav-collapse-4 { display: none; }
+.tab-bar-container:is(.collapse-5,.collapse-6,.collapse-7) .nav-collapse-5 { display: none; }
+.tab-bar-container:is(.collapse-6,.collapse-7) .nav-collapse-6 { display: none; }
+.tab-bar-container.collapse-7 .nav-collapse-7 { display: none; }
+/* Group divider hides in lockstep once the Discovery group is empty (its last
+   inline member, Search=nav-collapse-3, has collapsed) — no dangling separator. */
+.tab-bar-container:is(.collapse-3,.collapse-4,.collapse-5,.collapse-6,.collapse-7) .nav-group-divider { display: none; }
+/* Proxy reveal — mirror the inline collapse, but only when the dropdown open. */
+.tab-bar-container:is(.collapse-1,.collapse-2,.collapse-3,.collapse-4,.collapse-5,.collapse-6,.collapse-7).overflow-open .nav-overflow-1 { display: flex; }
+.tab-bar-container:is(.collapse-2,.collapse-3,.collapse-4,.collapse-5,.collapse-6,.collapse-7).overflow-open .nav-overflow-2 { display: flex; }
+.tab-bar-container:is(.collapse-3,.collapse-4,.collapse-5,.collapse-6,.collapse-7).overflow-open .nav-overflow-3 { display: flex; }
+.tab-bar-container:is(.collapse-4,.collapse-5,.collapse-6,.collapse-7).overflow-open .nav-overflow-4 { display: flex; }
+.tab-bar-container:is(.collapse-5,.collapse-6,.collapse-7).overflow-open .nav-overflow-5 { display: flex; }
+.tab-bar-container:is(.collapse-6,.collapse-7).overflow-open .nav-overflow-6 { display: flex; }
+.tab-bar-container.collapse-7.overflow-open .nav-overflow-7 { display: flex; }
 
 /* Toolbar action control (e.g. Actions / undo-history). NOT a nav
    destination — it toggles a modal — so it reads as a pill button, set
@@ -1204,15 +1372,13 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
 }
 
 /* ── Phone-only tweaks (≤600px) ─────────────────────────────────
-   1. Icon-only nav (issue 2 — B2)
-   2. Tap-target floor: 36px on .btn, .input, .nav-tab (issue 4 — D1) */
+   Nav destinations stay text (they carry no icons); the ⋮ menu absorbs
+   overflow. Import drops to icon-only to reclaim width for the pinned chrome
+   (brand + Import + utilities never collapse). Nav tap targets stay 44px
+   (base rule); only non-nav controls get the 36px floor. */
 @media (max-width: 600px) {
-    .nav-tab-label { display: none; }
-    /* Compact horizontal padding so 7 icon-tabs + brand fit in 414px.
-       `!important` overrides the inline `padding: 6px 16px` from `tab-style`
-       in main.cljc (the inline style otherwise wins specificity-wise). */
-    .nav-tab { padding: 6px 7px !important; min-height: 36px; }
-    .nav-action-btn { padding: 6px 10px; min-height: 36px; }
+    .nav-import-label { display: none; }
+    .nav-import-cta { margin: 0 4px; padding: 6px 10px; }
     .btn { min-height: 36px; padding: 8px 14px; }
     .input { min-height: 36px; }
     /* Library row buttons (`.btn-sm`) already get bumped via the
@@ -1352,13 +1518,8 @@ textarea:hover {
 @media (max-width: 1024px) {
     /* Card add/edit modal inner panel — wider on non-desktop */
     .card-modal-inner { width: 80vw; }
-    /* Tab bar: horizontal scroll instead of clip */
-    .tab-bar {
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none;
-    }
-    .tab-bar::-webkit-scrollbar { display: none; }
+    /* Nav no longer needs a tablet scroll override — the content-aware
+       `.collapse-N` overflow (base `.tab-bar` rules) handles every width. */
     .page-container { padding: var(--sp-4); }
 
     /* Quill toolbar: wrap to multiple rows on narrow screens.
@@ -2387,6 +2548,22 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     bottom: auto;
     margin: 6px 0 0 0;
     transform: none;
+}
+
+/* Top-nav tooltips: same fix as `.toolbar` — the anchor-positioning engine
+   otherwise resolves `position-area:bottom` to a spot overlapping the button.
+   Force plain below-centered absolute placement. Covers destinations (in
+   `.tab-bar`) and the pinned Import/utilities (in `.tab-bar-container`). */
+.tab-bar-container [data-tooltip]::after {
+    position: absolute;
+    position-area: none;
+    position-try-fallbacks: none;
+    top: 100%;
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    margin: 6px 0 0 0;
+    transform: translateX(-50%);
 }
 
 /* Virtual-scroll (.tape-scroll) tooltips: the anchor-positioning `position:fixed`

@@ -25,6 +25,8 @@
             [freememo.optimistic :refer [CommandDispatcher]]
             [freememo.undo-history-modal :refer [ActionsNavButton UndoHistoryModal]]
             [freememo.icons :as icons]
+            [freememo.tooltip :as tooltip]
+            [freememo.toolbar-overflow :refer [install-overflow-detector!]]
             [freememo.command-bus :as bus]
             [freememo.command-palette :refer [CommandPalette]]
             [freememo.keyboard :as keyboard] ; loads the registry-driven shortcut handler
@@ -168,6 +170,41 @@
             ;; Unknown viewer sub-type
             (EmptyViewerView)))))))
 
+;; A primary-nav destination — text-only in the bar (item 3: icons live only on
+;; the right-cluster utilities). `.is-active` drives the filled active pill (CSS
+;; owns the visual; item 4). `collapse-class` (or nil) is the tier that hides this
+;; tab into the ⋮ dropdown; lower tiers hide first (nav-collapse-1 first). `tip`
+;; is the descriptive hover tooltip.
+(e/defn NavTab [active-tab navigate! tab-key label collapse-class tip]
+  (e/client
+    (dom/button
+      (dom/props {:class (cond-> "nav-tab"
+                           (= active-tab tab-key) (str " is-active")
+                           collapse-class          (str " " collapse-class))})
+      (tooltip/Tooltip! tip)
+      (dom/span (dom/props {:class "nav-tab-label"}) (dom/text label))
+      (dom/On "click" (fn [_] (navigate! tab-key)) nil))))
+
+;; A right-cluster utility — icon-only, pinned, never collapses. `tip` names the
+;; button for both hover and assistive tech (icon has no visible text).
+(e/defn NavUtil [active-tab navigate! tab-key icon tip]
+  (e/client
+    (dom/button
+      (dom/props {:class (cond-> "nav-tab nav-util" (= active-tab tab-key) (str " is-active"))})
+      (tooltip/Tooltip! tip :aria? true)
+      (icons/Icon icon :size 18)
+      (dom/On "click" (fn [_] (navigate! tab-key)) nil))))
+
+;; Dropdown proxy for a collapsed tab. `overflow-class` (nav-overflow-N) mirrors
+;; the tab's collapse tier so the proxy appears exactly when its inline tab hid.
+(e/defn NavProxy [navigate! !overflow-open tab-key icon label overflow-class]
+  (e/client
+    (dom/button
+      (dom/props {:class (str "nav-overflow-item " overflow-class)})
+      (icons/Icon icon :size 16)
+      (dom/span (dom/props {:class "nav-overflow-item-label"}) (dom/text label))
+      (dom/On "click" (fn [_] (navigate! tab-key) (reset! !overflow-open false)) nil))))
+
 (e/defn Main [ring-request]
   (e/client
     (binding [dom/node js/document.body]
@@ -204,12 +241,15 @@
                     [page] r/route
                     active-tab (if page (keyword (str page)) :home)
 
-                    tab-style (fn [key]
-                                {:padding "6px 16px" :border "none" :background "none" :cursor "pointer"
-                                 :font-size "14px" :font-weight (if (= active-tab key) "600" "400")
-                                 :color (if (= active-tab key) "var(--color-primary-text)" "var(--color-text-secondary)")
-                                 :border-bottom (if (= active-tab key) "2px solid var(--color-primary)" "2px solid transparent")
-                                 :margin-bottom "-2px"})
+                    ;; Content-aware nav overflow (mirrors ContentToolbar):
+                    ;; install-overflow-detector! writes `.collapse-N` on the
+                    ;; .tab-bar-container; !collapse-tier / !nav-overflow-open are
+                    ;; e/watched so Electric stays reactive on tier + dropdown
+                    ;; state (the detector owns collapse-N via classList).
+                    !collapse-tier (atom 0)
+                    _collapse-tier (e/watch !collapse-tier)
+                    !nav-overflow-open (atom false)
+                    nav-overflow-open (e/watch !nav-overflow-open)
                     navigate! (fn
                                 ([tab]
                                  (reset! !nav-cmd {:route (nav->route tab) :id (random-uuid)}))
@@ -234,93 +274,95 @@
                   (dom/props {:href "#main-content" :class "skip-link"})
                   (dom/text "Skip to content"))
 
-                ;; Combined title + tab bar
+                ;; Top nav. `.tab-bar-container` = brand + Import CTA (left,
+                ;; pinned) · measured `.tab-bar` destinations (collapse into ⋮) ·
+                ;; `.nav-utils` icon utilities (right, pinned). Brand, Import, and
+                ;; utilities never collapse; only destinations feed the ⋮ menu.
                 (dom/nav
-                  (dom/props {:class "tab-bar"
-                              :aria-label "Primary"
-                              :style {:display "flex" :align-items "center" :border-bottom "2px solid var(--color-border)" :flex-shrink "0"}})
+                  (dom/props {:class (str "tab-bar-container" (when nav-overflow-open " overflow-open"))
+                              :aria-label "Primary"})
+                  (let [container-node dom/node]
 
-                  ;; Brand is a real link (keyboard + SR reachable); click is
-                  ;; intercepted so navigation stays in the SPA router.
-                  (dom/a
-                    (dom/props {:href "/"
-                                :style {:font-size "16px" :font-weight "700" :padding "6px 16px"
-                                        :color "var(--color-text-primary)" :cursor "pointer" :white-space "nowrap"
-                                        :text-decoration "none"}})
-                    (dom/text "FreeMemo")
-                    (dom/On "click" (fn [e] (.preventDefault e) (navigate! :home)) nil))
+                    ;; Brand is a real link (keyboard + SR reachable); click is
+                    ;; intercepted so navigation stays in the SPA router.
+                    (dom/a
+                      (dom/props {:href "/"
+                                  :style {:font-size "16px" :font-weight "700" :padding "6px 16px"
+                                          :color "var(--color-text-primary)" :cursor "pointer" :white-space "nowrap"
+                                          :text-decoration "none" :flex-shrink "0"}})
+                      (dom/text "FreeMemo")
+                      (dom/On "click" (fn [e] (.preventDefault e) (navigate! :home)) nil))
 
-                  ;; Each tab: Icon + label-span. CSS hides `.nav-tab-label`
-                  ;; at <600px so phone shows icon-only.
-                  (dom/button
-                    (dom/props {:class "nav-tab" :style (tab-style :home)})
-                    (icons/Icon :home :size 18)
-                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Home"))
-                    (dom/On "click" (fn [_] (navigate! :home)) nil))
+                    ;; Import — primary create CTA, accented, pinned left.
+                    (dom/button
+                      (dom/props {:class (cond-> "nav-import-cta" (= active-tab :import) (str " is-active"))})
+                      (tooltip/Tooltip! "Add content — link, upload, paste, Zotero")
+                      (icons/Icon :plus :size 18)
+                      (dom/span (dom/props {:class "nav-import-label"}) (dom/text "Import"))
+                      (dom/On "click" (fn [_] (navigate! :import)) nil))
 
-                  (dom/button
-                    (dom/props {:class "nav-tab" :style (tab-style :learn)})
-                    (icons/Icon :graduation-cap :size 18)
-                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Learn"))
-                    (dom/On "click" (fn [_] (navigate! :learn)) nil))
+                    ;; Measured destination strip — flex-nowrap + overflow clip so
+                    ;; the detector reads overflow via scrollWidth. Two groups
+                    ;; (Content · Discovery) split by a lockstep-collapsing divider.
+                    (dom/div
+                      (dom/props {:class "tab-bar"})
+                      (let [toolbar-node dom/node
+                            cleanup (install-overflow-detector!
+                                      container-node toolbar-node
+                                      !collapse-tier !nav-overflow-open)]
+                        (e/on-unmount cleanup)
 
-                  (dom/button
-                    (dom/props {:class "nav-tab" :style (tab-style :viewer)})
-                    (icons/Icon :book-open :size 18)
-                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Viewer"))
-                    (dom/On "click" (fn [_] (navigate! :viewer)) nil))
+                        ;; Content group — Home never collapses; the rest carry
+                        ;; descending priority (nav-collapse-N, higher N = leaves
+                        ;; later, so Home>Viewer>Library>Learn>Quiz).
+                        (NavTab active-tab navigate! :home "Home" nil "Dashboard & due items")
+                        (NavTab active-tab navigate! :viewer "Viewer" "nav-collapse-7" "Read an open document")
+                        (NavTab active-tab navigate! :library "Library" "nav-collapse-6" "Your documents & cards")
+                        (NavTab active-tab navigate! :learn "Learn" "nav-collapse-5" "Spaced-repetition queue")
+                        (NavTab active-tab navigate! :quiz "Quiz" "nav-collapse-4" "LLM-graded quiz on your facts")
 
-                  (dom/button
-                    (dom/props {:class "nav-tab" :style (tab-style :library)})
-                    (icons/Icon :library :size 18)
-                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Library"))
-                    (dom/On "click" (fn [_] (navigate! :library)) nil))
+                        ;; Content · Discovery divider (hides once Discovery empties).
+                        (dom/div (dom/props {:class "nav-group-divider"}))
 
-                  (dom/button
-                    (dom/props {:class "nav-tab" :style (tab-style :search)})
-                    (icons/Icon :search :size 18)
-                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Search"))
-                    (dom/On "click" (fn [_] (navigate! :search)) nil))
+                        ;; Discovery group — collapses first (Graph→Facts→Search).
+                        (NavTab active-tab navigate! :search "Search" "nav-collapse-3" "Search all content")
+                        (NavTab active-tab navigate! :knowledge "Facts" "nav-collapse-2" "Distilled facts & entities")
+                        (NavTab active-tab navigate! :graph "Graph" "nav-collapse-1" "Visual map of your facts")
 
-                  (dom/button
-                    (dom/props {:class "nav-tab" :style (tab-style :knowledge)})
-                    (icons/Icon :link :size 18)
-                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Knowledge"))
-                    (dom/On "click" (fn [_] (navigate! :knowledge)) nil))
+                        ;; ⋮ overflow trigger — CSS reveals it from tier 1.
+                        (dom/div
+                          (dom/props {:class "nav-overflow-trigger"})
+                          (dom/button
+                            (dom/props {:class "nav-tab" :aria-label "More" :title "More"
+                                        :style {:cursor "pointer" :border "none" :background "none"}})
+                            (icons/Icon :more-vertical :size 18)
+                            (dom/On "click" (fn [_] (swap! !nav-overflow-open not)) nil)))
 
-                  (dom/button
-                    (dom/props {:class "nav-tab" :style (tab-style :graph)})
-                    (icons/Icon :share-2 :size 18)
-                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Graph"))
-                    (dom/On "click" (fn [_] (navigate! :graph)) nil))
+                        ;; Overflow dropdown — proxies flow inline (display:contents)
+                        ;; until .overflow-open turns the panel into a card; each
+                        ;; proxy reveals at the tier its inline tab hid (drop order).
+                        (dom/div
+                          (dom/props {:class "nav-overflow-panel"})
+                          (NavProxy navigate! !nav-overflow-open :graph :share-2 "Graph" "nav-overflow-1")
+                          (NavProxy navigate! !nav-overflow-open :knowledge :link "Facts" "nav-overflow-2")
+                          (NavProxy navigate! !nav-overflow-open :search :search "Search" "nav-overflow-3")
+                          (NavProxy navigate! !nav-overflow-open :quiz :clipboard "Quiz" "nav-overflow-4")
+                          (NavProxy navigate! !nav-overflow-open :learn :graduation-cap "Learn" "nav-overflow-5")
+                          (NavProxy navigate! !nav-overflow-open :library :library "Library" "nav-overflow-6")
+                          (NavProxy navigate! !nav-overflow-open :viewer :book-open "Viewer" "nav-overflow-7"))))
 
-                  (dom/button
-                    (dom/props {:class "nav-tab" :style (tab-style :quiz)})
-                    (icons/Icon :clipboard :size 18)
-                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Quiz"))
-                    (dom/On "click" (fn [_] (navigate! :quiz)) nil))
+                    ;; Utilities — icon-only, pinned right, never collapse.
+                    (dom/div (dom/props {:class "nav-utils"})
+                      (NavUtil active-tab navigate! :help :circle-help "Help")
+                      (NavUtil active-tab navigate! :settings :settings "Settings")
+                      (ActionsNavButton !undo-modal-open?))
 
-                  (dom/button
-                    (dom/props {:class "nav-tab" :style (tab-style :import)})
-                    (icons/Icon :plus :size 18)
-                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Import"))
-                    (dom/On "click" (fn [_] (navigate! :import)) nil))
-
-                  (dom/button
-                    (dom/props {:class "nav-tab" :style (tab-style :help)})
-                    (icons/Icon :circle-help :size 18)
-                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Help"))
-                    (dom/On "click" (fn [_] (navigate! :help)) nil))
-
-                  (dom/button
-                    (dom/props {:class "nav-tab" :style (tab-style :settings)})
-                    (icons/Icon :settings :size 18)
-                    (dom/span (dom/props {:class "nav-tab-label"}) (dom/text "Settings"))
-                    (dom/On "click" (fn [_] (navigate! :settings)) nil))
-
-                  ;; Actions/undo history — pushed to the right edge of the bar.
-                  (dom/div (dom/props {:style {:margin-left "auto"}})
-                    (ActionsNavButton !undo-modal-open?)))
+                    ;; Backdrop for outside-click close — outside .tab-bar so
+                    ;; clipping can't hide it.
+                    (when nav-overflow-open
+                      (dom/div
+                        (dom/props {:class "nav-overflow-backdrop"})
+                        (dom/On "click" (fn [_] (reset! !nav-overflow-open false)) nil)))))
 
                 ;; Storage warning banner — appears when usage exceeds 80%.
                 (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
