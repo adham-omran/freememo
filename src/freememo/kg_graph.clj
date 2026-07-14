@@ -14,8 +14,7 @@
    fits them, so the server does no normalization."
   (:require [freememo.db :as db]
             [clojure.string :as str]
-            [taoensso.telemere :as tel])
-  (:import [java.lang ProcessBuilder$Redirect]))
+            [taoensso.telemere :as tel]))
 
 (def ^:private sfdp-bin "sfdp")
 
@@ -43,19 +42,23 @@
         payload-bytes (.getBytes dot "UTF-8")]
     (tel/log! {:level :info :id ::sfdp.start :data {:dot-bytes (alength payload-bytes)}}
       "kg-graph sfdp: starting layout")
-    (try
-      (let [pb (doto (ProcessBuilder. [sfdp-bin "-Goverlap=true" "-Tplain"])
-                 (.redirectError ProcessBuilder$Redirect/DISCARD))
-            proc (.start pb)
-            ;; Drain stdout on another thread while we write stdin, so neither
-            ;; pipe buffer can fill and deadlock the subprocess.
-            out (future (slurp (.getInputStream proc)))]
+    (let [proc (.start (ProcessBuilder. [sfdp-bin "-Goverlap=true" "-Tplain"]))
+          ;; Drain stdout on another thread while we write stdin, so neither pipe
+          ;; buffer can fill and deadlock the subprocess.
+          out (future (slurp (.getInputStream proc)))
+          ;; Capture — never discard — stderr. When sfdp aborts at startup (e.g.
+          ;; a missing neato/sfdp layout plugin) it prints the reason here and
+          ;; closes stdin, so our write fails with a bare "Broken pipe"; stderr
+          ;; is the only place the true cause is visible. Bound outside the try
+          ;; so the catch can read it on the broken-pipe path.
+          err (future (slurp (.getErrorStream proc)))]
+      (try
         (with-open [w (.getOutputStream proc)]
           (.write w payload-bytes))
         (let [text @out
               code (.waitFor proc)]
           (when-not (zero? code)
-            (throw (ex-info "sfdp exited non-zero" {:code code})))
+            (throw (ex-info (str "sfdp exited " code ": " (str/trim @err)) {:code code})))
           (let [pos (into {}
                       (keep (fn [line]
                               (when (str/starts-with? line "node ")
@@ -70,14 +73,15 @@
                               :out-bytes (count text)
                               :ms (- (System/currentTimeMillis) t0)}}
               "kg-graph sfdp: layout complete")
-            pos)))
-      (catch Throwable t
-        (tel/log! {:level :error :id ::sfdp.error
-                   :data {:ms (- (System/currentTimeMillis) t0)
-                          :error (.getMessage t)
-                          :class (.getName (class t))}}
-          "kg-graph sfdp: FAILED — sfdp missing on PATH or non-zero exit")
-        (throw t)))))
+            pos))
+        (catch Throwable t
+          (tel/log! {:level :error :id ::sfdp.error
+                     :data {:ms (- (System/currentTimeMillis) t0)
+                            :error (.getMessage t)
+                            :class (.getName (class t))
+                            :stderr (try (str/trim @err) (catch Throwable _ nil))}}
+            "kg-graph sfdp: FAILED — see :stderr for the real cause (missing layout plugin, etc.)")
+          (throw t))))))
 
 (defn compute-payload
   "Assemble + lay out the edges-only graph for `user-id`.
