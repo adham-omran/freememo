@@ -16,6 +16,7 @@
    [freememo.quiz-page :as quiz]
    #?(:clj [freememo.kg-graph :as kgg])
    #?(:clj [freememo.user-state :as us])
+   #?(:clj [taoensso.telemere :as tel])
    #?(:cljs [freememo.graph-render :as render])))
 
 ;; ---------------------------------------------------------------------------
@@ -28,7 +29,23 @@
       the :kg-mutations counter (reactive) — any KG mutation recomputes lazily on
       the next open. Post: {:nodes :edges :predicates :docs}."
      [version user-id]
-     (kgg/get-or-compute user-id "all" version)))
+     (tel/log! {:level :info :id ::payload.enter :data {:user-id user-id :version version}}
+       "graph-page: graph-payload* enter (server pipeline start)")
+     (let [t0 (System/currentTimeMillis)]
+       (try
+         (let [p (kgg/get-or-compute user-id "all" version)]
+           (tel/log! {:level :info :id ::payload.exit
+                      :data {:user-id user-id :nodes (count (:nodes p))
+                             :edges (count (:edges p))
+                             :ms (- (System/currentTimeMillis) t0)}}
+             "graph-page: graph-payload* exit (payload ready for wire)")
+           p)
+         (catch Throwable t
+           (tel/log! {:level :error :id ::payload.error
+                      :data {:user-id user-id :ms (- (System/currentTimeMillis) t0)
+                             :error (.getMessage t) :class (.getName (class t))}}
+             "graph-page: graph-payload* FAILED")
+           (throw t))))))
 
 ;; ---------------------------------------------------------------------------
 ;; sigma bridge — reader conditionals live here, never in the e/defn body.
