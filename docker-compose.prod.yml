@@ -21,6 +21,7 @@ x-app-common: &app-common
     dockerfile: Dockerfile
     args:
       VERSION: "${APP_VERSION:?APP_VERSION required — pass e.g. $(git describe --tags --long --always --dirty)}"
+      GIT_COMMIT: "${GIT_COMMIT:?GIT_COMMIT required — pass e.g. $(git rev-parse --short HEAD)}"
   image: "freememo:${APP_VERSION:?APP_VERSION required}"
   restart: unless-stopped
   # Hard container memory ceiling. The app JVM sets no -Xmx (runtime is a bare
