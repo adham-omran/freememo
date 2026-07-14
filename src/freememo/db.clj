@@ -714,6 +714,21 @@
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_reviews_question
                       ON kg_reviews(question_id, reviewed_at DESC)"])
 
+  ;; Graph-view layout cache — one row per (user, scope). payload is the
+  ;; positioned, wire-ready render payload {:nodes :edges :predicates :docs};
+  ;; version = the :kg-mutations counter at compute time, so a stale row is
+  ;; detected by a cheap integer compare on read (freememo.kg-graph). Positions
+  ;; are recomputed lazily on the next Graph-tab open after any KG mutation.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS kg_graph_layout (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      scope TEXT NOT NULL,
+      version BIGINT NOT NULL,
+      payload JSONB NOT NULL,
+      computed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (user_id, scope)
+    )"])
+
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
   (run-grandfather-migration!)
 
@@ -4617,6 +4632,71 @@
                  {:builder-fn rs/as-unqualified-maps})]
     (assoc (first (kg-aliases->vec [e]))
       :facts (entity-fact-neighborhood user-id entity-id))))
+
+(defn kg-graph-elements
+  "The edges-only concept graph for the Graph tab. Node = an entity that
+   participates in ≥1 approved entity→entity fact; edge = such a fact.
+   Literal-object facts are excluded (no second node) — they reach the UI only
+   through kg-entity-card's side panel. Degree is derived from the edge list by
+   the caller (freememo.kg-graph), not per-node subqueries.
+   Post: {:nodes [{:id :label}] :edges [{:s :t :p :topic}] :predicates
+   [{:id :label}] :docs [{:id :title}]} — all wire-safe scalars."
+  [user-id]
+  (let [edges (jdbc/execute! ds
+                ["SELECT subject_entity_id AS s, object_entity_id AS t,
+                         predicate_id AS p, graph_topic_id AS topic
+                  FROM kg_facts
+                  WHERE user_id = ? AND status = 'approved'
+                    AND object_entity_id IS NOT NULL"
+                 user-id]
+                {:builder-fn rs/as-unqualified-maps})
+        nodes (jdbc/execute! ds
+                ["SELECT id, label FROM kg_entities
+                  WHERE user_id = ? AND id IN (
+                    SELECT subject_entity_id FROM kg_facts
+                      WHERE user_id = ? AND status = 'approved' AND object_entity_id IS NOT NULL
+                    UNION
+                    SELECT object_entity_id FROM kg_facts
+                      WHERE user_id = ? AND status = 'approved' AND object_entity_id IS NOT NULL)"
+                 user-id user-id user-id]
+                {:builder-fn rs/as-unqualified-maps})
+        predicates (jdbc/execute! ds
+                     ["SELECT DISTINCT p.id, p.label FROM kg_predicates p
+                       JOIN kg_facts f ON f.predicate_id = p.id
+                       WHERE f.user_id = ? AND f.status = 'approved'
+                         AND f.object_entity_id IS NOT NULL"
+                      user-id]
+                     {:builder-fn rs/as-unqualified-maps})
+        docs (jdbc/execute! ds
+               ["SELECT DISTINCT t.id, t.title FROM topics t
+                 JOIN kg_facts f ON f.graph_topic_id = t.id
+                 WHERE f.user_id = ? AND f.status = 'approved'
+                   AND f.object_entity_id IS NOT NULL"
+                user-id]
+               {:builder-fn rs/as-unqualified-maps})]
+    {:nodes nodes :edges edges :predicates predicates :docs docs}))
+
+(defn read-graph-layout
+  "Cached render payload for a Graph-tab scope, or nil on cold cache.
+   Post: {:version <long> :payload {...}} | nil."
+  [user-id scope]
+  (when-let [row (jdbc/execute-one! ds
+                   ["SELECT version, payload FROM kg_graph_layout
+                     WHERE user_id = ? AND scope = ?" user-id scope]
+                   {:builder-fn rs/as-unqualified-maps})]
+    {:version (:version row) :payload (pgobject->clj (:payload row))}))
+
+(defn write-graph-layout!
+  "Upsert the positioned render payload for (user, scope) at version.
+   Post: exactly one row for (user, scope); its version/payload are the args."
+  [user-id scope version payload]
+  (jdbc/execute! ds
+    ["INSERT INTO kg_graph_layout (user_id, scope, version, payload, computed_at)
+      VALUES (?, ?, ?, ?, now())
+      ON CONFLICT (user_id, scope)
+      DO UPDATE SET version = EXCLUDED.version, payload = EXCLUDED.payload,
+                    computed_at = now()"
+     user-id scope version (->jsonb payload)]))
 
 (defn set-kg-question-status!
   "reject (curation) or retire. Ownership enforced in SQL.
