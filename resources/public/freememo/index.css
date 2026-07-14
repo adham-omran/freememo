@@ -1330,9 +1330,15 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
     color: var(--color-text-primary);
 }
 
-/* ── Legacy hover states (override for buttons not yet using .btn) ── */
-button:not(:disabled):not(.btn):not(.btn-delete-x):hover {
-    filter: brightness(0.95);
+/* ── Legacy hover states (fallback for buttons not yet using .btn) ──
+   Background tint, NOT `filter: brightness()`: a filter promotes each hovered
+   button to its own compositing layer, so sweeping the top nav churned layers
+   and repainted large regions. `:where()` zeroes the negations' specificity
+   (0,4,1 → 0,1,1) so any explicit per-button :hover (.nav-action-btn,
+   .icon-btn, …) and inline background (nav-tab) still win — this is only the
+   fallback for buttons with no hover styling of their own. */
+button:where(:not(:disabled):not(.btn):not(.btn-delete-x)):hover {
+    background-color: var(--color-bg-hover);
 }
 input[type="text"]:not(.input):hover,
 input[type="password"]:not(.input):hover,
