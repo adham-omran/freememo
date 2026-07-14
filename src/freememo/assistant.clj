@@ -221,11 +221,13 @@
    Order: ownership gate → key/blank checks → credit gate → persist user turn →
    resolve live context → call model → persist reply → charge usage.cost →
    title backfill → bump.
+   `client-id` is the client's echo-correlation id, stored on the user turn so
+   the optimistic echo retires when its persisted row lands (nil = no echo).
    Pre: chat-id owned by user-id (else {:error}). Post: on success exactly one
    assistant row is appended and one usage charge recorded; on model failure the
    user turn persists but no assistant row is added; reading context, referenced
    docs, and facts are never persisted to the transcript."
-  [user-id chat-id page-topic-id user-text ref-topic-ids]
+  [user-id chat-id page-topic-id user-text ref-topic-ids client-id]
   (let [chat (db/get-assistant-chat user-id chat-id)
         api-key (settings/get-openrouter-api-key user-id)]
     (cond
@@ -237,7 +239,7 @@
         (if-not (:ok gate)
           {:error (:error gate)}
           (do
-            (db/insert-assistant-message! chat-id "user" user-text)
+            (db/insert-assistant-message! chat-id "user" user-text client-id)
             (bump! user-id) ; show the learner's turn immediately
             (let [root-topic-id (:assistant_chats/root_topic_id chat)
                   ctx (resolve-context user-id root-topic-id page-topic-id)
@@ -259,7 +261,7 @@
                   (if (str/blank? reply)
                     {:error "The model returned an empty response."}
                     (do
-                      (db/insert-assistant-message! chat-id "assistant" reply)
+                      (db/insert-assistant-message! chat-id "assistant" reply nil)
                       (credits/record-cost-charge! user-id :assistant.chat (:id entry) cost)
                       (when (= "New chat" (:assistant_chats/title chat))
                         (db/set-assistant-chat-title! chat-id (title-from user-text)))
@@ -272,11 +274,12 @@
 (defn ensure-and-send!
   "Send to `chat-id`, creating a fresh chat first when `chat-id` is nil (the
    learner typed before any chat existed). `ref-topic-ids` are @-referenced
-   documents for this turn. Returns the send result plus the :chat-id actually
-   used, so the client can select it."
-  [user-id root-topic-id page-topic-id chat-id user-text ref-topic-ids]
+   documents for this turn; `client-id` correlates the client's optimistic echo.
+   Returns the send result plus the :chat-id actually used, so the client can
+   select it."
+  [user-id root-topic-id page-topic-id chat-id user-text ref-topic-ids client-id]
   (let [cid (or chat-id (start-chat! user-id root-topic-id))]
-    (assoc (send! user-id cid page-topic-id user-text ref-topic-ids) :chat-id cid)))
+    (assoc (send! user-id cid page-topic-id user-text ref-topic-ids client-id) :chat-id cid)))
 
 (def ^:private feedback-anchor
   "Verbatim heading the persona emits to open the feedback section. The parser
