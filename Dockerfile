@@ -23,9 +23,13 @@ WORKDIR /app
 # out to `magick`. (Base switched from amazoncorretto:17 / Amazon Linux 2,
 # whose ImageMagick package lacks a reliable HEIF delegate.)
 # curl backs the compose healthcheck. graphviz provides `sfdp`, which lays out
-# the knowledge-graph view server-side (freememo.kg-graph).
+# the knowledge-graph view server-side (freememo.kg-graph). On Ubuntu the
+# `graphviz` package ships the sfdp BINARY but not its layout engine — that
+# lives in libgvplugin-neato-layout8 (neato/fdp/sfdp family). Without it sfdp
+# exits with "no layout engine support for sfdp", so it MUST be installed
+# explicitly (it is not a graphviz dependency or recommend).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends imagemagick libheif1 curl graphviz \
+ && apt-get install -y --no-install-recommends imagemagick libheif1 curl graphviz libgvplugin-neato-layout8 \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/target/app.jar app.jar
 
