@@ -36,29 +36,48 @@
   "Pipe `dot` through `sfdp -Goverlap=true -Tplain`; parse node positions.
    Pre: the `sfdp` binary is on PATH (provisioned in the runtime image).
    Post: {node-id [x y]} for every `node` line. Throws if sfdp is absent or
-   exits non-zero — blame there is a deployment (image) bug, not a caller bug."
+   exits non-zero — blame there is a deployment (image) bug, not a caller bug.
+   Every start/finish/failure is logged so a prod hang or crash is locatable."
   [^String dot]
-  (let [pb (doto (ProcessBuilder. [sfdp-bin "-Goverlap=true" "-Tplain"])
-             (.redirectError ProcessBuilder$Redirect/DISCARD))
-        proc (.start pb)
-        ;; Drain stdout on another thread while we write stdin, so neither pipe
-        ;; buffer can fill and deadlock the subprocess.
-        out (future (slurp (.getInputStream proc)))]
-    (with-open [w (.getOutputStream proc)]
-      (.write w (.getBytes dot "UTF-8")))
-    (let [text @out
-          code (.waitFor proc)]
-      (when-not (zero? code)
-        (throw (ex-info "sfdp exited non-zero" {:code code})))
-      (into {}
-        (keep (fn [line]
-                (when (str/starts-with? line "node ")
-                  ;; `node <name> <x> <y> <w> <h> <label> …` — names are our
-                  ;; integer ids (no spaces), so a plain split is safe.
-                  (let [parts (str/split line #"\s+" 5)]
-                    [(parse-long (nth parts 1))
-                     [(parse-double (nth parts 2)) (parse-double (nth parts 3))]]))))
-        (str/split-lines text)))))
+  (let [t0 (System/currentTimeMillis)
+        payload-bytes (.getBytes dot "UTF-8")]
+    (tel/log! {:level :info :id ::sfdp.start :data {:dot-bytes (alength payload-bytes)}}
+      "kg-graph sfdp: starting layout")
+    (try
+      (let [pb (doto (ProcessBuilder. [sfdp-bin "-Goverlap=true" "-Tplain"])
+                 (.redirectError ProcessBuilder$Redirect/DISCARD))
+            proc (.start pb)
+            ;; Drain stdout on another thread while we write stdin, so neither
+            ;; pipe buffer can fill and deadlock the subprocess.
+            out (future (slurp (.getInputStream proc)))]
+        (with-open [w (.getOutputStream proc)]
+          (.write w payload-bytes))
+        (let [text @out
+              code (.waitFor proc)]
+          (when-not (zero? code)
+            (throw (ex-info "sfdp exited non-zero" {:code code})))
+          (let [pos (into {}
+                      (keep (fn [line]
+                              (when (str/starts-with? line "node ")
+                                ;; `node <name> <x> <y> <w> <h> <label> …` — names
+                                ;; are our integer ids (no spaces), plain split safe.
+                                (let [parts (str/split line #"\s+" 5)]
+                                  [(parse-long (nth parts 1))
+                                   [(parse-double (nth parts 2)) (parse-double (nth parts 3))]]))))
+                      (str/split-lines text))]
+            (tel/log! {:level :info :id ::sfdp.done
+                       :data {:exit code :positions (count pos)
+                              :out-bytes (count text)
+                              :ms (- (System/currentTimeMillis) t0)}}
+              "kg-graph sfdp: layout complete")
+            pos)))
+      (catch Throwable t
+        (tel/log! {:level :error :id ::sfdp.error
+                   :data {:ms (- (System/currentTimeMillis) t0)
+                          :error (.getMessage t)
+                          :class (.getName (class t))}}
+          "kg-graph sfdp: FAILED — sfdp missing on PATH or non-zero exit")
+        (throw t)))))
 
 (defn compute-payload
   "Assemble + lay out the edges-only graph for `user-id`.
@@ -69,7 +88,13 @@
       :docs       [[topic-id title] …]}
    Isolated nodes cannot occur (edges-only). Empty graph → empty vectors."
   [user-id]
-  (let [{:keys [nodes edges predicates docs]} (db/kg-graph-elements user-id)
+  (let [t0 (System/currentTimeMillis)
+        {:keys [nodes edges predicates docs]} (db/kg-graph-elements user-id)
+        _ (tel/log! {:level :info :id ::compute.elements
+                     :data {:user-id user-id :nodes (count nodes) :edges (count edges)
+                            :predicates (count predicates) :docs (count docs)
+                            :ms (- (System/currentTimeMillis) t0)}}
+            "kg-graph compute: elements queried")
         node-ids (mapv :id nodes)
         pos (if (seq node-ids)
               (run-sfdp (->dot node-ids (mapv (juxt :s :t) edges)))
@@ -77,14 +102,20 @@
         degree (reduce (fn [m {:keys [s t]}]
                          (-> m (update s (fnil inc 0)) (update t (fnil inc 0))))
                  {} edges)
-        pred-idx (into {} (map-indexed (fn [i {:keys [id]}] [id i]) predicates))]
-    {:nodes (mapv (fn [{:keys [id label]}]
-                    (let [[x y] (get pos id [0.0 0.0])]
-                      [id label (get degree id 0) x y]))
-              nodes)
-     :edges (mapv (fn [{:keys [s t p topic]}] [s t (get pred-idx p) topic]) edges)
-     :predicates (mapv (fn [{:keys [id label]}] [id label]) predicates)
-     :docs (mapv (fn [{:keys [id title]}] [id title]) docs)}))
+        pred-idx (into {} (map-indexed (fn [i {:keys [id]}] [id i]) predicates))
+        payload {:nodes (mapv (fn [{:keys [id label]}]
+                                (let [[x y] (get pos id [0.0 0.0])]
+                                  [id label (get degree id 0) x y]))
+                          nodes)
+                 :edges (mapv (fn [{:keys [s t p topic]}] [s t (get pred-idx p) topic]) edges)
+                 :predicates (mapv (fn [{:keys [id label]}] [id label]) predicates)
+                 :docs (mapv (fn [{:keys [id title]}] [id title]) docs)}]
+    (tel/log! {:level :info :id ::compute.done
+               :data {:user-id user-id :nodes (count (:nodes payload))
+                      :edges (count (:edges payload)) :positioned (count pos)
+                      :total-ms (- (System/currentTimeMillis) t0)}}
+      "kg-graph compute: payload assembled")
+    payload))
 
 (defn get-or-compute
   "Serve the cached payload for (user, scope) when its version matches the
@@ -97,10 +128,19 @@
   [user-id scope version]
   (let [cached (db/read-graph-layout user-id scope)]
     (if (and cached (= (long (:version cached)) (long version)))
-      (:payload cached)
-      (let [payload (compute-payload user-id)]
-        (db/write-graph-layout! user-id scope version payload)
-        (tel/log! :info (str "kg-graph layout computed: user=" user-id
-                          " scope=" scope " nodes=" (count (:nodes payload))
-                          " edges=" (count (:edges payload))))
-        payload))))
+      (do (tel/log! {:level :info :id ::cache.hit
+                     :data {:user-id user-id :scope scope :version version
+                            :nodes (count (:nodes (:payload cached)))}}
+            "kg-graph: layout cache hit")
+        (:payload cached))
+      (do (tel/log! {:level :info :id ::cache.miss
+                     :data {:user-id user-id :scope scope :requested version
+                            :cached-version (:version cached)}}
+            "kg-graph: layout cache miss — recomputing")
+        (let [payload (compute-payload user-id)]
+          (db/write-graph-layout! user-id scope version payload)
+          (tel/log! {:level :info :id ::cache.written
+                     :data {:user-id user-id :scope scope :version version
+                            :nodes (count (:nodes payload)) :edges (count (:edges payload))}}
+            "kg-graph: layout computed and cached")
+          payload)))))
