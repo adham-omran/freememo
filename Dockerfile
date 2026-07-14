@@ -3,6 +3,8 @@ WORKDIR /app
 COPY deps.edn deps.edn
 ARG VERSION
 ENV VERSION=$VERSION
+ARG GIT_COMMIT
+ENV GIT_COMMIT=$GIT_COMMIT
 RUN clojure -A:prod -M -e ::ok       # preload – rebuilds if deps or commit version changes
 RUN clojure -A:build:prod -M -e ::ok # preload
 
@@ -12,7 +14,7 @@ COPY src-prod src-prod
 COPY src-build src-build
 COPY resources resources
 
-RUN clojure -X:prod:build uberjar :version "\"$VERSION\"" :build/jar-name "app.jar"
+RUN clojure -X:prod:build uberjar :version "\"$VERSION\"" :git-commit "\"$GIT_COMMIT\"" :build/jar-name "app.jar"
 
 FROM eclipse-temurin:17-jre AS app
 WORKDIR /app

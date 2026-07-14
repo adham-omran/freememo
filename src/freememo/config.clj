@@ -142,6 +142,21 @@
 (defonce ^{:doc "Parsed config.edn. Stable for the process lifetime (restart to reload)."}
   config (load-config))
 
+;; ── Build metadata (electric-manifest.edn, written by src-build/build.clj) ──
+
+(defonce ^{:private true
+           :doc "Deployed short git SHA baked into electric-manifest.edn at build
+   time (build.clj :git-commit). \"dev\" when no manifest is on the classpath
+   (dev/REPL — build-client hasn't run)."}
+  git-commit-sha
+  (or (:git-commit (load-edn (io/resource "electric-manifest.edn"))) "dev"))
+
+(defn git-commit
+  "Short git SHA of the running build, for the Settings → About readout.
+   Returns \"dev\" outside a built artifact."
+  []
+  git-commit-sha)
+
 (defn- credits-config [] (:credits config))
 
 (defn markup

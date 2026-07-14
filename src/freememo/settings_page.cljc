@@ -9,7 +9,8 @@
    [freememo.ai-features-section :refer [AIFeaturesSection]]
    [freememo.zotero-client :as zc]
    [freememo.commands :as commands]
-   #?(:clj [freememo.settings :as settings])))
+   #?(:clj [freememo.settings :as settings])
+   #?(:clj [freememo.config :as config])))
 
 
 ;; Section anchor ids + sidebar labels, in display order.
@@ -264,7 +265,15 @@
             (StorageSection user-id)
 
         ;; AI cost history — the user's credit ledger (searchable/filterable)
-            (CostHistorySection user-id))
+            (CostHistorySection user-id)
+
+        ;; About — deployed build commit (baked at build time; "dev" locally)
+            (let [commit (e/server (config/git-commit))]
+              (dom/div
+                (dom/props {:style {:margin-top "16px" :padding-top "12px"
+                                    :border-top "1px solid var(--color-bg-subtle)"
+                                    :font-size "12px" :color "var(--color-text-label)"}})
+                (dom/text (str "freememo · " commit)))))
 
 
           (dom/div

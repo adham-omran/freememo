@@ -44,7 +44,9 @@ flock -n 9 || { echo "deploy: another run holds the lock; exiting"; exit 1; }
 # --- version: host-supplied (the Docker build context has no .git) --------
 APP_VERSION="$(git describe --tags --long --always --dirty)"
 export APP_VERSION
-echo "deploy: version ${APP_VERSION}"
+GIT_COMMIT="$(git rev-parse --short HEAD)"
+export GIT_COMMIT
+echo "deploy: version ${APP_VERSION} (commit ${GIT_COMMIT})"
 
 # --- pick the idle color from Caddy's live upstream (single source of truth) --
 live_color=""
