@@ -22,9 +22,10 @@ WORKDIR /app
 # uploads — the JVM's ImageIO has no HEIC codec, so /api/heic-preview shells
 # out to `magick`. (Base switched from amazoncorretto:17 / Amazon Linux 2,
 # whose ImageMagick package lacks a reliable HEIF delegate.)
-# curl backs the compose healthcheck.
+# curl backs the compose healthcheck. graphviz provides `sfdp`, which lays out
+# the knowledge-graph view server-side (freememo.kg-graph).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends imagemagick libheif1 curl \
+ && apt-get install -y --no-install-recommends imagemagick libheif1 curl graphviz \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/target/app.jar app.jar
 
