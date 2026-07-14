@@ -111,7 +111,7 @@
         :status (db/get-status-breakdown user-id)})
      :cljs {:studied [] :future-due {:backlog 0 :days []} :studied-today 0 :streak 0
             :reviews {:all-time 0 :this-week 0}
-            :status {:active 0 :done 0}}))
+            :status {:active 0 :done 0 :dismissed 0}}))
 
 ;; Dashboard UI
 

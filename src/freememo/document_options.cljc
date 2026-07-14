@@ -276,6 +276,41 @@
         (when (some? r)
           (if (:success r) (do (reset! !open false) (token)) (token (:error r))))))))
 
+(e/defn DismissButton
+  "Toggle Dismiss for the whole document (root-topic-id + its subtree): remove it
+   from / restore it to the Learning Queue. Reads the current state reactively so
+   the label flips after the roundtrip. The dismiss-vs-undismiss intent is
+   captured at click time so a mid-flight :refresh can't flip which mutation runs."
+  [user-id root-topic-id]
+  (e/client
+    (let [refresh    (e/server (e/watch (us/get-atom user-id :refresh)))
+          dismissed? (e/server (do refresh (db/topic-dismissed? root-topic-id)))
+          !click     (atom nil)
+          click      (e/watch !click)]
+      (dom/div
+        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
+        (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
+          (dom/text "Learning"))
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-secondary" :type "button"
+                      :aria-label (if dismissed? "Undismiss" "Dismiss")})
+          (tooltip/Tooltip! (if dismissed?
+                              "Restore this document and its contents to the Learning Queue"
+                              "Remove this document and its contents from the Learning Queue"))
+          (icons/Icon (if dismissed? :rotate-ccw :x) :size 16)
+          (dom/span (dom/props {:class "icon-label"})
+            (dom/text (if dismissed? "Undismiss" "Dismiss")))
+          (dom/On "click" (fn [_] (reset! !click {:dismiss? (not dismissed?) :n (str (random-uuid))})) nil))
+        (let [[t _] (e/Token click)]
+          (when t
+            (let [to-dismiss? (:dismiss? click)]
+              (case (e/server (e/Offload #(do (if to-dismiss?
+                                                (db/dismiss-topic! user-id root-topic-id)
+                                                (db/undismiss-topic! user-id root-topic-id))
+                                              :ok)))
+                (case (e/server (commands/bump! user-id (if to-dismiss? :dismiss :undismiss)))
+                  (t))))))))))
+
 (e/defn DocumentOptionsModal [user-id bib-topic-id is-pdf? root-topic-id item-topic-id priority-topic-id !open !show-bib show-edit?]
   (e/client
     (when (e/watch !open)
@@ -300,6 +335,12 @@
                 (dom/text "Review priority"))
               (PriorityControl user-id priority-topic-id
                 (e/server (get-topic-priority* refresh priority-topic-id)))))
+
+          ;; Learning — Dismiss/Undismiss the whole document. Viewer only:
+          ;; show-edit? is true only from the viewer toolbar; the library row
+          ;; ⋯-menu has its own Dismiss item, so gating here avoids a duplicate.
+          (when show-edit?
+            (DismissButton user-id root-topic-id))
 
           ;; Bibliography — item-scoped Edit / Refetch / Push-to-children.
           (BibliographySection user-id bib-topic-id !open !show-bib show-edit?)

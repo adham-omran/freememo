@@ -157,7 +157,7 @@
       topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       event_type TEXT NOT NULL
-        CHECK (event_type IN ('advance','touch','postpone','done','restore','priority-change')),
+        CHECK (event_type IN ('advance','touch','postpone','done','restore','priority-change','dismiss','undismiss')),
       event_at TIMESTAMP NOT NULL DEFAULT NOW(),
       status_before TEXT NOT NULL,
       priority_before INTEGER,
@@ -168,11 +168,21 @@
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_repetitions_topic_time
                       ON topic_repetitions(topic_id, event_at DESC)"])
+  ;; Widen event_type for Dismiss/Undismiss on installs created before them
+  ;; (the inline CHECK above only applies to a freshly-created table).
+  (jdbc/execute! ds ["ALTER TABLE topic_repetitions DROP CONSTRAINT IF EXISTS topic_repetitions_event_type_check"])
+  (jdbc/execute! ds ["ALTER TABLE topic_repetitions ADD CONSTRAINT topic_repetitions_event_type_check
+                      CHECK (event_type IN ('advance','touch','postpone','done','restore','priority-change','dismiss','undismiss'))"])
 
   ;; Live Document flag — a kind='pdf' root that the user keeps appending
   ;; camera/upload image pages to. Stays a first-class PDF everywhere; this
   ;; boolean only drives the viewer's add-photos affordance and empty-state.
   (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS is_live BOOLEAN NOT NULL DEFAULT false"])
+
+  ;; Dismiss flag — removes a topic AND its whole subtree from the Learning
+  ;; Queue while keeping it in the collection (SuperMemo Dismiss). Orthogonal to
+  ;; status: a topic may be both done and dismissed (4 positions). Reversible.
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS dismissed BOOLEAN NOT NULL DEFAULT false"])
 
   ;; Search: plain-text column derived from HTML content, trigram GIN index
   (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS content_text text"])
@@ -3227,6 +3237,7 @@
          AND t.staged_delete_id IS NULL
          AND (t.next_review_at::date <= CURRENT_DATE OR t.next_review_at IS NULL)
          AND (t.status = 'active' OR t.status IS NULL)
+         AND NOT t.dismissed
        ORDER BY t.priority ASC, md5(t.id::text || CURRENT_DATE::text) ASC, t.id ASC" user-id])
     (catch Exception e
       (tel/error! {:id ::get-learning-queue} e)
@@ -3241,7 +3252,8 @@
                      AND kind != 'page'
                      AND staged_delete_id IS NULL
                      AND (next_review_at::date <= CURRENT_DATE OR next_review_at IS NULL)
-                     AND (status = 'active' OR status IS NULL)"
+                     AND (status = 'active' OR status IS NULL)
+                     AND NOT dismissed"
                   user-id])]
     (or (:total result) 0)))
 
@@ -3253,7 +3265,8 @@
                    WHERE user_id = ?
                      AND kind != 'page'
                      AND staged_delete_id IS NULL
-                     AND (status = 'active' OR status IS NULL)"
+                     AND (status = 'active' OR status IS NULL)
+                     AND NOT dismissed"
                   user-id])]
     (or (:total result) 0)))
 
@@ -3263,11 +3276,13 @@
   (try
     (let [result (jdbc/execute-one! ds
                    ["SELECT COUNT(*) AS total,
-                           COUNT(*) FILTER (WHERE status = 'done') AS inactive,
+                           COUNT(*) FILTER (WHERE status = 'done' AND NOT dismissed) AS inactive,
                            COUNT(*) FILTER (WHERE (status = 'active' OR status IS NULL)
+                                             AND NOT dismissed
                                              AND (next_review_at IS NULL
                                                   OR next_review_at <= CURRENT_TIMESTAMP)) AS due_today,
                            COUNT(*) FILTER (WHERE (status = 'active' OR status IS NULL)
+                                             AND NOT dismissed
                                              AND (next_review_at IS NULL
                                                   OR next_review_at <= CURRENT_TIMESTAMP + INTERVAL '7 days')) AS due_week
                     FROM topics
@@ -3293,6 +3308,7 @@
         AND staged_delete_id IS NULL
         AND next_review_at::date BETWEEN CURRENT_DATE AND CURRENT_DATE + ?::int
         AND (status = 'active' OR status IS NULL)
+        AND NOT dismissed
       GROUP BY DATE(next_review_at)
       ORDER BY review_date"
      user-id days]))
@@ -3308,7 +3324,8 @@
                 AND kind != 'page'
                 AND staged_delete_id IS NULL
                 AND next_review_at::date < CURRENT_DATE
-                AND (status = 'active' OR status IS NULL)"
+                AND (status = 'active' OR status IS NULL)
+                AND NOT dismissed"
              user-id])]
     (or (:n r) 0)))
 
@@ -3377,27 +3394,30 @@
   [user-id]
   (try
     (let [r (jdbc/execute-one! ds
-              ["SELECT COUNT(*) FILTER (WHERE status = 'active' OR status IS NULL) AS active,
-                       COUNT(*) FILTER (WHERE status = 'done') AS done
+              ["SELECT COUNT(*) FILTER (WHERE (status = 'active' OR status IS NULL) AND NOT dismissed) AS active,
+                       COUNT(*) FILTER (WHERE status = 'done' AND NOT dismissed) AS done,
+                       COUNT(*) FILTER (WHERE dismissed) AS dismissed
                 FROM topics
                 WHERE user_id = ? AND kind != 'page' AND staged_delete_id IS NULL" user-id])]
       {:active (or (:active r) 0)
-       :done (or (:done r) 0)})
+       :done (or (:done r) 0)
+       :dismissed (or (:dismissed r) 0)})
     (catch Exception e
       (tel/error! {:id ::get-status-breakdown} e)
-      {:active 0 :done 0})))
+      {:active 0 :done 0 :dismissed 0})))
 
 (defn get-inactive-topics
-  "Get all non-active (done) topics for a user."
+  "Topics excluded from the Learning Queue for a user: done OR dismissed.
+   (dismissed is an orthogonal flag, so a topic can be both.)"
   [user-id]
   (try
     (jdbc/execute! ds
-      ["SELECT id, parent_id, kind, title, created_at, status
+      ["SELECT id, parent_id, kind, title, created_at, status, dismissed
        FROM topics
        WHERE user_id = ?
          AND kind != 'page'
          AND staged_delete_id IS NULL
-         AND status IN ('dismissed', 'done')
+         AND (status = 'done' OR dismissed)
        ORDER BY created_at DESC" user-id])
     (catch Exception e
       (tel/error! {:id ::get-inactive-topics} e)
@@ -3416,6 +3436,7 @@
   (jdbc/execute! ds
     (sql/format {:select [[:t.id :id] [:t.parent_id :parent_id] [:t.title :title]
                           [:t.kind :kind] [:t.status :status] [:t.created_at :created_at]
+                          [:t.dismissed :dismissed]
                           [:t.page_number :page_number] [:t.last_review_at :last_review_at]
                           :s.title :s.csl_type :s.container_title
                           [[:coalesce :tf.file_size [:octet_length [:coalesce :t.content ""]]] :file_size]
@@ -3877,6 +3898,52 @@
          SELECT t.id, t.parent_id, t.user_id FROM topics t JOIN anc a ON t.id = a.parent_id)
        SELECT user_id FROM anc WHERE parent_id IS NULL" topic-id]
      {:builder-fn rs/as-unqualified-maps})))
+
+;; ---------------------------------------------------------------------------
+;; Dismiss / Undismiss — remove a topic + its whole subtree from the Learning
+;; Queue (SuperMemo Dismiss) while keeping it in the collection. Recursive by
+;; design; orthogonal to status (Done survives a dismiss round-trip). Compare
+;; done-topic!/restore-topic! (single-topic, status-column). One repetition
+;; event is logged on the target only, not per descendant.
+;; ---------------------------------------------------------------------------
+
+(defn- set-subtree-dismissed!
+  "Flip `dismissed` across topic-id + its whole subtree, logging one repetition
+   `event-type` on topic-id. Shared body of dismiss-topic!/undismiss-topic!.
+   Pre:  caller owns topic-id. Post: every subtree row has dismissed=`value`;
+   exactly one `event-type` row on topic-id. Returns {:count n} | nil (not owned)."
+  [user-id topic-id value event-type]
+  (jdbc/with-transaction [tx ds]
+    (when (= user-id (subtree-owner tx topic-id))
+      (let [ids    (subtree-topic-ids tx topic-id)
+            before (snapshot-topic-row tx topic-id)]
+        (insert-repetition! tx topic-id event-type before)
+        (jdbc/execute! tx
+          (sql/format {:update :topics
+                       :set {:dismissed value}
+                       :where [:in :id ids]}))
+        {:count (count ids)}))))
+
+(defn dismiss-topic!
+  "Dismiss topic-id + its whole subtree (dismissed=true). Reversible via
+   undismiss-topic!. Returns {:count n} | nil when not owned by user-id."
+  [user-id topic-id]
+  (set-subtree-dismissed! user-id topic-id true "dismiss"))
+
+(defn undismiss-topic!
+  "Reverse a dismiss: clear dismissed across topic-id + its whole subtree.
+   Leaves each row's status untouched (a done child stays done).
+   Returns {:count n} | nil when not owned by user-id."
+  [user-id topic-id]
+  (set-subtree-dismissed! user-id topic-id false "undismiss"))
+
+(defn topic-dismissed?
+  "True iff topic-id is currently dismissed. Drives the viewer toolbar's
+   Dismiss/Undismiss toggle label. False for a missing topic."
+  [topic-id]
+  (boolean (:dismissed (jdbc/execute-one! ds
+                         ["SELECT dismissed FROM topics WHERE id = ?" topic-id]
+                         {:builder-fn rs/as-unqualified-maps}))))
 
 (defn- over-quota?
   "True when the user's usage now exceeds an explicit quota (nil quota ⇒ unlimited)."

@@ -199,7 +199,7 @@
 (e/defn DocumentRow [user-id navigate! row i row-height
                      editing-id
                      !expansion !editing-id !show-confirm !scroll-node
-                     !drag-src drag-src forbidden !drop-cmd]
+                     !drag-src drag-src forbidden !drop-cmd !dismiss-cmd]
   (e/client
     (let [{:keys [depth topic has-children is-root expanded?]} row
           id (:topics/id topic)
@@ -208,6 +208,7 @@
           is-page (= kind "page")
           source-container (:sources/container_title topic)
           topic-status (or (:topics/status topic) "active")
+          dismissed? (boolean (:topics/dismissed topic))
           [badge-text badge-color] (bibform/topic-badge kind source-container)
           open-topic! (fn [_] (navigate! :viewer (nav/nav-topic id :library)))
           toggle-children! (fn [e]
@@ -225,7 +226,7 @@
                     :role "row"
                     :style {:border-bottom "1px solid var(--color-bg-subtle)"
                             :height (str row-height "px")
-                            :opacity (case topic-status "done" "0.6" "1")
+                            :opacity (if (or dismissed? (= topic-status "done")) "0.6" "1")
                             :cursor "pointer"
                             ;; 0-based absolute index → per-row translateY (C1c)
                             :--order i}})
@@ -303,7 +304,16 @@
                                   :font-size (if is-root "13px" "12px")
                                   :font-weight (if is-root "500" "400")
                                   :color "var(--color-text-primary)"}})
-              (dom/text title))))
+              (dom/text title)))
+          ;; Dismissed tag — the row also greys (opacity above); the label keeps
+          ;; Dismissed distinguishable from Done, which greys the same way.
+          (when dismissed?
+            (dom/span
+              (dom/props {:class "type-badge"
+                          :style {:background "var(--color-bg-subtle)"
+                                  :color "var(--color-text-secondary)"
+                                  :flex-shrink "0"}})
+              (dom/text "Dismissed"))))
         ;; Column 2: Done
         (dom/td
           (dom/props {:role "cell"
@@ -344,8 +354,8 @@
         (dom/td
           (dom/props {:style {:padding "4px 6px" :display "flex" :align-items "center"
                               :justify-content "flex-end"}})
-          (RowActionsMenu user-id id title is-root has-children kind
-            navigate! !editing-id !drop-cmd !show-confirm !scroll-node))))))
+          (RowActionsMenu user-id id title is-root has-children kind dismissed?
+            navigate! !editing-id !drop-cmd !show-confirm !scroll-node !dismiss-cmd))))))
 
 ;; ---------------------------------------------------------------------------
 ;; DeleteConfirmModal — extracted to keep DocumentTreeView lean
@@ -454,7 +464,13 @@
           drag-src (e/watch !drag-src)
           forbidden (e/server (if drag-src (set (db/get-subtree-ids drag-src)) #{}))
           !drop-cmd (atom nil)
-          drop-cmd (e/watch !drop-cmd)]
+          drop-cmd (e/watch !drop-cmd)
+          ;; Row-menu Dismiss/Undismiss. Handled here (not in the transient
+          ;; RowActionsMenu) so the server roundtrip runs in a scope that stays
+          ;; mounted while the menu closes; :dismiss/:undismiss bump
+          ;; :tree-mutations so this tree re-queries and the row re-greys.
+          !dismiss-cmd (atom nil)
+          dismiss-cmd (e/watch !dismiss-cmd)]
             ;; Commit a drop / promote-to-root via the standard mutation idiom.
             (let [[t _] (e/Token drop-cmd)]
               (when t
@@ -462,6 +478,16 @@
                       ok (e/server (e/Offload #(topic-move/move-topic! user-id src dst)))]
                   (case ok
                     (case (e/client (reset! !drop-cmd nil)) (t))))))
+            (let [[t _] (e/Token dismiss-cmd)]
+              (when t
+                (let [{:keys [id dismissed?]} dismiss-cmd
+                      ok (e/server (e/Offload #(do (if dismissed?
+                                                     (db/undismiss-topic! user-id id)
+                                                     (db/dismiss-topic! user-id id))
+                                                   :ok)))]
+                  (case ok
+                    (case (e/server (commands/bump! user-id (if dismissed? :undismiss :dismiss)))
+                      (case (e/client (reset! !dismiss-cmd nil)) (t)))))))
             ;; ONE ARIA table spans header + virtual-scrolled body (see the
             ;; identical mapping on the Learn table for the rationale).
             (dom/div
@@ -548,7 +574,7 @@
                             (DocumentRow user-id navigate! row i row-height
                               editing-id
                               !expansion !editing-id !show-confirm !scroll-node
-                              !drag-src drag-src forbidden !drop-cmd))))
+                              !drag-src drag-src forbidden !drop-cmd !dismiss-cmd))))
                       (dom/tr
                         ;; Opt out of the fixed row-height so the message isn't clipped (C1c).
                         (dom/props {:role "row" :style {:height "auto"}})

@@ -49,8 +49,8 @@
 ;; Invariant: item visibility matches the buttons that rendered on this row
 ;;       before — Rename always, Move-to-top when-not root, Review when children,
 ;;       Delete / Document-options when root.
-(e/defn RowActionsMenu [user-id id title is-root has-children kind
-                        navigate! !editing-id !drop-cmd !show-confirm !scroll-node]
+(e/defn RowActionsMenu [user-id id title is-root has-children kind dismissed?
+                        navigate! !editing-id !drop-cmd !show-confirm !scroll-node !dismiss-cmd]
   (e/client
     (let [!open (atom false)
           open (e/watch !open)
@@ -131,6 +131,21 @@
                   (dom/span (dom/text "Delete"))
                   (dom/On "click"
                     (fn [e] (.stopPropagation e) (reset! !show-confirm id) (reset! !open false))
+                    nil)))
+
+              ;; Dismiss / Undismiss — root only. Removes this document + its
+              ;; whole subtree from the Learning Queue (or restores it). The
+              ;; server roundtrip is delegated to DocumentTreeView via
+              ;; !dismiss-cmd so it runs in a scope that outlives this menu.
+              (when is-root
+                (dom/button
+                  (dom/props {:class "toolbar-dropdown-item" :role "menuitem"})
+                  (icons/Icon (if dismissed? :rotate-ccw :x) :size 16)
+                  (dom/span (dom/text (if dismissed? "Undismiss" "Dismiss")))
+                  (dom/On "click"
+                    (fn [e] (.stopPropagation e)
+                      (reset! !dismiss-cmd {:id id :dismissed? dismissed?})
+                      (reset! !open false))
                     nil)))
 
               ;; Document options — root only. Reuses the viewer's button+modal
