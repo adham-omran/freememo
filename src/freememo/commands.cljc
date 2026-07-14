@@ -143,6 +143,13 @@
                       :table #{:topics} :views #{:refresh :meta-refresh}}
      :restore        {:label "Restore (un-done)" :class :mutation :exec :ui-button
                       :when #{:viewer} :table #{:topics} :views #{:refresh :meta-refresh}}
+     ;; Dismiss/Undismiss — recursive queue-visibility toggle, bumped directly
+     ;; by RowActionsMenu (library) and DocumentOptionsModal (viewer); no palette
+     ;; entry or invoker, so no :exec.
+     :dismiss        {:label "Dismiss" :class :mutation :palette-hidden true
+                      :table #{:topics} :views #{:refresh :meta-refresh :tree-mutations}}
+     :undismiss      {:label "Undismiss" :class :mutation :palette-hidden true
+                      :table #{:topics} :views #{:refresh :meta-refresh :tree-mutations}}
      :advance-topic  {:label "Next topic" :class :mutation :exec :ui-button
                       :when #{:viewer} :table #{:topic_repetitions} :views #{:queue-mutations}}
      :postpone-topic {:label "Postpone topic" :class :mutation :exec :ui-button
