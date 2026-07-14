@@ -105,9 +105,10 @@
           !pick-search (atom "")
           !picked (atom nil)
           picked (e/watch !picked)
-          ;; Optimistic echo of the just-sent user turn: {:id :text :baseline-count}
-          ;; or nil. Rendered as a user bubble until the server transcript grows
-          ;; past :baseline-count (send! persists + bumps the row before the reply).
+          ;; Optimistic echo of the just-sent user turn: {:id :text} or nil.
+          ;; Rendered as a user bubble until the persisted row carrying this :id
+          ;; appears in the transcript (send! stores :id as the row's client_id and
+          ;; bumps before the reply), so the echo and the real row never both show.
           !echo (atom nil)
           echo (e/watch !echo)
           assistant-rev (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
@@ -136,7 +137,7 @@
       ;; suggested prompt). ensure-and-send! creates the chat when :chat is nil,
       ;; so the very first message auto-creates a chat carrying this page context.
       (when t
-        (let [{:keys [text chat] ref-ids :refs} submit
+        (let [{:keys [id text chat] ref-ids :refs} submit
               refs-snapshot (e/snapshot refs)] ; frozen at mount for failure-restore
           (if (str/blank? text)
             (t)
@@ -145,11 +146,10 @@
             (do
               (reset! !draft "")
               (reset! !refs [])
-              (reset! !echo {:id (:id submit) :text text
-                             :baseline-count (count messages)})
+              (reset! !echo {:id id :text text})
               (let [r (e/server (e/Offload
                                   #(assistant/ensure-and-send!
-                                     user-id root-topic-id page-topic-id chat text ref-ids)))]
+                                     user-id root-topic-id page-topic-id chat text ref-ids id)))]
                 (case r
                   (do
                     (reset! !active (:chat-id r)) ; select the (possibly new) chat
@@ -158,7 +158,7 @@
                       (do (reset! !error (:error r))
                           (reset! !draft text)
                           (reset! !refs refs-snapshot)))
-                    (reset! !echo nil) ; echo already stopped rendering on transcript growth
+                    (reset! !echo nil) ; echo already stopped rendering on id correlation
                     (t))))))))
 
       ;; @-reference commit: Typeahead wrote the chosen title to !picked. Add the
@@ -292,11 +292,12 @@
                                          (:assistant_messages/role m))})
                     (dom/text (:assistant_messages/content m)))))))
           ;; Optimistic echo of the just-sent turn (user bubble). Rendered only
-          ;; while the server transcript hasn't grown past the send baseline — a
-          ;; pure guard, so the echo and the real row never both show and no
-          ;; reactive write is needed (the atom is cleared at token completion).
+          ;; until the persisted row carrying this echo's id lands in the
+          ;; transcript — a pure id correlation, so the echo and the real row
+          ;; never both show and no reactive write is needed (the atom is cleared
+          ;; at token completion).
           (when-let [e-text (and echo
-                              (<= (count messages) (:baseline-count echo))
+                              (not-any? #(= (:id echo) (:assistant_messages/client_id %)) messages)
                               (:text echo))]
             (dom/div
               (dom/props {:class "assistant-msg assistant-msg--user"})

@@ -312,6 +312,11 @@
       content TEXT NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )"])
+  ;; Client-generated id for the optimistic echo of a user turn. The client
+  ;; renders the sent turn immediately and retires that echo once the persisted
+  ;; row bearing this id appears in the transcript — a globally-unique key that
+  ;; survives the round trip. NULL on assistant/server-originated rows.
+  (jdbc/execute! ds ["ALTER TABLE assistant_messages ADD COLUMN IF NOT EXISTS client_id TEXT"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_messages_chat
                       ON assistant_messages(chat_id, id)"])
 
@@ -1037,11 +1042,14 @@
 
 (defn insert-assistant-message!
   "Append a message and touch the parent chat's updated_at. Returns new id.
-   Pre: role ∈ {\"user\",\"assistant\"} (enforced by table CHECK)."
-  [chat-id role content]
+   Pre: role ∈ {\"user\",\"assistant\"} (enforced by table CHECK); `client-id`
+   is the client's echo-correlation id for a user turn, nil for assistant rows.
+   Post: the row's client_id = `client-id`."
+  [chat-id role content client-id]
   (let [id (-> (jdbc/execute-one! ds
                  (sql/format {:insert-into :assistant_messages
-                              :values [{:chat_id chat-id :role role :content content}]
+                              :values [{:chat_id chat-id :role role :content content
+                                        :client_id client-id}]
                               :returning [:id]}))
              :assistant_messages/id)]
     (jdbc/execute! ds
@@ -1055,7 +1063,7 @@
    reading context is injected transiently per send, not stored here)."
   [chat-id]
   (jdbc/execute! ds
-    (sql/format {:select [:id :role :content]
+    (sql/format {:select [:id :role :content :client_id]
                  :from [:assistant_messages]
                  :where [:= :chat_id chat-id]
                  :order-by [[:id :asc]]})))
