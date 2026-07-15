@@ -44,6 +44,34 @@
         (.dispose g)
         dst))))
 
+(defn- crop-image
+  "Return the sub-region of `src` selected by normalized `crop`
+   {:x :y :w :h} — fractions ∈ [0,1] measured in `src`'s OWN pixel space
+   (the caller crops AFTER rotating, so these fractions are in post-rotation
+   space, matching the client editor that produced them).
+   Pre:  crop is nil or a map of four numbers; the handler clamps them to [0,1].
+   Post: crop=nil or a (near-)full frame → src unchanged; otherwise a fresh
+         opaque TYPE_INT_RGB image holding only the cropped pixels. The pixel
+         rect is clamped to the image bounds and floored to ≥1×1."
+  ^BufferedImage [^BufferedImage src crop]
+  (if (nil? crop)
+    src
+    (let [w (.getWidth src) h (.getHeight src)
+          cx (double (:x crop)) cy (double (:y crop))
+          cw (double (:w crop)) ch (double (:h crop))
+          px (max 0 (min (long (Math/floor (* cx w))) (dec w)))
+          py (max 0 (min (long (Math/floor (* cy h))) (dec h)))
+          pw (max 1 (min (long (Math/ceil (* cw w))) (- w px)))
+          ph (max 1 (min (long (Math/ceil (* ch h))) (- h py)))]
+      (if (and (zero? px) (zero? py) (= pw w) (= ph h))
+        src
+        (let [sub (.getSubimage src px py pw ph)
+              dst (BufferedImage. pw ph BufferedImage/TYPE_INT_RGB)
+              g (.createGraphics dst)]
+          (.drawImage g sub 0 0 nil)
+          (.dispose g)
+          dst)))))
+
 (defn- ->opaque-rgb
   "Draw `src` onto a fresh opaque TYPE_INT_RGB image so JPEG embedding (which
    has no alpha channel) never fails. No-op when `src` is already opaque RGB."
@@ -57,16 +85,17 @@
       dst)))
 
 (defn- add-image-page!
-  "Append one A4 page to `doc` showing `img-bytes`, rotated clockwise by `deg`,
-   scaled to fit within the page margins, centered, aspect-ratio preserved.
+  "Append one A4 page to `doc` showing `img-bytes`, rotated clockwise by `deg`
+   then cropped to normalized `crop` (nil = whole frame), scaled to fit within
+   the page margins, centered, aspect-ratio preserved.
    Images whose source bytes exceed `compress-threshold-bytes` are embedded as
    JPEG (lossy); smaller ones stay lossless.
    Throws ex-info {:reason :bad-image} when the bytes are not a decodable image."
-  [^PDDocument doc ^bytes img-bytes deg]
+  [^PDDocument doc ^bytes img-bytes deg crop]
   (let [decoded (ImageIO/read (ByteArrayInputStream. img-bytes))]
     (when (nil? decoded)
       (throw (ex-info "Unreadable image" {:reason :bad-image})))
-    (let [bimg (rotate-image decoded deg)
+    (let [bimg (-> decoded (rotate-image deg) (crop-image crop))
           compress? (> (alength img-bytes) compress-threshold-bytes)
           page (PDPage. PDRectangle/A4)
           _ (.addPage doc page)
@@ -95,9 +124,12 @@
          nothing (the db tx aborts).
    `rotations` is a seq of clockwise degrees ∈ {0,90,180,270} index-aligned to
    `images`; missing/short entries default to 0 (no rotation).
+   `crops` is a seq of normalized crop maps {:x :y :w :h} (or nil) index-aligned
+   to `images`; missing/short/nil entries default to no crop (whole frame). Each
+   crop is applied AFTER its rotation, in post-rotation pixel space.
    Returns {:success true :pages-added K :doc_id id}
         or {:success false :error <msg> :code <code>}."
-  [user-id topic-id images rotations]
+  [user-id topic-id images rotations crops]
   (try
     (let [existing (db/get-topic-file topic-id)
           ^PDDocument doc (if existing
@@ -106,10 +138,11 @@
       (try
         (let [prev-total (.getNumberOfPages doc)
               prev-size (long (or (:topic_files/file_size existing) 0))
-              degs (concat (or rotations []) (repeat 0))]
-          (doseq [[idx img deg] (map vector (range) images degs)]
+              degs (concat (or rotations []) (repeat 0))
+              crps (concat (or crops []) (repeat nil))]
+          (doseq [[idx img deg crop] (map vector (range) images degs crps)]
             (try
-              (add-image-page! doc img deg)
+              (add-image-page! doc img deg crop)
               (catch clojure.lang.ExceptionInfo e
                 (throw (ex-info (.getMessage e) (assoc (ex-data e) :image-index idx))))))
           (let [baos (ByteArrayOutputStream.)

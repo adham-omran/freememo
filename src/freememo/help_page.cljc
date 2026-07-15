@@ -32,7 +32,7 @@
     :steps [["Upload a file" "Import → Upload. Drop a PDF, EPUB, HTML, Markdown, or code-repo (.zip) file (or click to browse); PDFs, EPUBs, and code repos ask \"Import as …\" first. Drag-and-drop onto the modal works too."]
             ["Import from a link" "Import → Link, paste a web or Wikipedia URL, and Fetch. A URL that resolves to a PDF or EPUB is offered for import."]
             ["Import from Zotero" "Import → Zotero opens your library; filter and click an item to pull its PDF. First turn it on in Settings → Zotero (Enable Zotero import, then Test Connection) with the FreeMemo for Zotero plugin installed."]
-            ["Live Document" "Import → Live Document makes a PDF you keep adding to. In its viewer use Upload images or Take photo, then Add pages; HEIC photos convert automatically."]]}
+            ["Live Document" "Import → Live Document makes a PDF you keep adding to. Tap ＋ to upload or take photos, rotate and crop each in the editor, then Done to append them as pages; HEIC photos convert automatically."]]}
    {:title "Studying a PDF"
     :intro "Turn a PDF into studied, card-ready material, one page at a time."
     :steps [["Import it" "Import tab → Upload (PDF or EPUB) or Link (a web or Wikipedia URL). Drag-and-drop works too."]

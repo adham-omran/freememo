@@ -467,7 +467,10 @@
     (json-response 401 {:success false :error "Not authenticated"})))
 
 (defn append-images-handler
-  "POST /api/append-images — multipart {doc_id, images (1..N image parts)}.
+  "POST /api/append-images — multipart {doc_id, images (1..N image parts),
+   rotations (JSON int array), crops (JSON array of {x,y,w,h}|null)}.
+   `rotations`/`crops` are index-aligned to `images`; both are optional and
+   default per-entry to no rotation / no crop.
    Pre:  authenticated; doc_id is a kind='pdf', is_live=true topic owned by caller;
          every part is image/*; combined size within the per-file cap.
    Post: each image appended as an A4 page → {:success true :pages_added K :doc_id N}."
@@ -481,6 +484,14 @@
                         (#(try (json/parse-string %) (catch Exception _ nil)))
                         (mapv #(let [d (mod (long (if (number? %) % 0)) 360)]
                                  (if (zero? (mod d 90)) d 0))))
+            clamp01 (fn [v] (-> (if (number? v) (double v) 0.0) (max 0.0) (min 1.0)))
+            crops (some->> (get-in request [:params "crops"])
+                    (#(try (json/parse-string %) (catch Exception _ nil)))
+                    (mapv (fn [c]
+                            (when (map? c)
+                              (let [x (clamp01 (get c "x")) y (clamp01 (get c "y"))
+                                    w (clamp01 (get c "w")) h (clamp01 (get c "h"))]
+                                (when (and (pos? w) (pos? h)) {:x x :y y :w w :h h}))))))
             topic (when doc-id (db/get-topic-for-user user-id doc-id))]
         (cond
           (nil? doc-id)
@@ -507,7 +518,7 @@
                     {:user-id user-id :doc-id doc-id :batch-size total :limit cap})
                   (json-response 413 {:success false :error (str "Batch exceeds " cap " bytes")
                                       :code "file-too-large" :limit cap :incoming total}))
-              (let [r (live-doc/append-images! user-id doc-id images rotations)]
+              (let [r (live-doc/append-images! user-id doc-id images rotations crops)]
                 (if (:success r)
                   (do (commands/bump! user-id :append-images)
                       (json-response 200 {:success true :pages_added (:pages-added r) :doc_id doc-id}))
