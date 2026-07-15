@@ -10,6 +10,7 @@
    [freememo.doc-context :as dctx]
    [freememo.document-view :refer [DocumentColumns DocumentToolbars]]
    [freememo.bottom-panel :refer [BottomPanel]]
+   [freememo.live-doc-wizard :refer [LiveDocEmptyState]]
    [freememo.util :as util]
    #?(:clj [freememo.settings :as settings])))
 
@@ -24,7 +25,8 @@
           card-font-size dctx/card-font-size card-refresh dctx/card-refresh
           !top-pct dctx/!top-pct top-pct dctx/top-pct
           !top-pct-save dctx/!top-pct-save reset-split! dctx/reset-split!
-          t-layout dctx/t-layout layout-save dctx/layout-save]
+          t-layout dctx/t-layout layout-save dctx/layout-save
+          is-live? dctx/is-live? pdf-has-file? dctx/pdf-has-file?]
     ;; Persist layout on toggle
     (when t-layout
       (if (and is-pdf? pdf-root-id)
@@ -33,7 +35,12 @@
             (if (:success r) (case r (t-layout)) (t-layout (:error r)))))
         (t-layout)))
 
-    (dom/div
+    ;; Blob-less Live Document: the upload wizard IS the whole body — no
+    ;; toolbars, hierarchy/pins, or card table. Normal layout returns once the
+    ;; first page commits (pdf-has-file? flips true → this gate is false).
+    (if (and is-live? (not pdf-has-file?))
+      (LiveDocEmptyState)
+      (dom/div
       (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
                           :min-height "0" :overflow "hidden"}})
 
@@ -65,7 +72,7 @@
 
       ;; BOTTOM BAR (full width): the card table.
       (when-not reading-mode?
-        (BottomPanel)))
+        (BottomPanel))))
     )))
 
 (e/defn DocumentRoot

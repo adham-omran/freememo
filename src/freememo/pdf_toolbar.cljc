@@ -27,7 +27,7 @@
    [freememo.copy-text :as copy]
    [freememo.pdf-action-dropdowns :refer [ScanDropdown CopyDropdown KgCommandSources]]
    [freememo.pdf-viewer :as viewer]
-   [freememo.pdf-viewer-component :refer [LiveDocAddPhotos]]
+   [freememo.live-doc-wizard :refer [LiveDocAddPhotos]]
    [freememo.score-toolbar :refer [ScoreRectButton]]
    [freememo.toolbar-overflow :refer [install-overflow-detector!]]
    [freememo.tooltip :as tooltip]
