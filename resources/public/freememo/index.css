@@ -2676,6 +2676,17 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     width: 32px;
 }
 
+/* Compact (portrait tablet): a manually-opened side panel keeps its persisted
+   desktop width, which can crowd out the content column on a narrow screen.
+   Cap each open panel so the content always keeps room; the collapsed 32px
+   state is below the cap and unaffected. */
+@media (max-width: 900px) {
+    .pin-side-panel,
+    .hierarchy-side-panel {
+        max-width: 60vw;
+    }
+}
+
 /* Header row containing the hamburger toggle + (when open) the title label.
    Always renders, so the toggle is reachable in the collapsed 32px state. */
 .side-panel__header {

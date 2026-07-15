@@ -3,6 +3,7 @@
   (:require
    [clojure.string :as string]
    [contrib.data :refer [clamp-left]]
+   [freememo.viewport :as viewport]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]))
@@ -32,7 +33,8 @@
    placeholder  — input placeholder text
    ?!committed  — optional atom; reset to selected item only on definitive selection
                   (mousedown or Enter), not on every keystroke. Pass nil to disable.
-   autofocus?   — when truthy, focus the input on mount."
+   autofocus?   — when truthy, focus the input on mount (skipped on touch,
+                  where autofocus would pop the on-screen keyboard)."
   [!atom options placeholder ?!committed autofocus?]
   (e/client
     (let [value (e/watch !atom)
@@ -59,7 +61,10 @@
                       :placeholder placeholder
                       :class "input"
                       :style {:width "100%"}})
-          (let [focus-node (when autofocus? dom/node)]
+          ;; Touch: skip autofocus — it would pop the on-screen keyboard; the
+          ;; learner taps the field when they actually mean to type.
+          (let [coarse? (e/watch viewport/!coarse?)
+                focus-node (when (and autofocus? (not coarse?)) dom/node)]
             (when focus-node
               (js/setTimeout (fn [] (.focus focus-node)) 50)))
           ;; Focus opens the dropdown but keeps the value — search stays nil so
