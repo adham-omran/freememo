@@ -120,10 +120,11 @@
     ;; DOM subtree persist across page scrolls.
     (e/for-by identity [_k [root-topic-id]]
       (let [phone?          (e/watch viewport/!phone?)
+            compact?        (e/watch viewport/!compact?)
             persisted-open? (e/server (settings/get-hierarchy-open user-id root-topic-id))
-            ;; Phone defaults to collapsed regardless of persisted desktop pref.
-            ;; The toggle still works — user can open it manually on phone.
-            initial-open?   (and (not phone?) persisted-open?)
+            ;; Phone and portrait-tablet (compact) default to collapsed regardless
+            ;; of the persisted desktop pref — the toggle still opens it manually.
+            initial-open?   (and (not phone?) (not compact?) persisted-open?)
             !open?          (atom initial-open?)
             open?           (e/watch !open?)
             !save           (atom nil)

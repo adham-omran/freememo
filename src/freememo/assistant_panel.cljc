@@ -15,6 +15,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
    [freememo.typeahead :refer [Typeahead]]
+   [freememo.viewport :as viewport]
    #?(:clj [freememo.assistant :as assistant])
    #?(:clj [freememo.markdown :as markdown])
    #?(:clj [freememo.settings :as settings])
@@ -131,7 +132,10 @@
                                    markdown/dollar-math->tex))
                                m))
                        (or (assistant/messages* assistant-rev user-id active) [])))
-          sending? (some? t)]
+          sending? (some? t)
+          ;; Touch devices: never steal focus into the composer — an autofocus
+          ;; here pops the on-screen keyboard the moment the panel opens.
+          coarse? (e/watch viewport/!coarse?)]
 
       ;; Send effect: fires when a submit payload is produced (Send / Enter /
       ;; suggested prompt). ensure-and-send! creates the chat when :chat is nil,
@@ -361,7 +365,7 @@
                   (reset! !at-open? true))) ; the `@` still types into the draft
               nil)
             ;; Return the caret to the composer once a reply lands (edge-fired).
-            (case (focus! dom/node (not sending?)) nil))
+            (case (focus! dom/node (and (not sending?) (not coarse?))) nil))
           (dom/div
             (dom/props {:class "assistant-panel__composer-actions"})
             (dom/button

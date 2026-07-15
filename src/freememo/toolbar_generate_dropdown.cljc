@@ -64,6 +64,7 @@
           context-window dctx/context-window context-tooltip dctx/context-tooltip
           content-text dctx/content-text mod-key dctx/mod-key
           !use-context dctx/!use-context !context-window dctx/!context-window !card-type dctx/!card-type
+          !card-count dctx/!card-count
           !open (atom false)
           open (e/watch !open)
           no-content? (empty? content-text)
@@ -142,12 +143,14 @@
                 (dom/props {:class "toolbar-dropdown-menu toolbar-generate-menu"
                             :role "menu"})
 
-                ;; Generation settings (C3): card-type + Context live here as
-                ;; live widgets above the actions. Clicking them stays inside the
-                ;; menu (install-dropdown-listeners! keeps it open). Card-count
-                ;; deliberately stays inline in the toolbar — commonly changed.
+                ;; Generation settings (C3): card-count + card-type + Context live
+                ;; here as live widgets above the actions. Clicking them stays
+                ;; inside the menu (install-dropdown-listeners! keeps it open).
+                ;; Card-count is ALSO shown inline in the toolbar until it collapses
+                ;; (tier 4); both share !card-count, so they stay synced.
                 (dom/div
                   (dom/props {:class "toolbar-generate-menu-settings"})
+                  (settings/CardCountStepper user-id card-count-val !card-count)
                   (settings/ToolbarSettings)
                   (settings/ContextSettings))
                 (dom/div (dom/props {:class "toolbar-dropdown-separator"}))

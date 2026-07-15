@@ -223,7 +223,7 @@
         (if (e/server (some? user-id))
           ;; Authenticated: render app with URL router
           (dom/div
-            (dom/props {:style {:height "100vh" :display "flex" :flex-direction "column" :overflow "hidden"}})
+            (dom/props {:style {:height "100dvh" :display "flex" :flex-direction "column" :overflow "hidden"}})
 
             (r/router (r/HTML5-History)
               (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
