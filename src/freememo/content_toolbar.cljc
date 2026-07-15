@@ -145,12 +145,9 @@
             ;; into the Generate dropdown menu (C3), which is itself a dropdown
             ;; and works on mobile, so no overflow proxy is needed.
 
-            ;; CardCount proxy (.toolbar-overflow-cardcount, reveals T4+).
-            ;; Same atom as inline stepper — instances stay in sync.
-                (when llm-enabled?
-                  (dom/div
-                    (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-cardcount"})
-                    (settings/CardCountStepper user-id card-count-val !card-count)))
+            ;; CardCount is no longer proxied into the ⋮ overflow panel — it now
+            ;; lives inside the Generate dropdown menu (always a dropdown, works at
+            ;; every tier). The inline stepper below still shows until it collapses.
 
             ;; Bibliography (Refetch) proxy removed — Refetch folded into the
             ;; Edit-Bibliography modal (C4).
@@ -269,7 +266,7 @@
                           dctx/context-window context-window dctx/gen-active? gen-active?
                           dctx/gen-pending gen-pending dctx/gen-error gen-error
                           dctx/!use-context !use-context dctx/!context-window !context-window
-                          dctx/!card-type !card-type]
+                          dctx/!card-type !card-type dctx/!card-count !card-count]
                   (GenerateDropdown))
 
                 ;; Card-count stays inline (commonly changed). Card-type +

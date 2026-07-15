@@ -485,9 +485,6 @@ html, body {
 
 /* Proxy reveal — mirror the inline collapse, but only when dropdown is open. */
 .toolbar-container.overflow-open .toolbar-overflow-keep { display: flex; }
-.toolbar-container:is(.collapse-4, .collapse-5, .collapse-6, .collapse-7).overflow-open .toolbar-overflow-cardcount {
-    display: flex;
-}
 .toolbar-container:is(.collapse-5, .collapse-6, .collapse-7).overflow-open .toolbar-overflow-bib {
     display: flex;
 }
@@ -817,6 +814,16 @@ html, body {
    grows to fit rather than wrapping the label. */
 .toolbar-sync-dropdown .toolbar-dropdown-item {
     white-space: nowrap;
+}
+
+/* Copy / Scan / Generate triggers sit toward the right of their bars; right-align
+   their menus (like sync above) so a left-anchored menu can't run past the
+   toolbar's right edge and get clipped by `.toolbar`'s `overflow-x: clip`. */
+.toolbar-copy-dropdown .toolbar-dropdown-menu,
+.toolbar-scan-dropdown .toolbar-dropdown-menu,
+.toolbar-generate-dropdown .toolbar-dropdown-menu {
+    left: auto;
+    right: 0;
 }
 
 /* Menu items — full-width rows, icon + label, hover/focus states match the
@@ -2496,6 +2503,12 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 [data-tooltip]:hover::after {
     opacity: 1;
     visibility: visible;
+}
+/* Touch devices latch `:hover` after a tap, leaving a stale bubble painted over
+   whatever opens next (e.g. a confirm modal — the bubble is z-index:1100, above
+   the backdrop). No hover intent exists on touch, so drop the affordance. */
+@media (hover: none) {
+    [data-tooltip]::after { content: none; }
 }
 /* Suppress the tooltip while the element's menu is open. The cursor is still
    over the trigger after a click, so :hover stays true and the tooltip would
