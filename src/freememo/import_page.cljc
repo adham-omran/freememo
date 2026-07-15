@@ -109,7 +109,7 @@
               (ImportModal !show-link user-id :url navigate!)))
 
           (let [show-upload (e/watch !show-upload)]
-            (ImportCard :upload "Upload" "PDF, EPUB, HTML, or Markdown — chosen by file extension" (fn [] (reset! !show-upload true)))
+            (ImportCard :upload "Upload" "PDF, EPUB, HTML, Markdown or a ZIP code base, chosen by file extension" (fn [] (reset! !show-upload true)))
             (when show-upload
               (ImportModal !show-upload user-id :file navigate!)))
 
