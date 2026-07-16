@@ -2,48 +2,12 @@
   "Server-side Anki sync operations — fetching cards for sync,
    recording pushed note IDs, and applying pull updates."
   (:require
-   [clojure.string :as str]
    [freememo.db :as db]
    [freememo.settings :as settings]
    [freememo.commands :as commands]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.bibliography-form :as bibform]
-   [taoensso.telemere :as tel])
-  (:import [java.util Base64]))
-
-(defn mime-type->ext
-  "Derive a file extension from a MIME type string. Defaults to \"bin\" for unknowns."
-  [mime-type]
-  (case (str/lower-case (or mime-type ""))
-    "image/png" "png"
-    "image/jpeg" "jpg"
-    "image/jpg" "jpg"
-    "image/gif" "gif"
-    "image/webp" "webp"
-    "image/svg+xml" "svg"
-    "image/bmp" "bmp"
-    "image/tiff" "tiff"
-    "audio/mpeg" "mp3"
-    "bin"))
-
-(defn get-media-base64
-  "Fetch a media row by id and return {:filename \"<id>.<ext>\" :data \"<base64>\"}
-   or nil if the row does not exist or the media table is not yet available.
-   Called server-side from the push pipeline.
-   Uses requiring-resolve so the compile succeeds even before db/get-media is defined."
-  [media-id]
-  (try
-    (when-let [get-media-fn (requiring-resolve 'freememo.db/get-media)]
-      (when-let [row (get-media-fn media-id)]
-        (let [^bytes raw-bytes (:media/bytes row)
-              mime (:media/mime_type row)
-              ext (mime-type->ext mime)
-              filename (str media-id "." ext)
-              b64 (.encodeToString (Base64/getEncoder) raw-bytes)]
-          {:filename filename :data b64})))
-    (catch Exception e
-      (tel/error! {:id ::get-media-base64 :data {:media-id media-id}} e)
-      nil)))
+   [taoensso.telemere :as tel]))
 
 (defn load-anki-preferences
   "Load saved Anki sync preferences for a user (global). Note types are
@@ -239,20 +203,6 @@
                :data (assoc detail :user-id user-id :topic-id topic-id)}
       "client sync error"))
   nil)
-
-(defn record-pushed-notes
-  "After push, bulk-save Anki note IDs.
-   pairs: [{:card-id N :anki-note-id M} ...]"
-  [pairs]
-  (try
-    (db/set-anki-note-ids
-      (mapv (fn [{:keys [card-id anki-note-id]}]
-              [card-id anki-note-id])
-        pairs))
-    {:success true :count (count pairs)}
-    (catch Exception e
-      (tel/error! {:id ::record-pushed-notes} e)
-      {:success false :error (.getMessage e)})))
 
 (defn finalize-push!
   "Atomically (per-server-call) record pushed notes, save global last-used,

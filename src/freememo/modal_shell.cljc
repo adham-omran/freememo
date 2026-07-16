@@ -119,6 +119,55 @@
           (= (.-key e) "Tab")    (trap-tab! (.-currentTarget e) e)))
       nil)))
 
+;; Cmd/Ctrl+Enter → click the modal's primary (Save/Generate) button. Escape is
+;; ModalEscape's job; this covers the one extra shortcut ModalEscape doesn't.
+;; Top-level platform-split defn, NOT an inline #?(:cljs) fn body inside an
+;; e/defn — an event handler closing over reactive bindings must capture the
+;; SAME set on both peers, or the frame slot counts diverge and the server
+;; crashes with ArrayIndexOutOfBounds on mount (this exact defn was hoisted
+;; out of freememo.occlusion-modal for that reason; see its history).
+#?(:cljs
+   (defn mod-enter-submit!
+     "!primary-btn is a client atom holding the mounted primary button node."
+     [e !primary-btn]
+     (when (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
+       (when-let [btn @!primary-btn]
+         (.preventDefault e)
+         (.click btn)))))
+#?(:clj (defn mod-enter-submit! [_e _!primary-btn] nil))
+
+;; Pointer-capture drag of the modal by its <h3> title bar. Call from a
+;; pointerdown handler on the modal's content container (the element whose
+;; position gets flipped to "fixed" while dragging). Top-level defn for the
+;; same capture-symmetry reason as `mod-enter-submit!`.
+#?(:cljs
+   (defn drag-modal-by-title! [e]
+     (let [inner (.-currentTarget e)
+           h3 (.querySelector inner "h3")]
+       (when (and h3 (or (= (.-target e) h3)
+                       (.contains h3 (.-target e))))
+         (.preventDefault e)
+         (let [rect (.getBoundingClientRect inner)
+               sx (.-clientX e)
+               sy (.-clientY e)
+               px (.-left rect)
+               py (.-top rect)
+               move-fn (fn [me]
+                         (set! (.-position (.-style inner)) "fixed")
+                         (set! (.-left (.-style inner))
+                           (str (+ px (- (.-clientX me) sx)) "px"))
+                         (set! (.-top (.-style inner))
+                           (str (+ py (- (.-clientY me) sy)) "px"))
+                         (set! (.-margin (.-style inner)) "0"))
+               up-fn (fn self [ue]
+                       (.releasePointerCapture inner (.-pointerId ue))
+                       (.removeEventListener inner "pointermove" move-fn)
+                       (.removeEventListener inner "pointerup" self))]
+           (.setPointerCapture inner (.-pointerId e))
+           (.addEventListener inner "pointermove" move-fn)
+           (.addEventListener inner "pointerup" up-fn))))))
+#?(:clj (defn drag-modal-by-title! [_e] nil))
+
 (e/defn ConfirmModal
   "Reusable confirm dialog on ModalEscape chrome. Renders nothing while @!open is
    nil; when non-nil, shows `message` (with `title` as the dialog label) and

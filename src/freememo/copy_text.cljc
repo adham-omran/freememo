@@ -123,7 +123,8 @@
 
 (e/defn PickButton
   "Commit the chosen text to the page; if Remember is checked, also persist the
-   style. Closes the modal on success."
+   style. Closes the modal on success; on failure toasts the error and leaves
+   the modal open so the user isn't left thinking the pick was saved."
   [label user-id root-topic-id page html style enabled? !remember !compare]
   (e/client
     (dom/button
@@ -133,12 +134,21 @@
       (let [click (dom/On "click" (fn [_] @!remember) nil)
             [t _] (e/Token click)]
         (when t
-          (e/on-unmount #(reset! !compare nil))
-          (case (e/server (e/Offload #(commit-html!* user-id root-topic-id page html)))
-            (case (if click
-                    (e/server (save-style!* user-id root-topic-id style))
-                    :skip)
-              (t))))))))
+          (let [commit-r (e/server (e/Offload #(commit-html!* user-id root-topic-id page html)))]
+            (case commit-r
+              (if (:success commit-r)
+                (let [style-r (if click
+                                (e/server (save-style!* user-id root-topic-id style))
+                                {:success true})]
+                  (case style-r
+                    (if (:success style-r)
+                      (do (e/on-unmount #(reset! !compare nil)) (t))
+                      (case (e/server (e/Offload #(push-toast!* user-id :warning
+                                                    (str "Saved the text, but couldn't remember the style: " (:error style-r)))))
+                        (do (e/on-unmount #(reset! !compare nil)) (t))))))
+                (case (e/server (e/Offload #(push-toast!* user-id :error
+                                              (str "Couldn't save text: " (:error commit-r)))))
+                  (t (:error commit-r)))))))))))
 
 (e/defn CompareModal
   "Runs both previews on mount, shows them side-by-side, commits the picked text
@@ -247,16 +257,24 @@
         (let [[t _] (e/Token remote-run)]
           (when t
             (e/on-unmount #(reset! !remote-run nil))
-            (case (e/server (e/Offload #(remote-extract-save!* user-id root-topic-id (:page remote-run))))
-              (t)))))
+            (let [r (e/server (e/Offload #(remote-extract-save!* user-id root-topic-id (:page remote-run))))]
+              (case r
+                (if (:success r)
+                  (t)
+                  (case (e/server (e/Offload #(push-toast!* user-id :error (str "Couldn't copy text: " (:error r)))))
+                    (t (:error r)))))))))
 
       ;; Client direct path: save the client-extracted raw text.
       (when client-save
         (let [[t _] (e/Token client-save)]
           (when t
             (e/on-unmount #(reset! !client-save nil))
-            (case (e/server (e/Offload #(client-save!* user-id root-topic-id (:page client-save) (:raw client-save))))
-              (t)))))
+            (let [r (e/server (e/Offload #(client-save!* user-id root-topic-id (:page client-save) (:raw client-save))))]
+              (case r
+                (if (:success r)
+                  (t)
+                  (case (e/server (e/Offload #(push-toast!* user-id :error (str "Couldn't save text: " (:error r)))))
+                    (t (:error r)))))))))
 
       ;; Compare path (style unset): run both previews in a modal.
       (when compare

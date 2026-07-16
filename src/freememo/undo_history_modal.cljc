@@ -178,7 +178,7 @@
     (when (e/watch !open?)
       (let [refresh (e/server (e/watch (us/get-atom user-id :undo-mutations)))
             rows (e/server (get-undo-views* refresh user-id))
-            n (count rows)]
+            n (e/server (count rows))]
         (dom/div
           (dom/props {:class "modal-backdrop"})
           (dom/On "click" (fn [_] (reset! !open? false)) nil)
@@ -216,7 +216,7 @@
                   (dom/props {:style {:width "100%" :display "grid"
                                       :grid-template-columns "110px 1fr 1fr 1.4fr 100px"
                                       :font-size "13px"}})
-                  (e/for [row (e/diff-by :id rows)]
+                  (e/for [row (e/server (e/diff-by :id rows))]
                     (UndoRow row user-id)))
                 (dom/div
                   (dom/props {:style {:text-align "center" :padding "32px 12px"

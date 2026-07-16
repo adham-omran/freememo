@@ -110,7 +110,7 @@
             query (e/watch !query)
             !idx (atom 0)
             idx (e/watch !idx)
-            rows (palette-rows active-tab @bus/!ctx query)]
+            rows (palette-rows active-tab (e/watch bus/!ctx) query)]
         (dom/div
           (dom/props {:class "modal-backdrop"
                       :role "dialog" :aria-modal "true" :aria-label "Command palette"
@@ -128,12 +128,12 @@
             (dom/input
               (dom/props {:placeholder "Type a command or search…"
                           :aria-label "Command palette"
+                          :autofocus true
                           :style {:padding "14px 16px" :font-size "15px"
                                   :border "none" :outline "none"
                                   :border-bottom "0.5px solid var(--color-border-light)"
                                   :background "transparent"
                                   :color "var(--color-text-primary)"}})
-              (modal-shell/focus-on-mount! dom/node)
               (dom/On "input"
                 (fn [e]
                   (reset! !query (-> e .-target .-value))

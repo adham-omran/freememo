@@ -266,6 +266,8 @@
             [t _] (e/Token click)]
         (dom/props {:disabled (some? t)})
         (when t
+          ;; fire-and-forget: retry-pending-card! always returns :done — no
+          ;; {:success ...} contract to branch on.
           (case (e/server (opt/retry-pending-card! user-id tempid))
             (t)))))))
 
@@ -280,6 +282,8 @@
             [t _] (e/Token click)]
         (dom/props {:disabled (some? t)})
         (when t
+          ;; fire-and-forget: forget-pending-card! is idempotent and always
+          ;; returns :done — no {:success ...} contract to branch on.
           (case (e/server (opt/forget-pending-card! user-id tempid))
             (t)))))))
 

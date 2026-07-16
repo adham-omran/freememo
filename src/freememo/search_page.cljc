@@ -9,6 +9,7 @@
    [clojure.string :as str]
    [freememo.navigation :as nav]
    [freememo.tooltip :as tooltip]
+   [freememo.util :as util]
    #?(:clj [freememo.search :as search])))
 
 ;; Server wrapper — plain defn with reader conditional, so :refer works from cljs
@@ -182,6 +183,13 @@
 
           !query (atom initial-q)
           query (e/watch !query)
+          ;; Debounced twin of !query — the input's displayed value tracks
+          ;; !query directly (instant keystrokes); the server query below
+          ;; tracks !query-debounced, which only commits after a short idle
+          ;; so typing doesn't fire a search per keystroke.
+          !query-debounced (atom initial-q)
+          query-debounced (e/watch !query-debounced)
+          !query-timer (atom nil)
           !mode (atom initial-mode)
           mode (e/watch !mode)
           !kind (atom initial-kind)
@@ -190,8 +198,9 @@
           ;; URL sync — side effect during binding evaluation
           url-synced (do (update-url! mode kind query) true)
 
-          ;; Derived
-          q-trimmed (str/trim (or query ""))
+          ;; Derived — from the debounced query, so the validity gate and the
+          ;; server call below settle together after the idle window.
+          q-trimmed (str/trim (or query-debounced ""))
           valid? (>= (count q-trimmed) 2)
 
           ;; Server search — form binding, sited-by-use: the result rows stay
@@ -226,7 +235,12 @@
             (dom/props {:type "text" :placeholder "Search all content..."
                         :class "input" :style {:flex "1" :min-width "200px"}})
             (set! (.-value dom/node) query)
-            (dom/On "input" (fn [e] (reset! !query (-> e .-target .-value))) nil))
+            (dom/On "input"
+              (fn [e]
+                (let [v (-> e .-target .-value)]
+                  (reset! !query v)
+                  (util/debounce! !query-timer !query-debounced v 300)))
+              nil))
 
           (dom/select
             (dom/props {:class "input" :aria-label "Match mode"})

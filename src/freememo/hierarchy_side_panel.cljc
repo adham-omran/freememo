@@ -112,6 +112,91 @@
                   [row])))]
       (vec (walk scope-root 0)))))
 
+(e/defn SidePanelShell
+  "Shared side-panel chrome, factored out of this ns and freememo.right-side-panel
+   (RightSidePanel), which independently grew the same header-toggle +
+   resize-handle shell. Lives here rather than its own namespace because this
+   dedup pass is scoped to the two files that duplicated it.
+
+   Renders: an outer div (`class`, plus `class`--collapsed when closed) whose
+   width tracks `width-px` while open; a `side-panel__header` row with a ☰
+   toggle that flips `!open?` and stages the new value into `!save` for the
+   caller's own persistence effect; a `side-panel__resize` handle (only when
+   open) wired to util/start-drag-px!/key-resize-px!, staging the committed
+   width into `!width-save`.
+
+   `side` is the panel-relative edge the resize handle sits on — :right for
+   the hierarchy panel (handle on its inner/right edge; content follows,
+   :after) or :left for the right side-panel (handle on its inner/left edge;
+   content precedes, :before). Drives the `side-panel__resize--<side>` class,
+   drag `invert?` (true for :left — dragging right shrinks the panel), and
+   the content-side passed to util/panel-resize-max.
+
+   The caller owns querying its own persisted open?/width values, the
+   settings namespace, and running the save-token effects (offload + :success
+   case) — this component only renders chrome and mutates the atoms it's
+   handed, so each panel's own (already-fixed) persistence behavior is
+   untouched by this refactor.
+
+   `Header-extra` is `(e/fn [] ...)`, rendered after the toggle when open (a
+   title, a tab row, etc). `Body` is `(e/fn [] ...)`, rendered below the
+   resize handle when open."
+  [{:keys [side class toggle-aria-label resize-aria-label
+           open? !open? !save
+           width-px !width-px !width-save]}
+   Header-extra Body]
+  (e/client
+    (let [[content-side invert?] (case side :left [:before true] :right [:after false])]
+      (dom/div
+        (dom/props {:class (str class (when-not open? (str " " class "--collapsed")))
+                    :style (merge {:position "relative"}
+                             (when open? {:width (str width-px "px")}))})
+
+        ;; Header row — toggle (always visible) + Header-extra (only when
+        ;; open). The row renders even when collapsed so the fixed gutter
+        ;; still surfaces the hamburger.
+        (dom/div
+          (dom/props {:class "side-panel__header"})
+          (dom/button
+            (dom/props {:class "side-panel__toggle"
+                        :aria-label toggle-aria-label
+                        :aria-expanded (str (boolean open?))})
+            (dom/text "☰")
+            (dom/On "click"
+              (fn [_]
+                (let [next-open? (not @!open?)]
+                  (reset! !open? next-open?)
+                  (reset! !save next-open?)))
+              nil))
+          (when open? (Header-extra)))
+
+        ;; Resize handle on the inner edge; only when open.
+        (when open?
+          (dom/div
+            (dom/props {:class (str "side-panel__resize side-panel__resize--" (name side))
+                        :title "Drag to resize"
+                        :role "separator" :aria-orientation "vertical"
+                        :aria-label resize-aria-label :tabindex "0"
+                        :aria-valuenow (str (int (or width-px 0)))})
+            (dom/On "pointerdown"
+              (fn [e]
+                (util/start-drag-px! e !width-px
+                  {:min 180
+                   :max (max 180 (util/panel-resize-max (.-currentTarget e) content-side 320))
+                   :invert? invert?
+                   :on-commit #(reset! !width-save %)}))
+              nil)
+            (dom/On "keydown"
+              (fn [e]
+                (util/key-resize-px! e !width-px
+                  {:min 180
+                   :max (max 180 (util/panel-resize-max (.-currentTarget e) content-side 320))
+                   :invert? invert?
+                   :on-commit #(reset! !width-save %)}))
+              nil)))
+
+        (when open? (Body))))))
+
 (e/defn HierarchySidePanel [user-id page-topic-id root-topic-id navigate! !nav-target]
   (e/client
     ;; Frame isolation — remounts only when root-topic-id changes (i.e. when
@@ -138,66 +223,25 @@
             [?width-token _] (e/Token width-save)]
 
         (when-some [token ?save-token]
-          (e/server (settings/save-hierarchy-open user-id root-topic-id save-val))
-          (token))
+          (let [r (e/server (e/Offload #(settings/save-hierarchy-open user-id root-topic-id save-val)))]
+            (case r (if (:success r) (token) (token (:error r))))))
 
         (when-some [token ?width-token]
-          (e/server (settings/save-hierarchy-width user-id root-topic-id width-save))
-          (token))
+          (let [r (e/server (e/Offload #(settings/save-hierarchy-width user-id root-topic-id width-save)))]
+            (case r (if (:success r) (token) (token (:error r))))))
 
-        (dom/div
-          (dom/props {:class (str "hierarchy-side-panel"
-                               (when-not open? " hierarchy-side-panel--collapsed"))
-                      :style (merge {:position "relative"}
-                               (when open? {:width (str width-px "px")}))})
-
-          ;; Header row — toggle (always visible) + title (only when open).
-          ;; The row renders even when collapsed so the 32px gutter still
-          ;; surfaces the hamburger.
-          (dom/div
-            (dom/props {:class "side-panel__header"})
-            (dom/button
-              (dom/props {:class "side-panel__toggle"
-                          :aria-label "Toggle hierarchy panel"
-                          :aria-expanded (str (boolean open?))})
-              (dom/text "☰")
-              (dom/On "click"
-                (fn [_]
-                  (let [next-open? (not @!open?)]
-                    (reset! !open? next-open?)
-                    (reset! !save next-open?)))
-                nil))
-            (when open?
-              (dom/span
-                (dom/props {:class "side-panel__title"})
-                (dom/text "Hierarchy"))))
-
-          ;; Resize handle on the inner (right) edge; only when open.
-          (when open?
-            (dom/div
-              (dom/props {:class "side-panel__resize side-panel__resize--right"
-                          :title "Drag to resize"
-                          :role "separator" :aria-orientation "vertical"
-                          :aria-label "Resize hierarchy panel" :tabindex "0"
-                          :aria-valuenow (str (int (or width-px 0)))})
-              (dom/On "pointerdown"
-                (fn [e]
-                  (util/start-drag-px! e !width-px
-                    {:min 180
-                     :max (max 180 (util/panel-resize-max (.-currentTarget e) :after 320))
-                     :invert? false
-                     :on-commit #(reset! !width-save %)}))
-                nil)
-              (dom/On "keydown"
-                (fn [e]
-                  (util/key-resize-px! e !width-px
-                    {:min 180
-                     :max (max 180 (util/panel-resize-max (.-currentTarget e) :after 320))
-                     :invert? false
-                     :on-commit #(reset! !width-save %)}))
-                nil)))
-
-          (when open?
+        (SidePanelShell
+          {:side :right
+           :class "hierarchy-side-panel"
+           :toggle-aria-label "Toggle hierarchy panel"
+           :resize-aria-label "Resize hierarchy panel"
+           :open? open? :!open? !open? :!save !save
+           :width-px width-px :!width-px !width-px :!width-save !width-save}
+          (e/fn []
+            (dom/span
+              (dom/props {:class "side-panel__title"})
+              (dom/text "Hierarchy")))
+          (e/fn []
             (if (nil? page-topic-id)
               (dom/div
                 (dom/props {:style {:padding "16px 12px" :font-size "13px"

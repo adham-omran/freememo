@@ -13,6 +13,7 @@
    [freememo.scroll :refer [Scroll-window]]
    [freememo.card-models :as card-models]
    [freememo.ocr-models :as ocr-models]
+   [freememo.util :as util]
    [clojure.string :as str]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.credits :as credits])
@@ -138,18 +139,26 @@
           !preset (atom "all") preset (e/watch !preset)
           !min-amount (atom "") min-amount (e/watch !min-amount)
           !q (atom "")        q (e/watch !q)
+          ;; Debounced twins — the inputs' displayed values track !min-amount/!q
+          ;; directly (instant keystrokes); the filters below track the
+          ;; debounced pair, which only commit after a short idle so typing
+          ;; doesn't fire a query per keystroke.
+          !min-amount-debounced (atom "") min-amount-debounced (e/watch !min-amount-debounced)
+          !min-amount-timer (atom nil)
+          !q-debounced (atom "")        q-debounced (e/watch !q-debounced)
+          !q-timer (atom nil)
           refresh (e/server (e/watch (us/get-atom user-id :credits-refresh)))
           facets (e/server (facets* refresh user-id))
           endpoints (:endpoints facets)
           models (:models facets)
-          filters {:kind kind :endpoint endpoint :model model :q q
+          filters {:kind kind :endpoint endpoint :model model :q q-debounced
                    :since-days (get preset->days preset)
-                   :min-amount (parse-min-amount min-amount)}
+                   :min-amount (parse-min-amount min-amount-debounced)}
           results (e/server (e/Offload #(list-transactions* refresh user-id filters)))
           result-count (e/server (count results))
           loading? (nil? result-count)
           rc (or result-count 0)
-          reset-key [kind endpoint model preset min-amount q]
+          reset-key [kind endpoint model preset min-amount-debounced q-debounced]
           row-height 36
           min-width "830px"
           grid-cols "90px 150px minmax(120px,1fr) minmax(120px,1fr) 110px 110px 130px"]
@@ -191,12 +200,22 @@
                                  :aria-label "Minimum amount (IQD)"
                                  :style {:width "120px"}})
             (set! (.-value dom/node) min-amount)
-            (dom/On "input" (fn [e] (reset! !min-amount (-> e .-target .-value))) nil))
+            (dom/On "input"
+              (fn [e]
+                (let [v (-> e .-target .-value)]
+                  (reset! !min-amount v)
+                  (util/debounce! !min-amount-timer !min-amount-debounced v 300)))
+              nil))
           (dom/input (dom/props {:type "text" :class "input"
                                  :placeholder "Search feature or model…"
                                  :style {:flex "1" :min-width "160px"}})
             (set! (.-value dom/node) q)
-            (dom/On "input" (fn [e] (reset! !q (-> e .-target .-value))) nil))
+            (dom/On "input"
+              (fn [e]
+                (let [v (-> e .-target .-value)]
+                  (reset! !q v)
+                  (util/debounce! !q-timer !q-debounced v 300)))
+              nil))
           (when loading?
             (dom/span
               (dom/props {:style {:display "inline-flex" :align-items "center"

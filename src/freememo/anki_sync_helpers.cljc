@@ -354,43 +354,6 @@
                       (.text resp)))))))))
 
 #?(:cljs
-   (defn ensure-io-model!
-     "Missionary task: create the FreeMemo IO model if missing, else re-assert
-      its styling (the served freememo-anki.css) and template against the
-      canonical definition. Drift check is strict string equality — any
-      Anki-side edit is restored. Resolves to true; throws on AnkiConnect
-      errors (the caller's whole push fails with that message)."
-     []
-     (m/sp
-       (let [css (m/? (fetch-text! app-anki-css-url))
-             models (vec (js->clj (m/? (anki-call! "modelNames" nil))))]
-         (if (some #{io-model-name} models)
-           (do
-             (let [styling (js->clj (m/? (anki-call! "modelStyling" {:modelName io-model-name})))]
-               (when (not= (get styling "css") css)
-                 (log/log-debug "[anki-push] FreeMemo IO styling drifted — restoring")
-                 (m/? (anki-call! "updateModelStyling"
-                        {:model {:name io-model-name :css css}}))))
-             (let [templates (js->clj (m/? (anki-call! "modelTemplates" {:modelName io-model-name})))
-                   tmpl (get templates io-template-name)]
-               (when (or (not= (get tmpl "Front") io-card-front)
-                       (not= (get tmpl "Back") io-card-back))
-                 (log/log-debug "[anki-push] FreeMemo IO templates drifted — restoring")
-                 (m/? (anki-call! "updateModelTemplates"
-                        {:model {:name io-model-name
-                                 :templates {io-template-name {:Front io-card-front
-                                                               :Back io-card-back}}}})))))
-           (m/? (anki-call! "createModel"
-                  {:modelName io-model-name
-                   :inOrderFields io-field-names
-                   :css css
-                   :isCloze false
-                   :cardTemplates [{:Name io-template-name
-                                    :Front io-card-front
-                                    :Back io-card-back}]})))
-         true))))
-
-#?(:cljs
    (defn migrate-fields!
      "Missionary task: reconcile an app-owned model's field NAMES toward canon.
       Renames then removes, each op guarded so it is idempotent and safe to run
@@ -427,55 +390,6 @@
                (m/? (anki-call! "modelFieldRemove"
                       {:modelName model-name :fieldName nm})))
              (recur more)))
-         true))))
-
-#?(:cljs
-   (defn ensure-score-model!
-     "Missionary task: create the FreeMemo Score model if missing, else
-      re-assert its styling/template against canon — same strict-drift policy
-      as ensure-io-model! — and migrate its FIELDS toward canon: legacy
-      'Bibliography' renames to 'Links', legacy 'Source'/'Sources' are removed,
-      and any canonical field the model lacks is appended. Existing Remarks
-      content survives."
-     []
-     (m/sp
-       (let [css (m/? (fetch-text! app-anki-css-url))
-             models (vec (js->clj (m/? (anki-call! "modelNames" nil))))]
-         (if (some #{score-model-name} models)
-           (do
-             (m/? (migrate-fields! score-model-name
-                    [["Bibliography" "Links"]] ["Source" "Sources"]))
-             (let [fields (set (js->clj (m/? (anki-call! "modelFieldNames"
-                                               {:modelName score-model-name}))))
-                   missing (vec (remove fields score-field-names))]
-               (loop [[f & more] missing]
-                 (when f
-                   (log/log-debug (str "[anki-push] FreeMemo Score: adding field " f))
-                   (m/? (anki-call! "modelFieldAdd"
-                          {:modelName score-model-name :fieldName f}))
-                   (recur more))))
-             (let [styling (js->clj (m/? (anki-call! "modelStyling" {:modelName score-model-name})))]
-               (when (not= (get styling "css") css)
-                 (log/log-debug "[anki-push] FreeMemo Score styling drifted — restoring")
-                 (m/? (anki-call! "updateModelStyling"
-                        {:model {:name score-model-name :css css}}))))
-             (let [templates (js->clj (m/? (anki-call! "modelTemplates" {:modelName score-model-name})))
-                   tmpl (get templates score-template-name)]
-               (when (or (not= (get tmpl "Front") score-card-front)
-                       (not= (get tmpl "Back") score-card-back))
-                 (log/log-debug "[anki-push] FreeMemo Score templates drifted — restoring")
-                 (m/? (anki-call! "updateModelTemplates"
-                        {:model {:name score-model-name
-                                 :templates {score-template-name {:Front score-card-front
-                                                                  :Back score-card-back}}}})))))
-           (m/? (anki-call! "createModel"
-                  {:modelName score-model-name
-                   :inOrderFields score-field-names
-                   :css css
-                   :isCloze false
-                   :cardTemplates [{:Name score-template-name
-                                    :Front score-card-front
-                                    :Back score-card-back}]})))
          true))))
 
 #?(:cljs
@@ -523,6 +437,41 @@
                    :isCloze is-cloze
                    :cardTemplates [{:Name template-name :Front front :Back back}]})))
          true))))
+
+#?(:cljs
+   (defn ensure-io-model!
+     "Missionary task: create-or-restore the FreeMemo IO model via
+      ensure-owned-model! — no field migrations for this model (renames/removals
+      empty; io-field-names has been stable since the model was cloned from
+      Image Occlusion Enhanced's \"IO Card\"). Drift check is strict string
+      equality — any Anki-side edit is restored. Resolves to true; throws on
+      AnkiConnect errors (the caller's whole push fails with that message)."
+     []
+     (m/sp
+       (let [css (m/? (fetch-text! app-anki-css-url))]
+         (m/? (ensure-owned-model!
+                {:model-name io-model-name :template-name io-template-name
+                 :field-names io-field-names :is-cloze false
+                 :front io-card-front :back io-card-back
+                 :renames [] :removals []}
+                css))))))
+
+#?(:cljs
+   (defn ensure-score-model!
+     "Missionary task: create-or-restore the FreeMemo Score model via
+      ensure-owned-model!, migrating its FIELDS toward canon: legacy
+      'Bibliography' renames to 'Links', legacy 'Source'/'Sources' are removed,
+      and any canonical field the model lacks is appended. Existing Remarks
+      content survives."
+     []
+     (m/sp
+       (let [css (m/? (fetch-text! app-anki-css-url))]
+         (m/? (ensure-owned-model!
+                {:model-name score-model-name :template-name score-template-name
+                 :field-names score-field-names :is-cloze false
+                 :front score-card-front :back score-card-back
+                 :renames [["Bibliography" "Links"]] :removals ["Source" "Sources"]}
+                css))))))
 
 #?(:cljs
    (defn ensure-basic-model!

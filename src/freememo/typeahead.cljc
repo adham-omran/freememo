@@ -44,6 +44,9 @@
           open? (e/watch !open?)
           !active-idx (atom -1)
           active-idx (e/watch !active-idx)
+          ;; Touch: skip autofocus — it would pop the on-screen keyboard; the
+          ;; learner taps the field when they actually mean to type.
+          coarse? (e/watch viewport/!coarse?)
           ;; Dropdown contents while open: all options when not typing (browse),
           ;; filtered when typing. Scrolls (max-height below). Keyed on open?,
           ;; not on search, so focus keeps the value visible without clearing it.
@@ -60,13 +63,8 @@
                       :value (if (some? search) search (or value ""))
                       :placeholder placeholder
                       :class "input"
+                      :autofocus (and autofocus? (not coarse?))
                       :style {:width "100%"}})
-          ;; Touch: skip autofocus — it would pop the on-screen keyboard; the
-          ;; learner taps the field when they actually mean to type.
-          (let [coarse? (e/watch viewport/!coarse?)
-                focus-node (when (and autofocus? (not coarse?)) dom/node)]
-            (when focus-node
-              (js/setTimeout (fn [] (.focus focus-node)) 50)))
           ;; Focus opens the dropdown but keeps the value — search stays nil so
           ;; the input shows the current value; Tab-through no longer loses it.
           (dom/On "focus" (fn [_] (reset! !open? true)

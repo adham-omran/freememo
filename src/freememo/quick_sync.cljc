@@ -64,8 +64,8 @@
           conn-status (e/watch (:!status conn))
           decks (e/watch (:!decks conn))
           sync-phase (e/watch (:!phase sync))
-          root-id (e/server (panels/get-root-topic-id* selected-doc))
-          prefs (e/server (load-prefs* user-id root-id))]
+          root-id (e/server (e/Offload #(panels/get-root-topic-id* selected-doc)))
+          prefs (e/server (e/Offload #(load-prefs* user-id root-id)))]
 
       ;; (a) Connect — fetch decks/models/tags once per trigger.
       (when (pos? trigger)

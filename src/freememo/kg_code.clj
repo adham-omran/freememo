@@ -139,7 +139,10 @@
                   (map (fn [{:keys [slug label]}]
                          [slug (:id (db/get-or-create-kg-predicate! user-id slug label))]))
                   predicates)
-        entity-id (memoize (fn [label] (db/get-or-create-kg-entity! user-id label)))
+        ;; Collect every distinct s/o label up front and resolve them in one
+        ;; batched round trip, instead of one get-or-create per triple side.
+        entity-labels (into [] (comp (mapcat (juxt :s :o)) (remove nil?) (distinct)) triples)
+        entity-id (or (db/get-or-create-kg-entities! user-id entity-labels) {})
         rows (into []
                (keep (fn [{:keys [s p o lit]}]
                        (when-let [pid (pred-id p)]

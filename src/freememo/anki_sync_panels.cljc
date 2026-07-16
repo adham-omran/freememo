@@ -58,11 +58,11 @@
         allow-dupes (e/watch (:!allow-dupes form))
         use-tags (e/watch (:!use-tags form))
         tags (e/watch (:!tags form))
-        auto-load-mode (e/server (get-anki-auto-load-mode* user-id))
-        root-id (e/server (get-root-topic-id* selected-doc))
+        auto-load-mode (e/server (e/Offload #(get-anki-auto-load-mode* user-id)))
+        root-id (e/server (e/Offload #(get-root-topic-id* selected-doc)))
         ;; Header is per-PDF, resolved server-side (override, else off) — the
         ;; authoritative source for push. Not read from form atoms (decoupled).
-        resolved-header (e/server (form/resolve-anki-header* user-id root-id))
+        resolved-header (e/server (e/Offload #(form/resolve-anki-header* user-id root-id)))
         use-header (boolean (:use-header resolved-header))
         header-text (or (:header-text resolved-header) "")
         topic-info (e/server (when selected-doc
@@ -96,7 +96,7 @@
                           " auto-load-mode=" auto-load-mode
                           " root-id=" root-id
                           " deck=" selected-deck))
-          (let [result (e/server (sync/finalize-push! user-id root-id pairs prefs-map auto-load-mode))]
+          (let [result (e/server (e/Offload #(sync/finalize-push! user-id root-id pairs prefs-map auto-load-mode)))]
             (log/log-info (str "[anki-sync] finalize-push! returned success=" (:success result)
                             " error=" (:error result)))
             (if (:success result)
@@ -112,11 +112,11 @@
     ;; so a nested Web syncs only its own cards under 'self'.
     (e/client
       (when (= sync-phase :pushing)
-        (let [cards-result (e/server (sync/get-cards-for-sync
-                                       {:user-id user-id
-                                        :scope scope
-                                        :topic-id dctx/topic-id
-                                        :root-topic-id selected-doc}))]
+        (let [cards-result (e/server (e/Offload #(sync/get-cards-for-sync
+                                                    {:user-id user-id
+                                                     :scope scope
+                                                     :topic-id dctx/topic-id
+                                                     :root-topic-id selected-doc})))]
           (if-not (:success cards-result)
             (do (reset! !error {:message (:error cards-result) :source :server})
               (reset! !phase :error))
@@ -192,9 +192,9 @@
   [user-id selected-doc conn form sync !show-modal]
   (e/client
     (let [decks (e/watch (:!decks conn))
-          root-id (e/server (get-root-topic-id* selected-doc))
+          root-id (e/server (e/Offload #(get-root-topic-id* selected-doc)))
           ;; One-shot resolved prefs (preset/Settings/last-used) — single read.
-          prefs (e/server (resolve-modal-prefs* user-id root-id))
+          prefs (e/server (e/Offload #(resolve-modal-prefs* user-id root-id)))
           !ready? (atom false)
           ready? (e/watch !ready?)]
 
@@ -235,9 +235,8 @@
       (dom/div
         (dom/props {:class "modal-backdrop" :style {:background "rgba(0,0,0,0.5)"}
                     :role "dialog" :aria-modal "true" :aria-label "Anki sync"
-                    :tabindex "-1"})
+                    :tabindex "-1" :autofocus true})
         (modal-shell/FocusReturn)
-        (modal-shell/focus-on-mount! dom/node)
         (dom/On "click" (fn [_] (when-not sync-phase (reset! !show-modal false))) nil)
         (dom/On "keydown"
           (fn [e]
@@ -299,7 +298,7 @@
                          :allow-dupes @(:!allow-dupes form)
                          :use-tags @(:!use-tags form)
                          :tags @(:!tags form)}]
-              (case (e/server (save-last-used-prefs!* user-id prefs))
+              (case (e/server (e/Offload #(save-last-used-prefs!* user-id prefs)))
                 (do (reset! !show-modal false)
                     (reset! !sync-phase nil)
                     (trigger-quick-sync!)
