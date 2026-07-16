@@ -60,7 +60,7 @@
       (dom/div
         (dom/props {:class "row-actions" :style {:display "inline-flex"}})
         (dom/button
-          (dom/props {:class "btn btn-sm btn-secondary row-actions-trigger"
+          (dom/props {:class "btn btn-sm btn-secondary row-actions-trigger tooltip-right"
                       :style {:padding "2px 8px" :font-size "14px" :line-height "1"}
                       :aria-haspopup "menu" :aria-expanded (if open "true" "false")
                       :aria-label "Row actions"})
