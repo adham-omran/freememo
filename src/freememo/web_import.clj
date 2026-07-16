@@ -122,26 +122,48 @@
                   {:ok true :topic-id (:id result)})
               {:ok false :error (:error result)}))
 
-          :repo
-          ;; Topics are created synchronously (fast — caller navigates to the
-          ;; root immediately); fact distillation runs async and owns/deletes
-          ;; the temp dir. If topic creation fails before the async job starts,
-          ;; delete the dir here — ownership hasn't transferred yet.
-          (let [dir (kg-code/unzip-repo! bytes)]
-            (try
-              (let [repo-name (str/replace (or filename "repo") #"(?i)\.zip$" "")
-                    {:keys [root-id]} (kg-code/create-repo-topics! user-id repo-name dir)]
-                (kg-code/start-repo-distill! user-id root-id dir)
-                (commands/bump! user-id :import-document)
-                {:ok true :topic-id root-id})
-              (catch Throwable t
-                (kg-code/delete-dir! dir)
-                (throw t))))
-
           {:ok false :error (str "Unknown flow: " flow)}))
       {:ok false :error "Upload not found or expired"})
     (catch Exception e
       (log/log-error (str "confirm-staged-upload!* failed: " (.getMessage e)))
+      {:ok false :error (.getMessage e)})))
+
+(defn confirm-repo-upload!*
+  "Finalize a staged code-repo (.zip) upload into a topic tree, optionally
+   distilling knowledge-graph facts.
+   Pre  : user-id owns the staged upload; upload-id is unclaimed; the entry's
+          flow is :repo.
+   Post : {:ok true :topic-id N} on success, {:ok false :error S} otherwise.
+   Invariant: claim is one-shot — replays return {:ok false}. The unzip temp
+          dir has exactly one owner: start-repo-distill! when extract-facts?,
+          else this fn deletes it. Fact distillation is opt-in — when
+          extract-facts? is false, topics are created with no kg_facts."
+  [user-id upload-id extract-facts?]
+  (try
+    (if-let [entry (staging/claim! user-id upload-id)]
+      (let [{:keys [^bytes bytes filename flow]} entry]
+        (if (not= :repo flow)
+          {:ok false :error (str "Not a code repository: " flow)}
+          ;; Topics are created synchronously (fast — caller navigates to the
+          ;; root immediately). When facts are requested, start-repo-distill!
+          ;; takes ownership of the temp dir and deletes it when the async run
+          ;; ends; otherwise we delete it here. On topic-creation failure the
+          ;; dir has no owner yet, so delete it before re-throwing.
+          (let [dir (kg-code/unzip-repo! bytes)]
+            (try
+              (let [repo-name (str/replace (or filename "repo") #"(?i)\.zip$" "")
+                    {:keys [root-id]} (kg-code/create-repo-topics! user-id repo-name dir)]
+                (if extract-facts?
+                  (kg-code/start-repo-distill! user-id root-id dir)
+                  (kg-code/delete-dir! dir))
+                (commands/bump! user-id :import-document)
+                {:ok true :topic-id root-id})
+              (catch Throwable t
+                (kg-code/delete-dir! dir)
+                (throw t))))))
+      {:ok false :error "Upload not found or expired"})
+    (catch Exception e
+      (log/log-error (str "confirm-repo-upload!* failed: " (.getMessage e)))
       {:ok false :error (.getMessage e)})))
 
 (defn confirm-score-upload!*

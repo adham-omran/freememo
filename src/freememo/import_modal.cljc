@@ -522,11 +522,13 @@
         (do (on-create (nth cmd 1)) (token))))))
 
 ;; Pre:  !staged holds {:upload-id :filename :flow}; user-id owns the upload.
-;; Post: on submit, dispatches `[Confirm-staged-upload upload-id image-mode]` to
-;;       web-import/confirm-staged-upload!* via e/server, navigates on success.
+;; Post: on submit, a repo flow dispatches `[Confirm-repo-upload upload-id
+;;       extract-facts?] to web-import/confirm-repo-upload!*; every other flow
+;;       dispatches `[Confirm-staged-upload upload-id image-mode] to
+;;       web-import/confirm-staged-upload!*. Both via e/server, navigate on ok.
 ;; Cancel button: locally resets staged state without claiming the upload.
 (e/defn ConfirmingStage [user-id navigate-to-viewer! !stage !staged !flow
-                         !image-mode !advanced-open !error !quota-error? !busy-msg]
+                         !image-mode !advanced-open !extract-facts? !error !quota-error? !busy-msg]
   (e/client
     (let [staged (e/watch !staged)
           flow (e/watch !flow)
@@ -535,6 +537,7 @@
           label (flow-label flow)
           advanced-open (e/watch !advanced-open)
           image-mode (e/watch !image-mode)
+          extract-facts? (e/watch !extract-facts?)
           upload-id (:upload-id staged)
           commits (forms/Form! {}
                     (e/fn Fields [_]
@@ -581,6 +584,20 @@
                                     (set! (.-checked dom/node) (= image-mode "strip"))
                                     (dom/On "change" (fn [_] (reset! !image-mode "strip")) nil))
                                   (dom/text "Strip images — text only"))))))
+                        (when (= flow "repo")
+                          (dom/div
+                            (dom/props {:style {:margin-bottom "var(--sp-3)"}})
+                            (dom/label
+                              (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
+                                                  :font-size "13px" :cursor "pointer"}})
+                              (dom/input (dom/props {:type "checkbox"})
+                                (set! (.-checked dom/node) extract-facts?)
+                                (dom/On "change" (fn [_] (swap! !extract-facts? not)) nil))
+                              (dom/text "Extract facts into the knowledge graph"))
+                            (dom/p
+                              (dom/props {:style {:margin "4px 0 0 24px" :font-size "12px"
+                                                  :color "var(--color-text-secondary)"}})
+                              (dom/text "Static analysis, runs in the background. You can also do this later from the Knowledge tab."))))
                         (dom/div
                           (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
                           (forms/SubmitButton! :label (str "Import as " label)
@@ -589,7 +606,9 @@
                     :type :command
                     :show-buttons false
                     :Parse (e/fn [_ _tempid]
-                             [`Confirm-staged-upload upload-id (keyword image-mode)]))]
+                             (if (= flow "repo")
+                               [`Confirm-repo-upload upload-id extract-facts?]
+                               [`Confirm-staged-upload upload-id (keyword image-mode)])))]
       ;; Cancel button — local-only reset, not part of the form's commit stream.
       (dom/div
         (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"
@@ -600,17 +619,21 @@
           (dom/On "click" (fn [_]
                             (reset! !staged nil)
                             (reset! !flow nil)
+                            (reset! !extract-facts? false)
                             (reset! !stage :collecting))
             nil)))
-      (e/for [[token [_head u-id i-mode]] (e/diff-by first (e/as-vec commits))]
+      ;; `Confirm-repo-upload carries the extract-facts? flag and gates async
+      ;; fact distillation; every other flow carries the image-mode keyword.
+      (e/for [[token [head u-id arg]] (e/diff-by first (e/as-vec commits))]
         (when token
           ;; Busy overlay while the staged upload commits (sibling of the
           ;; offload; cleared on token spend via e/on-unmount).
           (e/on-unmount #(reset! !busy-msg nil))
           (case (reset! !busy-msg "Importing…")
             (case (reset-error! !error !quota-error?)
-              (let [r (e/server (e/Offload #(web-import/confirm-staged-upload!*
-                                              user-id u-id i-mode)))]
+              (let [r (e/server (e/Offload #(if (= head `Confirm-repo-upload)
+                                              (web-import/confirm-repo-upload!* user-id u-id arg)
+                                              (web-import/confirm-staged-upload!* user-id u-id arg))))]
                 (case r
                   (if (:ok r)
                     (case (navigate-to-viewer! (:topic-id r)) (token))
@@ -751,6 +774,9 @@
           !paste-url (atom "")
           !image-mode (atom "reduce")
           !advanced-open (atom false)
+          ;; repo confirm: whether to distill knowledge-graph facts on import
+          ;; (opt-in; skippable later via the Knowledge tab's Distill action)
+          !extract-facts? (atom false)
           ;; Score preset: the two staged slots ({:upload-id :filename :size} or nil)
           !score-pdf (atom nil)
           !score-audio (atom nil)
@@ -890,7 +916,7 @@
             :importing (StatusStage "Importing…")
             :confirming (ConfirmingStage user-id navigate-to-viewer!
                                          !stage !staged !flow
-                                         !image-mode !advanced-open
+                                         !image-mode !advanced-open !extract-facts?
                                          !error !quota-error? !busy-msg)
             :text-confirming (TextFileReviewStage !flow !filename !title
                                                   on-text-confirm on-cancel-text)
