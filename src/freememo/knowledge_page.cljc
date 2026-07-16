@@ -348,7 +348,7 @@
       (dom/props {:class "btn-delete-x" :aria-label "Reject fact"})
       (tooltip/Tooltip! "Reject — removes this fact from the graph")
       (dom/text "×")
-      (let [click (dom/On "click" (fn [e] #?(:cljs (.stopPropagation e)) fact-id) nil)
+      (let [click (dom/On "click" (fn [e] (.stopPropagation e) fact-id) nil)
             [t _] (e/Token click)]
         (dom/props {:disabled (some? t)})
         (when t
@@ -486,7 +486,7 @@
       (dom/props {:class "btn-delete-x" :aria-label "Reject question"})
       (tooltip/Tooltip! "Reject — removes this question from the bank")
       (dom/text "×")
-      (let [click (dom/On "click" (fn [e] #?(:cljs (.stopPropagation e)) question-id) nil)
+      (let [click (dom/On "click" (fn [e] (.stopPropagation e) question-id) nil)
             [t _] (e/Token click)]
         (dom/props {:disabled (some? t)})
         (when t
@@ -655,7 +655,7 @@
                   :aria-label (str "Synthesize questions for " label)})
       (tooltip/Tooltip! "Generate questions spanning this entity's facts")
       (icons/Icon :graduation-cap :size 14)
-      (let [click (dom/On "click" (fn [e] #?(:cljs (.stopPropagation e)) (random-uuid)) nil)
+      (let [click (dom/On "click" (fn [e] (.stopPropagation e) (random-uuid)) nil)
             [t _] (e/Token click)]
         (dom/props {:disabled (some? t)})
         (when t
