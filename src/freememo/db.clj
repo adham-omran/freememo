@@ -37,7 +37,11 @@
    :host (or (System/getenv "DB_HOST") "localhost")
    :port (Integer/parseInt (or (System/getenv "DB_PORT") "5432"))
    :dbname (or (System/getenv "DB_NAME") "cardmaker")
-   :user (or (System/getenv "DB_USER") "cardmaker")
+   ;; HikariCP setter is setUsername → key must be :username, NOT :user
+   ;; (next.jdbc's ->pool passes leftover keys to the pool's Java setters;
+   ;; :user maps to no setter and is silently dropped → driver would fall
+   ;; back to the OS user and auth would fail).
+   :username (or (System/getenv "DB_USER") "cardmaker")
    :password (or (System/getenv "DB_PASSWORD") "dev")
    :maximumPoolSize 10
    ;; -1 = don't probe a connection at pool construction; connect lazily on first
