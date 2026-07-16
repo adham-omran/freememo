@@ -59,3 +59,43 @@
          (.disconnect resize-obs)
          (.disconnect mut-obs)))
      :clj (fn [] nil)))
+
+;; Pre:  a dropdown menu (class `menu-class`) opened from a trigger (class
+;;       `trigger-class`) is about to mount as a descendant of `.toolbar`, whose
+;;       `overflow-x: clip` (the tier system above) would otherwise horizontally
+;;       clip a menu wider than — or offset from — the toolbar's box.
+;; Post: pins the menu with INLINE `position: fixed` + top/left directly under the
+;;       trigger, clamped into the viewport (left-align to the trigger, else
+;;       right-align, else clamp to the right edge). `fixed` escapes the ancestor
+;;       overflow clip entirely while the coords keep it anchored to the trigger.
+;;       Re-pins on window resize. Returns a 0-arg cleanup fn.
+;; Why inline (not CSS): only the toolbar dropdowns that call this become fixed,
+;;       so other `.toolbar-dropdown-menu` users OUTSIDE the toolbar (e.g. library
+;;       row actions) keep their CSS `position: absolute` anchor untouched.
+(defn install-dropdown-menu-position! [trigger-class menu-class]
+  #?(:cljs
+     (let [trigger-sel (str "." trigger-class)
+           menu-sel    (str "." menu-class)
+           margin 8
+           reposition
+           (fn []
+             (when-let [trigger (.querySelector js/document trigger-sel)]
+               (when-let [menu (.querySelector js/document menu-sel)]
+                 (let [tr (.getBoundingClientRect trigger)
+                       mw (.-offsetWidth menu)
+                       vw (.-innerWidth js/window)
+                       left (cond
+                              (<= (+ (.-left tr) mw) (- vw margin)) (.-left tr)
+                              (>= (- (.-right tr) mw) margin)       (- (.-right tr) mw)
+                              :else                                 (- vw mw margin))
+                       s (.-style menu)]
+                   (set! (.-position s) "fixed")
+                   (set! (.-right s) "auto")
+                   (set! (.-left s) (str (max margin left) "px"))
+                   (set! (.-top s) (str (+ (.-bottom tr) 4) "px"))))))]
+       ;; The menu mounts on the same reactive turn, right after this installer
+       ;; runs — defer one frame so offsetWidth/layout is measurable.
+       (js/requestAnimationFrame reposition)
+       (.addEventListener js/window "resize" reposition)
+       (fn [] (.removeEventListener js/window "resize" reposition)))
+     :clj (fn [] nil)))

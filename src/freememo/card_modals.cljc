@@ -78,6 +78,18 @@
          vec))
      :clj []))
 
+(defn blank-html?
+  "True when QuillField HTML has no visible content — no text and no <img>.
+   An empty Quill editor renders as <p><br></p>, so a bare str/blank? misses it
+   (same content test quill-html->items uses per line)."
+  [html]
+  #?(:cljs
+     (let [tmp (.createElement js/document "div")]
+       (set! (.-innerHTML tmp) (or html ""))
+       (and (str/blank? (.-textContent tmp))
+            (zero? (.-length (.querySelectorAll tmp "img")))))
+     :clj (str/blank? html)))
+
 (defn ol-items->html
   "Build QuillField mount HTML from a stored items vector — one <p> block per
    item so Quill renders each item on its own line."
@@ -523,7 +535,10 @@
                               (case (e/server (commands/bump! user-id :edit-card))
                                 (t)))
                           (t (:error result))))))
-                  (let [validation-error (when (= kind "cloze") (validate-cloze cloze))]
+                  (let [validation-error (cond
+                                           (= kind "cloze") (validate-cloze cloze)
+                                           (= kind "basic") (when (blank-html? question)
+                                                              "Question can't be empty"))]
                     (if validation-error
                       (t validation-error)
                       (let [clean-q (e/server (sanitize-card-field question))
@@ -735,7 +750,10 @@
                                           {:topic-id topic-id :root-topic-id root-topic-id
                                            :kind "overlapping" :card-data card-data}))
                           (do (e/on-unmount #(reset! !show-add false)) (t))))))
-                  (let [validation-error (when (= kind "cloze") (validate-cloze primary))]
+                  (let [validation-error (cond
+                                           (= kind "cloze") (validate-cloze primary)
+                                           (= kind "basic") (when (blank-html? primary)
+                                                              "Question can't be empty"))]
                   (if validation-error
                     (t validation-error)
                     (let [clean-primary (e/server (sanitize-card-field primary))
