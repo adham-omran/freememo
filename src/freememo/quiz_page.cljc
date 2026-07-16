@@ -384,7 +384,8 @@
           (dom/On "click" (fn [_] (reset! !entity-card nil)) nil)
           (dom/div
             (dom/props {:role "dialog" :aria-label (str "About " (:label card))
-                        :style {:background "var(--color-bg, #fff)"
+                        :style {:background "var(--color-bg-card)"
+                                :color "var(--color-text-primary)"
                                 :border-radius "8px" :padding "16px 20px"
                                 :max-width "600px" :width "90%"
                                 :max-height "70vh" :overflow-y "auto"
