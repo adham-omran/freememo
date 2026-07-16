@@ -389,7 +389,7 @@
                                 :max-width "600px" :width "90%"
                                 :max-height "70vh" :overflow-y "auto"
                                 :box-shadow "0 8px 32px rgba(0,0,0,0.25)"}})
-            (dom/On "click" (fn [e] #?(:cljs (.stopPropagation e)) nil) nil)
+            (dom/On "click" (fn [e] (.stopPropagation e) nil) nil)
             (dom/h3 (dom/props {:style {:font-size "16px" :margin "0 0 4px"}})
               (dom/text (:label card)))
             (when (seq (:aliases card))
@@ -589,7 +589,7 @@
           qdata (e/server (quiz-question* user-id qid))]
       ;; Expiry latch — fires once; submit-req non-nil blocks re-entry.
       (when (and (zero? remaining) (nil? submit-req))
-        (reset! !submit-req {:draft #?(:cljs @!draft :clj "")}))
+        (reset! !submit-req {:draft @!draft}))
       (dom/div
         (dom/props {:style panel-style})
         (if (some? submit-req)

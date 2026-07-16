@@ -132,5 +132,5 @@
           ;; Full navigation so SettingsPage's init-active-from-hash! runs and
           ;; lands on the AI Features section (where credits live).
           (dom/On "click"
-            (fn [_] #?(:cljs (set! (.. js/window -location -href) "/settings#settings-ai")))
+            (fn [_] (set! (.. js/window -location -href) "/settings#settings-ai"))
             nil))))))

@@ -204,7 +204,7 @@
           (dom/span (dom/props {:class "icon-label"})
             (dom/text (if scanning? "Scanning…" "Scan Page")))
           (icons/Icon :chevron-down :size 14)
-          (dom/On "click" (fn [e] #?(:cljs (.stopPropagation e)) (swap! !open not)) nil))
+          (dom/On "click" (fn [e] (.stopPropagation e) (swap! !open not)) nil))
 
         (when open
           (let [cleanup (install-dropdown-listeners! !open "toolbar-scan-trigger" "toolbar-scan-menu")]
@@ -255,7 +255,7 @@
           (icons/Icon :clipboard :size 16)
           (dom/span (dom/props {:class "icon-label"}) (dom/text "Copy text"))
           (icons/Icon :chevron-down :size 14)
-          (dom/On "click" (fn [e] #?(:cljs (.stopPropagation e)) (swap! !open not)) nil))
+          (dom/On "click" (fn [e] (.stopPropagation e) (swap! !open not)) nil))
 
         (when open
           (let [cleanup (install-dropdown-listeners! !open "toolbar-copy-trigger" "toolbar-copy-menu")]

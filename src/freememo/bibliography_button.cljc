@@ -82,8 +82,8 @@
                 (do (e/on-unmount
                       (fn []
                         (reset! !flash-success true)
-                        #?(:cljs (js/setTimeout
-                                   #(reset! !flash-success false)
-                                   1200))))
+                        (js/setTimeout
+                          #(reset! !flash-success false)
+                          1200)))
                     (t))
                 (t (str (:error result)))))))))))

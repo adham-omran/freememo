@@ -97,7 +97,7 @@
           (icons/Icon :chevron-down :size 14)
           (dom/On "click"
             (fn [e]
-              #?(:cljs (.stopPropagation e))
+              (.stopPropagation e)
               (swap! !open not))
             nil))
 

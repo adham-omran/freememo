@@ -387,32 +387,31 @@
           ;; innerHTML assignment fires no input event.
           (dom/On "paste"
             (fn [e]
-              #?(:cljs
-                 (let [cd (.-clipboardData e)
-                       html-data (.getData cd "text/html")
-                       text-data (.getData cd "text/plain")
-                       ;; raw source travels in text/plain; with only a
-                       ;; text/html flavor, its text content is the source
-                       source-text (if (seq text-data)
-                                     text-data
-                                     (when (seq html-data)
-                                       (.-textContent (.-body (parse-inert html-data)))))
-                       source-paste? (and (html-source? source-text)
-                                          (or (empty? html-data)
-                                              (code-block-wrapper? html-data)))
-                       ;; effective markup of this paste on either path
-                       markup (cond
-                                source-paste? (strip-active-content source-text)
-                                (seq html-data) html-data
-                                :else nil)]
-                   (when source-paste?
-                     ;; replaces any prior pane content
-                     (.preventDefault e)
-                     (set! (.-innerHTML (.-currentTarget e)) markup)
-                     (reset! !html-text (.-innerHTML (.-currentTarget e))))
-                   (when (and (seq markup) (empty? @!title))
-                     (when-some [t (first-heading-text markup)]
-                       (reset! !title t))))))
+              (let [cd (.-clipboardData e)
+                    html-data (.getData cd "text/html")
+                    text-data (.getData cd "text/plain")
+                    ;; raw source travels in text/plain; with only a
+                    ;; text/html flavor, its text content is the source
+                    source-text (if (seq text-data)
+                                  text-data
+                                  (when (seq html-data)
+                                    (.-textContent (.-body (parse-inert html-data)))))
+                    source-paste? (and (html-source? source-text)
+                                       (or (empty? html-data)
+                                           (code-block-wrapper? html-data)))
+                    ;; effective markup of this paste on either path
+                    markup (cond
+                             source-paste? (strip-active-content source-text)
+                             (seq html-data) html-data
+                             :else nil)]
+                (when source-paste?
+                  ;; replaces any prior pane content
+                  (.preventDefault e)
+                  (set! (.-innerHTML (.-currentTarget e)) markup)
+                  (reset! !html-text (.-innerHTML (.-currentTarget e))))
+                (when (and (seq markup) (empty? @!title))
+                  (when-some [t (first-heading-text markup)]
+                    (reset! !title t)))))
             nil)
           (dom/On "input"
             (fn [e] (reset! !html-text (.-innerHTML (.-currentTarget e))))
