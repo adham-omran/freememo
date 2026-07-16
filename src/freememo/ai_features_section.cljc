@@ -305,7 +305,7 @@
           (dom/text "Controls detail level of generated flashcards"))))))
 
 (e/defn ScanDpiField
-  "Scan-quality (DPI) used for Scan Page OCR. Free-numeric Input! (72-300);
+  "Scan-quality (DPI) used for Scan Page OCR — preset select (Low/Standard/High);
    settings/save-scan-dpi clamps server-side regardless of the client value."
   [user-id]
   (e/client
@@ -315,16 +315,28 @@
       (dom/div
         (dom/props {:class "field"})
         (dom/label (dom/props {:class "label"}) (dom/text "Scan Quality (DPI)"))
-        (e/for [[t {:keys [dpi]}] (forms/Input! :dpi dpi :type "number" :min "72" :max "300" :class "input")]
-          (let [r (e/server (e/Offload #(settings/save-scan-dpi user-id dpi)))]
-            (case r
-              (if (:success r) (do (reset! !dpi dpi) (t)) (t (:error r))))))
+        (dom/select
+          (dom/props {:value dpi :class "select"})
+          (dom/option (dom/props {:value "72"}) (dom/text "Low (72 DPI)"))
+          (dom/option (dom/props {:value "150"}) (dom/text "Standard (150 DPI)"))
+          (dom/option (dom/props {:value "300"}) (dom/text "High (300 DPI)"))
+          ;; A1-fallback: Forms5 has no tracked select
+          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                [t ?error] (e/Token change-event)]
+            (dom/props {:disabled (some? t) :aria-busy (some? t)})
+            (when (some? change-event)
+              (reset! !dpi change-event))
+            (when t
+              (let [r (e/server (e/Offload #(settings/save-scan-dpi user-id change-event)))]
+                (case r
+                  (if (:success r) (t) (t (:error r))))))))
         (dom/div (dom/props {:class "hint"})
           (dom/text "Higher quality improves text recognition but increases processing time and API cost"))))))
 
 (e/defn AssistantPdfContextField
   "Pages before AND after the current page the Socratic assistant reads
-   (0 = current page only)."
+   (0 = current page only). Autosave-on-blur (A1-fallback — Forms5 has no
+   commit-on-blur text primitive)."
   [user-id]
   (e/client
     (let [server-window (e/server (settings/get-assistant-pdf-window user-id))
@@ -336,12 +348,27 @@
           (dom/props {:style {:display "flex" :align-items "center" :gap "10px"}})
           (dom/span (dom/props {:class "label" :style {:margin-bottom "0"}})
             (dom/text "Assistant PDF context"))
-          (e/for [[t {:keys [window]}] (forms/Input! :window window :type "number" :min "0" :max "50"
-                                          :style {:width "56px" :font-size "13px" :padding "4px 6px"
-                                                  :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"})]
-            (let [r (e/server (e/Offload #(settings/save-assistant-pdf-window user-id window)))]
-              (case r
-                (if (:success r) (do (reset! !window window) (t)) (t (:error r))))))
+          ;; A1-fallback: Forms5 has no commit-on-blur text primitive (Input!/Input
+          ;; fire on "input" = per-keystroke). Managed via a Focused? guard (A5 —
+          ;; don't clobber the user's draft mid-edit), committed once on "change"
+          ;; (blur); clamped to [0,50] client-side before saving so the field
+          ;; snaps to the clamped value immediately, not just after a refresh.
+          (dom/input
+            (dom/props {:type "number" :min "0" :max "50"
+                        :style {:width "56px" :font-size "13px" :padding "4px 6px"
+                                :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"}})
+            (when-not (dom/Focused?) (set! (.-value dom/node) (str window)))
+            (let [committed (dom/On "change" #(-> % .-target .-value) nil)
+                  [t _] (e/Token committed)]
+              (dom/props {:disabled (some? t) :aria-busy (some? t)})
+              (when t
+                (let [parsed (js/parseInt committed)]
+                  (if (js/isNaN parsed)
+                    (t) ; blank/unparseable on blur — release the token, nothing to save
+                    (let [clamped (max 0 (min 50 parsed))
+                          r (e/server (e/Offload #(settings/save-assistant-pdf-window user-id clamped)))]
+                      (case r
+                        (if (:success r) (do (reset! !window clamped) (t)) (t (:error r))))))))))
           (dom/span (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
             (dom/text "pages")))
         (dom/div (dom/props {:class "hint"})
@@ -378,8 +405,8 @@
           (dom/text "Used for Scan Page unless a document overrides it in Document options"))))))
 
 (e/defn CardGenRetriesField
-  "Card generation retries — all attempts are billed (§5.4.5). Free-numeric
-   Input! (1-3); settings/save-card-gen-max-retries clamps server-side."
+  "Card generation retries — all attempts are billed (§5.4.5). Preset select
+   (1-3); settings/save-card-gen-max-retries clamps server-side."
   [user-id]
   (e/client
     (let [server-retries (e/server (settings/get-card-gen-max-retries user-id))
@@ -388,10 +415,21 @@
       (dom/div
         (dom/props {:class "field"})
         (dom/label (dom/props {:class "label"}) (dom/text "Card Generation Retries"))
-        (e/for [[t {:keys [retries]}] (forms/Input! :retries retries :type "number" :min "1" :max "3" :class "input")]
-          (let [r (e/server (e/Offload #(settings/save-card-gen-max-retries user-id retries)))]
-            (case r
-              (if (:success r) (do (reset! !retries retries) (t)) (t (:error r))))))
+        (dom/select
+          (dom/props {:value retries :class "select"})
+          (dom/option (dom/props {:value "1"}) (dom/text "1 (no retry)"))
+          (dom/option (dom/props {:value "2"}) (dom/text "2"))
+          (dom/option (dom/props {:value "3"}) (dom/text "3"))
+          ;; A1-fallback: Forms5 has no tracked select
+          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                [t ?error] (e/Token change-event)]
+            (dom/props {:disabled (some? t) :aria-busy (some? t)})
+            (when (some? change-event)
+              (reset! !retries change-event))
+            (when t
+              (let [r (e/server (e/Offload #(settings/save-card-gen-max-retries user-id change-event)))]
+                (case r
+                  (if (:success r) (t) (t (:error r))))))))
         (dom/div (dom/props {:class "hint"})
           (dom/text "If the model returns the wrong number of cards, retry up to N times. Each attempt uses tokens and is billed."))))))
 
@@ -414,15 +452,24 @@
           (dom/props {:class "settings-accordion__body"})
           (dom/div (dom/props {:class "hint" :style {:margin-bottom "8px"}})
             (dom/text "Controls the persona, rules, and style for flashcard generation. Format-specific instructions (basic/cloze/context) are appended automatically."))
-          (e/for [[t {:keys [sys-prompt]}] (forms/Input! :sys-prompt sys-prompt :as :textarea
-                                              :rows "20"
-                                              :style {:width "100%" :font-family "monospace" :font-size "12px" :line-height "1.5"
-                                                      :padding "10px" :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"
-                                                      :background "var(--color-bg-subtle)" :resize "vertical"
-                                                      :color "var(--color-text-primary)"})]
-            (let [r (e/server (e/Offload #(settings/save-system-prompt user-id sys-prompt)))]
-              (case r
-                (if (:success r) (do (reset! !sys-prompt sys-prompt) (t)) (t (:error r))))))
+          ;; A1-fallback: Forms5 has no commit-on-blur text primitive (Input!/Input
+          ;; fire on "input" = per-keystroke). Managed via a Focused? guard (A5 —
+          ;; don't clobber the user's draft mid-edit), committed once on "change"
+          ;; (blur).
+          (dom/textarea
+            (dom/props {:rows "20"
+                        :style {:width "100%" :font-family "monospace" :font-size "12px" :line-height "1.5"
+                                :padding "10px" :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"
+                                :background "var(--color-bg-subtle)" :resize "vertical"
+                                :color "var(--color-text-primary)"}})
+            (when-not (dom/Focused?) (set! (.-value dom/node) (str sys-prompt)))
+            (let [committed (dom/On "change" #(-> % .-target .-value) nil)
+                  [t _] (e/Token committed)]
+              (dom/props {:disabled (some? t) :aria-busy (some? t)})
+              (when t
+                (let [r (e/server (e/Offload #(settings/save-system-prompt user-id committed)))]
+                  (case r
+                    (if (:success r) (do (reset! !sys-prompt committed) (t)) (t (:error r))))))))
           (dom/button
             (dom/props {:type "button" :class "btn btn-secondary"
                         :disabled (= sys-prompt default-sys)
@@ -456,15 +503,24 @@
           (dom/props {:class "settings-accordion__body"})
           (dom/div (dom/props {:class "hint" :style {:margin-bottom "8px"}})
             (dom/text "Instructions for extracting text from PDF page images. Controls how tables, headings, and structure are handled."))
-          (e/for [[t {:keys [ocr-prompt]}] (forms/Input! :ocr-prompt ocr-prompt :as :textarea
-                                              :rows "10"
-                                              :style {:width "100%" :font-family "monospace" :font-size "12px" :line-height "1.5"
-                                                      :padding "10px" :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"
-                                                      :background "var(--color-bg-subtle)" :resize "vertical"
-                                                      :color "var(--color-text-primary)"})]
-            (let [r (e/server (e/Offload #(settings/save-ocr-prompt user-id ocr-prompt)))]
-              (case r
-                (if (:success r) (do (reset! !ocr-prompt ocr-prompt) (t)) (t (:error r)))))))
+          ;; A1-fallback: Forms5 has no commit-on-blur text primitive (Input!/Input
+          ;; fire on "input" = per-keystroke). Managed via a Focused? guard (A5 —
+          ;; don't clobber the user's draft mid-edit), committed once on "change"
+          ;; (blur).
+          (dom/textarea
+            (dom/props {:rows "10"
+                        :style {:width "100%" :font-family "monospace" :font-size "12px" :line-height "1.5"
+                                :padding "10px" :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"
+                                :background "var(--color-bg-subtle)" :resize "vertical"
+                                :color "var(--color-text-primary)"}})
+            (when-not (dom/Focused?) (set! (.-value dom/node) (str ocr-prompt)))
+            (let [committed (dom/On "change" #(-> % .-target .-value) nil)
+                  [t _] (e/Token committed)]
+              (dom/props {:disabled (some? t) :aria-busy (some? t)})
+              (when t
+                (let [r (e/server (e/Offload #(settings/save-ocr-prompt user-id committed)))]
+                  (case r
+                    (if (:success r) (do (reset! !ocr-prompt committed) (t)) (t (:error r)))))))))
         (dom/button
           (dom/props {:type "button" :class "btn btn-secondary"
                       :disabled (= ocr-prompt default-ocr)
