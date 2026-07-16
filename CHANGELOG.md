@@ -9,6 +9,162 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
+## v20260716-ceeb056
+
+### For users
+
+- **Knowledge graph, visualized.** A new **Graph** tab draws your knowledge graph
+  the way Obsidian does — each concept is a node, each approved concept-to-concept
+  fact is an edge — so you can finally see the *shape* of what you've collected,
+  not just a list.
+  - Click a concept to highlight its neighbours and open its fact panel.
+  - Filter the view by document, relation, or connection count, and search to jump
+    to a concept.
+  - Facts whose object is a plain value (a date, a number) stay as attributes in
+    the panel rather than drawing an edge, so the graph stays about how concepts
+    connect.
+- **Learn a codebase.** You can now upload a Clojure code repository (as a `.zip`,
+  e.g. `git archive`) as a **Code Repository**. FreeMemo statically analyzes the
+  sources and distills their structure — definitions, calls, requires, arglists,
+  docstrings, visibility — into the knowledge graph, then generates and schedules
+  quiz questions over them exactly like any other document. The code is only
+  analyzed, never run.
+  - Fact extraction is **opt-in**: tick "Extract facts into the knowledge graph"
+    on the confirm step (off by default). If you skip it at import, you can still
+    distill later from the Facts tab's **Distill** action.
+  - The Help page has a new "Learning a codebase" workflow.
+- **See your AI spend.** Settings → Account gains a read-only **AI costs** card
+  showing your full credit ledger — searchable and filterable by kind, feature,
+  model, date, and text, and virtual-scrolled so a long history stays fast.
+  - A **Min amount** filter surfaces your largest spends (e.g. combine with the
+    Debits filter to see everything 500+).
+- **A sharper reading assistant.**
+  - **Live reading context** - each question is now grounded in the pages
+    *around where you're reading* (a configurable window, default 20 pages, in AI
+    settings) plus the document's approved facts — no longer a single page frozen
+    when the chat opened.
+  - **Reliable math** - assistant replies render math with KaTeX, including inline
+    `$…$`, and money like "$10" is no longer mistaken for math.
+  - **Better Socratic tutoring** - replies follow a clear *"Where you are" /
+    "Consider next"* structure, ask a smaller question instead of handing you the
+    answer when you're stuck, and no longer open with empty praise.
+  - Bug fix: your just-sent message no longer shows up as a doubled bubble while
+    the reply is being generated.
+- **The custom editor toolbar is now everywhere.** The on-selection bubble toolbar
+  and code-block language picker (added for the main editor last release) now work
+  in every card-edit modal — Basic, Cloze, Overlapping, and Occlusion. The toolbar
+  image button also uploads the image now instead of embedding it inline.
+- **Dismiss topics you're done with.** A SuperMemo-style **Dismiss** removes a
+  topic *and its whole subtree* from the Learning Queue while keeping every row in
+  your collection; **Undismiss** brings it back. Invoke it from the Library
+  document row menu or the Viewer's document options. Dismissed rows grey out with
+  a "Dismissed" tag.
+- **Reworked top navigation.** Tabs that used to clip off-screen at certain window
+  widths now collapse into an overflow (⋯) menu instead — nothing is ever hidden.
+  Text destinations are grouped (Content / Discovery), **Import** is promoted to a
+  left button, Help / Settings / Actions are pinned right as icons, the active tab
+  is now a filled pill (readable for color-blind users), and every item has a
+  tooltip. The **Knowledge** tab is now labeled **Facts**.
+- **Live Document photo wizard.** Starting a Live Document from photos is now a
+  focused wizard: the empty state is a clear, readable card with one **+** button
+  that opens an Upload / Take-photo sheet, then a modal editor where you rotate
+  *and crop* each photo on a canvas before committing the batch. Replaces the old
+  clipped, low-contrast inline strip that only offered rotate.
+- **Deployed build is visible.** Settings → Account now shows a `freememo · <sha>`
+  line, so you can tell exactly which commit the live app was built from.
+- Bug fix: on tablet-width screens the viewer was running desktop logic — it
+  opened every panel and squeezed out the editor, popped the on-screen keyboard,
+  and pushed the review bar below the fold. Panels now collapse by default under
+  900px, touch no longer auto-focuses inputs, the Postpone/Next bar stays
+  on-screen, and the copy/scan/generate menus no longer clip past the toolbar's
+  edge. (The card-count stepper moved into the Generate menu.)
+
+### Known issues
+
+- **Code-repo import is Clojure-only for now.** Other languages, git/forge sync,
+  and a code-tuned question prompt are deferred to a later phase. Fact extraction
+  is off by default — enable it at import or distill later from the Facts tab.
+- **Older chats and code repos don't get windowed context.** Chats created before
+  this release still show their original frozen one-page context (no migration is
+  applied). For code repositories the assistant grounds on whole-document facts —
+  page/neighborhood scoping is deferred.
+- **Making a cloze now needs a selection.** Because the cloze buttons live in the
+  on-selection bubble toolbar, you must select text first before creating a cloze
+  deletion. By design.
+- **Dismiss leaves card/quiz queues alone.** Dismissing a topic removes it from the
+  Learning Queue only; its flashcards and quiz questions stay in their own review
+  queues. This is intentional.
+- **AI cost history isn't live.** Debits from your current session appear on your
+  next visit to the page rather than in real time, matching how the balance display
+  already refreshes.
+
+### Technical
+
+- **Graph tab.** `freememo.graph-page` + `graph_render.cljs`; server layout in
+  `freememo.kg-graph` via Graphviz `sfdp` (JGraphT dropped — 87s / OutOfMemory on
+  the largest real graph; sfdp lays out the same graph in under a second).
+  Positions cached per user in a new `kg_graph_layout` JSONB table keyed by the
+  `:kg-mutations` counter and recomputed lazily on the next open after a mutation.
+  Client renders with `sigma@3.0.2` + `graphology@0.26.0` as CDN UMD globals
+  (`window.Sigma` / `window.graphology`) — the prod Docker build has no npm step —
+  drawing fixed server positions with client-side visibility filters. `graphviz`
+  **and** `libgvplugin-neato-layout8` added to the runtime image: the plugin is
+  what actually supplies sfdp's layout engine, and its absence blanked every route
+  in prod with an opaque "Broken pipe" (now `run-sfdp` also captures stderr). Added
+  end-to-end pipeline logging (`graph-payload*`, `kg-graph`).
+- **Code-repo ingestion.** New `freememo.kg-code` static analysis via `clj-kondo`
+  (library API, added to `deps.edn`; not the native CLI) and
+  `freememo.web-import/confirm-repo-upload!*`. `.zip` classified `:repo`, unzipped
+  under entry-count / size / zip-slip guards into a `code` root topic plus one
+  `code` child per source file; facts map definitions to entities by
+  fully-qualified name over a fixed predicate vocabulary (`defined-in`, `calls`,
+  `requires`, `has-arglist`, `has-docstring`, `is-private`), with calls/requires
+  restricted to namespaces defined in the repo. `kg_facts` multi-row inserts are
+  chunked under Postgres' 65,535-parameter cap (independent statements;
+  `ON CONFLICT DO NOTHING` + idempotent re-distill let a partial run self-heal).
+- **AI cost history.** `freememo.cost-history`; server reads
+  `list-credit-transactions` (kind/endpoint/model/date/text filters, newest-first,
+  capped at 5000) and filter-independent `credit-transaction-facets`. Virtual-
+  scrolled like `search-page` — only the visible window rows plus the count cross
+  the wire.
+- **Assistant.** Windowed context assembled per send in `assemble-messages` /
+  `send!`; new `assistant_pdf_window` setting (0–50, default 20) and
+  `db/get-kg-facts-context` (page-ranged, row-limited). KaTeX replaces MathJax
+  (`katex@0.16.11` CDN, gated on a `window.__katexReady` promise);
+  `markdown/dollar-math->tex` rewrites real math to `\(…\)`/`\[…\]` server-side so
+  no `$` delimiter reaches the client. New nullable `client_id` column on
+  `assistant_messages` correlates the optimistic echo with its persisted row by a
+  globally-unique id instead of a drifting reactive count.
+- **Shared editor UI.** `QuillField` switched to the bubble theme;
+  `insert-cloze!` / `cloze-max-n` / `upload-pasted-image!` extracted to
+  `freememo.editor-actions` to break the `format-menu` ↔ `quill-field` cycle;
+  `init-quill-field!` now returns `{:editor :teardowns}` so modals mounting several
+  fields leave no orphan body cards or document listeners behind.
+- **Recursive Dismiss.** New `topics.dismissed` boolean (modelled separately from
+  `status`, so a done child survives a dismiss/undismiss round-trip); every queue
+  and count query gains an `AND NOT dismissed` conjunct; the `topic_repetitions`
+  `event_type` CHECK is widened for Dismiss/Undismiss on pre-existing installs.
+- **Top nav / toolbar overflow.** Reuses the `ContentToolbar` content-aware
+  overflow detector; new `freememo.toolbar-overflow`. Replaced the catch-all
+  `button:hover { filter: brightness }` with a `background-color` tint wrapped in
+  `:where()` — the filter promoted each hovered button to its own compositing layer
+  and repainted large regions of the app on nav hover.
+- **Live Document wizard.** `freememo.live-doc-wizard` + `live-doc-image-editor`
+  (Konva crop canvas). Rotation/crop are metadata: original bytes are sent
+  unchanged with parallel rotations/crops arrays, and `add-image-page!` bakes
+  rotate-then-crop from normalized `{x,y,w,h}` rects (clamped at the API boundary).
+  Server geometry covered by `test/freememo/live_doc_test.clj`.
+- **Settings About.** `deploy.sh` exports `GIT_COMMIT` → Docker `:git-commit`
+  uberjar arg → `build.clj` writes it into `electric-manifest.edn` →
+  `freememo.config` reads it at boot (falling back to `"dev"` with no manifest).
+- **Tablet viewport signals.** `!compact?` (≤900px) collapses hierarchy/right
+  panels by default and `!coarse?` (`pointer:coarse`) suppresses composer/typeahead
+  autofocus on touch, in `freememo.viewport`; `100dvh` keeps the pinned review bar
+  on-screen.
+- **Refactor pass** ("Audit v1–v3") - extracted a shared `freememo.modal-shell`,
+  consolidated `number-stepper` and `settings-page`, and added `freememo.util`
+  helpers; behavior-preserving.
+
 ## v20260712-cb16479
 
 ### For users
