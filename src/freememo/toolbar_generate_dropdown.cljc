@@ -22,6 +22,7 @@
    [freememo.content-toolbar-settings :as settings]
    [freememo.icons :as icons]
    [freememo.command-bus :as bus]
+   [freememo.toolbar-overflow :as overflow]
    [freememo.tooltip :as tooltip]))
 
 ;; Pre:  `!open` is a CLJS atom holding the menu open state.
@@ -44,12 +45,16 @@
                       (let [target (.-target e)]
                         (when-not (or (.closest target menu-sel)
                                     (.closest target trigger-sel))
-                          (reset! !open false))))]
+                          (reset! !open false))))
+           ;; Pin the menu fixed under the trigger so .toolbar's overflow-x:clip
+           ;; can't cut it off horizontally (see install-dropdown-menu-position!).
+           unposition (overflow/install-dropdown-menu-position! trigger-class menu-class)]
        (.addEventListener js/document "keydown" on-key)
        (.addEventListener js/document "mousedown" on-mouse)
        (fn []
          (.removeEventListener js/document "keydown" on-key)
-         (.removeEventListener js/document "mousedown" on-mouse)))
+         (.removeEventListener js/document "mousedown" on-mouse)
+         (unposition)))
      :clj (fn [] nil)))
 
 ;; !use-context / !context-window / !card-type are passed positionally (atoms
