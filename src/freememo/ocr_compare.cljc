@@ -91,7 +91,8 @@
 
 (e/defn UseOcrButton
   "Adopt this model's text for the page; honors the shared Remember checkbox.
-   Closes the modal on success."
+   Closes the modal on success; on failure surfaces the error and leaves the
+   modal open so the user isn't left wondering whether the save happened."
   [user-id root page model-id result !remember !open]
   (e/client
     (dom/button
@@ -99,11 +100,15 @@
                   :style {:width "100%"}})
       (dom/text "Use this")
       (let [click (dom/On "click" (fn [_] @!remember) nil)
-            [t _] (e/Token click)]
+            [t ?error] (e/Token click)]
+        (when ?error
+          (dom/div (dom/props {:style {:color "var(--color-danger-text)" :font-size "12px" :margin-top "4px"}})
+            (dom/text "Error: " ?error)))
         (when t
-          (e/on-unmount #(reset! !open nil))
-          (case (e/server (e/Offload #(commit-and-remember!* user-id root page (:text result) model-id click)))
-            (t)))))))
+          (let [r (e/server (e/Offload #(commit-and-remember!* user-id root page (:text result) model-id click)))]
+            (if (:success r)
+              (do (reset! !open nil) (t))
+              (t (:error r)))))))))
 
 (e/defn OcrCompareModal
   "Floating, draggable, non-blocking compare panel: runs every model in

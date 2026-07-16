@@ -225,8 +225,7 @@
                              #(when (bibform/claim-pending-biblio-show?* user-id bib-topic-id)
                                 bib-topic-id)))]
           (e/for-by identity [_k (when claimed-id [claimed-id])]
-            (let [opened (reset! !show-bib true)]
-              (when opened nil))))
+            (reset! !show-bib true)))
 
         ;; Bibliography modal — overlays everything when shown
         (when show-bib?

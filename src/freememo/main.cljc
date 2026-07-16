@@ -247,7 +247,6 @@
                     ;; e/watched so Electric stays reactive on tier + dropdown
                     ;; state (the detector owns collapse-N via classList).
                     !collapse-tier (atom 0)
-                    _collapse-tier (e/watch !collapse-tier)
                     !nav-overflow-open (atom false)
                     nav-overflow-open (e/watch !nav-overflow-open)
                     navigate! (fn

@@ -171,7 +171,7 @@
                   :style {:padding-left "12px"
                           :border-left "1px solid var(--color-border)"}})
       (let [refresh    (e/server (e/watch (us/get-atom user-id :meta-refresh)))
-            page-done? (e/server (page-done?* refresh pdf-root-id page-number))]
+            page-done? (e/server (e/Offload #(page-done?* refresh pdf-root-id page-number)))]
         (dom/button
           (dom/props {:class "btn btn-sm btn-secondary"
                       :aria-label (if page-done?
@@ -191,7 +191,7 @@
                               nil)
                 [t _] (e/Token click-event)]
             (when t
-              (case (e/server (db/toggle-page-done! pdf-root-id (:page click-event)))
+              (case (e/server (e/Offload #(db/toggle-page-done! pdf-root-id (:page click-event))))
                 (case (e/server (commands/bump! user-id :done))
                   (t)))))))))))
 
@@ -253,7 +253,7 @@
           on-page-change! dctx/on-page-change! on-layout-toggle! dctx/on-layout-toggle!
           ;; Reactive per-PDF extraction style (drives Copy text / Copy all).
           settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
-          extract-style (e/server (copy/get-extract-style* settings-refresh user-id pdf-root-id))]
+          extract-style (e/server (e/Offload #(copy/get-extract-style* settings-refresh user-id pdf-root-id)))]
       (if phone?
         ;; ── Phone (C3): two primaries + ⋮ overflow dropdown ──────────────
         (let [!overflow-open (atom false)

@@ -18,20 +18,11 @@
    [freememo.tree-dnd :as tree-dnd]
    [freememo.library-row-actions :refer [RowActionsMenu]]
    [freememo.commands :as commands]
+   [hyperfiddle.electric-forms5 :as forms]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.staged-delete :as staged-delete])
    #?(:clj [freememo.topic-move :as topic-move])
    #?(:clj [freememo.user-state :as us])))
-
-;; Frame-safe focus-on-mount. HTML :autofocus does NOT fire on dynamically
-;; inserted elements, so a modal opened on click never receives focus from it;
-;; rAF schedules .focus after DOM attach + layout. Top-level platform-split
-;; defn called uniformly from the reactive body — no #?(:cljs …) in the e/defn
-;; body (which would diverge CLJ/CLJS frame slot counts).
-#?(:cljs
-   (defn focus-on-mount! [node]
-     (when node (.requestAnimationFrame js/window (fn [] (.focus node))))))
-#?(:clj (defn focus-on-mount! [_node] nil))
 
 ;; Trap Tab within `container` so focus cycles the modal's focusable elements
 ;; instead of escaping to the page behind it. Call from a keydown handler on
@@ -201,14 +192,26 @@
                      !expansion !editing-id !show-confirm !scroll-node
                      !drag-src drag-src forbidden !drop-cmd !dismiss-cmd]
   (e/client
-    (let [{:keys [depth topic has-children is-root expanded?]} row
-          id (:topics/id topic)
-          title (or (:topics/title topic) "(empty)")
-          kind (or (:topics/kind topic) "basic")
+    ;; `row` is a server-sited value (bound via e/server at the call site) —
+    ;; pull each field through its own e/server so only the fields this row
+    ;; actually renders cross the wire, not the whole row+topic map (mirrors
+    ;; LibraryCardRow, library_cards.cljc).
+    (let [depth (e/server (:depth row))
+          has-children (e/server (:has-children row))
+          is-root (e/server (:is-root row))
+          expanded? (e/server (:expanded? row))
+          id (e/server (get-in row [:topic :topics/id]))
+          title (or (e/server (get-in row [:topic :topics/title])) "(empty)")
+          kind (or (e/server (get-in row [:topic :topics/kind])) "basic")
           is-page (= kind "page")
-          source-container (:sources/container_title topic)
-          topic-status (or (:topics/status topic) "active")
-          dismissed? (boolean (:topics/dismissed topic))
+          source-container (e/server (get-in row [:topic :sources/container_title]))
+          topic-status (or (e/server (get-in row [:topic :topics/status])) "active")
+          dismissed? (boolean (e/server (get-in row [:topic :topics/dismissed])))
+          total-items (e/server (get-in row [:topic :total-items]))
+          done-items (e/server (get-in row [:topic :done-items]))
+          total-cards (e/server (get-in row [:topic :total-cards]))
+          synced-cards (e/server (get-in row [:topic :synced-cards]))
+          formatted-date (e/server (get-in row [:topic :formatted_date]))
           [badge-text badge-color] (bibform/topic-badge kind source-container)
           open-topic! (fn [_] (navigate! :viewer (nav/nav-topic id :library)))
           toggle-children! (fn [e]
@@ -264,41 +267,60 @@
             (dom/text badge-text))
           (if (= editing-id id)
             (e/for-by identity [_k [id]]
-              (dom/input
-                (dom/props {:type "text"
-                            :placeholder "Title"
-                            :maxlength "500"
-                            :style {:flex "1" :min-width "0" :padding "2px 6px"
-                                    :font-size (if is-root "13px" "12px")
-                                    :border "1px solid var(--color-border)"
-                                    :border-radius "3px"
-                                    :background "var(--color-bg-card)"}})
-                (set! (.-value dom/node) (or title ""))
-                (let [n dom/node]
-                  (js/setTimeout
-                    (fn []
-                      (.focus n)
-                      (when (pos? (count (.-value n))) (.select n)))
-                    0))
-                (dom/On "click" (fn [e] (.stopPropagation e)) nil)
-                (dom/On "keydown"
-                  (fn [e]
-                    (when (= (.-key e) "Escape")
-                      (.preventDefault e)
-                      (set! (.-value (.-target e)) (or title ""))
-                      (.blur (.-target e))
-                      (reset! !editing-id nil)))
-                  nil)
-                (let [event (dom/On "change" #(-> % .-target .-value) nil)
-                      [t _] (e/Token event)]
-                  (when t
-                    (let [trimmed (str/trim event)]
-                      (if (str/blank? trimmed)
-                        (case (e/client (reset! !editing-id nil)) (t))
-                        (let [ok (e/server (e/Offload #(rename-and-refresh! user-id id trimmed)))]
-                          (case ok
-                            (case (e/client (reset! !editing-id nil))
-                              (t))))))))))
+              ;; Select-all on focus so the autofocus-on-mount lets the user
+              ;; immediately overwrite the whole title (was the .select half
+              ;; of the old rAF focus+select dance). Delegated on "focusin"
+              ;; (bubbles, unlike "focus") because Input! owns the <input>
+              ;; node — we no longer hold a direct ref to it.
+              (dom/On "focusin"
+                (fn [e]
+                  (let [n (.-target e)]
+                    (when (and (instance? js/HTMLInputElement n) (pos? (count (.-value n))))
+                      (.select n))))
+                nil)
+              (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+              ;; Esc cancels without saving. Input! unmounts with the rest of
+              ;; this branch on reset — no manual value-revert/blur needed,
+              ;; unlike the old imperative dance.
+              (dom/On "keydown"
+                (fn [e]
+                  (when (and (= (.-key e) "Escape") (instance? js/HTMLInputElement (.-target e)))
+                    (.preventDefault e)
+                    (reset! !editing-id nil)))
+                nil)
+              ;; Managed Forms5 input, bound to `title` (authoritative): while
+              ;; focused/dirty it holds the user's draft instead of reflecting
+              ;; `title`, so a concurrent rename-and-refresh! elsewhere never
+              ;; clobbers an in-progress edit (A5 fix). Its own per-keystroke
+              ;; token is intentionally left unconsumed — committing on every
+              ;; keystroke would bump :tree-mutations and re-sort/re-fetch the
+              ;; whole tree while typing; see the delegated "change" commit
+              ;; below instead, which fires once on blur like before.
+              (forms/Input! :title title
+                :type "text" :placeholder "Title" :maxlength "500" :autofocus true
+                :style {:flex "1" :min-width "0" :padding "2px 6px"
+                        :font-size (if is-root "13px" "12px")
+                        :border "1px solid var(--color-border)"
+                        :border-radius "3px"
+                        :background "var(--color-bg-card)"})
+              ;; Commit on change/blur — delegated (bubbles from Input!'s
+              ;; node), same policy as before: blank title cancels, otherwise
+              ;; rename + refresh, then close.
+              (let [event (dom/On "change"
+                            #(when (instance? js/HTMLInputElement (.-target %)) (-> % .-target .-value))
+                            nil)
+                    [t _] (e/Token event)]
+                (when t
+                  (let [trimmed (str/trim event)]
+                    (if (str/blank? trimmed)
+                      (case (e/client (reset! !editing-id nil)) (t))
+                      ;; fire-and-forget: rename-and-refresh! has no failure
+                      ;; return (returns :ok, or throws — no {:success ...}
+                      ;; contract to branch on).
+                      (let [ok (e/server (e/Offload #(rename-and-refresh! user-id id trimmed)))]
+                        (case ok
+                          (case (e/client (reset! !editing-id nil))
+                            (t)))))))))
             (dom/span
               (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
                                   :font-size (if is-root "13px" "12px")
@@ -320,14 +342,12 @@
                       :style {:padding "4px 6px" :text-align "center"
                               :display "flex" :align-items "center" :justify-content "center"}})
           (when is-root
-            (let [total (:total-items topic)
-                  done (:done-items topic)]
-              (dom/span
-                (dom/props {:style {:color (cond
-                                             (and (pos? total) (= done total)) "var(--color-success-dark)"
-                                             (pos? done) "var(--color-text-primary)"
-                                             :else "var(--color-text-secondary)")}})
-                (dom/text (str done " / " total))))))
+            (dom/span
+              (dom/props {:style {:color (cond
+                                           (and (pos? total-items) (= done-items total-items)) "var(--color-success-dark)"
+                                           (pos? done-items) "var(--color-text-primary)"
+                                           :else "var(--color-text-secondary)")}})
+              (dom/text (str done-items " / " total-items)))))
         ;; Column 3: Synced
         (dom/td
           (dom/props {:role "cell"
@@ -335,12 +355,10 @@
                               :display "flex" :align-items "center" :justify-content "center"
                               :color "var(--color-text-secondary)"}})
           (when is-root
-            (let [total-cards (:total-cards topic)
-                  synced (:synced-cards topic)]
-              (dom/span
-                (dom/text (if (pos? total-cards)
-                            (str synced " / " total-cards)
-                            "–"))))))
+            (dom/span
+              (dom/text (if (pos? total-cards)
+                          (str synced-cards " / " total-cards)
+                          "–")))))
         ;; Column 4: Added
         (dom/td
           (dom/props {:role "cell"
@@ -349,7 +367,7 @@
                               :color "var(--color-text-secondary)"}})
           (when is-root
             (dom/span
-              (dom/text (or (:formatted_date topic) "")))))
+              (dom/text (or formatted-date "")))))
         ;; Column 5: Actions — all row actions collapsed behind one ⋯ menu.
         (dom/td
           (dom/props {:style {:padding "4px 6px" :display "flex" :align-items "center"
@@ -364,7 +382,7 @@
 ;; Pre:  `show-confirm` is the topic-id to delete, or nil (modal hidden).
 ;; Post: Esc / backdrop click / Cancel → close (reset! !show-confirm nil).
 ;;       Delete click or Cmd/Ctrl+Enter → run delete sequence, then close.
-;; Invariant: Delete button receives focus on mount (via RAF, after DOM attach)
+;; Invariant: Delete button receives focus on mount (:autofocus true)
 ;;            so Tab cycles between Delete↔Cancel and the keydown shortcut works.
 (e/defn DeleteConfirmModal [user-id show-confirm !show-confirm !scroll-node]
   (e/client
@@ -403,9 +421,8 @@
                 (dom/text "Cancel")
                 (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil))
               (dom/button
-                (dom/props {:class "btn btn-danger-fill"})
+                (dom/props {:class "btn btn-danger-fill" :autofocus true})
                 (reset! !delete-btn dom/node)
-                (focus-on-mount! dom/node)
                 (dom/text "Delete")
                 ;; Thread the pre-delete scrollTop through the confirm event so
                 ;; it's captured in the click callback (not the reactive body).

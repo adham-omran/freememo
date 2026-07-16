@@ -19,11 +19,17 @@
    [clojure.string :as str]))
 
 ;; ---------------------------------------------------------------------------
-;; Quill config — shared with rich_text_editor.cljc via this defn.
+;; Quill config — single source of truth, required by rich_text_editor.cljc
+;; (the main document editor) rather than redefined there. Both editors need
+;; the identical toolbar/syntax/table setup, the code-block icon override,
+;; and the clipboard matchers below; a prior copy-paste of all three into
+;; rich_text_editor.cljc had drifted the icon's line by 1px.
 ;; ---------------------------------------------------------------------------
 
-;; Mirror of the icon override in rich_text_editor.cljc — idempotent (same SVG
-;; string; either ns loading first sets it). See that ns for context.
+;; Quill 2.0.3 ships one `code.svg` aliased to both "code" and "code-block",
+;; making the two toolbar buttons visually identical. Override "code-block"
+;; with a terminal-frame glyph so users can distinguish inline from block.
+;; Inline "code" stays on Quill's default `</>` icon.
 #?(:cljs
    (defonce ^:private code-block-icon-installed?
      (let [icons (.import js/Quill "ui/icons")]
@@ -31,7 +37,7 @@
          (str "<svg viewbox=\"0 0 18 18\">"
            "<rect class=\"ql-stroke\" x=\"2\" y=\"4\" width=\"14\" height=\"10\" rx=\"1\" ry=\"1\" fill=\"none\"/>"
            "<polyline class=\"ql-stroke\" points=\"5 7 7 9 5 11\" fill=\"none\"/>"
-           "<line class=\"ql-stroke\" x1=\"9\" y1=\"11\" x2=\"13\" y2=\"11\"/>"
+           "<line class=\"ql-stroke\" x1=\"9\" y1=\"12\" x2=\"13\" y2=\"12\"/>"
            "</svg>"))
        true)))
 
@@ -42,40 +48,91 @@
    surface via the custom format-menu, including code-block highlight.js
    colouring and tables. Image insertion and cloze deletion are provided by
    format-menu opts in init-quill-field! (not the Quill toolbar), so the hidden
-   bubble toolbar carries neither."
-  [placeholder]
-  {:theme "bubble"
-   :modules {:toolbar [["bold" "italic" "underline" "strike"]
-                       [{"header" 1} {"header" 2} {"header" 3}]
-                       [{"size" ["small" false "large" "huge"]}]
-                       [{"color" []} {"background" []}]
-                       [{"list" "ordered"} {"list" "bullet"}]
-                       [{"align" []}]
-                       [{"direction" "rtl"}]
-                       ["code" "code-block"]
-                       ["clean"]
-                       ["table"]]
-             ;; Syntax module — requires window.hljs + clojure pack (loaded in
-             ;; index*.html). Same `:languages` list as the main editor for
-             ;; consistent picker UX across modals and the page editor.
-             :syntax {:languages [{:key "plain" :label "Plain"}
-                                  {:key "bash" :label "Bash"}
-                                  {:key "cpp" :label "C++"}
-                                  {:key "cs" :label "C#"}
-                                  {:key "clojure" :label "Clojure"}
-                                  {:key "css" :label "CSS"}
-                                  {:key "diff" :label "Diff"}
-                                  {:key "xml" :label "HTML/XML"}
-                                  {:key "java" :label "Java"}
-                                  {:key "javascript" :label "JavaScript"}
-                                  {:key "markdown" :label "Markdown"}
-                                  {:key "php" :label "PHP"}
-                                  {:key "python" :label "Python"}
-                                  {:key "ruby" :label "Ruby"}
-                                  {:key "rust" :label "Rust"}
-                                  {:key "sql" :label "SQL"}]}
-             :table true}
-   :placeholder (or placeholder "Enter text...")})
+   bubble toolbar carries neither.
+   `extra` (optional) is merged in last, letting a caller add ctor options
+   this ns has no use for — e.g. rich_text_editor.cljc passes {:bounds
+   container} to clamp its floating tooltip to the editor pane; QuillField
+   has no such ancestor to clamp to and omits it."
+  ([placeholder] (quill-config placeholder nil))
+  ([placeholder extra]
+   (merge
+     {:theme "bubble"
+      :modules {:toolbar [["bold" "italic" "underline" "strike"]
+                          [{"header" 1} {"header" 2} {"header" 3}]
+                          [{"size" ["small" false "large" "huge"]}]
+                          [{"color" []} {"background" []}]
+                          [{"list" "ordered"} {"list" "bullet"}]
+                          [{"align" []}]
+                          [{"direction" "rtl"}]
+                          ["code" "code-block"]
+                          ["clean"]
+                          ["table"]]
+                ;; Syntax module — requires window.hljs + clojure pack (loaded in
+                ;; index*.html). Same `:languages` list as the main editor for
+                ;; consistent picker UX across modals and the page editor.
+                :syntax {:languages [{:key "plain" :label "Plain"}
+                                     {:key "bash" :label "Bash"}
+                                     {:key "cpp" :label "C++"}
+                                     {:key "cs" :label "C#"}
+                                     {:key "clojure" :label "Clojure"}
+                                     {:key "css" :label "CSS"}
+                                     {:key "diff" :label "Diff"}
+                                     {:key "xml" :label "HTML/XML"}
+                                     {:key "java" :label "Java"}
+                                     {:key "javascript" :label "JavaScript"}
+                                     {:key "markdown" :label "Markdown"}
+                                     {:key "php" :label "PHP"}
+                                     {:key "python" :label "Python"}
+                                     {:key "ruby" :label "Ruby"}
+                                     {:key "rust" :label "Rust"}
+                                     {:key "sql" :label "SQL"}]}
+                :table true}
+      :placeholder (or placeholder "Enter text...")}
+     extra)))
+
+(defn install-clipboard-matchers!
+  "Register the clipboard matchers that keep Quill's syntax-highlighted code
+   blocks round-trip-safe through HTML. Shared by rich_text_editor.cljc's
+   init-editor! and this ns's init-quill-field! — CLJS-only, no-op on CLJ.
+
+   - `select.ql-ui`: the syntax module's per-block language <select>. Quill's
+     default clipboard handling extracts the <option> labels as text and
+     emits a <p> with the concatenated picker labels on every reload,
+     growing one corrupted paragraph per save cycle. Returning a fresh empty
+     Delta tells the converter this subtree contributes nothing — the
+     surrounding container + child line divs are processed by their own
+     matchers and continue to render as multi-line code blocks.
+   - `span.ql-token`: CodeToken.formats in Quill 2.0.3 returns boolean `true`
+     instead of the actual hljs-X value, producing `class=\"hljs-true\"` and
+     collapsing adjacent same-value inlines into one span. Returning a Delta
+     with just the textContent (no code-token attribute) hands Quill clean
+     text; the syntax module's 1 s timer re-applies fresh, correctly-classed
+     tokens.
+   - `div.ql-code-block`: preserves leading/trailing/inter-character
+     whitespace inside code blocks. Quill 2.0.3's default clipboard text-node
+     walker runs through the HTML parser's whitespace normalization, which
+     collapses leading runs of spaces at element boundaries — losing
+     user-typed indentation on every reload. Reading the div's textContent
+     verbatim and emitting one text op + one code-block-attributed newline
+     op per line hands Quill clean, whitespace-faithful text; the syntax
+     module re-applies hljs spans on its 1 s timer after setContents."
+  [clipboard]
+  #?(:cljs
+     (let [^js clipboard clipboard
+           Delta (.import (.-Quill js/window) "delta")]
+       (.addMatcher clipboard "select.ql-ui"
+         (fn [_node _delta] (new Delta)))
+       (.addMatcher clipboard "span.ql-token"
+         (fn [^js node _delta]
+           (-> (new Delta) (.insert (.-textContent node)))))
+       (.addMatcher clipboard "div.ql-code-block"
+         (fn [^js node _delta]
+           (let [text (.-textContent node)
+                 lang (or (.getAttribute node "data-language") "plain")]
+             (-> (new Delta)
+               (.insert text)
+               (.insert "\n" #js {"code-block" lang}))))))
+     :clj nil))
 
 ;; ---------------------------------------------------------------------------
 ;; Quill instance lifecycle — plain defns so side effects are stable.
@@ -97,39 +154,9 @@
              cfg (clj->js (quill-config placeholder))
              ed (new Quill container cfg)
              cb (.-clipboard ed)
-             ;; Tell Quill's clipboard pipeline to ignore the syntax module's
-             ;; language-picker <select>. Without this, Quill's default
-             ;; handling extracts <option> labels as text and emits a <p> with
-             ;; the concatenated picker labels on every reload. Returning an
-             ;; empty Delta makes the converter treat the <select> subtree as
-             ;; if it didn't exist; container + child line divs are processed
-             ;; by their own matchers and continue to render as multi-line
-             ;; code blocks.
-             Delta (.import (.-Quill js/window) "delta")
-             _ (.addMatcher cb "select.ql-ui"
-                 (fn [_node _delta] (new Delta)))
-             ;; Strip Quill syntax-module token wrappers. CodeToken.formats
-             ;; in Quill 2.0.3 returns boolean `true` instead of the actual
-             ;; hljs-X value (rendering as `class="hljs-true"` and merging
-             ;; adjacent same-value inlines). Returning a Delta with just
-             ;; the textContent hands Quill clean text; the syntax module
-             ;; re-applies fresh tokens on its 1 s timer.
-             _ (.addMatcher cb "span.ql-token"
-                 (fn [^js node _delta]
-                   (-> (new Delta) (.insert (.-textContent node)))))
-             ;; Preserve whitespace inside code blocks. Quill 2.0.3's
-             ;; default text-node walker collapses leading whitespace at
-             ;; element boundaries (HTML parser whitespace normalization),
-             ;; dropping user-typed indentation on reload. Reading the
-             ;; div's textContent verbatim sidesteps that path; the
-             ;; syntax module re-applies hljs spans after setContents.
-             _ (.addMatcher cb "div.ql-code-block"
-                 (fn [^js node _delta]
-                   (let [text (.-textContent node)
-                         lang (or (.getAttribute node "data-language") "plain")]
-                     (-> (new Delta)
-                       (.insert text)
-                       (.insert "\n" #js {"code-block" lang})))))
+             ;; See install-clipboard-matchers! above for what each matcher
+             ;; does and why (shared with rich_text_editor.cljc's main editor).
+             _ (install-clipboard-matchers! cb)
              raw (or initial-html "")
              cleaned (-> raw
                        (str/replace (js/RegExp. "^```html\\s*\\n?" "") "")

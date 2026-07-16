@@ -39,6 +39,21 @@
   #?(:cljs (boolean (re-find #"(?i)firefox" (str (.-userAgent js/navigator))))
      :clj false))
 
+;; Debounce helper for search-as-you-type inputs — delays a server-bound
+;; derived value behind rapid client input so every keystroke doesn't fire a
+;; query. Does not touch the input's own displayed value (callers keep that
+;; on its own, un-debounced atom when the input is controlled).
+(defn debounce!
+  "Reset `!debounced` to `v` after `ms` of idle time, cancelling any pending
+   timer from a previous call. `!timer` is a plain (atom nil) owned by the
+   caller, holding the in-flight setTimeout id."
+  [!timer !debounced v ms]
+  #?(:cljs
+     (do
+       (when-let [t @!timer] (js/clearTimeout t))
+       (reset! !timer (js/setTimeout #(reset! !debounced v) ms)))
+     :clj nil))
+
 ;; Drag helper for split-pane dividers (PointerEvent API — works for mouse, touch, and stylus)
 (defn start-drag!
   "Begin a split-pane drag. Call from a pointerdown handler.

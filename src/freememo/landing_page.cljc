@@ -31,8 +31,6 @@
     "The app is free. Card generation, OCR, and transcription use OpenRouter — via hosted credits, or your own OpenRouter key when self-hosting. Reading, reviewing, editing, and Anki sync never touch a paid API."]
    ["Where does my reading go?"
     "PDFs, EPUBs, and extracted text live on the FreeMemo server, tied to your account. Cards stay in your browser until you push them to your own Anki collection."]
-   #_["What if FreeMemo shuts down?"
-    "You can export every card as Anki-compatible CSV at any time, and your Anki collection lives on your machine regardless. Worst case: you lose the reading view — your cards survive."]
    ["Will my cards work in regular Anki?"
     "Yes. Basic cards map to Anki's Basic note type. Cloze cards use Anki's standard {{c1::}} syntax. Sync runs over AnkiConnect, so any standard Anki setup with the AnkiConnect plugin works."]
    ["What can I import?"

@@ -90,6 +90,17 @@
   #?(:cljs (let [n (js/parseInt (str s) 10)] (if (js/isNaN n) 1 (max 0 n)))
      :clj (max 0 (or (parse-long (str s)) 1))))
 
+(defn flush-editors!
+  "Force-flush each [editor-atom target-atom] pair's Quill syntax-highlight
+   spans into the DOM and reset! the resulting HTML into target-atom.
+   Shared by EditCardModal's and AddCardModal's Save click handlers — see
+   flush-syntax-tokens! (freememo.quill-field) for why this MUST run at
+   click time rather than relying on QuillField's on-change."
+  [pairs]
+  (doseq [[!editor !target] pairs]
+    (when-let [html (flush-syntax-tokens! @!editor)]
+      (reset! !target html))))
+
 ;; ---------------------------------------------------------------------------
 ;; Modal Tab navigation — Tab moves focus editor→editor→Save→Cancel instead of
 ;; letting Quill insert a tab character. Toolbar buttons are excluded (they
@@ -284,48 +295,17 @@
                             :justify-content "center" :z-index "1000"
                             :pointer-events "none"}
                     :tabindex "-1"})
+        (modal/ModalEscape (fn [] (reset! !show false))
+          (str "Generate " (if (= prompt-dialog-kind "basic") "Basic" "Cloze") " Cards"))
         (dom/On "keydown"
-          (fn [e]
-            #?(:cljs
-               (cond
-                 (= (.-key e) "Escape")
-                 (reset! !show false)
-                 (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
-                 (when-let [btn @!primary-btn]
-                   (.preventDefault e)
-                   (.click btn)))))
+          (fn [e] (modal/mod-enter-submit! e !primary-btn))
           nil)
         (dom/div
           (dom/props {:style {:background "var(--color-bg-card)" :border-radius "var(--radius-lg)" :padding "var(--sp-6)"
                               :width "500px" :max-width "90%" :box-shadow "0 4px 20px rgba(0,0,0,0.25)"
                               :pointer-events "auto"}})
           (dom/On "pointerdown"
-            (fn [e]
-              #?(:cljs
-                 (let [inner (.-currentTarget e)
-                       h3 (.querySelector inner "h3")]
-                   (when (and h3 (or (= (.-target e) h3)
-                                   (.contains h3 (.-target e))))
-                     (.preventDefault e)
-                     (let [rect (.getBoundingClientRect inner)
-                           sx (.-clientX e)
-                           sy (.-clientY e)
-                           px (.-left rect)
-                           py (.-top rect)
-                           move-fn (fn [me]
-                                     (set! (.-position (.-style inner)) "fixed")
-                                     (set! (.-left (.-style inner))
-                                       (str (+ px (- (.-clientX me) sx)) "px"))
-                                     (set! (.-top (.-style inner))
-                                       (str (+ py (- (.-clientY me) sy)) "px"))
-                                     (set! (.-margin (.-style inner)) "0"))
-                           up-fn (fn self [ue]
-                                   (.releasePointerCapture inner (.-pointerId ue))
-                                   (.removeEventListener inner "pointermove" move-fn)
-                                   (.removeEventListener inner "pointerup" self))]
-                       (.setPointerCapture inner (.-pointerId e))
-                       (.addEventListener inner "pointermove" move-fn)
-                       (.addEventListener inner "pointerup" up-fn))))))
+            (fn [e] (modal/drag-modal-by-title! e))
             nil)
           (dom/h3
             (dom/props {:style {:margin-top "0" :cursor "move" :user-select "none"
@@ -442,16 +422,10 @@
                             :justify-content "center" :z-index "1000"
                             :pointer-events "none"}
                     :tabindex "-1"})
+        (modal/ModalEscape (fn [] (reset! !editing-card nil))
+          (str "Edit " (cond (= kind "overlapping") "Overlapping" (= kind "basic") "Basic" :else "Cloze") " Card"))
         (dom/On "keydown"
-          (fn [e]
-            #?(:cljs
-               (cond
-                 (= (.-key e) "Escape")
-                 (reset! !editing-card nil)
-                 (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
-                 (when-let [btn @!primary-btn]
-                   (.preventDefault e)
-                   (.click btn)))))
+          (fn [e] (modal/mod-enter-submit! e !primary-btn))
           nil)
         (dom/div
           (dom/props {:class "card-modal-inner"
@@ -459,32 +433,7 @@
                               :box-shadow "0 4px 20px rgba(0,0,0,0.25)"
                               :pointer-events "auto"}})
           (dom/On "pointerdown"
-            (fn [e]
-              #?(:cljs
-                 (let [inner (.-currentTarget e)
-                       h3 (.querySelector inner "h3")]
-                   (when (and h3 (or (= (.-target e) h3)
-                                   (.contains h3 (.-target e))))
-                     (.preventDefault e)
-                     (let [rect (.getBoundingClientRect inner)
-                           sx (.-clientX e)
-                           sy (.-clientY e)
-                           px (.-left rect)
-                           py (.-top rect)
-                           move-fn (fn [me]
-                                     (set! (.-position (.-style inner)) "fixed")
-                                     (set! (.-left (.-style inner))
-                                       (str (+ px (- (.-clientX me) sx)) "px"))
-                                     (set! (.-top (.-style inner))
-                                       (str (+ py (- (.-clientY me) sy)) "px"))
-                                     (set! (.-margin (.-style inner)) "0"))
-                           up-fn (fn self [ue]
-                                   (.releasePointerCapture inner (.-pointerId ue))
-                                   (.removeEventListener inner "pointermove" move-fn)
-                                   (.removeEventListener inner "pointerup" self))]
-                       (.setPointerCapture inner (.-pointerId e))
-                       (.addEventListener inner "pointermove" move-fn)
-                       (.addEventListener inner "pointerup" up-fn))))))
+            (fn [e] (modal/drag-modal-by-title! e))
             nil)
           (let [cleanup (attach-modal-tab-nav! dom/node)]
             (e/on-unmount (fn [] (when cleanup (cleanup)))))
@@ -528,35 +477,35 @@
                   "Optional back extra..." [:edit-be card-id] !a-editor nil nil))))
           (dom/div
             (dom/props {:style {:display "flex" :justify-content "flex-end" :align-items "center" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
-            (let [click-event
+            (let [[click-event btn-node]
                   (dom/button
                     (dom/props {:class "btn btn-primary" :style {:order "1"}})
                     (reset! !primary-btn dom/node)
                     (dom/text "Save")
                     ;; Force the syntax module to flush its hljs-* spans into the
                     ;; DOM, then read the post-flush innerHTML and reset! the
-                    ;; matching atom directly. Quill 2.0.3's syntax module does
-                    ;; NOT fire any observable text-change for its formatAt pass,
-                    ;; so on-change cannot deliver the tokenized HTML; we MUST
-                    ;; capture it via the flush return value here. dom/On is the
-                    ;; button's last form, so the button returns the click event
-                    ;; for the e/Token below — letting the error render beside the
-                    ;; buttons (not inside this blue one).
-                    (dom/On "click"
-                      (fn [e]
-                        (when-let [html (flush-syntax-tokens! @!q-editor)]
-                          (reset! !question html))
-                        (when-let [html (flush-syntax-tokens! @!a-editor)]
-                          (reset! !answer html))
-                        (when-let [html (flush-syntax-tokens! @!c-editor)]
-                          (reset! !cloze html))
-                        (when-let [html (flush-syntax-tokens! @!ol-items-editor)]
-                          (reset! !ol-items-html html))
-                        (when-let [html (flush-syntax-tokens! @!ol-question-editor)]
-                          (reset! !ol-question html))
-                        e)
-                      nil))
+                    ;; matching atom directly (flush-editors!). Quill 2.0.3's
+                    ;; syntax module does NOT fire any observable text-change for
+                    ;; its formatAt pass, so on-change cannot deliver the
+                    ;; tokenized HTML; we MUST capture it via the flush return
+                    ;; value here. The vector is the button's last form, so the
+                    ;; button returns [click-event node] for the e/Token below —
+                    ;; letting the error render beside the buttons (not inside
+                    ;; this blue one) and letting the button gate its own
+                    ;; disabled/aria-busy state on the resulting token.
+                    [(dom/On "click"
+                       (fn [e]
+                         (flush-editors! [[!q-editor !question] [!a-editor !answer] [!c-editor !cloze]
+                                           [!ol-items-editor !ol-items-html] [!ol-question-editor !ol-question]])
+                         e)
+                       nil)
+                     dom/node])
                   [t ?error] (e/Token click-event)]
+              ;; Disable + aria-busy while a Save is in flight — closes the
+              ;; double-submit hole (a second click while the first commit is
+              ;; still pending would otherwise fire a second concurrent e/server
+              ;; round-trip; e/Token alone does not prevent that).
+              (dom/props btn-node {:disabled (some? t) :aria-busy (some? t)})
               (when ?error
                 (dom/div (dom/props {:style {:order "-1" :margin-right "auto" :color "var(--color-danger-text)" :font-size "12px"}})
                   (dom/text "Error: " ?error)))
@@ -565,10 +514,10 @@
                   (let [items (quill-html->items ol-items-html)]
                     (if (empty? items)
                       (t "Add at least one list item")
-                      (let [result (e/server (cards/update-overlapping-card card-id
-                                               {:question ol-question :items items
-                                                :settings {:before (ol-before-int ol-before)
-                                                           :after 0 :reveal-all? ol-reveal}}))]
+                      (let [result (e/server (e/Offload #(cards/update-overlapping-card card-id
+                                                            {:question ol-question :items items
+                                                             :settings {:before (ol-before-int ol-before)
+                                                                        :after 0 :reveal-all? ol-reveal}})))]
                         (if (:success result)
                           (do (e/on-unmount #(reset! !editing-card nil))
                               (case (e/server (commands/bump! user-id :edit-card))
@@ -585,7 +534,7 @@
                                      (cond-> {:cloze clean-c}
                                        (and clean-a (not (str/blank? clean-a)))
                                        (assoc :answer clean-a)))
-                            result (e/server (cards/update-card card-id fields))]
+                            result (e/server (e/Offload #(cards/update-card card-id fields)))]
                         (if (:success result)
                           (do (e/on-unmount #(reset! !editing-card nil))
                               (case (e/server (commands/bump! user-id :edit-card))
@@ -668,16 +617,9 @@
                             :justify-content "center" :z-index "1000"
                             :pointer-events "none"}
                     :tabindex "-1"})
+        (modal/ModalEscape (fn [] (reset! !show-add false)) "Add Card")
         (dom/On "keydown"
-          (fn [e]
-            #?(:cljs
-               (cond
-                 (= (.-key e) "Escape")
-                 (reset! !show-add false)
-                 (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
-                 (when-let [btn @!primary-btn]
-                   (.preventDefault e)
-                   (.click btn)))))
+          (fn [e] (modal/mod-enter-submit! e !primary-btn))
           nil)
         (dom/div
           (dom/props {:class "card-modal-inner"
@@ -685,32 +627,7 @@
                               :box-shadow "0 4px 20px rgba(0,0,0,0.25)"
                               :pointer-events "auto"}})
           (dom/On "pointerdown"
-            (fn [e]
-              #?(:cljs
-                 (let [inner (.-currentTarget e)
-                       h3 (.querySelector inner "h3")]
-                   (when (and h3 (or (= (.-target e) h3)
-                                   (.contains h3 (.-target e))))
-                     (.preventDefault e)
-                     (let [rect (.getBoundingClientRect inner)
-                           sx (.-clientX e)
-                           sy (.-clientY e)
-                           px (.-left rect)
-                           py (.-top rect)
-                           move-fn (fn [me]
-                                     (set! (.-position (.-style inner)) "fixed")
-                                     (set! (.-left (.-style inner))
-                                       (str (+ px (- (.-clientX me) sx)) "px"))
-                                     (set! (.-top (.-style inner))
-                                       (str (+ py (- (.-clientY me) sy)) "px"))
-                                     (set! (.-margin (.-style inner)) "0"))
-                           up-fn (fn self [ue]
-                                   (.releasePointerCapture inner (.-pointerId ue))
-                                   (.removeEventListener inner "pointermove" move-fn)
-                                   (.removeEventListener inner "pointerup" self))]
-                       (.setPointerCapture inner (.-pointerId e))
-                       (.addEventListener inner "pointermove" move-fn)
-                       (.addEventListener inner "pointerup" up-fn))))))
+            (fn [e] (modal/drag-modal-by-title! e))
             nil)
           (let [cleanup (attach-modal-tab-nav! dom/node)]
             (e/on-unmount (fn [] (when cleanup (cleanup)))))
@@ -776,31 +693,33 @@
                   "Optional back extra..." [:add-be] !a-editor nil nil))))
           (dom/div
             (dom/props {:style {:display "flex" :justify-content "flex-end" :align-items "center" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
-            (let [click-event
+            (let [[click-event btn-node]
                   (dom/button
                     (dom/props {:class "btn btn-primary" :style {:border-radius "var(--radius-sm)" :order "1"}})
                     (reset! !primary-btn dom/node)
                     (dom/text "Save")
                     ;; Mirror the EditCardModal Save: force-flush hljs spans and
-                    ;; capture the post-flush innerHTML via the return value.
-                    ;; The Quill 2.0.3 syntax module does not fire text-change for
+                    ;; capture the post-flush innerHTML via flush-editors!. The
+                    ;; Quill 2.0.3 syntax module does not fire text-change for
                     ;; its formatAt pass, so on-change cannot deliver the
                     ;; tokenized HTML — we MUST reset! atoms directly here.
-                    ;; dom/On is the button's last form → button returns the click.
+                    ;; The vector is the button's last form → button returns
+                    ;; [click-event node], letting the button gate its own
+                    ;; disabled/aria-busy state on the resulting token.
                     ;; !primary-editor is whichever of Question/Cloze is mounted.
-                    (dom/On "click"
-                      (fn [e]
-                        (when-let [html (flush-syntax-tokens! @!primary-editor)]
-                          (reset! !primary html))
-                        (when-let [html (flush-syntax-tokens! @!a-editor)]
-                          (reset! !answer html))
-                        (when-let [html (flush-syntax-tokens! @!ol-items-editor)]
-                          (reset! !ol-items-html html))
-                        (when-let [html (flush-syntax-tokens! @!ol-question-editor)]
-                          (reset! !ol-question html))
-                        e)
-                      nil))
+                    [(dom/On "click"
+                       (fn [e]
+                         (flush-editors! [[!primary-editor !primary] [!a-editor !answer]
+                                           [!ol-items-editor !ol-items-html] [!ol-question-editor !ol-question]])
+                         e)
+                       nil)
+                     dom/node])
                   [t ?error] (e/Token click-event)]
+              ;; Disable + aria-busy while a Save is in flight — closes the
+              ;; double-submit hole (a second click while the first commit is
+              ;; still pending would otherwise fire a second concurrent
+              ;; opt/enqueue-add-card! call; e/Token alone does not prevent that).
+              (dom/props btn-node {:disabled (some? t) :aria-busy (some? t)})
               (when ?error
                 (dom/div (dom/props {:style {:order "-1" :margin-right "auto" :color "var(--color-danger-text)" :font-size "12px"}})
                   (dom/text "Error: " ?error)))

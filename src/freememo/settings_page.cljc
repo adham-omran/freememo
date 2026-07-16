@@ -3,6 +3,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [hyperfiddle.electric-forms5 :as forms]
    [freememo.util :refer [mac-platform?]]
    [freememo.storage-section :refer [StorageSection]]
    [freememo.cost-history :refer [CostHistorySection]]
@@ -79,8 +80,6 @@
   [user-id]
   (e/client
     (let [server-enabled (e/server (settings/zotero-enabled? user-id))
-          !enabled       (atom server-enabled)
-          enabled        (e/watch !enabled)
           !probe-state   (atom :idle)   ; :idle | :running | :ok | :error
           probe-state    (e/watch !probe-state)
           !probe-data    (atom nil)     ; map on :ok, string on :error
@@ -106,22 +105,21 @@
           (dom/props {:class "field"})
           (dom/label
             (dom/props {:style {:display "flex" :align-items "center" :gap "10px" :cursor "pointer"}})
-            (dom/input
-              (dom/props {:type "checkbox" :checked enabled
-                          :style {:width "18px" :height "18px"
-                                  :accent-color "var(--color-primary)"}})
-              (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
-                    [t _]        (e/Token change-event)]
-                (when (some? change-event)
-                  (reset! !enabled change-event))
-                (when t
-                  (let [r (e/server (e/Offload #(settings/save-zotero-enabled user-id change-event)))]
-                    (case r
-                      (if (:success r) (t) (t (:error r))))))))
-            (dom/span
-              (dom/props {:style {:font-size "14px" :font-weight "500"
-                                  :color "var(--color-text-primary)"}})
-              (dom/text "Enable Zotero import"))))
+            ;; e/amb, not implicit do — a bare sibling after the tracked
+            ;; Checkbox!/e/for would swallow its token (forms.md "do Gotcha").
+            (e/amb
+              (e/for [[t {:keys [zotero-enabled]}]
+                      (forms/Checkbox! :zotero-enabled server-enabled
+                        :style {:width "18px" :height "18px" :accent-color "var(--color-primary)"})]
+                (let [r (e/server (e/Offload #(settings/save-zotero-enabled user-id zotero-enabled)))]
+                  (case r
+                    (if (:success r) (t) (t (:error r))))))
+              (do
+                (dom/span
+                  (dom/props {:style {:font-size "14px" :font-weight "500"
+                                      :color "var(--color-text-primary)"}})
+                  (dom/text "Enable Zotero import"))
+                (e/amb)))))
 
         ;; Plugin install link
         (dom/div
@@ -151,7 +149,7 @@
             (dom/text (case probe-state
                         :running "Testing…"
                         "Test Connection"))
-            (let [click-event (dom/On "click" (fn [_] :run) nil)
+            (let [click-event (dom/On "click" identity nil)
                   [t _]       (e/Token click-event)]
               (when t
                 (reset! !probe-state :running)
@@ -188,6 +186,183 @@
                 (dom/props {:style {:margin-top "6px" :font-size "12px"
                                     :color "var(--color-text-secondary)"}})
                 (dom/text "Troubleshoot: install the plugin (above), confirm Zotero is running, and that \"Allow other applications…\" is enabled in Zotero → Settings → Advanced.")))))))))
+
+;; ---------------------------------------------------------------------------
+;; Account tab fields — split into their own e/defns (mirrors AIFeaturesSection's
+;; field split in ai_features_section.cljc) so SettingsPage's body stays a flat
+;; list of calls instead of one large e/defn approaching the JVM 64KB cap.
+;; ---------------------------------------------------------------------------
+
+(e/defn EmailUpdatesField
+  "Email-updates opt-in checkbox on the Account tab. Auto-saves on toggle."
+  [user-id]
+  (e/client
+    (let [server-email-updates (e/server (settings/get-email-updates user-id))]
+      (dom/div
+        (dom/props {:class "field" :style {:margin-top "12px"}})
+        (dom/label
+          (dom/props {:style {:display "flex" :align-items "center" :gap "10px" :cursor "pointer"}})
+          ;; e/amb, not implicit do — see ZoteroSection's Enable toggle for why.
+          (e/amb
+            (e/for [[t {:keys [email-updates]}]
+                    (forms/Checkbox! :email-updates server-email-updates
+                      :style {:width "18px" :height "18px" :accent-color "var(--color-primary)"})]
+              (let [r (e/server (e/Offload #(settings/save-email-updates user-id email-updates)))]
+                (case r
+                  (if (:success r) (t) (t (:error r))))))
+            (do
+              (dom/span
+                (dom/props {:style {:font-size "14px" :font-weight "500" :color "var(--color-text-primary)"}})
+                (dom/text "Subscribe to email updates"))
+              (e/amb))))))))
+
+;; ---------------------------------------------------------------------------
+;; Appearance tab fields
+;; ---------------------------------------------------------------------------
+
+(e/defn ThemeField
+  "Theme select (Auto/Light/Dark). Kept hand-rolled — Forms5 has no tracked
+   select primitive — but busy-gated so a second change can't race the
+   in-flight save; commits also bump :set-setting so other tabs/sessions
+   pick up the theme change."
+  [user-id]
+  (e/client
+    (let [server-theme (e/server (settings/get-theme user-id))
+          !theme (atom server-theme)
+          theme (e/watch !theme)]
+      (dom/div
+        (dom/props {:class "field"})
+        (dom/label (dom/props {:class "label"}) (dom/text "Theme"))
+        (dom/select
+          (dom/props {:value theme :class "select"})
+          (dom/option (dom/props {:value "auto"}) (dom/text "Auto"))
+          (dom/option (dom/props {:value "light"}) (dom/text "Light"))
+          (dom/option (dom/props {:value "dark"}) (dom/text "Dark"))
+          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                [t ?error] (e/Token change-event)]
+            ;; A1-fallback: Forms5 has no tracked select primitive.
+            (dom/props {:disabled (some? t) :aria-busy (some? t)})
+            (when (some? change-event)
+              (reset! !theme change-event))
+            (when t
+              (let [r (e/server (e/Offload #(settings/save-theme user-id change-event)))]
+                (case r
+                  (if (:success r)
+                    (case (e/server (commands/bump! user-id :set-setting))
+                      (t))
+                    (t (:error r))))))))
+        (dom/div (dom/props {:class "hint"})
+          (dom/text "Auto follows your system preference"))))))
+
+(e/defn CardFontSizeField
+  "Card text-size number stepper (10-20px)."
+  [user-id]
+  (e/client
+    (let [server-font-size (e/server (settings/get-card-font-size user-id))]
+      (dom/div
+        (dom/props {:class "field"})
+        (dom/label
+          (dom/props {:style {:display "flex" :align-items "center" :gap "10px"}})
+          ;; e/amb, not implicit do — the tracked Input! sits between two plain
+          ;; siblings here, so both siblings must be amb-wrapped too or the
+          ;; do-sequencing silently drops the Input! token (forms.md "do Gotcha").
+          (e/amb
+            (do
+              (dom/span (dom/props {:class "label" :style {:margin-bottom "0"}})
+                (dom/text "Card Text Size"))
+              (e/amb))
+            (e/for [[t {:keys [card-font-size]}]
+                    (forms/Input! :card-font-size server-font-size
+                      :type "number" :min "10" :max "20"
+                      :Parse (e/fn [s] (js/parseInt s))
+                      :style {:width "56px" :font-size "13px" :padding "4px 6px"
+                              :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"})]
+              (let [r (e/server (e/Offload #(settings/save-card-font-size user-id card-font-size)))]
+                (case r
+                  (if (:success r) (t) (t (:error r))))))
+            (do
+              (dom/span (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
+                (dom/text "px"))
+              (e/amb))))
+        (dom/div (dom/props {:class "hint"})
+          (dom/text "Adjusts text size for cards (10-20px)"))))))
+
+(e/defn AppearanceSection
+  "Settings → Appearance. Theme (hand-rolled select) + card text size
+   (Forms5 Input!). Wrapped by the caller in the tab-visibility div, same
+   convention as AIFeaturesSection."
+  [user-id]
+  (e/client
+    (dom/div
+      (dom/props {:class "card"})
+      (dom/h3 (dom/props {:class "section-title"}) (dom/text "Appearance"))
+      (ThemeField user-id)
+      (CardFontSizeField user-id))))
+
+;; ---------------------------------------------------------------------------
+;; Anki Sync tab
+;; ---------------------------------------------------------------------------
+
+;; Auto-load radio options. Static, page-local data — same shape as
+;; `section-defs` above. Collapses what used to be 3 byte-identical
+;; hand-rolled radio blocks (per-item/global/none — C3/F2 finding) into one
+;; data-driven e/for, mirroring KgModelsField/kg-model-step-choices in
+;; ai_features_section.cljc.
+(def anki-auto-load-mode-choices
+  [{:value "per-item" :label "Use Last Settings Per Item"
+    :hint "Restore the saved settings for this specific document; auto-saves on every successful push."}
+   {:value "global" :label "Use Last Settings Globally"
+    :hint "Restore the most-recent settings used anywhere; same defaults across documents."}
+   {:value "none" :label "None (Manual)"
+    :hint "Open the modal with default values; you set everything fresh each time."}])
+
+(e/defn AnkiSyncSection
+  "Settings → Anki Sync. Auto-load mode is a radiogroup — no Forms5 tracked
+   radio primitive exists (A1-fallback), so it stays hand-rolled, but
+   data-driven over anki-auto-load-mode-choices and busy-gated per option."
+  [user-id]
+  (e/client
+    (let [server-auto-mode (e/server (settings/get-anki-auto-load-mode user-id))
+          !auto-mode (atom server-auto-mode)
+          auto-mode (e/watch !auto-mode)]
+      (dom/div
+        (dom/props {:class "card"})
+        (dom/h3 (dom/props {:class "section-title"}) (dom/text "Anki Sync"))
+
+        ;; ── Auto-load section ──────────────────────────────────────
+        (dom/div
+          (dom/props {:class "anki-settings-section"})
+          (dom/h4 (dom/props {:class "anki-settings-section-title"})
+            (dom/text "Auto-load Settings"))
+
+          ;; Auto-load Settings — controls what the Anki Sync modal restores on open
+          (dom/div
+            (dom/props {:class "field"})
+            (dom/label (dom/props {:class "label"}) (dom/text "Auto-load Settings"))
+            (dom/div
+              (dom/props {:style {:display "flex" :flex-direction "column" :gap "10px" :margin-top "4px"}})
+              (e/for-by :value [{:keys [value label hint]} anki-auto-load-mode-choices]
+                (dom/label
+                  (dom/props {:style {:display "flex" :align-items "flex-start" :gap "8px" :cursor "pointer"}})
+                  (dom/input
+                    (dom/props {:type "radio" :name "anki-auto-load-mode" :value value
+                                :checked (= auto-mode value)
+                                :style {:margin-top "3px"}})
+                    (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                          [t _] (e/Token change-event)]
+                      ;; A1-fallback: Forms5 has no tracked radio primitive.
+                      (dom/props {:disabled (some? t) :aria-busy (some? t)})
+                      (when (some? change-event)
+                        (reset! !auto-mode change-event))
+                      (when t
+                        (let [r (e/server (e/Offload #(settings/save-anki-auto-load-mode user-id change-event)))]
+                          (case r
+                            (if (:success r) (t) (t (:error r))))))))
+                  (dom/div
+                    (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
+                      (dom/text label))
+                    (dom/div (dom/props {:class "hint"})
+                      (dom/text hint))))))))))))
 
 (e/defn SettingsNav []
   (e/client
@@ -239,27 +414,7 @@
                   (dom/text "Logout"))))
 
         ;; Email updates toggle
-            (let [server-email-updates (e/server (settings/get-email-updates user-id))
-                  !email-updates (atom server-email-updates)
-                  email-updates (e/watch !email-updates)]
-              (dom/div
-                (dom/props {:class "field" :style {:margin-top "12px"}})
-                (dom/label
-                  (dom/props {:style {:display "flex" :align-items "center" :gap "10px" :cursor "pointer"}})
-                  (dom/input
-                    (dom/props {:type "checkbox" :checked email-updates
-                                :style {:width "18px" :height "18px" :accent-color "var(--color-primary)"}})
-                    (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
-                          [t ?error] (e/Token change-event)]
-                      (when (some? change-event)
-                        (reset! !email-updates change-event))
-                      (when t
-                        (let [r (e/server (e/Offload #(settings/save-email-updates user-id change-event)))]
-                          (case r
-                            (if (:success r) (t) (t (:error r))))))))
-                  (dom/span
-                    (dom/props {:style {:font-size "14px" :font-weight "500" :color "var(--color-text-primary)"}})
-                    (dom/text "Subscribe to email updates")))))
+            (EmailUpdatesField user-id)
 
         ;; Storage usage (formerly its own tab; now part of Account)
             (StorageSection user-id)
@@ -282,142 +437,16 @@
             (AIFeaturesSection user-id enc-key base-url client-country))
 
       ;; ── Appearance section ──
-          (let [server-font-size (e/server (settings/get-card-font-size user-id))
-                !font-size (atom server-font-size)
-                font-size (e/watch !font-size)
-                server-theme (e/server (settings/get-theme user-id))
-                !theme (atom server-theme)
-                theme (e/watch !theme)]
-            (dom/div
-              (dom/props {:class "card" :id "settings-appearance"
-                          :style (tab-style active "settings-appearance")})
-              (dom/h3 (dom/props {:class "section-title"}) (dom/text "Appearance"))
-
-              (dom/div
-                (dom/props {:class "field"})
-                (dom/label (dom/props {:class "label"}) (dom/text "Theme"))
-                (dom/select
-                  (dom/props {:value theme :class "select"})
-                  (dom/option (dom/props {:value "auto"}) (dom/text "Auto"))
-                  (dom/option (dom/props {:value "light"}) (dom/text "Light"))
-                  (dom/option (dom/props {:value "dark"}) (dom/text "Dark"))
-                  (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                        [t ?error] (e/Token change-event)]
-                    (when (some? change-event)
-                      (reset! !theme change-event))
-                    (when t
-                      (let [r (e/server (e/Offload #(settings/save-theme user-id change-event)))]
-                        (case r
-                          (if (:success r)
-                            (case (e/server (commands/bump! user-id :set-setting))
-                              (t))
-                            (t (:error r))))))))
-                (dom/div (dom/props {:class "hint"})
-                  (dom/text "Auto follows your system preference")))
-
-              (dom/div
-                (dom/props {:class "field"})
-                (dom/label
-                  (dom/props {:style {:display "flex" :align-items "center" :gap "10px"}})
-                  (dom/span (dom/props {:class "label" :style {:margin-bottom "0"}})
-                    (dom/text "Card Text Size"))
-                  (e/for-by identity [_k [:font-size-input]]
-                    (dom/input
-                      (dom/props {:type "number" :min "10" :max "20"
-                                  :style {:width "56px" :font-size "13px" :padding "4px 6px"
-                                          :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"}})
-                      (set! (.-value dom/node) (str font-size))
-                      (let [change-event (dom/On "change" #(-> % .-target .-value js/parseInt) nil)
-                            [t _] (e/Token change-event)]
-                        (when (some? change-event)
-                          (reset! !font-size change-event))
-                        (when t
-                          (let [r (e/server (e/Offload #(settings/save-card-font-size user-id change-event)))]
-                            (case r
-                              (if (:success r) (t) (t (:error r)))))))))
-                  (dom/span (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
-                    (dom/text "px")))
-                (dom/div (dom/props {:class "hint"})
-                  (dom/text "Adjusts text size for cards (10-20px)")))))
+          (dom/div
+            (dom/props {:id "settings-appearance"
+                        :style (tab-style active "settings-appearance")})
+            (AppearanceSection user-id))
 
       ;; ── Anki Sync section ──
-          (let [server-auto-mode (e/server (settings/get-anki-auto-load-mode user-id))
-                !auto-mode (atom server-auto-mode)
-                auto-mode (e/watch !auto-mode)]
-            (dom/div
-              (dom/props {:class "card" :id "settings-anki"
-                          :style (tab-style active "settings-anki")})
-              (dom/h3 (dom/props {:class "section-title"}) (dom/text "Anki Sync"))
-
-            ;; ── Auto-load section ──────────────────────────────────────
-              (dom/div
-                (dom/props {:class "anki-settings-section"})
-                (dom/h4 (dom/props {:class "anki-settings-section-title"})
-                  (dom/text "Auto-load Settings"))
-
-            ;; Auto-load Settings — controls what the Anki Sync modal restores on open
-                (dom/div
-                  (dom/props {:class "field"})
-                  (dom/label (dom/props {:class "label"}) (dom/text "Auto-load Settings"))
-                  (dom/div
-                    (dom/props {:style {:display "flex" :flex-direction "column" :gap "10px" :margin-top "4px"}})
-                    (dom/label
-                      (dom/props {:style {:display "flex" :align-items "flex-start" :gap "8px" :cursor "pointer"}})
-                      (dom/input
-                        (dom/props {:type "radio" :name "anki-auto-load-mode" :value "per-item"
-                                    :checked (= auto-mode "per-item")
-                                    :style {:margin-top "3px"}})
-                        (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                              [t _] (e/Token change-event)]
-                          (when (some? change-event)
-                            (reset! !auto-mode change-event))
-                          (when t
-                            (let [r (e/server (e/Offload #(settings/save-anki-auto-load-mode user-id change-event)))]
-                              (case r
-                                (if (:success r) (t) (t (:error r))))))))
-                      (dom/div
-                        (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
-                          (dom/text "Use Last Settings Per Item"))
-                        (dom/div (dom/props {:class "hint"})
-                          (dom/text "Restore the saved settings for this specific document; auto-saves on every successful push."))))
-                    (dom/label
-                      (dom/props {:style {:display "flex" :align-items "flex-start" :gap "8px" :cursor "pointer"}})
-                      (dom/input
-                        (dom/props {:type "radio" :name "anki-auto-load-mode" :value "global"
-                                    :checked (= auto-mode "global")
-                                    :style {:margin-top "3px"}})
-                        (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                              [t _] (e/Token change-event)]
-                          (when (some? change-event)
-                            (reset! !auto-mode change-event))
-                          (when t
-                            (let [r (e/server (e/Offload #(settings/save-anki-auto-load-mode user-id change-event)))]
-                              (case r
-                                (if (:success r) (t) (t (:error r))))))))
-                      (dom/div
-                        (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
-                          (dom/text "Use Last Settings Globally"))
-                        (dom/div (dom/props {:class "hint"})
-                          (dom/text "Restore the most-recent settings used anywhere; same defaults across documents."))))
-                    (dom/label
-                      (dom/props {:style {:display "flex" :align-items "flex-start" :gap "8px" :cursor "pointer"}})
-                      (dom/input
-                        (dom/props {:type "radio" :name "anki-auto-load-mode" :value "none"
-                                    :checked (= auto-mode "none")
-                                    :style {:margin-top "3px"}})
-                        (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                              [t _] (e/Token change-event)]
-                          (when (some? change-event)
-                            (reset! !auto-mode change-event))
-                          (when t
-                            (let [r (e/server (e/Offload #(settings/save-anki-auto-load-mode user-id change-event)))]
-                              (case r
-                                (if (:success r) (t) (t (:error r))))))))
-                      (dom/div
-                        (dom/span (dom/props {:style {:font-size "14px" :color "var(--color-text-primary)"}})
-                          (dom/text "None (Manual)"))
-                        (dom/div (dom/props {:class "hint"})
-                          (dom/text "Open the modal with default values; you set everything fresh each time.")))))))))
+          (dom/div
+            (dom/props {:id "settings-anki"
+                        :style (tab-style active "settings-anki")})
+            (AnkiSyncSection user-id))
 
       ;; ── Zotero section ─────────────────────────────────────────
           (dom/div

@@ -8,8 +8,10 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [hyperfiddle.electric-forms5 :as forms]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [clojure.string :as str]
+   [taoensso.telemere :as tel]
    [freememo.command-bus :as bus]
    [freememo.icons :as icons]
    [freememo.modal-shell :as modal]
@@ -243,7 +245,7 @@
                           :aria-pressed (if (= mode k) "true" "false")})
               (dom/text label)
               (dom/On "click" (fn [_] (reset! !mode k) (reset! !count-str dflt)) nil))))
-        (if (empty? docs)
+        (if (e/server (empty? docs))
           (dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
             (dom/text "No questions yet — distill a document and generate questions in Knowledge."))
           (dom/div
@@ -254,7 +256,7 @@
               (dom/props {:style {:max-height "40vh" :overflow-y "auto" :min-height "0"
                                   :border "1px solid var(--color-border)"
                                   :border-radius "var(--radius-sm)"}})
-              (let [row-count (count docs)
+              (let [row-count (e/server (count docs))
                     [offset limit] (Scroll-window quiz-material-row-height row-count dom/node
                                      {:overquery-factor 2})]
                 (dom/props {:class "tape-scroll"
@@ -264,7 +266,7 @@
                 (dom/table
                   (dom/props {:style {:width "100%"}})
                   (e/for [i (Tape offset limit)]
-                    (when-let [{:keys [id title questions]} (nth docs i nil)]
+                    (when-let [{:keys [id title questions]} (e/server (nth docs i nil))]
                       (dom/tr
                         (dom/props {:class (when (even? i) "row-alt")
                                     :style {:--order i
@@ -275,29 +277,37 @@
                           (dom/label
                             (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
                                                 :cursor "pointer" :width "100%"}})
-                            (dom/input
-                              (dom/props {:type "checkbox" :checked (contains? scope id)})
-                              (dom/On "change"
-                                (fn [_] (swap! !scope #(if (% id) (disj % id) (conj % id)))) nil))
-                            (dom/span (dom/text title))
-                            (dom/span (dom/props {:style {:color "var(--color-text-secondary)"
-                                                          :font-size "12px" :margin-left "auto"}})
-                              (dom/text (str questions " questions")))))))))))
+                            ;; Local-only (never hits the server — !scope only feeds the
+                            ;; "Start quiz" command below) — still Forms5 Checkbox! for
+                            ;; consistency with anki_sync_form.cljc's local-checkbox idiom.
+                            ;; e/amb (not do) — Checkbox! is a tracked control sharing this
+                            ;; <label> with plain text siblings.
+                            (e/amb
+                              (e/for [[t edit] (forms/Checkbox! id (contains? scope id))]
+                                (swap! !scope (fn [s] (if (get edit id) (conj s id) (disj s id))))
+                                (t))
+                              (do (dom/span (dom/text title))
+                                (dom/span (dom/props {:style {:color "var(--color-text-secondary)"
+                                                              :font-size "12px" :margin-left "auto"}})
+                                  (dom/text (str questions " questions")))
+                                (e/amb)))))))))))
             (dom/div
               (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :margin-top "12px"}})
               (dom/label (dom/props {:style {:font-size "13px"}}) (dom/text "Questions:"))
-              (dom/input
-                (dom/props {:type "number" :min "1" :max "50" :value count-str
-                            :class "form-input" :style {:width "70px"}
-                            :aria-label "Question count"})
-                (dom/On "input" (fn [ev] (reset! !count-str (.. ev -target -value))) nil))
+              ;; Local-only (!count-str only feeds the "Start quiz" command below)
+              ;; — Input! + inline mirror-ack, no server round-trip per keystroke.
+              (e/for [[t {v :count}] (forms/Input! :count count-str :type "number" :min "1" :max "50"
+                                        :class "form-input" :style {:width "70px"}
+                                        :aria-label "Question count")]
+                (reset! !count-str v)
+                (t))
               (when (= mode "exam")
                 (dom/label (dom/props {:style {:font-size "13px"}}) (dom/text "Minutes:"))
-                (dom/input
-                  (dom/props {:type "number" :min "1" :max "180" :value limit-str
-                              :class "form-input" :style {:width "70px"}
-                              :aria-label "Time limit in minutes"})
-                  (dom/On "input" (fn [ev] (reset! !limit-str (.. ev -target -value))) nil)))
+                (e/for [[t {v :limit}] (forms/Input! :limit limit-str :type "number" :min "1" :max "180"
+                                          :class "form-input" :style {:width "70px"}
+                                          :aria-label "Time limit in minutes")]
+                  (reset! !limit-str v)
+                  (t)))
               (dom/button
                 (dom/props {:class "btn btn-primary" :disabled (empty? scope)})
                 (dom/text (if (= mode "exam") "Start exam" "Start quiz"))
@@ -438,7 +448,8 @@
     (let [{sid :id qids :question-ids answered :answered} session
           total (count qids)
           !idx (atom answered) idx (e/watch !idx)
-          !draft (atom "") ; textarea mirror
+          !draft (atom "") draft (e/watch !draft) ; textarea mirror
+          !grading? (atom false) grading? (e/watch !grading?)
           !feedback (atom nil) feedback (e/watch !feedback)
           !entity-card (atom nil) entity-card (e/watch !entity-card)
           qid (nth qids (min idx (dec total)) nil)
@@ -464,32 +475,36 @@
           (dom/text (str (:question qdata))))
         (if (nil? feedback)
           (dom/div
-            (dom/textarea
-              (dom/props {:class "form-input" :rows 4 :placeholder "Answer in your own words…"
-                          :aria-label "Your answer"
-                          :style {:width "100%" :resize "vertical"}})
-              (dom/On "input" (fn [ev] (reset! !draft (.. ev -target -value))) nil))
-            (dom/button
-              (dom/props {:class "btn btn-primary" :style {:margin-top "8px"}})
-              (let [click (dom/On "click"
-                            (fn [_]
-                              (let [a (str/trim (str @!draft))]
-                                (when-not (str/blank? a)
-                                  {:id (str (random-uuid)) :answer a})))
-                            nil)
-                    [t _] (e/Token click)]
-                (dom/props {:disabled (some? t)})
-                (dom/text (if (some? t) "Grading…" "Submit"))
-                (when t
-                  (let [answer (:answer click)
-                        position idx
-                        result (e/server
-                                 (e/Offload
-                                   #(grade/grade-answer! user-id sid qid position answer)))]
-                    (case result ; wait on the value — do would race the token
-                      (do (when (:success result)
-                            (reset! !feedback {:result result :answer answer}))
-                        (t))))))))
+            ;; Forms5: Input! (tracked textarea) + Button! (tracked submit),
+            ;; combined via e/amb — a `do` here would swallow whichever token
+            ;; isn't last and hang that control. One inline service below:
+            ;; field edits mirror into !draft and ack immediately (no server
+            ;; round-trip per keystroke); the submit command grades on the server.
+            (e/for [[t edit] (e/amb
+                               (forms/Input! :quiz/answer draft :as :textarea
+                                 :class "form-input" :rows 4
+                                 :placeholder "Answer in your own words…"
+                                 :aria-label "Your answer"
+                                 :style {:width "100%" :resize "vertical"})
+                               (forms/Button! [::submit]
+                                 :class "btn btn-primary" :style {:margin-top "8px"}
+                                 :label (if grading? "Grading…" "Submit")
+                                 :disabled grading?))]
+              (if (map? edit)
+                (do (reset! !draft (:quiz/answer edit)) (t))
+                (let [answer (str/trim (str draft))]
+                  (if (str/blank? answer)
+                    (t) ; nothing to submit — ack and stay, same as before
+                    (do (reset! !grading? true)
+                      (let [position idx
+                            result (e/server
+                                     (e/Offload
+                                       #(grade/grade-answer! user-id sid qid position answer)))]
+                        (case result ; wait on the value — do would race the token
+                          (do (reset! !grading? false)
+                            (when (:success result)
+                              (reset! !feedback {:result result :answer answer}))
+                            (t))))))))))
           (dom/div
             (QuizFeedback (:result feedback) (:answer feedback)
               (:entities qdata) !entity-card)
@@ -557,7 +572,7 @@
            limit :time-limit-seconds elapsed :elapsed-seconds} session
           total (count qids)
           !idx (atom (min answered (dec total))) idx (e/watch !idx)
-          !draft (atom "")
+          !draft (atom "") draft (e/watch !draft)
           !now (atom (now-ms)) now (e/watch !now)
           deadline (+ (now-ms) (* 1000 (max 0 (- (or limit 0) (or elapsed 0)))))
           ;; e/on-unmount + let must live on BOTH peers (identical frame slots);
@@ -582,17 +597,32 @@
           (let [[done gtotal] (get grading sid [0 nil])
                 draft (:draft submit-req)
                 position idx
-                counts (e/server
+                ;; grade-exam-session! has no :success contract of its own (a
+                ;; per-answer grade failure is skipped internally), but it CAN
+                ;; throw on an unexpected DB error — catch that here so a throw
+                ;; can't latch "Grading…" forever with no way back.
+                result (e/server
                          (e/Offload
-                           #(do (when-not (str/blank? draft)
-                                  (db/record-kg-answer! user-id sid qid position draft))
-                              (grade/grade-exam-session! user-id sid))))]
+                           #(try
+                              (when-not (str/blank? draft)
+                                (db/record-kg-answer! user-id sid qid position draft))
+                              {:success true :counts (grade/grade-exam-session! user-id sid)}
+                              (catch Exception e
+                                (tel/error! {:id ::exam-grading-failed} e)
+                                (toasts/push! user-id
+                                  {:level :error
+                                   :message "Grading failed — try submitting again."})
+                                {:success false}))))]
             (dom/h3 (dom/props {:style {:font-size "16px"}}) (dom/text "Grading your exam…"))
             (dom/p (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
               (dom/text (if gtotal (str done " / " gtotal " answers graded") "Preparing…")))
-            (case counts ; wait on the value — do would race the transition
-              (do (reset! !result-sid sid)
-                (reset! !session nil)
+            (case result ; wait on the value — do would race the transition
+              (if (:success result)
+                (do (reset! !result-sid sid)
+                  (reset! !session nil)
+                  (reset! !submit-req nil))
+                ;; Unlatch so the (now-expired-or-clicked) submit can retry
+                ;; instead of leaving the user stuck on "Grading…" forever.
                 (reset! !submit-req nil))))
           (dom/div
             (dom/div
@@ -616,37 +646,39 @@
                   nil)))
             (dom/h3 (dom/props {:style {:font-size "16px" :margin "14px 0"}})
               (dom/text (str (:question qdata))))
-            (dom/textarea
-              (dom/props {:class "form-input" :rows 4
-                          :placeholder "Answer in your own words — graded when you submit the exam"
-                          :aria-label "Your answer"
-                          :style {:width "100%" :resize "vertical"}})
-              (dom/On "input" (fn [ev] (reset! !draft (.. ev -target -value))) nil))
-            (dom/button
-              (dom/props {:class "btn btn-primary" :style {:margin-top "8px"}})
-              (dom/text (if (< (inc idx) total) "Save & next" "Save & submit exam"))
-              (let [click (dom/On "click"
-                            (fn [_] {:id (str (random-uuid))
-                                     :answer (str/trim (str @!draft))})
-                            nil)
-                    [t _] (e/Token click)]
-                (dom/props {:disabled (some? t)})
-                (when t
-                  (let [answer (:answer click)
-                        position idx
-                        last? (>= (inc idx) total)
-                        r (e/server
-                            (e/Offload
-                              #(do (when-not (str/blank? answer)
-                                     (save-exam-answer!* user-id sid qid position answer))
-                                 :saved)))]
-                    (case r ; wait on the value — do would race the token
-                      (do (if last?
-                            (when (nil? @!submit-req)
-                              (reset! !submit-req {:draft nil}))
-                            (do (reset! !draft "")
-                              (swap! !idx inc)))
-                        (t)))))))))))))
+            ;; Forms5: Input! (tracked textarea) + Button! (tracked save), via
+            ;; e/amb — never `do` here, it would swallow whichever token isn't
+            ;; last and hang that control. Field edits mirror into !draft and
+            ;; ack immediately (no server round-trip per keystroke); the save
+            ;; command persists the answer (unlike the quiz flow, a blank exam
+            ;; answer still saves-and-advances — matches the original: only
+            ;; the DB write itself is skipped for blank).
+            (e/for [[t edit] (e/amb
+                               (forms/Input! :exam/answer draft :as :textarea
+                                 :class "form-input" :rows 4
+                                 :placeholder "Answer in your own words — graded when you submit the exam"
+                                 :aria-label "Your answer"
+                                 :style {:width "100%" :resize "vertical"})
+                               (forms/Button! [::save]
+                                 :class "btn btn-primary" :style {:margin-top "8px"}
+                                 :label (if (< (inc idx) total) "Save & next" "Save & submit exam")))]
+              (if (map? edit)
+                (do (reset! !draft (:exam/answer edit)) (t))
+                (let [answer (str/trim (str draft))
+                      position idx
+                      last? (>= (inc idx) total)
+                      r (e/server
+                          (e/Offload
+                            #(do (when-not (str/blank? answer)
+                                   (save-exam-answer!* user-id sid qid position answer))
+                               :saved)))]
+                  (case r ; wait on the value — do would race the token
+                    (do (if last?
+                          (when (nil? @!submit-req)
+                            (reset! !submit-req {:draft nil}))
+                          (do (reset! !draft "")
+                            (swap! !idx inc)))
+                      (t))))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; History + session result (spec 6.6). SessionResult doubles as the exam's
@@ -749,7 +781,7 @@
               (dom/div
                 (dom/props {:style {:flex "1" :min-height "0" :overflow-y "auto"}})
                 (let [sessions (e/server (history-sessions* user-id))
-                      row-count (count sessions)]
+                      row-count (e/server (count sessions))]
                   (if (zero? row-count)
                     (dom/p (dom/props {:style {:padding "24px 16px" :text-align "center"
                                                :color "var(--color-text-secondary)"}})
@@ -764,7 +796,7 @@
                         (dom/props {:style {:width "100%"}})
                         (e/for [i (Tape offset limit)]
                           (when-let [{:keys [id kind total started correct partial incorrect]}
-                                     (nth sessions i nil)]
+                                     (e/server (nth sessions i nil))]
                             (dom/tr
                               (dom/props {:class (when (even? i) "row-alt")
                                           :style {:--order i
@@ -885,7 +917,8 @@
           initial (e/server (review-queue* kg-bump user-id))
           !queue (atom ::unset) queue (e/watch !queue)
           !feedback (atom nil) feedback (e/watch !feedback)
-          !draft (atom "")
+          !draft (atom "") draft (e/watch !draft)
+          !grading? (atom false) grading? (e/watch !grading?)
           !reviewed (atom 0) reviewed (e/watch !reviewed)
           !entity-card (atom nil) entity-card (e/watch !entity-card)]
       (dom/div
@@ -917,30 +950,36 @@
               (dom/text (str (:question qdata))))
             (if (nil? feedback)
               (dom/div
-                (dom/textarea
-                  (dom/props {:class "form-input" :rows 4 :placeholder "Answer in your own words…"
-                              :aria-label "Your answer" :style {:width "100%" :resize "vertical"}})
-                  (dom/On "input" (fn [ev] (reset! !draft (.. ev -target -value))) nil))
-                (dom/button
-                  (dom/props {:class "btn btn-primary" :style {:margin-top "8px"}})
-                  (let [click (dom/On "click"
-                                (fn [_]
-                                  (let [a (str/trim (str @!draft))]
-                                    (when-not (str/blank? a)
-                                      {:id (str (random-uuid)) :answer a})))
-                                nil)
-                        [t _] (e/Token click)]
-                    (dom/props {:disabled (some? t)})
-                    (dom/text (if (some? t) "Grading…" "Submit"))
-                    (when t
-                      (let [res (e/server
-                                  (e/Offload #(review-answer!* user-id qid (:answer click))))]
-                        (case res ; wait on the value — do would race the token
-                          (do (when (:success (:result res))
-                                (reset! !feedback {:result (:result res)
-                                                   :answer (:answer click)
-                                                   :schedule (:schedule res)}))
-                            (t))))))))
+                ;; Forms5: Input! (tracked textarea) + Button! (tracked submit),
+                ;; via e/amb — never `do` here, it would swallow whichever token
+                ;; isn't last and hang that control. Field edits mirror into
+                ;; !draft and ack immediately (no server round-trip per
+                ;; keystroke); the submit command grades on the server.
+                (e/for [[t edit] (e/amb
+                                   (forms/Input! :review/answer draft :as :textarea
+                                     :class "form-input" :rows 4
+                                     :placeholder "Answer in your own words…"
+                                     :aria-label "Your answer"
+                                     :style {:width "100%" :resize "vertical"})
+                                   (forms/Button! [::submit]
+                                     :class "btn btn-primary" :style {:margin-top "8px"}
+                                     :label (if grading? "Grading…" "Submit")
+                                     :disabled grading?))]
+                  (if (map? edit)
+                    (do (reset! !draft (:review/answer edit)) (t))
+                    (let [answer (str/trim (str draft))]
+                      (if (str/blank? answer)
+                        (t) ; nothing to submit — ack and stay, same as before
+                        (do (reset! !grading? true)
+                          (let [res (e/server
+                                      (e/Offload #(review-answer!* user-id qid answer)))]
+                            (case res ; wait on the value — do would race the token
+                              (do (reset! !grading? false)
+                                (when (:success (:result res))
+                                  (reset! !feedback {:result (:result res)
+                                                     :answer answer
+                                                     :schedule (:schedule res)}))
+                                (t))))))))))
               (dom/div
                 (QuizFeedback (:result feedback) (:answer feedback)
                   (:entities qdata) !entity-card)

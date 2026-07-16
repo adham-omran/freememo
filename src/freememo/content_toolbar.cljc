@@ -44,6 +44,112 @@
 ;; install-overflow-detector! lives in freememo.toolbar-overflow (shared with
 ;; PdfToolbar). Required above.
 
+(e/defn OverflowPanel
+  "The ⋮ overflow dropdown/panel body — proxy buttons for actions that collapse
+   out of the inline toolbar at narrow widths (Auto-extract, Document-options,
+   DocumentMeta, Add-new/Export/Pull/Push/Delete). Split out of ContentToolbar
+   per the JVM 64KB method-limit convention (§7.4); always mounted (display via
+   CSS/.overflow-open) so its e/Token handlers stay live."
+  [user-id biblio-target-id is-pdf? root-topic-id topic-id review-topic-id
+   !show-bib unsynced-count extract-status !overflow-open]
+  (e/client
+    (dom/div (dom/props {:class "toolbar-overflow-panel"})
+
+      ;; Priority / Context / Basic-Cloze proxies removed: Priority moved
+      ;; into the Document-Options modal (C5); card-type + Context moved
+      ;; into the Generate dropdown menu (C3), which is itself a dropdown
+      ;; and works on mobile, so no overflow proxy is needed.
+
+      ;; CardCount is no longer proxied into the ⋮ overflow panel — it now
+      ;; lives inside the Generate dropdown menu (always a dropdown, works at
+      ;; every tier). The inline stepper below still shows until it collapses.
+
+      ;; Bibliography (Refetch) proxy removed — Refetch folded into the
+      ;; Edit-Bibliography modal (C4).
+
+      ;; Auto-extract proxy (.toolbar-overflow-bib, reveals T5+).
+      ;; Disabled pending release — tooltip surfaces the status.
+      (dom/div
+        (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-bib"})
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-secondary"
+                      :aria-label "Auto-extract (future feature)"
+                      :disabled true})
+          (tooltip/Tooltip! "Future Feature")
+          (icons/Icon :scan-text :size 16)
+          (dom/span (dom/props {:class "icon-label"}) (dom/text "Auto-extract"))))
+
+      ;; Document-options proxy (.toolbar-overflow-bib, reveals T5+).
+      ;; Hosts the Priority field (C5), so it targets review-topic-id.
+      (dom/div
+        (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-bib"})
+        (DocumentOptionsButton user-id biblio-target-id is-pdf? (or root-topic-id topic-id) topic-id review-topic-id !show-bib true nil))
+
+      ;; DocumentMeta proxy (.toolbar-overflow-docmeta, reveals T2+) —
+      ;; actions only (Edit-Bibliography + Mark-PDF-Done); citation and
+      ;; progress are informational and drop when collapsed.
+      (dom/div
+        (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-docmeta"
+                    :style {:flex-direction "column" :gap "6px"}})
+        (binding [dctx/bib-topic-id biblio-target-id
+                  dctx/citation nil dctx/page-info nil
+                  dctx/variant :overflow]
+          (DocumentMetaGroup)))
+
+      ;; Separator between settings/context group and action buttons
+      (dom/div (dom/props {:class "toolbar-overflow-panel-separator"}))
+
+      ;; Proxy action buttons — hidden on desktop, visible in dropdown on mobile.
+      ;; Each dispatches its command through the bus (same path as
+      ;; keyboard shortcuts and the palette).
+      (dom/button
+        (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-default"
+                    :aria-label "Add new"})
+        (icons/Icon :plus :size 16)
+        (dom/span (dom/props {:class "icon-label"}) (dom/text "Add new"))
+        (dom/On "click" (fn [_]
+                          (bus/dispatch! :add-new)
+                          (reset! !overflow-open false)) nil))
+      (dom/button
+        (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-sync"
+                    :aria-label "Export"})
+        (icons/Icon :download :size 16)
+        (dom/span (dom/props {:class "icon-label"})
+          (dom/text (if (and unsynced-count (pos? unsynced-count))
+                      (str "Export (" unsynced-count ")...")
+                      "Export...")))
+        (dom/On "click" (fn [_]
+                          (bus/dispatch! :export)
+                          (reset! !overflow-open false)) nil))
+      (dom/button
+        (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-sync"
+                    :aria-label "Pull from Anki"})
+        (icons/Icon :cloud-download :size 16)
+        (dom/span (dom/props {:class "icon-label"}) (dom/text "Pull from Anki"))
+        (dom/On "click" (fn [_]
+                          (bus/dispatch! :pull-anki)
+                          (reset! !overflow-open false)) nil))
+      (dom/button
+        (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-sync"
+                    :aria-label "Push to Anki"})
+        (icons/Icon :refresh-cw :size 16)
+        (dom/span (dom/props {:class "icon-label"})
+          (dom/text (if (and unsynced-count (pos? unsynced-count))
+                      (str "Push to Anki (" unsynced-count ")...")
+                      "Push to Anki...")))
+        (dom/On "click" (fn [_]
+                          (bus/dispatch! :anki-sync)
+                          (reset! !overflow-open false)) nil))
+      (when extract-status
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-danger toolbar-overflow-panel-action toolbar-overflow-default"
+                      :aria-label "Delete"})
+          (icons/Icon :trash-2 :size 16)
+          (dom/span (dom/props {:class "icon-label"}) (dom/text "Delete..."))
+          (dom/On "click" (fn [_]
+                            (bus/dispatch! :delete-document)
+                            (reset! !overflow-open false)) nil))))))
+
 (e/defn ContentToolbar []
   (e/client
     (let [mod-key (if (mac-platform?) "Cmd" "Ctrl")
@@ -138,102 +244,8 @@
           ;; Overflow panel — display:contents on desktop (items flow inline),
           ;; dropdown on mobile (toggled via .overflow-open on container).
           ;; Always mounted so settings e/Token handlers stay active.
-              (dom/div (dom/props {:class "toolbar-overflow-panel"})
-
-            ;; Priority / Context / Basic-Cloze proxies removed: Priority moved
-            ;; into the Document-Options modal (C5); card-type + Context moved
-            ;; into the Generate dropdown menu (C3), which is itself a dropdown
-            ;; and works on mobile, so no overflow proxy is needed.
-
-            ;; CardCount is no longer proxied into the ⋮ overflow panel — it now
-            ;; lives inside the Generate dropdown menu (always a dropdown, works at
-            ;; every tier). The inline stepper below still shows until it collapses.
-
-            ;; Bibliography (Refetch) proxy removed — Refetch folded into the
-            ;; Edit-Bibliography modal (C4).
-
-            ;; Auto-extract proxy (.toolbar-overflow-bib, reveals T5+).
-            ;; Disabled pending release — tooltip surfaces the status.
-                (dom/div
-                  (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-bib"})
-                  (dom/button
-                    (dom/props {:class "btn btn-sm btn-secondary"
-                                :aria-label "Auto-extract (future feature)"
-                                :disabled true})
-                    (tooltip/Tooltip! "Future Feature")
-                    (icons/Icon :scan-text :size 16)
-                    (dom/span (dom/props {:class "icon-label"}) (dom/text "Auto-extract"))))
-
-            ;; Document-options proxy (.toolbar-overflow-bib, reveals T5+).
-            ;; Hosts the Priority field (C5), so it targets review-topic-id.
-                (dom/div
-                  (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-bib"})
-                  (DocumentOptionsButton user-id biblio-target-id is-pdf? (or root-topic-id topic-id) topic-id review-topic-id !show-bib true nil))
-
-            ;; DocumentMeta proxy (.toolbar-overflow-docmeta, reveals T2+) —
-            ;; actions only (Edit-Bibliography + Mark-PDF-Done); citation and
-            ;; progress are informational and drop when collapsed.
-                (dom/div
-                  (dom/props {:class "toolbar-overflow-panel-action toolbar-overflow-docmeta"
-                              :style {:flex-direction "column" :gap "6px"}})
-                  (binding [dctx/bib-topic-id biblio-target-id
-                            dctx/citation nil dctx/page-info nil
-                            dctx/variant :overflow]
-                    (DocumentMetaGroup)))
-
-            ;; Separator between settings/context group and action buttons
-                (dom/div (dom/props {:class "toolbar-overflow-panel-separator"}))
-
-            ;; Proxy action buttons — hidden on desktop, visible in dropdown on mobile.
-            ;; Each dispatches its command through the bus (same path as
-            ;; keyboard shortcuts and the palette).
-                (dom/button
-                  (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-default"
-                              :aria-label "Add new"})
-                  (icons/Icon :plus :size 16)
-                  (dom/span (dom/props {:class "icon-label"}) (dom/text "Add new"))
-                  (dom/On "click" (fn [_]
-                                    (bus/dispatch! :add-new)
-                                    (reset! !overflow-open false)) nil))
-                (dom/button
-                  (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-sync"
-                              :aria-label "Export"})
-                  (icons/Icon :download :size 16)
-                  (dom/span (dom/props {:class "icon-label"})
-                    (dom/text (if (and unsynced-count (pos? unsynced-count))
-                                (str "Export (" unsynced-count ")...")
-                                "Export...")))
-                  (dom/On "click" (fn [_]
-                                    (bus/dispatch! :export)
-                                    (reset! !overflow-open false)) nil))
-                (dom/button
-                  (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-sync"
-                              :aria-label "Pull from Anki"})
-                  (icons/Icon :cloud-download :size 16)
-                  (dom/span (dom/props {:class "icon-label"}) (dom/text "Pull from Anki"))
-                  (dom/On "click" (fn [_]
-                                    (bus/dispatch! :pull-anki)
-                                    (reset! !overflow-open false)) nil))
-                (dom/button
-                  (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-sync"
-                              :aria-label "Push to Anki"})
-                  (icons/Icon :refresh-cw :size 16)
-                  (dom/span (dom/props {:class "icon-label"})
-                    (dom/text (if (and unsynced-count (pos? unsynced-count))
-                                (str "Push to Anki (" unsynced-count ")...")
-                                "Push to Anki...")))
-                  (dom/On "click" (fn [_]
-                                    (bus/dispatch! :anki-sync)
-                                    (reset! !overflow-open false)) nil))
-                (when extract-status
-                  (dom/button
-                    (dom/props {:class "btn btn-sm btn-danger toolbar-overflow-panel-action toolbar-overflow-default"
-                                :aria-label "Delete"})
-                    (icons/Icon :trash-2 :size 16)
-                    (dom/span (dom/props {:class "icon-label"}) (dom/text "Delete..."))
-                    (dom/On "click" (fn [_]
-                                      (bus/dispatch! :delete-document)
-                                      (reset! !overflow-open false)) nil))))
+              (OverflowPanel user-id biblio-target-id is-pdf? root-topic-id topic-id review-topic-id
+                !show-bib unsynced-count extract-status !overflow-open)
 
           ;; Toolbar groups (flat runs + dividers), left-to-right:
           ;; 1 Extract/Add · 2 Generate · 3 Sync · 4 History/Priority/Done/Delete

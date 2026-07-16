@@ -37,8 +37,8 @@
       (when-some [token ?page-token]
         (log/log-debug (str "PdfPane: saving last page=" page-to-save
                             " doc=" pdf-root-id))
-        (e/server (settings/save-last-page user-id pdf-root-id page-to-save))
-        (token))
+        (case (e/server (e/Offload #(settings/save-last-page user-id pdf-root-id page-to-save)))
+          (token)))
 
       (dom/div
         (dom/props {:style {:height "100%" :width "100%"

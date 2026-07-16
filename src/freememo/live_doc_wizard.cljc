@@ -73,6 +73,183 @@
      :clj nil))
 
 ;; ---------------------------------------------------------------------------
+;; Sub-components (split per the JVM 64KB method-limit convention) — each is a
+;; reactively-independent sibling of LiveDocAddPhotos's body, so moving them
+;; into their own e/defn doesn't change mount order or behavior.
+;; ---------------------------------------------------------------------------
+
+(e/defn AddPhotosLauncher
+  "The single [+] launcher (compact toolbar glyph, or the wizard button) —
+   opens the Upload/Take-photo action sheet."
+  [compact? busy launcher-style open-sheet!]
+  (e/client
+    (dom/button
+      (dom/props {:title "Add photos" :disabled busy :style launcher-style})
+      (dom/text (if compact? "＋" "＋ Add photos"))
+      (dom/On "click" (fn [_] (open-sheet!)) nil))))
+
+(e/defn PhotoActionSheetModal
+  "Upload/Take-photo action sheet (z above the editor modal), plus the two
+   hidden file inputs it drives. The inputs stay mounted unconditionally —
+   `pick!` reads their dom/node refs from !upload-input/!camera-input, so they
+   must be live before the sheet ever opens."
+  [sheet-open? !sheet-open? pick! !upload-input !camera-input btn-style stage-files!]
+  (e/client
+    ;; ── Action sheet: Upload / Take photo (z above the editor modal) ──
+    (when sheet-open?
+      (dom/div
+        (dom/props {:style {:position "fixed" :inset "0" :z-index "1200"
+                            :display "flex" :align-items "center" :justify-content "center"
+                            :background "rgba(0,0,0,0.4)"}})
+        (dom/On "click" (fn [e] (when (= (.-target e) (.-currentTarget e)) (reset! !sheet-open? false))) nil)
+        (modal/ModalEscape (fn [] (reset! !sheet-open? false)) "Add photos")
+        (dom/div
+          (dom/props {:class "modal-content"
+                      :style {:width "280px" :max-width "90vw" :display "flex"
+                              :flex-direction "column" :gap "10px"}})
+          (dom/button (dom/props {:style btn-style})
+            (dom/text "🖼  Upload images")
+            (dom/On "click" (fn [_] (pick! !upload-input)) nil))
+          (dom/button (dom/props {:style btn-style})
+            (dom/text "📷  Take photo")
+            (dom/On "click" (fn [_] (pick! !camera-input)) nil)))))
+
+    ;; ── Hidden inputs: upload (multi) + camera (rear on mobile) ──
+    (dom/input
+      (dom/props {:type "file" :accept "image/*" :multiple true :style {:display "none"}})
+      (reset! !upload-input dom/node)
+      (dom/On "change"
+        (fn [e] (stage-files! (array-seq (-> e .-target .-files)))
+          (set! (-> e .-target .-value) "")) nil))
+    (dom/input
+      (dom/props {:type "file" :accept "image/*" :capture "environment" :style {:display "none"}})
+      (reset! !camera-input dom/node)
+      (dom/On "change"
+        (fn [e] (stage-files! (array-seq (-> e .-target .-files)))
+          (set! (-> e .-target .-value) "")) nil))))
+
+(e/defn StagingStrip
+  "Thumbnail strip of all staged photos — click a thumb to make it active,
+   ✕ to remove it. Renders nothing while `staged` is empty."
+  [staged active-id !active-id remove!]
+  (e/client
+    (when (seq staged)
+      (dom/div
+        (dom/props {:style {:display "flex" :flex-wrap "wrap" :gap "8px"}})
+        (e/for [entry (e/diff-by :id staged)]
+          (let [id (:id entry) st (:status entry) active? (= id active-id)]
+            (dom/div
+              (dom/props {:style {:position "relative" :width (str thumb-px "px")
+                                  :height (str thumb-px "px") :cursor "pointer"
+                                  :border (if active? "2px solid var(--color-accent, #2d6cdf)"
+                                              "1px solid var(--color-border)")
+                                  :border-radius "4px" :overflow "hidden"
+                                  :display "flex" :align-items "center" :justify-content "center"
+                                  :background "var(--color-bg-card)" :font-size "11px"}})
+              (dom/On "click" (fn [_] (reset! !active-id id)) nil)
+              (case st
+                :converting (dom/text "…")
+                :error (dom/div (dom/props {:style {:color "#c0392b" :padding "4px"
+                                                    :text-align "center"}})
+                         (dom/text "!"))
+                (e/for-by identity [_k [[(:rotation entry) (:crop entry)]]]
+                  (dom/element "canvas"
+                    (dom/props {:width (str thumb-px) :height (str thumb-px)
+                                :style {:width "100%" :height "100%"}})
+                    (paint-thumb! dom/node entry))))
+              (dom/button
+                (dom/props {:title "Remove"
+                            :style {:position "absolute" :top "2px" :right "2px"
+                                    :font-size "12px" :line-height "1" :padding "2px 5px"
+                                    :border "none" :border-radius "3px" :cursor "pointer"
+                                    :background "rgba(0,0,0,0.55)" :color "white"}})
+                (dom/text "✕")
+                (dom/On "click" (fn [e] (.stopPropagation e) (remove! id)) nil)))))))))
+
+(e/defn PhotoEditorModal
+  "The rotate/crop editor for the currently staged batch — Konva editor host
+   for the active photo, StagingStrip, commit-error, and the Add-another/Done
+   footer. Renders nothing while `open?` is false."
+  [open? cancel! active active-id active-rot !staged set-crop! rotate!
+   staged !active-id remove! commit-error busy converting? open-sheet! commit! btn-style]
+  (e/client
+    ;; ── Editor modal ──
+    (when open?
+      (dom/div
+        (dom/props {:class "modal-backdrop" :tabindex "-1"})
+        (modal/ModalEscape cancel! "Edit photos")
+        (dom/On "click" (fn [e] (when (= (.-target e) (.-currentTarget e)) (cancel!))) nil)
+        (dom/div
+          (dom/props {:class "modal-content"
+                      :style {:width "760px" :max-width "95vw" :display "flex"
+                              :flex-direction "column" :gap "12px"}})
+          (dom/On "click" (fn [e] (.stopPropagation e)) nil)
+          (dom/div
+            (dom/props {:style {:display "flex" :align-items "center" :gap "8px"}})
+            (dom/h3 (dom/props {:style {:margin "0" :font-size "16px"}})
+              (dom/text "Edit photos"))
+            (dom/span (dom/props {:style {:margin-left "auto" :font-size "12px"
+                                          :color "var(--color-text-secondary)"}})
+              (dom/text "Rotate to set orientation, then drag to crop.")))
+
+          ;; Current-photo editor (remounts on active-id × rotation change;
+          ;; crop edits update !staged without remounting).
+          (dom/div
+            (dom/props {:style {:display "flex" :flex-direction "column" :gap "8px"
+                                :align-items "center"}})
+            (if (nil? active)
+              (dom/div (dom/props {:style {:padding "40px" :color "var(--color-text-secondary)"
+                                           :font-size "13px"}})
+                (dom/text "Add a photo to begin."))
+              (case (:status active)
+                :converting (dom/div (dom/props {:style {:padding "40px" :font-size "13px"}})
+                              (dom/text "Preparing…"))
+                :error (dom/div (dom/props {:style {:padding "40px" :color "#c0392b" :font-size "13px"}})
+                         (dom/text (or (:error active) "Couldn’t read this image")))
+                (e/for-by identity [[aid _rot] [[active-id active-rot]]]
+                  (dom/div
+                    (dom/props {:style {:width "100%" :display "flex" :justify-content "center"
+                                        :min-height "220px" :background "var(--color-bg-subtle, #f3f4f6)"
+                                        :border "1px solid var(--color-border)" :border-radius "6px"
+                                        :overflow "hidden"}})
+                    (let [host dom/node
+                          !handle (atom nil)]
+                      (mount-crop-editor! !handle host !staged aid set-crop!)
+                      (e/on-unmount (fn [] (destroy-crop-editor! !handle))))))))
+            ;; Rotate (only for the active ready photo).
+            (when (= :ready (:status active))
+              (dom/button
+                (dom/props {:style (assoc btn-style :text-align "center")})
+                (dom/text "↻ Rotate 90°")
+                (dom/On "click" (fn [_] (rotate! active-id)) nil))))
+
+          ;; Staging strip.
+          (StagingStrip staged active-id !active-id remove!)
+
+          (when commit-error
+            (dom/div (dom/props {:style {:color "#c0392b" :font-size "12px"}})
+              (dom/text commit-error)))
+
+          ;; Footer: add another + commit.
+          (dom/div
+            (dom/props {:style {:display "flex" :gap "8px" :justify-content "flex-end"
+                                :align-items "center"}})
+            (dom/button
+              (dom/props {:style (assoc btn-style :text-align "center") :disabled busy})
+              (dom/text "＋ Add another")
+              (dom/On "click" (fn [_] (open-sheet!)) nil))
+            (dom/button
+              (dom/props {:title "Add staged photos as pages"
+                          :disabled (or busy converting? (empty? staged))
+                          :style {:padding "10px 18px" :border "none" :border-radius "6px"
+                                  :font-weight "600" :font-size "14px"
+                                  :cursor (if (or busy converting? (empty? staged)) "not-allowed" "pointer")
+                                  :background "var(--color-accent, #2d6cdf)" :color "white"
+                                  :opacity (if (or busy converting? (empty? staged)) "0.6" "1")}})
+              (dom/text (cond busy "Uploading…"
+                              converting? "Preparing…"
+                              :else (str "Done · " (count staged) " page" (when (not= 1 (count staged)) "s"))))
+              (dom/On "click" (fn [_] (commit!)) nil))))))))
 
 (e/defn LiveDocAddPhotos
   "Single [+] launcher + Upload/Take-photo action sheet + editor modal.
@@ -179,152 +356,14 @@
       (e/on-unmount (fn [] (revoke-all!)))
 
       ;; ── Launcher: single [+] (compact toolbar glyph, or the wizard button) ──
-      (dom/button
-        (dom/props {:title "Add photos" :disabled busy :style launcher-style})
-        (dom/text (if compact? "＋" "＋ Add photos"))
-        (dom/On "click" (fn [_] (open-sheet!)) nil))
+      (AddPhotosLauncher compact? busy launcher-style open-sheet!)
 
-      ;; ── Action sheet: Upload / Take photo (z above the editor modal) ──
-      (when sheet-open?
-        (dom/div
-          (dom/props {:style {:position "fixed" :inset "0" :z-index "1200"
-                              :display "flex" :align-items "center" :justify-content "center"
-                              :background "rgba(0,0,0,0.4)"}})
-          (dom/On "click" (fn [e] (when (= (.-target e) (.-currentTarget e)) (reset! !sheet-open? false))) nil)
-          (modal/ModalEscape (fn [] (reset! !sheet-open? false)) "Add photos")
-          (dom/div
-            (dom/props {:class "modal-content"
-                        :style {:width "280px" :max-width "90vw" :display "flex"
-                                :flex-direction "column" :gap "10px"}})
-            (dom/button (dom/props {:style btn-style})
-              (dom/text "🖼  Upload images")
-              (dom/On "click" (fn [_] (pick! !upload-input)) nil))
-            (dom/button (dom/props {:style btn-style})
-              (dom/text "📷  Take photo")
-              (dom/On "click" (fn [_] (pick! !camera-input)) nil)))))
-
-      ;; ── Hidden inputs: upload (multi) + camera (rear on mobile) ──
-      (dom/input
-        (dom/props {:type "file" :accept "image/*" :multiple true :style {:display "none"}})
-        (reset! !upload-input dom/node)
-        (dom/On "change"
-          (fn [e] (stage-files! (array-seq (-> e .-target .-files)))
-            (set! (-> e .-target .-value) "")) nil))
-      (dom/input
-        (dom/props {:type "file" :accept "image/*" :capture "environment" :style {:display "none"}})
-        (reset! !camera-input dom/node)
-        (dom/On "change"
-          (fn [e] (stage-files! (array-seq (-> e .-target .-files)))
-            (set! (-> e .-target .-value) "")) nil))
+      ;; ── Action sheet + hidden file inputs ──
+      (PhotoActionSheetModal sheet-open? !sheet-open? pick! !upload-input !camera-input btn-style stage-files!)
 
       ;; ── Editor modal ──
-      (when open?
-        (dom/div
-          (dom/props {:class "modal-backdrop" :tabindex "-1"})
-          (modal/ModalEscape cancel! "Edit photos")
-          (dom/On "click" (fn [e] (when (= (.-target e) (.-currentTarget e)) (cancel!))) nil)
-          (dom/div
-            (dom/props {:class "modal-content"
-                        :style {:width "760px" :max-width "95vw" :display "flex"
-                                :flex-direction "column" :gap "12px"}})
-            (dom/On "click" (fn [e] (.stopPropagation e)) nil)
-            (dom/div
-              (dom/props {:style {:display "flex" :align-items "center" :gap "8px"}})
-              (dom/h3 (dom/props {:style {:margin "0" :font-size "16px"}})
-                (dom/text "Edit photos"))
-              (dom/span (dom/props {:style {:margin-left "auto" :font-size "12px"
-                                            :color "var(--color-text-secondary)"}})
-                (dom/text "Rotate to set orientation, then drag to crop.")))
-
-            ;; Current-photo editor (remounts on active-id × rotation change;
-            ;; crop edits update !staged without remounting).
-            (dom/div
-              (dom/props {:style {:display "flex" :flex-direction "column" :gap "8px"
-                                  :align-items "center"}})
-              (if (nil? active)
-                (dom/div (dom/props {:style {:padding "40px" :color "var(--color-text-secondary)"
-                                             :font-size "13px"}})
-                  (dom/text "Add a photo to begin."))
-                (case (:status active)
-                  :converting (dom/div (dom/props {:style {:padding "40px" :font-size "13px"}})
-                                (dom/text "Preparing…"))
-                  :error (dom/div (dom/props {:style {:padding "40px" :color "#c0392b" :font-size "13px"}})
-                           (dom/text (or (:error active) "Couldn’t read this image")))
-                  (e/for-by identity [[aid _rot] [[active-id active-rot]]]
-                    (dom/div
-                      (dom/props {:style {:width "100%" :display "flex" :justify-content "center"
-                                          :min-height "220px" :background "var(--color-bg-subtle, #f3f4f6)"
-                                          :border "1px solid var(--color-border)" :border-radius "6px"
-                                          :overflow "hidden"}})
-                      (let [host dom/node
-                            !handle (atom nil)]
-                        (mount-crop-editor! !handle host !staged aid set-crop!)
-                        (e/on-unmount (fn [] (destroy-crop-editor! !handle))))))))
-              ;; Rotate (only for the active ready photo).
-              (when (= :ready (:status active))
-                (dom/button
-                  (dom/props {:style (assoc btn-style :text-align "center")})
-                  (dom/text "↻ Rotate 90°")
-                  (dom/On "click" (fn [_] (rotate! active-id)) nil))))
-
-            ;; Staging strip.
-            (when (seq staged)
-              (dom/div
-                (dom/props {:style {:display "flex" :flex-wrap "wrap" :gap "8px"}})
-                (e/for [entry (e/diff-by :id staged)]
-                  (let [id (:id entry) st (:status entry) active? (= id active-id)]
-                    (dom/div
-                      (dom/props {:style {:position "relative" :width (str thumb-px "px")
-                                          :height (str thumb-px "px") :cursor "pointer"
-                                          :border (if active? "2px solid var(--color-accent, #2d6cdf)"
-                                                      "1px solid var(--color-border)")
-                                          :border-radius "4px" :overflow "hidden"
-                                          :display "flex" :align-items "center" :justify-content "center"
-                                          :background "var(--color-bg-card)" :font-size "11px"}})
-                      (dom/On "click" (fn [_] (reset! !active-id id)) nil)
-                      (case st
-                        :converting (dom/text "…")
-                        :error (dom/div (dom/props {:style {:color "#c0392b" :padding "4px"
-                                                            :text-align "center"}})
-                                 (dom/text "!"))
-                        (e/for-by identity [_k [[(:rotation entry) (:crop entry)]]]
-                          (dom/element "canvas"
-                            (dom/props {:width (str thumb-px) :height (str thumb-px)
-                                        :style {:width "100%" :height "100%"}})
-                            (paint-thumb! dom/node entry))))
-                      (dom/button
-                        (dom/props {:title "Remove"
-                                    :style {:position "absolute" :top "2px" :right "2px"
-                                            :font-size "12px" :line-height "1" :padding "2px 5px"
-                                            :border "none" :border-radius "3px" :cursor "pointer"
-                                            :background "rgba(0,0,0,0.55)" :color "white"}})
-                        (dom/text "✕")
-                        (dom/On "click" (fn [e] (.stopPropagation e) (remove! id)) nil)))))))
-
-            (when commit-error
-              (dom/div (dom/props {:style {:color "#c0392b" :font-size "12px"}})
-                (dom/text commit-error)))
-
-            ;; Footer: add another + commit.
-            (dom/div
-              (dom/props {:style {:display "flex" :gap "8px" :justify-content "flex-end"
-                                  :align-items "center"}})
-              (dom/button
-                (dom/props {:style (assoc btn-style :text-align "center") :disabled busy})
-                (dom/text "＋ Add another")
-                (dom/On "click" (fn [_] (open-sheet!)) nil))
-              (dom/button
-                (dom/props {:title "Add staged photos as pages"
-                            :disabled (or busy converting? (empty? staged))
-                            :style {:padding "10px 18px" :border "none" :border-radius "6px"
-                                    :font-weight "600" :font-size "14px"
-                                    :cursor (if (or busy converting? (empty? staged)) "not-allowed" "pointer")
-                                    :background "var(--color-accent, #2d6cdf)" :color "white"
-                                    :opacity (if (or busy converting? (empty? staged)) "0.6" "1")}})
-                (dom/text (cond busy "Uploading…"
-                                converting? "Preparing…"
-                                :else (str "Done · " (count staged) " page" (when (not= 1 (count staged)) "s"))))
-                (dom/On "click" (fn [_] (commit!)) nil)))))))))
+      (PhotoEditorModal open? cancel! active active-id active-rot !staged set-crop! rotate!
+        staged !active-id remove! commit-error busy converting? open-sheet! commit! btn-style))))
 
 (e/defn LiveDocEmptyState
   "Blob-less Live Document body: a centered light card inviting the first photo

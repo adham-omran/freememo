@@ -787,7 +787,7 @@
           !busy-msg (atom nil)
           source (e/watch !source)
           stage (e/watch !stage)
-          cap-bytes (e/server (upload-cap-bytes* user-id))
+          cap-bytes (e/server (e/Offload #(upload-cap-bytes* user-id)))
           navigate-to-viewer! (fn [doc-id]
                                 (reset! !show false)
                                 (navigate! :viewer (nav/nav-topic doc-id nil)))

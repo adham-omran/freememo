@@ -4,6 +4,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [taoensso.telemere :as tel]
    [freememo.doc-context :as dctx]
    [freememo.card-components :as card-components]
    [freememo.history-modal :refer [HistoryModal]]
@@ -20,8 +21,10 @@
 
 (defn delete-topic-with-parent!
   "Server-only: stage the topic (subtree + cards) for deletion, returning
-   {:parent-id _ :note-ids _ :entry-id _} for the client's navigate-up + Anki
-   cleanup. Reversible for 12h via the undo log.
+   {:success true :parent-id _ :note-ids _ :entry-id _} for the client's
+   navigate-up + Anki cleanup, or {:success false :error _} when the topic
+   isn't owned by user-id, is already gone, or the stage failed. Reversible
+   for 12h via the undo log.
 
    Stages via freememo.staged-delete/stage-deletion! with refresh? false:
    TopicPage watches :refresh, and bumping it during the same WS tick as this
@@ -30,8 +33,40 @@
    the now-hidden topic's URL. :tree-mutations (bumped inside stage-deletion!)
    is watched only by HierarchySidePanel and DocumentTreeView, so it is safe."
   [user-id topic-id]
-  #?(:clj (or (staged-delete/stage-deletion! user-id topic-id false)
-            {:parent-id nil :note-ids []})
+  #?(:clj (try
+            (if-let [r (staged-delete/stage-deletion! user-id topic-id false)]
+              (assoc r :success true)
+              {:success false :error "Could not delete — topic not found or already removed"})
+            (catch Exception e
+              (tel/error! {:id ::delete-topic-with-parent!} e)
+              {:success false :error "Failed to delete"}))
+     :cljs nil))
+
+(defn- done-topic!*
+  "Mark topic-id done and bump :done. Returns {:success true} or
+   {:success false :error _} — a throw from the DB write no longer strands
+   the caller's token."
+  [user-id topic-id]
+  #?(:clj (try
+            (db/done-topic! topic-id)
+            (commands/bump! user-id :done)
+            {:success true}
+            (catch Exception e
+              (tel/error! {:id ::done-topic!} e)
+              {:success false :error "Failed to mark as done"}))
+     :cljs nil))
+
+(defn- restore-topic!*
+  "Restore topic-id to active and bump :restore. Same failure contract as
+   done-topic!*."
+  [user-id topic-id]
+  #?(:clj (try
+            (db/restore-topic! topic-id)
+            (commands/bump! user-id :restore)
+            {:success true}
+            (catch Exception e
+              (tel/error! {:id ::restore-topic!} e)
+              {:success false :error "Failed to restore"}))
      :cljs nil))
 
 (e/defn ExtractActions []
@@ -112,10 +147,12 @@
               ;; disable flag is unnecessary.
               (let [[t _] (e/Token done-click)]
                 (when t
-                  (case (e/server (e/Offload #(do (db/done-topic! topic-id) :ok)))
-                    (case (e/server (commands/bump! user-id :done))
-                      (do (when on-done! (e/on-unmount (fn [] (on-done!))))
-                          (t)))))))
+                  (let [r (e/server (e/Offload #(done-topic!* user-id topic-id)))]
+                    (case r
+                      (if (:success r)
+                        (do (when on-done! (e/on-unmount (fn [] (on-done!))))
+                            (t))
+                        (t (:error r))))))))
 
           ;; Done status: show Restore button
           (let [!restore-click (atom nil)
@@ -134,11 +171,13 @@
               (dom/On "click" (fn [_] (reset! !restore-click (str (random-uuid)))) nil))
             (let [[t _] (e/Token restore-click)]
               (when t
-                (case (e/server (e/Offload #(do (db/restore-topic! topic-id) :ok)))
-                  (case (e/server (commands/bump! user-id :restore))
-                    (if (and navigate! origin)
-                      (case (navigate! origin) (t))
-                      (t))))))))))
+                (let [r (e/server (e/Offload #(restore-topic!* user-id topic-id)))]
+                  (case r
+                    (if (:success r)
+                      (if (and navigate! origin)
+                        (case (navigate! origin) (t))
+                        (t))
+                      (t (:error r)))))))))))
 
       ;; Delete button — hidden, triggered via overflow menu proxy
       (when (some? extract-status)
@@ -186,7 +225,7 @@
                           [t _] (e/Token event)]
                       (when t
                         (let [result (e/server (e/Offload #(delete-topic-with-parent! user-id topic-id)))]
-                          (case result
+                          (if (:success result)
                             (case (e/client (card-components/try-delete-anki-notes! (:note-ids result)))
                               (if navigate!
                                 (case (cond
@@ -194,4 +233,5 @@
                                         origin (navigate! origin)
                                         :else (navigate! :library))
                                   (case (reset! !delete-state nil) (t)))
-                                (case (reset! !delete-state nil) (t))))))))))))))))))
+                                (case (reset! !delete-state nil) (t))))
+                            (t (:error result))))))))))))))))

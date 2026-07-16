@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.logging :as log]
    [freememo.quill-table-ui :as table-ui]
+   [freememo.quill-field :as quill-field]
    [freememo.a11y :as a11y]
    #?(:cljs [freememo.format-menu :as format-menu])
    #?(:cljs [freememo.code-lang-picker :as code-lang-picker])
@@ -27,7 +28,12 @@
 ;; :idle | :importing | :done | :already-exists | :error
 (defonce !import-status (atom :idle))
 
-;; Set to the current HTML on every user edit (immediate, no debounce).
+;; Set to the current HTML on every user edit (immediate, no debounce — other
+;; consumers need the live value: bottom_panel.cljc's ToolbarBar derives
+;; card-gen context from it, rich_text_editor_component.cljc gates its
+;; in-place content refresh on it). editor_pane.cljc's auto-save watches this
+;; but debounces the actual DB write to an idle pause; it does not save on
+;; every change here.
 ;; nil means "no pending user edits" — the auto-save guard checks for non-nil.
 ;; Reset to nil on init/page-switch so navigating doesn't trigger a save.
 ;; Shape: {:html "..." :topic-id N}
@@ -39,20 +45,9 @@
 ;; click handler reads selection. Shape: {:index N :length N} or nil.
 (defonce !last-selection (atom nil))
 
-;; Quill 2.0.3 ships one `code.svg` aliased to both "code" and "code-block",
-;; making the two toolbar buttons visually identical. Override "code-block"
-;; with a terminal-frame glyph so users can distinguish inline from block.
-;; Inline "code" stays on Quill's default `</>` icon.
-#?(:cljs
-   (defonce ^:private code-block-icon-installed?
-     (let [icons (.import js/Quill "ui/icons")]
-       (aset icons "code-block"
-         (str "<svg viewbox=\"0 0 18 18\">"
-           "<rect class=\"ql-stroke\" x=\"2\" y=\"4\" width=\"14\" height=\"10\" rx=\"1\" ry=\"1\" fill=\"none\"/>"
-           "<polyline class=\"ql-stroke\" points=\"5 7 7 9 5 11\" fill=\"none\"/>"
-           "<line class=\"ql-stroke\" x1=\"9\" y1=\"12\" x2=\"13\" y2=\"12\"/>"
-           "</svg>"))
-       true)))
+;; Code-block toolbar icon override lives in freememo.quill-field (single
+;; source of truth, required above) — loading that ns installs it on both
+;; editors' shared `Quill.import("ui/icons")` registry.
 
 (defn destroy-editor!
   "Destroy the current global editor instance (if any)."
@@ -311,88 +306,20 @@
              t0 (when js/goog.DEBUG (js/performance.now))
              ^js editor (new Quill container
                           ;; bubble theme (E1): floating-on-selection toolbar
-                          ;; (Notion-style). The toolbar module config below is
-                          ;; still honored — bubble builds its tooltip buttons
-                          ;; from it. Card-field editors stay snow (quill_field).
-                          (clj->js {:theme "bubble"
-                                    ;; Clamp the floating tooltip to the editor
-                                    ;; container (the narrow pane), not the
-                                    ;; default wide ancestor — otherwise it is
-                                    ;; positioned past the pane edge and clipped
-                                    ;; by the PDF pane.
-                                    :bounds container
-                                    :modules {:toolbar [["bold" "italic" "underline" "strike"]
-                                                        [{"header" 1} {"header" 2} {"header" 3}]
-                                                        [{"size" ["small" false "large" "huge"]}]
-                                                        [{"color" []} {"background" []}]
-                                                        [{"list" "ordered"} {"list" "bullet"}]
-                                                        [{"align" []}]
-                                                        [{"direction" "rtl"}]
-                                                        ["code" "code-block"]
-                                                        ["clean"]
-                                                        ["table"]]
-                                              ;; Quill 2 syntax module — requires window.hljs (loaded in index*.html).
-                                              ;; Renders `<span class="hljs-*">` spans inside `.ql-code-block` line divs;
-                                              ;; html-cleaner carves out `.ql-code-block-container` so the spans survive.
-                                              ;; `:languages` overrides Quill's 14-item default to insert Clojure
-                                              ;; (its language pack is loaded in index*.html alongside highlight.min.js).
-                                              :syntax {:languages [{:key "plain" :label "Plain"}
-                                                                   {:key "bash" :label "Bash"}
-                                                                   {:key "cpp" :label "C++"}
-                                                                   {:key "cs" :label "C#"}
-                                                                   {:key "clojure" :label "Clojure"}
-                                                                   {:key "css" :label "CSS"}
-                                                                   {:key "diff" :label "Diff"}
-                                                                   {:key "xml" :label "HTML/XML"}
-                                                                   {:key "java" :label "Java"}
-                                                                   {:key "javascript" :label "JavaScript"}
-                                                                   {:key "markdown" :label "Markdown"}
-                                                                   {:key "php" :label "PHP"}
-                                                                   {:key "python" :label "Python"}
-                                                                   {:key "ruby" :label "Ruby"}
-                                                                   {:key "rust" :label "Rust"}
-                                                                   {:key "sql" :label "SQL"}]}
-                                              :table true}
-                                    :placeholder "Enter text..."}))
+                          ;; (Notion-style). Modules (toolbar/syntax/table) come
+                          ;; from quill-field/quill-config — the SAME config
+                          ;; QuillField uses (quill_field.cljc), so the two
+                          ;; editors' formatting surfaces stay identical. Extra
+                          ;; :bounds clamps the floating tooltip to this
+                          ;; container (the narrow pane), not the default wide
+                          ;; ancestor — otherwise it is positioned past the
+                          ;; pane edge and clipped by the PDF pane. QuillField
+                          ;; has no such ancestor and omits :bounds.
+                          (clj->js (quill-field/quill-config "Enter text..." {:bounds container})))
              ^js clipboard (.-clipboard editor)
-             ;; Tell Quill's clipboard pipeline to ignore the syntax module's
-             ;; language-picker <select>. Without this, Quill's default
-             ;; handling extracts the <option> labels as text and emits a <p>
-             ;; with the concatenated picker labels on every reload, growing
-             ;; one corrupted paragraph per save cycle. Returning a fresh
-             ;; empty Delta tells the converter this subtree contributes
-             ;; nothing — the surrounding container + child line divs are
-             ;; processed by their own matchers and continue to render as
-             ;; multi-line code blocks.
-             Delta (.import (.-Quill js/window) "delta")
-             _ (.addMatcher clipboard "select.ql-ui"
-                 (fn [_node _delta] (new Delta)))
-             ;; Strip Quill syntax-module token wrappers. CodeToken.formats
-             ;; in Quill 2.0.3 returns boolean `true` instead of the actual
-             ;; hljs-X value, producing `class="hljs-true"` and collapsing
-             ;; adjacent same-value inlines into one span. By returning a
-             ;; Delta with just the textContent (no code-token attribute),
-             ;; we hand Quill clean text; the syntax module's 1 s timer
-             ;; re-applies fresh, correctly-classed tokens.
-             _ (.addMatcher clipboard "span.ql-token"
-                 (fn [^js node _delta]
-                   (-> (new Delta) (.insert (.-textContent node)))))
-             ;; Preserve leading/trailing/inter-character whitespace inside
-             ;; code blocks. Quill 2.0.3's default clipboard text-node walker
-             ;; runs through the HTML parser's whitespace normalization,
-             ;; which collapses leading runs of spaces at element boundaries
-             ;; — losing user-typed indentation on every reload. By reading
-             ;; the div's textContent verbatim and emitting one text op +
-             ;; one code-block-attributed newline op per line, we hand Quill
-             ;; clean, whitespace-faithful text; the syntax module re-applies
-             ;; hljs spans on its 1 s timer after setContents.
-             _ (.addMatcher clipboard "div.ql-code-block"
-                 (fn [^js node _delta]
-                   (let [text (.-textContent node)
-                         lang (or (.getAttribute node "data-language") "plain")]
-                     (-> (new Delta)
-                       (.insert text)
-                       (.insert "\n" #js {"code-block" lang})))))
+             ;; See quill-field/install-clipboard-matchers! for what each
+             ;; matcher does and why (shared with QuillField's own editor).
+             _ (quill-field/install-clipboard-matchers! clipboard)
              delta (.convert clipboard #js {:html cleaned-html})]
          (when (seq cleaned-html)
            (.setContents editor delta))
@@ -404,8 +331,11 @@
          (.setAttribute (.-root editor) "dir" "auto")
          (when (and js/goog.DEBUG t0)
            (js/console.log "[Editor perf] init TOTAL:" (.toFixed (- (js/performance.now) t0) 1) "ms, html-len:" (count cleaned-html)))
-         ;; Immediate text-change: sets !dirty-html on every user edit
-         ;; e/Offload-latch in callers handles rapid updates via "latest-wins" semantics
+         ;; Immediate text-change: sets !dirty-html on every user edit. Other
+         ;; consumers (ToolbarBar's live-content, the unsaved-edits guard)
+         ;; need this un-debounced; editor_pane.cljc's auto-save is the one
+         ;; consumer that debounces its reaction to an idle pause before it
+         ;; writes to the DB — see that ns.
          ;; Text-change listener reads topic-id from !editor-state (mutable ref)
          ;; so it stays correct across page navigations without reinit
          (.on editor "text-change"

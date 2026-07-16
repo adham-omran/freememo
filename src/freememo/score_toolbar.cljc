@@ -409,7 +409,7 @@
           !score-region dctx/!score-region
           !score-pages dctx/!score-pages
           !score-edit dctx/!score-edit
-          result (e/server (get-score-group-for-edit* group-id))]
+          result (e/server (e/Offload #(get-score-group-for-edit* group-id)))]
       (when (some? result)
         (if (:success result)
           (case (load-group-into-editor! (:group result)

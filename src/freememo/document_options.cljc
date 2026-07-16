@@ -28,6 +28,7 @@
                               ["client" "Client (PDF.js, in-browser)"]
                               ["remote" "Remote (PDFBox, server)"]])
 
+;; A1-fallback: Forms5 has no tracked select.
 (e/defn StyleSelect
   "A1-fallback select (Forms5 has no tracked select). Atom is the truth; the
    Form's :Parse reads (e/watch !style)."
@@ -44,6 +45,7 @@
           (dom/option (dom/props {:value v :selected (= v current)}) (dom/text label)))))
     (e/amb)))
 
+;; A1-fallback: Forms5 has no tracked select.
 (e/defn OcrModelSelect
   "Per-document OCR model for \"Scan Page\". \"\" = use my global default.
    Atom is the truth; the Form's :Parse reads (e/watch !model)."
@@ -62,6 +64,7 @@
           (dom/option (dom/props {:value v :selected (= v current)}) (dom/text label)))))
     (e/amb)))
 
+;; A1-fallback: Forms5 has no tracked select.
 (e/defn DocCardModelSelect
   "Per-document card-generation model. \"\" = use my global default. Document-scoped
    (keyed by root-topic-id), applies to every kind. Autosaves on change — sits in
@@ -70,8 +73,8 @@
   [user-id root-topic-id]
   (e/client
     (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
-          current (e/server (do settings-refresh (settings/get-card-model user-id root-topic-id)))
-          default-id (e/server (settings/get-model user-id))
+          current (e/server (do settings-refresh (e/Offload #(settings/get-card-model user-id root-topic-id))))
+          default-id (e/server (e/Offload #(settings/get-model user-id)))
           choices (e/server (settings/card-model-choices))
           ;; Name the global default that "" resolves to, minus the
           ;; "Provider · " prefix (registry labels are "OpenAI · GPT-5.1").
@@ -89,6 +92,7 @@
             (dom/option (dom/props {:value v :selected (= v model)}) (dom/text label)))
           (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
                 [t _] (e/Token change-event)]
+            (dom/props {:disabled (some? t) :aria-busy (some? t)})
             (when (some? change-event)
               (reset! !model change-event))
             (when t
@@ -98,21 +102,19 @@
 
 (e/defn CustomPromptField
   "Editable per-item Custom Prompt, appended to the effective system prompt for
-   this item and everything under it. Atom is the truth; the Form's :Parse reads
-   (e/watch !prompt). Blank = inherit the nearest ancestor's (or the global) prompt."
-  [!prompt]
-  (let [current (e/watch !prompt)]
-    (dom/div
-      (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-      (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
-        (dom/text "Custom Prompt"))
-      (dom/textarea
-        (dom/props {:class "input" :style {:width "100%" :min-height "72px" :resize "vertical"}
-                    :maxlength "5000"
-                    :placeholder "Extra card-generation instructions for this item (and anything under it)."})
-        (set! (.-value dom/node) current)
-        (dom/On "change" (fn [e] (reset! !prompt (-> e .-target .-value))) nil)))
-    (e/amb)))
+   this item and everything under it. Tracked Forms5 field (Input! :as :textarea)
+   — contributes its edit into the surrounding Form!'s e/amb; :Parse reads it back
+   from the merged :prompt key. Blank = inherit the nearest ancestor's (or the
+   global) prompt."
+  [prompt]
+  (dom/div
+    (dom/props {:style {:margin-bottom "var(--sp-3)"}})
+    (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
+      (dom/text "Custom Prompt"))
+    (forms/Input! :prompt prompt :as :textarea
+      :class "input" :style {:width "100%" :min-height "72px" :resize "vertical"}
+      :maxlength 5000
+      :placeholder "Extra card-generation instructions for this item (and anything under it).")))
 
 ;; ---------------------------------------------------------------------------
 ;; Bibliography section — item-scoped Edit / Refetch / Push-to-children
@@ -190,8 +192,8 @@
   [user-id bib-topic-id !open !show-bib show-edit?]
   (e/client
     (let [refresh     (e/server (e/watch (us/get-atom user-id :refresh)))
-          has-source? (e/server (bib-btn/has-source?* refresh user-id bib-topic-id))
-          eff-source? (e/server (has-effective-source?* refresh user-id bib-topic-id))]
+          has-source? (e/server (e/Offload #(bib-btn/has-source?* refresh user-id bib-topic-id)))
+          eff-source? (e/server (e/Offload #(has-effective-source?* refresh user-id bib-topic-id)))]
       (dom/div
         (dom/props {:style {:margin-bottom "var(--sp-3)"}})
         (dom/label
@@ -214,18 +216,18 @@
 (e/defn DocumentOptionsDialog
   "PDF: Forms5 Style select + OCR-model select + per-item Custom Prompt + Submit.
    Style and OCR model are document-scoped (keyed by root-topic-id); the prompt is
-   item-scoped (keyed by item-topic-id). A save that fails the prompt length check
-   surfaces the error and leaves style/OCR untouched."
+   item-scoped (keyed by item-topic-id), tracked via Input! and read back from the
+   merged form fields. A save that fails the prompt length check surfaces the
+   error and leaves style/OCR untouched."
   [user-id root-topic-id item-topic-id current-style current-ocr-model current-prompt !open]
   (let [!style (atom (e/snapshot (or current-style "ask")))
         !ocr-model (atom (e/snapshot (or current-ocr-model "")))
-        !prompt (atom (e/snapshot (or current-prompt "")))
-        commits (forms/Form! {}
-                  (e/fn Fields [_fields]
+        commits (forms/Form! {:prompt (or current-prompt "")}
+                  (e/fn Fields [{:keys [prompt]}]
                     (e/amb
                       (StyleSelect !style)
                       (OcrModelSelect !ocr-model)
-                      (CustomPromptField !prompt)
+                      (CustomPromptField prompt)
                       (dom/div
                         (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
                         (e/amb
@@ -234,30 +236,32 @@
                             (dom/props {:class "btn btn-secondary" :type "button"})
                             (dom/text "Cancel")
                             (dom/On "click" (fn [_] (reset! !open false)) nil))))))
-                  :Parse (e/fn [_merged _tempid]
+                  :Parse (e/fn [merged _tempid]
                            [`SaveDocOptions {:style (e/watch !style)
                                              :ocr-model (e/watch !ocr-model)
-                                             :prompt (e/watch !prompt)}])
+                                             :prompt (:prompt merged)}])
                   :type :command
                   :show-buttons false)]
     (e/for [[token cmd] (e/diff-by first (e/as-vec commits))]
       (let [{:keys [style ocr-model prompt]} (nth cmd 1)
             r (e/server (e/Offload #(let [pr (settings/save-custom-prompt user-id item-topic-id prompt)]
-                                      (when (:success pr)
-                                        (copy/save-style!* user-id root-topic-id style)
-                                        (settings/save-ocr-model user-id root-topic-id ocr-model))
-                                      pr)))]
+                                      (if-not (:success pr)
+                                        pr
+                                        (let [sr (copy/save-style!* user-id root-topic-id style)]
+                                          (if-not (:success sr)
+                                            sr
+                                            (settings/save-ocr-model user-id root-topic-id ocr-model)))))))]
         (when (some? r)
           (if (:success r) (do (reset! !open false) (token)) (token (:error r))))))))
 
 (e/defn CustomPromptDialog
-  "Non-PDF: a Forms5 form with just the per-item Custom Prompt + Save."
+  "Non-PDF: a Forms5 form with just the per-item Custom Prompt (tracked Input!)
+   + Save."
   [user-id item-topic-id current-prompt !open]
-  (let [!prompt (atom (e/snapshot (or current-prompt "")))
-        commits (forms/Form! {}
-                  (e/fn Fields [_fields]
+  (let [commits (forms/Form! {:prompt (or current-prompt "")}
+                  (e/fn Fields [{:keys [prompt]}]
                     (e/amb
-                      (CustomPromptField !prompt)
+                      (CustomPromptField prompt)
                       (dom/div
                         (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"}})
                         (e/amb
@@ -266,8 +270,8 @@
                             (dom/props {:class "btn btn-secondary" :type "button"})
                             (dom/text "Cancel")
                             (dom/On "click" (fn [_] (reset! !open false)) nil))))))
-                  :Parse (e/fn [_merged _tempid]
-                           [`SaveCustomPrompt {:prompt (e/watch !prompt)}])
+                  :Parse (e/fn [merged _tempid]
+                           [`SaveCustomPrompt {:prompt (:prompt merged)}])
                   :type :command
                   :show-buttons false)]
     (e/for [[token cmd] (e/diff-by first (e/as-vec commits))]
@@ -284,7 +288,7 @@
   [user-id root-topic-id]
   (e/client
     (let [refresh    (e/server (e/watch (us/get-atom user-id :refresh)))
-          dismissed? (e/server (do refresh (db/topic-dismissed? root-topic-id)))
+          dismissed? (e/server (do refresh (e/Offload #(db/topic-dismissed? root-topic-id))))
           !click     (atom nil)
           click      (e/watch !click)]
       (dom/div
@@ -334,7 +338,7 @@
               (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
                 (dom/text "Review priority"))
               (PriorityControl user-id priority-topic-id
-                (e/server (get-topic-priority* refresh priority-topic-id)))))
+                (e/server (e/Offload #(get-topic-priority* refresh priority-topic-id))))))
 
           ;; Learning — Dismiss/Undismiss the whole document. Viewer only:
           ;; show-edit? is true only from the viewer toolbar; the library row
@@ -350,13 +354,13 @@
 
           (if is-pdf?
             (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
-                  current (e/server (copy/get-extract-style* settings-refresh user-id root-topic-id))
-                  current-ocr (e/server (do settings-refresh (settings/get-ocr-model user-id root-topic-id)))
-                  current-prompt (e/server (do settings-refresh (settings/get-custom-prompt user-id item-topic-id)))]
+                  current (e/server (e/Offload #(copy/get-extract-style* settings-refresh user-id root-topic-id)))
+                  current-ocr (e/server (do settings-refresh (e/Offload #(settings/get-ocr-model user-id root-topic-id))))
+                  current-prompt (e/server (do settings-refresh (e/Offload #(settings/get-custom-prompt user-id item-topic-id))))]
               (DocumentOptionsDialog user-id root-topic-id item-topic-id current current-ocr current-prompt !open))
             ;; non-PDF: per-item Custom Prompt only, in its own Forms5 form.
             (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
-                  current-prompt (e/server (do settings-refresh (settings/get-custom-prompt user-id item-topic-id)))]
+                  current-prompt (e/server (do settings-refresh (e/Offload #(settings/get-custom-prompt user-id item-topic-id))))]
               (CustomPromptDialog user-id item-topic-id current-prompt !open))))))))
 
 ;; item-topic-id — the topic the Custom Prompt attaches to: the viewed page/extract

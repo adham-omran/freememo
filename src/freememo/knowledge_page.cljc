@@ -20,6 +20,7 @@
    [freememo.tooltip :as tooltip]
    [freememo.typeahead :as typeahead]
    [freememo.loading :as loading]
+   [freememo.util :as util]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.kg-extract :as kg])
    #?(:clj [freememo.kg-questions :as kgq])
@@ -209,6 +210,10 @@
         (let [click (dom/On "click" (fn [_] {:id (str (random-uuid))}) nil)
               [t _] (e/Token click)]
           (when t
+            ;; fire-and-forget: kg/start-distill! dispatches to a bounded async
+            ;; executor and returns before the run finishes; it has no
+            ;; synchronous :success — completion toasts + bumps :distill later
+            ;; from the background thread.
             (case (e/server (kg/start-distill! user-id doc-id))
               (t))))))
     (when distilling?
@@ -218,6 +223,8 @@
         (let [click (dom/On "click" (fn [_] {:id (str (random-uuid))}) nil)
               [t _] (e/Token click)]
           (when t
+            ;; fire-and-forget: kg/cancel-distill! always returns nil (no-op if
+            ;; nothing is in flight); no failure contract to branch on.
             (case (e/server (kg/cancel-distill! user-id doc-id))
               (t))))))))
 
@@ -237,6 +244,10 @@
       (let [click (dom/On "click" (fn [_] {:id (str (random-uuid))}) nil)
             [t _] (e/Token click)]
         (when t
+          ;; fire-and-forget: kgq/start-atomic-generation! dispatches to a
+          ;; bounded async executor and returns before the run finishes; no
+          ;; synchronous :success — completion toasts + bumps :generate-questions
+          ;; later from the background thread.
           (case (e/server (kgq/start-atomic-generation! user-id doc-id))
             (t)))))
     (when generating?
@@ -246,6 +257,8 @@
         (let [click (dom/On "click" (fn [_] {:id (str (random-uuid))}) nil)
               [t _] (e/Token click)]
           (when t
+            ;; fire-and-forget: kgq/cancel-atomic-generation! always returns nil
+            ;; (no-op if nothing is in flight); no failure contract to branch on.
             (case (e/server (kgq/cancel-atomic-generation! user-id doc-id))
               (t))))))))
 
@@ -276,6 +289,7 @@
 (e/defn DocumentsView [user-id navigate! kg-bump]
   (e/client
     (let [!query (atom "") query (e/watch !query)
+          !query-timer (atom nil)             ; debounces !query against the server search below
           distilling (e/server (e/watch (us/get-atom user-id :distilling-docs)))
           generating (e/server (e/watch (us/get-atom user-id :generating-questions)))
           !redistill (atom nil)]              ; doc-id pending a re-distill confirm, or nil
@@ -295,7 +309,9 @@
                   (dom/props {:placeholder "Search documents…" :class "input"
                               :aria-label "Search documents"
                               :style {:flex "1" :min-width "140px"}})
-                  (dom/On "input" (fn [ev] (reset! !query (.. ev -target -value))) nil))
+                  (dom/On "input"
+                    (fn [ev] (util/debounce! !query-timer !query (.. ev -target -value) 300))
+                    nil))
                 (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
                   (dom/text (str item-count " doc" (when (not= 1 item-count) "s")))))
               (if (zero? item-count)
@@ -336,6 +352,9 @@
             [t _] (e/Token click)]
         (dom/props {:disabled (some? t)})
         (when t
+          ;; fire-and-forget: reject-fact!* always returns :done (a no-op on an
+          ;; already-rejected/missing fact is silent by design); no :success key
+          ;; to branch on.
           (let [result (e/server
                          (e/Offload
                            #(reject-fact!* user-id click)))]
@@ -369,17 +388,25 @@
             (let [result (e/server
                            (e/Offload
                              #(let [r (if literal?
-                                        (do (db/update-kg-fact-literal! user-id fact-id (:value keyev))
-                                          :done)
+                                        (when (db/update-kg-fact-literal! user-id fact-id (:value keyev)) :done)
                                         (db/relink-kg-fact-object! user-id fact-id (:value keyev)))]
                                 (when (= :duplicate r)
                                   (toasts/push! user-id
                                     {:level :error
                                      :message "That fact already exists in this document."}))
                                 (commands/bump! user-id :distill)
-                                (or r :done))))]
+                                ;; r is :done (saved), :duplicate (rejected —
+                                ;; already toasted above), or nil (fact gone /
+                                ;; not literal) — only :done is a real save.
+                                {:success (= :done r)
+                                 :error (when (not= :done r)
+                                          (if (= :duplicate r)
+                                            "That fact already exists in this document."
+                                            "Fact not found"))})))]
               (case result
-                (do (reset! !editing nil) (t)))))))
+                (if (:success result)
+                  (do (reset! !editing nil) (t))
+                  (t (:error result))))))))
       (dom/span (dom/props {:style fact-text-style})
         (dom/text (or object_label object_literal))))))
 
@@ -415,6 +442,7 @@
 (e/defn FactsView [user-id doc-id navigate! kg-bump]
   (e/client
     (let [!query (atom "") query (e/watch !query)
+          !query-timer (atom nil)             ; debounces !query against the server search below
           facts (e/server (e/Offload #(get-doc-facts* kg-bump user-id doc-id query)))
           item-count (count facts)
           grid-cols "minmax(140px,1fr) minmax(130px,1fr) minmax(160px,1.2fr) 60px 110px"
@@ -433,7 +461,9 @@
             (dom/props {:placeholder "Search facts…" :class "input"
                         :aria-label "Search facts"
                         :style {:flex "1" :min-width "140px"}})
-            (dom/On "input" (fn [ev] (reset! !query (.. ev -target -value))) nil))
+            (dom/On "input"
+              (fn [ev] (util/debounce! !query-timer !query (.. ev -target -value) 300))
+              nil))
           (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
             (dom/text (str item-count " fact" (when (not= 1 item-count) "s")))))
         (if (zero? item-count)
@@ -460,6 +490,9 @@
             [t _] (e/Token click)]
         (dom/props {:disabled (some? t)})
         (when t
+          ;; fire-and-forget: reject-question!* always returns :done (a no-op on
+          ;; an already-rejected/missing question is silent by design); no
+          ;; :success key to branch on.
           (let [result (e/server
                          (e/Offload
                            #(reject-question!* user-id click)))]
@@ -516,12 +549,15 @@
                       [t _] (e/Token ev)]
                   (dom/props {:disabled (some? t)})
                   (when t
-                    (case (e/server
-                            (e/Offload
-                              #(do (db/update-kg-question! user-id qid (:q ev) (:a ev))
-                                 (commands/bump! user-id :generate-questions)
-                                 :done)))
-                      (case (reset! !editing nil) (t)))))))))))))
+                    (let [result (e/server
+                                   (e/Offload
+                                     #(let [ok? (db/update-kg-question! user-id qid (:q ev) (:a ev))]
+                                        (when ok? (commands/bump! user-id :generate-questions))
+                                        {:success ok? :error (when-not ok? "Question not found")})))]
+                      (case result
+                        (if (:success result)
+                          (do (reset! !editing nil) (t))
+                          (t (:error result)))))))))))))))
 
 (e/defn QuestionRow [user-id q i !editing]
   (e/client
@@ -558,6 +594,7 @@
 (e/defn QuestionsView [user-id kg-bump]
   (e/client
     (let [!query (atom "") query (e/watch !query)
+          !query-timer (atom nil)             ; debounces !query against the server search below
           !source-text (atom "") source-text (e/watch !source-text)
           !entity-text (atom "") entity-text (e/watch !entity-text)
           docs (e/server (e/Offload #(list-source-docs* kg-bump user-id)))
@@ -583,7 +620,9 @@
                   (dom/props {:placeholder "Search questions…" :class "input"
                               :aria-label "Search questions"
                               :style {:flex "1" :min-width "140px"}})
-                  (dom/On "input" (fn [ev] (reset! !query (.. ev -target -value))) nil))
+                  (dom/On "input"
+                    (fn [ev] (util/debounce! !query-timer !query (.. ev -target -value) 300))
+                    nil))
                 (dom/div (dom/props {:style {:width "200px"}})
                   (typeahead/Typeahead !source-text (mapv :title docs) "Filter by source…" nil nil))
                 (dom/div (dom/props {:style {:width "200px"}})
@@ -616,16 +655,18 @@
                   :aria-label (str "Synthesize questions for " label)})
       (tooltip/Tooltip! "Generate questions spanning this entity's facts")
       (icons/Icon :graduation-cap :size 14)
-      (let [click (dom/On "click" (fn [e] #?(:cljs (.stopPropagation e)) entity-id) nil)
+      (let [click (dom/On "click" (fn [e] #?(:cljs (.stopPropagation e)) (random-uuid)) nil)
             [t _] (e/Token click)]
         (dom/props {:disabled (some? t)})
         (when t
-          (let [result (e/server
-                         (e/Offload
-                           #(do (kgq/generate-synthesis-questions! user-id click label)
-                              :done)))]
+          ;; generate-synthesis-questions! already pushes its own outcome toast
+          ;; on both paths, so no client-side toast here — just thread the real
+          ;; :success/:error through the token instead of always reporting done.
+          (let [result (e/server (e/Offload #(kgq/generate-synthesis-questions! user-id entity-id label)))]
             (case result
-              (t))))))))
+              (if (:success result)
+                (t)
+                (t (:error result))))))))))
 
 (e/defn EntityRow [user-id entity i !renaming renaming !merge-source merge-source !merge-confirm]
   (e/client
@@ -648,11 +689,13 @@
                 (when t
                   (let [result (e/server
                                  (e/Offload
-                                   #(do (db/rename-kg-entity! user-id id (:value keyev))
-                                      (commands/bump! user-id :distill)
-                                      :done)))]
+                                   #(let [ok? (db/rename-kg-entity! user-id id (:value keyev))]
+                                      (when ok? (commands/bump! user-id :distill))
+                                      {:success ok? :error (when-not ok? "Entity not found")})))]
                     (case result
-                      (do (reset! !renaming nil) (t)))))))
+                      (if (:success result)
+                        (do (reset! !renaming nil) (t))
+                        (t (:error result))))))))
             (dom/span (dom/props {:style fact-text-style}) (dom/text label))))
         (dom/td (dom/props {:style (merge fact-cell-style
                                      {:color "var(--color-text-secondary)" :font-size "12px"})})
@@ -693,6 +736,7 @@
 (e/defn EntitiesView [user-id kg-bump]
   (e/client
     (let [!query (atom "") query (e/watch !query)
+          !query-timer (atom nil)             ; debounces !query against the server search below
           !source-text (atom "") source-text (e/watch !source-text)
           !merge-source (atom nil) merge-source (e/watch !merge-source)
           !merge-confirm (atom nil) merge-confirm (e/watch !merge-confirm)
@@ -716,7 +760,9 @@
                   (dom/props {:placeholder "Search entities…" :class "input"
                               :aria-label "Search entities"
                               :style {:flex "1" :min-width "140px"}})
-                  (dom/On "input" (fn [ev] (reset! !query (.. ev -target -value))) nil))
+                  (dom/On "input"
+                    (fn [ev] (util/debounce! !query-timer !query (.. ev -target -value) 300))
+                    nil))
                 (dom/div (dom/props {:style {:width "220px"}})
                   (typeahead/Typeahead !source-text (mapv :title docs) "Filter by source…" nil nil))
                 (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
@@ -745,6 +791,9 @@
                      "? Its facts and aliases move over and the source entity is removed. This can't be undone.")
                 "Merge" "btn btn-danger-fill"
                 (e/fn [payload]
+                  ;; fire-and-forget: db/merge-kg-entities! has no :success key
+                  ;; (returns a fixed truthy value; a bad merge throws instead of
+                  ;; returning an error) — no failure contract to branch on here.
                   (let [r (e/server (e/Offload #(do (db/merge-kg-entities! user-id (:target payload) (:source payload))
                                                  (commands/bump! user-id :distill) :done)))]
                     (case r (reset! !merge-source nil))))))))))))
