@@ -32,6 +32,8 @@ Built with [Hyperfiddle Electric v3](https://github.com/hyperfiddle/electric) (C
 - **Docker** (for PostgreSQL)
 - **Node.js** (for shadow-cljs)
 - **ImageMagick** (optional — only for HEIC photo uploads in Live Documents; conversion shells out to `magick`/`convert`)
+- **Graphviz**. 
+  - The `sfdp` binary needs its layout-engine plugin — on **Debian/Ubuntu** the plugin is a **separate** package: `apt install graphviz libgvplugin-neato-layout8` (without it `sfdp` aborts with *"no layout engine support for sfdp"*). **Fedora**: `dnf install graphviz`; **macOS**: `brew install graphviz` — both bundle the plugin. Missing `sfdp` throws `Cannot run program "sfdp"` and closes the graph page's WebSocket.
 
 ### Run
 
@@ -84,6 +86,7 @@ Why a plugin: Zotero's built-in API sends no CORS headers, returns `file://` red
 | Build | deps.edn + shadow-cljs |
 | PDF rendering | PDF.js 3.11.174 (CDN) |
 | Rich text | Quill 2.0.3 (CDN) |
+| Graph layout | Graphviz `sfdp` (server-side, Knowledge Graph view) |
 | Logging | Telemere (structured, CLJ + CLJS) |
 | AI | OpenAI GPT-5.1 (card generation) + Vision (OCR) |
 
@@ -281,8 +284,9 @@ To accept uploads larger than 100 MB, also raise `STORAGE_REQUEST_MAX_BYTES` (th
 
 ### Non-Docker (run the jar on the host)
 
-Requires a reachable Postgres (e.g. `docker compose up` for just the DB) and ImageMagick on PATH
-(HEIC upload conversion shells out to `magick`).
+Requires a reachable Postgres (e.g. `docker compose up` for just the DB), ImageMagick on PATH
+(HEIC upload conversion shells out to `magick`), and — for the Knowledge Graph view — Graphviz on
+PATH (layout shells out to `sfdp`; Debian/Ubuntu also needs the separate `libgvplugin-neato-layout8`).
 
 ```bash
 # Build client + uberjar
