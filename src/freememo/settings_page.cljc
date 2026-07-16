@@ -255,31 +255,51 @@
           (dom/text "Auto follows your system preference"))))))
 
 (e/defn CardFontSizeField
-  "Card text-size number stepper (10-20px)."
+  "Card text-size number stepper (10-20px). Autosave-on-blur (A1-fallback —
+   Forms5 has no commit-on-blur text primitive); clamped to [10,20]
+   client-side before saving so the field snaps to the clamped value
+   immediately on blur, not just after a refresh."
   [user-id]
   (e/client
-    (let [server-font-size (e/server (settings/get-card-font-size user-id))]
+    (let [server-font-size (e/server (settings/get-card-font-size user-id))
+          !font-size (atom server-font-size)
+          font-size (e/watch !font-size)]
       (dom/div
         (dom/props {:class "field"})
         (dom/label
           (dom/props {:style {:display "flex" :align-items "center" :gap "10px"}})
-          ;; e/amb, not implicit do — the tracked Input! sits between two plain
-          ;; siblings here, so both siblings must be amb-wrapped too or the
-          ;; do-sequencing silently drops the Input! token (forms.md "do Gotcha").
+          ;; e/amb, not implicit do — the hand-rolled input sits between two
+          ;; plain siblings here; keep them amb-wrapped for consistency with
+          ;; the tracked-field layout this replaced (forms.md "do Gotcha").
           (e/amb
             (do
               (dom/span (dom/props {:class "label" :style {:margin-bottom "0"}})
                 (dom/text "Card Text Size"))
               (e/amb))
-            (e/for [[t {:keys [card-font-size]}]
-                    (forms/Input! :card-font-size server-font-size
-                      :type "number" :min "10" :max "20"
-                      :Parse (e/fn [s] (js/parseInt s))
-                      :style {:width "56px" :font-size "13px" :padding "4px 6px"
-                              :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"})]
-              (let [r (e/server (e/Offload #(settings/save-card-font-size user-id card-font-size)))]
-                (case r
-                  (if (:success r) (t) (t (:error r))))))
+            (do
+              ;; A1-fallback: Forms5 has no commit-on-blur text primitive
+              ;; (Input!/Input fire on "input" = per-keystroke). Managed via a
+              ;; Focused? guard (A5 — don't clobber the user's draft mid-edit),
+              ;; committed once on "change" (blur); clamped to [10,20]
+              ;; client-side before saving so the displayed digits snap to the
+              ;; clamped value immediately.
+              (dom/input
+                (dom/props {:type "number" :min "10" :max "20"
+                            :style {:width "56px" :font-size "13px" :padding "4px 6px"
+                                    :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"}})
+                (when-not (dom/Focused?) (set! (.-value dom/node) (str font-size)))
+                (let [committed (dom/On "change" #(-> % .-target .-value) nil)
+                      [t _] (e/Token committed)]
+                  (dom/props {:disabled (some? t) :aria-busy (some? t)})
+                  (when t
+                    (let [parsed (js/parseInt committed)]
+                      (if (js/isNaN parsed)
+                        (t) ; blank/unparseable on blur — release the token, nothing to save
+                        (let [clamped (max 10 (min 20 parsed))
+                              r (e/server (e/Offload #(settings/save-card-font-size user-id clamped)))]
+                          (case r
+                            (if (:success r) (do (reset! !font-size clamped) (t)) (t (:error r))))))))))
+              (e/amb))
             (do
               (dom/span (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
                 (dom/text "px"))

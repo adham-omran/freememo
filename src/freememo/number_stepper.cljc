@@ -8,8 +8,7 @@
    electric-fn supplied by the call site."
   (:require
    [hyperfiddle.electric3 :as e]
-   [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-forms5 :as forms]))
+   [hyperfiddle.electric-dom3 :as dom]))
 
 (defn- spend
   "Token-spend policy shared by all paths. `r` is the Save result: a settings
@@ -26,17 +25,17 @@
 
 (defn- read-step
   "Current mirrored value stepped by `delta` and clamped to [lo,hi]. Reads
-   `!mirror` — kept live by every path (buttons and the managed Forms5 input,
-   see NumberStepper) — NOT the reactive `value` prop, so the click handler
-   has no reactive dependency on `value` and cannot loop when a save bumps
-   it. Falls back to `lo` before any value has landed."
+   `!mirror` — kept live by every path (buttons and the typed input, see
+   NumberStepper) — NOT the reactive `value` prop, so the click handler has
+   no reactive dependency on `value` and cannot loop when a save bumps it.
+   Falls back to `lo` before any value has landed."
   [!mirror lo hi delta]
   (clamp lo hi (+ (or (some-> !mirror deref) lo) delta)))
 
 (defn- parse-typed
   "Parse a typed digit string to an int clamped to [lo,hi], or nil for
-   blank/unparseable input. Used as Input!'s `:Parse` hook — see
-   NumberStepper. nil means \"nothing to save yet\", not an error."
+   blank/unparseable input. Run on commit (blur) — see NumberStepper. nil
+   means \"nothing to save yet\", not an error."
   [s lo hi]
   #?(:cljs (when-some [v (not-empty s)]
              (let [n (js/parseInt v)]
@@ -54,15 +53,16 @@
          visible `label` (\"#\", nil) is not a usable accessible name.
          `Save` :: (e/fn [clamped-int] → result-or-nil).
    Post: every −/+ click and typed edit calls `(Save clamped)` exactly once
-         per commit; the token spends on completion. The middle input is a
-         managed Forms5 `Input!` bound to `value` — it reflects the
-         authoritative value only while the field isn't dirty (unfocused, no
-         in-flight edit), so a save landing mid-type never clobbers the
-         user's draft (see forms.md / patterns.md, managed vs unmanaged
-         inputs — this is the A5 fix).
+         per commit; the token spends on completion. The middle input is an
+         A1-fallback hand-rolled input (Forms5 has no commit-on-blur text
+         primitive — Input!/Input fire on \"input\" = per-keystroke): managed
+         via a Focused? guard — it reflects the authoritative value only
+         while the field isn't focused, so a save landing mid-type never
+         clobbers the user's draft (the A5 fix) — and committed once on
+         \"change\" (blur).
    Invariant: clamp on both paths — buttons saturate at the bounds, typed
-              input is clamped in Input!'s `:Parse` before Save and before
-              the digits are re-displayed."
+              input is clamped by `parse-typed` before Save and before the
+              digits are re-displayed."
   [value min-val max-val mount-key label input-aria-label suffix disabled? !mirror Save]
   (e/client
     (dom/span
@@ -83,20 +83,24 @@
           (when t (spend t (Save nv)))))
 
       ;; N — editable, frame-isolated per CLAUDE.md inline-number pattern.
-      ;; Managed Forms5 Input!: bound to `value`, "don't damage user input"
-      ;; while focused/waiting/erroring — no more imperative set! stomping a
-      ;; concurrent in-progress edit.
+      ;; A1-fallback: Forms5 has no commit-on-blur text primitive (Input!/Input
+      ;; fire on "input" = per-keystroke). Managed via a Focused? guard (A5 —
+      ;; don't clobber the user's draft mid-edit), committed once on "change"
+      ;; (blur).
       (e/for-by identity [_k [mount-key]]
-        (e/for [[t edit] (forms/Input! mount-key value
-                           :type "number" :min (str min-val) :max (str max-val)
-                           :inputmode "numeric" :class "number-stepper-input"
-                           :aria-label input-aria-label :disabled disabled?
-                           :Parse (e/fn [s] (parse-typed s min-val max-val)))]
-          (if-some [clamped (get edit mount-key)]
-            (do
-              (when !mirror (reset! !mirror clamped))
-              (spend t (Save clamped)))
-            (t)))) ; blank/unparseable keystroke — release the token, nothing to save
+        (dom/input
+          (dom/props {:type "number" :min (str min-val) :max (str max-val)
+                      :inputmode "numeric" :class "number-stepper-input"
+                      :aria-label input-aria-label :disabled disabled?})
+          (when-not (dom/Focused?) (set! (.-value dom/node) (str value)))
+          (let [raw (dom/On "change" #(-> % .-target .-value) nil)
+                [t _] (e/Token raw)]
+            (when t
+              (if-some [clamped (parse-typed raw min-val max-val)]
+                (do
+                  (when !mirror (reset! !mirror clamped))
+                  (spend t (Save clamped)))
+                (t)))))) ; blank/unparseable on blur — release the token, nothing to save
 
       ;; + increment
       (dom/button
