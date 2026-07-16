@@ -8,9 +8,21 @@
   (:require
    [freememo.credits :as credits]
    [freememo.cards :as cards]
+   [freememo.db :as db]
    [freememo.kg-llm :as llm]
    [taoensso.telemere :as tel]
    [clojure.string :as str]))
+
+(defn weak-fact?
+  "Whether a fact still needs practice, from its db/get-fact-mastery entry.
+   Pre:  `m` is a get-fact-mastery value, or nil (fact has no linked approved
+         question — never quizzable, hence never practiced).
+   Post: true when the fact is untested, due, or has lapsed; nil ⇒ true."
+  [m]
+  (or (nil? m)
+    (not (:tested? m))
+    (:due? m)
+    (pos? (:lapses m))))
 
 (defn- fact->select-row
   "get-kg-facts display row → the {:id :s :p :o} shape the selector prompt
@@ -56,7 +68,13 @@
           model-ids (into [] (filter int?) (when (sequential? parsed) parsed))
           dropped-ids (into [] (remove by-id) model-ids)
           relevant (into [] (comp (distinct) (keep by-id))
-                     (when (sequential? parsed) parsed))]
+                     (when (sequential? parsed) parsed))
+          ;; Reorder weak-first (untested/due/lapsed lead) so card generation
+          ;; spends the card-count budget on the facts that most need practice.
+          ;; Reorder only — every passage-supported fact stays eligible; a stable
+          ;; sort preserves the model's order within each weak/mastered band.
+          mastery (db/get-fact-mastery user-id (mapv :id relevant))
+          prioritized (vec (sort-by #(if (weak-fact? (get mastery (:id %))) 0 1) relevant))]
       (credits/record-cost-charge! user-id :cards.fact-select (:id entry) cost)
       (tel/log! {:level :info :id ::fact-selection-complete
                  :data {:user-id user-id
@@ -64,11 +82,11 @@
                         :candidate-count (count candidate-facts)
                         :model-selected-ids model-ids
                         :dropped-ids dropped-ids
-                        :selected-ids (mapv :id relevant)
-                        :selected-facts (mapv (fn [f] {:id (:id f) :stmt (fact->statement f)}) relevant)
+                        :selected-ids (mapv :id prioritized)
+                        :selected-facts (mapv (fn [f] {:id (:id f) :stmt (fact->statement f)}) prioritized)
                         :cost-usd cost}}
         "Card-gen fact selection")
-      {:success true :facts relevant :cost cost})
+      {:success true :facts prioritized :cost cost})
     (catch Exception e
       (if (llm/insufficient-credits? e)
         (tel/log! {:level :info :id ::spend-refused :data {:user-id user-id}}

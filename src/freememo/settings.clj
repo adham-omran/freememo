@@ -501,6 +501,29 @@
         (tel/error! {:id ::save-card-model} e)
         {:success false :error "Failed to save card model"}))))
 
+(defn get-learning-goal
+  "Per-document learning goal — the learner's reason for studying this document,
+   keyed by root-topic-id. nil/\"\" when unset. Grounds the Socratic assistant and
+   card generation."
+  [user-id root-topic-id]
+  (db/get-setting user-id (str "goal_" root-topic-id)))
+
+(defn save-learning-goal
+  "Persist the per-document learning goal (root-topic-id). `value` is free text;
+   \"\" clears it. Rejects text over 2000 chars (the UI caps input at the same).
+   Pre:  root-topic-id owned by user-id (settings are per-user-keyed regardless).
+   Post: setting stored, or {:success false :error}."
+  [user-id root-topic-id value]
+  (let [v (str/trim (or value ""))]
+    (if (> (count v) 2000)
+      {:success false :error "Learning goal is too long (max 2000 characters)."}
+      (try
+        (db/set-setting user-id (str "goal_" root-topic-id) v)
+        {:success true}
+        (catch Exception e
+          (tel/error! {:id ::save-learning-goal} e)
+          {:success false :error "Failed to save learning goal"})))))
+
 (defn effective-card-model
   "Card-model :id used when generating cards under `root-topic-id`: the
    per-document selection when set and still allowed, else the user's global
