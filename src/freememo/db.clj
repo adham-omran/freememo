@@ -43,13 +43,14 @@
    ;; back to the OS user and auth would fail).
    :username (or (System/getenv "DB_USER") "cardmaker")
    :password (or (System/getenv "DB_PASSWORD") "dev")
-   :maximumPoolSize 10
-   ;; -1 = don't probe a connection at pool construction; connect lazily on first
-   ;; query. Preserves the prior get-datasource behavior (namespace loads without
-   ;; a reachable DB — needed by dev tooling / REPL / compile checks).
-   :initializationFailTimeout -1})
+   :maximumPoolSize 10})
 
-;; HikariCP connection pool (lazy init — see :initializationFailTimeout above)
+;; HikariCP connection pool. Fail-fast init (HikariCP default
+;; initializationFailTimeout): probes one connection at construction and throws if
+;; the DB is unreachable, so a down/misconfigured DB surfaces at boot rather than
+;; on first query. Tradeoff: requiring this namespace now needs a live DB
+;; (no lazy load) — dev tooling / compile-checks that loaded db.clj without a DB
+;; will no longer work.
 (defonce ds (connection/->pool HikariDataSource db-config))
 
 ;; ---------------------------------------------------------------------------
@@ -2384,8 +2385,11 @@
             VALUES (?, ?, ?, ?)"
            topic-id file-bytes file-size "application/epub+zip"])
         ;; Create chapter children — one multi-row INSERT instead of one per
-        ;; chapter; Postgres preserves VALUES row order through RETURNING, so
-        ;; chapter-ids still line up positionally with `chapters`.
+        ;; chapter. Each row already carries a stable, unique-within-this-batch
+        ;; ordinal (:page_number = 1-based chapter index); RETURNING it back
+        ;; alongside id and re-associating by that value keeps chapter-ids
+        ;; correctly ordered without trusting Postgres' VALUES/RETURNING row
+        ;; order, which SQL does not guarantee.
         (let [chapter-rows (map-indexed
                              (fn [i ch]
                                (let [sanitized (sanitize-utf8 (:html ch))]
@@ -2401,11 +2405,12 @@
                                   :priority 50}))
                              chapters)
               chapter-ids (when (seq chapter-rows)
-                            (mapv :topics/id
-                              (jdbc/execute! tx
-                                (sql/format {:insert-into :topics
-                                             :values (vec chapter-rows)
-                                             :returning [:id]}))))]
+                            (let [returned (jdbc/execute! tx
+                                             (sql/format {:insert-into :topics
+                                                          :values (vec chapter-rows)
+                                                          :returning [:id :page_number]}))
+                                  id-by-page (into {} (map (juxt :topics/page_number :topics/id)) returned)]
+                              (mapv (comp id-by-page :page_number) chapter-rows)))]
           {:topic-id topic-id :chapter-ids (vec (remove nil? chapter-ids))})))))
 
 (defn create-standalone-topic!
@@ -4291,19 +4296,24 @@
    or a caller that (like kg-extract's LLM-linker) inserts without an
    existence check, can produce a duplicate label — acceptable, matching the
    prior single-row insert-kg-entity!'s semantics.
-   Pre:  labels non-empty.
-   Post: vector of ids, positionally matching `labels` (Postgres preserves
-   VALUES row order through RETURNING for a single multi-row INSERT)."
+   Pre:  labels non-empty; distinct within any one chunk (both callers dedupe
+         before calling — a duplicate label in the same chunk would share one
+         id in the result, since re-association below is by label).
+   Post: vector of ids, positionally matching `labels`. RETURNING also pulls
+   back `label` and re-associates each id to its input label by that value —
+   NOT by trusting Postgres' VALUES/RETURNING row order, which SQL does not
+   guarantee (reliable in practice for a single INSERT, but not a contract)."
   [user-id labels]
   (when (seq labels)
     (into []
       (mapcat (fn [chunk]
-                (mapv :id
-                  (jdbc/execute! ds
-                    (sql/format {:insert-into :kg_entities
-                                 :values (mapv #(hash-map :user_id user-id :label (sanitize-utf8 %)) chunk)
-                                 :returning [:id]})
-                    {:builder-fn rs/as-unqualified-maps}))))
+                (let [returned (jdbc/execute! ds
+                                  (sql/format {:insert-into :kg_entities
+                                               :values (mapv #(hash-map :user_id user-id :label (sanitize-utf8 %)) chunk)
+                                               :returning [:id :label]})
+                                  {:builder-fn rs/as-unqualified-maps})
+                      id-by-label (into {} (map (juxt :label :id)) returned)]
+                  (mapv (comp id-by-label sanitize-utf8) chunk))))
       (partition-all entity-batch-chunk-size labels))))
 
 (defn get-or-create-kg-entities!
