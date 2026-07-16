@@ -162,10 +162,31 @@
                 (db/get-kg-facts-context user-id (:root-id ctx)
                   {:limit max-context-facts}))]
     (when (seq facts)
-      (str "\n\n# Facts established in this document\n\n"
-        "Use these only to ground and steer your questions — do not recite them "
-        "as answers.\n\n"
-        (cff/render-facts facts)))))
+      (let [mastery (db/get-fact-mastery user-id (mapv :id facts))
+            weak (filterv #(cff/weak-fact? (get mastery (:id %))) facts)]
+        (str "\n\n# Facts established in this document\n\n"
+          "Use these only to ground and steer your questions — do not recite them "
+          "as answers.\n\n"
+          (cff/render-facts facts)
+          (when (seq weak)
+            (str "\n\n## Focus: facts the learner has not yet mastered\n\n"
+              "These most need practice — steer your questions toward them. Still "
+              "never recite them as answers.\n\n"
+              (cff/render-facts weak))))))))
+
+(defn- mission-suffix
+  "System-prompt segment naming the learner's goal for this document, so the tutor
+   grounds its questions in that goal.
+   Pre:  root-topic-id owned by user-id.
+   Post: \"\" when no goal is set (caller composes suffixes with str), else a
+         non-blank segment."
+  [user-id root-topic-id]
+  (let [goal (str/trim (or (settings/get-learning-goal user-id root-topic-id) ""))]
+    (if (str/blank? goal)
+      ""
+      (str "\n\n# Learning goal\n\n"
+        "The learner is studying this document to: " goal "\n"
+        "Ground your questions in this goal; prioritize what serves it."))))
 
 (defn- reference-context-messages
   "Transient OpenRouter context turns for @-referenced documents — one per
@@ -253,7 +274,9 @@
                 (let [body (openrouter/chat-completion! api-key
                              {:model slug
                               :messages (assemble-messages chat-id
-                                          (grounding-system-suffix user-id ctx)
+                                          (not-empty
+                                            (str (mission-suffix user-id root-topic-id)
+                                              (grounding-system-suffix user-id ctx)))
                                           context-msgs)
                               :reasoning_effort (settings/get-reasoning user-id)})
                       reply (-> body :choices first :message :content)

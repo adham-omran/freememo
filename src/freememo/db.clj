@@ -4456,6 +4456,38 @@
         limit (assoc :limit limit)))
       {:builder-fn rs/as-unqualified-maps}))
 
+(defn get-fact-mastery
+  "Per-fact FSRS mastery signal, aggregated over the approved kg_questions linked
+   to each fact via kg_question_facts. Shared by the assistant (weak-fact steering)
+   and the facts→cards bridge (weak-first ordering).
+   Pre:  fact-ids is a seq of kg_facts ids owned by user-id.
+   Post: {fact-id {:tested? bool :due? bool :lapses int}} for every input id with
+         ≥1 linked approved question. Ids with no linked approved question are
+         OMITTED — the caller treats an absent id as untested (never quizzed).
+         :tested? = some linked question reviewed ≥once; :due? = some introduced
+         linked question is due now; :lapses = max lapses across linked questions."
+  [user-id fact-ids]
+  (if (empty? fact-ids)
+    {}
+    (into {}
+      (map (juxt :fact_id
+             (fn [r] {:tested? (boolean (:tested r))
+                      :due? (boolean (:due r))
+                      :lapses (or (:lapses r) 0)})))
+      (jdbc/execute! ds
+        (sql/format
+          {:select [[:qf.fact_id :fact_id]
+                    [[:raw "BOOL_OR(q.fsrs_reps > 0)"] :tested]
+                    [[:raw "BOOL_OR(q.fsrs_due IS NOT NULL AND q.fsrs_due <= now())"] :due]
+                    [[:raw "COALESCE(MAX(q.fsrs_lapses), 0)"] :lapses]]
+           :from [[:kg_question_facts :qf]]
+           :join [[:kg_questions :q] [:= :q.id :qf.question_id]]
+           :where [:and [:= :q.user_id user-id]
+                   [:= :q.status "approved"]
+                   [:in :qf.fact_id (vec fact-ids)]]
+           :group-by [:qf.fact_id]})
+        {:builder-fn rs/as-unqualified-maps}))))
+
 (defn kg-fact-stats
   "Per-document fact counts by status — feeds the Knowledge page badges.
    Post: {graph-topic-id {status-string n}}."

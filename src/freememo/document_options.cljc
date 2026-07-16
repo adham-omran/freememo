@@ -100,6 +100,37 @@
                 (case r
                   (if (:success r) (t) (t (:error r))))))))))))
 
+(e/defn DocLearningGoalField
+  "Per-document learning goal (root-topic-id): the learner's reason for studying
+   this document. Grounds the Socratic assistant's questions and card generation.
+   Document-scoped, autosaves on blur (textarea 'change') like DocCardModelSelect,
+   so it sits outside the PDF/non-PDF Forms. Blank = no goal."
+  [user-id root-topic-id]
+  (e/client
+    (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
+          current (e/server (do settings-refresh (e/Offload #(settings/get-learning-goal user-id root-topic-id))))
+          !goal (atom (e/snapshot (or current "")))
+          goal (e/watch !goal)]
+      (dom/div
+        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
+        (dom/label (dom/props {:style {:display "block" :margin-bottom "4px" :font-weight "500" :font-size "13px"}})
+          (dom/text "Learning goal"))
+        (dom/textarea
+          (dom/props {:class "input"
+                      :style {:width "100%" :min-height "72px" :resize "vertical"}
+                      :maxlength 2000
+                      :placeholder "Why are you studying this? Grounds the assistant's questions and card generation."
+                      :value goal})
+          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                [t _] (e/Token change-event)]
+            (dom/props {:aria-busy (some? t)})
+            (when (some? change-event)
+              (reset! !goal change-event))
+            (when t
+              (let [r (e/server (e/Offload #(settings/save-learning-goal user-id root-topic-id change-event)))]
+                (case r
+                  (if (:success r) (t) (t (:error r))))))))))))
+
 (e/defn CustomPromptField
   "Editable per-item Custom Prompt, appended to the effective system prompt for
    this item and everything under it. Tracked Forms5 field (Input! :as :textarea)
@@ -350,6 +381,10 @@
 
           ;; Card-generation model — document-scoped (root-topic-id), all kinds.
           (DocCardModelSelect user-id root-topic-id)
+
+          ;; Learning goal — document-scoped (root-topic-id); grounds the
+          ;; assistant and card generation.
+          (DocLearningGoalField user-id root-topic-id)
 
           (if is-pdf?
             (let [settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))

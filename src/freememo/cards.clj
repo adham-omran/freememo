@@ -156,7 +156,7 @@
          to a card-models entry; the OpenRouter key is configured.
    Post: {:success true :cards v} with (count v) = card-count, else
          {:success false :error s}."
-  [{:keys [content context card-count model user-id pre-prompt topic-id]} prompt-builder-fn endpoint-tag]
+  [{:keys [content context card-count model user-id pre-prompt topic-id goal]} prompt-builder-fn endpoint-tag]
   (let [api-key (settings/get-openrouter-api-key user-id)
         _ (when (empty? api-key) (throw (ex-info "OpenRouter API key not configured" {})))
         _ (when (empty? content) (throw (ex-info "No content provided" {})))
@@ -174,6 +174,13 @@
         has-context? (not (empty? context))
         prompt (prompt-builder-fn card-count has-context? pre-prompt user-id topic-id)
         _ (when-not prompt (throw (ex-info "Failed to load prompt templates" {})))
+        ;; Document-scoped learning goal (per root-topic), appended so generated
+        ;; cards serve why the learner is studying. Absent/blank ⇒ prompt unchanged.
+        prompt (cond-> prompt
+                 (and goal (not (str/blank? goal)))
+                 (str "\n\n# Learning goal\n\n"
+                   "The learner is studying this material to: " goal "\n"
+                   "Favor cards that serve this goal."))
         content-text (if has-context? (pr-str {:content content :context context}) content)]
     (loop [attempt 1
            cost-acc 0.0]

@@ -144,6 +144,8 @@
              ;; Per-document model override; falls back to the user's global
              ;; default when the document has no selection (effective-card-model).
              model (settings/effective-card-model user-id root-topic-id)
+             ;; Per-document learning goal (root-topic); nil/"" leaves gen unchanged.
+             goal (settings/get-learning-goal user-id root-topic-id)
              resolved (resolve-gen-content content user-id root-topic-id)]
          (if (false? (:success resolved))
            resolved ;; fact-selection failure — carries :error-type for the toast
@@ -153,7 +155,7 @@
                  gen-context (when-not (:from-facts? resolved) context)
                  opts (cond-> {:content gen-content :context gen-context
                                :card-count card-count :user-id user-id :enc-key enc-key
-                               :topic-id topic-id :model model}
+                               :topic-id topic-id :model model :goal goal}
                         pre-prompt (assoc :pre-prompt pre-prompt))
                  gen-result (case card-type
                               "basic" (cards/generate-basic-cards opts)
