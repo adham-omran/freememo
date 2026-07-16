@@ -51,7 +51,7 @@
                             (fn [_]
                               (let [v @!postpone-days]
                                 {:id (str (random-uuid))
-                                 :days #?(:cljs (js/parseInt v) :clj nil)}))
+                                 :days (js/parseInt v)}))
                             nil)
                     [t _error] (e/Token event)]
                 (when t

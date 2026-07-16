@@ -150,8 +150,7 @@
             flash-success? (e/watch !flash-success)
             click-event (dom/On "click"
                           (fn [e]
-                            (when #?(:cljs (js/confirm "Overwrite the bibliography of all descendant extracts with this item's bibliography? This cannot be undone.")
-                                     :clj true)
+                            (when (js/confirm "Overwrite the bibliography of all descendant extracts with this item's bibliography? This cannot be undone.")
                               e))
                           nil)
             [t ?error] (e/Token click-event)]
@@ -178,7 +177,7 @@
                 (do (e/on-unmount
                       (fn []
                         (reset! !flash-success true)
-                        #?(:cljs (js/setTimeout #(reset! !flash-success false) 1200))))
+                        (js/setTimeout #(reset! !flash-success false) 1200)))
                     (t))
                 (t (str "Failed: " (name (or (:error result) :error))))))))))))
 
