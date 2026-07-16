@@ -4,6 +4,7 @@
    in a parent_id tree."
   (:require
    [next.jdbc :as jdbc]
+   [next.jdbc.connection :as connection]
    [next.jdbc.result-set :as rs]
    [honey.sql :as sql]
    [cheshire.core :as json]
@@ -16,7 +17,8 @@
    [freememo.config :as config]
    [freememo.fsrs :as fsrs]
    [freememo.text :as text])
-  (:import [org.postgresql.util PGobject]))
+  (:import [com.zaxxer.hikari HikariDataSource]
+           [org.postgresql.util PGobject]))
 
 (declare sanitize-utf8)
 (declare migrate-to-topics!)
@@ -36,10 +38,15 @@
    :port (Integer/parseInt (or (System/getenv "DB_PORT") "5432"))
    :dbname (or (System/getenv "DB_NAME") "cardmaker")
    :user (or (System/getenv "DB_USER") "cardmaker")
-   :password (or (System/getenv "DB_PASSWORD") "dev")})
+   :password (or (System/getenv "DB_PASSWORD") "dev")
+   :maximumPoolSize 10
+   ;; -1 = don't probe a connection at pool construction; connect lazily on first
+   ;; query. Preserves the prior get-datasource behavior (namespace loads without
+   ;; a reachable DB — needed by dev tooling / REPL / compile checks).
+   :initializationFailTimeout -1})
 
-;; HikariCP datasource (connection pool)
-(defonce ds (jdbc/get-datasource db-config))
+;; HikariCP connection pool (lazy init — see :initializationFailTimeout above)
+(defonce ds (connection/->pool HikariDataSource db-config))
 
 ;; ---------------------------------------------------------------------------
 ;; Schema setup
@@ -58,9 +65,11 @@
            ["SELECT 1 FROM information_schema.tables
              WHERE table_name = 'topics' AND table_schema = 'public'"])))
 
-(defn setup-schema []
-  (tel/log! :info "Setting up database schema")
-
+(defn- setup-schema-core!
+  "Extensions, the users table (+ OAuth + storage-quota columns), and the
+   per-user settings table.
+   Split out of setup-schema (see 7.4); called from it in order."
+  []
   ;; Enable pgcrypto for password hashing
   (jdbc/execute! ds ["CREATE EXTENSION IF NOT EXISTS pgcrypto"])
 
@@ -117,7 +126,16 @@
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           PRIMARY KEY (user_id, key)
         )"])))
+)
 
+(defn- setup-schema-topics!
+  "The topics tree (+ repetition log, is_live/dismissed/content_text flags),
+   topic_files, and flashcards — plus the legacy-table migration and its
+   post-migration column/constraint cleanup. Order matters: flashcards'
+   topic_id/root_topic_id FKs need topics first, and the migration needs
+   both tables in place before it can move rows into them.
+   Split out of setup-schema (see 7.4); called from it in order."
+  []
   ;; Topics table (unified: documents + pages + content_items)
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS topics (
@@ -255,7 +273,12 @@
       (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_unique_cloze
                           ON flashcards(topic_id, kind, cloze) WHERE question IS NULL"])
       (catch Exception _ nil)))
+)
 
+(defn- setup-schema-activity!
+  "User events, the media registry, and topic pins (pins FK into media).
+   Split out of setup-schema (see 7.4); called from it in order."
+  []
   ;; User events (activity tracking)
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS user_events (
@@ -297,7 +320,12 @@
       ord SMALLINT NOT NULL DEFAULT 0
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_pins_topic ON topic_pins(topic_id)"])
+)
 
+(defn- setup-schema-assistant!
+  "Socratic AI assistant chats + message transcripts.
+   Split out of setup-schema (see 7.4); called from it in order."
+  []
   ;; Socratic AI assistant — per-document chats + their message transcripts.
   ;; A chat is scoped to (user_id, root_topic_id): the document being read.
   ;; The transcript holds learner/assistant turns only; the learner's live
@@ -329,7 +357,14 @@
   (jdbc/execute! ds ["ALTER TABLE assistant_messages ADD COLUMN IF NOT EXISTS client_id TEXT"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_messages_chat
                       ON assistant_messages(chat_id, id)"])
+)
 
+(defn- setup-schema-annotations!
+  "Image-occlusion groups, audio/score groups, and the overlapping-cloze
+   column — the three non-basic flashcard kinds' supporting tables/columns.
+   Both groups FK into media, so this runs after setup-schema-activity!.
+   Split out of setup-schema (see 7.4); called from it in order."
+  []
   ;; Occlusion groups — one row per image-occlusion authoring session.
   ;; geometry JSONB = {:width :height :rects [{:x :y :w :h :ordinal} ...]}
   ;; in natural-image pixels. next_ordinal is the single ordinal authority:
@@ -384,7 +419,14 @@
   ;; the materialized Anki-field expansion (freememo.overlapping/expand),
   ;; re-derived on every save. question/answer/cloze stay NULL for this kind.
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS overlapping JSONB"])
+)
 
+(defn- setup-schema-sources!
+  "Bibliography: the sources table, topics.source_id, the source_url/
+   source_reference backfill + cleanup, and legacy title canonicalization.
+   Must run after setup-schema-topics! (backfills read/write topics rows).
+   Split out of setup-schema (see 7.4); called from it in order."
+  []
   ;; Drop deprecated source_reference columns — title is the single source of truth.
   (jdbc/execute! ds ["ALTER TABLE topics DROP COLUMN IF EXISTS source_reference"])
   (jdbc/execute! ds ["ALTER TABLE flashcards DROP COLUMN IF EXISTS source_reference"])
@@ -448,7 +490,13 @@
 
   ;; Backfill content_text for existing rows (idempotent)
   (backfill-content-text!)
+)
 
+(defn- setup-schema-credits!
+  "Pass-through AI billing: per-user balance/markup columns, credit_orders,
+   credit_transactions.
+   Split out of setup-schema (see 7.4); called from it in order."
+  []
   ;; Credits — pass-through AI billing (official deployment only).
   ;; Per-user IQD balance (denormalized, mirrors usage_bytes) + append-only
   ;; ledger (source of truth: SUM(amount_iqd) per user == credit_balance_iqd)
@@ -494,7 +542,13 @@
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_credit_transactions_user
                       ON credit_transactions(user_id, created_at DESC)"])
+)
 
+(defn- setup-schema-undo!
+  "The undo log and topics.staged_delete_id (which FKs into it) — must run
+   after setup-schema-topics! (topics must already exist).
+   Split out of setup-schema (see 7.4); called from it in order."
+  []
   ;; Undo log — bounded per-user action history for the Undo feature.
   ;; entity_refs/snapshot are JSONB; occurred_at drives the 12h window,
   ;; undone_at IS NULL marks an entry still reversible. Hard-capped to the
@@ -533,7 +587,14 @@
                       REFERENCES undo_log(id) ON DELETE SET NULL"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_staged_delete
                       ON topics(staged_delete_id) WHERE staged_delete_id IS NOT NULL"])
+)
 
+(defn- setup-schema-kg!
+  "Knowledge graph: entities, predicates, facts, question bank (+ FSRS
+   columns), question↔fact links, quiz/exam sessions, answers, review log,
+   and the graph-layout cache. See plans/knowledge-graph-quizzes.md.
+   Split out of setup-schema (see 7.4); called from it in order."
+  []
   ;; Knowledge graph — LLM-distilled facts with human review (see
   ;; plans/knowledge-graph-quizzes.md). Physical store is annotated rows;
   ;; the Ontop service (ontop/) publishes approved rows as orthodox RDF.
@@ -738,6 +799,20 @@
       computed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (user_id, scope)
     )"])
+)
+
+(defn setup-schema []
+  (tel/log! :info "Setting up database schema")
+
+  (setup-schema-core!)
+  (setup-schema-topics!)
+  (setup-schema-activity!)
+  (setup-schema-assistant!)
+  (setup-schema-annotations!)
+  (setup-schema-sources!)
+  (setup-schema-credits!)
+  (setup-schema-undo!)
+  (setup-schema-kg!)
 
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
   (run-grandfather-migration!)
@@ -1031,6 +1106,21 @@
                  :where [:and
                          [:= :user_id user-id]
                          [:= :key key]]})))
+
+(defn get-settings
+  "Batch variant of get-setting: {key value} for all of `ks` in one query.
+   Keys with no row are absent from the result map. [] ks → {} (no DB hit)."
+  [user-id ks]
+  (if (empty? ks)
+    {}
+    (into {}
+      (map (juxt :settings/key :settings/value))
+      (jdbc/execute! ds
+        (sql/format {:select [:key :value]
+                     :from [:settings]
+                     :where [:and
+                             [:= :user_id user-id]
+                             [:in :key ks]]})))))
 
 ;; ---------------------------------------------------------------------------
 ;; Assistant chats (Socratic AI assistant)
@@ -1974,6 +2064,25 @@
 ;; Compound creation helpers
 ;; ---------------------------------------------------------------------------
 
+(defn- insert-page-stubs!
+  "Batch-insert kind='page' topic stubs titled \"Page N\" for page numbers
+   `from-n`..`to-n` inclusive, under parent-id. One multi-row INSERT instead
+   of one per page. ON CONFLICT (parent_id, page_number) DO NOTHING — a
+   re-run, or a page already materialized by OCR, is a no-op.
+   tx may be the pool `ds` or an in-flight transaction."
+  [tx user-id parent-id from-n to-n]
+  (when (<= from-n to-n)
+    (jdbc/execute! tx
+      (sql/format {:insert-into :topics
+                   :values (mapv (fn [n] {:user_id user-id
+                                           :parent_id parent-id
+                                           :kind "page"
+                                           :title (str "Page " n)
+                                           :page_number n})
+                             (range from-n (inc to-n)))
+                   :on-conflict [:parent_id :page_number {:where [:is-not :page_number nil]}]
+                   :do-nothing true}))))
+
 (defn create-pdf-topic!
   "Create a PDF root topic with file data, page stubs, and a `sources` row.
    Atomically checks quota and increments users.usage_bytes by file-size.
@@ -2007,13 +2116,7 @@
             VALUES (?, ?, ?, ?)"
            topic-id file-bytes file-size "application/pdf"])
         (when (pos? page-count)
-          (doseq [n (range 1 (inc page-count))]
-            (jdbc/execute! tx
-              ["INSERT INTO topics (user_id, parent_id, kind, title, page_number)
-                VALUES (?, ?, 'page', ?, ?)
-                ON CONFLICT (parent_id, page_number) WHERE page_number IS NOT NULL
-                DO NOTHING"
-               user-id topic-id (str "Page " n) n])))
+          (insert-page-stubs! tx user-id topic-id 1 page-count))
         topic))))
 
 (defn create-audio-topic!
@@ -2144,13 +2247,7 @@
         DO UPDATE SET file_data = excluded.file_data, file_size = excluded.file_size,
                       mime_type = excluded.mime_type"
        topic-id new-bytes new-size])
-    (doseq [n (range (inc prev-total) (inc new-total))]
-      (jdbc/execute! tx
-        ["INSERT INTO topics (user_id, parent_id, kind, title, page_number)
-          VALUES (?, ?, 'page', ?, ?)
-          ON CONFLICT (parent_id, page_number) WHERE page_number IS NOT NULL
-          DO NOTHING"
-         user-id topic-id (str "Page " n) n]))
+    (insert-page-stubs! tx user-id topic-id (inc prev-total) new-total)
     {:pages-added (- new-total prev-total)}))
 
 (defn find-web-topic-by-title
@@ -2282,26 +2379,29 @@
           ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
             VALUES (?, ?, ?, ?)"
            topic-id file-bytes file-size "application/epub+zip"])
-        ;; Create chapter children
-        (let [chapter-ids (when (seq chapters)
-                            (mapv (fn [i ch]
-                                    (let [sanitized (sanitize-utf8 (:html ch))
-                                          result (jdbc/execute-one! tx
-                                                   (sql/format {:insert-into :topics
-                                                                :values [{:user_id user-id
-                                                                          :parent_id topic-id
-                                                                          :kind "basic"
-                                                                          :title (input/prettify-title
-                                                                                   (or (:title ch) (str "Chapter " (inc i))))
-                                                                          :content sanitized
-                                                                          :content_text (text/strip-html sanitized)
-                                                                          :page_number (inc i)
-                                                                          :status "active"
-                                                                          :priority 50}]
-                                                                :returning [:id]}))]
-                                      (:topics/id result)))
-                              (range (count chapters))
-                              chapters))]
+        ;; Create chapter children — one multi-row INSERT instead of one per
+        ;; chapter; Postgres preserves VALUES row order through RETURNING, so
+        ;; chapter-ids still line up positionally with `chapters`.
+        (let [chapter-rows (map-indexed
+                             (fn [i ch]
+                               (let [sanitized (sanitize-utf8 (:html ch))]
+                                 {:user_id user-id
+                                  :parent_id topic-id
+                                  :kind "basic"
+                                  :title (input/prettify-title
+                                           (or (:title ch) (str "Chapter " (inc i))))
+                                  :content sanitized
+                                  :content_text (text/strip-html sanitized)
+                                  :page_number (inc i)
+                                  :status "active"
+                                  :priority 50}))
+                             chapters)
+              chapter-ids (when (seq chapter-rows)
+                            (mapv :topics/id
+                              (jdbc/execute! tx
+                                (sql/format {:insert-into :topics
+                                             :values (vec chapter-rows)
+                                             :returning [:id]}))))]
           {:topic-id topic-id :chapter-ids (vec (remove nil? chapter-ids))})))))
 
 (defn create-standalone-topic!
@@ -2327,13 +2427,7 @@
   "Batch-insert empty page topics for a parent. ON CONFLICT DO NOTHING."
   [parent-id page-count user-id]
   (when (pos? page-count)
-    (doseq [n (range 1 (inc page-count))]
-      (jdbc/execute! ds
-        ["INSERT INTO topics (user_id, parent_id, kind, title, page_number)
-          VALUES (?, ?, 'page', ?, ?)
-          ON CONFLICT (parent_id, page_number) WHERE page_number IS NOT NULL
-          DO NOTHING"
-         user-id parent-id (str "Page " n) n]))))
+    (insert-page-stubs! ds user-id parent-id 1 page-count)))
 
 (defn save-page-text!
   "Save or update OCR text for a page topic (by parent + page_number).
@@ -2570,18 +2664,20 @@
 
 (defn delete-user-flashcards!
   "Bulk delete of user-id's flashcards. Ownership enforced via the root
-   topic join. Returns the full deleted rows (RETURNING f.*) so callers can
-   both read :flashcards/anki_note_id and snapshot the rows for undo."
+   topic join. Returns the full deleted rows (RETURNING flashcards.*) so
+   callers can both read :flashcards/anki_note_id and snapshot the rows for
+   undo."
   [user-id card-ids]
   (if (empty? card-ids)
     []
     (jdbc/execute! ds
-      (into [(str "DELETE FROM flashcards f USING topics root
-                   WHERE f.root_topic_id = root.id AND root.user_id = ?
-                     AND f.id IN (" (str/join "," (repeat (count card-ids) "?")) ")
-                   RETURNING f.*")
-             user-id]
-        card-ids))))
+      (sql/format {:delete-from :flashcards
+                   :using [[:topics :root]]
+                   :where [:and
+                           [:= :flashcards.root_topic_id :root.id]
+                           [:= :root.user_id user-id]
+                           [:in :flashcards.id (vec card-ids)]]
+                   :returning [:flashcards.*]}))))
 
 (defn get-flashcards-by-anki-note-ids
   "Flashcards owned by user-id (via root topic) whose anki_note_id is in
@@ -2964,10 +3060,9 @@
   [card-ids]
   (when (seq card-ids)
     (jdbc/execute! ds
-      (into [(str "UPDATE flashcards SET anki_synced_at = CURRENT_TIMESTAMP WHERE id IN ("
-               (str/join "," (repeat (count card-ids) "?"))
-               ")")]
-        card-ids))))
+      (sql/format {:update :flashcards
+                   :set {:anki_synced_at [:now]}
+                   :where [:in :id (vec card-ids)]}))))
 
 (defn get-unsynced-card-count
   "Count unsynced cards for a specific topic."
@@ -3448,20 +3543,6 @@
                              [:sources :s] [:= :t.source_id :s.id]]
                  :where [:and [:= :t.user_id user-id] [:is :t.staged_delete_id nil]]
                  :order-by [[:t.parent_id :asc-nulls-first] [:t.page_number :asc-nulls-first] [:t.created_at :asc]]})))
-
-(defn get-root-topic-id
-  "Walk up parent_id chain to find the root topic. Returns the root topic's ID."
-  [topic-id]
-  (let [result (jdbc/execute-one! ds
-                 ["WITH RECURSIVE ancestors AS (
-                     SELECT id, parent_id FROM topics WHERE id = ?
-                     UNION ALL
-                     SELECT t.id, t.parent_id FROM topics t
-                     JOIN ancestors a ON t.id = a.parent_id
-                   )
-                   SELECT id FROM ancestors WHERE parent_id IS NULL"
-                  topic-id])]
-    (:id result)))
 
 (defn get-extract-source-page
   "For an extract whose immediate parent is a PDF page, return
@@ -4149,52 +4230,108 @@
   [rows]
   (mapv #(update % :aliases (fn [a] (some-> ^java.sql.Array a .getArray vec))) rows))
 
-(defn find-entity-link-candidates
-  "Trigram-ranked shortlist of the user's entities whose label or an alias
-   resembles `label` — the pass-2 linking candidates.
-   Pre:  label non-blank.
-   Post: ≤ `limit` rows {:id :label :aliases :sim}, sim DESC, all sim ≥ 0.25."
-  [user-id label limit]
-  (kg-aliases->vec
-    (jdbc/execute! ds
-      ["SELECT id, label, aliases, GREATEST(
-          similarity(label, ?),
-          COALESCE((SELECT MAX(similarity(a, ?)) FROM unnest(aliases) a), 0)
-        ) AS sim
-        FROM kg_entities
-        WHERE user_id = ?
-          AND GREATEST(
-            similarity(label, ?),
-            COALESCE((SELECT MAX(similarity(a, ?)) FROM unnest(aliases) a), 0)
-          ) >= 0.25
-        ORDER BY sim DESC LIMIT ?"
-       label label user-id label label limit]
-      {:builder-fn rs/as-unqualified-maps})))
+;; entity-batch-chunk-size caps rows/labels per statement so a large repo
+;; distill's distinct-entity count never approaches Postgres' 65 535
+;; bind-parameter limit — mirrors insert-kg-facts!'s chunking, one column
+;; short of it since these rows are narrower.
+(def ^:private entity-batch-chunk-size 20000)
 
-(defn insert-kg-entity!
-  "Insert an entity; returns its id."
-  [user-id label]
-  (:id (jdbc/execute-one! ds
-         ["INSERT INTO kg_entities (user_id, label) VALUES (?, ?) RETURNING id"
-          user-id (sanitize-utf8 label)]
-         {:builder-fn rs/as-unqualified-maps})))
+(defn find-entity-link-candidates-batch
+  "Batched find-entity-link-candidates: one query for every label in `labels`
+   instead of a round trip per label (a VALUES list cross-joined against the
+   user's kg_entities, ranked per label with a window function — same total
+   work as the per-label loop, fewer round trips).
+   Pre:  labels non-empty; entries need not be distinct.
+   Post: {label [candidate...]}, same row shape as the single-label version
+   (:id :label :aliases :sim, sim DESC, sim ≥ 0.25, ≤ `limit` per label). A
+   label with zero qualifying candidates is absent from the map."
+  [user-id labels limit]
+  (when (seq labels)
+    (let [distinct-labels (distinct labels)
+          placeholders (str/join ", " (repeat (count distinct-labels) "(?)"))
+          rows (jdbc/execute! ds
+                 (vec (concat
+                        [(str
+                           "WITH query_labels(q_label) AS (VALUES " placeholders "),
+                            scored AS (
+                              SELECT q.q_label, e.id, e.label, e.aliases,
+                                     GREATEST(
+                                       similarity(e.label, q.q_label),
+                                       COALESCE((SELECT MAX(similarity(a, q.q_label)) FROM unnest(e.aliases) a), 0)
+                                     ) AS sim
+                              FROM query_labels q
+                              CROSS JOIN kg_entities e
+                              WHERE e.user_id = ?
+                            ),
+                            ranked AS (
+                              SELECT *, ROW_NUMBER() OVER (PARTITION BY q_label ORDER BY sim DESC) AS rn
+                              FROM scored
+                              WHERE sim >= 0.25
+                            )
+                            SELECT q_label, id, label, aliases, sim
+                            FROM ranked
+                            WHERE rn <= ?
+                            ORDER BY q_label, sim DESC")]
+                        distinct-labels
+                        [user-id limit]))
+                 {:builder-fn rs/as-unqualified-maps})]
+      (->> rows
+        kg-aliases->vec
+        (reduce (fn [m {:keys [q_label] :as row}]
+                  (update m q_label (fnil conj []) (dissoc row :q_label)))
+          {})))))
 
-(defn get-or-create-kg-entity!
-  "Exact get-or-create of an entity by (user-id, label) — the DETERMINISTIC
-   linker for code facts, whose labels are canonical fully-qualified names, so
-   the prose path's fuzzy trigram/LLM merge (find-entity-link-candidates) is
-   neither needed nor wanted.
-   Select-then-insert (no UNIQUE(user_id,label): the prose path relies on
-   dup-tolerant fuzzy merge, so a global constraint would regress it). A race
-   could insert a duplicate — acceptable: a dup entity is reviewable, and
-   single-user ingest is low-concurrency.
-   Pre:  label non-blank. Post: entity id (existing or freshly inserted)."
-  [user-id label]
-  (or (:id (jdbc/execute-one! ds
-             ["SELECT id FROM kg_entities WHERE user_id = ? AND label = ? LIMIT 1"
-              user-id (sanitize-utf8 label)]
-             {:builder-fn rs/as-unqualified-maps}))
-    (insert-kg-entity! user-id label)))
+(defn insert-kg-entities!
+  "Batch-insert entities for `labels`. No ON CONFLICT — kg_entities has no
+   UNIQUE(user_id,label) constraint (see get-or-create-kg-entities!); a race,
+   or a caller that (like kg-extract's LLM-linker) inserts without an
+   existence check, can produce a duplicate label — acceptable, matching the
+   prior single-row insert-kg-entity!'s semantics.
+   Pre:  labels non-empty.
+   Post: vector of ids, positionally matching `labels` (Postgres preserves
+   VALUES row order through RETURNING for a single multi-row INSERT)."
+  [user-id labels]
+  (when (seq labels)
+    (into []
+      (mapcat (fn [chunk]
+                (mapv :id
+                  (jdbc/execute! ds
+                    (sql/format {:insert-into :kg_entities
+                                 :values (mapv #(hash-map :user_id user-id :label (sanitize-utf8 %)) chunk)
+                                 :returning [:id]})
+                    {:builder-fn rs/as-unqualified-maps}))))
+      (partition-all entity-batch-chunk-size labels))))
+
+(defn get-or-create-kg-entities!
+  "Batched exact get-or-create of entities by (user-id, label) — the
+   DETERMINISTIC linker for code facts, whose labels are canonical
+   fully-qualified names, so the prose path's fuzzy trigram/LLM merge
+   (find-entity-link-candidates-batch) is neither needed nor wanted.
+   One SELECT ... WHERE label IN (...) plus one multi-row INSERT for the
+   labels not found, instead of a round trip per label. Same
+   select-then-insert semantics as the old single-label get-or-create-kg-entity!
+   (no UNIQUE(user_id,label) — a race could still insert a duplicate;
+   acceptable, single-user ingest is low-concurrency).
+   Pre:  labels non-empty; entries need not be distinct.
+   Post: {label id} covering every distinct label in `labels`."
+  [user-id labels]
+  (when (seq labels)
+    (let [clean (into {} (map (juxt identity sanitize-utf8)) (distinct labels))
+          clean-vals (distinct (vals clean))
+          existing (into []
+                     (mapcat (fn [chunk]
+                               (jdbc/execute! ds
+                                 (sql/format {:select [:label :id]
+                                              :from [:kg_entities]
+                                              :where [:and [:= :user_id user-id] [:in :label chunk]]
+                                              :order-by [:id]})
+                                 {:builder-fn rs/as-unqualified-maps})))
+                     (partition-all entity-batch-chunk-size clean-vals))
+          found (reduce (fn [m {:keys [label id]}] (if (contains? m label) m (assoc m label id)))
+                  {} existing)
+          missing (vec (remove found clean-vals))
+          id-by-clean (merge found (zipmap missing (insert-kg-entities! user-id missing)))]
+      (into {} (map (fn [[raw c]] [raw (id-by-clean c)])) clean))))
 
 (defn get-or-create-kg-predicate!
   "Upsert a predicate by (user-id, slug); new rows land status='approved' —

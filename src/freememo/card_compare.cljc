@@ -128,10 +128,11 @@
             [t _] (e/Token click)]
         (when t
           (e/on-unmount #(reset! !open nil))
-          (case (e/server (e/Offload #(commit-and-maybe-default!*
-                                        (:user-id ctx) (:topic-id ctx) (:root-topic-id ctx)
-                                        (:card-type ctx) (:cards result) model-id click)))
-            (t)))))))
+          (let [r (e/server (e/Offload #(commit-and-maybe-default!*
+                                          (:user-id ctx) (:topic-id ctx) (:root-topic-id ctx)
+                                          (:card-type ctx) (:cards result) model-id click)))]
+            (case r
+              (if (:success r) (t) (t (:error r))))))))))
 
 (e/defn CardCompareModal
   "Floating, draggable, non-blocking compare panel. Phase 1: pick ≥2 card models.
@@ -170,7 +171,7 @@
               (dom/text "Pick 2 or more models. Each runs a real generation and is billed."))
             (dom/div
               (dom/props {:style {:display "flex" :flex-direction "column" :gap "6px"}})
-              (e/for [mid (e/diff-by identity model-ids)]
+              (e/for [mid (e/server (e/diff-by identity model-ids))]
                 (dom/label
                   (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
                                       :font-size "13px" :cursor "pointer"}})

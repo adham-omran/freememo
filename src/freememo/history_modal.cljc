@@ -213,7 +213,7 @@
         (let [next-info (e/server (get-next* refresh topic-id))
               topic-title (:title next-info)
               rows (e/server (get-history* refresh topic-id))
-              row-count (count rows)]
+              row-count (e/server (count rows))]
           (dom/div
             (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
             (modal/ModalEscape (fn [] (reset! !open? false)) "History")
@@ -298,7 +298,7 @@
                                       :font-size "13px"}})
                   (HistoryTableHeader)
                   (if (pos? row-count)
-                    (e/for [row (e/diff-by :id rows)]
+                    (e/for [row (e/server (e/diff-by :id rows))]
                       (HistoryRow row))
                     (dom/tr
                       (dom/props {:style {:display "contents"}})

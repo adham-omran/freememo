@@ -62,49 +62,54 @@
       nil)))
 
 ;; Prompt building
-(defn build-basic-prompt
-  "Build prompt for basic Q&A cards.
+(def ^:private prompt-configs
+  "Per-card-type knobs for build-prompt: the body template file, the optional
+   context template file (nil = no context support), and the two nouns that
+   vary in the trailing count-instruction sentence."
+  {:basic {:template "basic.md" :context-template "context.md"
+           :item-noun "flashcards" :collection-noun "items"}
+   :cloze {:template "cloze.md" :context-template "context-cloze.md"
+           :item-noun "flashcards" :collection-noun "items"}
+   :overlapping {:template "overlapping.md" :context-template "context.md"
+                 :item-noun "overlapping-cloze cards" :collection-noun "maps"}})
+
+(defn- build-prompt
+  "Build a card-generation prompt per `config` (a prompt-configs entry).
    Concatenates effective system prompt (global + nearest per-item prompt for
-   topic-id) + optional pre-prompt + basic.md + optional context.md."
-  [card-count has-context? pre-prompt user-id topic-id]
+   topic-id) + optional pre-prompt + the config's template + optional context
+   template."
+  [{:keys [template context-template item-noun collection-noun]}
+   card-count has-context? pre-prompt user-id topic-id]
   (let [system (settings/get-effective-system-prompt user-id topic-id)
-        basic (load-prompt-template "basic.md")
-        context (when has-context? (load-prompt-template "context.md"))]
-    (when (and system basic)
+        body (load-prompt-template template)
+        context (when has-context? (load-prompt-template context-template))]
+    (when (and system body)
       (str system
         (when (and pre-prompt (not (str/blank? pre-prompt)))
           (str "\n\n## Custom Question Format\n\n"
             "Use the following pattern for your questions:\n\n"
             pre-prompt
             "\n\n"))
-        basic
+        body
         (when context (str "\n\n" context))
         "\n\n# Instructions\n\n"
-        "Generate EXACTLY " card-count " flashcards from the provided text. "
-        "Return EXACTLY " card-count " items in the EDN vector — no more, no fewer. "
+        "Generate EXACTLY " card-count " " item-noun " from the provided text. "
+        "Return EXACTLY " card-count " " collection-noun " in the EDN vector — no more, no fewer. "
         "Do not exceed this count even if the content seems to warrant more cards."))))
+
+(defn build-basic-prompt
+  "Build prompt for basic Q&A cards.
+   Concatenates effective system prompt (global + nearest per-item prompt for
+   topic-id) + optional pre-prompt + basic.md + optional context.md."
+  [card-count has-context? pre-prompt user-id topic-id]
+  (build-prompt (:basic prompt-configs) card-count has-context? pre-prompt user-id topic-id))
 
 (defn build-cloze-prompt
   "Build prompt for cloze deletion cards.
    Concatenates effective system prompt (global + nearest per-item prompt for
    topic-id) + optional pre-prompt + cloze.md + optional context-cloze.md."
   [card-count has-context? pre-prompt user-id topic-id]
-  (let [system (settings/get-effective-system-prompt user-id topic-id)
-        cloze (load-prompt-template "cloze.md")
-        context (when has-context? (load-prompt-template "context-cloze.md"))]
-    (when (and system cloze)
-      (str system
-        (when (and pre-prompt (not (str/blank? pre-prompt)))
-          (str "\n\n## Custom Question Format\n\n"
-            "Use the following pattern for your questions:\n\n"
-            pre-prompt
-            "\n\n"))
-        cloze
-        (when context (str "\n\n" context))
-        "\n\n# Instructions\n\n"
-        "Generate EXACTLY " card-count " flashcards from the provided text. "
-        "Return EXACTLY " card-count " items in the EDN vector — no more, no fewer. "
-        "Do not exceed this count even if the content seems to warrant more cards."))))
+  (build-prompt (:cloze prompt-configs) card-count has-context? pre-prompt user-id topic-id))
 
 (defn build-overlapping-prompt
   "Build prompt for overlapping-cloze cards.
@@ -112,22 +117,7 @@
    card-count is the number of LISTS to produce (each becomes one note that
    Anki fans out into N+1 cards)."
   [card-count has-context? pre-prompt user-id topic-id]
-  (let [system (settings/get-effective-system-prompt user-id topic-id)
-        overlapping (load-prompt-template "overlapping.md")
-        context (when has-context? (load-prompt-template "context.md"))]
-    (when (and system overlapping)
-      (str system
-        (when (and pre-prompt (not (str/blank? pre-prompt)))
-          (str "\n\n## Custom Question Format\n\n"
-            "Use the following pattern for your questions:\n\n"
-            pre-prompt
-            "\n\n"))
-        overlapping
-        (when context (str "\n\n" context))
-        "\n\n# Instructions\n\n"
-        "Generate EXACTLY " card-count " overlapping-cloze cards from the provided text. "
-        "Return EXACTLY " card-count " maps in the EDN vector — no more, no fewer. "
-        "Do not exceed this count even if the content seems to warrant more cards."))))
+  (build-prompt (:overlapping prompt-configs) card-count has-context? pre-prompt user-id topic-id))
 
 ;; Context retrieval
 (defn get-context-pages
@@ -237,6 +227,25 @@
                 "Card count mismatch, retrying")
             (recur (inc attempt) cost-acc')))))))
 
+(defn- generate-cards-wrapped
+  "Shared try/catch wrapper around generate-cards* for one card type.
+   trace-id names the tel/trace! span; error-id names the tel/error! log on an
+   unrecognized failure (kept distinct per call site for log/trace filtering).
+   Out-of-credits refusal is a normal business outcome, not a pipeline
+   failure — keep it off the :error channel (alert email noise)."
+  [opts prompt-builder-fn endpoint-tag trace-id error-id]
+  (try
+    (tel/trace! {:id trace-id}
+      (generate-cards* opts prompt-builder-fn endpoint-tag))
+    (catch Exception e
+      (if (= :insufficient-credits (error-type e))
+        (tel/log! {:level :info :id ::spend-refused :data {:user-id (:user-id opts)}}
+          "Card generation refused: out of credits")
+        (tel/error! {:id error-id} e))
+      {:success false
+       :error (humanize-error (.getMessage (root-cause e)))
+       :error-type (error-type e)})))
+
 (defn generate-basic-cards
   "Generate basic Q&A flashcards via OpenRouter.
    Options:
@@ -247,53 +256,24 @@
    - :pre-prompt - Optional custom formatting instructions
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}"
   [opts]
-  (try
-    (tel/trace! {:id ::generate-basic}
-      (generate-cards* opts build-basic-prompt :cards.basic))
-    (catch Exception e
-      ;; Out-of-credits refusal is a normal business outcome, not a pipeline
-      ;; failure — keep it off the :error channel (alert email noise).
-      (if (= :insufficient-credits (error-type e))
-        (tel/log! {:level :info :id ::spend-refused :data {:user-id (:user-id opts)}}
-          "Card generation refused: out of credits")
-        (tel/error! {:id ::generate-basic-cards} e))
-      {:success false
-       :error (humanize-error (.getMessage (root-cause e)))
-       :error-type (error-type e)})))
+  (generate-cards-wrapped opts build-basic-prompt :cards.basic
+    ::generate-basic ::generate-basic-cards))
 
 (defn generate-cloze-cards
   "Generate cloze deletion flashcards via OpenRouter.
    Options same as generate-basic-cards.
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}"
   [opts]
-  (try
-    (tel/trace! {:id ::generate-cloze}
-      (generate-cards* opts build-cloze-prompt :cards.cloze))
-    (catch Exception e
-      (if (= :insufficient-credits (error-type e))
-        (tel/log! {:level :info :id ::spend-refused :data {:user-id (:user-id opts)}}
-          "Card generation refused: out of credits")
-        (tel/error! {:id ::generate-cloze-cards} e))
-      {:success false
-       :error (humanize-error (.getMessage (root-cause e)))
-       :error-type (error-type e)})))
+  (generate-cards-wrapped opts build-cloze-prompt :cards.cloze
+    ::generate-cloze ::generate-cloze-cards))
 
 (defn generate-overlapping-cards
   "Generate overlapping-cloze cards via OpenRouter.
    Each returned map is {:question s :items [s ...]}. Options as generate-basic-cards.
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}."
   [opts]
-  (try
-    (tel/trace! {:id ::generate-overlapping}
-      (generate-cards* opts build-overlapping-prompt :cards.overlapping))
-    (catch Exception e
-      (if (= :insufficient-credits (error-type e))
-        (tel/log! {:level :info :id ::spend-refused :data {:user-id (:user-id opts)}}
-          "Card generation refused: out of credits")
-        (tel/error! {:id ::generate-overlapping-cards} e))
-      {:success false
-       :error (humanize-error (.getMessage (root-cause e)))
-       :error-type (error-type e)})))
+  (generate-cards-wrapped opts build-overlapping-prompt :cards.overlapping
+    ::generate-overlapping ::generate-overlapping-cards))
 
 ;; Card persistence
 

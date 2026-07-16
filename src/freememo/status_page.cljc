@@ -87,9 +87,9 @@
             sort-col (e/watch !sort-col)
             !sort-dir (atom :asc)
             sort-dir (e/watch !sort-dir)
-            filtered (apply-filters all-rows kind-filter status-filter)
-            sorted (vec (sort-rows filtered sort-col sort-dir))
-            item-count (count sorted)
+            filtered (e/server (apply-filters all-rows kind-filter status-filter))
+            sorted (e/server (vec (sort-rows filtered sort-col sort-dir)))
+            item-count (e/server (count sorted))
             row-height 36
             grid-cols "1fr 90px 90px"]
 
@@ -171,7 +171,7 @@
                   (dom/props {:style {:width "100%" :font-size "13px"}})
                   (if (pos? item-count)
                     (e/for [i (Tape offset limit)]
-                      (let [item (nth sorted i nil)]
+                      (let [item (e/server (nth sorted i nil))]
                         (when item
                           (let [{:keys [id title kind source-container total-items done-items total-cards synced-cards]} item
                                 [badge-text badge-color] (bibform/topic-badge kind source-container)

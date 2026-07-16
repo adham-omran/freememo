@@ -984,10 +984,12 @@ IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return
    custom prompt found; topic-id nil or no override → global prompt unchanged."
   [user-id topic-id]
   (let [base (get-system-prompt user-id)
+        ancestor-ids (db/get-ancestor-ids topic-id)
+        prompts (db/get-settings user-id (map #(str "custom_prompt_" %) ancestor-ids))
         override (some (fn [tid]
-                         (let [v (db/get-setting user-id (str "custom_prompt_" tid))]
+                         (let [v (get prompts (str "custom_prompt_" tid))]
                            (when-not (str/blank? v) v)))
-                   (db/get-ancestor-ids topic-id))]
+                   ancestor-ids)]
     (if (str/blank? override)
       base
       (str base "\n\n## Document-specific instructions\n\n" override))))

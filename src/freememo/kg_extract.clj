@@ -24,7 +24,7 @@
    [clojure.string :as str]
    [missionary.core :as m])
   (:import [missionary Cancelled]
-           [java.util.concurrent Executors]))
+           [java.util.concurrent Executors Semaphore]))
 
 (defn slugify
   "Predicate label → slug satisfying kg_predicates' CHECK
@@ -84,6 +84,43 @@
           {:triples (mapv #(assoc % :page page-number) valid)
            :cost cost})))))
 
+(def ^:private extract-page-concurrency
+  "Bounds concurrent per-page extraction calls — mirrors page-ocr's
+   compare-ocr-limiter; a long PDF's pages must not fire N OpenRouter calls
+   at once."
+  4)
+
+(defn- extract-pages!
+  "Pass 1 over every page, bounded-concurrent (extract-page-concurrency at a
+   time) instead of one page at a time, serially. Post: a seq of
+   extract-page-triples!'s results (or a {:failed true} stub on error),
+   order matching `pages`.
+   Checks llm/interrupt-checkpoint! before fan-out and again after each page
+   completes, so a cancelled run unwinds without waiting out the rest — the
+   handful of pages already in flight when cancellation lands keep running to
+   completion in the background, same blast radius as the prior sequential
+   loop's one in-flight call, just bounded by extract-page-concurrency
+   instead of 1."
+  [api-key model-slug prompt pages root-topic-id]
+  (llm/interrupt-checkpoint!)
+  (let [limiter (Semaphore. extract-page-concurrency)
+        futs (mapv
+               (fn [{:keys [page text]}]
+                 (future
+                   (.acquire limiter)
+                   (try
+                     (extract-page-triples! api-key model-slug prompt page text)
+                     (catch InterruptedException e (throw e))
+                     (catch Exception e
+                       (tel/log! {:level :warn :id ::page-extraction-failed
+                                  :data {:root root-topic-id :page page
+                                         :error (ex-message (llm/root-cause e))}}
+                         "Page extraction failed; skipping page")
+                       {:triples [] :cost 0.0 :failed true})
+                     (finally (.release limiter)))))
+               pages)]
+    (mapv (fn [f] (llm/interrupt-checkpoint!) (deref f)) futs)))
+
 (defn- link-entities!
   "Pass 2. Distinct labels → {lower-label entity-id}, creating rows for :new.
    Labels without trigram candidates skip the LLM. A failed/invalid LLM
@@ -92,11 +129,13 @@
   [api-key model-slug user-id labels]
   (let [distinct-labels (into [] (comp (map str/trim) (distinct)) labels)
         by-lower (into {} (map (juxt str/lower-case identity)) distinct-labels)
+        ;; One batched trigram query for every label instead of a round trip
+        ;; per label; the LLM merge decision itself was already one call.
+        candidates-by-label (db/find-entity-link-candidates-batch user-id (vals by-lower) 6)
         candidates (into {}
                      (keep (fn [[_ label]]
-                             (let [cs (db/find-entity-link-candidates user-id label 6)]
-                               (when (seq cs)
-                                 [label (mapv #(select-keys % [:id :label :aliases]) cs)]))))
+                             (when-let [cs (seq (get candidates-by-label label))]
+                               [label (mapv #(select-keys % [:id :label :aliases]) cs)])))
                      by-lower)
         {:keys [decisions cost]}
         (if (empty? candidates)
@@ -114,11 +153,14 @@
         valid-ids (into #{} (comp (mapcat val) (map :id)) candidates)
         id-of (fn [label]
                 (let [d (get decisions label)]
-                  (when (and (integer? d) (valid-ids d)) d)))]
+                  (when (and (integer? d) (valid-ids d)) d)))
+        ;; Labels with no merge decision are new — batch-insert them all in
+        ;; one round trip instead of one insert-kg-entity! per label.
+        new-labels (into [] (comp (map val) (remove id-of)) by-lower)
+        new-ids (zipmap new-labels (db/insert-kg-entities! user-id new-labels))]
     {:by-label (into {}
                  (map (fn [[lower label]]
-                        [lower (or (id-of label)
-                                   (db/insert-kg-entity! user-id label))]))
+                        [lower (or (id-of label) (get new-ids label))]))
                  by-lower)
      :cost cost}))
 
@@ -162,17 +204,7 @@
           pages (or (seq (document-pages root-topic-id))
                     (throw (ex-info "No page text. Extract text first." {})))
           prompt (extraction-prompt (db/get-kg-approved-predicates user-id))
-          extractions (mapv (fn [{:keys [page text]}]
-                              (llm/interrupt-checkpoint!)
-                              (try (extract-page-triples! api-key model-slug prompt page text)
-                                (catch InterruptedException e (throw e))
-                                (catch Exception e
-                                  (tel/log! {:level :warn :id ::page-extraction-failed
-                                             :data {:root root-topic-id :page page
-                                                    :error (ex-message (llm/root-cause e))}}
-                                    "Page extraction failed; skipping page")
-                                  {:triples [] :cost 0.0 :failed true})))
-                        pages)
+          extractions (extract-pages! api-key model-slug prompt pages root-topic-id)
           _ (llm/interrupt-checkpoint!)
           triples (into [] (mapcat :triples) extractions)
           entity-labels (into [] (comp (mapcat (juxt :s :o)) (remove nil?)) triples)

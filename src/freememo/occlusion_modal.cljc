@@ -15,6 +15,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.modal-shell :as modal]
    [freememo.quill-field :refer [QuillField]]
    [freememo.card-modals :refer [attach-modal-tab-nav!]]
    [freememo.card-components :refer [try-delete-anki-notes!]]
@@ -95,54 +96,6 @@
 (defn confirm-discard! []
   #?(:cljs (js/confirm "Discard unsaved occlusion changes?")
      :clj true))
-
-(defn handle-occlusion-modal-keys!
-  "Escape → close! (dirty-guarded by the caller's close!); Cmd/Ctrl-Enter →
-   click the primary button. Top-level defn — NOT an inline #?(:cljs) fn body:
-   an event handler that closes over reactive bindings must capture the SAME
-   set on both peers, or the frame slot counts diverge and the server crashes
-   with ArrayIndexOutOfBounds on mount (observed: index 23 vs length 11)."
-  [e close! !primary-btn]
-  #?(:cljs (cond
-             (= (.-key e) "Escape")
-             (close!)
-             (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
-             (when-let [btn @!primary-btn]
-               (.preventDefault e)
-               (.click btn)))
-     :clj nil))
-
-(defn drag-modal-by-title!
-  "Pointer-capture drag of the modal by its <h3> title bar — the card_modals
-   drag pattern, hoisted to a top-level defn for the same capture-symmetry
-   reason as handle-occlusion-modal-keys!."
-  [e]
-  #?(:cljs
-     (let [inner (.-currentTarget e)
-           h3 (.querySelector inner "h3")]
-       (when (and h3 (or (= (.-target e) h3)
-                       (.contains h3 (.-target e))))
-         (.preventDefault e)
-         (let [rect (.getBoundingClientRect inner)
-               sx (.-clientX e)
-               sy (.-clientY e)
-               px (.-left rect)
-               py (.-top rect)
-               move-fn (fn [me]
-                         (set! (.-position (.-style inner)) "fixed")
-                         (set! (.-left (.-style inner))
-                           (str (+ px (- (.-clientX me) sx)) "px"))
-                         (set! (.-top (.-style inner))
-                           (str (+ py (- (.-clientY me) sy)) "px"))
-                         (set! (.-margin (.-style inner)) "0"))
-               up-fn (fn self [ue]
-                       (.releasePointerCapture inner (.-pointerId ue))
-                       (.removeEventListener inner "pointermove" move-fn)
-                       (.removeEventListener inner "pointerup" self))]
-           (.setPointerCapture inner (.-pointerId e))
-           (.addEventListener inner "pointermove" move-fn)
-           (.addEventListener inner "pointerup" up-fn))))
-     :clj nil))
 
 (def empty-io-fields
   {:header "" :footer "" :remarks "" :sources "" :extra1 "" :extra2 ""})
@@ -305,8 +258,9 @@
                             :justify-content "center" :z-index "1000"
                             :pointer-events "none"}
                     :tabindex "-1"})
+        (modal/ModalEscape close! (if edit? "Edit Image Occlusion" "Image Occlusion"))
         (dom/On "keydown"
-          (fn [e] (handle-occlusion-modal-keys! e close! !primary-btn))
+          (fn [e] (modal/mod-enter-submit! e !primary-btn))
           nil)
         (dom/div
           (dom/props {:class "card-modal-inner"
@@ -315,7 +269,7 @@
                               :box-shadow "0 4px 20px rgba(0,0,0,0.25)"
                               :pointer-events "auto"}})
           (dom/On "pointerdown"
-            (fn [e] (drag-modal-by-title! e))
+            (fn [e] (modal/drag-modal-by-title! e))
             nil)
           (let [cleanup (attach-modal-tab-nav! dom/node)]
             (e/on-unmount (fn [] (when cleanup (cleanup)))))
@@ -363,7 +317,7 @@
     (let [request (e/watch !request)]
       (when request
         (if (= :edit (:mode request))
-          (let [result (e/server (get-group-for-edit* (:group-id request)))]
+          (let [result (e/server (e/Offload #(get-group-for-edit* (:group-id request))))]
             (cond
               (nil? result) nil                      ; server round-trip in flight
               (:success result) (OcclusionModalBody request !request user-id (:group result))

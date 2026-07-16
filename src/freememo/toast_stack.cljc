@@ -124,10 +124,9 @@
 
 (e/defn ToastStack [user-id navigate!]
   (e/client
-    (let [toasts (e/server (e/watch (us/get-atom user-id :toasts)))
-          ;; Render newest at top.
-          ordered (vec (reverse toasts))]
-      (dom/div
-        (dom/props {:class "toast-stack"})
-        (e/for [t (e/diff-by :id ordered)]
-          (ToastCard t user-id navigate!))))))
+    (dom/div
+      (dom/props {:class "toast-stack"})
+      ;; Reverse (newest-first) + diff-by keyed by :id computed server-side so
+      ;; only the differential — not the whole toasts collection — crosses the wire.
+      (e/for [t (e/server (e/diff-by :id (reverse (e/watch (us/get-atom user-id :toasts)))))]
+        (ToastCard t user-id navigate!)))))

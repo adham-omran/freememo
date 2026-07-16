@@ -8,7 +8,8 @@
    electric-fn supplied by the call site."
   (:require
    [hyperfiddle.electric3 :as e]
-   [hyperfiddle.electric-dom3 :as dom]))
+   [hyperfiddle.electric-dom3 :as dom]
+   [hyperfiddle.electric-forms5 :as forms]))
 
 (defn- spend
   "Token-spend policy shared by all paths. `r` is the Save result: a settings
@@ -21,17 +22,25 @@
       (t (:error r))
       (t))))
 
+(defn- clamp [lo hi n] (max lo (min hi n)))
+
 (defn- read-step
-  "Current input value stepped by `delta` and clamped to [lo,hi]. Reads the live
-   DOM (`!node` atom), NOT the reactive `value` prop — so the handler has no
-   reactive dependency on `value` and cannot loop when a save bumps it. Returns
-   nil when the node is absent (pre-mount; no real click can reach here)."
-  [!node lo hi delta]
-  #?(:cljs
-     (when-some [node @!node]
-       (let [cur (js/parseInt (.-value node))
-             cur (if (js/isNaN cur) lo cur)]
-         (max lo (min hi (+ cur delta)))))
+  "Current mirrored value stepped by `delta` and clamped to [lo,hi]. Reads
+   `!mirror` — kept live by every path (buttons and the managed Forms5 input,
+   see NumberStepper) — NOT the reactive `value` prop, so the click handler
+   has no reactive dependency on `value` and cannot loop when a save bumps
+   it. Falls back to `lo` before any value has landed."
+  [!mirror lo hi delta]
+  (clamp lo hi (+ (or (some-> !mirror deref) lo) delta)))
+
+(defn- parse-typed
+  "Parse a typed digit string to an int clamped to [lo,hi], or nil for
+   blank/unparseable input. Used as Input!'s `:Parse` hook — see
+   NumberStepper. nil means \"nothing to save yet\", not an error."
+  [s lo hi]
+  #?(:cljs (when-some [v (not-empty s)]
+             (let [n (js/parseInt v)]
+               (when-not (js/isNaN n) (clamp lo hi n))))
      :clj nil))
 
 (e/defn NumberStepper
@@ -44,62 +53,60 @@
          `input-aria-label` names the number input for assistive tech — the
          visible `label` (\"#\", nil) is not a usable accessible name.
          `Save` :: (e/fn [clamped-int] → result-or-nil).
-   Post: every −/+ click and committed edit calls `(Save clamped)` exactly once
-         (the value is computed in the click/change callback, so the reactive
-         re-eval that awaits Save does not recompute it); the token spends on
-         completion.
-   Invariant: clamp on both paths — buttons saturate at the bounds, typed input
-              is clamped before Save and before the digits are re-displayed."
+   Post: every −/+ click and typed edit calls `(Save clamped)` exactly once
+         per commit; the token spends on completion. The middle input is a
+         managed Forms5 `Input!` bound to `value` — it reflects the
+         authoritative value only while the field isn't dirty (unfocused, no
+         in-flight edit), so a save landing mid-type never clobbers the
+         user's draft (see forms.md / patterns.md, managed vs unmanaged
+         inputs — this is the A5 fix).
+   Invariant: clamp on both paths — buttons saturate at the bounds, typed
+              input is clamped in Input!'s `:Parse` before Save and before
+              the digits are re-displayed."
   [value min-val max-val mount-key label input-aria-label suffix disabled? !mirror Save]
   (e/client
-    (let [!node (atom nil)]
-      (dom/span
-        (dom/props {:class "number-stepper"
-                    :style (when disabled? {:opacity "0.5"})})
-        (when label
-          (dom/span (dom/props {:class "number-stepper-label"}) (dom/text label)))
+    (dom/span
+      (dom/props {:class "number-stepper"
+                  :style (when disabled? {:opacity "0.5"})})
+      (when label
+        (dom/span (dom/props {:class "number-stepper-label"}) (dom/text label)))
 
-        ;; − decrement. The step is computed once in the click callback (plain
-        ;; JS, reads the live DOM), so the awaiting re-eval keeps the same nv.
-        (dom/button
-          (dom/props {:class "number-stepper-btn" :type "button"
-                      :aria-label "Decrease" :disabled disabled?})
-          (dom/text "−")
-          (let [nv (dom/On "click" (fn [_] (read-step !node min-val max-val -1)) nil)
-                nv (if (and (some? nv) !mirror) (reset! !mirror nv) nv)
-                [t _] (e/Token nv)]
-            (when t (spend t (Save nv)))))
+      ;; − decrement. The step is computed once in the click callback (plain
+      ;; JS, reads !mirror), so the awaiting re-eval keeps the same nv.
+      (dom/button
+        (dom/props {:class "number-stepper-btn" :type "button"
+                    :aria-label "Decrease" :disabled disabled?})
+        (dom/text "−")
+        (let [nv (dom/On "click" (fn [_] (read-step !mirror min-val max-val -1)) nil)
+              nv (if (and (some? nv) !mirror) (reset! !mirror nv) nv)
+              [t _] (e/Token nv)]
+          (when t (spend t (Save nv)))))
 
-        ;; N — editable, frame-isolated per CLAUDE.md inline-number pattern;
-        ;; imperative set! avoids :value-prop flicker on the server snapshot.
-        (e/for-by identity [_k [mount-key]]
-          (dom/input
-            (dom/props {:type "number" :min (str min-val) :max (str max-val)
-                        :inputmode "numeric" :class "number-stepper-input"
-                        :aria-label input-aria-label
-                        :disabled disabled?})
-            (reset! !node dom/node)
-            (set! (.-value dom/node) (str value))
-            (let [node dom/node
-                  raw (dom/On "change"
-                        (fn [e] (let [v (-> e .-target .-value)]
-                                  (when (seq v) (js/parseInt v))))
-                        nil)
-                  clamped (when (some? raw) (max min-val (min max-val raw)))
-                  clamped (if (and clamped !mirror) (reset! !mirror clamped) clamped)
-                  [t _] (e/Token clamped)]
-              (when (some? clamped) (set! (.-value node) (str clamped)))
-              (when t (spend t (Save clamped))))))
+      ;; N — editable, frame-isolated per CLAUDE.md inline-number pattern.
+      ;; Managed Forms5 Input!: bound to `value`, "don't damage user input"
+      ;; while focused/waiting/erroring — no more imperative set! stomping a
+      ;; concurrent in-progress edit.
+      (e/for-by identity [_k [mount-key]]
+        (e/for [[t edit] (forms/Input! mount-key value
+                           :type "number" :min (str min-val) :max (str max-val)
+                           :inputmode "numeric" :class "number-stepper-input"
+                           :aria-label input-aria-label :disabled disabled?
+                           :Parse (e/fn [s] (parse-typed s min-val max-val)))]
+          (if-some [clamped (get edit mount-key)]
+            (do
+              (when !mirror (reset! !mirror clamped))
+              (spend t (Save clamped)))
+            (t)))) ; blank/unparseable keystroke — release the token, nothing to save
 
-        ;; + increment
-        (dom/button
-          (dom/props {:class "number-stepper-btn" :type "button"
-                      :aria-label "Increase" :disabled disabled?})
-          (dom/text "+")
-          (let [nv (dom/On "click" (fn [_] (read-step !node min-val max-val 1)) nil)
-                nv (if (and (some? nv) !mirror) (reset! !mirror nv) nv)
-                [t _] (e/Token nv)]
-            (when t (spend t (Save nv)))))
+      ;; + increment
+      (dom/button
+        (dom/props {:class "number-stepper-btn" :type "button"
+                    :aria-label "Increase" :disabled disabled?})
+        (dom/text "+")
+        (let [nv (dom/On "click" (fn [_] (read-step !mirror min-val max-val 1)) nil)
+              nv (if (and (some? nv) !mirror) (reset! !mirror nv) nv)
+              [t _] (e/Token nv)]
+          (when t (spend t (Save nv)))))
 
-        (when suffix
-          (dom/span (dom/props {:class "number-stepper-suffix"}) (dom/text suffix)))))))
+      (when suffix
+        (dom/span (dom/props {:class "number-stepper-suffix"}) (dom/text suffix))))))

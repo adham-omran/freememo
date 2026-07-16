@@ -27,7 +27,15 @@
    no-op returning :unavailable.
 
    Payload contract: payloads cross the Electric wire for :queue commands —
-   they MUST be plain serializable data (violation = preparer/caller bug)."
+   they MUST be plain serializable data (violation = preparer/caller bug).
+
+   Design note: this is a deliberate hand-rolled pub/sub, not forms.md's
+   e/amb service pattern — commands fire app-wide from keyboard/palette,
+   but the button that owns a command's flow may be off-page (unmounted)
+   at invocation time, so there is no single reactive scope to run an
+   e/amb service in. QueueInvoker below IS the idiomatic service-pattern
+   part: it owns the :queue lane's reactive lifecycle via e/diff-by +
+   e/Token, same as any other Electric service."
   (:require [hyperfiddle.electric3 :as e]
             [freememo.commands :as commands]
             [freememo.navigation :as nav]
@@ -118,10 +126,10 @@
   "See ns docstring for the availability contract."
   ([command-id] (available? command-id @!ctx))
   ([command-id ctx]
-   (let [{:keys [when] :as entry} (commands/command command-id)]
+   (let [{active-when :when :as entry} (commands/command command-id)]
      (boolean
        (and entry
-            (or (nil? when) (contains? when (:active-tab ctx)))
+            (or (nil? active-when) (contains? active-when (:active-tab ctx)))
             (if (= :ui-button (commands/exec-mode entry))
               (contains? @!invokers command-id)
               (if-let [prepare (get @!preparers command-id)]

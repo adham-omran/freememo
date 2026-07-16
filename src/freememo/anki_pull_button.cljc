@@ -59,10 +59,10 @@
 
       ;; Phase :pulling — fetch synced cards for the entire doc, then run pull task.
       (when (= pull-phase :pulling)
-        (let [cards-result (e/server (sync/get-cards-for-sync
-                                       {:user-id user-id
-                                        :topic-id nil
-                                        :root-topic-id root-topic-id}))]
+        (let [cards-result (e/server (e/Offload #(sync/get-cards-for-sync
+                                                    {:user-id user-id
+                                                     :topic-id nil
+                                                     :root-topic-id root-topic-id})))]
           (if-not (:success cards-result)
             (do (reset! !pull-error {:message (:error cards-result) :source :server})
               (reset! !pull-phase :error))

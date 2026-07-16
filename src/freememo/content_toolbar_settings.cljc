@@ -6,6 +6,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [hyperfiddle.electric-forms5 :as forms]
    [freememo.doc-context :as dctx]
    [freememo.a11y :as a11y]
    [freememo.number-stepper :refer [NumberStepper]]
@@ -19,6 +20,10 @@
 ;; Post: Renders Context checkbox + numeric page-window input. Mounted inside
 ;;       the overflow panel so it hides on desktop / shows in the mobile
 ;;       dropdown via the `.toolbar-overflow-panel-action` wrapper at the call site.
+;; Note: Checkbox! is bound to use-context (authoritative) rather than
+;;       optimistically written on change — !use-context only advances after
+;;       the server confirms, so a failed save leaves the DOM on the prior
+;;       (correct) value with no manual rollback.
 (e/defn ContextSettings []
   (e/client
     (let [user-id dctx/user-id context-tooltip dctx/context-tooltip llm-enabled? dctx/llm-enabled?
@@ -30,17 +35,14 @@
           (dom/label
             (dom/props {:style {:display "flex" :align-items "center" :gap "4px"}
                         :title (or context-tooltip "Include context for better cards")})
-            (dom/input
-              (dom/props {:type "checkbox" :checked use-context})
-              (let [change-event (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)
-                    [t ?error] (e/Token change-event)]
-                (when (some? change-event)
-                  (reset! !use-context change-event))
-                (when t
-                  (let [r (e/server (e/Offload #(settings/save-context-enabled user-id change-event)))]
-                    (case r
-                      (if (:success r) (t) (t (:error r))))))))
-            (dom/text "Context"))
+            (e/amb
+              (e/for [[t {new-use-context :use-context}] (forms/Checkbox! :use-context use-context)]
+                (let [r (e/server (e/Offload #(settings/save-context-enabled user-id new-use-context)))]
+                  (case r
+                    (if (:success r)
+                      (do (reset! !use-context new-use-context) (t))
+                      (t (:error r))))))
+              (do (dom/text "Context") (e/amb))))
           (NumberStepper context-window context-pages-min context-pages-max
             :context-pages nil "Context pages" "pages" (not use-context)
             !context-window

@@ -64,7 +64,7 @@
                               :border "1px solid var(--color-border)" :border-radius "var(--radius-sm)"
                               :font-size "14px" :min-height "30px" :background "var(--color-bg-card)"}})
           ;; Chips
-          (e/for [t (e/diff-by {} tags)]
+          (e/for [t (e/diff-by identity tags)]
             (dom/span
               (dom/props {:style {:display "inline-flex" :align-items "center" :gap "3px"
                                   :background "var(--color-border)" :border-radius "3px"
@@ -135,7 +135,7 @@
                                 :background "var(--color-bg-card)" :border "1px solid var(--color-border)"
                                 :border-radius "var(--radius-sm)" :z-index "100"
                                 :box-shadow "0 2px 4px rgba(0,0,0,0.15)"}})
-            (e/for [[i t] (e/diff-by {} (map-indexed vector filtered))]
+            (e/for [[i t] (e/diff-by first (map-indexed vector filtered))]
               (dom/div
                 (dom/props {:style {:padding "5px 8px" :cursor "pointer" :font-size "14px"
                                     :background (cond
@@ -169,7 +169,7 @@
    the form map; push resolves the header server-side independently."
   [user-id root-id]
   (e/client
-    (let [loaded       (e/server (resolve-anki-header* user-id root-id))
+    (let [loaded       (e/server (e/Offload #(resolve-anki-header* user-id root-id)))
           !use-header  (atom (e/snapshot (boolean (:use-header loaded))))
           !header-text (atom (e/snapshot (or (:header-text loaded) "")))
           use-header   (e/watch !use-header)
@@ -201,32 +201,39 @@
 
 (e/defn AnkiSyncOptions
   "Custom header (per-PDF, Forms5) + allow-duplicates checkbox + tags.
-   conn = {:!all-tags ...}  form = {:!allow-dupes :!use-tags :!tags ...}"
+   conn = {:!all-tags ...}  form = {:!allow-dupes :!use-tags :!tags ...}
+   allow-dupes/use-tags have no per-field server save (unlike the header) —
+   they're pure client form state, read at push-time (anki-sync-panels) and
+   persisted only as part of the push's last-used prefs-map. Checkbox! still
+   writes straight through to the same form atoms so that consumer keeps
+   seeing the current value."
   [user-id root-id conn form]
   (e/client
-    (let [all-tags (e/watch (:!all-tags conn))]
+    (let [all-tags (e/watch (:!all-tags conn))
+          allow-dupes (e/watch (:!allow-dupes form))
+          use-tags (e/watch (:!use-tags form))]
       (HeaderSettings user-id root-id)
       ;; Allow duplicates
       (dom/div
         (dom/props {:style {:margin-bottom "var(--sp-3)"}})
         (dom/label
           (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "14px"}})
-          (dom/input
-            (dom/props {:type "checkbox" :checked (e/watch (:!allow-dupes form))})
-            (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
-              (when (some? v) (reset! (:!allow-dupes form) v))))
-          (dom/text "Allow duplicates")))
+          (e/amb
+            (e/for [[t {v :allow-dupes}] (forms/Checkbox! :allow-dupes allow-dupes)]
+              (reset! (:!allow-dupes form) v)
+              (t))
+            (do (dom/text "Allow duplicates") (e/amb)))))
       ;; Tags
       (dom/div
         (dom/props {:style {:margin-bottom "var(--sp-4)"}})
         (dom/label
           (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "14px" :margin-bottom "6px"}})
-          (dom/input
-            (dom/props {:type "checkbox" :checked (e/watch (:!use-tags form))})
-            (let [v (dom/On "change" (fn [e] (-> e .-target .-checked)) nil)]
-              (when (some? v) (reset! (:!use-tags form) v))))
-          (dom/text "Tags"))
-        (when (e/watch (:!use-tags form))
+          (e/amb
+            (e/for [[t {v :use-tags}] (forms/Checkbox! :use-tags use-tags)]
+              (reset! (:!use-tags form) v)
+              (t))
+            (do (dom/text "Tags") (e/amb))))
+        (when use-tags
           (TagInput (:!tags form) all-tags))))))
 
 (e/defn AnkiSyncForm
@@ -238,7 +245,7 @@
   (e/client
     (let [scope (e/watch (:!scope form))
           decks (e/watch (:!decks conn))
-          scope-ctx (e/server (topic-scope-context* dctx/topic-id))
+          scope-ctx (e/server (e/Offload #(topic-scope-context* dctx/topic-id)))
           kind (:kind scope-ctx)
           has-children? (:has-children? scope-ctx)
           ;; Coerce display when a leaf carries a stale 'subtree' pref — the

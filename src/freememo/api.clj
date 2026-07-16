@@ -89,19 +89,31 @@
 ;; try the binaries in order and use whichever is present.
 (def ^:private imagemagick-bins ["magick" "convert"])
 
+(def ^:private imagemagick-timeout-ms
+  "Bound on ImageMagick subprocess wall time. A hung/malicious input must not
+   pin a Jetty worker thread forever (self-DoS)."
+  30000)
+
 (defn- run-imagemagick->jpeg
   "Run `bin path -quality 85 jpeg:-`, returning JPEG bytes or nil.
    nil distinguishes 'binary absent' (IOException) from 'ran but failed'
-   (non-zero exit / empty output)."
+   (non-zero exit / empty output / timed out)."
   [^String bin ^String path]
   (let [pb (doto (ProcessBuilder. [bin path "-quality" "85" "jpeg:-"])
              (.redirectError ProcessBuilder$Redirect/DISCARD))
         proc (.start pb)
-        ;; Drain stdout in this thread (readAllBytes blocks until EOF) so a JPEG
-        ;; larger than the OS pipe buffer can't deadlock the subprocess.
-        out (.readAllBytes (.getInputStream proc))
-        code (.waitFor proc)]
-    (when (and (zero? code) (pos? (alength out))) out)))
+        ;; Drain stdout in a future (readAllBytes blocks until EOF) so a JPEG
+        ;; larger than the OS pipe buffer can't deadlock the subprocess, and so
+        ;; the drain itself can't outlive the timeout below.
+        out-fut (future (.readAllBytes (.getInputStream proc)))
+        finished? (.waitFor proc imagemagick-timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS)]
+    (if-not finished?
+      (do (.destroyForcibly proc)
+          (future-cancel out-fut)
+          nil)
+      (let [out (deref out-fut imagemagick-timeout-ms nil)
+            code (.exitValue proc)]
+        (when (and out (zero? code) (pos? (alength ^bytes out))) out)))))
 
 (defn- magick-image->jpeg
   "Convert the image file at `path` (HEIC/HEIF or any ImageMagick-readable
@@ -434,20 +446,12 @@
             ;; Was a stale-view gap pre-registry: no bump, so Library missed
             ;; new standalone topics until an unrelated mutation fired.
             (commands/bump! user-id :import-document)
-            {:status 200
-             :headers {"Content-Type" "application/json"}
-             :body (json/generate-string {:success true :doc_id topic-id})})
-          {:status 500
-           :headers {"Content-Type" "application/json"}
-           :body (json/generate-string {:success false :error "Failed to create topic"})}))
+            (json-response 200 {:success true :doc_id topic-id}))
+          (json-response 500 {:success false :error "Failed to create topic"})))
       (catch Exception e
         (tel/error! {:id ::create-topic-handler} e)
-        {:status 500
-         :headers {"Content-Type" "application/json"}
-         :body (json/generate-string {:success false :error "Failed to create topic. Please try again."})}))
-    {:status 401
-     :headers {"Content-Type" "application/json"}
-     :body (json/generate-string {:success false :error "Not authenticated"})}))
+        (json-response 500 {:success false :error "Failed to create topic. Please try again."})))
+    (json-response 401 {:success false :error "Not authenticated"})))
 
 (defn create-live-doc-handler
   "POST /api/create-live-doc — create an empty Live Document.
@@ -566,10 +570,7 @@
         (let [filename (:filename file)
               mime-type (or (:content-type file) "application/octet-stream")
               tempfile (:tempfile file)
-              bytes (with-open [in (io/input-stream tempfile)]
-                      (let [baos (java.io.ByteArrayOutputStream.)]
-                        (io/copy in baos)
-                        (.toByteArray baos)))
+              bytes (read-multipart-bytes tempfile)
               size (alength bytes)
               cap (upload-byte-cap user-id)
               media-kind (cond
@@ -624,8 +625,9 @@
         {:status 500 :body "Internal server error"}))
     {:status 401 :body "Not authenticated"}))
 
-(defn get-pdf-handler [request]
+(defn get-pdf-handler
   "Serve PDF file by topic ID from database."
+  [request]
   (if-let [user-id (require-auth request)]
     (try
       (let [uri (:uri request)
@@ -657,10 +659,11 @@
      :headers {"Location" "/"}
      :body ""}))
 
-(defn get-audio-handler [request]
+(defn get-audio-handler
   "Serve an audio topic's file by topic ID. Unlike PDF, the Content-Type is read
    from topic_files.mime_type since audio formats vary. Score topics keep their
    recording under role='audio' (role='main' is the PDF)."
+  [request]
   (if-let [user-id (require-auth request)]
     (try
       (let [uri (:uri request)

@@ -13,9 +13,9 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.hierarchy-side-panel :refer [SidePanelShell]]
    [freememo.pin-side-panel :refer [PinsBody]]
    [freememo.assistant-panel :refer [AssistantPanel]]
-   [freememo.util :as util]
    [freememo.viewport :as viewport]
    #?(:clj [freememo.settings :as settings])))
 
@@ -58,74 +58,35 @@
 
         (when tt
           (let [r (e/server (e/Offload #(settings/save-assistant-tab user-id root-topic-id tab-save)))]
-            (case r (tt))))
+            (case r (if (:success r) (tt) (tt (:error r))))))
 
-        (dom/div
-          (dom/props {:class (str "pin-side-panel"
-                               (when-not open? " pin-side-panel--collapsed"))
-                      :style (merge {:position "relative"}
-                               (when open? {:width (str width-px "px")}))})
-
-          ;; Header: toggle (always visible, anchored right via CSS row-reverse)
-          ;; + tab switch (only when open).
-          (dom/div
-            (dom/props {:class "side-panel__header"})
-            (dom/button
-              (dom/props {:class "side-panel__toggle"
-                          :aria-label "Toggle side panel"
-                          :aria-expanded (str (boolean open?))})
-              (dom/text "☰")
-              (dom/On "click"
-                (fn [_]
-                  (let [next-open? (not @!open?)]
-                    (reset! !open? next-open?)
-                    (reset! !save next-open?)))
-                nil))
-            (when open?
-              (dom/div
-                (dom/props {:class "side-panel__tabs" :role "tablist"})
-                (dom/button
-                  (dom/props {:class (str "side-panel__tab"
-                                       (when (= tab "pins") " side-panel__tab--active"))
-                              :role "tab" :aria-selected (str (= tab "pins"))})
-                  (dom/text "Pins")
-                  (dom/On "click"
-                    (fn [_] (reset! !tab "pins") (reset! !tab-save "pins")) nil))
-                (dom/button
-                  (dom/props {:class (str "side-panel__tab"
-                                       (when (= tab "assistant") " side-panel__tab--active"))
-                              :role "tab" :aria-selected (str (= tab "assistant"))})
-                  (dom/text "Assistant")
-                  (dom/On "click"
-                    (fn [_] (reset! !tab "assistant") (reset! !tab-save "assistant")) nil)))))
-
-          ;; Resize handle on the inner (left) edge; only when open.
-          (when open?
+        (SidePanelShell
+          {:side :left
+           :class "pin-side-panel"
+           :toggle-aria-label "Toggle side panel"
+           :resize-aria-label "Resize side panel"
+           :open? open? :!open? !open? :!save !save
+           :width-px width-px :!width-px !width-px :!width-save !width-save}
+          ;; Tab switch (only when open, via SidePanelShell).
+          (e/fn []
             (dom/div
-              (dom/props {:class "side-panel__resize side-panel__resize--left"
-                          :title "Drag to resize"
-                          :role "separator" :aria-orientation "vertical"
-                          :aria-label "Resize side panel" :tabindex "0"
-                          :aria-valuenow (str (int (or width-px 0)))})
-              (dom/On "pointerdown"
-                (fn [e]
-                  (util/start-drag-px! e !width-px
-                    {:min 180
-                     :max (max 180 (util/panel-resize-max (.-currentTarget e) :before 320))
-                     :invert? true
-                     :on-commit #(reset! !width-save %)}))
-                nil)
-              (dom/On "keydown"
-                (fn [e]
-                  (util/key-resize-px! e !width-px
-                    {:min 180
-                     :max (max 180 (util/panel-resize-max (.-currentTarget e) :before 320))
-                     :invert? true
-                     :on-commit #(reset! !width-save %)}))
-                nil)))
-
+              (dom/props {:class "side-panel__tabs" :role "tablist"})
+              (dom/button
+                (dom/props {:class (str "side-panel__tab"
+                                     (when (= tab "pins") " side-panel__tab--active"))
+                            :role "tab" :aria-selected (str (= tab "pins"))})
+                (dom/text "Pins")
+                (dom/On "click"
+                  (fn [_] (reset! !tab "pins") (reset! !tab-save "pins")) nil))
+              (dom/button
+                (dom/props {:class (str "side-panel__tab"
+                                     (when (= tab "assistant") " side-panel__tab--active"))
+                            :role "tab" :aria-selected (str (= tab "assistant"))})
+                (dom/text "Assistant")
+                (dom/On "click"
+                  (fn [_] (reset! !tab "assistant") (reset! !tab-save "assistant")) nil))))
           ;; Active tab body.
-          (when open?
+          (e/fn []
             (if (= tab "assistant")
               (AssistantPanel page-topic-id root-topic-id user-id)
               (PinsBody page-topic-id user-id))))))))
