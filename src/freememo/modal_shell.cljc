@@ -136,6 +136,23 @@
          (.click btn)))))
 #?(:clj (defn mod-enter-submit! [_e _!primary-btn] nil))
 
+;; Cmd/Ctrl+Enter → requestSubmit the modal's <form>. Sibling to
+;; mod-enter-submit! for Forms5-based modals whose primary action is a
+;; SubmitButton! (there is no captured button node to .click). Submitting the
+;; form runs the form's own submit pipeline — including any capture-phase flush
+;; listener on an ancestor — so the two entry points (button click, mod-enter)
+;; converge on one path. `e`'s currentTarget is the node the keydown listener is
+;; bound to; its descendant <form> is the one submitted. Top-level platform-split
+;; defn for the same capture-symmetry reason as mod-enter-submit!.
+#?(:cljs
+   (defn mod-enter-request-submit!
+     [e]
+     (when (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
+       (when-let [form (.querySelector (.-currentTarget e) "form")]
+         (.preventDefault e)
+         (.requestSubmit form)))))
+#?(:clj (defn mod-enter-request-submit! [_e] nil))
+
 ;; Pointer-capture drag of the modal by its <h3> title bar. Call from a
 ;; pointerdown handler on the modal's content container (the element whose
 ;; position gets flipped to "fixed" while dragging). Top-level defn for the
