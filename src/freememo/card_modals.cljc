@@ -167,6 +167,25 @@
        (fn [] (.removeEventListener container "keydown" handler true)))))
 #?(:clj (defn attach-modal-tab-nav! [_container] nil))
 
+#?(:cljs
+   (defn attach-submit-flush!
+     "Install a capture-phase `submit` listener on `container` that runs `flush!`
+      (Quill syntax-token flush → field atoms) BEFORE any bubble/target-phase
+      submit handler reads the form. Returns a 0-arg cleanup.
+
+      Capture phase on an ANCESTOR of the <form> is required: the Forms5 submit
+      handler (Form!*) and the form itself are the event target, so a listener
+      on `container` (a strict ancestor) is the only placement that reliably
+      precedes them — sibling registration order across concurrent Electric
+      mounts is not guaranteed. Running flush here makes the flushed HTML live in
+      the field atoms before Form!*'s :Parse stamps the commit, so the committed
+      command carries the syntax-tokenized content."
+     [container flush!]
+     (let [handler (fn [_] (flush!))]
+       (.addEventListener container "submit" handler true)
+       (fn [] (.removeEventListener container "submit" handler true)))))
+#?(:clj (defn attach-submit-flush! [_container _flush!] nil))
+
 ;; Export modal — Forms5 (Form! + Input!/Checkbox!).
 ;; Scope and Card Type render via A1-fallback selects (atom-backed); their
 ;; values are merged into the parsed command at commit time. Pattern mirrors
@@ -590,6 +609,17 @@
                                     :message (or (:error result) "Failed to add card")})))
        :done)))
 
+;; Cancel affordance for the Add-Card Form!. MUST be :type "button" — a bare
+;; <button> inside a <form> defaults to type=submit and would submit on click.
+;; Returns empty e/amb so it contributes no edit to the form. Mirrors
+;; ExportCancelButton.
+(e/defn AddCancelButton [!show-add]
+  (dom/button
+    (dom/props {:class "btn btn-secondary" :type "button"})
+    (dom/text "Cancel")
+    (dom/On "click" (fn [_] (reset! !show-add false)) nil))
+  (e/amb))
+
 ;; Add card modal — uses topic-id and root-topic-id instead of doc-id + page-number
 (e/defn AddCardModal [!show-add !card-kind !captured-selection topic-id root-topic-id user-id]
   (e/client
@@ -624,8 +654,7 @@
           ol-before (e/watch !ol-before)
           ol-reveal (e/watch !ol-reveal)
           card-font-sz (e/server (settings/get-card-font-size user-id))
-          modal-font (str (or card-font-sz 14) "px")
-          !primary-btn (atom nil)]
+          modal-font (str (or card-font-sz 14) "px")]
       (dom/div
         (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
                             :background "transparent" :display "flex" :align-items "center"
@@ -634,7 +663,7 @@
                     :tabindex "-1"})
         (modal/ModalEscape (fn [] (reset! !show-add false)) "Add Card")
         (dom/On "keydown"
-          (fn [e] (modal/mod-enter-submit! e !primary-btn))
+          (fn [e] (modal/mod-enter-request-submit! e))
           nil)
         (dom/div
           (dom/props {:class "card-modal-inner"
@@ -644,8 +673,12 @@
           (dom/On "pointerdown"
             (fn [e] (modal/drag-modal-by-title! e))
             nil)
-          (let [cleanup (attach-modal-tab-nav! dom/node)]
-            (e/on-unmount (fn [] (when cleanup (cleanup)))))
+          (let [inner dom/node
+                tab-cleanup (attach-modal-tab-nav! inner)
+                flush-cleanup (attach-submit-flush! inner
+                                (fn [] (flush-editors! [[!primary-editor !primary] [!a-editor !answer]
+                                                        [!ol-items-editor !ol-items-html] [!ol-question-editor !ol-question]])))]
+            (e/on-unmount (fn [] (when tab-cleanup (tab-cleanup)) (when flush-cleanup (flush-cleanup)))))
           (dom/h3 (dom/props {:style {:margin-top "0" :cursor "move" :user-select "none"
                                       :padding-bottom "var(--sp-2)" :margin-bottom "var(--sp-3)"
                                       :border-bottom "1px solid var(--color-border)"}})
@@ -706,75 +739,63 @@
                 (QuillField answer
                   (fn [html] (reset! !answer html))
                   "Optional back extra..." [:add-be] !a-editor nil nil))))
-          (dom/div
-            (dom/props {:style {:display "flex" :justify-content "flex-end" :align-items "center" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
-            (let [[click-event btn-node]
-                  (dom/button
-                    (dom/props {:class "btn btn-primary" :style {:border-radius "var(--radius-sm)" :order "1"}})
-                    (reset! !primary-btn dom/node)
-                    (dom/text "Save")
-                    ;; Mirror the EditCardModal Save: force-flush hljs spans and
-                    ;; capture the post-flush innerHTML via flush-editors!. The
-                    ;; Quill 2.0.3 syntax module does not fire text-change for
-                    ;; its formatAt pass, so on-change cannot deliver the
-                    ;; tokenized HTML — we MUST reset! atoms directly here.
-                    ;; The vector is the button's last form → button returns
-                    ;; [click-event node], letting the button gate its own
-                    ;; disabled/aria-busy state on the resulting token.
-                    ;; !primary-editor is whichever of Question/Cloze is mounted.
-                    [(dom/On "click"
-                       (fn [e]
-                         (flush-editors! [[!primary-editor !primary] [!a-editor !answer]
-                                           [!ol-items-editor !ol-items-html] [!ol-question-editor !ol-question]])
-                         e)
-                       nil)
-                     dom/node])
-                  [t ?error] (e/Token click-event)]
-              ;; Disable + aria-busy while a Save is in flight — closes the
-              ;; double-submit hole (a second click while the first commit is
-              ;; still pending would otherwise fire a second concurrent
-              ;; opt/enqueue-add-card! call; e/Token alone does not prevent that).
-              (dom/props btn-node {:disabled (some? t) :aria-busy (some? t)})
-              (when ?error
-                (dom/div (dom/props {:style {:order "-1" :margin-right "auto" :color "var(--color-danger-text)" :font-size "12px"}})
-                  (dom/text "Error: " ?error)))
-              (when t
-                (if (= kind "overlapping")
-                  (let [items (quill-html->items ol-items-html)]
-                    (if (empty? items)
-                      (t "Add at least one list item")
-                      (let [card-data [{:question ol-question :items items
-                                        :settings {:before (ol-before-int ol-before)
-                                                   :after 0 :reveal-all? ol-reveal}}]]
-                        (case (e/server (opt/enqueue-add-card! user-id
-                                          {:topic-id topic-id :root-topic-id root-topic-id
-                                           :kind "overlapping" :card-data card-data}))
-                          (do (e/on-unmount #(reset! !show-add false)) (t))))))
-                  (let [validation-error (cond
-                                           (= kind "cloze") (validate-cloze primary)
-                                           (= kind "basic") (when (blank-html? primary)
-                                                              "Question can't be empty"))]
-                  (if validation-error
-                    (t validation-error)
-                    (let [clean-primary (e/server (sanitize-card-field primary))
-                          clean-a (e/server (sanitize-card-field answer))
-                          card-data (if (= kind "basic")
-                                      [{:q clean-primary :a clean-a}]
-                                      [(cond-> {:c clean-primary}
-                                         (and clean-a (not (str/blank? clean-a)))
-                                         (assoc :a clean-a))])]
-                      ;; Optimistic: register a pending row + enqueue the save,
-                      ;; then close immediately. The CommandDispatcher runs
-                      ;; cards/save-cards (baking pinned <img> per P3d), toasts,
-                      ;; and reconciles the row (optimistic/run-command! :add-card).
-                      ;; The table is hidden in mobile reading-mode (spec 2.9),
-                      ;; so the toast is the only feedback there; harmless else.
-                      (case (e/server (opt/enqueue-add-card! user-id
-                                        {:topic-id topic-id :root-topic-id root-topic-id
-                                         :kind kind :card-data card-data}))
-                        (do (e/on-unmount #(reset! !show-add false)) (t)))))))))
-            (dom/button
-              (dom/props {:class "btn btn-secondary"})
-              (dom/text "Cancel")
-              (dom/On "click" (fn [_] (reset! !show-add false)) nil))))))))
+          ;; Forms5 Save. The command becomes one identity-stable element in the
+          ;; commits channel (keyed by its token), so the enqueue runs once per
+          ;; submit — replacing the hand-rolled e/Token whose e/server enqueue
+          ;; re-fired whenever the reactively-derived card-data changed, adding
+          ;; the card 2–3 times. Validation lives in :Parse (ex-info ⇒ Forms5
+          ;; disables commit + renders the message). Content capture: the
+          ;; capture-phase submit flush (attach-submit-flush!, on the modal-inner
+          ;; ancestor) writes the Quill syntax-tokenized HTML into the field atoms
+          ;; before :Parse stamps the commit.
+          (let [commits (forms/Form! {}
+                          (e/fn Fields [_]
+                            (dom/div
+                              (dom/props {:style {:display "flex" :justify-content "flex-end" :align-items "center" :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
+                              (e/amb
+                                (forms/SubmitButton! :label "Save" :class "btn btn-primary"
+                                  :style {:border-radius "var(--radius-sm)" :order "1"})
+                                (AddCancelButton !show-add))))
+                          :Parse (e/fn [_ _]
+                                   (case kind
+                                     "overlapping"
+                                     (let [items (quill-html->items ol-items-html)]
+                                       (if (empty? items)
+                                         (ex-info "Add at least one list item" {})
+                                         [`Add-card {:kind "overlapping" :topic-id topic-id :root-topic-id root-topic-id
+                                                     :ol {:question ol-question :items items
+                                                          :settings {:before (ol-before-int ol-before)
+                                                                     :after 0 :reveal-all? ol-reveal}}}]))
+                                     "basic"
+                                     (if (blank-html? primary)
+                                       (ex-info "Question can't be empty" {})
+                                       [`Add-card {:kind "basic" :topic-id topic-id :root-topic-id root-topic-id
+                                                   :primary primary :answer answer}])
+                                     (if-let [err (validate-cloze primary)]
+                                       (ex-info err {})
+                                       [`Add-card {:kind "cloze" :topic-id topic-id :root-topic-id root-topic-id
+                                                   :primary primary :answer answer}])))
+                          :type :command
+                          :show-buttons false)]
+            ;; Service: one branch per committed submit. e/snapshot freezes the
+            ;; parsed command at commit time — Forms5 sequential mode tracks
+            ;; parsed-form-v LIVE, so without the snapshot a late editor mutation
+            ;; during the enqueue round-trip would re-fire the enqueue. Sanitize
+            ;; the frozen HTML server-side (basic/cloze only; overlapping is
+            ;; stored verbatim, matching prior behavior), enqueue optimistically,
+            ;; close on ack.
+            (e/for [[t cmd] (e/diff-by first (e/as-vec commits))]
+              (let [{:keys [kind topic-id root-topic-id primary answer ol]} (nth (e/snapshot cmd) 1)
+                    card-data (case kind
+                                "basic" [{:q (e/server (sanitize-card-field primary))
+                                          :a (e/server (sanitize-card-field answer))}]
+                                "overlapping" [ol]
+                                [(let [clean-a (e/server (sanitize-card-field answer))]
+                                   (cond-> {:c (e/server (sanitize-card-field primary))}
+                                     (and clean-a (not (str/blank? clean-a)))
+                                     (assoc :a clean-a)))])]
+                (case (e/server (opt/enqueue-add-card! user-id
+                                  {:topic-id topic-id :root-topic-id root-topic-id
+                                   :kind kind :card-data card-data}))
+                  (do (e/on-unmount #(reset! !show-add false)) (t)))))))))))
 
