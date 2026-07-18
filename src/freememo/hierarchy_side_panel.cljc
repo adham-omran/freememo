@@ -197,6 +197,167 @@
 
         (when open? (Body))))))
 
+;; ---------------------------------------------------------------------------
+;; HierarchySidePanel is split into three e/defns (row · tree · panel). One
+;; ~190-line deeply-nested e/defn overflowed the Electric compiler's
+;; macroexpansion recursion on the default JVM stack; splitting caps each
+;; form's nesting depth so `-M:dev` boots without a -Xss flag.
+;; ---------------------------------------------------------------------------
+
+(e/defn HierarchyRow
+  "One topic row in the hierarchy tree. Extracted so the row's deep DOM subtree
+   macroexpands in its own stack budget."
+  [i row navigate! !nav-target
+   !drag-src drag-src forbidden !drop-cmd
+   !expanded-set !scroll-node]
+  (e/client
+    (let [{:keys [depth topic has-children current? expanded-display?]} row
+          id (:topics/id topic)
+          title (or (:topics/title topic) "(empty)")
+          kind (or (:topics/kind topic) "basic")
+          is-page (= kind "page")
+          page-num (:topics/page_number topic)
+          topic-status (or (:topics/status topic) "active")
+          done? (= topic-status "done")
+          expanded? expanded-display?
+          badge (side-panel-badge kind)]
+      (dom/tr
+        (dom/props {:style {:--order i}})
+        (dom/td
+          (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
+                              ;; Base 20 reserves the fixed left gutter for the
+                              ;; absolutely positioned .drag-grip (see tree_dnd).
+                              :padding-left (str (+ 26 (* depth 14)) "px")
+                              :padding-right "8px"
+                              :cursor (if current? "default" "pointer")
+                              :background (when current? "var(--color-bg-card)")
+                              :border-left "3px solid transparent"
+                              :outline (when current? "2px solid var(--color-primary)")
+                              :outline-offset (when current? "-2px")
+                              :font-weight (if current? "600" "400")}})
+          ;; DnD re-parenting on this cell (tr is display:contents → not
+          ;; draggable). Page stubs are structural — not draggable.
+          (tree-dnd/DragDropRow! id (not is-page)
+            !drag-src drag-src forbidden !drop-cmd)
+          (dom/On "click"
+            (fn [_]
+              (when-not current?
+                (cond
+                  ;; Same-document page jump (PDF/EPUB sibling pages) — only when caller provided !nav-target
+                  (and is-page page-num !nav-target)
+                  (reset! !nav-target {:topic-id (:topics/parent_id topic)
+                                       :page page-num})
+                  ;; Otherwise navigate to the topic
+                  navigate!
+                  (navigate! :viewer (nav/nav-topic id nil)))))
+            nil)
+
+          (if has-children
+            (dom/span
+              (dom/props {:style {:width "14px" :font-size "10px" :flex-shrink "0"
+                                  :user-select "none" :text-align "center"
+                                  :cursor "pointer"
+                                  :color "var(--color-text-secondary)"}})
+              (dom/text (if expanded? "▼" "▶"))
+              (dom/On "click"
+                (fn [e]
+                  (.stopPropagation e)
+                  (when-not current?
+                    (let [sn @!scroll-node
+                          st (when sn (.-scrollTop sn))]
+                      (swap! !expanded-set
+                        (fn [s] (if (contains? s id) (disj s id) (conj s id))))
+                      ;; Anchor scroll across the async re-render (see
+                      ;; util/restore-scroll-after-render!): a single rAF
+                      ;; resets scrollTop to 0; re-apply over a few frames.
+                      (util/restore-scroll-after-render! sn st))))
+                nil))
+            (dom/span
+              (dom/props {:style {:width "14px" :flex-shrink "0"}})))
+
+          (when (and is-page page-num)
+            (dom/span
+              (dom/props {:style {:font-size "11px"
+                                  :color "var(--color-text-secondary)"
+                                  :flex-shrink "0" :font-variant-numeric "tabular-nums"}})
+              (dom/text "p." page-num)))
+
+          (when badge
+            (let [[badge-text badge-color] badge]
+              (dom/span
+                (dom/props {:class "type-badge"
+                            :style {:background badge-color}})
+                (dom/text badge-text))))
+
+          (dom/span
+            (dom/props {:style {:overflow "hidden"
+                                :text-overflow "ellipsis"
+                                :white-space "nowrap"
+                                :flex "1" :min-width "0"
+                                :color "var(--color-text-primary)"
+                                :text-decoration (when done? "line-through")}})
+            (dom/text title)))))))
+
+(e/defn HierarchyTree
+  "Scrollable topic tree: rows query + virtual window + drag/drop. Extracted
+   from HierarchySidePanel to cap macroexpansion depth."
+  [user-id page-topic-id navigate! !nav-target]
+  (e/client
+    ;; :tree-mutations = tree shape; :meta-refresh = done-status (drives the
+    ;; strike-through). Both re-run the rows query.
+    (let [tree-rev   (e/server (+ (e/watch (us/get-atom user-id :tree-mutations))
+                                 (e/watch (us/get-atom user-id :meta-refresh))))
+          !expanded-set (atom #{})
+          expanded-set (e/watch !expanded-set)
+          ;; Server-form binding (sited-by-use): the subtree rows stay
+          ;; server-side; only row-count and the window rows cross.
+          rows (e/server (build-hierarchy-rows* tree-rev user-id
+                           page-topic-id expanded-set))]
+      (when (e/server (some? rows))
+        (let [row-count (e/server (count rows))
+              row-height 36
+              !scroll-node (atom nil)
+              ;; Drag-and-drop nesting (no promote-to-root here — the
+              ;; hierarchy tab has no root target by design).
+              !drag-src (atom nil)
+              drag-src (e/watch !drag-src)
+              forbidden (e/server (if drag-src (set (db/get-subtree-ids drag-src)) #{}))
+              !drop-cmd (atom nil)
+              drop-cmd (e/watch !drop-cmd)]
+
+          (let [[t _] (e/Token drop-cmd)]
+            (when t
+              (let [{:keys [src dst]} drop-cmd
+                    ok (e/server (e/Offload #(topic-move/move-topic! user-id src dst)))]
+                (case ok
+                  (case (e/client (reset! !drop-cmd nil)) (t))))))
+
+          (dom/div
+            (dom/props {:class "tape-scroll"
+                        :style {:flex "1" :overflow-y "auto" :min-height "0"
+                                :scrollbar-gutter "stable"}})
+            (reset! !scroll-node dom/node)
+            (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 2})]
+              (dom/props {:style {:--count row-count
+                                  :--grid-cols "1fr"
+                                  :--row-height (str row-height "px")}})
+              (dom/table
+                (dom/props {:style {:width "100%"
+                                    :font-size "13px"}})
+                (if (pos? row-count)
+                  (e/for [i (Tape offset limit)]
+                    (let [row (e/server (nth rows i nil))]
+                      (when row
+                        (HierarchyRow i row navigate! !nav-target
+                          !drag-src drag-src forbidden !drop-cmd
+                          !expanded-set !scroll-node))))
+                  (dom/tr
+                    (dom/props {:style {:--order 1 :height "auto"}})
+                    (dom/td
+                      (dom/props {:style {:padding "16px 12px" :text-align "center"
+                                          :color "var(--color-text-secondary)" :font-size "13px"}})
+                      (dom/text "No items."))))))))))))
+
 (e/defn HierarchySidePanel [user-id page-topic-id root-topic-id navigate! !nav-target]
   (e/client
     ;; Frame isolation — remounts only when root-topic-id changes (i.e. when
@@ -247,144 +408,4 @@
                 (dom/props {:style {:padding "16px 12px" :font-size "13px"
                                     :color "var(--color-text-secondary)"}})
                 (dom/text "No page selected."))
-
-              ;; :tree-mutations = tree shape; :meta-refresh = done-status (drives
-              ;; the strike-through). Both re-run the rows query.
-              (let [tree-rev   (e/server (+ (e/watch (us/get-atom user-id :tree-mutations))
-                                           (e/watch (us/get-atom user-id :meta-refresh))))
-                    !expanded-set (atom #{})
-                    expanded-set (e/watch !expanded-set)
-                    ;; Server-form binding (sited-by-use): the subtree rows
-                    ;; stay server-side; only row-count and the window rows
-                    ;; cross. expanded-set crosses upward (bounded).
-                    rows (e/server (build-hierarchy-rows* tree-rev user-id
-                                     page-topic-id expanded-set))]
-                (when (e/server (some? rows))
-                  (let [row-count (e/server (count rows))
-                        row-height 36
-                        !scroll-node (atom nil)
-                        ;; Drag-and-drop nesting (no promote-to-root here — the
-                        ;; hierarchy tab has no root target by design).
-                        !drag-src (atom nil)
-                        drag-src (e/watch !drag-src)
-                        forbidden (e/server (if drag-src (set (db/get-subtree-ids drag-src)) #{}))
-                        !drop-cmd (atom nil)
-                        drop-cmd (e/watch !drop-cmd)]
-
-                (let [[t _] (e/Token drop-cmd)]
-                  (when t
-                    (let [{:keys [src dst]} drop-cmd
-                          ok (e/server (e/Offload #(topic-move/move-topic! user-id src dst)))]
-                      (case ok
-                        (case (e/client (reset! !drop-cmd nil)) (t))))))
-
-              (dom/div
-                (dom/props {:class "tape-scroll"
-                            :style {:flex "1" :overflow-y "auto" :min-height "0"
-                                    :scrollbar-gutter "stable"}})
-                (reset! !scroll-node dom/node)
-                (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 2})]
-                  (dom/props {:style {:--count row-count
-                                      :--grid-cols "1fr"
-                                      :--row-height (str row-height "px")}})
-                  (dom/table
-                    (dom/props {:style {:width "100%"
-                                        :font-size "13px"}})
-                    (if (pos? row-count)
-                      (e/for [i (Tape offset limit)]
-                        (let [row (e/server (nth rows i nil))]
-                          (when row
-                            (let [{:keys [depth topic has-children current? expanded-display?]} row
-                                  id (:topics/id topic)
-                                  title (or (:topics/title topic) "(empty)")
-                                  kind (or (:topics/kind topic) "basic")
-                                  is-page (= kind "page")
-                                  page-num (:topics/page_number topic)
-                                  topic-status (or (:topics/status topic) "active")
-                                  done? (= topic-status "done")
-                                  expanded? expanded-display?
-                                  badge (side-panel-badge kind)]
-                              (dom/tr
-                                (dom/props {:style {:--order i}})
-                                (dom/td
-                                  (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
-                                                      ;; Base 20 reserves the fixed left gutter for the
-                                                      ;; absolutely positioned .drag-grip (see tree_dnd).
-                                                      :padding-left (str (+ 26 (* depth 14)) "px")
-                                                      :padding-right "8px"
-                                                      :cursor (if current? "default" "pointer")
-                                                      :background (when current? "var(--color-bg-card)")
-                                                      :border-left "3px solid transparent"
-                                                      :outline (when current? "2px solid var(--color-primary)")
-                                                      :outline-offset (when current? "-2px")
-                                                      :font-weight (if current? "600" "400")}})
-                                  ;; DnD re-parenting on this cell (tr is
-                                  ;; display:contents → not draggable). Page stubs
-                                  ;; are structural — not draggable.
-                                  (tree-dnd/DragDropRow! id (not is-page)
-                                    !drag-src drag-src forbidden !drop-cmd)
-                                  (dom/On "click"
-                                    (fn [_]
-                                      (when-not current?
-                                        (cond
-                                          ;; Same-document page jump (PDF/EPUB sibling pages) — only when caller provided !nav-target
-                                          (and is-page page-num !nav-target)
-                                          (reset! !nav-target {:topic-id (:topics/parent_id topic)
-                                                               :page page-num})
-                                          ;; Otherwise navigate to the topic
-                                          navigate!
-                                          (navigate! :viewer (nav/nav-topic id nil)))))
-                                    nil)
-
-                                  (if has-children
-                                    (dom/span
-                                      (dom/props {:style {:width "14px" :font-size "10px" :flex-shrink "0"
-                                                          :user-select "none" :text-align "center"
-                                                          :cursor "pointer"
-                                                          :color "var(--color-text-secondary)"}})
-                                      (dom/text (if expanded? "▼" "▶"))
-                                      (dom/On "click"
-                                        (fn [e]
-                                          (.stopPropagation e)
-                                          (when-not current?
-                                            (let [sn @!scroll-node
-                                                  st (when sn (.-scrollTop sn))]
-                                              (swap! !expanded-set
-                                                (fn [s] (if (contains? s id) (disj s id) (conj s id))))
-                                              ;; Anchor scroll across the async re-render (see
-                                              ;; util/restore-scroll-after-render!): a single rAF
-                                              ;; resets scrollTop to 0; re-apply over a few frames.
-                                              (util/restore-scroll-after-render! sn st))))
-                                        nil))
-                                    (dom/span
-                                      (dom/props {:style {:width "14px" :flex-shrink "0"}})))
-
-                                  (when (and is-page page-num)
-                                    (dom/span
-                                      (dom/props {:style {:font-size "11px"
-                                                          :color "var(--color-text-secondary)"
-                                                          :flex-shrink "0" :font-variant-numeric "tabular-nums"}})
-                                      (dom/text "p." page-num)))
-
-                                  (when badge
-                                    (let [[badge-text badge-color] badge]
-                                      (dom/span
-                                        (dom/props {:class "type-badge"
-                                                    :style {:background badge-color}})
-                                        (dom/text badge-text))))
-
-                                  (dom/span
-                                    (dom/props {:style {:overflow "hidden"
-                                                        :text-overflow "ellipsis"
-                                                        :white-space "nowrap"
-                                                        :flex "1" :min-width "0"
-                                                        :color "var(--color-text-primary)"
-                                                        :text-decoration (when done? "line-through")}})
-                                    (dom/text title))))))))
-                      (dom/tr
-                        (dom/props {:style {:--order 1 :height "auto"}})
-                        (dom/td
-                          (dom/props {:style {:padding "16px 12px" :text-align "center"
-                                              :color "var(--color-text-secondary)" :font-size "13px"}})
-                          (dom/text "No items.")))))
-                  ))))))))))))
+              (HierarchyTree user-id page-topic-id navigate! !nav-target))))))))
