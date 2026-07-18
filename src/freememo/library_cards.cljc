@@ -314,16 +314,17 @@
           ;; Ints only; content stays server-side.
           :filtered-ids (mapv :flashcards/id sorted)
           :unpushed (count (filterv #(= :unpushed (:sync-state %)) sorted))
-          :modified (count (filterv #(= :modified (:sync-state %)) sorted))
-          ;; Anki-overlay manifest — ALL pushed cards regardless of filters,
-          ;; so deletion detection doesn't depend on the current filter state.
-          :pushed-manifest (into []
-                             (keep (fn [c]
-                                     (when-let [nid (:flashcards/anki_note_id c)]
-                                       {:card-id (:flashcards/id c) :note-id nid})))
-                             all)})
+          :modified (count (filterv #(= :modified (:sync-state %)) sorted))})
        (catch Exception e
          {:success false :error (.getMessage e)}))
+     :cljs nil))
+
+;; Filter-independent overlay manifest. Separate from query-user-cards* so it
+;; can be computed UPSTREAM of the filtered query — the overlay's flag id-sets
+;; feed the query's opts, and sourcing the manifest here (not from the filtered
+;; result) keeps that a plain acyclic value flow. _rev = reactive dependency.
+(defn pushed-manifest* [_rev user-id]
+  #?(:clj (db/get-pushed-card-manifest user-id)
      :cljs nil))
 
 ;; ---------------------------------------------------------------------------
@@ -1261,25 +1262,18 @@
 ;; Everything downstream of the query result: edit modal, error branch,
 ;; selection region. Takes `result` from LibraryCardsView's gate — the query
 ;; runs there so the whole view mounts in one batch (see CardsFilterBar).
-(e/defn CardsResultRegion [user-id navigate! result filters-active? scroll-reset-key
-                           !sort-col !sort-dir !editing-card
-                           !ov-status !ov-payload !check-tick !overlay-ids]
+;; anki-overlay + ov-status are computed upstream in LibraryCardsView (the
+;; overlay must exist before the filtered query so its flag id-sets can feed
+;; opts as a plain value) and threaded through here to the rows + bulk bar.
+(e/defn CardsResultRegion [user-id navigate! result anki-overlay ov-status
+                           filters-active? scroll-reset-key
+                           !sort-col !sort-dir !editing-card]
   (e/client
     (let [success? (e/server (:success result))
           font-sz (or (e/server (settings/get-card-font-size user-id)) 13)
           ;; Fixed row height (see content_card_table): 12px padding + 28px line + 1px
           ;; border. font-sz sizes the text within the row, not the row itself.
-          row-height 41
-          ov-status (e/watch !ov-status)
-          manifest (e/server (vec (:pushed-manifest result)))
-          anki-overlay (AnkiOverlay user-id manifest
-                         !ov-status !ov-payload !check-tick)
-          ;; Mirror the client overlay's flag id-sets up into the atom
-          ;; LibraryCardsView reads for its query opts (§7). The manifest is
-          ;; filter-independent, so this feedback converges: overlay depends on
-          ;; the manifest, never on the filtered set. Re-runs only when the
-          ;; overlay value actually changes (Electric work-skipping).
-          _ (reset! !overlay-ids (overlay->filter-ids anki-overlay))]
+          row-height 41]
 
       (when (e/watch !editing-card)
         (EditCardModal !editing-card user-id))
@@ -1303,16 +1297,24 @@
           !ov-status (atom :idle) ov-status (e/watch !ov-status)
           !ov-payload (atom nil)
           !check-tick (atom 0)
-          ;; Overlay flag id-sets, mirrored up from CardsResultRegion (§7).
-          !overlay-ids (atom {:anki-changed #{} :marked #{} :suspended #{}})
-          ;; Read the overlay id-sets into opts ONLY while a facet that needs
-          ;; them is active — otherwise the query stays a pure function of the
-          ;; DB filters and populating the atom triggers no re-query.
+          ;; Overlay computed UPSTREAM of the filtered query: its per-card flag
+          ;; map feeds the rows (icons) AND, split into id-sets, the query opts.
+          ;; The manifest is filter-independent (own query), so this is an
+          ;; acyclic value flow — no atom bridge, no reactive write.
+          manifest (e/server
+                     (let [rev (+ refresh
+                                 (e/watch (us/get-atom user-id :card-mutations))
+                                 (e/watch (us/get-atom user-id :sync-mutations)))]
+                       (vec (e/Offload #(pushed-manifest* rev user-id)))))
+          anki-overlay (AnkiOverlay user-id manifest !ov-status !ov-payload !check-tick)
+          ;; Overlay id-sets enter opts ONLY while a facet that needs them is
+          ;; active — otherwise the query stays a pure function of the DB filters
+          ;; and overlay changes trigger no re-query.
           overlay-active? (or (contains? origins "anki-changed")
                             (contains? origins "both")
                             (seq flags))
           overlay-ids (if overlay-active?
-                        (e/watch !overlay-ids)
+                        (overlay->filter-ids anki-overlay)
                         {:anki-changed #{} :marked #{} :suspended #{}})
           opts {:text text :kinds kinds :origins origins :flags flags
                 :overlay-ids overlay-ids :sort-col sort-col :sort-dir sort-dir}
@@ -1344,6 +1346,6 @@
       ;; filter changes.
       (when (some? success?)
         (CardsFilterBar navigate! ov-status !text !kinds !origins !flags !check-tick)
-        (CardsResultRegion user-id navigate! result filters-active? scroll-reset-key
-          !sort-col !sort-dir !editing-card
-          !ov-status !ov-payload !check-tick !overlay-ids)))))
+        (CardsResultRegion user-id navigate! result anki-overlay ov-status
+          filters-active? scroll-reset-key
+          !sort-col !sort-dir !editing-card)))))
