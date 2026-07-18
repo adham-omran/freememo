@@ -2638,11 +2638,17 @@
                             [[:coalesce :t.page_number :parent.page_number] :page_number]
                             [:t.title :topic_title]
                             [:root.title :root_title]
+                            [:og.image_media_id :occlusion_image_media_id]
+                            [:og.mode :occlusion_mode]
+                            [:sg.start_ms :score_start_ms]
+                            [:sg.end_ms :score_end_ms]
                             [[:to_char :f.created_at [:inline "Mon DD"]] :formatted_date]]
                    :from [[:flashcards :f]]
                    :join [[:topics :t] [:= :f.topic_id :t.id]
                           [:topics :root] [:= :f.root_topic_id :root.id]]
-                   :left-join [[:topics :parent] [:= :t.parent_id :parent.id]]
+                   :left-join [[:topics :parent] [:= :t.parent_id :parent.id]
+                               [:occlusion_groups :og] [:= :f.occlusion_group_id :og.id]
+                               [:score_groups :sg] [:= :f.score_group_id :sg.id]]
                    :where [:= :root.user_id user-id]
                    :order-by [[:f.created_at :desc]]}))))
 
