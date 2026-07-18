@@ -15,7 +15,8 @@
    [freememo.logging :as log]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.card-components :refer [card-row-html set-inner-html! DeleteCardButton
-                                     overlapping-row-html try-delete-anki-notes!]]
+                                     overlapping-row-html occlusion-row-html
+                                     score-row-html try-delete-anki-notes!]]
    [freememo.card-modals :refer [EditCardModal]]
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.anki-sync-server :as sync-server])
@@ -149,17 +150,68 @@
 ;; before count; only the visible window crosses the wire (B1).
 ;; ---------------------------------------------------------------------------
 
-#?(:clj
-   (defn- filter-cards-kind [cards kind]
-     (if (= kind "all")
-       cards
-       (filterv #(= (:flashcards/kind %) kind) cards))))
+;; Multi-select facets combine OR within a group, AND across groups. Empty
+;; group = no constraint. Kind + the DB-derived origins (unpushed/fm-changed/
+;; in-sync) filter server-side here; the Anki-derived facets (anki-changed,
+;; both, marked, suspended) filter against overlay-ids the client supplies —
+;; nil/empty whenever Anki is disconnected, so the disabled chips can't narrow.
+
+(defn overlay->filter-ids
+  "Split the client Anki overlay (per-card flag map) into the id-sets the
+   server filter consumes: :anki-changed (also the 'both' input), :marked,
+   :suspended. Client-side — the overlay materializes on the client."
+  [anki-overlay]
+  {:anki-changed (set (keep (fn [[cid f]] (when (:anki-modified f) cid)) anki-overlay))
+   :marked       (set (keep (fn [[cid f]] (when (:marked f) cid)) anki-overlay))
+   :suspended    (set (keep (fn [[cid f]]
+                              (when-let [s (:suspended f)]
+                                (when (pos? (:suspended s)) cid)))
+                        anki-overlay))})
 
 #?(:clj
-   (defn- filter-cards-status [cards status]
-     (if (= status "all")
+   (defn- filter-cards-kinds [cards kinds]
+     (if (empty? kinds)
        cards
-       (filterv #(= status (name (:sync-state %))) cards))))
+       (filterv #(contains? kinds (:flashcards/kind %)) cards))))
+
+#?(:clj
+   (defn- filter-cards-origins [cards origins overlay-ids]
+     (if (empty? origins)
+       cards
+       (let [anki-changed (:anki-changed overlay-ids)]
+         (filterv
+           (fn [c]
+             (let [st (:sync-state c)
+                   anki? (contains? anki-changed (:flashcards/id c))]
+               (boolean
+                 (some (fn [o]
+                         (case o
+                           "unpushed"     (= st :unpushed)
+                           "fm-changed"   (= st :modified)
+                           "in-sync"      (= st :synced)
+                           "anki-changed" anki?
+                           "both"         (and (= st :modified) anki?)
+                           false))
+                   origins))))
+           cards)))))
+
+#?(:clj
+   (defn- filter-cards-flags [cards flags overlay-ids]
+     (if (empty? flags)
+       cards
+       (let [marked (:marked overlay-ids)
+             suspended (:suspended overlay-ids)]
+         (filterv
+           (fn [c]
+             (let [id (:flashcards/id c)]
+               (boolean
+                 (some (fn [fl]
+                         (case fl
+                           "marked"    (contains? marked id)
+                           "suspended" (contains? suspended id)
+                           false))
+                   flags))))
+           cards)))))
 
 #?(:clj
    (defn- filter-cards-text
@@ -188,39 +240,69 @@
            cmp (if (= sort-dir :asc) compare (fn [a b] (compare b a)))]
        (vec (sort-by key-fn cmp cards)))))
 
+;; Kinds whose front cell spans both content columns (the back cell is hidden).
+(def ^:private span2-kinds #{"cloze" "occlusion" "score" "overlapping"})
+
+#?(:clj
+   (defn- card-front-html
+     "Server-rendered front-cell HTML, one branch per kind — mirrors the item
+      view's CardRow so /cards and the topic view render identically. Built
+      here, server-side, so the heavy source fields (occlusion join columns,
+      overlapping jsonb) never cross the wire per scrolled row; only the
+      finished string does."
+     [c]
+     (case (:flashcards/kind c)
+       "occlusion"   (occlusion-row-html (:occlusion_image_media_id c) (:flashcards/mask_ordinal c)
+                       (:occlusion_mode c) (get-in c [:flashcards/io_fields :header]))
+       "score"       (score-row-html (:flashcards/score_direction c) (:score_start_ms c) (:score_end_ms c))
+       "overlapping" (overlapping-row-html (:flashcards/overlapping c))
+       "cloze"       (card-row-html (:flashcards/cloze c))
+       (card-row-html (:flashcards/question c)))))
+
 ;; Per-row projection for the virtual-scrolled list. The full flashcard row
-;; carries ~20 keys (io_fields jsonb, occlusion/score/mask, root_topic_id, raw
-;; timestamps) but LibraryCardRow renders only these ten. Every windowed row
-;; crosses the wire on scroll, so shipping the full row is pure per-scroll waste
-;; — this trims it to exactly what the row reads. question/answer/cloze stay:
-;; the row renders them and seeds the edit/diff modals from them.
+;; carries ~20 keys but the row renders a server-built HTML string plus the
+;; document context; every windowed row crosses the wire on scroll, so this
+;; trims to exactly that. question/answer/cloze/overlapping stay ONLY to seed
+;; the edit/diff modals on row click (basic/cloze/overlapping) — never for
+;; display. topic_title + root_topic_id drive the "Root / Document" cell.
 #?(:clj
    (defn- card-list-summary [c]
-     {:flashcards/id           (:flashcards/id c)
-      :flashcards/kind         (:flashcards/kind c)
-      :flashcards/question     (:flashcards/question c)
-      :flashcards/answer       (:flashcards/answer c)
-      :flashcards/cloze        (:flashcards/cloze c)
-      :flashcards/topic_id     (:flashcards/topic_id c)
-      :flashcards/anki_note_id (:flashcards/anki_note_id c)
-      :root_title              (:root_title c)
-      :formatted_date          (:formatted_date c)
-      :sync-state              (:sync-state c)}))
+     (let [kind (:flashcards/kind c)
+           span2? (contains? span2-kinds kind)]
+       {:flashcards/id            (:flashcards/id c)
+        :flashcards/kind          kind
+        :flashcards/topic_id      (:flashcards/topic_id c)
+        :flashcards/root_topic_id (:flashcards/root_topic_id c)
+        :flashcards/anki_note_id  (:flashcards/anki_note_id c)
+        :front-html               (card-front-html c)
+        :back-html                (if span2? "" (card-row-html (or (:flashcards/answer c) "")))
+        :span2?                   span2?
+        :flashcards/question      (:flashcards/question c)
+        :flashcards/answer        (:flashcards/answer c)
+        :flashcards/cloze         (:flashcards/cloze c)
+        :flashcards/overlapping   (:flashcards/overlapping c)
+        :root_title               (:root_title c)
+        :topic_title              (:topic_title c)
+        :formatted_date           (:formatted_date c)
+        :sync-state               (:sync-state c)})))
 
 ;; Query wrapper — _rev creates the Electric reactive dependency.
-;; opts: {:text str :kind str :status str :sort-col kw :sort-dir kw}
+;; opts: {:text str :kinds #{str} :origins #{str} :flags #{str}
+;;        :overlay-ids {:anki-changed #{id} :marked #{id} :suspended #{id}}
+;;        :sort-col kw :sort-dir kw}
 ;; Returns {:success true :cards [...] :count N :unpushed N :modified N}
 ;; (counts over the FILTERED set, so the summary narrows with the filters)
 ;; or {:success false :error msg}.
 (defn query-user-cards* [_rev user-id opts]
   #?(:clj
      (try
-       (let [{:keys [text kind status sort-col sort-dir]} opts
+       (let [{:keys [text kinds origins flags overlay-ids sort-col sort-dir]} opts
              all (mapv #(assoc % :sync-state (flashcard-sync-state %))
                    (db/get-user-flashcards user-id))
              filtered (-> all
-                        (filter-cards-kind kind)
-                        (filter-cards-status status)
+                        (filter-cards-kinds kinds)
+                        (filter-cards-origins origins overlay-ids)
+                        (filter-cards-flags flags overlay-ids)
                         (filter-cards-text text))
              sorted (sort-user-cards filtered sort-col sort-dir)]
          {:success true
@@ -493,30 +575,31 @@
                                 " suspended"))
             (dom/text "⏸")))))))
 
-;; Front + Back cells — cloze spans both content columns, back hidden for cloze
-(e/defn RowContentCells [cell-style cloze? id question answer cloze]
+;; Front + Back cells — span2? kinds (cloze/occlusion/score/overlapping) span
+;; both content columns with the back cell hidden. front-html/back-html are
+;; built server-side (card-front-html) so every kind renders one way.
+(e/defn RowContentCells [cell-style span2? id front-html back-html]
   (e/client
-    (let [front-html (card-row-html (if cloze? cloze question))]
-      (dom/td
-        (dom/props {:dir "auto"
-                    :class "card-row-cell"
-                    :style (merge cell-style (when cloze? {:grid-column "span 2"}))})
-        (e/for-by identity [_k [(str "f-" id)]]
-          (dom/div
-            (dom/props {:class "card-row-html"})
-            (set-inner-html! dom/node front-html)))))
-    (let [back-html (card-row-html (if cloze? "" (or answer "")))]
-      (dom/td
-        (dom/props {:dir "auto"
-                    :class "card-row-cell"
-                    :style (merge cell-style (when cloze? {:display "none"}))})
-        (e/for-by identity [_k [(str "b-" id)]]
-          (dom/div
-            (dom/props {:class "card-row-html"})
-            (set-inner-html! dom/node back-html)))))))
+    (dom/td
+      (dom/props {:dir "auto"
+                  :class "card-row-cell"
+                  :style (merge cell-style (when span2? {:grid-column "span 2"}))})
+      (e/for-by identity [_k [(str "f-" id)]]
+        (dom/div
+          (dom/props {:class "card-row-html"})
+          (set-inner-html! dom/node front-html))))
+    (dom/td
+      (dom/props {:dir "auto"
+                  :class "card-row-cell"
+                  :style (merge cell-style (when span2? {:display "none"}))})
+      (e/for-by identity [_k [(str "b-" id)]]
+        (dom/div
+          (dom/props {:class "card-row-html"})
+          (set-inner-html! dom/node back-html))))))
 
-;; Document cell — click navigates to the card's topic
-(e/defn RowDocCell [cell-style root-title topic-id navigate!]
+;; Document cell — "Root / Document", or "Root" alone when the card sits on the
+;; root topic. Click navigates to the card's topic.
+(e/defn RowDocCell [cell-style doc-label topic-id navigate!]
   (e/client
     (dom/td
       (dom/props {:style (merge cell-style {:overflow "hidden" :cursor "pointer"})})
@@ -527,8 +610,8 @@
       (dom/span
         (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
                             :font-size "12px" :color "var(--color-text-secondary)"}})
-        (tooltip/Tooltip! root-title)
-        (dom/text (or root-title ""))))))
+        (tooltip/Tooltip! doc-label)
+        (dom/text (or doc-label ""))))))
 
 (e/defn LibraryCardRow [card navigate! !editing-card !diff-card !selected selected user-id i anki-overlay]
   (e/client
@@ -539,24 +622,32 @@
           cloze (e/server (:flashcards/cloze card))
           ol (e/server (:flashcards/overlapping card))
           topic-id (e/server (:flashcards/topic_id card))
+          root-topic-id (e/server (:flashcards/root_topic_id card))
           note-id (e/server (:flashcards/anki_note_id card))
           root-title (e/server (:root_title card))
+          topic-title (e/server (:topic_title card))
+          front-html (e/server (:front-html card))
+          back-html (e/server (:back-html card))
+          span2? (e/server (:span2? card))
           added (e/server (:formatted_date card))
           sync-st (e/server (:sync-state card))
-          cloze? (= kind "cloze")
-          overlapping? (= kind "overlapping")
+          ;; "Root / Document", or just "Root" when the card is on the root topic.
+          doc-label (if (= topic-id root-topic-id)
+                      root-title
+                      (str root-title " / " topic-title))
           cell-style {:padding-block "6px" :padding-inline "8px"
                       :display "flex" :align-items "center"
-                      :border-bottom "1px solid var(--color-bg-subtle)"}]
-      (let [;; Occlusion rows have no text-field editor here — their editor is
-            ;; the occlusion modal in the topic view. Ignore the activation
-            ;; rather than open EditCardModal with empty fields.
-            edit-card! (fn [_] (when (not= kind "occlusion")
-                                 (reset! !editing-card
-                                   (if overlapping?
-                                     {:id id :kind kind :overlapping ol}
-                                     {:id id :kind kind :question question
-                                      :answer answer :cloze cloze}))))]
+                      :border-bottom "1px solid var(--color-bg-subtle)"}
+          ;; Occlusion/score have no in-place editor here — their editors live
+          ;; in the topic view (occlusion modal / score toolbar), which need
+          ;; doc-context /cards lacks. Route the click to the card's document
+          ;; instead. basic/cloze/overlapping seed the edit modal.
+          edit-card! (fn [_]
+                       (case kind
+                         ("occlusion" "score") (navigate! :viewer (nav/nav-topic topic-id :library))
+                         "overlapping" (reset! !editing-card {:id id :kind kind :overlapping ol})
+                         (reset! !editing-card {:id id :kind kind :question question
+                                                :answer answer :cloze cloze})))]
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt")
                     ;; 0-based absolute index → per-row translateY (C1c)
@@ -572,13 +663,17 @@
           (dom/props {:style (merge cell-style {:padding-inline "4px"})})
           (dom/span
             (dom/props {:class "type-badge"
-                        :style {:background (cond overlapping? "var(--color-badge-web, #7c5cbf)"
-                                             cloze? "var(--color-badge-epub)"
-                                             :else "var(--color-badge-pdf)")}})
-            (dom/text (cond overlapping? "Overlap" cloze? "Cloze" :else "Basic"))))
-        (RowContentCells cell-style (or cloze? overlapping?) id question answer
-          (if overlapping? (overlapping-row-html ol) cloze))
-        (RowDocCell cell-style root-title topic-id navigate!)
+                        :style {:background (case kind
+                                             "overlapping" "var(--color-badge-web, #7c5cbf)"
+                                             "cloze" "var(--color-badge-epub)"
+                                             "occlusion" "var(--color-badge-occlusion)"
+                                             "score" "var(--color-badge-score)"
+                                             "var(--color-badge-pdf)")}})
+            (dom/text (case kind
+                        "overlapping" "Overlap" "cloze" "Cloze"
+                        "occlusion" "Occlusion" "score" "Score" "Basic"))))
+        (RowContentCells cell-style span2? id front-html back-html)
+        (RowDocCell cell-style doc-label topic-id navigate!)
         ;; Added
         (dom/td
           (dom/props {:style (merge cell-style {:justify-content "flex-end" :padding-inline "6px"
@@ -587,7 +682,7 @@
         ;; Delete
         (dom/td
           (dom/props {:style (merge cell-style {:justify-content "center" :padding-inline "4px"})})
-          (DeleteCardButton id user-id)))))))
+          (DeleteCardButton id user-id))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Main view
@@ -654,9 +749,13 @@
                 (dom/props {:style {:margin "0 0 4px 0" :font-size "15px"}})
                 (dom/text (str (if cloze? "Cloze" "Basic") " card — FreeMemo vs Anki")))
               (dom/div
-                (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)"
+                (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
+                                    :font-size "11px" :color "var(--color-text-hint)"
                                     :margin-bottom "8px"}})
-                (dom/text "− FreeMemo · + Anki"))
+                (dom/span (dom/props {:class "source-chip source-chip-fm"}) (dom/text "FM"))
+                (dom/span (dom/text "removed  ·"))
+                (dom/span (dom/props {:class "source-chip source-chip-anki"}) (dom/text "Anki"))
+                (dom/span (dom/text "added")))
               (CardDiffSections id cloze? local-front local-back note-id anki-result)
               (dom/div
                 (dom/props {:style {:display "flex" :justify-content "flex-end" :margin-top "12px"}})
@@ -906,42 +1005,81 @@
                       (str " (" unpushed-count " unpushed, " modified-count " modified)"))
                     (when (= ov-status :unavailable) " · Anki not connected")))))))
 
-;; Header row: view toggle + text/kind/status filters + Check Anki.
+;; Filter facets. Multi-select within a group (OR); AND across groups.
+;; Kind + the DB origins filter server-side; the overlay? origins and every
+;; flag need the live Anki overlay and disable until it is :ready.
+(def ^:private kind-facets
+  [["basic" "Basic"] ["cloze" "Cloze"] ["overlapping" "Overlap"]
+   ["occlusion" "Occlusion"] ["score" "Score"]])
+;; [value label overlay-dependent? dot-color]
+(def ^:private origin-facets
+  [["unpushed" "Unpushed" false nil]
+   ["fm-changed" "FM changed" false "var(--color-chip-fm)"]
+   ["anki-changed" "Anki changed" true "var(--color-chip-anki)"]
+   ["both" "Both" true nil]
+   ["in-sync" "In sync" false nil]])
+(def ^:private flag-facets [["marked" "Marked"] ["suspended" "Suspended"]])
+
+;; One toggle chip. on-toggle fires only when enabled (disabled buttons emit
+;; no click, but guard anyway); dot-color paints the leading FM/Anki swatch.
+(e/defn FilterChip [label active? disabled? dot-color on-toggle]
+  (e/client
+    (dom/button
+      (dom/props {:class (str "filter-chip" (when active? " filter-chip-active"))
+                  :disabled (boolean disabled?)
+                  :aria-pressed (boolean active?)})
+      (when dot-color
+        (dom/span (dom/props {:class "filter-chip-dot" :style {:background dot-color}})))
+      (dom/span (dom/text label))
+      (dom/On "click" (fn [_] (when-not disabled? (on-toggle))) nil))))
+
+(defn- toggle-in! [!set v]
+  (swap! !set #(if (contains? % v) (disj % v) (conj % v))))
+
+;; Header row: view toggle + text + Kind/Origin/Flag chip groups + Check Anki.
 ;; Mounted inside LibraryCardsView's one-batch gate — see the `when` there.
 ;; Any sibling that mounts solo while the cards query is in flight gets
 ;; removed by the runtime when the result's children arrive (Electric v3
 ;; mount bug, observed on the documents→cards branch switch); nothing in
 ;; this view may mount before the query result exists.
-(e/defn CardsFilterBar [navigate! ov-status !text !kind !status !check-tick]
+(e/defn CardsFilterBar [navigate! ov-status !text !kinds !origins !flags !check-tick]
   (e/client
-    (dom/div
-      (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
-                          :margin-bottom "12px" :flex-wrap "wrap"}})
-      (LibraryViewToggle navigate! true)
-      (dom/input
-        (dom/props {:type "text" :placeholder "Filter cards..."
-                    :class "input" :style {:flex "1" :min-width "140px"}})
-        (dom/On "input" (fn [e] (reset! !text (-> e .-target .-value))) nil))
-      (dom/select
-        (dom/props {:class "input" :aria-label "Filter by card kind"})
-        (dom/option (dom/props {:value "all"}) (dom/text "All kinds"))
-        (dom/option (dom/props {:value "basic"}) (dom/text "Basic"))
-        (dom/option (dom/props {:value "cloze"}) (dom/text "Cloze"))
-        (dom/option (dom/props {:value "overlapping"}) (dom/text "Overlapping"))
-        (dom/On "change" (fn [e] (reset! !kind (-> e .-target .-value))) nil))
-      (dom/select
-        (dom/props {:class "input" :aria-label "Filter by sync status"})
-        (dom/option (dom/props {:value "all"}) (dom/text "All statuses"))
-        (dom/option (dom/props {:value "unpushed"}) (dom/text "Unpushed"))
-        (dom/option (dom/props {:value "modified"}) (dom/text "Modified"))
-        (dom/option (dom/props {:value "synced"}) (dom/text "Synced"))
-        (dom/On "change" (fn [e] (reset! !status (-> e .-target .-value))) nil))
-      (dom/button
-        (dom/props {:class "btn btn-sm btn-secondary"
-                    :disabled (= ov-status :checking)})
-        (tooltip/Tooltip! "Re-check Anki for edits, marks, suspensions and deletions")
-        (dom/text (if (= ov-status :checking) "Checking…" "Check Anki"))
-        (dom/On "click" (fn [_] (swap! !check-tick inc)) nil)))))
+    (let [kinds (e/watch !kinds)
+          origins (e/watch !origins)
+          flags (e/watch !flags)
+          anki-ready? (= ov-status :ready)]
+      (dom/div
+        (dom/props {:style {:display "flex" :align-items "center" :gap "10px"
+                            :margin-bottom "12px" :flex-wrap "wrap"}})
+        (LibraryViewToggle navigate! true)
+        (dom/input
+          (dom/props {:type "text" :placeholder "Filter cards..."
+                      :class "input" :style {:flex "1" :min-width "140px"}})
+          (dom/On "input" (fn [e] (reset! !text (-> e .-target .-value))) nil))
+        (dom/div
+          (dom/props {:class "filter-group" :aria-label "Filter by card kind"})
+          (e/for-by first [facet kind-facets]
+            (let [[v label] facet]
+              (FilterChip label (contains? kinds v) false nil
+                (fn [] (toggle-in! !kinds v))))))
+        (dom/div
+          (dom/props {:class "filter-group" :aria-label "Filter by change origin"})
+          (e/for-by first [facet origin-facets]
+            (let [[v label overlay? dot] facet]
+              (FilterChip label (contains? origins v) (and overlay? (not anki-ready?)) dot
+                (fn [] (toggle-in! !origins v))))))
+        (dom/div
+          (dom/props {:class "filter-group" :aria-label "Filter by Anki flag"})
+          (e/for-by first [facet flag-facets]
+            (let [[v label] facet]
+              (FilterChip label (contains? flags v) (not anki-ready?) nil
+                (fn [] (toggle-in! !flags v))))))
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-secondary"
+                      :disabled (= ov-status :checking)})
+          (tooltip/Tooltip! "Re-check Anki for edits, marks, suspensions and deletions")
+          (dom/text (if (= ov-status :checking) "Checking…" "Check Anki"))
+          (dom/On "click" (fn [_] (swap! !check-tick inc)) nil))))))
 
 ;; Fixed header table — sortable columns + select-all checkbox
 (e/defn CardsTableHeader [filtered-ids selected !selected !sort-col !sort-dir]
@@ -1125,7 +1263,7 @@
 ;; runs there so the whole view mounts in one batch (see CardsFilterBar).
 (e/defn CardsResultRegion [user-id navigate! result filters-active? scroll-reset-key
                            !sort-col !sort-dir !editing-card
-                           !ov-status !ov-payload !check-tick]
+                           !ov-status !ov-payload !check-tick !overlay-ids]
   (e/client
     (let [success? (e/server (:success result))
           font-sz (or (e/server (settings/get-card-font-size user-id)) 13)
@@ -1135,7 +1273,13 @@
           ov-status (e/watch !ov-status)
           manifest (e/server (vec (:pushed-manifest result)))
           anki-overlay (AnkiOverlay user-id manifest
-                         !ov-status !ov-payload !check-tick)]
+                         !ov-status !ov-payload !check-tick)
+          ;; Mirror the client overlay's flag id-sets up into the atom
+          ;; LibraryCardsView reads for its query opts (§7). The manifest is
+          ;; filter-independent, so this feedback converges: overlay depends on
+          ;; the manifest, never on the filtered set. Re-runs only when the
+          ;; overlay value actually changes (Electric work-skipping).
+          _ (reset! !overlay-ids (overlay->filter-ids anki-overlay))]
 
       (when (e/watch !editing-card)
         (EditCardModal !editing-card user-id))
@@ -1150,22 +1294,34 @@
 (e/defn LibraryCardsView [user-id navigate! refresh]
   (e/client
     (let [!text (atom "") text (e/watch !text)
-          !kind (atom "all") kind (e/watch !kind)
-          !status (atom "all") status (e/watch !status)
+          !kinds (atom #{}) kinds (e/watch !kinds)
+          !origins (atom #{}) origins (e/watch !origins)
+          !flags (atom #{}) flags (e/watch !flags)
           !sort-col (atom :added) sort-col (e/watch !sort-col)
           !sort-dir (atom :desc) sort-dir (e/watch !sort-dir)
           !editing-card (atom nil)
           !ov-status (atom :idle) ov-status (e/watch !ov-status)
           !ov-payload (atom nil)
           !check-tick (atom 0)
-          opts {:text text :kind kind :status status
-                :sort-col sort-col :sort-dir sort-dir}
-          filters-active? (or (not (str/blank? text)) (not= kind "all") (not= status "all"))
+          ;; Overlay flag id-sets, mirrored up from CardsResultRegion (§7).
+          !overlay-ids (atom {:anki-changed #{} :marked #{} :suspended #{}})
+          ;; Read the overlay id-sets into opts ONLY while a facet that needs
+          ;; them is active — otherwise the query stays a pure function of the
+          ;; DB filters and populating the atom triggers no re-query.
+          overlay-active? (or (contains? origins "anki-changed")
+                            (contains? origins "both")
+                            (seq flags))
+          overlay-ids (if overlay-active?
+                        (e/watch !overlay-ids)
+                        {:anki-changed #{} :marked #{} :suspended #{}})
+          opts {:text text :kinds kinds :origins origins :flags flags
+                :overlay-ids overlay-ids :sort-col sort-col :sort-dir sort-dir}
+          filters-active? (or (not (str/blank? text)) (seq kinds) (seq origins) (seq flags))
           ;; Scroll resets to top only when the user navigates the list (search /
           ;; filter / sort), NOT on row-count churn from delete. Mirrors
           ;; knowledge-tree/DocumentTreeView's reset-key. Threaded down to the
           ;; CardsTableBody Scroll-window call.
-          scroll-reset-key [text kind status sort-col sort-dir]
+          scroll-reset-key [text kinds origins flags sort-col sort-dir]
           ;; Server-FORM binding, deliberately not an e/defn call: an e/defn's
           ;; return value materializes at the (client) call site, which shipped
           ;; the entire result map — every card row — to the browser on each
@@ -1187,7 +1343,7 @@
       ;; re-queries, so the gate only blanks on first mount, not on
       ;; filter changes.
       (when (some? success?)
-        (CardsFilterBar navigate! ov-status !text !kind !status !check-tick)
+        (CardsFilterBar navigate! ov-status !text !kinds !origins !flags !check-tick)
         (CardsResultRegion user-id navigate! result filters-active? scroll-reset-key
           !sort-col !sort-dir !editing-card
-          !ov-status !ov-payload !check-tick)))))
+          !ov-status !ov-payload !check-tick !overlay-ids)))))
