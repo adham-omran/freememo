@@ -2652,6 +2652,20 @@
                    :where [:= :root.user_id user-id]
                    :order-by [[:f.created_at :desc]]}))))
 
+(defn get-pushed-card-manifest
+  "Card-id/note-id pairs for every pushed card the user owns (anki_note_id NOT
+   NULL). Filter-independent — this is the Anki overlay's fetch set, so it must
+   not narrow with the /library/cards filters. Empty → []."
+  [user-id]
+  (mapv (fn [r] {:card-id (:flashcards/id r) :note-id (:flashcards/anki_note_id r)})
+    (jdbc/execute! ds
+      (sql/format {:select [:f.id :f.anki_note_id]
+                   :from [[:flashcards :f]]
+                   :join [[:topics :root] [:= :f.root_topic_id :root.id]]
+                   :where [:and
+                           [:= :root.user_id user-id]
+                           [:not= :f.anki_note_id nil]]}))))
+
 (defn get-flashcards-by-ids
   "Flashcards owned by user-id (via root topic) with ids in card-ids.
    Full rows plus :page_number — the inputs for bulk push (build-update-fields
