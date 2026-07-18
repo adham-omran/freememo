@@ -42,14 +42,6 @@
 ;; OCR scan infrastructure (start-ocr-scan! + ocr-executor) moved to
 ;; freememo.pdf-toolbar, which now hosts the Scan Page button.
 
-;; Idle pause (ms) after the last keystroke before the auto-save DB write
-;; fires. editor/!dirty-html itself updates on every keystroke — other
-;; consumers need that immediate value (see rich_text_editor.cljc) — so only
-;; the server write below is gated on this timer, letting
-;; db/update-topic-content! run once per pause in typing instead of once per
-;; character.
-(def ^:private save-debounce-ms 600)
-
 ;; ---------------------------------------------------------------------------
 ;; EditorPane
 ;; ---------------------------------------------------------------------------
@@ -67,42 +59,33 @@
                           :min-width "0" :min-height "0" :overflow "hidden"}})
 
       ;; -----------------------------------------------------------------------
-      ;; Auto-save + save-status: watch editor/!dirty-html, save when topic-id
-      ;; matches. We compute save-result once and use it for both last-saved
-      ;; tracking and the status indicator (PDF mode).
+      ;; Auto-save + save-status: watch editor/!dirty-html and write on every
+      ;; edit whose topic-id matches. save-result is computed once and reused
+      ;; for last-saved tracking and the status indicator (PDF mode).
       ;;
-      ;; The DB write is debounced to an idle pause in typing: dirty-data
-      ;; changes on every keystroke, but each change just (re)arms a timer
-      ;; that copies it into !debounced-html after save-debounce-ms of
-      ;; silence, cancelling any timer still pending from the previous
-      ;; keystroke. needs-save?/save-result key off !debounced-html, not
-      ;; dirty-data directly, so update-topic-content! runs once per pause
-      ;; instead of once per character.
+      ;; The trigger MUST read dirty-data directly. needs-save? → save-result
+      ;; keeps dirty-data on a demanded reactive path — it feeds the e/server
+      ;; write and the status DOM, so Electric runs it. A prior debounce parked
+      ;; the write behind a value-discarded let-binding that Electric never
+      ;; evaluated, so no edit ever saved. !last-saved dedups repeat values, so
+      ;; a matched edit writes once per distinct html.
       ;; -----------------------------------------------------------------------
       (let [dirty-data (e/watch editor/!dirty-html)
             !last-saved (atom nil)
-            !debounced-html (atom nil)
-            !save-timer (atom nil)
-            _ (when (some? dirty-data)
-                (js/clearTimeout @!save-timer)
-                (reset! !save-timer
-                  (js/setTimeout #(reset! !debounced-html dirty-data) save-debounce-ms)))
-            debounced-data (e/watch !debounced-html)
-            needs-save? (and (some? debounced-data)
-                          (= (:topic-id debounced-data) topic-id)
-                          (not= (:html debounced-data) (e/watch !last-saved)))
+            needs-save? (and (some? dirty-data)
+                          (= (:topic-id dirty-data) topic-id)
+                          (not= (:html dirty-data) (e/watch !last-saved)))
             save-result (when needs-save?
                           (log/log-debug (str "EditorPane auto-save topic-id=" topic-id))
                           (e/server
                             (e/Offload
                               #(try
-                                 (db/update-topic-content! topic-id (:html debounced-data))
+                                 (db/update-topic-content! topic-id (:html dirty-data))
                                  {:success true}
                                  (catch Exception ex
                                    {:success false :error (.getMessage ex)})))))]
-        (e/on-unmount #(js/clearTimeout @!save-timer))
         (when (:success save-result)
-          (reset! !last-saved (:html debounced-data)))
+          (reset! !last-saved (:html dirty-data)))
         (when (and (some? save-result) (not (:success save-result)))
           (log/log-error (str "EditorPane auto-save error topic-id=" topic-id
                            " err=" (:error save-result))))
