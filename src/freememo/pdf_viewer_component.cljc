@@ -122,6 +122,7 @@
                                ;; Imperative read on purpose: an Electric e/watch of
                                ;; the flag does NOT observe this atom's mutation.
                                (viewer/on-page-change! (fn [page-num]
+                                                         (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] component pagechange cb: page=" page-num " restoring?=" (viewer/restoring?)))
                                                          (when-not (viewer/restoring?)
                                                            (reset! !page page-num)
                                                            (when on-navigate! (on-navigate! page-num)))))
