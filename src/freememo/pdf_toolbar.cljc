@@ -109,56 +109,105 @@
               (fn [_] (when (and (< page-number total) (> total 0))
                         (nav! (inc page-number)))) nil)))))))
 
-(e/defn PdfZoom
-  "Zoom −/+ + preset select + layout toggle."
+(e/defn PdfZoomControls
+  "−  [zoom%]  +  │  fit-toggle  │  rotate  │  layout-toggle.
+
+   The % field mirrors viewer/!scale, kept live by the once-per-viewer
+   `scalechanging` listener — so every zoom source (−/+, the field, fit toggle,
+   ctrl+wheel) stays reflected. The removed uncontrolled <select> never synced
+   back, which is why −/+ left it stale. Owns its own input/focus atoms so it
+   mounts inline (desktop) or in the phone overflow panel.
+   Invariant: while the field is focused the live-scale sync is suppressed, so
+   typing is never overwritten mid-edit."
   []
   (e/client
-    (let [layout dctx/layout on-layout-toggle! dctx/on-layout-toggle!]
-    (dom/div
-      (dom/props {:class "toolbar-group"
-                  :style {:display "flex" :align-items "center" :gap "4px"
-                          :padding-left "12px"
-                          :border-left "1px solid var(--color-border)"}})
-      (dom/button
-        (dom/props {:class "btn btn-sm btn-secondary" :title "Zoom Out"})
-        (dom/text "−")
-        (e/for [_ (dom/On-all "click")] (viewer/zoom! 0.9)))
-      (dom/button
-        (dom/props {:class "btn btn-sm btn-secondary" :title "Zoom In"})
-        (dom/text "+")
-        (e/for [_ (dom/On-all "click")] (viewer/zoom! 1.1)))
-      (dom/select
-        (dom/props {:style {:padding "6px 8px" :cursor "pointer"
-                            :background "transparent"
-                            :color "var(--color-text-label)"
-                            :border "1px solid transparent"
-                            :border-radius "3px"}})
-        (dom/option (dom/props {:value "page-width"}) (dom/text "Page Width"))
-        (dom/option (dom/props {:value "page-fit"}) (dom/text "Page Fit"))
-        (dom/option (dom/props {:value "0.5"}) (dom/text "50%"))
-        (dom/option (dom/props {:value "0.75"}) (dom/text "75%"))
-        (dom/option (dom/props {:value "1.0"}) (dom/text "100%"))
-        (dom/option (dom/props {:value "1.25"}) (dom/text "125%"))
-        (dom/option (dom/props {:value "1.5"}) (dom/text "150%"))
-        (dom/option (dom/props {:value "2.0"}) (dom/text "200%"))
-        (e/for [[t e] (dom/On-all "change")]
-          (when e
-            (let [v (-> e .-target .-value)]
-              (case v
-                "page-width" (viewer/set-zoom-fit!)
-                "page-fit" (viewer/set-zoom-page-fit!)
-                (let [scale (js/parseFloat v)]
-                  (when-not (js/isNaN scale) (viewer/set-zoom! scale))))))
-          (t)))
-      (when on-layout-toggle!
+    (let [layout dctx/layout on-layout-toggle! dctx/on-layout-toggle!
+          scale (e/watch viewer/!scale)
+          scale-mode (e/watch viewer/!scale-mode)
+          fit? (contains? #{"page-width" "page-fit"} scale-mode)
+          pct (js/Math.round (* 100 scale))
+          !zoom-val (atom (str pct "%"))
+          zoom-val (e/watch !zoom-val)
+          !zoom-focused (atom false)
+          zoom-focused (e/watch !zoom-focused)
+          apply-pct! (fn [raw]
+                       (let [n (js/parseInt raw 10)]      ; "150%" → 150, "" → NaN
+                         (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] zoom field apply-pct! raw=" (pr-str raw) " n=" n))
+                         (when-not (js/isNaN n)
+                           (viewer/set-zoom-pct! (max 25 (min 500 n))))))]
+      (when (and (not zoom-focused) (not= zoom-val (str pct "%")))
+        (reset! !zoom-val (str pct "%")))
+      (dom/div
+        (dom/props {:class "toolbar-group"
+                    :style {:display "flex" :align-items "center" :gap "4px"
+                            :padding-left "12px"
+                            :border-left "1px solid var(--color-border)"}})
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-secondary" :title "Zoom Out"})
+          (dom/text "−")
+          (e/for [_ (dom/On-all "click")] (viewer/zoom! 0.9)))
+        (dom/input
+          (dom/props {:type "text" :value zoom-val :title "Zoom level (%)"
+                      :style {:width "52px" :text-align "center" :padding "4px"
+                              :border "1px solid var(--color-border)"
+                              :border-radius "3px" :font-size "14px"}})
+          (dom/On "focus" (fn [_] (reset! !zoom-focused true)) nil)
+          (dom/On "blur"
+            ;; Read the typed value BEFORE clearing focus — clearing it first lets
+            ;; the live-scale sync revert the controlled input to the old % before
+            ;; we read it (observed: typed 200, apply saw "79%"). Order matches
+            ;; PdfPageNav.
+            (fn [e]
+              (let [raw (-> e .-target .-value)]
+                (reset! !zoom-focused false)
+                (apply-pct! raw))) nil)
+          (dom/On "keydown"
+            (fn [e] (when (= "Enter" (.-key e)) (.blur (.-target e)))) nil)
+          (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
+            (when (some? v) (reset! !zoom-val v))))
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-secondary" :title "Zoom In"})
+          (dom/text "+")
+          (e/for [_ (dom/On-all "click")] (viewer/zoom! 1.1)))
+        ;; Fit toggle: page-width ↔ page-fit. Glyph reflects the CURRENT fit
+        ;; (⇔ width, ⤢ page); outlined while a fit mode is active. No :width icon
+        ;; exists in the icon set, so a text glyph (like −/+/⇄) is used.
         (dom/button
           (dom/props {:class "btn btn-sm btn-secondary"
-                      :style {:font-size "14px"}})
-          (tooltip/Tooltip! (if (= layout "top-bottom")
-                              "Switch to side-by-side layout"
-                              "Switch to stacked layout"))
-          (dom/text (if (= layout "top-bottom") "⇅" "⇄"))
-          (dom/On "click" (fn [_] (on-layout-toggle!)) nil)))))))
+                      :aria-label (if (= scale-mode "page-width") "Fit page" "Fit width")
+                      :style {:font-size "14px"
+                              :outline (when fit? "1px solid currentColor")}})
+          (tooltip/Tooltip! (if (= scale-mode "page-width") "Fit page" "Fit width"))
+          (dom/text (if (= scale-mode "page-width") "⇔" "⤢"))
+          (dom/On "click"
+            (fn [_] (if (= scale-mode "page-width")
+                      (viewer/set-zoom-page-fit!)
+                      (viewer/set-zoom-fit!))) nil))
+        (dom/button
+          (dom/props {:class "btn btn-sm btn-secondary"
+                      :aria-label "Rotate counter-clockwise"})
+          (tooltip/Tooltip! "Rotate counter-clockwise")
+          (icons/Icon :rotate-ccw :size 16)
+          (dom/On "click" (fn [_] (viewer/rotate-ccw!)) nil))
+        (when on-layout-toggle!
+          (dom/button
+            (dom/props {:class "btn btn-sm btn-secondary"
+                        :style {:font-size "14px"}})
+            (tooltip/Tooltip! (if (= layout "top-bottom")
+                                "Switch to side-by-side layout"
+                                "Switch to stacked layout"))
+            (dom/text (if (= layout "top-bottom") "⇅" "⇄"))
+            (dom/On "click" (fn [_] (on-layout-toggle!)) nil)))))))
+
+(e/defn PdfViewerToolbar
+  "Chrome-style PDF bar for the desktop inline slot:
+   [ ◀ page# / total ▶ │ − zoom% + │ fit │ rotate │ layout ].
+   Composes the reusable page-anchor (PdfPageNav) and zoom (PdfZoomControls)
+   groups the phone layout mounts individually (nav primary, zoom in overflow)."
+  []
+  (e/client
+    (PdfPageNav)
+    (PdfZoomControls)))
 
 (e/defn PdfMarkDone
   "Mark-page-done toggle — plain ghost secondary button, check/rotate icon,
@@ -285,7 +334,7 @@
                 (dom/div
                   (dom/props {:class "pdf-overflow-panel"})
                   (when is-live? (PdfPageNav))
-                  (PdfZoom)
+                  (PdfZoomControls)
                   ;; Score topics have no page children — done/scan/copy all
                   ;; target page topics. They get the notation rect tool.
                   (if dctx/is-score?
@@ -316,8 +365,7 @@
                       cleanup (install-overflow-detector!
                                 container-node toolbar-node !tier !overflow-open)]
                   (e/on-unmount cleanup)
-                  (PdfPageNav)
-                  (PdfZoom)
+                  (PdfViewerToolbar)
                   ;; Score topics have no page children — done/scan/copy all
                   ;; target page topics. They get the notation rect tool.
                   (if dctx/is-score?
