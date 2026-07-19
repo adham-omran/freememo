@@ -17,8 +17,12 @@
 ;; resolve on CLJS to avoid a frame-signal mismatch. Shape: {:root id :page n}.
 (defonce !pending-page-jump (atom nil))
 
-(defn nav-topic [topic-id origin]
-  {:type :topic :topic-id topic-id :origin origin})
+(defn nav-topic
+  ([topic-id origin] (nav-topic topic-id origin nil))
+  ([topic-id origin page]
+   ;; page (optional): a PDF page number for the /viewer/topic/<id>/<page> URL
+   ;; anchor. nil for every non-PDF nav — nav->route omits the segment then.
+   {:type :topic :topic-id topic-id :origin origin :page page}))
 
 (defn nav-learn-session []
   {:type :learn-session})
@@ -28,3 +32,22 @@
 
 (defn nav-search-query [query]
   {:type :search-query :query query})
+
+(defn set-url-page!
+  "Reflect the current PDF page in the address bar as /viewer/topic/<root>/<page>.
+   replaceState — no history entry (page scrolls don't spam back/forward) and no
+   popstate, so the router does not re-resolve or remount the viewer. The URL is
+   the solid anchor: on reload the segment is parsed back into initial-page.
+   Pre:  root-id and page are non-nil; caller is on the PDF root doc (kind pdf).
+   Post: window pathname == /viewer/topic/<root>/<page>; no-op if already equal."
+  [root-id page]
+  #?(:cljs
+     (when (and root-id page)
+       (let [path (str "/viewer/topic/" root-id "/" page)
+             cur  (.. js/window -location -pathname)]
+         (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] set-url-page! root=" root-id
+                              " page=" page " cur=" cur " -> " path
+                              (if (= path cur) " (noop)" " (REWRITE)")))
+         (when (not= path cur)
+           (.replaceState js/window.history nil "" path))))
+     :clj nil))

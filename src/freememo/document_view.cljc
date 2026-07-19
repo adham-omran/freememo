@@ -172,6 +172,18 @@
           scan-dpi dctx/scan-dpi scanning-pages dctx/scanning-pages ocr-errors dctx/ocr-errors
           phone? dctx/phone? !current-page dctx/!current-page toggle-layout! dctx/toggle-layout!
           bib-topic-id dctx/bib-topic-id]
+        ;; URL anchor write-back: reflect the live page as /viewer/topic/<root>/<page>
+        ;; (real PDF root only — score/page kinds don't honour a URL page on
+        ;; restore). replaceState: no history entry, no router re-resolve, no
+        ;; viewer remount. Reads current-page, so it re-runs on scroll or toolbar
+        ;; nav alike.
+        ;; No restore guard needed here: current-page never reflects a restore or
+        ;; its reflow drift — pdf-viewer-component drops those pagechanging events
+        ;; at the boundary (viewer/restoring?), so current-page only ever holds a
+        ;; page the user actually navigated to.
+        (when (and pdf-root? current-page)
+          (nav/set-url-page! pdf-root-id current-page))
+
         ;; TOP TOOLBAR (full width): command bar directly under the global
         ;; nav, above the bibliography header and content — like a Word/Excel
         ;; ribbon. Its actions target the topic/document, not the card table,

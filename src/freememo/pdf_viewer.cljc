@@ -20,6 +20,26 @@
 ;; set-document! on a document-id change.
 (defonce !loaded-doc-id (atom nil))
 
+;; True while a programmatic page restore AND its post-fit reflow settle window
+;; are in progress. During this window `pagechanging` events originate from the
+;; restore jump and PDF.js's own layout reflow — NOT the user — so page-anchor
+;; persistence (URL segment, last-page) must ignore them. Cleared by the settle
+;; logic in go-to-page-after-load!. See restoring? for the read-side predicate.
+(defonce !restoring? (atom false))
+
+;; Restore settle window (ms). After the fit reflow's renders go quiet for
+;; -quiet-ms, the restore is considered settled; -max-ms is a hard ceiling so
+;; the flag can never stick if renders never quiesce.
+(def ^:private restore-quiet-ms 200)
+(def ^:private restore-max-ms 3000)
+
+(defn restoring?
+  "True iff a programmatic restore + reflow-settle window is active.
+   Contract: page-anchor persisters (set-url-page! caller, last-page save) MUST
+   skip while this holds — a page change here is not user navigation."
+  []
+  #?(:clj false :cljs @!restoring?))
+
 
 (defn destroy-viewer!
   "Tear down the current PDF.js viewer and release resources."
@@ -105,7 +125,10 @@
                            (.setDocument viewer pdf)
                            (.setDocument link-service pdf nil)
                            (.on event-bus "pagesloaded"
-                             (fn [] (set! (.-currentScaleValue viewer) "page-width"))
+                             (fn []
+                               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] pagesloaded -> set fit page-width; currentScale before=" (.-currentScale viewer)))
+                               (set! (.-currentScaleValue viewer) "page-width")
+                               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] fit applied; currentScale after=" (.-currentScale viewer) " currentPage=" (.-currentPageNumber viewer))))
                              (clj->js {:once true}))
                            (when on-ready (on-ready pdf viewer)))))]
          (-> (pdf-cache/cache-get doc-id)
@@ -176,7 +199,10 @@
   #?(:clj nil
      :cljs (when-let [{:keys [viewer]} @!viewer-state]
              (let [^js v viewer]
-               (set! (.-currentPageNumber v) page-num)))))
+               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] go-to-page! target=" page-num
+                                    " (was currentPage=" (.-currentPageNumber v) " scale=" (.-currentScale v) ")"))
+               (set! (.-currentPageNumber v) page-num)
+               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] go-to-page! done; currentPage=" (.-currentPageNumber v)))))))
 
 (defn zoom!
   "Zoom by multiplication factor (e.g., 1.1 = 110%, 0.9 = 90%)."
@@ -184,7 +210,10 @@
   #?(:clj nil
      :cljs (when-let [{:keys [viewer]} @!viewer-state]
              (let [^js v viewer]
-               (set! (.-currentScale v) (* (.-currentScale v) factor))))))
+               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] zoom! factor=" factor
+                                    " scaleBefore=" (.-currentScale v) " page=" (.-currentPageNumber v) " scrollTop=" (.-scrollTop (.-container v))))
+               (set! (.-currentScale v) (* (.-currentScale v) factor))
+               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] zoom! done scaleAfter=" (.-currentScale v) " page=" (.-currentPageNumber v) " scrollTop=" (.-scrollTop (.-container v))))))))
 
 (defn set-zoom!
   "Set absolute zoom level (e.g., 1.0 = 100%, 1.5 = 150%)."
@@ -192,13 +221,17 @@
   #?(:clj nil
      :cljs (when-let [{:keys [viewer]} @!viewer-state]
              (let [^js v viewer]
-               (set! (.-currentScale v) scale)))))
+               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] set-zoom! scale=" scale
+                                    " scaleBefore=" (.-currentScale v) " page=" (.-currentPageNumber v)))
+               (set! (.-currentScale v) scale)
+               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] set-zoom! done scaleAfter=" (.-currentScale v) " scaleValue=" (.-currentScaleValue v) " page=" (.-currentPageNumber v)))))))
 
 (defn set-zoom-fit!
   []
   #?(:clj nil
      :cljs (when-let [{:keys [viewer]} @!viewer-state]
              (let [^js v viewer]
+               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] set-zoom-fit! (page-width) scaleBefore=" (.-currentScale v)))
                (set! (.-currentScaleValue v) "page-width")))))
 
 (defn set-zoom-page-fit!
@@ -206,17 +239,70 @@
   #?(:clj nil
      :cljs (when-let [{:keys [viewer]} @!viewer-state]
              (let [^js v viewer]
+               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] set-zoom-page-fit! (page-fit) scaleBefore=" (.-currentScale v)))
                (set! (.-currentScaleValue v) "page-fit")))))
 
 (defn go-to-page-after-load!
-  "Navigate to page once PDF.js fires pagesloaded (pages not ready at setDocument time)."
+  "Restore to page-num and hold it there through the post-fit reflow.
+
+   The app sets the page-width fit on `pagesloaded`; that fit re-lays-out every
+   page asynchronously over the following frames. A single jump — even one
+   deferred to the first `pagerendered` — lands correctly but then DRIFTS: as the
+   remaining pages reach their fitted heights, the content above the viewport
+   shrinks/grows and slides the anchored page away (observed: restore to 20,
+   viewport settles on 30). So one jump is not enough.
+
+   Fix: re-assert the target on EVERY `pagerendered` until renders go quiet for
+   restore-quiet-ms — each render is exactly when a layout shift can occur, so
+   re-pinning there tracks the target through the whole reflow. A user gesture
+   (wheel/touch/key/pointer) ends the pin immediately so we never fight a real
+   scroll; restore-max-ms is a hard ceiling.
+
+   Pre:  called once per load, before pagesloaded; !viewer-state has an event-bus.
+   Post: viewer sits on page-num once reflow settles; !restoring? is true for the
+         whole window and false after — so persisters ignore the reflow's
+         `pagechanging` noise and honor genuine user navigation afterward.
+   Invariant: !restoring? is cleared on exactly one path (release, idempotent)."
   [page-num]
   #?(:clj nil
-     :cljs (when-let [{:keys [event-bus]} @!viewer-state]
-             (let [^js eb event-bus]
-               (.on eb "pagesloaded"
-                 (fn [] (go-to-page! page-num))
-                 (clj->js {:once true}))))))
+     :cljs
+     (when-let [{:keys [event-bus]} @!viewer-state]
+       (let [^js eb event-bus]
+         (reset! !restoring? true)
+         (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] go-to-page-after-load! armed for page=" page-num "; !restoring?=true"))
+         (.on eb "pagesloaded"
+           (fn []
+             (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] restore: pagesloaded fired; pinning to " page-num " until reflow settles"))
+             (let [!settle-timer (atom nil)
+                   released?     (atom false)
+                   !on-render    (atom nil)
+                   !on-gesture   (atom nil)
+                   container     (some-> ^js (:viewer @!viewer-state) .-container)
+                   gestures      ["wheel" "touchstart" "keydown" "pointerdown"]
+                   release (fn []
+                             (when-not @released?
+                               (reset! released? true)
+                               (when-let [t @!settle-timer] (js/clearTimeout t))
+                               (when-let [h @!on-render] (.off eb "pagerendered" h))
+                               (when (and container @!on-gesture)
+                                 (doseq [ev gestures] (.removeEventListener container ev @!on-gesture)))
+                               (reset! !restoring? false)
+                               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] restore: settled -> released; !restoring?=false"))))
+                   renderer (fn []
+                              (when-let [{:keys [viewer]} @!viewer-state]
+                                (let [^js v viewer]
+                                  (when (not= (.-currentPageNumber v) page-num)
+                                    (go-to-page! page-num))))
+                              (when-let [t @!settle-timer] (js/clearTimeout t))
+                              (reset! !settle-timer (js/setTimeout release restore-quiet-ms)))]
+               (reset! !on-render renderer)
+               (reset! !on-gesture (fn [] (release)))
+               (.on eb "pagerendered" renderer)
+               (when container
+                 (doseq [ev gestures]
+                   (.addEventListener container ev @!on-gesture #js {:once true :passive true})))
+               (js/setTimeout release restore-max-ms)))
+           (clj->js {:once true}))))))
 
 (defn on-page-change!
   "Register a callback for PDF.js page change events."
@@ -225,7 +311,9 @@
      :cljs (when-let [{:keys [event-bus]} @!viewer-state]
              (let [^js eb event-bus]
                (.on eb "pagechanging"
-                 (fn [^js e] (callback (.-pageNumber e))))))))
+                 (fn [^js e]
+                   (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] pagechanging event -> page=" (.-pageNumber e)))
+                   (callback (.-pageNumber e))))))))
 
 (defn get-page-text-content!
   "Extract plain text from a single page using PDF.js's text layer.

@@ -112,9 +112,19 @@
                                (let [n (.-numPages pdf)]
                                  (reset! !total n)
                                  (when on-total! (on-total! n)))
+                               ;; Single boundary gate for page-anchor persistence.
+                               ;; `pagechanging` fires for the restore jump AND the
+                               ;; post-fit reflow drift (restore to 20, reflow slides
+                               ;; to 30) — neither is user navigation. While
+                               ;; viewer/restoring?, drop the event so !page (hence
+                               ;; current-page, the URL anchor, and last-page) keeps
+                               ;; its seeded target instead of chasing the drift.
+                               ;; Imperative read on purpose: an Electric e/watch of
+                               ;; the flag does NOT observe this atom's mutation.
                                (viewer/on-page-change! (fn [page-num]
-                                                         (reset! !page page-num)
-                                                         (when on-navigate! (on-navigate! page-num))))
+                                                         (when-not (viewer/restoring?)
+                                                           (reset! !page page-num)
+                                                           (when on-navigate! (on-navigate! page-num)))))
                                ;; A PDF-page extract's "Go to page" button primes
                                ;; nav/!pending-page-jump then navigates here; consume
                                ;; it post-load (go-to-page is reliable only after
