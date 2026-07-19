@@ -353,20 +353,26 @@
                (set! (.-pagesRotation v) (- (.-pagesRotation v) 90))))))
 
 (defn set-zoom-fit!
+  "Fit page width, holding the current page across the reflow (like zoom!)."
   []
   #?(:clj nil
      :cljs (when-let [{:keys [viewer]} @!viewer-state]
-             (let [^js v viewer]
-               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] set-zoom-fit! (page-width) scaleBefore=" (.-currentScale v)))
-               (set! (.-currentScaleValue v) "page-width")))))
+             (let [^js v   viewer
+                   anchor  (.-currentPageNumber v)]
+               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] set-zoom-fit! (page-width) scaleBefore=" (.-currentScale v) " page=" anchor))
+               (set! (.-currentScaleValue v) "page-width")
+               (pin-anchor-through-reflow! anchor)))))
 
 (defn set-zoom-page-fit!
+  "Fit whole page, holding the current page across the reflow (like zoom!)."
   []
   #?(:clj nil
      :cljs (when-let [{:keys [viewer]} @!viewer-state]
-             (let [^js v viewer]
-               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] set-zoom-page-fit! (page-fit) scaleBefore=" (.-currentScale v)))
-               (set! (.-currentScaleValue v) "page-fit")))))
+             (let [^js v   viewer
+                   anchor  (.-currentPageNumber v)]
+               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] set-zoom-page-fit! (page-fit) scaleBefore=" (.-currentScale v) " page=" anchor))
+               (set! (.-currentScaleValue v) "page-fit")
+               (pin-anchor-through-reflow! anchor)))))
 
 (defn go-to-page-after-load!
   "Restore to page-num and hold it there through the post-fit reflow.
