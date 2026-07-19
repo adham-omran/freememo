@@ -135,7 +135,7 @@
    Post: returns a map keyed by DocumentBody prop names; :initial-layout and
          :initial-top-pct seed DocumentLayoutState; :refresh/:meta-refresh and
          the topic scalars seed DocumentViewState."
-  [user-id enc-key topic-id navigate! llm-enabled? queue-ctx]
+  [user-id enc-key topic-id navigate! llm-enabled? queue-ctx url-page]
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
           meta-refresh (e/server (e/watch (us/get-atom user-id :meta-refresh)))
@@ -165,12 +165,16 @@
                                         [topic-id (get-topic-content* refresh topic-id)]))
           static-content (when static-content+id (nth static-content+id 1))
           static-content-topic-id (when static-content+id (nth static-content+id 0))
-          initial-page (e/server
-                         (when is-pdf?
-                           (cond
-                             (= kind "page") (:page-number overview)
-                             (= kind "pdf") (or (settings/get-last-page user-id pdf-root-id) 1)
-                             :else 1)))
+          ;; initial-page precedence: URL page anchor > persisted last-page > 1
+          ;; for a PDF root; a page-topic carries its page number intrinsically.
+          ;; The last-page fetch is skipped when the URL already supplies a page.
+          initial-page (when is-pdf?
+                         (cond
+                           (= kind "page") (:page-number overview)
+                           (= kind "pdf") (or url-page
+                                              (e/server (settings/get-last-page user-id pdf-root-id))
+                                              1)
+                           :else 1))
           initial-layout (e/server
                            (when is-pdf?
                              (or (settings/get-pdf-layout user-id pdf-root-id) "left-right")))
