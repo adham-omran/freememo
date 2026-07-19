@@ -148,5 +148,5 @@
                 (dom/div
                   (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
                   (TopicPage user-id enc-key topic-id nil llm-enabled?
-                    {:on-done! #(swap! !queue-idx inc)}))
+                    {:on-done! #(swap! !queue-idx inc)} nil))
                 (SubsetBottomBar topic-id outstanding? !queue-idx)))))))))

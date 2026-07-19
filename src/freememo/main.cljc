@@ -101,7 +101,9 @@
        :knowledge (list 'knowledge 'documents) ; documents is the default sub-route
        (list (symbol (name tab))))
      (case (:type nav-map)
-       :topic (list 'viewer 'topic (:topic-id nav-map))
+       :topic (if-let [p (:page nav-map)]
+                (list 'viewer 'topic (:topic-id nav-map) p)
+                (list 'viewer 'topic (:topic-id nav-map)))
        :learn-session (list 'viewer 'learn-session)
        :subset-review (list 'viewer 'subset-review (:root-id nav-map))
        :library-cards (list 'library 'cards)
@@ -137,13 +139,16 @@
           (case vtype
             topic
             (r/pop
-              (let [[topic-id] r/route
+              ;; /viewer/topic/<id>[/<page>] — page is the URL anchor for PDF
+              ;; restore (nil for a bare URL → last-page fallback downstream).
+              (let [[topic-id page-seg] r/route
+                    url-page (some-> page-seg str parse-long)
                     authorized? (e/server (some? (db/get-topic-for-user user-id topic-id)))]
                 (if (not authorized?)
                   (NotFoundView)
                   (dom/div
                     (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
-                    (TopicPage user-id enc-key topic-id navigate! llm-enabled? nil)))))
+                    (TopicPage user-id enc-key topic-id navigate! llm-enabled? nil url-page)))))
 
             learn-session
             ;; Freeze the queue for the session: fetch once on mount, do NOT watch

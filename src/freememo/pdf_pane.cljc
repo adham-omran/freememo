@@ -51,6 +51,9 @@
         (reset! !current-page
           (binding [dctx/document-id pdf-root-id
                     dctx/on-navigate! (fn [p]
+                                        ;; Reached only for real user nav: restore /
+                                        ;; reflow-drift pagechanging is dropped upstream
+                                        ;; at pdf-viewer-component (viewer/restoring?).
                                         (reset! !page-to-save p)
                                         (when on-page-change! (on-page-change! p)))
                     dctx/on-total! (fn [n] (when on-total! (on-total! n)))]

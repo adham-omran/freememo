@@ -155,5 +155,5 @@
                   (TopicPage user-id enc-key topic-id
                     navigate!
                     llm-enabled?
-                    queue-ctx))
+                    queue-ctx nil))
                 (BottomBar user-id topic-id !queue-idx)))))))))

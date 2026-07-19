@@ -16,7 +16,7 @@
    [freememo.document-body :refer [DocumentRoot]]))
 
 ;; ---------------------------------------------------------------------------
-(e/defn TopicPage [user-id enc-key topic-id navigate! llm-enabled? queue-ctx]
+(e/defn TopicPage [user-id enc-key topic-id navigate! llm-enabled? queue-ctx url-page]
   (e/client
     (dom/div
       (dom/props {:style {:height "100%" :display "flex" :flex-direction "column" :overflow "hidden"}})
@@ -30,7 +30,7 @@
         ;; Three providers each return a prop-keyed map; merge seeds DocumentRoot,
         ;; the thin binder that unpacks the map into the doc-context dynamic vars
         ;; (dctx). No prop map reaches any component — they read dctx.
-        (let [resolved (ts/ResolveTopic user-id enc-key topic-id navigate! llm-enabled? queue-ctx)
+        (let [resolved (ts/ResolveTopic user-id enc-key topic-id navigate! llm-enabled? queue-ctx url-page)
               layout   (ts/DocumentLayoutState resolved)
               view     (ts/DocumentViewState resolved topic-id)]
           (DocumentRoot (merge resolved layout view)))))))
