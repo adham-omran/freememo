@@ -27,10 +27,10 @@
 ;; logic in go-to-page-after-load!. See restoring? for the read-side predicate.
 (defonce !restoring? (atom false))
 
-;; Reflow settle window (ms). A scale/fit change re-lays-out pages over several
-;; frames; once `pagerendered` is quiet for -quiet-ms the reflow is settled.
-;; -max-ms is a hard ceiling so the pin can never stick if renders never quiesce.
-(def ^:private reflow-quiet-ms 200)
+;; Reflow settle detection. The per-frame pin treats the anchor page as settled
+;; once its scroll position is unchanged for -stable-frames consecutive frames
+;; (~100ms at 60fps); -max-ms is a hard ceiling so the pin can never stick.
+(def ^:private reflow-stable-frames 6)
 (def ^:private reflow-max-ms 3000)
 
 ;; Release fn of the in-flight page-pin, if any. A new pin supersedes the previous
@@ -57,38 +57,6 @@
 (def ^:private max-scale 5.0)    ; 500%
 
 (defn- clamp-scale [s] (max min-scale (min max-scale s)))
-
-(defn- set-scale-anchored!
-  "Set currentScale (clamped) and preserve the vertical viewport by scaling the
-   container scrollTop by the SAME ratio.
-
-   PDF.js holds scrollTop constant across a scale change, so as page heights change
-   the viewport slides onto another page (observed: zoom-in at p42 → p38, revealed
-   on the next scroll because currentPageNumber lags). The whole document scales
-   uniformly, so the content at scrollTop s moves to s×(new/old); setting scrollTop
-   there preserves the exact view — page AND within-page offset — with no dependence
-   on PDF.js's (deferred, unreliable) page-offset layout. Re-applied on the next
-   animation frame in case the scrollHeight hadn't grown yet on the first set.
-
-   Pre: viewer mounted; currentScale > 0. Post: currentScale == clamp-scale(scale);
-   the content previously at the viewport top stays there."
-  [v scale]
-  #?(:cljs
-     (let [^js v v
-           ^js c (.-container v)
-           old-scale (.-currentScale v)
-           new-scale (clamp-scale scale)
-           target (when (pos? old-scale) (* (.-scrollTop c) (/ new-scale old-scale)))]
-       (set! (.-currentScale v) new-scale)
-       (when target
-         (set! (.-scrollTop c) target)
-         (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] set-scale-anchored! target=" (.toFixed target 0)
-                              " scrollTopAfter=" (.toFixed (.-scrollTop c) 0) " scrollH=" (.-scrollHeight c)))
-         (js/requestAnimationFrame
-           (fn []
-             (set! (.-scrollTop c) target)
-             (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] set-scale-anchored! rAF re-apply target=" (.toFixed target 0)
-                                  " scrollTopAfter=" (.toFixed (.-scrollTop c) 0) " scrollH=" (.-scrollHeight c)))))))))
 
 (declare zoom!)   ; defined below; referenced by init-viewer!'s ctrl+wheel handler
 
@@ -275,59 +243,64 @@
                (set! (.-currentPageNumber v) page-num)
                (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] go-to-page! done; currentPage=" (.-currentPageNumber v)))))))
 
-(defn- hold-through-reflow!
-  "Suppress page-anchor persistence (!restoring? true) across an async reflow,
-   releasing when `settle-event` is quiet for reflow-quiet-ms — the transient
-   `pagechanging` the reflow emits (viewport momentarily on the wrong page) is
-   thus never persisted. `on-settle`, if non-nil, runs (with the viewer) on each
-   settle-event; restore passes a re-pin, zoom passes nil (set-scale-anchored!
-   already positioned the viewport). A user gesture ends the hold early;
-   reflow-max-ms caps it; a prior hold is superseded so listeners never stack.
+(defn- pin-anchor-through-reflow!
+  "Lock the viewport onto anchor-page across a layout reflow (restore fit, or zoom
+   scale change) by re-scrolling it into view every animation frame until its
+   position stops moving for reflow-stable-frames.
 
-   Pre:  viewer + event-bus mounted; a reflow is in flight or imminent.
-   Post: !restoring? true for the window, false after.
-   Invariant: !restoring? cleared on exactly one path (release, idempotent)."
-  [settle-event on-settle]
+   Why per-frame, not event-driven: on a slow machine the reflow commits over many
+   frames with gaps that no single event (pagechanging/pagerendered) reliably
+   covers, so an event + quiet-timer always leaves a hole a late drift slips
+   through (observed: zoom p42 → held, released, then drifted to 38 and persisted).
+   Why scrollPageIntoView, not a fixed scrollTop: it targets the page's OWN moving
+   position, so the viewport shows anchor-page the whole time — no flash of a
+   neighbour and no reliance on when PDF.js commits positions.
+
+   Persistence is suppressed (!restoring?) for the window; a user gesture ends it
+   early; reflow-max-ms caps it; a prior pin is superseded so nothing stacks.
+
+   Pre:  viewer mounted; a reflow is in flight or imminent.
+   Post: viewer sits on anchor-page; !restoring? true during, false after.
+   Invariant: !restoring? cleared on exactly one path (release, idempotent).
+   Trade-off: anchors to the page top — within-page scroll offset is not kept."
+  [anchor-page]
   #?(:cljs
-     (when-let [{:keys [event-bus viewer]} @!viewer-state]
-       (when-let [cancel @!pin-cancel] (cancel))     ; supersede any active hold
-       (let [^js eb        event-bus
-             ^js v         viewer
-             !settle-timer (atom nil)
-             released?     (atom false)
-             !handler      (atom nil)
-             !on-gesture   (atom nil)
-             !self         (atom nil)
-             container     (.-container v)
-             gestures      ["wheel" "touchstart" "keydown" "pointerdown"]
+     (when-let [{:keys [viewer]} @!viewer-state]
+       (when-let [cancel @!pin-cancel] (cancel))     ; supersede any active pin
+       (let [^js v         viewer
+             ^js container (.-container v)
+             released?   (atom false)
+             !on-gesture (atom nil)
+             !self       (atom nil)
+             !last       (atom nil)
+             !stable     (atom 0)
+             gestures    ["wheel" "touchstart" "keydown" "pointerdown"]
              release (fn []
                        (when-not @released?
                          (reset! released? true)
-                         (when-let [t @!settle-timer] (js/clearTimeout t))
-                         (when-let [h @!handler] (.off eb settle-event h))
                          (when (and container @!on-gesture)
                            (doseq [ev gestures] (.removeEventListener container ev @!on-gesture)))
                          (when (identical? @!pin-cancel @!self) (reset! !pin-cancel nil))
                          (reset! !restoring? false)
-                         (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] hold: settled -> released; !restoring?=false"))))
-             handler (fn []
-                       (when on-settle (on-settle v))
-                       (when-let [t @!settle-timer] (js/clearTimeout t))
-                       (reset! !settle-timer (js/setTimeout release reflow-quiet-ms)))]
+                         (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] pin: released on page=" anchor-page "; !restoring?=false"))))
+             frame (fn frame []
+                     (when-not @released?
+                       (.scrollPageIntoView v (clj->js {:pageNumber anchor-page}))
+                       (let [st (.-scrollTop container)]
+                         (if (= st @!last)
+                           (swap! !stable inc)
+                           (do (reset! !stable 0) (reset! !last st))))
+                       (if (>= @!stable reflow-stable-frames)
+                         (release)
+                         (js/requestAnimationFrame frame))))]
          (reset! !self release)
          (reset! !pin-cancel release)
          (reset! !restoring? true)
-         (reset! !handler handler)
          (reset! !on-gesture (fn [] (release)))
-         (.on eb settle-event handler)
          (when container
            (doseq [ev gestures]
              (.addEventListener container ev @!on-gesture #js {:once true :passive true})))
-         ;; Start the quiet timer NOW: a clean change (no settle-event, e.g. a zoom
-         ;; that didn't shift the page) releases after reflow-quiet-ms; each event
-         ;; extends it. Without this the hold would run to reflow-max-ms and block
-         ;; genuine navigation meanwhile.
-         (reset! !settle-timer (js/setTimeout release reflow-quiet-ms))
+         (js/requestAnimationFrame frame)
          (js/setTimeout release reflow-max-ms)))))
 
 (defn zoom!
@@ -342,14 +315,8 @@
                    anchor  (.-currentPageNumber v)]
                (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] zoom! factor=" factor
                                     " scaleBefore=" (.-currentScale v) " page=" anchor " scrollTop=" (.-scrollTop (.-container v))))
-               ;; Hold BEFORE the change: scroll-ratio positions the viewport, and
-               ;; the re-pin snaps back to the anchor page on any transient the
-               ;; deferred position-commit produces — killing the visible flash,
-               ;; not just its persistence.
-               (hold-through-reflow! "pagechanging"
-                 (fn [^js vv] (when (not= (.-currentPageNumber vv) anchor)
-                                (go-to-page! anchor))))
-               (set-scale-anchored! v (* (.-currentScale v) factor))
+               (set! (.-currentScale v) (clamp-scale (* (.-currentScale v) factor)))
+               (pin-anchor-through-reflow! anchor)
                (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] zoom! done scaleAfter=" (.-currentScale v) " page=" (.-currentPageNumber v) " scrollTop=" (.-scrollTop (.-container v))))))))
 
 (defn set-zoom!
@@ -373,10 +340,8 @@
      :cljs (when-let [{:keys [viewer]} @!viewer-state]
              (let [^js v   viewer
                    anchor  (.-currentPageNumber v)]
-               (hold-through-reflow! "pagechanging"
-                 (fn [^js vv] (when (not= (.-currentPageNumber vv) anchor)
-                                (go-to-page! anchor))))
-               (set-scale-anchored! v (/ pct 100))))))
+               (set! (.-currentScale v) (clamp-scale (/ pct 100)))
+               (pin-anchor-through-reflow! anchor)))))
 
 (defn rotate-ccw!
   "Rotate all pages 90° counter-clockwise (viewer.pagesRotation −= 90)."
@@ -408,8 +373,8 @@
 
    The app sets the page-width fit on `pagesloaded`; that fit re-lays-out every
    page over the following frames, sliding a single jump off the target (observed:
-   restore to 20 → viewport settles on 30). pin-page-through-reflow! re-asserts the
-   page across the whole reflow.
+   restore to 20 → viewport settles on 30). pin-anchor-through-reflow! re-asserts
+   the page across the whole reflow.
 
    Pre:  called once per load, before pagesloaded; !viewer-state has an event-bus.
    Post: viewer sits on page-num once reflow settles; !restoring? is true from
@@ -426,10 +391,7 @@
          (.on eb "pagesloaded"
            (fn []
              (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] restore: pagesloaded fired; pinning to " page-num " until reflow settles"))
-             ;; Re-pin the target on each render until the fit reflow quiets.
-             (hold-through-reflow! "pagerendered"
-               (fn [^js v] (when (not= (.-currentPageNumber v) page-num)
-                             (go-to-page! page-num)))))
+             (pin-anchor-through-reflow! page-num))
            (clj->js {:once true}))))))
 
 (defn on-page-change!
