@@ -42,8 +42,10 @@
           (= 404 status) {:status :not-found}
           :else          {:status :http-error :code status}))
       (catch java.net.SocketTimeoutException _
+        (tel/log! {:level :warn :id ::http-get :url url} "socket timeout")
         {:status :timeout})
       (catch java.net.ConnectException _
+        (tel/log! {:level :warn :id ::http-get :url url} "connection refused")
         {:status :exception :reason :connect})
       (catch Exception e
         (tel/log! {:level :warn :id ::http-get :url url} (.getMessage e))

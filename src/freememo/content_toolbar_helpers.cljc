@@ -90,7 +90,7 @@
                 (db/copy-pins-to-child! parent-id (:topics/id created))
                 {:success true})
               (catch Exception e
-                (log/log-info (str "[CREATE-EXTRACT " invocation-id "] DB-INSERT-FAILED " (.getMessage e)))
+                (log/log-error (str "[CREATE-EXTRACT " invocation-id "] DB-INSERT-FAILED " (.getMessage e)))
                 {:success false :error (.getMessage e)})))
      :cljs nil))
 
@@ -165,6 +165,7 @@
                gen-result
                (save-cards-for-topic user-id topic-id root-topic-id card-type (:cards gen-result))))))
        (catch Exception e
+         (log/log-error (str "generate-and-save! failed: " (.getMessage e)))
          {:success false :error (.getMessage e)}))))
 
 (defn enqueue-card-gen! [item]
@@ -209,7 +210,7 @@
               (if (:success result)
                 (do (commands/bump! uid :generate)
                   (log/log-info (str "Card gen complete topic=" tid)))
-                (do (log/log-info (str "Card gen failed topic=" tid " error=" (:error result)))
+                (do (log/log-warn (str "Card gen failed topic=" tid " error=" (:error result)))
                   (swap! !status update tid assoc :error (:error result))
                   (toasts/push! uid
                     {:level :error

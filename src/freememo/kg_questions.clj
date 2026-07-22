@@ -69,7 +69,8 @@
                           (llm/interrupt-checkpoint!)
                           (try
                             (let [{:keys [parsed cost]} (llm/chat! api-key model-slug prompt
-                                                          (pr-str (vec batch)))]
+                                                          (pr-str (vec batch))
+                                                          {:feature :kg-atomic :user-id user-id})]
                               {:persisted (persist-atomic-batch! user-id (:id entry) batch parsed)
                                :cost cost})
                             (catch InterruptedException e (throw e))
@@ -126,7 +127,8 @@
               {:keys [parsed cost]} (llm/chat! api-key model-slug
                                       (cards/load-prompt-template "kg-question-synthesis.md")
                                       (pr-str {:entity entity-label
-                                               :facts (mapv fact->prompt-row facts)}))
+                                               :facts (mapv fact->prompt-row facts)})
+                                      {:feature :kg-synthesis :user-id user-id})
               valid-ids (into #{} (map :id) facts)
               persisted (count
                           (for [{:keys [q a fact-ids]} (when (sequential? parsed) parsed)
