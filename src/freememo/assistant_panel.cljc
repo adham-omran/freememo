@@ -345,7 +345,7 @@
                       (rt))))))))
 
         ;; Composer: Enter sends, Shift+Enter newlines, `@` opens the doc picker.
-        ;; The Send (↑) button sits in a row beneath the input.
+        ;; The Send (↑) button sits beside the input, aligned to its bottom.
         (dom/div
           (dom/props {:class "assistant-panel__composer"})
           (dom/textarea
