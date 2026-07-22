@@ -28,11 +28,11 @@
   ;; The user chooses the model and thus the OCR cost. Empty/unset = no restriction
   ;; (all registry models offered); set a subset to restrict. Self-host always
   ;; offers all models.
-  :ocr-model-allowlist ["openai-gpt-5.1" "gemini-3-flash" "gemini-3.5-flash" "mistral-ocr-4"]
+  :ocr-model-allowlist ["openai-gpt-5.1" "gemini-3-flash" "gemini-3.5-flash" "gemini-3.6-flash" "gemini-3.5-flash-lite" "mistral-ocr-4"]
 
   ;; Card-generation models a credits-mode user may pick (ids from
   ;; freememo.card-models/registry). Empty/unset = all registry models offered.
-  :card-model-allowlist ["gpt-5.1" "gemini-3-flash" "gemini-3.5-flash" "claude-haiku-4.5" "claude-sonnet-5" "deepseek-v4-flash"]
+  :card-model-allowlist ["gpt-5.1" "gemini-3-flash" "gemini-3.5-flash" "gemini-3.6-flash" "gemini-3.5-flash-lite" "claude-haiku-4.5" "claude-sonnet-5" "deepseek-v4-flash"]
 
   ;; Top-up amounts shown as buttons, in IQD (Wayl minimum per link is 1000).
   :presets [nil]
