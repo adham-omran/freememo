@@ -23,6 +23,7 @@
             [freememo.landing-page :refer [LandingPage]]
             [freememo.toast-stack :refer [ToastStack]]
             [freememo.optimistic :refer [CommandDispatcher]]
+            [freememo.client-errors :refer [ClientErrorForwarder]]
             [freememo.undo-history-modal :refer [ActionsNavButton UndoHistoryModal]]
             [freememo.icons :as icons]
             [freememo.tooltip :as tooltip]
@@ -420,6 +421,9 @@
 
                 ;; Optimistic-update command pump (headless; renders nothing)
                 (CommandDispatcher user-id)
+
+                ;; Client→server error trail pump (headless; renders nothing)
+                (ClientErrorForwarder user-id)
 
                 ;; Command architecture: queue-invocation bridge + palette
                 (bus/QueueInvoker user-id)

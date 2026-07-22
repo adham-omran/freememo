@@ -15,6 +15,7 @@
    [freememo.loading :as loading]
    [freememo.modal-shell :as modal]
    [freememo.navigation :as nav]
+   [freememo.client-errors :as ce]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.quota :as quota])
    #?(:clj [freememo.web-import :as web-import])))
@@ -148,6 +149,7 @@
          (.then (fn [^js data] (on-success data)))
          (.catch (fn [err]
                    (js/console.error "POST failed:" err)
+                   (ce/report! :import/post-form err)
                    (on-error "Request failed — please try again."))))))
 
 #?(:cljs
@@ -161,6 +163,7 @@
            (.then (fn [^js data] (on-success data)))
            (.catch (fn [err]
                      (js/console.error "Upload failed:" err)
+                     (ce/report! :import/upload err)
                      (on-error "Upload failed — please try again.")))))))
 
 ;; ── Atoms reset ────────────────────────────────────────────────────

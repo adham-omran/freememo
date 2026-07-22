@@ -20,6 +20,7 @@
    [freememo.commands :as commands]
    [hyperfiddle.electric-forms5 :as forms]
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.logging :as log])
    #?(:clj [freememo.staged-delete :as staged-delete])
    #?(:clj [freememo.topic-move :as topic-move])
    #?(:clj [freememo.user-state :as us])))
@@ -499,8 +500,12 @@
               (when t
                 (let [{:keys [id dismissed?]} dismiss-cmd
                       ok (e/server (e/Offload #(do (if dismissed?
-                                                     (db/undismiss-topic! user-id id)
-                                                     (db/dismiss-topic! user-id id))
+                                                     (do (db/undismiss-topic! user-id id)
+                                                       (log/audit! {:id ::topic-undismissed :user-id user-id
+                                                                    :action :update :entity :document :entity-id id}))
+                                                     (do (db/dismiss-topic! user-id id)
+                                                       (log/audit! {:id ::topic-dismissed :user-id user-id
+                                                                    :action :update :entity :document :entity-id id})))
                                                    :ok)))]
                   (case ok
                     (case (e/server (commands/bump! user-id (if dismissed? :undismiss :dismiss)))

@@ -14,6 +14,7 @@
    [freememo.icons :as icons]
    [freememo.commands :as commands]
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.logging :as log])
    #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])))
 
@@ -37,6 +38,8 @@
   #?(:clj
      (let [removed (db/remove-pin! pin-id)]
        (when removed
+         (log/audit! {:id ::remove-pin :user-id user-id :action :delete
+                      :entity :pin :entity-id pin-id})
          (let [undo-id (db/insert-undo-entry! user-id "remove-pin" "pin"
                          [pin-id] [removed])]
            (toasts/push! user-id {:level :success
@@ -53,6 +56,8 @@
   #?(:clj
      (let [new-placement (if (= current-placement "front") "back" "front")]
        (db/update-pin-placement! pin-id new-placement)
+       (log/audit! {:id ::toggle-pin-placement :user-id user-id :action :update
+                    :entity :pin :entity-id pin-id})
        (commands/bump! user-id :toggle-pin-placement)
        :ok)
      :cljs nil))

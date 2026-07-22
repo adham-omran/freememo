@@ -179,6 +179,7 @@
       {:success true :text (or (:topics/content page) "")}
       {:success false :error "Page not found"})
     (catch Exception e
+      (tel/error! {:id ::get-page-text :data {:parent-id parent-id :page-number page-number}} e)
       {:success false :error (.getMessage e)})))
 
 (defn list-extracted-pages
@@ -188,6 +189,7 @@
     (let [pages (db/list-pages parent-id)]
       {:success true :pages pages})
     (catch Exception e
+      (tel/error! {:id ::list-extracted-pages :data {:parent-id parent-id}} e)
       {:success false :error (.getMessage e)})))
 
 (defn save-page-html-impl
