@@ -132,7 +132,6 @@
           zoom-focused (e/watch !zoom-focused)
           apply-pct! (fn [raw]
                        (let [n (js/parseInt raw 10)]      ; "150%" → 150, "" → NaN
-                         (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] zoom field apply-pct! raw=" (pr-str raw) " n=" n))
                          (when-not (js/isNaN n)
                            (viewer/set-zoom-pct! (max 25 (min 500 n))))))]
       (when (and (not zoom-focused) (not= zoom-val (str pct "%")))
