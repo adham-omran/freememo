@@ -181,6 +181,8 @@
                                   (db/set-pin! {:topic-id topic-id
                                                 :media-id media-id
                                                 :placement placement})
+                                  (log/audit! {:id ::add-pin :user-id user-id :action :create
+                                               :entity :pin :entity-id media-id})
                                   {:success true}
                                   (catch clojure.lang.ExceptionInfo ex
                                     (let [data (ex-data ex)]

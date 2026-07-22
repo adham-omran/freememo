@@ -6,7 +6,8 @@
    format-menu drive the same behavior without a namespace cycle (format-menu
    requires this ns; this ns requires neither). CLJS side effects; the CLJ
    branch is inert so the ns loads on both peers."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [freememo.client-errors :as ce]))
 
 ;; ---------------------------------------------------------------------------
 ;; Cloze deletion — number tracking + selection wrapping (CLJS).
@@ -96,6 +97,7 @@
                       (on-uploaded (str "/api/media/" id))))))
          (.catch (fn [err]
                    (js/console.warn "[editor-actions] image upload failed:" (str err))
+                   (ce/report! :editor/image-upload err)
                    (on-uploaded nil)))))
      :clj nil))
 

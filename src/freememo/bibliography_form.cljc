@@ -12,6 +12,7 @@
    [freememo.icons :as icons]
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])
+   #?(:clj [taoensso.telemere :as tel])
    #?(:clj [freememo.optimistic :as opt])
    #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.biblio-import :as biblio-import])))
@@ -239,6 +240,7 @@
            ;; No bump here: optimistic/execute! bumps :save-biblio's :views.
            result))
        (catch Exception e
+         (tel/error! {:id ::save-biblio :data {:user-id user-id :topic-id topic-id}} e)
          {:ok false :error (.getMessage e)}))
      :cljs nil))
 

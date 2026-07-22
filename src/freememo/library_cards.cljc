@@ -22,6 +22,7 @@
    #?(:clj [freememo.anki-sync-server :as sync-server])
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.db :as db])
+   #?(:clj [taoensso.telemere :as tel])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])))
 
@@ -316,6 +317,7 @@
           :unpushed (count (filterv #(= :unpushed (:sync-state %)) sorted))
           :modified (count (filterv #(= :modified (:sync-state %)) sorted))})
        (catch Exception e
+         (tel/error! {:id ::query-user-cards :data {:user-id user-id}} e)
          {:success false :error (.getMessage e)}))
      :cljs nil))
 

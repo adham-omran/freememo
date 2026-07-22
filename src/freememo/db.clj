@@ -16,6 +16,7 @@
    [freememo.quota :as quota]
    [freememo.config :as config]
    [freememo.fsrs :as fsrs]
+   [freememo.logging :as log]
    [freememo.text :as text])
   (:import [com.zaxxer.hikari HikariDataSource]
            [org.postgresql.util PGobject]))
@@ -1530,6 +1531,15 @@
 ;; Topic CRUD
 ;; ---------------------------------------------------------------------------
 
+(defn- audit-doc-created!
+  "Audit a document (root/child topic) creation.
+   Pre: user-id the owner (nil for owner-less system topics — skipped); topic-id
+   the new row's id. Post: one :create audit signal (§3.2). Returns nil."
+  [user-id topic-id]
+  (when user-id
+    (log/audit! {:id ::topic-created :user-id user-id :action :create
+                 :entity :document :entity-id topic-id})))
+
 (defn create-topic!
   "Create a topic. attrs is a map with keys:
    :user-id :kind :title :parent-id :content :page-number
@@ -1549,11 +1559,13 @@
               sanitized (assoc :content sanitized
                           :content_text (text/strip-html sanitized))
               (:page-number attrs) (assoc :page_number (:page-number attrs))
-              (:source-id attrs) (assoc :source_id (:source-id attrs)))]
-    (jdbc/execute-one! ds
-      (sql/format {:insert-into :topics
-                   :values [row]
-                   :returning [:*]}))))
+              (:source-id attrs) (assoc :source_id (:source-id attrs)))
+        created (jdbc/execute-one! ds
+                  (sql/format {:insert-into :topics
+                               :values [row]
+                               :returning [:*]}))]
+    (audit-doc-created! (:user-id attrs) (:topics/id created))
+    created))
 
 (defn get-topic
   "Get a topic by ID. Excludes topics staged for deletion (hidden)."
@@ -1723,6 +1735,8 @@
                                 :where [:= :id id]}))]
       (when (and owner (pos? freed))
         (bump-user-usage! tx owner (- freed)))
+      (log/audit! {:id ::topic-deleted :user-id owner :action :delete
+                   :entity :document :entity-id id})
       result)))
 
 (defn delete-topic-for-user!
@@ -1736,6 +1750,8 @@
                                 :where [:and [:= :id id] [:= :user_id user-id]]}))]
       (when (pos? freed)
         (bump-user-usage! tx user-id (- freed)))
+      (log/audit! {:id ::topic-deleted :user-id user-id :action :delete
+                   :entity :document :entity-id id})
       result)))
 
 (defn batch-create-topics!
@@ -1850,6 +1866,8 @@
                                      :title title
                                      :container_title container}]
                            :returning [:*]}))]
+    (log/audit! {:id ::source-created :user-id user-id :action :create
+                 :entity :source :entity-id (:sources/id row)})
     (update row :sources/csl pgobject->clj)))
 
 (defn get-source
@@ -1891,6 +1909,9 @@
                            :set set-map
                            :where [:= :id id]
                            :returning [:*]}))]
+    (when row
+      (log/audit! {:id ::source-updated :user-id (:sources/user_id row) :action :update
+                   :entity :source :entity-id id}))
     (some-> row (update :sources/csl pgobject->clj))))
 
 (defn attach-source-to-topic!
@@ -2122,6 +2143,7 @@
            topic-id file-bytes file-size "application/pdf"])
         (when (pos? page-count)
           (insert-page-stubs! tx user-id topic-id 1 page-count))
+        (audit-doc-created! user-id topic-id)
         topic))))
 
 (defn create-audio-topic!
@@ -2159,6 +2181,7 @@
           ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
             VALUES (?, ?, ?, ?)"
            topic-id file-bytes file-size mime-type])
+        (audit-doc-created! user-id topic-id)
         topic))))
 
 (defn create-score-topic!
@@ -2201,6 +2224,7 @@
           ["INSERT INTO topic_files (topic_id, role, file_data, file_size, mime_type)
             VALUES (?, 'audio', ?, ?, ?)"
            topic-id audio-bytes audio-size audio-mime])
+        (audit-doc-created! user-id topic-id)
         topic))))
 
 (defn create-live-doc!
@@ -2221,15 +2245,17 @@
                                             :csl (->jsonb csl)
                                             :title title}]
                                   :returning [:id]}))
-            source-id (:sources/id source)]
-        (jdbc/execute-one! tx
-          (sql/format {:insert-into :topics
-                       :values [{:user_id user-id
-                                 :kind "pdf"
-                                 :title title
-                                 :is_live true
-                                 :source_id source-id}]
-                       :returning [:id]}))))))
+            source-id (:sources/id source)
+            topic (jdbc/execute-one! tx
+                    (sql/format {:insert-into :topics
+                                 :values [{:user_id user-id
+                                           :kind "pdf"
+                                           :title title
+                                           :is_live true
+                                           :source_id source-id}]
+                                 :returning [:id]}))]
+        (audit-doc-created! user-id (:topics/id topic))
+        topic))))
 
 (defn commit-live-append!
   "Atomically persist an appended PDF blob for a Live Document.
@@ -2333,6 +2359,7 @@
                                                :content_text (text/strip-html sanitized)}
                                         source-id (assoc :source_id source-id))]
                              :returning [:id]}))]
+    (audit-doc-created! user-id (:topics/id topic))
     (:topics/id topic)))
 
 (defn create-markdown-topic!
@@ -2349,6 +2376,7 @@
                                        :content sanitized
                                        :content_text (text/strip-html sanitized)}]
                              :returning [:id]}))]
+    (audit-doc-created! user-id (:topics/id topic))
     (:topics/id topic)))
 
 (defn create-epub-topic!
@@ -2411,6 +2439,7 @@
                                                           :returning [:id :page_number]}))
                                   id-by-page (into {} (map (juxt :topics/page_number :topics/id)) returned)]
                               (mapv (comp id-by-page :page_number) chapter-rows)))]
+          (audit-doc-created! user-id topic-id)
           {:topic-id topic-id :chapter-ids (vec (remove nil? chapter-ids))})))))
 
 (defn create-standalone-topic!
@@ -2426,6 +2455,7 @@
                                        :content ""
                                        :content_text ""}]
                              :returning [:id]}))]
+    (audit-doc-created! user-id (:topics/id topic))
     {:topic-id (:topics/id topic)}))
 
 ;; ---------------------------------------------------------------------------
