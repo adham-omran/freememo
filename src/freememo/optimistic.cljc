@@ -62,24 +62,39 @@
 
 #?(:clj
    (defn enqueue-pending-card!
-     "Register a :pending overlay row and enqueue its save command under one
-      fresh tempid (shared by both, so they correlate). `type` is the
+     "Register a :pending overlay row and enqueue its save command under `id`
+      (shared by overlay entry and command, so they correlate). `id` is the
+      client's idempotency key for one logical add; when nil a fresh one is
+      minted (fire-and-forget callers with no client key). `type` is the
       run-command! dispatch keyword; it is remembered on the entry so retry
-      re-enqueues the same command. Returns :enqueued."
-     [user-id type payload]
-     (let [tempid (java.util.UUID/randomUUID)]
-       (swap! (us/get-atom user-id :pending-cards) assoc tempid
-         {:tempid tempid :topic-id (:topic-id payload) :status :pending
-          :command-type type :payload payload})
-       (enqueue-command! user-id {:id tempid :type type :payload payload})
-       :enqueued)))
+      re-enqueues the same command.
+
+      Idempotent on `id`: a second call whose `id` is already an overlay entry
+      is a no-op — the re-fired or double-submitted add does NOT enqueue a
+      second command. The check-and-insert is one atomic swap-vals!, so two
+      concurrent enqueues (each execute! runs on its own thread) of the same id
+      still enqueue exactly once.
+
+      Returns :enqueued (newly registered) or :duplicate (id already present)."
+     ([user-id type payload] (enqueue-pending-card! user-id type nil payload))
+     ([user-id type id payload]
+      (let [id (or id (java.util.UUID/randomUUID))
+            entry {:tempid id :topic-id (:topic-id payload) :status :pending
+                   :command-type type :payload payload}
+            [old _] (swap-vals! (us/get-atom user-id :pending-cards)
+                      (fn [m] (if (contains? m id) m (assoc m id entry))))]
+        (if (contains? old id)
+          :duplicate
+          (do (enqueue-command! user-id {:id id :type type :payload payload})
+              :enqueued))))))
 
 #?(:clj
    (defn enqueue-add-card!
-     "enqueue-pending-card! for the :add-card command. `payload` is
+     "enqueue-pending-card! for the :add-card command. `id` is the client's
+      per-modal-open idempotency key; `payload` is
       {:topic-id :root-topic-id :kind :card-data}."
-     [user-id payload]
-     (enqueue-pending-card! user-id :add-card payload)))
+     ([user-id payload] (enqueue-add-card! user-id nil payload))
+     ([user-id id payload] (enqueue-pending-card! user-id :add-card id payload))))
 
 #?(:clj
    (defn retry-pending-card!

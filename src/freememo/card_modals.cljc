@@ -632,7 +632,11 @@
           ol-before (e/watch !ol-before)
           ol-reveal (e/watch !ol-reveal)
           card-font-sz (e/server (settings/get-card-font-size user-id))
-          modal-font (str (or card-font-sz 14) "px")]
+          modal-font (str (or card-font-sz 14) "px")
+          ;; One idempotency key per modal-open: a re-fired or double-submitted
+          ;; commit reuses it, so enqueue-add-card! collapses duplicates to a
+          ;; single save (freememo.optimistic/enqueue-pending-card!).
+          add-id (e/snapshot (random-uuid))]
       (dom/div
         (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
                             :background "transparent" :display "flex" :align-items "center"
@@ -772,7 +776,7 @@
                                    (cond-> {:c (e/server (sanitize-card-field primary))}
                                      (and clean-a (not (str/blank? clean-a)))
                                      (assoc :a clean-a)))])]
-                (case (e/server (opt/enqueue-add-card! user-id
+                (case (e/server (opt/enqueue-add-card! user-id add-id
                                   {:topic-id topic-id :root-topic-id root-topic-id
                                    :kind kind :card-data card-data}))
                   (do (e/on-unmount #(reset! !show-add false)) (t)))))))))))

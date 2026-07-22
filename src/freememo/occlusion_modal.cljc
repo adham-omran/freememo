@@ -33,8 +33,8 @@
   #?(:clj (occ/get-group-for-edit group-id)
      :cljs nil))
 
-(defn enqueue-add-occlusion!* [user-id payload]
-  #?(:clj (opt/enqueue-pending-card! user-id :add-occlusion payload)
+(defn enqueue-add-occlusion!* [user-id id payload]
+  #?(:clj (opt/enqueue-pending-card! user-id :add-occlusion id payload)
      :cljs nil))
 
 (defn enqueue-update-occlusion!* [user-id payload]
@@ -164,7 +164,11 @@
           !submit (atom nil)                    ; {:mode s :n int} — :n re-arms the token
           submit (e/watch !submit)
           submit! (fn [mode] (swap! !submit (fn [prev] {:mode mode :n (inc (:n prev 0))})))
-          [t ?error] (e/Token submit)]
+          [t ?error] (e/Token submit)
+          ;; One idempotency key per modal-open (the modal saves exactly one
+          ;; group and closes on enqueue): a re-fired submit reuses it, so
+          ;; enqueue-add-occlusion!* collapses duplicates to a single save.
+          add-id (e/snapshot (random-uuid))]
       (dom/div
         (dom/props {:style {:display "flex" :justify-content "flex-end" :align-items "center"
                             :gap "var(--sp-2)" :margin-top "var(--sp-4)"}})
@@ -226,7 +230,7 @@
                              :io-fields @!fields}]
                 ;; Optimistic: overlay row + command, close immediately; the
                 ;; CommandDispatcher persists the group (occlusion.clj).
-                (case (e/server (enqueue-add-occlusion!* user-id payload))
+                (case (e/server (enqueue-add-occlusion!* user-id add-id payload))
                   (do (e/on-unmount #(reset! !request nil))
                     (t)))))))))))
 

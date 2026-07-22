@@ -123,8 +123,8 @@
   (reset! !score-edit nil)
   nil)
 
-(defn enqueue-add-score!* [user-id payload]
-  #?(:clj (opt/enqueue-pending-card! user-id :add-score-group payload)
+(defn enqueue-add-score!* [user-id id payload]
+  #?(:clj (opt/enqueue-pending-card! user-id :add-score-group id payload)
      :cljs nil))
 
 (defn enqueue-update-score!* [user-id payload]
@@ -362,12 +362,16 @@
                 (fn [_] (start-pipeline! ["audio-front" "sheet-front"])) nil))))
         ;; Enqueue once the assets are materialized.
         (when t
-          (let [payload (:payload submit)]
+          ;; One idempotency key per submit (this toolbar is always mounted and
+          ;; reused across adds): e/snapshot freezes it for the armed token's
+          ;; lifetime, so a re-fired enqueue reuses it and collapses to one save.
+          (let [payload (:payload submit)
+                add-id (e/snapshot (random-uuid))]
             (if (:group-id payload)
               (case (e/server (enqueue-update-score!* user-id payload))
                 (do (clear-selection! !score-region !score-pages !score-edit)
                   (t)))
-              (case (e/server (enqueue-add-score!* user-id payload))
+              (case (e/server (enqueue-add-score!* user-id add-id payload))
                 (do (clear-selection! !score-region !score-pages !score-edit)
                   (t))))))))))
 
