@@ -20,6 +20,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [freememo.navigation :as nav]
+   [freememo.client-errors :as ce]
    [freememo.zotero-client :as zc]))
 
 (def ^:private row-height 52)
@@ -104,7 +105,8 @@
              (clj->js {:method "POST" :body fd}))
          (.then (fn [resp] (.json resp)))
          (.then on-data)
-         (.catch (fn [_err] (on-err "Failed to reach the server.")))))))
+         (.catch (fn [err] (ce/report! :zotero/post-form err)
+                   (on-err "Failed to reach the server.")))))))
 
 #?(:cljs
    (defn- post-multipart-stage!
@@ -123,7 +125,8 @@
              (clj->js {:method "POST" :body fd}))
          (.then (fn [resp] (.json resp)))
          (.then on-data)
-         (.catch (fn [_err] (on-err "Failed to upload to FreeMemo.")))))))
+         (.catch (fn [err] (ce/report! :zotero/stage-upload err)
+                   (on-err "Failed to upload to FreeMemo.")))))))
 
 #?(:cljs
    (defn- fetch-and-stage!
@@ -156,7 +159,8 @@
                             csljson (when (:ok? csl-result)
                                       (get-in csl-result [:data :csl]))]
                         (post-multipart-stage! bytes filename csljson on-data on-err))))))
-         (.catch (fn [_err] (on-err "Unexpected error during import.")))))))
+         (.catch (fn [err] (ce/report! :zotero/fetch-and-stage err)
+                   (on-err "Unexpected error during import.")))))))
 
 ;; ── Sub-components ─────────────────────────────────────────────────
 

@@ -66,7 +66,7 @@
    shape-valid and tagged :page. Retries malformed output once."
   [api-key model-slug prompt page-number page-text]
   (loop [attempt 1]
-    (let [result (try (llm/chat! api-key model-slug prompt page-text)
+    (let [result (try (llm/chat! api-key model-slug prompt page-text {:feature :kg-extract})
                    (catch clojure.lang.ExceptionInfo e
                      (if (and (= 1 attempt) (:raw (ex-data e)))
                        ::retry
@@ -143,7 +143,8 @@
           (try
             (let [{:keys [parsed cost]} (llm/chat! api-key model-slug
                                           (cards/load-prompt-template "kg-link.md")
-                                          (pr-str candidates))]
+                                          (pr-str candidates)
+                                          {:feature :kg-link})]
               {:decisions (if (map? parsed) parsed {}) :cost cost})
             (catch Exception e
               (tel/log! {:level :warn :id ::link-degraded

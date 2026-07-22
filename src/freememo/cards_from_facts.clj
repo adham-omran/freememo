@@ -63,7 +63,8 @@
           _ (when-not prompt (throw (ex-info "Failed to load select-facts prompt" {})))
           {:keys [parsed cost]} (llm/chat! api-key model-slug prompt
                                   (pr-str {:passage passage
-                                           :facts (mapv fact->select-row candidate-facts)}))
+                                           :facts (mapv fact->select-row candidate-facts)})
+                                  {:feature :fact-select :user-id user-id})
           by-id (into {} (map (juxt :id identity)) candidate-facts)
           model-ids (into [] (filter int?) (when (sequential? parsed) parsed))
           dropped-ids (into [] (remove by-id) model-ids)

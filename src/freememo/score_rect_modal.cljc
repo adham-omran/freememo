@@ -14,6 +14,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.modal-shell :as modal]
+   [freememo.client-errors :as ce]
    #?(:cljs [freememo.score-pdf :as score-pdf])
    #?(:cljs [freememo.score-rect-editor :as rect-editor])))
 
@@ -50,7 +51,8 @@
                       :on-change (fn [rects]
                                    (swap! !score-pages assoc-in [page :rects]
                                      (vec rects)))})))))
-           (.catch (fn [e] (js/console.error "[score-rect-modal] page render failed:" e))))
+           (.catch (fn [e] (js/console.error "[score-rect-modal] page render failed:" e)
+                     (ce/report! :score/rect-render e))))
        nil)
      :clj nil))
 
