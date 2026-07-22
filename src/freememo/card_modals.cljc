@@ -9,6 +9,7 @@
    [freememo.typeahead :refer [Typeahead]]
    [freememo.quill-field :refer [QuillField flush-syntax-tokens!]]
    [freememo.commands :as commands]
+   [freememo.cloze :as cloze]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.optimistic :as opt])
@@ -34,29 +35,6 @@
        (set! (.-download a) filename)
        (.click a)
        (.revokeObjectURL js/URL url))))
-
-(defn validate-cloze
-  "Validate cloze MARKER structure, not raw brace counts — card answers may
-   contain literal { } from code (e.g. a trailing }} that closes two Java
-   blocks). Counts {{cN::}} openers and how many are closed by a later }}
-   (non-greedy), then checks the numbering runs 1..max."
-  [text]
-  #?(:cljs
-     (let [text     (or text "")
-           opens    (count (re-seq #"\{\{c\d+::" text))
-           closed   (count (re-seq #"\{\{c\d+::[\s\S]*?\}\}" text))
-           nums     (set (map #(js/parseInt (second %) 10) (re-seq #"\{\{c(\d+)::" text)))
-           max-n    (if (seq nums) (apply max nums) 0)
-           expected (set (range 1 (inc max-n)))]
-       (cond
-         (zero? opens)
-         "No cloze deletion: select text and press the {+} button to add {{c1::...}}"
-         (not= opens closed)
-         "Unclosed cloze: a {{cN::...}} is missing its closing }}"
-         (not= nums expected)
-         (str "Non-sequential cloze numbers: found " (sort nums) ", expected 1 to " max-n)
-         :else nil))
-     :clj nil))
 
 (defn quill-html->items
   "Parse a QuillField's HTML into an ordered vector of list items — the inner
@@ -555,7 +533,7 @@
                                 (t)))
                           (t (:error result))))))
                   (let [validation-error (cond
-                                           (= kind "cloze") (validate-cloze cloze)
+                                           (= kind "cloze") (cloze/validate cloze)
                                            (= kind "basic") (when (blank-html? question)
                                                               "Question can't be empty"))]
                     (if validation-error
@@ -771,7 +749,7 @@
                                        (ex-info "Question can't be empty" {})
                                        [`Add-card {:kind "basic" :topic-id topic-id :root-topic-id root-topic-id
                                                    :primary primary :answer answer}])
-                                     (if-let [err (validate-cloze primary)]
+                                     (if-let [err (cloze/validate primary)]
                                        (ex-info err {})
                                        [`Add-card {:kind "cloze" :topic-id topic-id :root-topic-id root-topic-id
                                                    :primary primary :answer answer}])))
