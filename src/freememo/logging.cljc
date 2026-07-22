@@ -65,14 +65,15 @@
   "Record a client-originating failure, shipped from the browser via e/server.
    Pre:  op (keyword|str) names the failed operation; message a str; user-id may be
          nil (unauthenticated surfaces); session-id the per-page-load UUID or nil.
-   Post: one :warn signal, :id ::client-error, :data :source :client. Returns nil."
+   Post: one :warn signal, :id ::client-error, :data :source :client.
+   Returns :logged (truthy — the client-side forwarder spends its token on it)."
   [user-id session-id op message]
   (tel/log! {:level :warn
              :id ::client-error
              :data {:user-id user-id :session-id session-id
                     :source :client :op op}}
     (str message))
-  nil)
+  :logged)
 
 #?(:cljs
    (defn init-client!

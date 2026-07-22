@@ -9,7 +9,8 @@
    [freememo.navigation :as nav]
    [freememo.command-bus :as bus]
    [freememo.import-modal :refer [ImportModal]]
-   [freememo.zotero-picker-modal :refer [ZoteroPickerModal]]))
+   [freememo.zotero-picker-modal :refer [ZoteroPickerModal]]
+   [freememo.client-errors :as ce]))
 
 ;; Palette → Import handoff: the command handler records which entry modal to
 ;; open and navigates to :import; ImportPage consumes the intent on mount.
@@ -24,7 +25,9 @@
        (.then (fn [^js d]
                 (when (.-success d)
                   (navigate! :viewer (nav/nav-topic (.-doc_id d) nil)))))
-       (.catch (fn [e] (js/console.error "Create Live Document failed:" e)))))
+       (.catch (fn [e]
+                 (js/console.error "Create Live Document failed:" e)
+                 (ce/report! :import/create-live-doc e)))))
    :clj
    (defn- create-live-doc! [_navigate!] nil))
 

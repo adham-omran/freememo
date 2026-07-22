@@ -22,6 +22,7 @@
    [freememo.loading :as loading]
    [freememo.util :as util]
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.logging :as log])
    #?(:clj [freememo.kg-extract :as kg])
    #?(:clj [freememo.kg-questions :as kgq])
    #?(:clj [freememo.toasts :as toasts])
@@ -91,6 +92,8 @@
      [user-id question-id]
      (when-let [undo-id (db/reject-kg-question! user-id question-id)]
        (commands/bump! user-id :generate-questions)
+       (log/audit! {:id ::reject-question :user-id user-id :action :delete
+                    :entity :kg-question :entity-id question-id})
        (toasts/push! user-id {:level :success :message "Question rejected" :dedup? false
                               :actions [{:label "Undo" :undo-id undo-id}]}))
      :done))
@@ -102,9 +105,70 @@
      [user-id fact-id]
      (when-let [undo-id (db/reject-kg-fact! user-id fact-id)]
        (commands/bump! user-id :distill)
+       (log/audit! {:id ::reject-fact :user-id user-id :action :delete
+                    :entity :kg-fact :entity-id fact-id})
        (toasts/push! user-id {:level :success :message "Fact rejected" :dedup? false
                               :actions [{:label "Undo" :undo-id undo-id}]}))
      :done))
+
+#?(:clj
+   (defn merge-entities!*
+     "Merge the `source` entity into `target` (irreversible: source removed, its
+      facts/aliases repointed). Audits + bumps. Returns :done."
+     [user-id target-id source-id]
+     (db/merge-kg-entities! user-id target-id source-id)
+     (commands/bump! user-id :distill)
+     (log/audit! {:id ::merge-entities :user-id user-id :action :delete
+                  :entity :kg-entity :entity-id source-id})
+     :done))
+
+#?(:clj
+   (defn rename-entity!*
+     "Rename a KG entity. Audits + bumps on success.
+      Returns {:success bool :error str}."
+     [user-id entity-id new-label]
+     (let [ok? (db/rename-kg-entity! user-id entity-id new-label)]
+       (when ok?
+         (commands/bump! user-id :distill)
+         (log/audit! {:id ::rename-entity :user-id user-id :action :update
+                      :entity :kg-entity :entity-id entity-id}))
+       {:success ok? :error (when-not ok? "Entity not found")})))
+
+#?(:clj
+   (defn update-question!*
+     "Edit a KG question's Q/A text. Audits + bumps on success.
+      Returns {:success bool :error str}."
+     [user-id question-id q a]
+     (let [ok? (db/update-kg-question! user-id question-id q a)]
+       (when ok?
+         (commands/bump! user-id :generate-questions)
+         (log/audit! {:id ::update-question :user-id user-id :action :update
+                      :entity :kg-question :entity-id question-id}))
+       {:success ok? :error (when-not ok? "Question not found")})))
+
+#?(:clj
+   (defn edit-fact-value!*
+     "Edit a fact's object: set a literal (`literal?` true) or relink to an entity
+      by label. Audits + bumps; toasts on duplicate. The db result `r` is :done
+      (saved), :duplicate (already-exists), or nil (fact gone / not literal) —
+      only :done is a real save. Returns {:success bool :error str}."
+     [user-id fact-id value literal?]
+     (let [r (if literal?
+               (when (db/update-kg-fact-literal! user-id fact-id value) :done)
+               (db/relink-kg-fact-object! user-id fact-id value))]
+       (when (= :duplicate r)
+         (toasts/push! user-id
+           {:level :error
+            :message "That fact already exists in this document."}))
+       (commands/bump! user-id :distill)
+       (when (= :done r)
+         (log/audit! {:id ::edit-fact :user-id user-id :action :update
+                      :entity :kg-fact :entity-id fact-id}))
+       {:success (= :done r)
+        :error (when (not= :done r)
+                 (if (= :duplicate r)
+                   "That fact already exists in this document."
+                   "Fact not found"))})))
 
 ;; ---------------------------------------------------------------------------
 ;; Shared bits
@@ -387,22 +451,7 @@
           (when t
             (let [result (e/server
                            (e/Offload
-                             #(let [r (if literal?
-                                        (when (db/update-kg-fact-literal! user-id fact-id (:value keyev)) :done)
-                                        (db/relink-kg-fact-object! user-id fact-id (:value keyev)))]
-                                (when (= :duplicate r)
-                                  (toasts/push! user-id
-                                    {:level :error
-                                     :message "That fact already exists in this document."}))
-                                (commands/bump! user-id :distill)
-                                ;; r is :done (saved), :duplicate (rejected —
-                                ;; already toasted above), or nil (fact gone /
-                                ;; not literal) — only :done is a real save.
-                                {:success (= :done r)
-                                 :error (when (not= :done r)
-                                          (if (= :duplicate r)
-                                            "That fact already exists in this document."
-                                            "Fact not found"))})))]
+                             #(edit-fact-value!* user-id fact-id (:value keyev) literal?)))]
               (case result
                 (if (:success result)
                   (do (reset! !editing nil) (t))
@@ -551,9 +600,7 @@
                   (when t
                     (let [result (e/server
                                    (e/Offload
-                                     #(let [ok? (db/update-kg-question! user-id qid (:q ev) (:a ev))]
-                                        (when ok? (commands/bump! user-id :generate-questions))
-                                        {:success ok? :error (when-not ok? "Question not found")})))]
+                                     #(update-question!* user-id qid (:q ev) (:a ev))))]
                       (case result
                         (if (:success result)
                           (do (reset! !editing nil) (t))
@@ -689,9 +736,7 @@
                 (when t
                   (let [result (e/server
                                  (e/Offload
-                                   #(let [ok? (db/rename-kg-entity! user-id id (:value keyev))]
-                                      (when ok? (commands/bump! user-id :distill))
-                                      {:success ok? :error (when-not ok? "Entity not found")})))]
+                                   #(rename-entity!* user-id id (:value keyev))))]
                     (case result
                       (if (:success result)
                         (do (reset! !renaming nil) (t))
@@ -794,8 +839,7 @@
                   ;; fire-and-forget: db/merge-kg-entities! has no :success key
                   ;; (returns a fixed truthy value; a bad merge throws instead of
                   ;; returning an error) — no failure contract to branch on here.
-                  (let [r (e/server (e/Offload #(do (db/merge-kg-entities! user-id (:target payload) (:source payload))
-                                                 (commands/bump! user-id :distill) :done)))]
+                  (let [r (e/server (e/Offload #(merge-entities!* user-id (:target payload) (:source payload))))]
                     (case r (reset! !merge-source nil))))))))))))
 
 ;; ---------------------------------------------------------------------------

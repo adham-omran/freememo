@@ -20,6 +20,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.modal-shell :as modal]
+   [freememo.client-errors :as ce]
    #?(:cljs [freememo.live-doc-image-editor :as img-ed])))
 
 (def ^:private heic-name-rx #"(?i)\.hei[cf]$")
@@ -296,8 +297,10 @@
                                                (let [url (js/URL.createObjectURL blob)
                                                      jpg (js/File. (clj->js [blob]) (str nm ".jpg") (clj->js {:type "image/jpeg"}))]
                                                  (set-entry! id #(assoc % :status :ready :url url :payload jpg)))))
-                                      (.catch (fn [_] (set-entry! id #(assoc % :status :error
-                                                                        :error "Couldn’t read this image")))))))
+                                      (.catch (fn [e]
+                                                (ce/report! :live-doc/heic-preview e)
+                                                (set-entry! id #(assoc % :status :error
+                                                                  :error "Couldn’t read this image")))))))
                                 (let [url (js/URL.createObjectURL f)]
                                   (swap! !staged conj {:id id :name nm :status :ready
                                                        :rotation 0 :crop nil :url url :payload f}))))))
@@ -339,7 +342,8 @@
                                              (do (revoke-all!) (reset! !staged [])
                                                  (reset! !active-id nil) (reset! !open? false))
                                              (reset! !commit-error (or (.-error d) "Upload failed")))))
-                                  (.catch (fn [_]
+                                  (.catch (fn [e]
+                                            (ce/report! :live-doc/commit-append e)
                                             (reset! !busy false)
                                             (reset! !commit-error "Upload failed — please try again."))))))))
           launcher-style {:padding (if compact? "6px 10px" "12px 20px")

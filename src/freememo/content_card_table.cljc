@@ -12,6 +12,7 @@
    [freememo.occlusion-modal :refer [OcclusionModal]]
    [freememo.score-toolbar :refer [ScoreEditLoader]]
    #?(:clj [freememo.db :as db])
+   #?(:clj [taoensso.telemere :as tel])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.optimistic :as opt])))
 
@@ -29,6 +30,7 @@
                             (db/get-flashcards topic-id))]
                 {:success true :cards cards}))
             (catch Exception e
+              (tel/error! {:id ::get-cards-for-topic :data {:topic-id topic-id}} e)
               {:success false :error (.getMessage e)}))
      :cljs nil))
 
