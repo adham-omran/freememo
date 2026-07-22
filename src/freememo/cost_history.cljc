@@ -95,13 +95,21 @@
 ;; ── Row + section ───────────────────────────────────────────────────────────
 
 (defn- cell-style
-  "Shared td style; `align` :start (text) or :end (numeric, tabular)."
-  [align]
-  {:padding "4px 10px" :overflow "hidden" :white-space "nowrap"
-   :text-overflow "ellipsis" :display "flex" :align-items "center"
-   :justify-content (if (= align :end) "flex-end" "flex-start")
+  "Shared td style: left-aligned, vertically centered, single line. `numeric?`
+   turns on tabular figures so digits stay column-aligned even when left-aligned.
+   `min-width:0` lets the grid item shrink below its content so an inner
+   `ellipsis-cell` span can ellipsize — grid items default to min-width:auto
+   (= min-content), which otherwise defeats text-overflow."
+  [numeric?]
+  {:padding "4px 10px" :min-width "0" :overflow "hidden"
+   :display "flex" :align-items "center" :justify-content "flex-start"
    :font-size "13px" :color "var(--color-text-primary)"
-   :font-variant-numeric (when (= align :end) "tabular-nums")})
+   :font-variant-numeric (when numeric? "tabular-nums")})
+
+(def ^:private ellipsis-cell
+  "Style for the inner span wrapping overflow-prone cell text. text-overflow is
+   inert on the flex td itself; on this block-level flex child it fires."
+  {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap" :min-width "0"})
 
 (e/defn TxRow [row i row-height]
   (e/client
@@ -116,17 +124,17 @@
         (dom/td (dom/props {:style {:display "flex" :align-items "center" :padding "4px 10px"}})
           (dom/span (dom/props {:class "type-badge" :style {:background badge-color}})
             (dom/text badge-text)))
-        (dom/td (dom/props {:style (cell-style :start)}) (dom/text (or when-str "")))
-        (dom/td (dom/props {:style (cell-style :start) :title (or endpoint "")})
-          (dom/text (endpoint-label endpoint)))
-        (dom/td (dom/props {:style (cell-style :start) :title (or model "")})
-          (dom/text (model-label model)))
-        (dom/td (dom/props {:style (assoc (cell-style :end)
+        (dom/td (dom/props {:style (cell-style false)}) (dom/text (or when-str "")))
+        (dom/td (dom/props {:style (cell-style false) :title (or endpoint "")})
+          (dom/span (dom/props {:style ellipsis-cell}) (dom/text (endpoint-label endpoint))))
+        (dom/td (dom/props {:style (cell-style false) :title (or model "")})
+          (dom/span (dom/props {:style ellipsis-cell}) (dom/text (model-label model))))
+        (dom/td (dom/props {:style (assoc (cell-style true)
                                      :color (if debit? "var(--color-danger)" "var(--color-success)"))
                             :title (or usd-str "")})
           (dom/text (str amount_iqd)))
-        (dom/td (dom/props {:style (cell-style :end)}) (dom/text (str balance_after)))
-        (dom/td (dom/props {:style (cell-style :end) :title "input / output / cached tokens"})
+        (dom/td (dom/props {:style (cell-style true)}) (dom/text (str balance_after)))
+        (dom/td (dom/props {:style (cell-style true) :title "input / output / cached tokens"})
           (dom/text (if (= toks "0/0/0") "—" toks)))))))
 
 (e/defn CostHistorySection
@@ -160,8 +168,8 @@
           rc (or result-count 0)
           reset-key [kind endpoint model preset min-amount-debounced q-debounced]
           row-height 36
-          min-width "830px"
-          grid-cols "90px 150px minmax(120px,1fr) minmax(120px,1fr) 110px 110px 130px"]
+          min-width "910px"
+          grid-cols "90px 150px minmax(120px,1fr) minmax(200px,1.4fr) 110px 110px 130px"]
       (dom/div
         (dom/props {:class "card"})
         (dom/h3 (dom/props {:class "section-title"}) (dom/text "AI costs"))
@@ -223,11 +231,19 @@
               (dom/span (dom/props {:class "spinner"}))
               (dom/text "Loading…"))))
 
-        ;; ── Table (header + virtual-scrolled body share one h-scroll wrapper) ──
+        ;; ── Table: header + virtual-scrolled body in ONE both-axis scroll box.
+        ;;    Both tables are grids driven by the same --grid-cols and sized in the
+        ;;    same width context (identical scrollbar gutter), so their columns
+        ;;    cannot drift; the header is pinned via .tx-head (see index.css). ──
         (dom/div
-          (dom/props {:style {:overflow-x "auto"}})
+          (dom/props {:class "tape-scroll"
+                      :style {:max-height "480px" :overflow "auto"
+                              :scrollbar-gutter "stable"
+                              :--count rc :--grid-cols grid-cols
+                              :--row-height (str row-height "px")}})
           (dom/table
-            (dom/props {:style {:width "100%" :min-width min-width :display "grid"
+            (dom/props {:class "tx-head"
+                        :style {:width "100%" :min-width min-width
                                 :grid-template-columns grid-cols}})
             (dom/thead (dom/props {:style {:display "contents"}})
               (dom/tr (dom/props {:style {:display "contents"}})
@@ -241,20 +257,14 @@
                   (dom/th (dom/props {:style th-style}) (dom/text "Amount"))
                   (dom/th (dom/props {:style th-style}) (dom/text "Balance"))
                   (dom/th (dom/props {:style th-style}) (dom/text "Tokens"))))))
-          (dom/div
-            (dom/props {:class "tape-scroll"
-                        :style {:max-height "480px" :overflow-y "auto"
-                                :scrollbar-gutter "stable"
-                                :--count rc :--grid-cols grid-cols
-                                :--row-height (str row-height "px")}})
-            (let [[offset limit] (Scroll-window row-height rc dom/node
-                                   {:overquery-factor 2 :reset-key reset-key})]
-              (dom/table
-                (dom/props {:style {:width "100%" :min-width min-width :font-size "13px"}})
-                (e/for [i (Tape offset limit)]
-                  (let [row (e/server (nth results i nil))]
-                    (when row
-                      (TxRow row i row-height))))))))
+          (let [[offset limit] (Scroll-window row-height rc dom/node
+                                 {:overquery-factor 2 :reset-key reset-key})]
+            (dom/table
+              (dom/props {:style {:width "100%" :min-width min-width :font-size "13px"}})
+              (e/for [i (Tape offset limit)]
+                (let [row (e/server (nth results i nil))]
+                  (when row
+                    (TxRow row i row-height)))))))
 
         ;; ── Empty state (table stays mounted; message is a sibling) ──
         (when (and (not loading?) (= rc 0))
