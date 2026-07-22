@@ -45,11 +45,15 @@
 (defn chat!
   "One completion; returns {:parsed value :cost usd}. Throws on API error or
    unparseable output (parse failures carry :raw in ex-data — callers decide
-   retry policy)."
-  [api-key slug system-prompt user-content]
-  (let [body (openrouter/chat-completion! api-key
-               {:model slug
-                :messages [{:role "system" :content system-prompt}
-                           {:role "user" :content user-content}]})]
-    {:parsed (llm-edn/parse-response (-> body :choices first :message :content))
-     :cost (double (or (-> body :usage :cost) 0))}))
+   retry policy). Optional `ctx` {:feature kw :user-id id} tags the transport
+   observability signal (see freememo.openrouter/post!)."
+  ([api-key slug system-prompt user-content]
+   (chat! api-key slug system-prompt user-content nil))
+  ([api-key slug system-prompt user-content ctx]
+   (let [body (openrouter/chat-completion! api-key
+                {:model slug
+                 :messages [{:role "system" :content system-prompt}
+                            {:role "user" :content user-content}]}
+                ctx)]
+     {:parsed (llm-edn/parse-response (-> body :choices first :message :content))
+      :cost (double (or (-> body :usage :cost) 0))})))

@@ -18,6 +18,62 @@
 (defn log-error [msg] (tel/log! :error msg))
 (defn log-trace [msg] (tel/log! :trace msg))
 
+;; ---------------------------------------------------------------------------
+;; Structured signals — one schema for the audit trail / observability
+;; (see plans/logging-coverage.md §1.1). Plain defns (not the tel/ macros) so
+;; they're callable inside Electric e/defn bodies and route through Telemere on
+;; both peers. Base :data schema:
+;;   {:user-id :action :entity :entity-id :outcome :duration-ms}
+;; :action  ∈ #{:create :update :delete :restore}
+;; :outcome ∈ #{:ok :error}   :duration-ms present on external calls only.
+;; ---------------------------------------------------------------------------
+
+(def audit-actions "Valid :action values for `audit!`." #{:create :update :delete :restore})
+
+(defn audit!
+  "Log a user-content mutation that succeeded.
+   Pre:  m has :user-id, :entity (keyword), :action ∈ audit-actions;
+         :entity-id present (nil allowed for batch inserts whose ids are unknown).
+   Post: one :info signal; :id = (:id m) (falls back to ::audit); :data carries the
+         base schema keys with :outcome :ok. Returns nil.
+   Pre violation (bad :action) is a caller bug and still logs, tagged :outcome :ok."
+  [{:keys [id action entity entity-id] :as m}]
+  (tel/log! {:level :info
+             :id (or id ::audit)
+             :data (-> (select-keys m [:user-id :action :entity :entity-id :n
+                                       :duration-ms :session-id])
+                     (assoc :outcome :ok))}
+    (str (some-> action name) " " (some-> entity name)
+      (when (some? entity-id) (str " #" entity-id))))
+  nil)
+
+(defn external!
+  "Log an outbound external call's outcome and latency.
+   Pre:  m has :id, :feature (keyword), :outcome ∈ #{:ok :error}, :duration-ms (long).
+   Post: one signal — :info when :ok, :warn when :error; :data carries
+         {:feature :outcome :duration-ms :user-id :status :error}. Returns nil."
+  [{:keys [id outcome duration-ms feature] :as m}]
+  (tel/log! {:level (if (= :error outcome) :warn :info)
+             :id (or id ::external)
+             :data (select-keys m [:feature :outcome :duration-ms :user-id
+                                   :status :error])}
+    (str (some-> feature name) " " (some-> outcome name)
+      (when duration-ms (str " " duration-ms "ms"))))
+  nil)
+
+(defn client-error!
+  "Record a client-originating failure, shipped from the browser via e/server.
+   Pre:  op (keyword|str) names the failed operation; message a str; user-id may be
+         nil (unauthenticated surfaces); session-id the per-page-load UUID or nil.
+   Post: one :warn signal, :id ::client-error, :data :source :client. Returns nil."
+  [user-id session-id op message]
+  (tel/log! {:level :warn
+             :id ::client-error
+             :data {:user-id user-id :session-id session-id
+                    :source :client :op op}}
+    (str message))
+  nil)
+
 #?(:cljs
    (defn init-client!
      "Client log init — call once from the client entrypoint.

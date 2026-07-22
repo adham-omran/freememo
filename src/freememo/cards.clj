@@ -10,6 +10,7 @@
    [freememo.card-models :as card-models]
    [freememo.llm-edn :as llm-edn]
    [freememo.overlapping :as overlap]
+   [freememo.logging :as log]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
    [clojure.string :as str]))
@@ -360,6 +361,7 @@
   "Save generated cards to the database.
    For basic cards: expects [{:q \"...\" :a \"...\"}]
    For cloze cards: expects [{:c \"...\" :a html-or-nil}]
+   user-id: owner, for the audit log (§3.1).
    topic-id: the page or extract topic that owns these cards.
    root-topic-id: the root PDF/EPUB/web/basic topic.
    Bakes pinned images into each card's HTML before insert.
@@ -370,9 +372,9 @@
    bake? false skips bake-card-html — used by the manual Add-Card path, which
    prefills pinned images into the editor content itself (pins-prefill-html), so
    baking would duplicate them."
-  ([topic-id root-topic-id kind cards]
-   (save-cards topic-id root-topic-id kind cards true))
-  ([topic-id root-topic-id kind cards bake?]
+  ([user-id topic-id root-topic-id kind cards]
+   (save-cards user-id topic-id root-topic-id kind cards true))
+  ([user-id topic-id root-topic-id kind cards bake?]
    (try
      (let [rows (map (fn [card]
                        (if (= kind "overlapping")
@@ -402,8 +404,11 @@
                               :question nil
                               :answer (:a baked)
                               :cloze (:c baked)}))))
-                  cards)]
-       {:success true :ids (vec (db/insert-flashcards! rows))})
+                  cards)
+             ids (vec (db/insert-flashcards! rows))]
+       (log/audit! {:id ::save-cards :user-id user-id :action :create
+                    :entity :card :n (count ids)})
+       {:success true :ids ids})
      (catch Exception e
        (tel/error! {:id ::save-cards} e)
        {:success false :error (.getMessage e)}))))
@@ -440,16 +445,17 @@
    Pre:  cards is a non-empty seq of generated card maps.
    Post: rows inserted; :card-mutations bumped (via :generate) on success."
   [user-id topic-id root-topic-id card-type cards]
-  (let [r (save-cards topic-id root-topic-id card-type cards)]
+  (let [r (save-cards user-id topic-id root-topic-id card-type cards)]
     (when (:success r)
       (commands/bump! user-id :generate))
     r))
 
 (defn add-card
   "Manually add a single flashcard.
+   user-id: owner, for the audit log (logged by save-cards).
    topic-id: the page or extract topic.
    root-topic-id: the root topic."
-  [topic-id root-topic-id kind fields]
+  [user-id topic-id root-topic-id kind fields]
   (try
     (let [cards (case kind
                   "basic" [{:q (:question fields) :a (:answer fields)}]
@@ -457,7 +463,7 @@
                                   :items (:items fields)
                                   :settings (:settings fields)}]
                   [{:c (:cloze fields)}])]
-      (save-cards topic-id root-topic-id kind cards))
+      (save-cards user-id topic-id root-topic-id kind cards))
     (catch Exception e
       (tel/error! {:id ::add-card} e)
       {:success false :error (.getMessage e)})))
@@ -520,6 +526,9 @@
         (toasts/push! user-id {:level :success
                                :message "Occlusion mask deleted"
                                :dedup? false}))
+      (when deleted
+        (log/audit! {:id ::delete-card :user-id user-id :action :delete
+                     :entity :card :entity-id card-id}))
       {:success true :anki-note-id note-id :undo-id undo-id})
     (catch Exception e
       (tel/error! {:id ::delete-card} e)
@@ -539,6 +548,8 @@
         (cleanup-occlusion-mask! row))
       (when (seq deleted)
         (commands/bump! user-id :bulk-delete-cards)
+        (log/audit! {:id ::delete-cards! :user-id user-id :action :delete
+                     :entity :card :n (count deleted)})
         ;; Occlusion rows are excluded from the undo snapshot — their rects
         ;; are retired from the group geometry above, so a row-only restore
         ;; would be inconsistent (and the group itself may be gone).
@@ -558,8 +569,9 @@
       {:success false :error (.getMessage e)})))
 
 (defn update-card
-  "Update a flashcard with validation. Returns {:success bool :error string}"
-  [card-id updated-fields]
+  "Update a flashcard with validation. Returns {:success bool :error string}.
+   user-id: owner, for the audit log (§3.1)."
+  [user-id card-id updated-fields]
   (try
     (when (and (contains? updated-fields :question)
             (str/blank? (:question updated-fields)))
@@ -572,6 +584,8 @@
       (throw (ex-info "Cloze text cannot be empty" {})))
 
     (db/update-flashcard! card-id updated-fields)
+    (log/audit! {:id ::update-card :user-id user-id :action :update
+                 :entity :card :entity-id card-id})
     {:success true}
 
     (catch Exception e
@@ -584,14 +598,17 @@
    Pre:  items non-empty and ≤ overlapping/max-items (expand enforces both).
    Post: the row's :overlapping is {:question :items :settings :fields}, :fields
          consistent with :items/:settings; updated_at bumped for sync.
-   Returns {:success bool :error string}."
-  [card-id {:keys [question items settings]}]
+   Returns {:success bool :error string}.
+   user-id: owner, for the audit log (§3.1)."
+  [user-id card-id {:keys [question items settings]}]
   (try
     (let [items (vec items)
           settings (merge overlap/default-settings settings)
           ol {:question question :items items :settings settings
               :fields (overlap/expand items settings)}]
       (db/update-flashcard! card-id {:overlapping ol})
+      (log/audit! {:id ::update-overlapping-card :user-id user-id :action :update
+                   :entity :card :entity-id card-id})
       {:success true})
     (catch Exception e
       (tel/error! {:id ::update-overlapping-card} e)
