@@ -146,9 +146,7 @@
                            (.setDocument link-service pdf nil)
                            (.on event-bus "pagesloaded"
                              (fn []
-                               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] pagesloaded -> set fit page-width; currentScale before=" (.-currentScale viewer)))
-                               (set! (.-currentScaleValue viewer) "page-width")
-                               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] fit applied; currentScale after=" (.-currentScale viewer) " currentPage=" (.-currentPageNumber viewer))))
+                               (set! (.-currentScaleValue viewer) "page-width"))
                              (clj->js {:once true}))
                            (when on-ready (on-ready pdf viewer)))))]
          (-> (pdf-cache/cache-get doc-id)
@@ -201,13 +199,9 @@
            ;; reused across set-document! swaps, so no listener stacking). Mirrors
            ;; PDF.js scale into !scale/!scale-mode for the toolbar to e/watch.
            (.on event-bus "scalechanging"
-             (fn [^js e]
+             (fn [_e]
                (reset! !scale (.-currentScale viewer))
-               (reset! !scale-mode (.-currentScaleValue viewer))
-               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0)
-                                    "] scalechanging -> scale=" (.-scale e)
-                                    " scaleValue=" (.-currentScaleValue viewer)
-                                    " page=" (.-currentPageNumber viewer)))))
+               (reset! !scale-mode (.-currentScaleValue viewer))))
            ;; ctrl+wheel zoom (native-viewer parity). passive:false so we can
            ;; preventDefault the browser's page-zoom. zoom! keeps the page anchor.
            (.addEventListener container "wheel"
@@ -238,10 +232,7 @@
   #?(:clj nil
      :cljs (when-let [{:keys [viewer]} @!viewer-state]
              (let [^js v viewer]
-               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] go-to-page! target=" page-num
-                                    " (was currentPage=" (.-currentPageNumber v) " scale=" (.-currentScale v) ")"))
-               (set! (.-currentPageNumber v) page-num)
-               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] go-to-page! done; currentPage=" (.-currentPageNumber v)))))))
+               (set! (.-currentPageNumber v) page-num)))))
 
 (defn- pin-anchor-through-reflow!
   "Lock the viewport onto anchor-page across a layout reflow (restore fit, or zoom
@@ -281,8 +272,7 @@
                          (when (and container @!on-gesture)
                            (doseq [ev gestures] (.removeEventListener container ev @!on-gesture)))
                          (when (identical? @!pin-cancel @!self) (reset! !pin-cancel nil))
-                         (reset! !restoring? false)
-                         (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] pin: released on page=" anchor-page "; !restoring?=false"))))
+                         (reset! !restoring? false)))
              frame (fn frame []
                      (when-not @released?
                        (.scrollPageIntoView v (clj->js {:pageNumber anchor-page}))
@@ -305,19 +295,16 @@
 
 (defn zoom!
   "Zoom by multiplication factor (1.1 = in, 0.9 = out), clamped to [min,max],
-   preserving the viewport via scroll-ratio anchoring (see set-scale-anchored!).
-   Pre: viewer mounted. Post: scale == clamp-scale(before×factor); the content at the
-   viewport top is unchanged."
+   holding the current page across the reflow (see pin-anchor-through-reflow!).
+   Pre: viewer mounted. Post: scale == clamp-scale(before×factor); the current page
+   is held (anchored to its top)."
   [factor]
   #?(:clj nil
      :cljs (when-let [{:keys [viewer]} @!viewer-state]
              (let [^js v   viewer
                    anchor  (.-currentPageNumber v)]
-               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] zoom! factor=" factor
-                                    " scaleBefore=" (.-currentScale v) " page=" anchor " scrollTop=" (.-scrollTop (.-container v))))
                (set! (.-currentScale v) (clamp-scale (* (.-currentScale v) factor)))
-               (pin-anchor-through-reflow! anchor)
-               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] zoom! done scaleAfter=" (.-currentScale v) " page=" (.-currentPageNumber v) " scrollTop=" (.-scrollTop (.-container v))))))))
+               (pin-anchor-through-reflow! anchor)))))
 
 (defn set-zoom!
   "Set absolute zoom level (e.g., 1.0 = 100%, 1.5 = 150%)."
@@ -325,16 +312,13 @@
   #?(:clj nil
      :cljs (when-let [{:keys [viewer]} @!viewer-state]
              (let [^js v viewer]
-               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] set-zoom! scale=" scale
-                                    " scaleBefore=" (.-currentScale v) " page=" (.-currentPageNumber v)))
-               (set! (.-currentScale v) (clamp-scale scale))
-               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] set-zoom! done scaleAfter=" (.-currentScale v) " scaleValue=" (.-currentScaleValue v) " page=" (.-currentPageNumber v)))))))
+               (set! (.-currentScale v) (clamp-scale scale))))))
 
 (defn set-zoom-pct!
-  "Set zoom to pct percent (150 → 1.5), clamped to [25,500], preserving the viewport
-   via scroll-ratio anchoring (see set-scale-anchored!).
+  "Set zoom to pct percent (150 → 1.5), clamped to [25,500], holding the current
+   page across the reflow (see pin-anchor-through-reflow!).
    Pre: pct is a finite number. Post: currentScale == clamp-scale(pct/100); the
-   content at the viewport top is unchanged."
+   current page is held (anchored to its top)."
   [pct]
   #?(:clj nil
      :cljs (when-let [{:keys [viewer]} @!viewer-state]
@@ -349,7 +333,6 @@
   #?(:clj nil
      :cljs (when-let [{:keys [viewer]} @!viewer-state]
              (let [^js v viewer]
-               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] rotate-ccw! from=" (.-pagesRotation v)))
                (set! (.-pagesRotation v) (- (.-pagesRotation v) 90))))))
 
 (defn set-zoom-fit!
@@ -359,7 +342,6 @@
      :cljs (when-let [{:keys [viewer]} @!viewer-state]
              (let [^js v   viewer
                    anchor  (.-currentPageNumber v)]
-               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] set-zoom-fit! (page-width) scaleBefore=" (.-currentScale v) " page=" anchor))
                (set! (.-currentScaleValue v) "page-width")
                (pin-anchor-through-reflow! anchor)))))
 
@@ -370,7 +352,6 @@
      :cljs (when-let [{:keys [viewer]} @!viewer-state]
              (let [^js v   viewer
                    anchor  (.-currentPageNumber v)]
-               (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] set-zoom-page-fit! (page-fit) scaleBefore=" (.-currentScale v) " page=" anchor))
                (set! (.-currentScaleValue v) "page-fit")
                (pin-anchor-through-reflow! anchor)))))
 
@@ -393,10 +374,8 @@
        (let [^js eb event-bus]
          ;; Suppress from arm-time (before pagesloaded); pin takes over on load.
          (reset! !restoring? true)
-         (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] go-to-page-after-load! armed for page=" page-num "; !restoring?=true"))
          (.on eb "pagesloaded"
            (fn []
-             (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] restore: pagesloaded fired; pinning to " page-num " until reflow settles"))
              (pin-anchor-through-reflow! page-num))
            (clj->js {:once true}))))))
 
@@ -408,7 +387,6 @@
              (let [^js eb event-bus]
                (.on eb "pagechanging"
                  (fn [^js e]
-                   (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] pagechanging event -> page=" (.-pageNumber e)))
                    (callback (.-pageNumber e))))))))
 
 (defn get-page-text-content!
