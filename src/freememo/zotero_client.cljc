@@ -14,7 +14,8 @@
      {:ok? bool :status int :data <map|nil> :error <string|nil>}
    Transport failure ⇒ :ok? false, :status 0, :error <message>."
   (:require
-   [hyperfiddle.electric3 :as e]))
+   [hyperfiddle.electric3 :as e]
+   [freememo.client-errors :as ce]))
 
 (def ^:private base-url "http://127.0.0.1:23119/freememo")
 
@@ -36,6 +37,7 @@
                                 :error  nil})))))
          (.catch (fn [e]
                    (js/console.warn "FreeMemo zotero-client fetch failed:" e)
+                   (ce/report! :zotero-client/fetch e)
                    {:ok?    false
                     :status 0
                     :data   nil

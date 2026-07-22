@@ -138,7 +138,7 @@
                         (str/starts-with? ct "image/"))
                   {:bytes (:body resp) :mime-type ct}))
               (catch Exception e
-                (tel/log! {:level :debug :id ::fetch-image-failed
+                (tel/log! {:level :warn :id ::fetch-image-failed
                            :data {:url url :error (.getMessage e)}}
                   "Image fetch failed — skipping")
                 nil))))))))

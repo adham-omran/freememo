@@ -17,6 +17,7 @@
             [freememo.image-rehost :as image-rehost]
             [freememo.import-staging :as staging]
             [freememo.logging :as log]
+            [taoensso.telemere :as tel]
             [freememo.pdf :as pdf]
             [freememo.quota :as quota]
             [freememo.commands :as commands]
@@ -78,7 +79,7 @@
                 (commands/bump! user-id :import-document))
               {:ok true :flow :imported :topic-id topic-id :title (:title r)})))))
     (catch Exception e
-      (log/log-error (str "import-url!* failed: " (.getMessage e)))
+      (tel/error! {:id ::import-url :data {:user-id user-id :url url}} e)
       {:ok false :error (.getMessage e)})))
 
 (defn confirm-staged-upload!*

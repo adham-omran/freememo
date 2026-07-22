@@ -3,6 +3,7 @@
    Derives a stable 256-bit key from the user's login password using PBKDF2-SHA256.
    The derived key is stored base64-encoded in the server-side Ring session.
    Even with full DB access, the API key cannot be decrypted without the user's password."
+  (:require [taoensso.telemere :as tel])
   (:import [javax.crypto Cipher SecretKeyFactory]
            [javax.crypto.spec SecretKeySpec GCMParameterSpec PBEKeySpec]
            [java.security SecureRandom]
@@ -84,6 +85,8 @@
           (catch Exception _
             ;; GCM failed: value was encrypted with a different key (old ENCRYPTION_KEY scheme)
             ;; Return "" so caller treats it as missing — user will see "API key not configured"
+            (tel/log! {:level :warn :id ::decrypt-key-mismatch}
+              "API key decrypt failed (GCM) — likely ENCRYPTION_KEY mismatch; treating key as missing")
             "")))
       (catch IllegalArgumentException _
         ;; Not valid base64: value is plaintext (stored before encryption was added)

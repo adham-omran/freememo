@@ -15,25 +15,35 @@
    requests at `request-max-bytes` (STORAGE_REQUEST_MAX_BYTES). A per-user
    `upload_max_bytes` above that ceiling — or 0/unlimited — is still bounded by
    it at the HTTP layer; lifting it requires raising STORAGE_REQUEST_MAX_BYTES."
-  (:require [next.jdbc :as jdbc]))
+  (:require [next.jdbc :as jdbc]
+            [taoensso.telemere :as tel]))
 
 (def default-total-bytes
   (try
     (Long/parseLong (or (System/getenv "STORAGE_QUOTA_BYTES") "1073741824"))
-    (catch Exception _ 1073741824)))
+    (catch Exception _
+      (tel/log! {:level :warn :id ::bad-env :data {:var "STORAGE_QUOTA_BYTES"}}
+        "Invalid STORAGE_QUOTA_BYTES; using default")
+      1073741824)))
 
 (def default-upload-max-bytes
   "Default per-upload-increment cap; NULL fallback for users.upload_max_bytes."
   (try
     (Long/parseLong (or (System/getenv "STORAGE_PER_FILE_MAX_BYTES") "104857600"))
-    (catch Exception _ 104857600)))
+    (catch Exception _
+      (tel/log! {:level :warn :id ::bad-env :data {:var "STORAGE_PER_FILE_MAX_BYTES"}}
+        "Invalid STORAGE_PER_FILE_MAX_BYTES; using default")
+      104857600)))
 
 (def request-max-bytes
   "Absolute HTTP request-body ceiling for upload routes (per-user-blind).
    Invariant: every effective upload_max_bytes should be <= this."
   (try
     (Long/parseLong (or (System/getenv "STORAGE_REQUEST_MAX_BYTES") "104857600"))
-    (catch Exception _ 104857600)))
+    (catch Exception _
+      (tel/log! {:level :warn :id ::bad-env :data {:var "STORAGE_REQUEST_MAX_BYTES"}}
+        "Invalid STORAGE_REQUEST_MAX_BYTES; using default")
+      104857600)))
 
 (defn unlimited?
   "Sentinel check — `0` means no cap."

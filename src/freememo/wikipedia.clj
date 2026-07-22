@@ -2,6 +2,7 @@
   "Web article fetching — Wikipedia and generic URLs."
   (:require [clj-http.client :as http]
             [clojure.string :as str]
+            [taoensso.telemere :as tel]
             [freememo.biblio-web :as bw]
             [freememo.content-type :as ct]
             [freememo.html-cleaner :as cleaner]
@@ -308,9 +309,12 @@
           ;; Helper may have returned {:success false :error ...} for redirects
           ;; or non-200 statuses — pass through; otherwise mark success.
           (if (false? (:success result))
-            result
+            (do (tel/log! {:level :warn :id ::fetch-url :data {:url url :error (:error result)}}
+                  "URL fetch failed")
+                result)
             (assoc result :success true)))))
     (catch Exception e
+      (tel/log! {:level :warn :id ::fetch-url :data {:url url}} (.getMessage e))
       {:success false :error (.getMessage e)})))
 
 ;; ── 1.5 Wikipedia REST summary endpoint ───────────────────────────

@@ -13,6 +13,7 @@
    [freememo.commands :as commands]
    [freememo.optimistic :as opt]
    [freememo.toasts :as toasts]
+   [freememo.logging :as log]
    [taoensso.telemere :as tel]))
 
 (defn- anki-divergence?
@@ -65,6 +66,8 @@
               result (restore! user-id entry)
               over-quota? (boolean (:over-quota? result))]
           (db/mark-undone! entry-id)
+          (log/audit! {:id ::undo :user-id user-id :action :restore
+                       :entity (keyword (:entity_type entry)) :entity-id entry-id})
           (bump-views! user-id entry)
           (when warn?
             (toasts/push! user-id

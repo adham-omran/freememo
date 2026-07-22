@@ -14,7 +14,8 @@
    chosen, `on-occlude!` is invoked with {:media-id <int> :topic-id <int>}
    after the img src is resolved. The caller (editor_pane.cljc) owns what
    happens next (db/set-pin! / opening the occlusion modal)."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [freememo.client-errors :as ce]))
 
 ;; ---------------------------------------------------------------------------
 ;; Menu DOM builder
@@ -177,14 +178,16 @@
                                          :placement placement
                                          :topic-id (get-topic-id)})))
                       (.catch (fn [err]
-                                (js/console.warn "[PinMenu] resolve failed:" (str err))))))
+                                (js/console.warn "[PinMenu] resolve failed:" (str err))
+                                (ce/report! :pin-menu/resolve err)))))
                   (fn [{:keys [src]}]
                     (-> (resolve-src->media-id! src)
                       (.then (fn [media-id]
                                (on-occlude! {:media-id media-id
                                              :topic-id (get-topic-id)})))
                       (.catch (fn [err]
-                                (js/console.warn "[PinMenu] occlusion resolve failed:" (str err)))))))))))]
+                                (js/console.warn "[PinMenu] occlusion resolve failed:" (str err))
+                                (ce/report! :pin-menu/occlusion-resolve err))))))))))]
     (.addEventListener container-el "contextmenu" handler)
     ;; Return cleanup fn
     (fn [] (.removeEventListener container-el "contextmenu" handler))))

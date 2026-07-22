@@ -1098,20 +1098,31 @@
                              [:= :key key]]}))
     :settings/value))
 
-(defn set-setting [user-id key value]
-  (jdbc/execute! ds
-    (sql/format {:insert-into :settings
-                 :values [{:user_id user-id :key key :value value}]
-                 :on-conflict [:user_id :key]
-                 :do-update-set {:value value
-                                 :updated_at [:now]}})))
+(defn set-setting
+  "Upsert a per-user setting. Audits every change here (§3.4) — the single
+   choke point for all settings/save-* callers, so no per-caller log is needed."
+  [user-id key value]
+  (let [r (jdbc/execute! ds
+            (sql/format {:insert-into :settings
+                         :values [{:user_id user-id :key key :value value}]
+                         :on-conflict [:user_id :key]
+                         :do-update-set {:value value
+                                         :updated_at [:now]}}))]
+    (log/audit! {:id ::setting-changed :user-id user-id :action :update
+                 :entity :setting :entity-id key})
+    r))
 
-(defn delete-setting [user-id key]
-  (jdbc/execute! ds
-    (sql/format {:delete-from :settings
-                 :where [:and
-                         [:= :user_id user-id]
-                         [:= :key key]]})))
+(defn delete-setting
+  "Delete a per-user setting (settings reset path). Audits here (§3.4)."
+  [user-id key]
+  (let [r (jdbc/execute! ds
+            (sql/format {:delete-from :settings
+                         :where [:and
+                                 [:= :user_id user-id]
+                                 [:= :key key]]}))]
+    (log/audit! {:id ::setting-deleted :user-id user-id :action :delete
+                 :entity :setting :entity-id key})
+    r))
 
 (defn get-settings
   "Batch variant of get-setting: {key value} for all of `ks` in one query.

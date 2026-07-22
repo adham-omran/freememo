@@ -16,6 +16,7 @@
    [freememo.icons :as icons]
    [freememo.score-rect-modal :refer [ScoreRectModal]]
    [freememo.tooltip :as tooltip]
+   [freememo.client-errors :as ce]
    #?(:cljs [freememo.score-wavesurfer :as ws])
    #?(:cljs [freememo.score-audio :as score-audio])
    #?(:cljs [freememo.score-pdf :as score-pdf])
@@ -103,7 +104,8 @@
                         (.then (fn [arr]
                                  (done {:clip-media-id clip-id
                                         :pages (vec arr)}))))))
-             (.catch (fn [e] (fail (str (or (.-message e) e))))))
+             (.catch (fn [e] (ce/report! :score/produce-assets e)
+                       (fail (str (or (.-message e) e))))))
          nil)
        (do (fail "Audio is still loading — try again in a moment") nil))
      :clj (do (fail "client only") nil)))
@@ -135,7 +137,8 @@
 
 (defn log-load-error!
   [msg]
-  #?(:cljs (js/console.error "score group load failed:" msg)
+  #?(:cljs (do (js/console.error "score group load failed:" msg)
+               (ce/report! :score/group-load msg))
      :clj nil))
 
 (defn load-group-into-editor!
