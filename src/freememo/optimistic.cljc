@@ -43,6 +43,9 @@
      [user-id command]
      (let [command (update command :id #(or % (java.util.UUID/randomUUID)))]
        (swap! (us/get-atom user-id :pending-commands) conj command)
+       (tel/log! {:level :info :id ::enqueue-command
+                  :data {:user-id user-id :type (:type command) :command-id (:id command)}}
+         "enqueue command")
        :enqueued)))
 
 #?(:clj
@@ -169,6 +172,9 @@
       and a partial effect may still have written; a stale view hides a
       failure worse than a spurious refetch reveals one). Returns :done."
      [user-id command]
+     (tel/log! {:level :info :id ::execute-command
+                :data {:user-id user-id :type (:type command) :command-id (:id command)}}
+       "execute command")
      (try
        (run-command! user-id command)
        (catch Throwable t
