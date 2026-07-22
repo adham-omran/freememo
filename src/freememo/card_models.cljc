@@ -21,6 +21,12 @@
    {:id "gemini-3.5-flash"
     :label "Google · Gemini 3.5 Flash"
     :openrouter-model "google/gemini-3.5-flash"}
+   {:id "gemini-3.6-flash"
+    :label "Google · Gemini 3.6 Flash"
+    :openrouter-model "google/gemini-3.6-flash"}
+   {:id "gemini-3.5-flash-lite"
+    :label "Google · Gemini 3.5 Flash-Lite"
+    :openrouter-model "google/gemini-3.5-flash-lite"}
    {:id "claude-haiku-4.5"
     :label "Anthropic · Claude Haiku 4.5"
     :openrouter-model "anthropic/claude-haiku-4.5"}

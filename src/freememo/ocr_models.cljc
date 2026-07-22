@@ -27,6 +27,14 @@
     :label "Google · Gemini 3.5 Flash"
     :shape :chat
     :openrouter-model "google/gemini-3.5-flash"}
+   {:id "gemini-3.6-flash"
+    :label "Google · Gemini 3.6 Flash"
+    :shape :chat
+    :openrouter-model "google/gemini-3.6-flash"}
+   {:id "gemini-3.5-flash-lite"
+    :label "Google · Gemini 3.5 Flash-Lite"
+    :shape :chat
+    :openrouter-model "google/gemini-3.5-flash-lite"}
    {:id "mistral-ocr-4"
     :label "Mistral · OCR 4"
     :shape :plugin
