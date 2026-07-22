@@ -408,6 +408,10 @@
              ids (vec (db/insert-flashcards! rows))]
        (log/audit! {:id ::save-cards :user-id user-id :action :create
                     :entity :card :n (count ids)})
+       (tel/log! {:level :info :id ::save-cards-detail
+                  :data {:user-id user-id :topic-id topic-id :kind kind
+                         :ids ids :n (count ids) :card-hash (hash cards)}}
+         "save-cards detail")
        {:success true :ids ids})
      (catch Exception e
        (tel/error! {:id ::save-cards} e)
