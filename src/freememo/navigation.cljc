@@ -45,9 +45,6 @@
      (when (and root-id page)
        (let [path (str "/viewer/topic/" root-id "/" page)
              cur  (.. js/window -location -pathname)]
-         (js/console.log (str "[PDFDBG " (.toFixed (.now js/performance) 0) "] set-url-page! root=" root-id
-                              " page=" page " cur=" cur " -> " path
-                              (if (= path cur) " (noop)" " (REWRITE)")))
          (when (not= path cur)
            (.replaceState js/window.history nil "" path))))
      :clj nil))
