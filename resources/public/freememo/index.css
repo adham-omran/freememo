@@ -1148,6 +1148,28 @@ html, body {
 .tape-scroll table tr.row-alt td { background: light-dark(#eef2f7, #243044); }
 .tape-scroll table tr:hover td { background: light-dark(#e2e8f0, #2f3d52); }
 
+/* Sticky header for the cost-history table (.tx-head). It's a grid sharing the
+   body's --grid-cols, so header and body are ONE track set and cannot drift.
+   Higher specificity than the shared `.tape-scroll table` / `tr` rules above
+   overrides their block layout + absolute/transform virtual-scroll positioning
+   for the header only — and never touches the library table, which has no
+   .tx-head. Opaque background so rows scrolling under it don't bleed through;
+   z-index beats the hovered-row z-index:1. */
+.tape-scroll table.tx-head {
+    display: grid;
+    grid-template-columns: var(--grid-cols);
+    height: auto;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--color-bg-card);
+}
+.tape-scroll table.tx-head tr {
+    position: static;
+    transform: none;
+    height: auto;
+}
+
 /* Always-visible scrollbar indicator on all virtual-scroll tables.
    Defining ::-webkit-scrollbar width opts the element out of macOS overlay
    rendering, so the thumb persists when idle. The standard scrollbar-width/
