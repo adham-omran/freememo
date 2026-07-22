@@ -32,6 +32,7 @@
    [hyperfiddle.electric3 :as e]
    [freememo.commands :as commands]
    #?(:clj [freememo.user-state :as us])
+   #?(:clj [taoensso.telemere :as tel])
    #?(:clj [freememo.toasts :as toasts])))
 
 #?(:clj
@@ -156,6 +157,10 @@
      (try
        (run-command! user-id command)
        (catch Throwable t
+         (tel/error! {:id ::command-failed
+                      :data {:user-id user-id :type (:type command)
+                             :command-id (:id command)}}
+           t)
          (toasts/push! user-id {:level :error
                                 :message (str (name (:type command)) " failed: "
                                            (.getMessage t))}))

@@ -523,7 +523,7 @@
                   (let [items (quill-html->items ol-items-html)]
                     (if (empty? items)
                       (t "Add at least one list item")
-                      (let [result (e/server (e/Offload #(cards/update-overlapping-card card-id
+                      (let [result (e/server (e/Offload #(cards/update-overlapping-card user-id card-id
                                                             {:question ol-question :items items
                                                              :settings {:before (ol-before-int ol-before)
                                                                         :after 0 :reveal-all? ol-reveal}})))]
@@ -546,7 +546,7 @@
                                      (cond-> {:cloze clean-c}
                                        (and clean-a (not (str/blank? clean-a)))
                                        (assoc :answer clean-a)))
-                            result (e/server (e/Offload #(cards/update-card card-id fields)))]
+                            result (e/server (e/Offload #(cards/update-card user-id card-id fields)))]
                         (if (:success result)
                           (do (e/on-unmount #(reset! !editing-card nil))
                               (case (e/server (commands/bump! user-id :edit-card))
@@ -576,7 +576,7 @@
      (let [{:keys [topic-id root-topic-id kind card-data]} payload
            ;; bake? false — the Add-Card modal already inlined pinned images
            ;; into card-data via pins-prefill-html; baking would duplicate them.
-           result (cards/save-cards topic-id root-topic-id kind card-data false)]
+           result (cards/save-cards user-id topic-id root-topic-id kind card-data false)]
        (if (:success result)
          (do (swap! (us/get-atom user-id :pending-cards) update id merge
                {:status :confirmed :real-ids (:ids result)})

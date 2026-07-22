@@ -278,7 +278,8 @@
                                             (str (mission-suffix user-id root-topic-id)
                                               (grounding-system-suffix user-id ctx)))
                                           context-msgs)
-                              :reasoning_effort (settings/get-reasoning user-id)})
+                              :reasoning_effort (settings/get-reasoning user-id)}
+                             {:feature :assistant :user-id user-id})
                       reply (-> body :choices first :message :content)
                       cost (double (or (-> body :usage :cost) 0))]
                   (if (str/blank? reply)
@@ -351,7 +352,7 @@
                               :topic-id page-topic-id})]
                    (if-not (:success gen)
                      {:success false :error (:error gen)}
-                     (let [saved (cards/save-cards page-topic-id root-topic-id "basic" (:cards gen))]
+                     (let [saved (cards/save-cards user-id page-topic-id root-topic-id "basic" (:cards gen))]
                        (if (:success saved)
                          (do (commands/bump! user-id :generate)
                            {:success true :ids (:ids saved) :count (count (:ids saved))})
