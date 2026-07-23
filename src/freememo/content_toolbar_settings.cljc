@@ -10,6 +10,7 @@
    [freememo.doc-context :as dctx]
    [freememo.a11y :as a11y]
    [freememo.number-stepper :refer [NumberStepper]]
+   [freememo.card-count :as cc]
    #?(:clj [freememo.settings :as settings])))
 
 (def ^:private context-pages-min 1)
@@ -114,8 +115,10 @@
                         "overlapping" "Chained cloze for lists & sequences."
                         ""))))))))
 
-(def ^:private card-count-min 1)
-(def ^:private card-count-max 20)
+;; Single source of the 1–20 bounds is freememo.card-count (shared with the
+;; format-menu popup); alias locally so the stepper call site stays readable.
+(def ^:private card-count-min cc/card-count-min)
+(def ^:private card-count-max cc/card-count-max)
 
 ;; Pre:  card-count-val is current persisted count (1..20). !card-count is
 ;;       the controlling atom (writes flow to settings/save-card-count; the

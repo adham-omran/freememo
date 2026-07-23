@@ -10,6 +10,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.content-toolbar-helpers :as helpers]
+   [freememo.card-count :as cc]
    [freememo.content-toolbar-actions :as actions]
    [freememo.content-toolbar-extract :refer [ExtractActions]]
    [freememo.toolbar-generate-dropdown :refer [GenerateDropdown]]
@@ -149,6 +150,30 @@
                             (bus/dispatch! :delete-document)
                             (reset! !overflow-open false)) nil))))))
 
+(e/defn CardCountPersister
+  "Hidden button that persists the shared card-count global on demand.
+   The format-menu selection popup (plain CLJS) can't call e/server, so it
+   fires this via the :persist-card-count invoker after mutating cc/!card-count.
+
+   Pre:  cc/!card-count holds the value to persist.
+   Post: the click callback reads @cc/!card-count SYNCHRONOUSLY (fresh value —
+         no reactive-propagation race) and saves it server-side.
+   Invariant: the value MUST come from the click-time deref, never an e/watch
+              binding, or a save could race a just-issued reset!."
+  [user-id]
+  (e/client
+    (dom/button
+      (dom/props {:style {:display "none"} :type "button"
+                  :aria-hidden "true" :tabindex "-1"})
+      (let [node dom/node]
+        (bus/publish-invoker! :persist-card-count (fn [] (.click node)))
+        (e/on-unmount (fn [] (bus/retract-invoker! :persist-card-count))))
+      (let [v (dom/On "click" (fn [_] @cc/!card-count) nil)
+            [t _] (e/Token v)]
+        (when t
+          (case (e/server (e/Offload #(user-settings/save-card-count user-id v)))
+            (t)))))))
+
 (e/defn ContentToolbar []
   (e/client
     (let [mod-key (if (mac-platform?) "Cmd" "Ctrl")
@@ -188,7 +213,9 @@
           context-window (e/watch !context-window)
           !card-type (atom server-card-type)
           card-type (e/watch !card-type)
-          !card-count (atom server-card-count)
+          ;; Shared client-global (freememo.card-count) — the format-menu popup
+          ;; reads/writes the same atom. Seeded once from the server value below.
+          !card-count cc/!card-count
           card-count-val (e/watch !card-count)
 
           ;; Generation status (per-user, keyed by topic-id)
@@ -211,6 +238,12 @@
           ;; the collapse-N class via classList; we still e/watch so reactive
           ;; updates fire downstream where tier matters reactively).
           _collapse-tier (e/watch !collapse-tier)]
+
+      ;; Seed the shared card-count global once, when the server value arrives
+      ;; and nothing has set it yet. Guarded so later re-renders never clobber a
+      ;; value the user changed via the toolbar stepper or the format-menu popup.
+      (when (and (some? server-card-count) (nil? card-count-val))
+        (reset! cc/!card-count server-card-count))
 
       (if reading-mode?
         ;; Reading mode (mobile learn, A2): reduce to the IR verbs — Extract +
@@ -278,7 +311,9 @@
                           dctx/gen-pending gen-pending dctx/gen-error gen-error
                           dctx/!use-context !use-context dctx/!context-window !context-window
                           dctx/!card-type !card-type dctx/!card-count !card-count]
-                  (GenerateDropdown)))
+                  (GenerateDropdown))
+                ;; Hidden persister — lets the format-menu popup save the count.
+                (CardCountPersister user-id))
 
               (dom/div (dom/props {:class "toolbar-group-divider"}))
 

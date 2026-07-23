@@ -16,11 +16,15 @@
    `install!` wires the selection / scroll / resize / dismiss listeners, builds
    the card once, and returns a teardown fn that removes them and the card.
 
-   `opts` (2-arity install!) turns on card-editor-only controls: `:image?`
-   adds an image-insert button, `:cloze?` adds a cloze-deletion row. Both drive
-   freememo.editor-actions; the document editor calls the no-opts arity."
+   `opts` (2-arity install!) turns on optional controls: `:image?` adds an
+   image-insert button, `:cloze?` adds a cloze-deletion row (both drive
+   freememo.editor-actions), `:card-gen?` adds the document editor's card-count
+   stepper + Generate-here row (drives freememo.card-count + the command bus).
+   The document editor passes `:card-gen?`; card fields pass `:image?/:cloze?`."
   (:require [clojure.string :as str]
-            [freememo.editor-actions :as editor-actions]))
+            [freememo.editor-actions :as editor-actions]
+            [freememo.card-count :as cc]
+            [freememo.command-bus :as bus]))
 
 ;; ---------------------------------------------------------------------------
 ;; Glyphs for the opt-in controls. Inline SVG with stroke="currentColor" (NOT
@@ -49,6 +53,13 @@
     "<rect x=\"2.5\" y=\"3.5\" width=\"13\" height=\"11\" rx=\"1.5\"/>"
     "<circle cx=\"6.3\" cy=\"7.3\" r=\"1.3\" fill=\"currentColor\" stroke=\"none\"/>"
     "<path d=\"M3 13 L7 9 L9.5 11.5 L12 9 L15 12.5\"/></svg>"))
+
+;; Sparkles — matches freememo.icons :sparkles (24-viewBox Lucide path); marks
+;; the Generate-here action on the card-gen row.
+(def ^:private sparkles-glyph
+  (str "<svg viewBox=\"0 0 24 24\" width=\"15\" height=\"15\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\">"
+    "<path d=\"M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z\"/>"
+    "<path d=\"M20 3v4\"/><path d=\"M22 5h-4\"/><path d=\"M4 17v2\"/><path d=\"M5 18H3\"/></svg>"))
 
 ;; ---------------------------------------------------------------------------
 ;; Quill format actions — all operate on a cached range so focus/selection
@@ -234,6 +245,68 @@
 ;; Card assembly
 ;; ---------------------------------------------------------------------------
 
+(defn- card-gen-row
+  "Bottom card-gen row: a `Cards −/+` stepper over the shared cc/!card-count
+   global + a `Generate here` action. Returns {:row :sync}, where `sync`
+   repaints the number and −/+ disabled state from the global (called on build
+   and on every external change via install!'s add-watch).
+
+   Pre:  `card` is the menu card element (hidden to dismiss); `get-rng` returns
+         the cached selection {:index :length}.
+   Post: −/+ clamp to [card-count-min, card-count-max], mutate the global, and
+         persist via the :persist-card-count invoker (no-op if unpublished, e.g.
+         reading-mode). `Generate here` restores the selection, fires :generate,
+         and hides the card. `keep-selection!` blocks the mousedown blur so the
+         cached range survives the click."
+  [^js q get-rng ^js card]
+  (let [row      (el "div" "fmt-row fmt-cardgen-row")
+        stepper  (el "div" "number-stepper")
+        lbl      (el "span" "number-stepper-label")
+        dec-btn  (el "button" "number-stepper-btn")
+        numspan  (el "span" "number-stepper-value")
+        inc-btn  (el "button" "number-stepper-btn")
+        gen-btn  (el "button" "fmt-btn fmt-cardgen-btn")
+        current  (fn [] (or @cc/!card-count cc/card-count-min))
+        persist! (fn [] (when-let [f (get @bus/!invokers :persist-card-count)] (f)))
+        sync!    (fn []
+                   (let [v (current)]
+                     (set! (.-textContent numspan) (str v))
+                     (set! (.-disabled dec-btn) (<= v cc/card-count-min))
+                     (set! (.-disabled inc-btn) (>= v cc/card-count-max))))
+        step!    (fn [delta]
+                   (reset! cc/!card-count (cc/clamp (+ (current) delta)))
+                   (persist!)
+                   (sync!))]
+    (set! (.-textContent lbl) "Cards")
+    (set! (.-type dec-btn) "button")
+    (set! (.-textContent dec-btn) "−")
+    (.setAttribute dec-btn "aria-label" "Fewer cards to generate")
+    (set! (.-type inc-btn) "button")
+    (set! (.-textContent inc-btn) "+")
+    (.setAttribute inc-btn "aria-label" "More cards to generate")
+    (set! (.-type gen-btn) "button")
+    (set! (.-innerHTML gen-btn) (str sparkles-glyph "<span>Generate here</span>"))
+    (.setAttribute gen-btn "title" "Generate cards from the selection")
+    (.setAttribute gen-btn "aria-label" "Generate cards from the selection")
+    (keep-selection! dec-btn)
+    (keep-selection! inc-btn)
+    (keep-selection! gen-btn)
+    (.addEventListener dec-btn "click" (fn [^js e] (.stopPropagation e) (step! -1)))
+    (.addEventListener inc-btn "click" (fn [^js e] (.stopPropagation e) (step! 1)))
+    (.addEventListener gen-btn "click"
+      (fn [^js e]
+        (.stopPropagation e)
+        (reselect! q (get-rng))            ; restore the cached range for :generate
+        (bus/dispatch! :generate)
+        (set! (.. card -style -display) "none")))
+    (.appendChild stepper lbl)
+    (.appendChild stepper dec-btn)
+    (.appendChild stepper numspan)
+    (.appendChild stepper inc-btn)
+    (.appendChild row stepper)
+    (.appendChild row gen-btn)
+    {:row row :sync sync!}))
+
 (defn- build-card
   "Build the menu card and its controls. Returns
    {:card <el> :refresh (fn []) :!sync <atom>}.
@@ -241,8 +314,9 @@
    mutating the document, calls `(@!sync)` — install! sets that to
    refresh + re-place, so active-state and geometry stay current after a format
    (e.g. a heading changes line height). `get-rng` returns the cached
-   {:index :length}. `opts` = {:image? :cloze?} toggles the card-editor-only
-   controls (§ ns docstring)."
+   {:index :length}. `opts` = {:image? :cloze? :card-gen?}: :image?/:cloze?
+   toggle card-editor controls; :card-gen? adds the document-editor card-count
+   row (§ ns docstring). Returns :card-count-sync (nil unless :card-gen?)."
   [^js q get-rng opts]
   (let [card    (el "div" "format-menu")
         section (fn [] (el "div" "fmt-row"))
@@ -274,7 +348,8 @@
                     {:label "Justify" :on-select (after #(set-format! q (get-rng) "align" "justify"))}])
         row-block (section)
         row-inline (section)
-        row-blockfmt (section)]
+        row-blockfmt (section)
+        cardgen (when (:card-gen? opts) (card-gen-row q get-rng card))]
     ;; Row 1 — block type + size dropdowns
     (.appendChild row-block (:wrap block-dd))
     (.appendChild row-block (:wrap size-dd))
@@ -316,8 +391,14 @@
             (after #(do (reselect! q (get-rng)) (editor-actions/insert-cloze! q :eq)))))
         (.appendChild card (el "div" "fmt-divider"))
         (.appendChild card cloze-row)))
+    ;; Card-gen row (document editor only, via :card-gen? opt) — count stepper
+    ;; + Generate-here, at the bottom under its own divider.
+    (when cardgen
+      (.appendChild card (el "div" "fmt-divider"))
+      (.appendChild card (:row cardgen)))
     {:card card
      :!sync !sync
+     :card-count-sync (:sync cardgen)      ; nil when no card-gen row
      :refresh
      (fn []
        (let [af (active-format q (get-rng))]
@@ -391,7 +472,9 @@
    (let [q editor
         container (.-container q)
         !rng (atom nil)                                   ; cached selection
-        {:keys [card refresh !sync]} (build-card q #(deref !rng) opts)
+        {:keys [card refresh !sync card-count-sync]} (build-card q #(deref !rng) opts)
+        ;; Unique per-install key so N editors' watches never collide.
+        watch-key (gensym "fmt-cardcount")
         visible? #(= "block" (.. card -style -display))
         hide! (fn [] (set! (.. card -style -display) "none"))
         show! (fn [] (set! (.. card -style -display) "block") (refresh) (place! card container))
@@ -420,6 +503,11 @@
     (.addEventListener js/window "resize" reposition)
     (.addEventListener js/document "mousedown" on-doc-down true)
     (.addEventListener js/document "keydown" on-key)
+    ;; Card-gen row (if present): paint from the shared global now, and keep it
+    ;; live when the toolbar stepper changes the count while the popup is open.
+    (when card-count-sync
+      (card-count-sync)
+      (add-watch cc/!card-count watch-key (fn [_ _ _ _] (card-count-sync))))
     (fn teardown []
       (.off q "selection-change" on-selection)
       (.removeEventListener (.-root q) "scroll" reposition false)
@@ -427,4 +515,5 @@
       (.removeEventListener js/window "resize" reposition)
       (.removeEventListener js/document "mousedown" on-doc-down true)
       (.removeEventListener js/document "keydown" on-key)
+      (when card-count-sync (remove-watch cc/!card-count watch-key))
       (when (.-parentNode card) (.remove card))))))
