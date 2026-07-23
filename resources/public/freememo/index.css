@@ -1827,6 +1827,24 @@ textarea:hover {
 .format-menu .fmt-btn u, .format-menu .fmt-btn s { font-style: inherit; }
 .format-menu .fmt-btn i { font-style: italic; }
 
+/* Card-gen row (document editor only): count stepper + Generate-here. Reuses
+   the global .number-stepper* classes for the stepper; only the plain display
+   value + the action button need local rules. */
+.format-menu .fmt-cardgen-row { justify-content: space-between; gap: 8px; padding: 4px 2px; }
+.format-menu .number-stepper-value {
+    min-width: 22px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--color-text-primary);
+}
+.format-menu .fmt-cardgen-btn {
+    gap: 6px;
+    padding: 0 10px;
+    font-size: 13px;
+    color: var(--color-primary-text, #2383e2);
+}
+.format-menu .fmt-cardgen-btn svg { flex-shrink: 0; }
+
 /* Colour presets: the "A" trigger opens a popup of Text + Background swatches. */
 .format-menu .fmt-colour-trigger { font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
 .format-menu .fmt-colour-popup { padding: 10px; min-width: 210px; }
