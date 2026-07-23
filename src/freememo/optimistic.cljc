@@ -52,6 +52,12 @@
    (defn drop-command!
      "Remove the command identified by `id` from the queue. Idempotent."
      [user-id id]
+     ;; DEBUG (card-dupe root-cause, WBS §1.4): queue-churn visibility — pairs
+     ;; drop events against ::execute-command to show whether the entry was
+     ;; removed and re-added. Remove after the fix is confirmed.
+     (tel/log! {:level :info :id ::drop-command
+                :data {:user-id user-id :command-id id}}
+       "drop command")
      (swap! (us/get-atom user-id :pending-commands)
        (fn [cmds] (filterv #(not= id (:id %)) cmds)))
      nil))
@@ -170,10 +176,17 @@
       Post: command absent from :pending-commands, its :views channels bumped
       exactly once (even when the method throws — the queue must not wedge,
       and a partial effect may still have written; a stale view hides a
-      failure worse than a spurious refetch reveals one). Returns :done."
-     [user-id command]
+      failure worse than a spurious refetch reveals one). Returns :done.
+
+      `mount-nonce` is the client branch-mount identity (DEBUG, WBS §1.1): a
+      re-fire via branch remount (M1) carries a fresh nonce, an e/Offload
+      re-dispatch within one mount (M2) reuses it — remove the param after fix."
+     [user-id command mount-nonce]
      (tel/log! {:level :info :id ::execute-command
-                :data {:user-id user-id :type (:type command) :command-id (:id command)}}
+                :data {:user-id user-id :type (:type command) :command-id (:id command)
+                       ;; DEBUG (card-dupe, WBS §1.1/§1.3): mount-nonce is the
+                       ;; M1/M2 discriminator; cmd-hash confirms identical content.
+                       :mount-nonce mount-nonce :cmd-hash (hash command)}}
        "execute command")
      (try
        (run-command! user-id command)
@@ -199,7 +212,13 @@
   [user-id]
   (e/client
     (e/for [cmd (e/server (e/diff-by :id (e/watch (us/get-atom user-id :pending-commands))))]
-      (let [[t _] (e/Token (:id cmd))]
+      (let [[t _] (e/Token (:id cmd))
+            ;; DEBUG (card-dupe root-cause, WBS §1.1): per-branch-mount identity.
+            ;; e/snapshot freezes it at mount, so a branch remount (M1) yields a
+            ;; fresh nonce while an e/Offload re-dispatch within one mount (M2)
+            ;; reuses it — the decisive discriminator, logged by execute!.
+            ;; Remove (and revert execute!'s arity) after the fix is confirmed.
+            mount-nonce (e/snapshot (random-uuid))]
         (when t
-          (when-some [_ (e/server (e/Offload #(execute! user-id cmd)))]
+          (when-some [_ (e/server (e/Offload #(execute! user-id cmd mount-nonce)))]
             (t)))))))
