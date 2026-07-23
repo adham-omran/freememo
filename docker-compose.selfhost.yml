@@ -78,9 +78,8 @@ services:
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:-}"
       # Set false to log in over plain HTTP (localhost/LAN without TLS).
       COOKIE_SECURE: "${COOKIE_SECURE:-true}"
-      # AI keys — OPENAI_API_KEY: card generation; PLATFORM_OPENROUTER_API_KEY: OCR.
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      OPENAI_DEMO_KEY: "${OPENAI_DEMO_KEY:-}"
+      # AI key — card generation, OCR, and transcription all route through one
+      # OpenRouter key (no separate OpenAI key is used).
       PLATFORM_OPENROUTER_API_KEY: "${PLATFORM_OPENROUTER_API_KEY:-}"
       # Google OAuth — only needed when AUTH_MODE is google or both.
       GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
