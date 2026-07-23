@@ -75,11 +75,13 @@
 #?(:cljs
    (defn- on-palette-key
      "Container keydown: arrows — and Emacs-style Ctrl/Cmd-n / Ctrl/Cmd-p —
-      move selection, Enter runs the highlighted row, Escape closes. Reads
-      atoms at event time and re-derives rows via palette-rows (see ns
-      contract). Cmd-N never reaches the page in Chrome (browser-reserved:
-      new window) — Ctrl-n is the binding that always works; Cmd-P is
-      interceptable and preventDefault suppresses the print dialog."
+      move selection, Enter runs the highlighted row, Escape closes, Tab
+      cycles focus within the modal (modal-shell/trap-tab! on the content
+      container). Reads atoms at event time and re-derives rows via
+      palette-rows (see ns contract). Cmd-N never reaches the page in Chrome
+      (browser-reserved: new window) — Ctrl-n is the binding that always
+      works; Cmd-P is interceptable and preventDefault suppresses the print
+      dialog."
      [active-tab !query !idx e]
      (let [rows (palette-rows active-tab @bus/!ctx @!query)
            n (count rows)
@@ -95,6 +97,7 @@
                           (let [i (min @!idx (dec n))]
                             (when-let [row (and (>= i 0) (nth rows i nil))]
                               (run-row! row @!query))))
+         (= k "Tab")    (modal-shell/trap-tab! (.-currentTarget e) e)
          :else nil)))
    :clj
    (defn- on-palette-key [_active-tab _!query _!idx _e] nil))
@@ -128,12 +131,16 @@
             (dom/input
               (dom/props {:placeholder "Type a command or search…"
                           :aria-label "Command palette"
-                          :autofocus true
                           :style {:padding "14px 16px" :font-size "15px"
                                   :border "none" :outline "none"
                                   :border-bottom "0.5px solid var(--color-border-light)"
                                   :background "transparent"
                                   :color "var(--color-text-primary)"}})
+              ;; rAF focus-on-mount: HTML :autofocus is inert on dynamically
+              ;; inserted elements (see modal-shell/focus-on-mount!). e/snapshot
+              ;; fires once at mount; the rAF defer lets FocusReturn's
+              ;; synchronous opener-capture win before focus moves in.
+              (e/snapshot (modal-shell/focus-on-mount! dom/node))
               (dom/On "input"
                 (fn [e]
                   (reset! !query (-> e .-target .-value))
