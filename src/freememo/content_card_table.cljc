@@ -50,7 +50,7 @@
           ;; Score rows load their group into the in-view score editor
           ;; (waveform region + rect pages) instead of opening a modal.
           "score" (when dctx/is-score?
-                    (ScoreEditLoader !editing-card))
+                    (ScoreEditLoader user-id !editing-card))
           (EditCardModal !editing-card user-id)))
 
       (if (:success cards-result)

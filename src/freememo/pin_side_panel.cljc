@@ -36,7 +36,7 @@
    then bump :pin-mutations on behalf of the caller."
   [user-id pin-id]
   #?(:clj
-     (let [removed (db/remove-pin! pin-id)]
+     (let [removed (db/remove-pin! user-id pin-id)]
        (when removed
          (log/audit! {:id ::remove-pin :user-id user-id :action :delete
                       :entity :pin :entity-id pin-id})
@@ -55,7 +55,7 @@
   [user-id pin-id current-placement]
   #?(:clj
      (let [new-placement (if (= current-placement "front") "back" "front")]
-       (db/update-pin-placement! pin-id new-placement)
+       (db/update-pin-placement! user-id pin-id new-placement)
        (log/audit! {:id ::toggle-pin-placement :user-id user-id :action :update
                     :entity :pin :entity-id pin-id})
        (commands/bump! user-id :toggle-pin-placement)

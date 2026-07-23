@@ -54,8 +54,10 @@
   "Create a group + its per-mask cards.
    payload = {:topic-id :root-topic-id :image-media-id :mode :geometry :io-fields}
    Post: {:success true :group-id id :ids [card-id ...]} or {:success false :error}."
-  [payload]
+  [user-id payload]
   (try
+    (when-not (db/owns-topic? user-id (:root-topic-id payload))
+      (throw (ex-info "Not authorized for this topic" {:type ::not-owner})))
     (let [result (db/insert-occlusion-group!
                    (assoc payload
                      :geometry (validate-geometry (:geometry payload))
@@ -69,8 +71,10 @@
   "Full reconcile of a group edit (see db/reconcile-occlusion-group!).
    payload = {:group-id :mode :geometry :io-fields}
    Post: {:success true :added-ids [..] :removed [{:id :anki-note-id} ..]}."
-  [payload]
+  [user-id payload]
   (try
+    (when-not (= user-id (db/occlusion-group-owner (:group-id payload)))
+      (throw (ex-info "Not authorized for this group" {:type ::not-owner})))
     (let [result (db/reconcile-occlusion-group!
                    {:group-id (:group-id payload)
                     :mode (:mode payload)
@@ -88,8 +92,10 @@
    io-fields come from the lowest-ordinal row — the modal edits fields
    group-wide, so per-row divergence (Anki-side pulls) is squashed on the
    next group save."
-  [group-id]
+  [user-id group-id]
   (try
+    (if (not= user-id (db/occlusion-group-owner group-id))
+      {:success false :error "Occlusion group not found"}
     (if-let [group (db/get-occlusion-group group-id)]
       (let [cards (db/get-occlusion-cards group-id)]
         {:success true
@@ -104,7 +110,7 @@
                            (when-let [nid (:flashcards/anki_note_id c)]
                              [(:flashcards/mask_ordinal c) nid])))
                    cards)}})
-      {:success false :error "Occlusion group not found"})
+      {:success false :error "Occlusion group not found"}))
     (catch Exception e
       (tel/error! {:id ::get-group-for-edit :data {:group-id group-id}} e)
       {:success false :error (.getMessage e)})))
@@ -116,7 +122,7 @@
 ;; ---------------------------------------------------------------------------
 
 (defmethod opt/run-command! :add-occlusion [user-id {:keys [id payload]}]
-  (let [result (create-group! payload)]
+  (let [result (create-group! user-id payload)]
     (if (:success result)
       (do (swap! (us/get-atom user-id :pending-cards) update id merge
             {:status :confirmed :real-ids (:ids result)})
@@ -130,7 +136,7 @@
     :done))
 
 (defmethod opt/run-command! :update-occlusion [user-id {:keys [payload]}]
-  (let [result (update-group! payload)]
+  (let [result (update-group! user-id payload)]
     (if (:success result)
       (toasts/push! user-id {:level :success :message "Occlusion updated"})
       (toasts/push! user-id {:level :error

@@ -20,10 +20,10 @@
    Pre:  pdf-root-id non-nil; `currently-done?` is the status at click time.
    Post: status becomes the opposite of `currently-done?`; returns :ok.
    Blame: caller bug if pdf-root-id is nil."
-  [pdf-root-id currently-done?]
+  [user-id pdf-root-id currently-done?]
   #?(:clj (do (if currently-done?
-                (db/restore-topic! pdf-root-id)
-                (db/done-topic! pdf-root-id))
+                (db/restore-topic! user-id pdf-root-id)
+                (db/done-topic! user-id pdf-root-id))
               :ok)
      :cljs nil))
 
@@ -62,7 +62,7 @@
               ;; Two-step: DB write, then bump :meta-refresh, then (t). The bump
               ;; is last so (t) unmounts this block before `done?` re-reads —
               ;; otherwise the status flips back. Mirrors the old TitleBar.
-              (case (e/server (toggle-pdf-done!* bib-topic-id done?))
+              (case (e/server (toggle-pdf-done!* user-id bib-topic-id done?))
                 (case (e/server (commands/bump! user-id :done))
                   (t)))))))
 

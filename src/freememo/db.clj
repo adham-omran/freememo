@@ -1732,24 +1732,6 @@
                id]))
     0))
 
-(defn delete-topic!
-  "Delete a topic by ID. CASCADE handles children + flashcards.
-   Decrements usage_bytes by the subtree's total file_size atomically.
-   Looks up owner from the row before delete (so the counter belongs to the right user)."
-  [id]
-  (jdbc/with-transaction [tx ds]
-    (let [owner (:users_id (jdbc/execute-one! tx
-                             ["SELECT user_id AS users_id FROM topics WHERE id = ?" id]))
-          freed (subtree-file-bytes tx id)
-          result (jdbc/execute! tx
-                   (sql/format {:delete-from :topics
-                                :where [:= :id id]}))]
-      (when (and owner (pos? freed))
-        (bump-user-usage! tx owner (- freed)))
-      (log/audit! {:id ::topic-deleted :user-id owner :action :delete
-                   :entity :document :entity-id id})
-      result)))
-
 (defn delete-topic-for-user!
   "Delete a topic scoped to user. Decrements usage_bytes by the subtree's
    total file_size atomically."
@@ -1764,34 +1746,6 @@
       (log/audit! {:id ::topic-deleted :user-id user-id :action :delete
                    :entity :document :entity-id id})
       result)))
-
-(defn batch-create-topics!
-  "Batch insert child topics under parent-id. items is a seq of maps with :content.
-   Returns count of created items."
-  [parent-id items]
-  (when (seq items)
-    (let [parent (get-topic parent-id)
-          user-id (:topics/user_id parent)
-          rows (mapv (fn [item]
-                       (let [sanitized (sanitize-utf8 (:content item))]
-                         {:user_id user-id
-                          :parent_id parent-id
-                          :kind "basic"
-                          :title (let [raw (or (:content item) "")]
-                                   (-> raw
-                                     (str/replace #"<[^>]+>" "")
-                                     (subs 0 (min 80 (count (str/replace raw #"<[^>]+>" ""))))
-                                     str/trim
-                                     (#(if (str/blank? %) "Extract" %))))
-                          :content sanitized
-                          :content_text (text/strip-html sanitized)
-                          :status "active"
-                          :priority 50}))
-                 items)]
-      (jdbc/execute! ds
-        (sql/format {:insert-into :topics
-                     :values rows}))
-      (count items))))
 
 ;; ---------------------------------------------------------------------------
 ;; File operations
@@ -3259,12 +3213,18 @@
      (:next_review_at before)
      (:last_review_at before)]))
 
+;; Forward decl: the scheduling + pin mutations below own-gate via subtree-owner,
+;; which is defined further down (near owns-topic?).
+(declare subtree-owner)
+
 (defn advance-topic!
   "Advance a topic's review schedule using A-Factor algorithm.
-   Logs 'advance' event with pre-mutation snapshot."
-  [id]
+   Logs 'advance' event with pre-mutation snapshot. Owner-gated by `user-id`
+   (the topic's root carries the owner); a non-owner call is a no-op."
+  [user-id id]
   (jdbc/with-transaction [tx ds]
-    (when-let [before (snapshot-topic-row tx id)]
+    (when (= user-id (subtree-owner tx id))
+     (when-let [before (snapshot-topic-row tx id)]
       (insert-repetition! tx id "advance" before)
       ;; Floor the interval to >= 1 day before multiplying. COALESCE guards NULL
       ;; but not 0/negatives, and 0 is a multiplication fixed point (0*a_factor=0
@@ -3277,60 +3237,67 @@
               next_review_at = NOW() + (GREATEST(COALESCE(interval_days, 1.0), 1.0) * COALESCE(a_factor, 2.0)) * INTERVAL '1 day',
               last_review_at = NOW()
           WHERE id = ?"
-         id]))))
+         id])))))
 
 (defn update-topic-priority!
-  "Update a topic's priority (0=highest, 100=lowest).
+  "Update a topic's priority (0=highest, 100=lowest). Owner-gated by `user-id`.
    Logs 'priority-change' event only when new value differs from current (no-op skipped)."
-  [id priority]
+  [user-id id priority]
   (jdbc/with-transaction [tx ds]
-    (when-let [before (snapshot-topic-row tx id)]
+    (when (= user-id (subtree-owner tx id))
+     (when-let [before (snapshot-topic-row tx id)]
       (when (not= (:priority before) priority)
         (insert-repetition! tx id "priority-change" before)
         (jdbc/execute-one! tx
-          ["UPDATE topics SET priority = ? WHERE id = ?" priority id])))))
+          ["UPDATE topics SET priority = ? WHERE id = ?" priority id]))))))
 
 (defn postpone-topic!
-  "Postpone a topic by N days without changing interval/a-factor.
-   Logs 'postpone' event with pre-mutation snapshot."
-  [id days]
+  "Postpone a topic by N days without changing interval/a-factor. Owner-gated by
+   `user-id`. Logs 'postpone' event with pre-mutation snapshot."
+  [user-id id days]
   (jdbc/with-transaction [tx ds]
-    (when-let [before (snapshot-topic-row tx id)]
+    (when (= user-id (subtree-owner tx id))
+     (when-let [before (snapshot-topic-row tx id)]
       (insert-repetition! tx id "postpone" before)
       (jdbc/execute-one! tx
         ["UPDATE topics
           SET next_review_at = NOW() + ? * INTERVAL '1 day',
               last_review_at = NOW()
           WHERE id = ?"
-         (double days) id]))))
+         (double days) id])))))
 
 (defn done-topic!
-  "Mark a topic as done. Logs 'done' event with pre-mutation snapshot."
-  [id]
+  "Mark a topic as done. Owner-gated by `user-id`. Logs 'done' event with
+   pre-mutation snapshot."
+  [user-id id]
   (jdbc/with-transaction [tx ds]
-    (when-let [before (snapshot-topic-row tx id)]
+    (when (= user-id (subtree-owner tx id))
+     (when-let [before (snapshot-topic-row tx id)]
       (insert-repetition! tx id "done" before)
       (jdbc/execute-one! tx
-        ["UPDATE topics SET status = 'done' WHERE id = ?" id]))))
+        ["UPDATE topics SET status = 'done' WHERE id = ?" id])))))
 
 (defn restore-topic!
-  "Restore a done topic back to active queue. Logs 'restore' event."
-  [id]
+  "Restore a done topic back to active queue. Owner-gated by `user-id`.
+   Logs 'restore' event."
+  [user-id id]
   (jdbc/with-transaction [tx ds]
-    (when-let [before (snapshot-topic-row tx id)]
+    (when (= user-id (subtree-owner tx id))
+     (when-let [before (snapshot-topic-row tx id)]
       (insert-repetition! tx id "restore" before)
       (jdbc/execute-one! tx
-        ["UPDATE topics SET status = 'active', next_review_at = NULL WHERE id = ?" id]))))
+        ["UPDATE topics SET status = 'active', next_review_at = NULL WHERE id = ?" id])))))
 
 (defn touch-topic!
   "Update last_review_at without advancing the interval (subset-review soft rep).
-   Logs 'touch' event with pre-mutation snapshot."
-  [id]
+   Owner-gated by `user-id`. Logs 'touch' event with pre-mutation snapshot."
+  [user-id id]
   (jdbc/with-transaction [tx ds]
-    (when-let [before (snapshot-topic-row tx id)]
+    (when (= user-id (subtree-owner tx id))
+     (when-let [before (snapshot-topic-row tx id)]
       (insert-repetition! tx id "touch" before)
       (jdbc/execute-one! tx
-        ["UPDATE topics SET last_review_at = NOW() WHERE id = ?" id]))))
+        ["UPDATE topics SET last_review_at = NOW() WHERE id = ?" id])))))
 
 (defn get-topic-history
   "Return repetition history rows for a topic, newest first.
@@ -3745,23 +3712,32 @@
         :topic_pins/id))))
 
 (defn remove-pin!
-  "Delete a pin row by id. Returns the full deleted row (RETURNING *) so the
-   caller can snapshot it for undo."
-  [pin-id]
-  (jdbc/execute-one! ds
-    (sql/format {:delete-from :topic_pins
-                 :where [:= :id pin-id]
-                 :returning [:*]})))
+  "Delete pin `pin-id` iff owned by `user-id` (the pin's topic's root carries the
+   owner). Returns the full deleted row (RETURNING *) for undo, or nil when not
+   owned / absent."
+  [user-id pin-id]
+  (jdbc/with-transaction [tx ds]
+    (when-let [pin (jdbc/execute-one! tx
+                     ["SELECT topic_id FROM topic_pins WHERE id = ?" pin-id])]
+      (when (= user-id (subtree-owner tx (:topic_pins/topic_id pin)))
+        (jdbc/execute-one! tx
+          (sql/format {:delete-from :topic_pins
+                       :where [:= :id pin-id]
+                       :returning [:*]}))))))
 
 (defn update-pin-placement!
-  "Update a pin's placement. Throws on invalid value."
-  [pin-id new-placement]
+  "Update pin `pin-id`'s placement iff owned by `user-id`. Throws on invalid value."
+  [user-id pin-id new-placement]
   (when-not (#{"front" "back"} new-placement)
     (throw (ex-info "Invalid placement" {:placement new-placement})))
-  (jdbc/execute-one! ds
-    (sql/format {:update :topic_pins
-                 :set {:placement new-placement}
-                 :where [:= :id pin-id]})))
+  (jdbc/with-transaction [tx ds]
+    (when-let [pin (jdbc/execute-one! tx
+                     ["SELECT topic_id FROM topic_pins WHERE id = ?" pin-id])]
+      (when (= user-id (subtree-owner tx (:topic_pins/topic_id pin)))
+        (jdbc/execute-one! tx
+          (sql/format {:update :topic_pins
+                       :set {:placement new-placement}
+                       :where [:= :id pin-id]}))))))
 
 (defn copy-pins-to-child!
   "Snapshot parent topic's pins into a newly created child topic.
@@ -4068,6 +4044,28 @@
    The security predicate for topic/group ownership checks outside db.clj."
   [user-id topic-id]
   (boolean (and user-id topic-id (= user-id (subtree-owner ds topic-id)))))
+
+(defn occlusion-group-owner
+  "Owner (root user_id) of occlusion `group-id`, resolved via any member
+   flashcard's root topic, or nil. occlusion_groups carries no owner column."
+  [group-id]
+  (:user_id
+   (jdbc/execute-one! ds
+     ["SELECT root.user_id FROM flashcards f
+       JOIN topics root ON f.root_topic_id = root.id
+       WHERE f.occlusion_group_id = ? LIMIT 1" group-id]
+     {:builder-fn rs/as-unqualified-maps})))
+
+(defn score-group-owner
+  "Owner (root user_id) of score `group-id`, resolved via any member flashcard's
+   root topic, or nil. score_groups carries no owner column."
+  [group-id]
+  (:user_id
+   (jdbc/execute-one! ds
+     ["SELECT root.user_id FROM flashcards f
+       JOIN topics root ON f.root_topic_id = root.id
+       WHERE f.score_group_id = ? LIMIT 1" group-id]
+     {:builder-fn rs/as-unqualified-maps})))
 
 ;; ---------------------------------------------------------------------------
 ;; Dismiss / Undismiss — remove a topic + its whole subtree from the Learning
