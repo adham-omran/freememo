@@ -57,7 +57,6 @@ x-app-common: &app-common
     AUTH_MODE: "${AUTH_MODE:-google}"
     # Secrets / config — sourced from .env (compose auto-loads it).
     ENC_KEY_SECRET: "${ENC_KEY_SECRET:?ENC_KEY_SECRET required — generate: openssl rand -hex 32}"
-    OPENAI_DEMO_KEY: "${OPENAI_DEMO_KEY:-}"
     GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
     GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
     GOOGLE_REDIRECT_URI: "${GOOGLE_REDIRECT_URI:-}"
@@ -110,8 +109,16 @@ services:
     image: caddy:2-alpine
     container_name: freememo-caddy
     restart: unless-stopped
+    # Two publishes: 127.0.0.1 is the loopback the Cloudflare tunnel dials
+    # (cloudflared runs --network=host and reaches Caddy at localhost). The
+    # second exposes the app on exactly FREEMEMO_BIND_IP (the box's tailscale IP)
+    # for direct tailnet access. Default 127.0.0.2 — a distinct loopback — when
+    # FREEMEMO_BIND_IP is unset, so the two entries never collide and never fall
+    # back to 0.0.0.0. Changing these needs a one-time `up -d caddy` (deploy.sh
+    # only reloads Caddy, never recreates it).
     ports:
-      - "${APP_PORT:-8080}:8080"
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+      - "${FREEMEMO_BIND_IP:-127.0.0.2}:${APP_PORT:-8080}:8080"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy/upstream.caddy:/etc/caddy/upstream.caddy:ro
