@@ -65,6 +65,13 @@
               digits are re-displayed."
   [value min-val max-val mount-key label input-aria-label suffix disabled? !mirror Save]
   (e/client
+    ;; Bounds-disable: −/+ disable at the respective bound. Reads the reactive
+    ;; `value` prop only for the :disabled attr — NOT the click token — so a
+    ;; save that bumps `value` re-renders the attr but never re-fires Save
+    ;; (a disabled button can't emit a click, so the token never spends there).
+    ;; `(or value min-val)` guards the pre-load nil: − starts disabled, + enabled.
+    (let [at-min? (<= (or value min-val) min-val)
+          at-max? (>= (or value min-val) max-val)]
     (dom/span
       (dom/props {:class "number-stepper"
                   :style (when disabled? {:opacity "0.5"})})
@@ -75,7 +82,7 @@
       ;; JS, reads !mirror), so the awaiting re-eval keeps the same nv.
       (dom/button
         (dom/props {:class "number-stepper-btn" :type "button"
-                    :aria-label "Decrease" :disabled disabled?})
+                    :aria-label "Decrease" :disabled (or disabled? at-min?)})
         (dom/text "−")
         (let [nv (dom/On "click" (fn [_] (read-step !mirror min-val max-val -1)) nil)
               nv (if (and (some? nv) !mirror) (reset! !mirror nv) nv)
@@ -105,7 +112,7 @@
       ;; + increment
       (dom/button
         (dom/props {:class "number-stepper-btn" :type "button"
-                    :aria-label "Increase" :disabled disabled?})
+                    :aria-label "Increase" :disabled (or disabled? at-max?)})
         (dom/text "+")
         (let [nv (dom/On "click" (fn [_] (read-step !mirror min-val max-val 1)) nil)
               nv (if (and (some? nv) !mirror) (reset! !mirror nv) nv)
@@ -113,4 +120,4 @@
           (when t (spend t (Save nv)))))
 
       (when suffix
-        (dom/span (dom/props {:class "number-stepper-suffix"}) (dom/text suffix))))))
+        (dom/span (dom/props {:class "number-stepper-suffix"}) (dom/text suffix)))))))
