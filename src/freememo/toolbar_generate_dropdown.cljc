@@ -18,6 +18,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.content-toolbar-generate :refer [ToolbarGenerate]]
+   [freememo.content-toolbar-helpers :as helpers]
    [freememo.card-compare :refer [CardCompareButton]]
    [freememo.content-toolbar-settings :as settings]
    [freememo.icons :as icons]
@@ -73,15 +74,10 @@
           !open (atom false)
           open (e/watch !open)
           no-content? (empty? content-text)
-          type-label (case card-type
-                       "basic" "Basic"
-                       "cloze" "Cloze"
-                       (str card-type))
-          action-summary (str "Generate " card-count-val " " type-label
-                           (when use-context
-                             (str " · " context-window
-                               " page" (when (not= 1 context-window) "s")
-                               " context")))]
+          ;; idle-label = visible primary text ("Generate N Type"); action-summary
+          ;; = full text incl. context, used for tooltip/aria only.
+          idle-label (helpers/gen-label card-count-val card-type)
+          action-summary (helpers/gen-summary card-count-val card-type use-context context-window)]
 
       ;; Hidden source — ToolbarGenerate renders the real Generate +
       ;; Generate-with-Prompt buttons (which set keyboard refs), the e/Token
@@ -99,41 +95,60 @@
         (dom/div
           (dom/props {:class "toolbar-dropdown toolbar-generate-dropdown"})
 
-          ;; Trigger — mirrors the original Generate button's state display
-          ;; (spinner + count when in-flight, error text on failure) so the
-          ;; user retains immediate feedback even though the action moved into
-          ;; a menu.
-          (dom/button
-            (dom/props {:class "btn btn-sm btn-primary toolbar-dropdown-trigger toolbar-generate-trigger"
-                        :style {:background (cond no-content? "var(--color-disabled-bg)"
-                                              gen-active? "var(--color-primary-light)"
-                                              :else "var(--color-primary)")
-                                :cursor (if no-content? "not-allowed" "pointer")
-                                :font-weight "bold"}
-                        :disabled no-content?
-                        :aria-haspopup "menu"
-                        :aria-expanded (if open "true" "false")
-                        :aria-label (str action-summary " menu")})
-            (tooltip/Tooltip! (if no-content?
-                                "Extract text first to generate flashcards"
-                                action-summary))
-            (if (and gen-active? (nil? gen-error))
-              (icons/Icon :loader-2 :size 16 :class "spin")
-              (icons/Icon :sparkles :size 16))
-            (dom/span (dom/props {:class "icon-label"})
-              (dom/text (cond gen-error gen-error
-                          gen-active? "Generating..."
-                          :else "Generate")))
-            (when (and gen-active? (nil? gen-error))
+          ;; Trigger — split button: the primary zone generates now (dispatches
+          ;; :generate, reusing the hidden ToolbarGenerate button so selection
+          ;; capture + enqueue stay single-owner); the caret zone opens the
+          ;; options menu. The primary mirrors generation state (spinner +
+          ;; pending count in-flight, error text on failure).
+          (dom/div
+            (dom/props {:class "toolbar-generate-split"})
+
+            ;; Primary zone — generate now.
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-primary toolbar-generate-trigger toolbar-generate-primary"
+                          :style {:background (cond no-content? "var(--color-disabled-bg)"
+                                                gen-active? "var(--color-primary-light)"
+                                                :else "var(--color-primary)")
+                                  :cursor (if no-content? "not-allowed" "pointer")
+                                  :font-weight "bold"}
+                          :disabled no-content?
+                          :aria-label (str action-summary " (" mod-key "+Shift+G)")})
+              (tooltip/Tooltip! (if no-content?
+                                  "Extract text first to generate flashcards"
+                                  (str action-summary " (" mod-key "+Shift+G)")))
+              (if (and gen-active? (nil? gen-error))
+                (icons/Icon :loader-2 :size 16 :class "spin")
+                (icons/Icon :sparkles :size 16))
               (dom/span (dom/props {:class "icon-label"})
-                (dom/text (str " (" gen-pending ")"))))
-            (icons/Icon :chevron-down :size 14)
-            (dom/On "click"
-              (fn [e]
-                (.stopPropagation e)
-                (when-not no-content?
-                  (swap! !open not)))
-              nil))
+                (dom/text (cond gen-error   gen-error
+                            gen-active? (str "Generating… (" gen-pending ")")
+                            :else       idle-label)))
+              (dom/On "click"
+                (fn [e]
+                  (.stopPropagation e)
+                  (when-not no-content?
+                    (bus/dispatch! :generate)))
+                nil))
+
+            ;; Caret zone — open/close the options menu.
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-primary toolbar-generate-trigger toolbar-generate-caret"
+                          :style {:background (cond no-content? "var(--color-disabled-bg)"
+                                                gen-active? "var(--color-primary-light)"
+                                                :else "var(--color-primary)")
+                                  :cursor (if no-content? "not-allowed" "pointer")}
+                          :disabled no-content?
+                          :aria-haspopup "menu"
+                          :aria-expanded (if open "true" "false")
+                          :aria-label "Generation options"})
+              (tooltip/Tooltip! "Generation options")
+              (icons/Icon :chevron-down :size 14)
+              (dom/On "click"
+                (fn [e]
+                  (.stopPropagation e)
+                  (when-not no-content?
+                    (swap! !open not)))
+                nil)))
 
           ;; Menu — mounts only when open. Listeners are installed inside a
           ;; `let` whose mount lifecycle matches the menu's; e/on-unmount
@@ -141,7 +156,7 @@
           (when open
             (let [cleanup (install-dropdown-listeners!
                             !open
-                            "toolbar-generate-trigger"
+                            "toolbar-generate-split"
                             "toolbar-generate-menu")]
               (e/on-unmount cleanup)
               (dom/div
@@ -159,22 +174,6 @@
                   (settings/ToolbarSettings)
                   (settings/ContextSettings))
                 (dom/div (dom/props {:class "toolbar-dropdown-separator"}))
-
-                ;; Generate
-                (dom/button
-                  (dom/props {:class "toolbar-dropdown-item"
-                              :role "menuitem"
-                              :disabled no-content?
-                              :aria-label action-summary})
-                  (icons/Icon :sparkles :size 16)
-                  (dom/span (dom/text "Generate"))
-                  (dom/span (dom/props {:class "dropdown-shortcut"})
-                    (dom/text (str mod-key "+Shift+G")))
-                  (dom/On "click"
-                    (fn [_]
-                      (bus/dispatch! :generate)
-                      (reset! !open false))
-                    nil))
 
                 ;; Generate with Prompt
                 (dom/button
@@ -197,7 +196,7 @@
                               :role "menuitem"
                               :disabled no-content?
                               :aria-label "Compare card models"})
-                  (icons/Icon :sparkles :size 16)
+                  (icons/Icon :git-compare :size 16)
                   (dom/span (dom/text "Compare models..."))
                   (dom/On "click"
                     (fn [_]
