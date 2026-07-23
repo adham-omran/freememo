@@ -362,7 +362,7 @@
                                 :topic-id topic-id :toolbar nil
                                 :a11y-observer (install-content-a11y! editor)
                                 :import-popover-teardown (setup-link-import-popover! editor)
-                                :format-menu-teardown (format-menu/install! editor)
+                                :format-menu-teardown (format-menu/install! editor {:card-gen? true})
                                 :code-lang-teardown (code-lang-picker/install! editor)})
          (setup-mobile-keyboard-suppression! editor)
          (table-ui/init! editor)
