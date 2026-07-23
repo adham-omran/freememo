@@ -29,8 +29,8 @@
 ;; e/defn reactive bodies (CLJ/CLJS frame signal-count rule).
 ;; ---------------------------------------------------------------------------
 
-(defn get-group-for-edit* [group-id]
-  #?(:clj (occ/get-group-for-edit group-id)
+(defn get-group-for-edit* [user-id group-id]
+  #?(:clj (occ/get-group-for-edit user-id group-id)
      :cljs nil))
 
 (defn enqueue-add-occlusion!* [user-id id payload]
@@ -321,7 +321,7 @@
     (let [request (e/watch !request)]
       (when request
         (if (= :edit (:mode request))
-          (let [result (e/server (e/Offload #(get-group-for-edit* (:group-id request))))]
+          (let [result (e/server (e/Offload #(get-group-for-edit* user-id (:group-id request))))]
             (cond
               (nil? result) nil                      ; server round-trip in flight
               (:success result) (OcclusionModalBody request !request user-id (:group result))

@@ -12,12 +12,12 @@
 
 #?(:clj
    (defn advance-topic* [user-id id]
-     (db/advance-topic! id)
+     (db/advance-topic! user-id id)
      (commands/bump! user-id :advance-topic)))
 
 #?(:clj
    (defn postpone-topic* [user-id id days]
-     (db/postpone-topic! id days)
+     (db/postpone-topic! user-id id days)
      (commands/bump! user-id :postpone-topic)))
 
 ;; Shared bottom bar with Postpone + Next

@@ -131,8 +131,8 @@
   #?(:clj (opt/enqueue-command! user-id {:type :update-score-group :payload payload})
      :cljs nil))
 
-(defn get-score-group-for-edit* [group-id]
-  #?(:clj (score/get-group-for-edit group-id)
+(defn get-score-group-for-edit* [user-id group-id]
+  #?(:clj (score/get-group-for-edit user-id group-id)
      :cljs nil))
 
 (defn log-load-error!
@@ -410,13 +410,13 @@
 (e/defn ScoreEditLoader
   "Loads a score group into the editor when a score card row is clicked.
    Mount while (:kind @!editing-card) = \"score\"; clears the atom when done."
-  [!editing-card]
+  [user-id !editing-card]
   (e/client
     (let [group-id (:group-id (e/watch !editing-card))
           !score-region dctx/!score-region
           !score-pages dctx/!score-pages
           !score-edit dctx/!score-edit
-          result (e/server (e/Offload #(get-score-group-for-edit* group-id)))]
+          result (e/server (e/Offload #(get-score-group-for-edit* user-id group-id)))]
       (when (some? result)
         (if (:success result)
           (case (load-group-into-editor! (:group result)
