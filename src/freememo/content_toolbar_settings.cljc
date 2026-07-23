@@ -42,9 +42,10 @@
                     (if (:success r)
                       (do (reset! !use-context new-use-context) (t))
                       (t (:error r))))))
-              (do (dom/text "Context") (e/amb))))
+              (do (dom/text "Include context") (e/amb))))
           (NumberStepper context-window context-pages-min context-pages-max
-            :context-pages nil "Context pages" "pages" (not use-context)
+            :context-pages nil "Context pages"
+            (if (= 1 context-window) "page" "pages") (not use-context)
             !context-window
             (e/fn [nv] (e/server (e/Offload #(settings/save-context-pages user-id nv))))))))))
 
@@ -67,60 +68,51 @@
       (when (some? r)
         (if (:success r) (t) (t (:error r)))))))
 
+;; Pre:  current-type is the live card-type; !card-type the controlling atom.
+;; Post: one segment of the card-type segmented control — a `role=radio`
+;;       button that persists `kind` on click / Enter / Space via SaveCardType.
+;; Note: mousedown preventDefault keeps a CLICK from stealing focus off the
+;;       Quill editor (preserves text selection); Tab-focus is deliberate and
+;;       allowed. Selection is shown by the --selected CSS class, not a glyph.
+(e/defn TypeSegment [user-id !card-type current-type kind label]
+  (e/client
+    (let [selected? (= current-type kind)]
+      (dom/button
+        (dom/props {:class (str "segmented-option"
+                             (when selected? " segmented-option--selected"))
+                    :type "button" :role "radio" :tabindex "0"
+                    :aria-checked (str selected?)})
+        (dom/On "mousedown" (fn [e] (.preventDefault e)) nil)
+        (e/for [[t e] (dom/On-all "click")]
+          (when e (SaveCardType t user-id !card-type kind)))
+        (e/for [[t e] (dom/On-all "keydown" radio-activation-key)]
+          (when e (SaveCardType t user-id !card-type kind)))
+        (dom/text label)))))
+
 ;; Pre:  llm-enabled? gates rendering. card-type is current value; !card-type
 ;;       is the controlling atom.
-;; Post: Renders Basic / Cloze as a keyboard-operable radiogroup (Tab to each
-;;       option, Enter/Space selects).
-;; Note:  mousedown preventDefault keeps a CLICK from stealing focus off the
-;;        Quill editor (preserves text selection); Tab-focus is deliberate
-;;        user intent and is allowed.
+;; Post: Renders the card-type segmented control as a keyboard-operable
+;;       radiogroup (Tab to each option, Enter/Space selects) plus a one-line
+;;       description of the selected kind.
 (e/defn ToolbarSettings []
   (e/client
     (let [llm-enabled? dctx/llm-enabled? user-id dctx/user-id card-type dctx/card-type
           !card-type dctx/!card-type]
       (when llm-enabled?
         (dom/div
-          (dom/props {:class "toolbar-settings-row"
-                      :role "radiogroup" :aria-label "Card type"})
-          (dom/span
-            (dom/props {:role "radio" :tabindex "0"
-                        :aria-checked (str (= card-type "basic"))
-                        :style {:display "flex" :align-items "center" :gap "4px" :cursor "pointer"}})
-            (dom/On "mousedown" (fn [e] (.preventDefault e)) nil)
-            (dom/span
-              (dom/props {:class (str "radio-dot" (when (= card-type "basic") " radio-dot--checked"))})
-              (dom/text (if (= card-type "basic") "◉" "○")))
-            (e/for [[t e] (dom/On-all "click")]
-              (when e (SaveCardType t user-id !card-type "basic")))
-            (e/for [[t e] (dom/On-all "keydown" radio-activation-key)]
-              (when e (SaveCardType t user-id !card-type "basic")))
-            (dom/text "Basic"))
-          (dom/span
-            (dom/props {:role "radio" :tabindex "0"
-                        :aria-checked (str (= card-type "cloze"))
-                        :style {:display "flex" :align-items "center" :gap "4px" :cursor "pointer"}})
-            (dom/On "mousedown" (fn [e] (.preventDefault e)) nil)
-            (dom/span
-              (dom/props {:class (str "radio-dot" (when (= card-type "cloze") " radio-dot--checked"))})
-              (dom/text (if (= card-type "cloze") "◉" "○")))
-            (e/for [[t e] (dom/On-all "click")]
-              (when e (SaveCardType t user-id !card-type "cloze")))
-            (e/for [[t e] (dom/On-all "keydown" radio-activation-key)]
-              (when e (SaveCardType t user-id !card-type "cloze")))
-            (dom/text "Cloze"))
-          (dom/span
-            (dom/props {:role "radio" :tabindex "0"
-                        :aria-checked (str (= card-type "overlapping"))
-                        :style {:display "flex" :align-items "center" :gap "4px" :cursor "pointer"}})
-            (dom/On "mousedown" (fn [e] (.preventDefault e)) nil)
-            (dom/span
-              (dom/props {:class (str "radio-dot" (when (= card-type "overlapping") " radio-dot--checked"))})
-              (dom/text (if (= card-type "overlapping") "◉" "○")))
-            (e/for [[t e] (dom/On-all "click")]
-              (when e (SaveCardType t user-id !card-type "overlapping")))
-            (e/for [[t e] (dom/On-all "keydown" radio-activation-key)]
-              (when e (SaveCardType t user-id !card-type "overlapping")))
-            (dom/text "Overlapping")))))))
+          (dom/props {:class "toolbar-settings-row toolbar-type-row"})
+          (dom/div
+            (dom/props {:class "segmented" :role "radiogroup" :aria-label "Card type"})
+            (TypeSegment user-id !card-type card-type "basic" "Basic")
+            (TypeSegment user-id !card-type card-type "cloze" "Cloze")
+            (TypeSegment user-id !card-type card-type "overlapping" "Overlapping"))
+          (dom/div
+            (dom/props {:class "segmented-description"})
+            (dom/text (case card-type
+                        "basic" "Question → answer."
+                        "cloze" "Fill-in-the-blank deletions."
+                        "overlapping" "Chained cloze for lists & sequences."
+                        ""))))))))
 
 (def ^:private card-count-min 1)
 (def ^:private card-count-max 20)
@@ -128,11 +120,12 @@
 ;; Pre:  card-count-val is current persisted count (1..20). !card-count is
 ;;       the controlling atom (writes flow to settings/save-card-count; the
 ;;       overflow-panel proxy mount reads the same atom and stays in sync).
-;; Post: Renders the shared `# [−] N [+]` borderless stepper beside Generate.
+;; Post: Renders the shared `Cards [−] N [+]` borderless stepper in the
+;;       Generate menu. Visible label "Cards"; aria "Cards to generate".
 ;; Invariant: clamp to [1,20] on both the button and typed-input paths.
 (e/defn CardCountStepper [user-id card-count-val !card-count]
   (e/client
     (NumberStepper card-count-val card-count-min card-count-max
-      :card-count "#" "Cards to generate" nil nil
+      :card-count "Cards" "Cards to generate" nil nil
       !card-count
       (e/fn [nv] (e/server (e/Offload #(settings/save-card-count user-id nv)))))))

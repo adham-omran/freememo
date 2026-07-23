@@ -55,15 +55,7 @@
           ;; Generate button — label and tooltip include the parameters
           ;; (count, type, context) so users see exactly what will happen.
           (let [no-content? (empty? content-text)
-                type-label (case card-type
-                             "basic" "Basic"
-                             "cloze" "Cloze"
-                             (str card-type))
-                action-summary (str "Generate " card-count-val " " type-label
-                                 (when use-context
-                                   (str " · " context-window
-                                     " page" (when (not= 1 context-window) "s")
-                                     " context")))]
+                action-summary (helpers/gen-summary card-count-val card-type use-context context-window)]
             (dom/button
               (dom/props {:class "btn btn-sm btn-primary"
                           :style {:background (cond no-content? "var(--color-disabled-bg)" gen-active? "var(--color-primary-light)" :else "var(--color-primary)")

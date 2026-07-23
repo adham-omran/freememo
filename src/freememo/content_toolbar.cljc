@@ -10,7 +10,6 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.content-toolbar-helpers :as helpers]
-   [freememo.content-toolbar-settings :as settings]
    [freememo.content-toolbar-actions :as actions]
    [freememo.content-toolbar-extract :refer [ExtractActions]]
    [freememo.toolbar-generate-dropdown :refer [GenerateDropdown]]
@@ -279,14 +278,7 @@
                           dctx/gen-pending gen-pending dctx/gen-error gen-error
                           dctx/!use-context !use-context dctx/!context-window !context-window
                           dctx/!card-type !card-type dctx/!card-count !card-count]
-                  (GenerateDropdown))
-
-                ;; Card-count stays inline (commonly changed). Card-type +
-                ;; Context moved into the Generate dropdown menu (C3).
-                (when llm-enabled?
-                  (dom/div
-                    (dom/props {:class "toolbar-collapse-cardcount"})
-                    (settings/CardCountStepper user-id card-count-val !card-count))))
+                  (GenerateDropdown)))
 
               (dom/div (dom/props {:class "toolbar-group-divider"}))
 
