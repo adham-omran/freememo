@@ -215,7 +215,7 @@
               rows (e/server (get-history* refresh topic-id))
               row-count (e/server (count rows))]
           (dom/div
-            (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
+            (dom/props {:class "modal-backdrop" :tabindex "-1"})
             (modal/ModalEscape (fn [] (reset! !open? false)) "History")
             (dom/On "click" (fn [_] (reset! !open? false)) nil)
             (dom/div

@@ -3,6 +3,7 @@
   (:require
    [clojure.string :as string]
    [contrib.data :refer [clamp-left]]
+   [freememo.modal-shell :as modal]
    [freememo.viewport :as viewport]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -63,8 +64,11 @@
                       :value (if (some? search) search (or value ""))
                       :placeholder placeholder
                       :class "input"
-                      :autofocus (and autofocus? (not coarse?))
                       :style {:width "100%"}})
+          ;; rAF focus-on-mount: HTML :autofocus is inert on dynamically
+          ;; inserted elements (see modal-shell/focus-on-mount!, which
+          ;; nil-guards — the touch gate rides inside the snapshot).
+          (e/snapshot (modal/focus-on-mount! (when (and autofocus? (not coarse?)) dom/node)))
           ;; Focus opens the dropdown but keeps the value — search stays nil so
           ;; the input shows the current value; Tab-through no longer loses it.
           (dom/On "focus" (fn [_] (reset! !open? true)
