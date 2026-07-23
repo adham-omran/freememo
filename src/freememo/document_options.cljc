@@ -349,7 +349,7 @@
   (e/client
     (when (e/watch !open)
       (dom/div
-        (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
+        (dom/props {:class "modal-backdrop" :tabindex "-1"})
         (modal/ModalEscape (fn [] (reset! !open false)) "Document options")
         (dom/On "click" (fn [e] (when (= (.-target e) (.-currentTarget e)) (reset! !open false))) nil)
         (dom/div

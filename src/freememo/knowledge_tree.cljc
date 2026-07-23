@@ -383,8 +383,10 @@
 ;; Pre:  `show-confirm` is the topic-id to delete, or nil (modal hidden).
 ;; Post: Esc / backdrop click / Cancel → close (reset! !show-confirm nil).
 ;;       Delete click or Cmd/Ctrl+Enter → run delete sequence, then close.
-;; Invariant: Delete button receives focus on mount (:autofocus true)
-;;            so Tab cycles between Delete↔Cancel and the keydown shortcut works.
+;; Invariant: Delete button receives focus on mount (rAF via
+;;            modal/focus-on-mount! — HTML :autofocus is inert on dynamically
+;;            inserted elements) so Tab cycles between Delete↔Cancel and the
+;;            keydown shortcut works.
 (e/defn DeleteConfirmModal [user-id show-confirm !show-confirm !scroll-node]
   (e/client
     (when (some? show-confirm)
@@ -422,8 +424,11 @@
                 (dom/text "Cancel")
                 (dom/On "click" (fn [_] (reset! !show-confirm nil)) nil))
               (dom/button
-                (dom/props {:class "btn btn-danger-fill" :autofocus true})
+                (dom/props {:class "btn btn-danger-fill"})
                 (reset! !delete-btn dom/node)
+                ;; rAF focus-on-mount (e/snapshot = once at mount); the defer
+                ;; lets FocusReturn's synchronous opener-capture win.
+                (e/snapshot (modal/focus-on-mount! dom/node))
                 (dom/text "Delete")
                 ;; Thread the pre-delete scrollTop through the confirm event so
                 ;; it's captured in the click callback (not the reactive body).

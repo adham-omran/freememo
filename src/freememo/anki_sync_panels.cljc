@@ -235,8 +235,13 @@
       (dom/div
         (dom/props {:class "modal-backdrop" :style {:background "rgba(0,0,0,0.5)"}
                     :role "dialog" :aria-modal "true" :aria-label "Anki sync"
-                    :tabindex "-1" :autofocus true})
+                    :tabindex "-1"})
         (modal-shell/FocusReturn)
+        ;; rAF focus-on-mount: HTML :autofocus is inert on dynamically
+        ;; inserted elements (see modal-shell/focus-on-mount!). e/snapshot
+        ;; fires once at mount; the rAF defer lets FocusReturn's
+        ;; synchronous opener-capture win before focus moves in.
+        (e/snapshot (modal-shell/focus-on-mount! dom/node))
         (dom/On "click" (fn [_] (when-not sync-phase (reset! !show-modal false))) nil)
         (dom/On "keydown"
           (fn [e]
@@ -247,7 +252,10 @@
               (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
               (when-let [btn @(:!push-btn sync)]
                 (.preventDefault e)
-                (.click btn))))
+                (.click btn))
+
+              (= (.-key e) "Tab")
+              (modal-shell/trap-tab! (.-currentTarget e) e)))
           nil)
         (dom/div
           (dom/props {:class "modal-content modal-lg" :style {:width "620px" :max-height "80vh" :overflow-y "auto"}})
