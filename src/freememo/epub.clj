@@ -41,22 +41,47 @@
 
 ;; ── ZIP reading ──────────────────────────────────────────────────
 
+;; Decompression-bomb caps: a .epub only needs to pass epub-magic-bytes? (first
+;; entry = small uncompressed "mimetype") to reach read-zip-entries, so a tiny
+;; upload can inflate to gigabytes of heap. Same guard as
+;; freememo.kg-code/unzip-repo!.
+(def ^:private max-zip-entries 50000)
+(def ^:private max-entry-bytes (* 20 1024 1024))
+(def ^:private max-total-uncompressed-bytes (* 300 1024 1024))
+
 (defn- read-zip-entries
-  "Read all entries from a ZIP byte array into a map of {path -> byte-array}."
+  "Read all entries from a ZIP byte array into a map of {path -> byte-array}.
+   Bomb-guarded: caps entry count, per-entry uncompressed bytes (checked while
+   streaming, before full inflation), and total uncompressed bytes; any breach
+   throws ex-info {:type ::zip-too-large}.
+   Pre:  file-bytes is a byte[] ZIP archive.
+   Post: {path -> byte-array}, or throws ::zip-too-large — callers
+         (api/upload-staged-handler, web-import/confirm-staged-upload!*) already
+         catch it and return an import-failed response."
   [file-bytes]
   (with-open [zis (ZipInputStream. (ByteArrayInputStream. file-bytes))]
-    (loop [entries {}]
+    (loop [entries {} n-entries 0 total 0]
+      (when (> n-entries max-zip-entries)
+        (throw (ex-info "Zip has too many entries" {:type ::zip-too-large})))
       (if-let [^ZipEntry entry (.getNextEntry zis)]
         (if (.isDirectory entry)
-          (recur entries)
+          (recur entries (inc n-entries) total)
           (let [baos (ByteArrayOutputStream.)
-                buf (byte-array 8192)]
-            (loop []
-              (let [n (.read zis buf)]
-                (when (pos? n)
-                  (.write baos buf 0 n)
-                  (recur))))
-            (recur (assoc entries (.getName entry) (.toByteArray baos)))))
+                buf (byte-array 8192)
+                written (loop [w 0]
+                          (let [n (.read zis buf)]
+                            (if (pos? n)
+                              (let [w2 (+ w n)]
+                                (when (> w2 max-entry-bytes)
+                                  (throw (ex-info "Zip entry too large" {:type ::zip-too-large})))
+                                (.write baos buf 0 n)
+                                (recur w2))
+                              w)))
+                total2 (+ total written)]
+            (when (> total2 max-total-uncompressed-bytes)
+              (throw (ex-info "Zip too large uncompressed" {:type ::zip-too-large})))
+            (recur (assoc entries (.getName entry) (.toByteArray baos))
+                   (inc n-entries) total2)))
         entries))))
 
 ;; ── XML parsing helpers ──────────────────────────────────────────
