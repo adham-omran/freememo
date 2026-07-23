@@ -10,18 +10,18 @@ Built with [Hyperfiddle Electric v3](https://github.com/hyperfiddle/electric) (C
 
 - **Import** — PDFs, EPUBs, web articles (paste or Wikipedia lookup)
 - **Live Document** — append photos (camera or library) as PDF pages; HEIC auto-converted to JPEG, rotate before saving, oversized images compressed
-- **AI flashcard generation** — OpenAI extracts key concepts into basic and cloze cards
-- **OCR** — OpenAI Vision converts PDF pages to editable semantic HTML
+- **AI flashcard generation** — extracts key concepts into basic and cloze cards (models via OpenRouter; default GPT-5.1)
+- **OCR** — converts PDF pages to editable semantic HTML (models via OpenRouter; default Gemini 3 Flash)
 - **Rich text editor** — Quill-based editor with highlighting and selection-based card generation
 - **Anki sync** — Push/pull cards directly to your Anki collection via AnkiConnect
 - **Zotero import** — Pull PDFs (with citation metadata) straight from your local Zotero library via the [FreeMemo for Zotero](./freememo-zotero-plugin/) plugin
 - **PDF viewer** — In-browser rendering via PDF.js with zoom and navigation
-- **Learn queue** — Priority-first spaced-review ordering (SuperMemo model): due date gates the queue, priority orders it, ties shuffle daily ([details](./docs/learn-queue-ordering.md))
+- **Learn queue** — Priority-first spaced-review ordering (SuperMemo model): due date gates the queue, priority orders it, ties shuffle daily
 - **Subset review** — Review a chosen subset of cards from any topic
 - **Search** — Full-text search across topics and cards
 - **Library** — Browse imported documents
 - **Contents** — Hierarchical knowledge tree with virtual scrolling
-- **Status** — Progress overview across all documents
+- **Knowledge graph** — Obsidian-style graph view of the knowledge tree (server-side Graphviz layout)
 
 ## Quick Start
 
@@ -30,7 +30,7 @@ Built with [Hyperfiddle Electric v3](https://github.com/hyperfiddle/electric) (C
 - **Java 17+**
 - **Clojure CLI** ([install guide](https://clojure.org/guides/install_clojure))
 - **Docker** (for PostgreSQL)
-- **Node.js** (for shadow-cljs)
+- **Node.js** (for the dev client build's npm dependencies)
 - **ImageMagick** (optional — only for HEIC photo uploads in Live Documents; conversion shells out to `magick`/`convert`)
 - **Graphviz**. 
   - The `sfdp` binary needs its layout-engine plugin — on **Debian/Ubuntu** the plugin is a **separate** package: `apt install graphviz libgvplugin-neato-layout8` (without it `sfdp` aborts with *"no layout engine support for sfdp"*). **Fedora**: `dnf install graphviz`; **macOS**: `brew install graphviz` — both bundle the plugin. Missing `sfdp` throws `Cannot run program "sfdp"` and closes the graph page's WebSocket.
@@ -41,6 +41,9 @@ Built with [Hyperfiddle Electric v3](https://github.com/hyperfiddle/electric) (C
 # Start PostgreSQL
 docker compose up -d
 
+# Install client JS dependencies (dev build only)
+npm install
+
 # Start dev server (hot reload, port 8080)
 clj -M:dev -m dev
 ```
@@ -49,10 +52,7 @@ Open http://localhost:8080.
 
 ### Configuration
 
-**AI keys** — FreeMemo uses two AI providers:
-
-- **Card generation** uses OpenAI. Set `OPENAI_API_KEY` server-wide, or let each user enter their own key in **Settings** (per-user BYOK). When a server-wide key is set, the per-user field is hidden and a "Server key" badge is shown.
-- **OCR** (scanning PDF pages to text) uses **OpenRouter**, not OpenAI. Set `PLATFORM_OPENROUTER_API_KEY`. Without it, OCR is unavailable even if an OpenAI key is set.
+**AI key** — all AI features (card generation, OCR, transcription) route through a single operator-set **OpenRouter** key. Set `PLATFORM_OPENROUTER_API_KEY` (get one at <https://openrouter.ai/keys>); without it these features are unavailable. There is no per-user BYOK. Users pick the model per-generation and per-document in **Settings** from a built-in catalog (card default GPT-5.1, OCR default Gemini 3 Flash).
 
 **Sign-in** — `AUTH_MODE` selects the login controls:
 
@@ -88,7 +88,7 @@ Why a plugin: Zotero's built-in API sends no CORS headers, returns `file://` red
 | Rich text | Quill 2.0.3 (CDN) |
 | Graph layout | Graphviz `sfdp` (server-side, Knowledge Graph view) |
 | Logging | Telemere (structured, CLJ + CLJS) |
-| AI | OpenAI GPT-5.1 (card generation) + Vision (OCR) |
+| AI | OpenRouter (card gen default GPT-5.1, OCR default Gemini 3 Flash; multi-model catalog) |
 
 ### Loading indicators
 
@@ -216,10 +216,9 @@ Schema auto-creates on first startup (no migration framework). Configure via env
 | `ADMIN_USER` | _(none)_ | Seed username, created at boot if absent. |
 | `ADMIN_PASSWORD` | _(none)_ | Seed password. Changing it later does **not** reset an existing account. |
 | `COOKIE_SECURE` | `true` | Session-cookie `Secure` attribute. **Set `false` to log in over plain HTTP** (localhost/LAN without TLS). |
-| `OPENAI_API_KEY` | _(none)_ | Server-wide OpenAI key for card generation. Falls back to `OPENAI_DEMO_KEY`. |
-| `PLATFORM_OPENROUTER_API_KEY` | _(none)_ | OpenRouter key for OCR. Required for document scanning. |
-| `OPENAI_DEMO_KEY` | _(none)_ | Backward-compatible alias for `OPENAI_API_KEY`. |
+| `PLATFORM_OPENROUTER_API_KEY` | _(none)_ | Single OpenRouter key backing all AI features (card generation, OCR, transcription). Required for those features. |
 | `LOG_LEVEL` | `info` (prod) / `debug` (dev) | `trace`, `debug`, `info`, `warn`, `error`, `fatal` |
+| `PROD` | _(none)_ | When set (the compose files set it), selects the `info` `LOG_LEVEL` default; unset ⇒ `debug`. |
 | `PORT` | `8080` | HTTP port |
 | `STORAGE_QUOTA_BYTES` | `1073741824` (1 GB) | Total per-user storage. `0` = unlimited. |
 | `STORAGE_PER_FILE_MAX_BYTES` | `104857600` (100 MB) | Default per-upload cap (per-user override via `users.upload_max_bytes`). `0` = unlimited. Also sizes the WebSocket message limit. |
@@ -253,8 +252,7 @@ AUTH_MODE=password                        # username/password login
 ADMIN_USER=admin
 ADMIN_PASSWORD=your-password-here
 COOKIE_SECURE=false                       # required to log in over plain HTTP (see security note)
-OPENAI_API_KEY=sk-...                     # card generation
-PLATFORM_OPENROUTER_API_KEY=sk-or-...     # OCR (document scanning)
+PLATFORM_OPENROUTER_API_KEY=sk-or-...     # all AI features (card gen, OCR, transcription)
 ```
 
 **2. Start:**
@@ -297,7 +295,7 @@ clj -J-Xss4m -X:build:prod uberjar :build/jar-name '"app.jar"'
 # ENC_KEY_SECRET are required (boot fails otherwise).
 DB_PASSWORD=secret ENC_KEY_SECRET=$(openssl rand -hex 32) \
   AUTH_MODE=password ADMIN_USER=admin ADMIN_PASSWORD=pw COOKIE_SECURE=false \
-  OPENAI_API_KEY=sk-... PLATFORM_OPENROUTER_API_KEY=sk-or-... PORT=9091 \
+  PLATFORM_OPENROUTER_API_KEY=sk-or-... PORT=9091 \
   java -cp target/app.jar clojure.main -m prod
 ```
 
@@ -337,8 +335,6 @@ Restore:
 ```bash
 cat backup.sql | docker compose exec -T postgres psql -U cardmaker cardmaker
 ```
-
-A remote-pull variant is in `scripts/backup.sh`.
 
 ## Geo-IP Database
 
