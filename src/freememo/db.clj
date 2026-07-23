@@ -2765,23 +2765,31 @@
                            [:in :f.anki_note_id (vec note-ids)]]}))))
 
 (defn delete-flashcard!
-  "Delete a single flashcard by ID. Returns the full deleted row (RETURNING *)
-   so callers can read :flashcards/anki_note_id and snapshot it for undo."
-  [card-id]
+  "Delete flashcard `card-id` iff owned by `user-id` (via its root topic).
+   Returns the full deleted row (RETURNING *) so callers can read
+   :flashcards/anki_note_id and snapshot it for undo, or nil when the card is
+   not the user's (0 rows — the ownership predicate is the security gate)."
+  [user-id card-id]
   (jdbc/execute-one! ds
-    ["DELETE FROM flashcards WHERE id = ? RETURNING *" card-id]))
+    ["DELETE FROM flashcards
+      WHERE id = ? AND root_topic_id IN (SELECT id FROM topics WHERE user_id = ?)
+      RETURNING *" card-id user-id]))
 
 (defn update-flashcard!
-  "Update flashcard content fields. Sets updated_at for sync tracking.
-   :io_fields (a plain map) is converted to JSONB here — callers never
-   touch PGobject."
-  [card-id fields]
+  "Update content fields of flashcard `card-id` iff owned by `user-id` (via its
+   root topic). Sets updated_at for sync tracking. :io_fields (a plain map) is
+   converted to JSONB here — callers never touch PGobject. No-op (0 rows) when
+   the card is not the user's."
+  [user-id card-id fields]
   (jdbc/execute-one! ds
     (sql/format {:update :flashcards
                  :set (cond-> (assoc fields :updated_at [:now])
                         (contains? fields :io_fields) (update :io_fields ->jsonb)
                         (contains? fields :overlapping) (update :overlapping ->jsonb))
-                 :where [:= :id card-id]})))
+                 :where [:and
+                         [:= :id card-id]
+                         [:in :root_topic_id {:select :id :from :topics
+                                              :where [:= :user_id user-id]}]]})))
 
 (defn get-anki-note-ids
   "Get anki_note_ids for a specific topic's flashcards."
@@ -2800,37 +2808,40 @@
     (mapv :flashcards/anki_note_id)))
 
 (defn set-anki-note-id
-  "Set anki_note_id and anki_synced_at for a flashcard."
-  [card-id anki-note-id]
+  "Set anki_note_id and anki_synced_at for a `user-id`-owned flashcard."
+  [user-id card-id anki-note-id]
   (jdbc/execute-one! ds
-    ["UPDATE flashcards SET anki_note_id = ?, anki_synced_at = CURRENT_TIMESTAMP WHERE id = ?"
-     anki-note-id card-id]))
+    ["UPDATE flashcards SET anki_note_id = ?, anki_synced_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND root_topic_id IN (SELECT id FROM topics WHERE user_id = ?)"
+     anki-note-id card-id user-id]))
 
 (defn set-anki-note-ids
-  "Bulk set anki_note_id + anki_synced_at. Takes [[card-id note-id] ...]."
-  [pairs]
+  "Bulk set anki_note_id + anki_synced_at for `user-id`'s cards.
+   Takes [[card-id note-id] ...]."
+  [user-id pairs]
   (doseq [[card-id note-id] pairs]
-    (set-anki-note-id card-id note-id)))
+    (set-anki-note-id user-id card-id note-id)))
 
 (defn mark-anki-synced
-  "Update anki_synced_at to now for a flashcard."
-  [card-id]
+  "Update anki_synced_at to now for a `user-id`-owned flashcard."
+  [user-id card-id]
   (jdbc/execute-one! ds
-    ["UPDATE flashcards SET anki_synced_at = CURRENT_TIMESTAMP WHERE id = ?"
-     card-id]))
+    ["UPDATE flashcards SET anki_synced_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND root_topic_id IN (SELECT id FROM topics WHERE user_id = ?)"
+     card-id user-id]))
 
 (defn merge-flashcard-io-fields!
   "Shallow-merge a partial map into a card's io_fields (JSONB ||) and mark it
    synced — the Anki-pull write path for occlusion text fields. Unchanged
    keys keep their local values; updated_at is untouched so the row does not
    read as locally modified."
-  [card-id partial-fields]
+  [user-id card-id partial-fields]
   (jdbc/execute-one! ds
     ["UPDATE flashcards
       SET io_fields = COALESCE(io_fields, '{}'::jsonb) || ?,
           anki_synced_at = CURRENT_TIMESTAMP
-      WHERE id = ?"
-     (->jsonb partial-fields) card-id]))
+      WHERE id = ? AND root_topic_id IN (SELECT id FROM topics WHERE user_id = ?)"
+     (->jsonb partial-fields) card-id user-id]))
 
 ;; ---------------------------------------------------------------------------
 ;; Occlusion groups — geometry lives here, one 'occlusion' flashcard row per
@@ -4049,6 +4060,14 @@
          SELECT t.id, t.parent_id, t.user_id FROM topics t JOIN anc a ON t.id = a.parent_id)
        SELECT user_id FROM anc WHERE parent_id IS NULL" topic-id]
      {:builder-fn rs/as-unqualified-maps})))
+
+(defn owns-topic?
+  "True iff `user-id` owns `topic-id` — the root document above it carries the
+   owner. Works for root or child topic-ids (walks parent_id to the root).
+   Pre: user-id server-authoritative (from the Ring session). Post: boolean.
+   The security predicate for topic/group ownership checks outside db.clj."
+  [user-id topic-id]
+  (boolean (and user-id topic-id (= user-id (subtree-owner ds topic-id)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Dismiss / Undismiss — remove a topic + its whole subtree from the Learning

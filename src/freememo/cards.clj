@@ -507,7 +507,7 @@
    is the undo_log entry id (nil if the card did not exist)."
   [user-id card-id]
   (try
-    (let [deleted (db/delete-flashcard! card-id)
+    (let [deleted (db/delete-flashcard! user-id card-id)
           _ (when deleted
               (cleanup-occlusion-mask! deleted)
               (cleanup-score-group! deleted))
@@ -587,7 +587,7 @@
             (str/blank? (:cloze updated-fields)))
       (throw (ex-info "Cloze text cannot be empty" {})))
 
-    (db/update-flashcard! card-id updated-fields)
+    (db/update-flashcard! user-id card-id updated-fields)
     (log/audit! {:id ::update-card :user-id user-id :action :update
                  :entity :card :entity-id card-id})
     {:success true}
@@ -610,7 +610,7 @@
           settings (merge overlap/default-settings settings)
           ol {:question question :items items :settings settings
               :fields (overlap/expand items settings)}]
-      (db/update-flashcard! card-id {:overlapping ol})
+      (db/update-flashcard! user-id card-id {:overlapping ol})
       (log/audit! {:id ::update-overlapping-card :user-id user-id :action :update
                    :entity :card :entity-id card-id})
       {:success true})
@@ -628,11 +628,13 @@
    - header-text: Optional text to prepend to each card's front
    Returns {:success true :csv \"...\" :filename \"...\"}
    or {:success false :error \"...\"}"
-  [{:keys [root-topic-id topic-id kind header-text]}]
+  [{:keys [user-id root-topic-id topic-id kind header-text]}]
   (try
-    (let [root (db/get-topic root-topic-id)
+    (let [root (db/get-topic-for-user user-id root-topic-id)
           _ (when-not root
               (throw (ex-info "Topic not found" {:root-topic-id root-topic-id})))
+          _ (when (and topic-id (not (db/owns-topic? user-id topic-id)))
+              (throw (ex-info "Topic not found" {:topic-id topic-id})))
           doc-filename (-> (:topics/title root)
                          (str/replace #"\.pdf$" "")
                          (str/replace #"[^a-zA-Z0-9_-]" "_"))
