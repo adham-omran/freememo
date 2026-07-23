@@ -23,7 +23,7 @@
     ["Topic" "var(--color-badge-epub)"]))
 
 ;; Bottom bar — Next button with split behavior (outstanding vs non-outstanding)
-(e/defn SubsetBottomBar [topic-id outstanding? !queue-idx]
+(e/defn SubsetBottomBar [user-id topic-id outstanding? !queue-idx]
   (e/client
     (dom/div
       (dom/props {:style {:display "flex" :align-items "center" :justify-content "center"
@@ -51,8 +51,8 @@
               (reset! !busy true)
               (case (e/server
                       (if outstanding?
-                        (db/advance-topic! topic-id)
-                        (db/touch-topic! topic-id)))
+                        (db/advance-topic! user-id topic-id)
+                        (db/touch-topic! user-id topic-id)))
                 (case (e/client (swap! !queue-idx inc)
                         (js/setTimeout (fn [] (reset! !busy false)) 500))
                   (t))))))))))
@@ -149,4 +149,4 @@
                   (dom/props {:style {:flex "1" :min-height "0" :overflow "hidden"}})
                   (TopicPage user-id enc-key topic-id nil llm-enabled?
                     {:on-done! #(swap! !queue-idx inc)} nil))
-                (SubsetBottomBar topic-id outstanding? !queue-idx)))))))))
+                (SubsetBottomBar user-id topic-id outstanding? !queue-idx)))))))))

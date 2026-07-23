@@ -48,7 +48,7 @@
    the caller's token."
   [user-id topic-id]
   #?(:clj (try
-            (db/done-topic! topic-id)
+            (db/done-topic! user-id topic-id)
             (commands/bump! user-id :done)
             {:success true}
             (catch Exception e
@@ -61,7 +61,7 @@
    done-topic!*."
   [user-id topic-id]
   #?(:clj (try
-            (db/restore-topic! topic-id)
+            (db/restore-topic! user-id topic-id)
             (commands/bump! user-id :restore)
             {:success true}
             (catch Exception e

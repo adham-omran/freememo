@@ -48,8 +48,10 @@
    payload = {:topic-id :root-topic-id :start-ms :end-ms :clip-media-id
               :geometry :directions}
    Post: {:success true :group-id id :ids [card-id ...]} or {:success false :error}."
-  [payload]
+  [user-id payload]
   (try
+    (when-not (db/owns-topic? user-id (:root-topic-id payload))
+      (throw (ex-info "Not authorized for this topic" {:type ::not-owner})))
     (let [dirs (vec (:directions payload))]
       (when (or (empty? dirs) (not-every? directions dirs))
         (throw (ex-info "Invalid card direction" {:directions dirs})))
@@ -69,8 +71,10 @@
   "Replace a group's segment, clip, and geometry (see db/update-score-group!).
    payload = {:group-id :start-ms :end-ms :clip-media-id :geometry}
    Post: {:success true :group-id id} or {:success false :error}."
-  [payload]
+  [user-id payload]
   (try
+    (when-not (= user-id (db/score-group-owner (:group-id payload)))
+      (throw (ex-info "Not authorized for this group" {:type ::not-owner})))
     (validate-segment (:start-ms payload) (:end-ms payload))
     (let [result (db/update-score-group!
                    (assoc (select-keys payload [:group-id :start-ms :end-ms
@@ -85,8 +89,10 @@
   "Everything the score editor needs to reopen a group.
    Post: {:success true :group {:group-id :start-ms :end-ms :clip-media-id
                                 :geometry :directions}}."
-  [group-id]
+  [user-id group-id]
   (try
+    (if (not= user-id (db/score-group-owner group-id))
+      {:success false :error "Score group not found"}
     (if-let [group (db/get-score-group group-id)]
       {:success true
        :group {:group-id group-id
@@ -96,7 +102,7 @@
                :geometry (:score_groups/geometry group)
                :directions (mapv :flashcards/score_direction
                              (db/get-score-cards group-id))}}
-      {:success false :error "Score group not found"})
+      {:success false :error "Score group not found"}))
     (catch Exception e
       (tel/error! {:id ::get-group-for-edit :data {:group-id group-id}} e)
       {:success false :error (.getMessage e)})))
@@ -108,7 +114,7 @@
 ;; ---------------------------------------------------------------------------
 
 (defmethod opt/run-command! :add-score-group [user-id {:keys [id payload]}]
-  (let [result (create-group! payload)]
+  (let [result (create-group! user-id payload)]
     (if (:success result)
       (do (swap! (us/get-atom user-id :pending-cards) update id merge
             {:status :confirmed :real-ids (:ids result)})
@@ -122,7 +128,7 @@
     :done))
 
 (defmethod opt/run-command! :update-score-group [user-id {:keys [payload]}]
-  (let [result (update-group! payload)]
+  (let [result (update-group! user-id payload)]
     (if (:success result)
       (toasts/push! user-id {:level :success :message "Score card updated"})
       (toasts/push! user-id {:level :error

@@ -26,8 +26,8 @@
   #?(:clj (or (db/get-topic-priority topic-id) 50)
      :cljs 50))
 
-(defn update-priority!* [topic-id priority]
-  #?(:clj (do (db/update-topic-priority! topic-id priority) :ok)
+(defn update-priority!* [user-id topic-id priority]
+  #?(:clj (do (db/update-topic-priority! user-id topic-id priority) :ok)
      :cljs nil))
 
 (e/defn PriorityControl
@@ -41,7 +41,7 @@
    changes after the write lands (no clobber). Gap: a failed write would leave
    the mirror ahead of the DB, matching the control's existing no-error-surface
    behavior."
-  [_user-id topic-id priority]
+  [user-id topic-id priority]
   (e/client
     (let [!mirror (atom priority)
           mirror-val (e/watch !mirror)]
@@ -57,4 +57,4 @@
         topic-id "Priority" "Priority" nil nil
         !mirror
         (e/fn [nv]
-          (e/server (e/Offload #(update-priority!* topic-id nv))))))))
+          (e/server (e/Offload #(update-priority!* user-id topic-id nv))))))))
