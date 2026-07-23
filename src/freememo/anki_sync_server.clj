@@ -154,7 +154,11 @@
                     :scope scope}}
     "get-cards-for-sync invoked")
   (try
-    (let [cards (attach-score-groups
+    (if-not (and user-id
+              (or (nil? topic-id) (db/owns-topic? user-id topic-id))
+              (or (nil? root-topic-id) (db/owns-topic? user-id root-topic-id)))
+      {:success false :error "Not authorized for this topic"}
+      (let [cards (attach-score-groups
                   (attach-occlusion-groups
                     (attach-card-bibliography
                       (case scope
@@ -183,7 +187,7 @@
        :topic-title (:topics/title root-topic)
        :topic-kind (:topics/kind root-topic)
        :bibliography-text bib-text
-       :bibliography-html bib-html})
+       :bibliography-html bib-html}))
     (catch Exception e
       (tel/error! {:id ::get-cards-for-sync} e)
       {:success false :error (.getMessage e)})))
@@ -221,7 +225,7 @@
                     :deck (:deck prefs-map)}}
     "finalize-push! invoked")
   (try
-    (db/set-anki-note-ids
+    (db/set-anki-note-ids user-id
       (mapv (fn [{:keys [card-id anki-note-id]}]
               [card-id anki-note-id])
         pairs))
@@ -314,7 +318,7 @@
           ;; F4: delete locally what Anki no longer has.
           absent-rows (db/get-flashcards-by-anki-note-ids user-id absent-note-ids)
           deleted-count (do (doseq [r absent-rows]
-                              (db/delete-flashcard! (:flashcards/id r)))
+                              (db/delete-flashcard! user-id (:flashcards/id r)))
                           (count absent-rows))]
       (when (pos? deleted-count)
         (commands/bump! user-id :pull-anki))
@@ -422,7 +426,7 @@
    pairs: [{:card-id N :anki-note-id M} ...]"
   [user-id pairs]
   (try
-    (db/set-anki-note-ids
+    (db/set-anki-note-ids user-id
       (mapv (fn [{:keys [card-id anki-note-id]}] [card-id anki-note-id]) pairs))
     (commands/bump! user-id :anki-sync)
     {:success true :count (count pairs)}
@@ -441,17 +445,17 @@
     (doseq [{:keys [card-id question answer cloze io-fields]} updates]
       (if (seq io-fields)
         ;; Occlusion: shallow JSONB merge — unchanged keys keep local values.
-        (db/merge-flashcard-io-fields! card-id io-fields)
+        (db/merge-flashcard-io-fields! user-id card-id io-fields)
         (let [fields (cond-> {}
                        question (assoc :question question)
                        answer (assoc :answer answer)
                        cloze (assoc :cloze cloze))]
           (when (seq fields)
-            (db/update-flashcard! card-id fields)
-            (db/mark-anki-synced card-id)))))
+            (db/update-flashcard! user-id card-id fields)
+            (db/mark-anki-synced user-id card-id)))))
     (when (seq deleted-card-ids)
       (doseq [id deleted-card-ids]
-        (db/delete-flashcard! id)))
+        (db/delete-flashcard! user-id id)))
     (commands/bump! user-id :pull-anki)
     {:success true :count (count updates) :deleted (count (or deleted-card-ids []))}
     (catch Exception e
