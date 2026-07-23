@@ -110,58 +110,48 @@
       ;; an inline stepper here.
 
       ;; Done/Restore button — only for extract topics (not PDF pages).
-      ;; `busy` holds the active branch mounted through the done→:refresh flip.
-      ;; done-topic!* bumps :refresh, which re-derives extract-status
-      ;; "active"→"done" in the same tick the token's success arm needs. Without
-      ;; the hold the outer `if` swaps Done→Restore and unmounts the token frame
-      ;; before on-done! can fire, so the queue never advances (the regression
-      ;; this restores). Set !busy true on token acquire — status is still
-      ;; "active" then, so (or busy …) keeps the SAME branch: no remount, so
-      ;; !done-click is stable and the token is not retracted. Release !busy in
-      ;; the success on-unmount (queue context advances there) or inline on
-      ;; failure. Mirrors the Next button's !busy pattern
-      ;; (learn_session.cljc:91-99). In doc-context (no on-done!) the release
-      ;; just lets the branch flip to Restore — the normal in-place toggle.
+      ;; The Done branch stays mounted through the done→:refresh flip by gating
+      ;; on on-done! presence, NOT extract-status. done-topic!* bumps :refresh,
+      ;; which re-derives extract-status "active"→"done" in the same tick the
+      ;; token's success arm needs; in a queue (on-done! set) that flip would
+      ;; otherwise swap Done→Restore and unmount the in-flight token before
+      ;; on-done! (swap! !queue-idx inc) fires — the regression. on-done! is
+      ;; stable for the item, so (or (some? on-done!) …) holds the branch, and
+      ;; the token itself drives :disabled (re-arms on spend, never strands the
+      ;; button). In doc-context (on-done! nil) the branch tracks live status and
+      ;; toggles Done→Restore in place. Do NOT mutate a branch-coupled atom in
+      ;; the token body — it recreates !done-click and retracts the token before
+      ;; dispatch (the earlier !busy hold's stuck-disabled failure).
       (when (some? extract-status)
-        (let [!busy (atom false)
-              busy (e/watch !busy)]
-          (if (or busy (= extract-status "active"))
-            ;; Active (or transitioning): show Done button
-            (let [!done-click (atom nil)
-                  done-click (e/watch !done-click)]
-              (dom/button
-                (dom/props {:class "btn btn-sm btn-secondary toolbar-done-btn"
-                            :style {:color "var(--color-success-dark)" :border "1px solid var(--color-success-dark)"
-                                    :font-weight "500"}
-                            :disabled busy
-                            :aria-label "Done"})
-                (tooltip/Tooltip! "Mark as fully processed (extracted/carded everything useful)")
-                (icons/Icon :check :size 16)
-                (dom/span (dom/props {:class "icon-label"}) (dom/text "Done"))
-                (let [node dom/node]
-                  (bus/publish-invoker! :done (fn [] (.click node)))
-                  (e/on-unmount (fn [] (bus/retract-invoker! :done))))
-                (dom/On "click" (fn [_] (when-not @!busy (reset! !done-click (str (random-uuid))))) nil))
-              ;; Advance is success-gated AND survives the status flip: on-done!
-              ;; (queue contexts /learn, subset-review) advances !queue-idx and
-              ;; unmounts this component, so it rides an e/on-unmount registered
-              ;; inside the SUCCESS arm — it fires only after done-topic! commits
-              ;; and (t) unmounts the frame, never on failure. The !busy reset
-              ;; shares that ONE callback so the next queue item can't render
-              ;; reading busy=true (a split reset risks a stuck-disabled frame —
-              ;; the atom persists across the topic-id change). Failure resets
-              ;; !busy inline: no :refresh bump happened, so extract-status is
-              ;; still "active" and the reset can't unmount the branch.
-              (let [[t _] (e/Token done-click)]
-                (when t
-                  (reset! !busy true)
-                  (let [r (e/server (e/Offload #(done-topic!* user-id topic-id)))]
-                    (case r
-                      (if (:success r)
-                        (do (e/on-unmount (fn [] (reset! !busy false) (when on-done! (on-done!))))
-                            (t))
-                        (do (reset! !busy false)
-                            (t (:error r)))))))))
+        (if (or (some? on-done!) (= extract-status "active"))
+          ;; Active, or any queue item: show Done
+          (let [!done-click (atom nil)
+                done-click (e/watch !done-click)
+                [t _] (e/Token done-click)]
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-secondary toolbar-done-btn"
+                          :style {:color "var(--color-success-dark)" :border "1px solid var(--color-success-dark)"
+                                  :font-weight "500"}
+                          :disabled (some? t)
+                          :aria-label "Done"})
+              (tooltip/Tooltip! "Mark as fully processed (extracted/carded everything useful)")
+              (icons/Icon :check :size 16)
+              (dom/span (dom/props {:class "icon-label"}) (dom/text "Done"))
+              (let [node dom/node]
+                (bus/publish-invoker! :done (fn [] (.click node)))
+                (e/on-unmount (fn [] (bus/retract-invoker! :done))))
+              (dom/On "click" (fn [_] (reset! !done-click (str (random-uuid)))) nil))
+            ;; on-done! (queue contexts /learn, subset-review) advances !queue-idx
+            ;; and unmounts this component, so it rides an e/on-unmount in the
+            ;; SUCCESS arm — it fires only after done-topic! commits and (t)
+            ;; unmounts the frame, never on failure.
+            (when t
+              (let [r (e/server (e/Offload #(done-topic!* user-id topic-id)))]
+                (case r
+                  (if (:success r)
+                    (do (when on-done! (e/on-unmount (fn [] (on-done!))))
+                        (t))
+                    (t (:error r)))))))
 
           ;; Done status: show Restore button
           (let [!restore-click (atom nil)
@@ -186,7 +176,7 @@
                       (if (and navigate! origin)
                         (case (navigate! origin) (t))
                         (t))
-                      (t (:error r)))))))))))
+                      (t (:error r))))))))))
 
       ;; Delete button — hidden, triggered via overflow menu proxy
       (when (some? extract-status)
