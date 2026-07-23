@@ -110,12 +110,18 @@
       ;; an inline stepper here.
 
       ;; Done/Restore button — only for extract topics (not PDF pages).
-      ;; `busy` holds the active branch open during the queue-advance transition:
-      ;; the :refresh bump (after server done!) propagates faster than the queue
-      ;; advance, so without the hold, the button visibly flips Done→Restore for
-      ;; a frame before the next topic mounts. Mirrors the Next button's
-      ;; !busy/:disabled pattern (learn_session.cljc:99-116). In doc-context
-      ;; (no on-done!) busy stays false; branch flip happens normally.
+      ;; `busy` holds the active branch mounted through the done→:refresh flip.
+      ;; done-topic!* bumps :refresh, which re-derives extract-status
+      ;; "active"→"done" in the same tick the token's success arm needs. Without
+      ;; the hold the outer `if` swaps Done→Restore and unmounts the token frame
+      ;; before on-done! can fire, so the queue never advances (the regression
+      ;; this restores). Set !busy true on token acquire — status is still
+      ;; "active" then, so (or busy …) keeps the SAME branch: no remount, so
+      ;; !done-click is stable and the token is not retracted. Release !busy in
+      ;; the success on-unmount (queue context advances there) or inline on
+      ;; failure. Mirrors the Next button's !busy pattern
+      ;; (learn_session.cljc:91-99). In doc-context (no on-done!) the release
+      ;; just lets the branch flip to Restore — the normal in-place toggle.
       (when (some? extract-status)
         (let [!busy (atom false)
               busy (e/watch !busy)]
@@ -136,23 +142,26 @@
                   (bus/publish-invoker! :done (fn [] (.click node)))
                   (e/on-unmount (fn [] (bus/retract-invoker! :done))))
                 (dom/On "click" (fn [_] (when-not @!busy (reset! !done-click (str (random-uuid))))) nil))
-              ;; on-done! (queue contexts /learn, subset-review) advances the
-              ;; queue and unmounts this component, so it is registered as
-              ;; e/on-unmount inside the SUCCESS frame: it fires only after
-              ;; done-topic! commits and (t) unmounts the frame.
-              ;; Do NOT reset !busy in the token body — that re-renders this
-              ;; branch, recreates the !done-click atom, and un-fires the token
-              ;; before done-topic! dispatches (verified: Done silently did
-              ;; nothing). !busy stays false; the button is brief enough that a
-              ;; disable flag is unnecessary.
+              ;; Advance is success-gated AND survives the status flip: on-done!
+              ;; (queue contexts /learn, subset-review) advances !queue-idx and
+              ;; unmounts this component, so it rides an e/on-unmount registered
+              ;; inside the SUCCESS arm — it fires only after done-topic! commits
+              ;; and (t) unmounts the frame, never on failure. The !busy reset
+              ;; shares that ONE callback so the next queue item can't render
+              ;; reading busy=true (a split reset risks a stuck-disabled frame —
+              ;; the atom persists across the topic-id change). Failure resets
+              ;; !busy inline: no :refresh bump happened, so extract-status is
+              ;; still "active" and the reset can't unmount the branch.
               (let [[t _] (e/Token done-click)]
                 (when t
+                  (reset! !busy true)
                   (let [r (e/server (e/Offload #(done-topic!* user-id topic-id)))]
                     (case r
                       (if (:success r)
-                        (do (when on-done! (e/on-unmount (fn [] (on-done!))))
+                        (do (e/on-unmount (fn [] (reset! !busy false) (when on-done! (on-done!))))
                             (t))
-                        (t (:error r))))))))
+                        (do (reset! !busy false)
+                            (t (:error r)))))))))
 
           ;; Done status: show Restore button
           (let [!restore-click (atom nil)
