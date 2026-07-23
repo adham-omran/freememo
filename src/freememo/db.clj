@@ -3360,8 +3360,7 @@
    Ordering (SuperMemo outstanding-queue model): date gates membership only;
    priority orders the queue; a per-day hash of the id breaks ties within a
    priority band, so equal-priority topics shuffle daily (stable within a day,
-   immune to mid-session :refresh) rather than ordering by due date. See
-   docs/learn-queue-ordering.md.
+   immune to mid-session :refresh) rather than ordering by due date.
    Selects `t.content` for the overview's preview titles; the session reads it
    per-row via nth, so it stays server-side until a row is accessed.
    Joins `sources` to surface bibliography fields (source_url, source_title,
