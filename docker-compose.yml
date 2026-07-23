@@ -5,8 +5,12 @@
         POSTGRES_DB: cardmaker
         POSTGRES_USER: cardmaker
         POSTGRES_PASSWORD: dev
+      # Bind the published port to FREEMEMO_BIND_IP (set in the gitignored .env,
+      # e.g. the host's tailscale IP). Unset → 127.0.0.1: fail closed to
+      # localhost, never 0.0.0.0. The app reaches the DB over the compose
+      # network (DB_HOST=postgres), so this only governs external host access.
       ports:
-        - "5432:5432"
+        - "${FREEMEMO_BIND_IP:-127.0.0.1}:5432:5432"
       volumes:
         - pgdata:/var/lib/postgresql/data
       healthcheck:
@@ -27,8 +31,10 @@
       volumes:
         - ./ontop/mapping.obda:/opt/ontop/input/mapping.obda:ro
         - ./ontop/ontop.properties:/opt/ontop/input/ontop.properties:ro
+      # See postgres above: FREEMEMO_BIND_IP gates external host access; unset
+      # → 127.0.0.1. ontop has no auth, so it must never bind 0.0.0.0.
       ports:
-        - "8081:8080"
+        - "${FREEMEMO_BIND_IP:-127.0.0.1}:8081:8080"
       depends_on:
         postgres:
           condition: service_healthy
