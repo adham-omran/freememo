@@ -1,10 +1,19 @@
 (ns freememo.quiz-page
-  "Quiz tab (plan M4): scope → frozen draw → answer → instant LLM grade with
-   keyword highlighting and (Doc, p.N) provenance.
+  "Quiz tab: three answering flows over the same question bank.
 
-   Session state lives in kg_sessions/kg_answers — reload lands back in the
-   active session at the first unanswered question (spec 6.1 done-condition).
-   Client atoms only steer the in-page flow."
+     ReviewFlow  — the FSRS due queue; grades instantly, advances the schedule,
+                   keeps no session row (kg_reviews carries the answer)
+     QuizActive  — a custom quiz session; frozen draw, instant feedback
+     ExamActive  — a timed sitting; answers saved ungraded, graded at submit
+
+   Landing is freememo.quiz-dashboard, not a flow: tiles plus the review and
+   session histories. Session state lives in kg_sessions/kg_answers, so a reload
+   lands back in the active session at the first unanswered question; client atoms
+   only steer the in-page flow.
+
+   Every flow renders the same three curation controls (Flag, Suspend & Skip, Edit)
+   from freememo.question-curation. A skip suspends the question and writes nothing:
+   it is not an attempt, so it never scores and never advances a schedule."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -13,83 +22,15 @@
    [clojure.string :as str]
    [taoensso.telemere :as tel]
    [freememo.command-bus :as bus]
-   [freememo.icons :as icons]
-   [freememo.modal-shell :as modal]
+   [freememo.navigation :as nav]
+   [freememo.question-curation :as curate]
+   [freememo.quiz-dashboard :as qd]
+   [freememo.quiz-feedback :as fb]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.kg-grade :as grade])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])))
-
-;; ---------------------------------------------------------------------------
-;; Keyword highlighting (spec 6.5) — pure, shared by reference + user answer
-;; ---------------------------------------------------------------------------
-
-(defn highlight-segments
-  "Split text into [[segment highlighted?] ...] on case-insensitive keyword
-   occurrences. Earliest match wins; ties go to the longest keyword.
-   Post: (apply str (map first result)) = text — nothing added or lost, so a
-   keyword absent from the text can never produce a phantom highlight."
-  [text keywords]
-  (let [t (str text)
-        lower (str/lower-case t)
-        kws (->> keywords (map str/lower-case) (remove str/blank?) distinct
-              (sort-by count >) vec)]
-    (if (or (empty? kws) (= t ""))
-      [[t false]]
-      (loop [from 0 acc []]
-        (let [hit (reduce (fn [best kw]
-                            (let [i (str/index-of lower kw from)]
-                              (if (and i (or (nil? best)
-                                             (< i (first best))
-                                             (and (= i (first best))
-                                               (> (count kw) (second best)))))
-                                [i (count kw)]
-                                best)))
-                    nil kws)]
-          (if (nil? hit)
-            (into [] (remove #(= "" (first %)))
-              (conj acc [(subs t from) false]))
-            (let [[i len] hit
-                  acc (cond-> acc (> i from) (conj [(subs t from i) false]))]
-              (recur (+ i len) (conj acc [(subs t i (+ i len)) true])))))))))
-
-(defn- entity-lexicon
-  "[{:id :label :aliases}] → {lower-mention {:id :label}} for segment lookup."
-  [entities]
-  (into {}
-    (comp (mapcat (fn [{:keys [id label aliases]}]
-                    (map #(vector (str/lower-case (str %)) {:id id :label label})
-                      (cons label aliases))))
-      (remove (comp str/blank? first)))
-    entities))
-
-(e/defn EntityLinkedText
-  "Text with entity mentions as concept links (click → popover via
-   !entity-card) and matched keywords highlighted. Highlight ⊆ links: every
-   mention comes from the graph's labels/aliases, so a click always resolves."
-  [text entities matched-keywords !entity-card]
-  (e/client
-    (let [lex (entity-lexicon entities)
-          matched (into #{} (map str/lower-case) matched-keywords)]
-      (e/for [[idx seg hit] (e/diff-by first
-                              (map-indexed (fn [i [s h]] [i s h])
-                                (highlight-segments text (keys lex))))]
-        (let [_ idx
-              ent (when hit (lex (str/lower-case seg)))]
-          (if ent
-            (dom/span
-              (dom/props {:role "button"
-                          :style (cond-> {:cursor "pointer"
-                                          :text-decoration "underline dotted"
-                                          :text-underline-offset "3px"
-                                          :border-radius "2px" :padding "0 2px"}
-                                   (matched (str/lower-case seg))
-                                   (assoc :background "var(--color-warning-bg, #fff3cd)"
-                                     :font-weight "600"))})
-              (dom/text seg)
-              (dom/On "click" (fn [_] (reset! !entity-card ent)) nil))
-            (dom/text seg)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Server queries/effects — whole defns under #?(:clj …) so CLJS misuse warns
@@ -118,7 +59,11 @@
          (db/get-active-kg-session user-id "quiz"))))
 
 #?(:clj
-   (defn quiz-question* [user-id question-id]
+   (defn quiz-question*
+     "The current turn's question. Takes the KG bump so an in-quiz edit or flag
+      toggle re-renders the question and its control states immediately — without
+      it the displayed wording would stay stale until the frame remounted."
+     [_kg-bump user-id question-id]
      (db/get-kg-question-for-session user-id question-id)))
 
 #?(:clj
@@ -145,23 +90,11 @@
      :saved))
 
 #?(:clj
-   (defn history-sessions* [user-id]
-     (db/list-kg-sessions user-id)))
-
-#?(:clj
-   (defn session-detail* [user-id session-id]
-     (db/kg-session-detail user-id session-id)))
-
-#?(:clj
    (defn finish-quiz!*
      "Close the session; return its verdict tally for the summary."
      [user-id session-id]
      (db/finish-kg-session! user-id session-id)
      (db/kg-session-verdict-counts user-id session-id)))
-
-#?(:clj
-   (defn entity-card* [user-id entity-id]
-     (db/kg-entity-card user-id entity-id)))
 
 ;; --- FSRS Review (default quiz) --------------------------------------------
 
@@ -180,20 +113,6 @@
      [user-id question-id answer]
      (grade/review-question! user-id question-id answer)))
 
-#?(:clj
-   (defn review-history*
-     "Data for the FSRS review-history view.
-      Post: {:daily [per-day rows] :questions [per-question rows]}."
-     [user-id]
-     {:daily (mapv #(-> % (update :day str)
-                        (update :reviews long) (update :good long)
-                        (update :again long) (update :new long))
-                (db/fsrs-review-history-daily user-id 30))
-      :questions (mapv #(-> % (update :fsrs_due str)
-                            (update :fsrs_state long) (update :fsrs_reps long)
-                            (update :fsrs_lapses long))
-                   (db/fsrs-question-states user-id 50))}))
-
 ;; ---------------------------------------------------------------------------
 ;; Views
 ;; ---------------------------------------------------------------------------
@@ -205,10 +124,7 @@
 ;; needs it up front and the .tape-scroll CSS consumes it as --row-height.
 (def ^:private quiz-material-row-height 36)
 
-;; Fixed row height for the virtualized session-history list in QuizHistoryModal.
-(def ^:private quiz-history-row-height 52)
-
-(e/defn QuizSetup [user-id !session !history-open? initial-mode !view]
+(e/defn QuizSetup [user-id !session initial-mode !view]
   (e/client
     (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
           docs (e/server (quiz-docs* kg-bump user-id))
@@ -225,16 +141,11 @@
           (dom/div
             (dom/props {:style {:display "flex" :gap "8px" :align-items "center"}})
             (dom/button
-              (dom/props {:class "btn btn-sm" :aria-label "Back to Review"})
-              (dom/text "← Review")
-              (dom/On "click" (fn [_] (reset! !view :review)) nil))
+              (dom/props {:class "btn btn-sm" :aria-label "Back to the quiz dashboard"})
+              (dom/text "← Dashboard")
+              (dom/On "click" (fn [_] (reset! !view :dashboard)) nil))
             (dom/h2 (dom/props {:style {:font-size "18px" :margin "0"}})
-              (dom/text (if (= mode "exam") "Start an exam" "Custom quiz"))))
-          (dom/button
-            (dom/props {:class "btn btn-sm" :aria-label "Session history"})
-            (icons/Icon :history :size 14)
-            (dom/text " History")
-            (dom/On "click" (fn [_] (reset! !history-open? true)) nil)))
+              (dom/text (if (= mode "exam") "Start an exam" "Custom quiz")))))
         ;; Mode toggle — quiz: untimed, instant feedback; exam: timed, graded at end.
         (dom/div
           (dom/props {:style {:display "flex" :gap "4px" :margin "10px 0"}})
@@ -338,113 +249,7 @@
                         (do (reset! !session result)
                           (t))))))))))))))
 
-(e/defn EntityMention
-  "A clickable entity label inside a fact line (nil id → plain text)."
-  [label entity-id !entity-card]
-  (e/client
-    (if entity-id
-      (dom/span
-        (dom/props {:role "button"
-                    :style {:cursor "pointer" :text-decoration "underline dotted"
-                            :text-underline-offset "3px"}})
-        (dom/text label)
-        (dom/On "click" (fn [_] (reset! !entity-card {:id entity-id :label label})) nil))
-      (dom/text label))))
-
-(e/defn FactLine
-  "One fact as `s — p → o (Doc, p.N)` with linkable entities."
-  [{:keys [subject_label predicate_label object_label object_literal
-           doc_title page_number subject_entity_id object_entity_id]}
-   !entity-card]
-  (e/client
-    (dom/li
-      (dom/props {:style {:font-size "13px" :padding "2px 0"}})
-      (EntityMention subject_label subject_entity_id !entity-card)
-      (dom/text (str " — " predicate_label " → "))
-      (if object_label
-        (EntityMention object_label object_entity_id !entity-card)
-        (dom/text object_literal))
-      (dom/span
-        (dom/props {:style {:color "var(--color-text-secondary)" :font-size "12px"
-                            :margin-left "6px"}})
-        (dom/text (str "(" doc_title (when page_number (str ", p." page_number)) ")"))))))
-
-(e/defn EntityCardPopover
-  "Concept card: the clicked entity's label, aliases, and fact neighborhood.
-   Fact rows link onward — the popover walks the graph."
-  [user-id !entity-card entity-card]
-  (e/client
-    (when entity-card
-      (let [card (e/server (entity-card* user-id (:id entity-card)))]
-        (dom/div ; backdrop — click closes
-          (dom/props {:style {:position "fixed" :inset "0" :z-index "1200"
-                              :background "rgba(0,0,0,0.35)"
-                              :display "flex" :align-items "center"
-                              :justify-content "center"}})
-          (dom/On "click" (fn [_] (reset! !entity-card nil)) nil)
-          (dom/div
-            (dom/props {:role "dialog" :aria-label (str "About " (:label card))
-                        :style {:background "var(--color-bg-card)"
-                                :color "var(--color-text-primary)"
-                                :border-radius "8px" :padding "16px 20px"
-                                :max-width "600px" :width "90%"
-                                :max-height "70vh" :overflow-y "auto"
-                                :box-shadow "0 8px 32px rgba(0,0,0,0.25)"}})
-            (dom/On "click" (fn [e] (.stopPropagation e) nil) nil)
-            (dom/h3 (dom/props {:style {:font-size "16px" :margin "0 0 4px"}})
-              (dom/text (:label card)))
-            (when (seq (:aliases card))
-              (dom/p (dom/props {:style {:font-size "12px" :margin "0 0 8px"
-                                         :color "var(--color-text-secondary)"}})
-                (dom/text (str "Also: " (str/join ", " (:aliases card))))))
-            (if (empty? (:facts card))
-              (dom/p (dom/props {:style {:font-size "13px"}})
-                (dom/text "No facts reference this concept."))
-              (dom/ul (dom/props {:style {:margin "4px 0" :padding-left "20px"}})
-                (e/for [f (e/diff-by :id (:facts card))]
-                  (FactLine f !entity-card))))))))))
-
-(def ^:private verdict-badge
-  {"correct"   ["✓ Correct" "var(--color-success-dark, #2e7d32)"]
-   "partial"   ["◐ Partial" "#b26a00"]
-   "incorrect" ["✗ Incorrect" "var(--color-danger, #c62828)"]})
-
-(e/defn QuizFeedback
-  "Graded result: verdict, explanation, reference + user answer with entity
-   mentions linked (matched keywords highlighted), missed facts with
-   provenance — every entity click opens the concept popover."
-  [result user-answer entities !entity-card]
-  (e/client
-    (let [{:keys [verdict explanation reference-answer matched-keywords missed-facts]} result
-          [label color] (get verdict-badge verdict ["?" "inherit"])]
-      (dom/div
-        (dom/props {:style {:border "1px solid var(--color-border)" :border-radius "8px"
-                            :padding "12px 16px" :margin-top "12px"}})
-        (dom/div
-          (dom/props {:style {:font-weight "700" :color color :font-size "15px"}})
-          (dom/text label))
-        (dom/p (dom/props {:style {:margin "8px 0" :font-size "14px"}})
-          (dom/text explanation))
-        (dom/div (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
-                                     :margin-top "10px"}})
-          (dom/text "Reference answer"))
-        (dom/p (dom/props {:style {:font-size "14px" :margin "4px 0"}})
-          (EntityLinkedText reference-answer entities matched-keywords !entity-card))
-        (dom/div (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
-                                     :margin-top "10px"}})
-          (dom/text "Your answer"))
-        (dom/p (dom/props {:style {:font-size "14px" :margin "4px 0"}})
-          (EntityLinkedText user-answer entities matched-keywords !entity-card))
-        (when (seq missed-facts)
-          (dom/div
-            (dom/div (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
-                                         :margin-top "10px"}})
-              (dom/text "You missed"))
-            (dom/ul (dom/props {:style {:margin "4px 0" :padding-left "20px"}})
-              (e/for [f (e/diff-by :id missed-facts)]
-                (FactLine f !entity-card)))))))))
-
-(e/defn QuizActive [user-id !session session !summary]
+(e/defn QuizActive [user-id !session session !summary !editing navigate-source!]
   (e/client
     (let [{sid :id qids :question-ids answered :answered} session
           total (count qids)
@@ -453,81 +258,94 @@
           !grading? (atom false) grading? (e/watch !grading?)
           !feedback (atom nil) feedback (e/watch !feedback)
           !entity-card (atom nil) entity-card (e/watch !entity-card)
+          ;; One latch for every path that ends the sitting: End quiz, Finish on the
+          ;; last question, and Suspend & Skip on the last question. Without it each
+          ;; path would carry its own copy of the finish call.
+          !finish-req (atom nil) finish-req (e/watch !finish-req)
+          finish! (fn [] (reset! !finish-req {:id (str (random-uuid))}))
+          kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
           qid (nth qids (min idx (dec total)) nil)
-          qdata (e/server (quiz-question* user-id qid))]
+          qdata (e/server (quiz-question* kg-bump user-id qid))
+          ;; Skipping the final question ends the sitting — there is nothing to
+          ;; advance to, and the skip is not an answer, so the tally is unaffected.
+          advance! (fn []
+                     (if (>= (inc @!idx) total)
+                       (finish!)
+                       (do (reset! !feedback nil) (reset! !draft "")
+                         (swap! !idx inc))))]
       (dom/div
         (dom/props {:style panel-style})
-        (dom/div
-          (dom/props {:style {:display "flex" :justify-content "space-between"
-                              :align-items "center"}})
-          (dom/span (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
-            (dom/text (str "Question " (inc idx) " / " total)))
-          (dom/button
-            (dom/props {:class "btn btn-sm" :aria-label "End quiz"})
-            (dom/text "End quiz")
-            (let [click (dom/On "click" (fn [_] {:id (str (random-uuid))}) nil)
-                  [t _] (e/Token click)]
-              (when t
-                (let [counts (e/server (e/Offload #(finish-quiz!* user-id sid)))]
-                  (case counts ; wait on the value — do would race the token
-                    (do (reset! !summary {:counts counts :total total})
-                      (t))))))))
-        (dom/h3 (dom/props {:style {:font-size "16px" :margin "14px 0"}})
-          (dom/text (str (:question qdata))))
-        (if (nil? feedback)
+        (if (some? finish-req)
+          (do
+            (dom/h3 (dom/props {:style {:font-size "16px"}}) (dom/text "Finishing…"))
+            (let [counts (e/server (e/Offload #(finish-quiz!* user-id sid)))]
+              (case counts ; wait on the value — do would race the transition
+                (reset! !summary {:counts counts :total total}))))
           (dom/div
-            ;; Forms5: Input! (tracked textarea) + Button! (tracked submit),
-            ;; combined via e/amb — a `do` here would swallow whichever token
-            ;; isn't last and hang that control. One inline service below:
-            ;; field edits mirror into !draft and ack immediately (no server
-            ;; round-trip per keystroke); the submit command grades on the server.
-            (e/for [[t edit] (e/amb
-                               (forms/Input! :quiz/answer draft :as :textarea
-                                 :class "form-input" :rows 4
-                                 :placeholder "Answer in your own words…"
-                                 :aria-label "Your answer"
-                                 :style {:width "100%" :resize "vertical"})
-                               (forms/Button! [::submit]
-                                 :class "btn btn-primary" :style {:margin-top "8px"}
-                                 :label (if grading? "Grading…" "Submit")
-                                 :disabled grading?))]
-              (if (map? edit)
-                (do (reset! !draft (:quiz/answer edit)) (t))
-                (let [answer (str/trim (str draft))]
-                  (if (str/blank? answer)
-                    (t) ; nothing to submit — ack and stay, same as before
-                    (do (reset! !grading? true)
-                      (let [position idx
-                            result (e/server
-                                     (e/Offload
-                                       #(grade/grade-answer! user-id sid qid position answer)))]
-                        (case result ; wait on the value — do would race the token
-                          (do (reset! !grading? false)
-                            (when (:success result)
-                              (reset! !feedback {:result result :answer answer}))
-                            (t))))))))))
-          (dom/div
-            (QuizFeedback (:result feedback) (:answer feedback)
-              (:entities qdata) !entity-card)
-            (dom/button
-              (dom/props {:class "btn btn-primary" :style {:margin-top "12px"}})
-              (dom/text (if (< (inc idx) total) "Next question" "Finish"))
-              (if (< (inc idx) total)
-                (dom/On "click" (fn [_]
-                                  (reset! !feedback nil)
-                                  (reset! !draft "")
-                                  (swap! !idx inc))
-                  nil)
-                (let [click (dom/On "click" (fn [_] {:id (str (random-uuid))}) nil)
-                      [t _] (e/Token click)]
-                  (when t
-                    (let [counts (e/server (e/Offload #(finish-quiz!* user-id sid)))]
-                      (case counts ; wait on the value — do would race the token
-                        (do (reset! !summary {:counts counts :total total})
-                          (t))))))))))
+            (dom/div
+              (dom/props {:style {:display "flex" :justify-content "space-between"
+                                  :align-items "center"}})
+              (dom/span (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
+                (dom/text (str "Question " (inc idx) " / " total)))
+              (dom/button
+                (dom/props {:class "btn btn-sm" :aria-label "End quiz"})
+                (dom/text "End quiz")
+                (dom/On "click" (fn [_] (finish!)) nil)))
+            (dom/h3 (dom/props {:style {:font-size "16px" :margin "14px 0"}})
+              (dom/text (str (:question qdata))))
+            ;; Curation bar: pre-answer it can skip; after grading Next already
+            ;; advances, so Suspend stays in place (advance! nil).
+            (curate/CurationBar user-id qdata (when (nil? feedback) advance!) !editing)
+            (if (nil? feedback)
+              (dom/div
+                ;; Forms5: Input! (tracked textarea) + Button! (tracked submit),
+                ;; combined via e/amb — a `do` here would swallow whichever token
+                ;; isn't last and hang that control. One inline service below:
+                ;; field edits mirror into !draft and ack immediately (no server
+                ;; round-trip per keystroke); the submit command grades on the server.
+                (e/for [[t edit] (e/amb
+                                   (forms/Input! :quiz/answer draft :as :textarea
+                                     :class "form-input" :rows 4
+                                     :placeholder "Answer in your own words…"
+                                     :aria-label "Your answer"
+                                     :style {:width "100%" :resize "vertical"})
+                                   (forms/Button! [::submit]
+                                     :class "btn btn-primary" :style {:margin-top "8px"}
+                                     :label (if grading? "Grading…" "Submit")
+                                     ;; Blank is unsubmittable: Suspend & Skip is the
+                                     ;; way past a question you cannot answer.
+                                     :disabled (or grading? (str/blank? (str draft)))))]
+                  (if (map? edit)
+                    (do (reset! !draft (:quiz/answer edit)) (t))
+                    (let [answer (str/trim (str draft))]
+                      (if (str/blank? answer)
+                        (t) ; defence in depth — the button is disabled for this
+                        (do (reset! !grading? true)
+                          (let [position idx
+                                result (e/server
+                                         (e/Offload
+                                           #(grade/grade-answer! user-id sid qid position answer)))]
+                            (case result ; wait on the value — do would race the token
+                              (do (reset! !grading? false)
+                                (when (:success result)
+                                  (reset! !feedback {:result result :answer answer}))
+                                (t))))))))))
+              (dom/div
+                (fb/QuizFeedback (:result feedback) (:answer feedback)
+                  (:entities qdata) !entity-card navigate-source!)
+                (dom/button
+                  (dom/props {:class "btn btn-primary" :style {:margin-top "12px"}})
+                  (dom/text (if (< (inc idx) total) "Next question" "Finish"))
+                  (if (< (inc idx) total)
+                    (dom/On "click" (fn [_]
+                                      (reset! !feedback nil)
+                                      (reset! !draft "")
+                                      (swap! !idx inc))
+                      nil)
+                    (dom/On "click" (fn [_] (finish!)) nil)))))))
         ;; Sibling of the answer/feedback `if`, inside the panel div — NOT
         ;; nested in any branch: it must mount for the whole session.
-        (EntityCardPopover user-id !entity-card entity-card)))))
+        (fb/EntityCardPopover user-id !entity-card entity-card)))))
 
 (e/defn QuizSummary [!session !summary summary]
   (e/client
@@ -550,7 +368,7 @@
           (dom/On "click" (fn [_] (reset! !summary nil) (reset! !session nil)) nil))))))
 
 ;; ---------------------------------------------------------------------------
-;; Exam sitting — timed, no feedback until submitted (spec 6.3)
+;; Exam sitting — timed, no feedback until submitted
 ;; ---------------------------------------------------------------------------
 
 (defn- now-ms [] #?(:cljs (js/Date.now) :clj 0))
@@ -566,8 +384,12 @@
    countdown from the server's started_at (client clock only ticks display).
    Expiry auto-submits ONCE (the !submit-req atom is the latch): the current
    draft is saved if non-blank, then every saved answer grades sequentially
-   and the session closes. No verdict is visible before submission."
-  [user-id !session session !result-sid]
+   and the session closes. No verdict is visible before submission.
+
+   A blank answer can no longer be saved-and-advanced; Suspend & Skip is the escape,
+   which withholds that question from future review. The frozen paper still counts
+   it, so a skipped question shows as unanswered in the report."
+  [user-id !session session !result-sid !editing]
   (e/client
     (let [{sid :id qids :question-ids answered :answered
            limit :time-limit-seconds elapsed :elapsed-seconds} session
@@ -586,8 +408,15 @@
           remaining (max 0 (quot (- deadline now) 1000))
           !submit-req (atom nil) submit-req (e/watch !submit-req)
           grading (e/server (e/watch (us/get-atom user-id :exam-grading)))
+          kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
           qid (nth qids (min idx (dec total)) nil)
-          qdata (e/server (quiz-question* user-id qid))]
+          qdata (e/server (quiz-question* kg-bump user-id qid))
+          ;; Skipping the last question submits the paper — the sitting is over
+          ;; either way, and the skip contributes no answer.
+          advance! (fn []
+                     (if (>= (inc @!idx) total)
+                       (when (nil? @!submit-req) (reset! !submit-req {:draft nil}))
+                       (do (reset! !draft "") (swap! !idx inc))))]
       ;; Expiry latch — fires once; submit-req non-nil blocks re-entry.
       (when (and (zero? remaining) (nil? submit-req))
         (reset! !submit-req {:draft @!draft}))
@@ -647,13 +476,12 @@
                   nil)))
             (dom/h3 (dom/props {:style {:font-size "16px" :margin "14px 0"}})
               (dom/text (str (:question qdata))))
+            (curate/CurationBar user-id qdata advance! !editing)
             ;; Forms5: Input! (tracked textarea) + Button! (tracked save), via
             ;; e/amb — never `do` here, it would swallow whichever token isn't
             ;; last and hang that control. Field edits mirror into !draft and
             ;; ack immediately (no server round-trip per keystroke); the save
-            ;; command persists the answer (unlike the quiz flow, a blank exam
-            ;; answer still saves-and-advances — matches the original: only
-            ;; the DB write itself is skipped for blank).
+            ;; command persists the answer.
             (e/for [[t edit] (e/amb
                                (forms/Input! :exam/answer draft :as :textarea
                                  :class "form-input" :rows 4
@@ -662,7 +490,8 @@
                                  :style {:width "100%" :resize "vertical"})
                                (forms/Button! [::save]
                                  :class "btn btn-primary" :style {:margin-top "8px"}
-                                 :label (if (< (inc idx) total) "Save & next" "Save & submit exam")))]
+                                 :label (if (< (inc idx) total) "Save & next" "Save & submit exam")
+                                 :disabled (str/blank? (str draft))))]
               (if (map? edit)
                 (do (reset! !draft (:exam/answer edit)) (t))
                 (let [answer (str/trim (str draft))
@@ -670,9 +499,7 @@
                       last? (>= (inc idx) total)
                       r (e/server
                           (e/Offload
-                            #(do (when-not (str/blank? answer)
-                                   (save-exam-answer!* user-id sid qid position answer))
-                               :saved)))]
+                            #(save-exam-answer!* user-id sid qid position answer)))]
                   (case r ; wait on the value — do would race the token
                     (do (if last?
                           (when (nil? @!submit-req)
@@ -682,155 +509,11 @@
                       (t))))))))))))
 
 ;; ---------------------------------------------------------------------------
-;; History + session result (spec 6.6). SessionResult doubles as the exam's
-;; post-grading report — one component for both.
+;; FSRS Review — a live queue of everything due today. Answers grade instantly
+;; and advance the schedule (freememo.kg-grade/review-question!); a card that stays
+;; due today (learning steps) is re-enqueued for this sitting. No kg_sessions row —
+;; the queue is recomputed from FSRS due on every mount.
 ;; ---------------------------------------------------------------------------
-
-(defn- session-score
-  "Σ(1 / 0.5 / 0) over `total` questions, as a rounded percentage."
-  [correct partial total]
-  (when (pos? (or total 0))
-    (int (+ 0.5 (* 100.0 (/ (+ correct (* 0.5 partial)) total))))))
-
-;; History is now a virtualized modal overlay — see QuizHistoryModal (below
-;; SessionResult, which it reuses for the in-modal drill-down).
-
-(e/defn SessionResult
-  "Per-question record of a finished session — the exam report and the
-   history drill-down. Verdict nil renders as ungraded ('—')."
-  [user-id result-sid !result-sid]
-  (e/client
-    (let [{:keys [session answers]} (e/server (session-detail* user-id result-sid))
-          {:keys [kind total started]} session
-          tally (frequencies (keep :verdict answers))
-          score (session-score (get tally "correct" 0) (get tally "partial" 0) total)]
-      (dom/div
-        (dom/props {:style panel-style})
-        (dom/div
-          (dom/props {:style {:display "flex" :gap "8px" :align-items "center"}})
-          (dom/button
-            (dom/props {:class "btn btn-sm"})
-            (dom/text "← Back")
-            (dom/On "click" (fn [_] (reset! !result-sid nil)) nil))
-          (dom/h2 (dom/props {:style {:font-size "18px" :margin "0"}})
-            (dom/text (str (if (= kind "exam") "Exam" "Quiz") " · " started)))
-          (dom/span (dom/props {:style {:font-size "16px" :font-weight "700" :margin-left "auto"}})
-            (dom/text (str (or score "—") "%"))))
-        (dom/p (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
-          (dom/text (str (get tally "correct" 0) " correct, "
-                      (get tally "partial" 0) " partial, "
-                      (get tally "incorrect" 0) " incorrect"
-                      (let [ungraded (- total (count (keep :verdict answers)))]
-                        (when (pos? ungraded) (str ", " ungraded " unanswered/ungraded")))
-                      " — of " total)))
-        (e/for [{:keys [position question reference_answer user_answer verdict explanation]}
-                (e/diff-by :position answers)]
-          (let [[label color] (get verdict-badge verdict ["— Ungraded" "var(--color-text-secondary)"])]
-            (dom/div
-              (dom/props {:style {:border "1px solid var(--color-border)" :border-radius "8px"
-                                  :padding "10px 14px" :margin "10px 0"}})
-              (dom/div
-                (dom/props {:style {:display "flex" :gap "8px" :align-items "baseline"}})
-                (dom/span (dom/props {:style {:font-weight "700" :color color :font-size "13px"
-                                              :flex-shrink "0"}})
-                  (dom/text label))
-                (dom/span (dom/props {:style {:font-size "14px" :font-weight "600"}})
-                  (dom/text (str (inc position) ". " question))))
-              (dom/p (dom/props {:style {:font-size "13px" :margin "6px 0 0"}})
-                (dom/text (str "Your answer: " user_answer)))
-              (when explanation
-                (dom/p (dom/props {:style {:font-size "13px" :margin "4px 0 0"
-                                           :color "var(--color-text-secondary)"}})
-                  (dom/text explanation)))
-              (dom/p (dom/props {:style {:font-size "13px" :margin "4px 0 0"
-                                         :color "var(--color-text-secondary)"}})
-                (dom/text (str "Reference: " reference_answer))))))))))
-
-(e/defn QuizHistoryModal
-  "Finished-session history as a modal overlay with a virtualized list. Selecting
-   a session swaps the body to its SessionResult report (modal-local !result-sid);
-   Back returns to the list. Closing resets both. Chrome mirrors HistoryModal /
-   ZoteroPickerModal (fixed height so the virtual viewport is bounded)."
-  [user-id !open? !result-sid]
-  (e/client
-    (when (e/watch !open?)
-      (let [result-sid (e/watch !result-sid)
-            close! (fn [] (reset! !open? false) (reset! !result-sid nil))]
-        (dom/div
-          (dom/props {:class "modal-backdrop"})
-          (dom/On "click" (fn [_] (close!)) nil)
-          (modal/ModalEscape close! "Quiz history")
-          (dom/div
-            (dom/props {:class "modal-content"
-                        :style {:width "min(680px, 95vw)" :height "75vh"
-                                :display "flex" :flex-direction "column" :padding "0"}})
-            (dom/On "click" (fn [e] (.stopPropagation e)) nil)
-            (dom/div
-              (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
-                                  :padding "12px 16px" :flex-shrink "0"
-                                  :border-bottom "1px solid var(--color-border)"}})
-              (dom/h3 (dom/props {:style {:margin "0" :font-size "16px" :flex "1"}})
-                (dom/text "Quiz history"))
-              (dom/button
-                (dom/props {:class "btn btn-sm" :aria-label "Close"})
-                (icons/Icon :x :size 16)
-                (dom/On "click" (fn [_] (close!)) nil)))
-            (if (some? result-sid)
-              (dom/div
-                (dom/props {:style {:flex "1" :min-height "0" :overflow-y "auto"}})
-                (SessionResult user-id result-sid !result-sid))
-              (dom/div
-                (dom/props {:style {:flex "1" :min-height "0" :overflow-y "auto"}})
-                (let [sessions (e/server (history-sessions* user-id))
-                      row-count (e/server (count sessions))]
-                  (if (zero? row-count)
-                    (dom/p (dom/props {:style {:padding "24px 16px" :text-align "center"
-                                               :color "var(--color-text-secondary)"}})
-                      (dom/text "No finished sessions yet."))
-                    (let [[offset limit] (Scroll-window quiz-history-row-height row-count dom/node
-                                           {:overquery-factor 2})]
-                      (dom/props {:class "tape-scroll"
-                                  :style {:--count row-count
-                                          :--grid-cols "1fr"
-                                          :--row-height (str quiz-history-row-height "px")}})
-                      (dom/table
-                        (dom/props {:style {:width "100%"}})
-                        (e/for [i (Tape offset limit)]
-                          (when-let [{:keys [id kind total started correct partial incorrect]}
-                                     (e/server (nth sessions i nil))]
-                            (dom/tr
-                              (dom/props {:class (when (even? i) "row-alt")
-                                          :style {:--order i
-                                                  :height (str quiz-history-row-height "px")}})
-                              (dom/td
-                                (dom/props {:role "button" :tabindex "0"
-                                            :style {:display "flex" :gap "12px" :align-items "center"
-                                                    :padding "0 14px" :cursor "pointer"
-                                                    :border-bottom "1px solid var(--color-bg-subtle)"}})
-                                (dom/On "click" (fn [_] (reset! !result-sid id)) nil)
-                                (dom/span
-                                  (dom/props {:class "type-badge"
-                                              :style {:background (if (= kind "exam")
-                                                                    "var(--color-badge-epub)"
-                                                                    "var(--color-badge-pdf)")}})
-                                  (dom/text kind))
-                                (dom/span (dom/props {:style {:font-size "13px"}})
-                                  (dom/text started))
-                                (dom/span (dom/props {:style {:font-size "13px"
-                                                              :color "var(--color-text-secondary)"}})
-                                  (dom/text (str (+ correct partial incorrect) " / " total " answered")))
-                                (dom/span (dom/props {:style {:font-size "14px" :font-weight "600"
-                                                              :margin-left "auto"}})
-                                  (dom/text (str (or (session-score correct partial total) "—") "%")))))))))))))))))))
-
-;; ---------------------------------------------------------------------------
-;; FSRS Review — the default quiz: a live queue of everything due today. Answers
-;; grade instantly and advance the schedule (freememo.kg-grade/review-question!);
-;; a card that stays due today (learning steps) is re-enqueued for this sitting.
-;; No kg_sessions row — the queue is recomputed from FSRS due on every mount.
-;; ---------------------------------------------------------------------------
-
-(def ^:private fsrs-state-label {1 "Learning" 2 "Review" 3 "Relearning"})
 
 (e/defn ReviewDone [reviewed !view]
   (e/client
@@ -848,71 +531,17 @@
           (dom/text "Custom quiz")
           (dom/On "click" (fn [_] (reset! !view :custom)) nil))
         (dom/button (dom/props {:class "btn"})
-          (dom/text "Review history")
-          (dom/On "click" (fn [_] (reset! !view :fsrs-history)) nil))))))
-
-(e/defn ReviewHistory [user-id !view]
-  (e/client
-    (let [{:keys [daily questions]} (e/server (review-history* user-id))]
-      (dom/div
-        (dom/props {:style panel-style})
-        (dom/div
-          (dom/props {:style {:display "flex" :gap "8px" :align-items "center"}})
-          (dom/button (dom/props {:class "btn btn-sm"})
-            (dom/text "← Review")
-            (dom/On "click" (fn [_] (reset! !view :review)) nil))
-          (dom/h2 (dom/props {:style {:font-size "18px" :margin "0"}})
-            (dom/text "Review history")))
-        (dom/h3 (dom/props {:style {:font-size "14px" :margin "16px 0 4px"}})
-          (dom/text "Last 30 days"))
-        (if (empty? daily)
-          (dom/p (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px"}})
-            (dom/text "No reviews yet."))
-          (dom/table
-            (dom/props {:style {:width "100%" :font-size "13px"}})
-            (dom/thead
-              (dom/tr
-                (e/for [h (e/diff-by identity ["Day" "Reviews" "Good" "Again" "New"])]
-                  (dom/th (dom/props {:style {:text-align "left" :padding "2px 8px"}})
-                    (dom/text h)))))
-            (dom/tbody
-              (e/for [{:keys [day reviews good again new]} (e/diff-by :day daily)]
-                (dom/tr
-                  (dom/td (dom/props {:style {:padding "2px 8px"}}) (dom/text (str day)))
-                  (dom/td (dom/props {:style {:padding "2px 8px"}}) (dom/text (str reviews)))
-                  (dom/td (dom/props {:style {:padding "2px 8px"}}) (dom/text (str good)))
-                  (dom/td (dom/props {:style {:padding "2px 8px"}}) (dom/text (str again)))
-                  (dom/td (dom/props {:style {:padding "2px 8px"}}) (dom/text (str new))))))))
-        (dom/h3 (dom/props {:style {:font-size "14px" :margin "18px 0 4px"}})
-          (dom/text "Questions"))
-        (if (empty? questions)
-          (dom/p (dom/props {:style {:color "var(--color-text-secondary)" :font-size "13px"}})
-            (dom/text "No reviewed questions yet."))
-          (dom/table
-            (dom/props {:style {:width "100%" :font-size "13px"}})
-            (dom/thead
-              (dom/tr
-                (e/for [h (e/diff-by identity ["Question" "State" "Reps" "Lapses"])]
-                  (dom/th (dom/props {:style {:text-align "left" :padding "2px 8px"}})
-                    (dom/text h)))))
-            (dom/tbody
-              (e/for [{:keys [id question fsrs_state fsrs_reps fsrs_lapses]}
-                      (e/diff-by :id questions)]
-                (let [_ id]
-                  (dom/tr
-                    (dom/td (dom/props {:style {:padding "2px 8px" :max-width "340px"
-                                                :white-space "nowrap" :overflow "hidden"
-                                                :text-overflow "ellipsis"}})
-                      (dom/text (str question)))
-                    (dom/td (dom/props {:style {:padding "2px 8px"}})
-                      (dom/text (get fsrs-state-label fsrs_state "?")))
-                    (dom/td (dom/props {:style {:padding "2px 8px"}}) (dom/text (str fsrs_reps)))
-                    (dom/td (dom/props {:style {:padding "2px 8px"}}) (dom/text (str fsrs_lapses)))))))))))))
+          (dom/text "Dashboard")
+          (dom/On "click" (fn [_] (reset! !view :dashboard)) nil))))))
 
 (e/defn ReviewFlow
   "Live FSRS due-today queue. `!queue` holds the remaining question ids; a
-   graded card that is still due today is appended back (learning steps)."
-  [user-id !view]
+   graded card that is still due today is appended back (learning steps).
+
+   A skipped card is dropped from the queue and not counted as reviewed — the
+   `::unset` seed guard means the KG bump a suspension triggers recomputes
+   `initial` without reshuffling the sitting in progress."
+  [user-id !view !editing navigate-source!]
   (e/client
     (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
           initial (e/server (review-queue* kg-bump user-id))
@@ -933,22 +562,27 @@
             (dom/button (dom/props {:class "btn btn-sm"})
               (dom/text "Custom quiz")
               (dom/On "click" (fn [_] (reset! !view :custom)) nil))
-            (dom/button (dom/props {:class "btn btn-sm" :aria-label "Review history"})
-              (icons/Icon :history :size 14) (dom/text " History")
-              (dom/On "click" (fn [_] (reset! !view :fsrs-history)) nil))))
+            (qd/ReviewHistoryButton !view)))
         (cond
           (= ::unset queue) (do (reset! !queue (vec initial)) nil)
           (empty? queue) (ReviewDone reviewed !view)
           :else
           (let [qid (first queue)
                 remaining (count queue)
-                qdata (e/server (quiz-question* user-id qid))]
+                qdata (e/server (quiz-question* kg-bump user-id qid))
+                ;; A skip drops the card without counting it and without touching
+                ;; its schedule — Suspend & Skip is not an attempt.
+                advance! (fn []
+                           (reset! !feedback nil)
+                           (reset! !draft "")
+                           (swap! !queue (fn [q] (into [] (rest q)))))]
             (dom/div
               (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"
                                   :margin "10px 0"}})
               (dom/text (str remaining " due · " reviewed " reviewed")))
             (dom/h3 (dom/props {:style {:font-size "16px" :margin "14px 0"}})
               (dom/text (str (:question qdata))))
+            (curate/CurationBar user-id qdata (when (nil? feedback) advance!) !editing)
             (if (nil? feedback)
               (dom/div
                 ;; Forms5: Input! (tracked textarea) + Button! (tracked submit),
@@ -965,12 +599,12 @@
                                    (forms/Button! [::submit]
                                      :class "btn btn-primary" :style {:margin-top "8px"}
                                      :label (if grading? "Grading…" "Submit")
-                                     :disabled grading?))]
+                                     :disabled (or grading? (str/blank? (str draft)))))]
                   (if (map? edit)
                     (do (reset! !draft (:review/answer edit)) (t))
                     (let [answer (str/trim (str draft))]
                       (if (str/blank? answer)
-                        (t) ; nothing to submit — ack and stay, same as before
+                        (t) ; defence in depth — the button is disabled for this
                         (do (reset! !grading? true)
                           (let [res (e/server
                                       (e/Offload #(review-answer!* user-id qid answer)))]
@@ -982,8 +616,8 @@
                                                      :schedule (:schedule res)}))
                                 (t))))))))))
               (dom/div
-                (QuizFeedback (:result feedback) (:answer feedback)
-                  (:entities qdata) !entity-card)
+                (fb/QuizFeedback (:result feedback) (:answer feedback)
+                  (:entities qdata) !entity-card navigate-source!)
                 (dom/button
                   (dom/props {:class "btn btn-primary" :style {:margin-top "12px"}})
                   (dom/text "Next")
@@ -998,7 +632,7 @@
                                           (if again-today? (conj rest-q qid) rest-q))))))
                     nil))))
             ;; Sibling of the answer/feedback `if` — must mount for the session.
-            (EntityCardPopover user-id !entity-card entity-card)))))))
+            (fb/EntityCardPopover user-id !entity-card entity-card)))))))
 
 (defonce !pending-preset
   ;; Palette → QuizPage handoff ({:mode "quiz"|"exam"} or {:view :history}),
@@ -1032,28 +666,35 @@
                     (bus/retract-invoker! :start-exam)
                     (bus/retract-invoker! :quiz-history)))))
 
-(e/defn QuizPage [user-id]
+(e/defn QuizPage [user-id navigate!]
   (e/client
     (let [preset (consume-pending-preset!)
           resume (e/server (active-session* user-id))
           !session (atom ::unset) session (e/watch !session)
           !summary (atom nil) summary (e/watch !summary)
           !result-sid (atom nil) result-sid (e/watch !result-sid)
-          ;; History is a modal overlay, not a view branch: seeded open from the
-          ;; :quiz-history preset handoff, and QuizSetup's History button opens it.
-          !history-open? (atom (= :history (:view preset)))
-          !history-result-sid (atom nil)  ; modal-local drill-down, independent of the page result
-          ;; Default landing is the FSRS Review queue; an explicit start-quiz/
-          ;; start-exam invoker (preset :mode) jumps to the custom setup instead.
-          !view (atom (if (:mode preset) :custom :review)) view (e/watch !view)]
-      (QuizHistoryModal user-id !history-open? !history-result-sid)
+          ;; The question being edited, hoisted here so one modal serves all three
+          ;; flows — the flows differ in how they advance, not in how they edit.
+          !editing (atom nil)
+          ;; Landing is the dashboard; an explicit start-quiz/start-exam invoker
+          ;; (preset :mode) jumps to the custom setup, and the history preset lands
+          ;; on the dashboard it was folded into.
+          !view (atom (if (:mode preset) :custom :dashboard)) view (e/watch !view)
+          ;; Fact provenance in feedback navigates to the source document page —
+          ;; the shortest route from "this question is wrong" to the material.
+          navigate-source! (fn [topic-id page]
+                             (navigate! :viewer (nav/nav-topic topic-id :quiz page)))]
+      (curate/QuestionEditorModal user-id !editing)
       (cond
         (= ::unset session) (do (reset! !session resume) nil)
-        (some? result-sid) (SessionResult user-id result-sid !result-sid)
+        (some? result-sid) (qd/SessionResult user-id result-sid !result-sid)
         (some? summary) (QuizSummary !session !summary summary)
         (some? session) (if (= "exam" (:kind session))
-                          (ExamActive user-id !session session !result-sid)
-                          (QuizActive user-id !session session !summary))
-        (= :custom view) (QuizSetup user-id !session !history-open? (:mode preset) !view)
-        (= :fsrs-history view) (ReviewHistory user-id !view)
-        :else (ReviewFlow user-id !view)))))
+                          (ExamActive user-id !session session !result-sid !editing)
+                          (QuizActive user-id !session session !summary !editing navigate-source!))
+        (= :custom view) (QuizSetup user-id !session (:mode preset) !view)
+        (= :review view) (ReviewFlow user-id !view !editing navigate-source!)
+        :else (qd/QuizDashboard user-id
+                (fn [] (reset! !view :review))
+                (fn [] (reset! !view :custom))
+                navigate-source!)))))

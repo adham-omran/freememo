@@ -2,7 +2,7 @@
   "Graph tab — an Obsidian-style WebGL view of the knowledge graph. Nodes are
    concepts (kg_entities); edges are approved entity→entity facts. Click a
    concept to highlight its neighbours and open its fact panel (reused from
-   quiz-page/EntityCardPopover). Positions are server-computed (sfdp) and cached
+   quiz-feedback/EntityCardPopover). Positions are server-computed (sfdp) and cached
    (freememo.kg-graph); the client only renders + filters (freememo.graph-render
    over sigma.js).
 
@@ -13,7 +13,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
-   [freememo.quiz-page :as quiz]
+   [freememo.quiz-feedback :as fb]
    #?(:clj [freememo.kg-graph :as kgg])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [taoensso.telemere :as tel])
@@ -224,4 +224,4 @@
                                     :pointer-events "none"}})
                 (dom/text (str node-count " concepts · click a node for its facts, scroll to zoom"))))))
         ;; Fact panel (reused) — mounts over everything when a node is selected.
-        (quiz/EntityCardPopover user-id !entity-card entity-card)))))
+        (fb/EntityCardPopover user-id !entity-card entity-card)))))

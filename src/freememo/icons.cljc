@@ -66,6 +66,23 @@
    [[:path {:d "M5 12h14"}]
     [:path {:d "M12 5v14"}]]
 
+   ;; Question curation (quiz + Questions bank): flag = "revisit later", eye /
+   ;; eye-off = drawn / withheld. Distinct silhouettes because the two axes are
+   ;; independent and sit side by side.
+   :flag
+   [[:path {:d "M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"}]
+    [:line {:x1 "4" :x2 "4" :y1 "22" :y2 "15"}]]
+
+   :eye
+   [[:path {:d "M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"}]
+    [:circle {:cx "12" :cy "12" :r "3"}]]
+
+   :eye-off
+   [[:path {:d "M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"}]
+    [:path {:d "M14.084 14.158a3 3 0 0 1-4.242-4.242"}]
+    [:path {:d "M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"}]
+    [:path {:d "m2 2 20 20"}]]
+
    :download
    [[:path {:d "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"}]
     [:polyline {:points "7 10 12 15 17 10"}]

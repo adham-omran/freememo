@@ -127,6 +127,13 @@
                           :when #{:viewer}
                           :table #{:kg_questions :kg_question_facts}
                           :views #{:kg-mutations}}
+     ;; Flag / Suspend — per-question curation toggles, orthogonal to each other and
+     ;; to status. Bumped directly by the in-quiz control bar and the Questions bank;
+     ;; no palette entry or invoker, so no :exec (same shape as :dismiss/:undismiss).
+     :flag-question    {:label "Flag question" :class :mutation :palette-hidden true
+                        :table #{:kg_questions} :views #{:kg-mutations}}
+     :suspend-question {:label "Suspend question" :class :mutation :palette-hidden true
+                        :table #{:kg_questions} :views #{:kg-mutations}}
      ;; Global quiz navigation — invokers published by GlobalQuizInvokers
      ;; (mounted once in Main), so they're reachable from every tab.
      :start-quiz     {:label "Start quiz…" :class :nav :exec :ui-button :views #{}}
