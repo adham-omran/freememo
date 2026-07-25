@@ -5162,6 +5162,25 @@
 (defn- sql-int-array->vec [a]
   (some->> ^java.sql.Array a .getArray (mapv long)))
 
+;; Write-side counterparts to sql-int-array->vec. A bare ARRAY[] has no inferable
+;; element type in Postgres, so the EMPTY case must carry an explicit cast. The
+;; failure mode is nasty enough to be worth centralising: it is a runtime SQL error
+;; on the empty path only, so a writer that is only ever tested with a non-empty
+;; array looks correct and then throws in production the first time it is handed
+;; nothing — inside an Electric server thunk that kills the session.
+
+(defn- int-array-value
+  "HoneySQL value for an INTEGER[] column.
+   Post: an expression valid for both empty and non-empty `ids`."
+  [ids]
+  (if (seq ids) [:array (vec ids)] [:raw "'{}'::integer[]"]))
+
+(defn- text-array-value
+  "HoneySQL value for a TEXT[] column; elements are UTF-8 sanitised.
+   Post: an expression valid for both empty and non-empty `strs`."
+  [strs]
+  (if (seq strs) [:array (mapv sanitize-utf8 strs)] [:raw "'{}'::text[]"]))
+
 (defn- drawable-question-where
   "SQL predicate for \"this question may be drawn into a quiz or review\": approved
    curation status AND not suspended. The single definition shared by every draw
@@ -5346,19 +5365,14 @@
 
 (defn grade-kg-answer!
   "Write the grading verdict. Only freememo.kg-grade calls this — it owns the
-   ⊆-validation of missed-fact-ids and matched-keywords. Empty arrays must be
-   explicitly typed — bare ARRAY[] is untypable for Postgres."
+   ⊆-validation of missed-fact-ids and matched-keywords."
   [answer-id verdict explanation missed-fact-ids matched-keywords]
   (jdbc/execute-one! ds
     (sql/format {:update :kg_answers
                  :set {:verdict verdict
                        :explanation (sanitize-utf8 explanation)
-                       :missed_fact_ids (if (seq missed-fact-ids)
-                                          [:array (vec missed-fact-ids)]
-                                          [:raw "'{}'::integer[]"])
-                       :matched_keywords (if (seq matched-keywords)
-                                           [:array (mapv sanitize-utf8 matched-keywords)]
-                                           [:raw "'{}'::text[]"])
+                       :missed_fact_ids (int-array-value missed-fact-ids)
+                       :matched_keywords (text-array-value matched-keywords)
                        :graded_at [:now]}
                  :where [:= :id answer-id]}))
   answer-id)
@@ -5499,7 +5513,7 @@
                        :elapsed_days elapsed :scheduled_days scheduled-days
                        :user_answer (some-> (:user-answer record) sanitize-utf8)
                        :explanation (some-> (:explanation record) sanitize-utf8)
-                       :missed_fact_ids [:array (vec (:missed-fact-ids record))]
+                       :missed_fact_ids (int-array-value (:missed-fact-ids record))
                        :question_text {:select [:question] :from [:kg_questions]
                                        :where [:= :id question-id]}
                        :reviewed_at [:now]}]}))

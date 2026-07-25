@@ -181,7 +181,11 @@
   (e/client
     (when-some [qid (:id qdata)]
       (dom/div
-        (dom/props {:style {:display "flex" :gap "6px" :align-items "center"
+        ;; .curation-bar pins these tooltips below their button — the bar sits above
+        ;; the answer box, where the anchor-positioning engine otherwise flips them
+        ;; up over the question text (index.css, alongside the .toolbar override).
+        (dom/props {:class "curation-bar"
+                    :style {:display "flex" :gap "6px" :align-items "center"
                             :margin "8px 0"}})
         (FlagToggle user-id qid (:flagged qdata))
         (SuspendSkipButton user-id qid advance!)

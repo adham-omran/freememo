@@ -132,21 +132,37 @@
    A failed grade writes nothing at all, so the typed answer is not retained; unlike
    the session flows there is no pre-grade persist to fall back on, and the toast
    pushed by grade-question is the only recovery path.
+
+   The schedule step is caught separately. It runs AFTER the billed LLM call, so
+   letting it throw would propagate out of the caller's e/Offload and tear down the
+   Electric session — the UI latches on \"Grading…\" with no way back and the user
+   has already paid. Catching it degrades to graded-but-unscheduled: the verdict is
+   shown, the card keeps its previous due date and so returns later.
    Post: {:result <grade-question map> :schedule <apply-fsrs-review! map|nil>};
-         :schedule is nil (schedule untouched, no review row) when grading fails."
+         :schedule is nil when grading failed (nothing written) OR when scheduling
+         failed (grade shown, no review row, schedule untouched). Never throws for a
+         DB fault; a grade failure is already a value, not an exception."
   [user-id question-id user-answer]
   (let [res (grade-question user-id question-id user-answer)]
-    (if (:success res)
+    (if-not (:success res)
+      {:result res :schedule nil}
       (let [{:keys [scheduler enable-fuzzing]} (settings/fsrs-config user-id)]
         {:result res
-         :schedule (db/apply-fsrs-review! user-id question-id
-                     (verdict->rating (:verdict res))
-                     {:verdict (:verdict res)
-                      :explanation (:explanation res)
-                      :user-answer user-answer
-                      :missed-fact-ids (:missed-fact-ids res)}
-                     scheduler enable-fuzzing)})
-      {:result res :schedule nil})))
+         :schedule (try
+                     (db/apply-fsrs-review! user-id question-id
+                       (verdict->rating (:verdict res))
+                       {:verdict (:verdict res)
+                        :explanation (:explanation res)
+                        :user-answer user-answer
+                        :missed-fact-ids (:missed-fact-ids res)}
+                       scheduler enable-fuzzing)
+                     (catch Exception e
+                       (tel/error! {:id ::review-schedule-failed
+                                    :data {:user-id user-id :question-id question-id}} e)
+                       (toasts/push! user-id
+                         {:level :error
+                          :message "Your answer was graded, but its schedule could not be saved — this review will come up again."})
+                       nil))}))))
 
 (defn grade-exam-session!
   "Grade every saved-but-ungraded answer of an exam sitting, then close the
