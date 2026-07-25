@@ -127,6 +127,11 @@
                           :when #{:viewer}
                           :table #{:kg_questions :kg_question_facts}
                           :views #{:kg-mutations}}
+     ;; Bulk fact reject — one op over a selection, bumped directly by the Facts
+     ;; view's confirm modal; no palette entry or invoker, so no :exec. Retiring the
+     ;; covering questions is part of the same transaction, hence kg_questions here.
+     :bulk-reject-facts {:label "Delete facts" :class :mutation :palette-hidden true
+                         :table #{:kg_facts :kg_questions} :views #{:kg-mutations}}
      ;; Flag / Suspend — per-question curation toggles, orthogonal to each other and
      ;; to status. Bumped directly by the in-quiz control bar and the Questions bank;
      ;; no palette entry or invoker, so no :exec (same shape as :dismiss/:undismiss).

@@ -108,8 +108,16 @@
        :learn-session (list 'viewer 'learn-session)
        :subset-review (list 'viewer 'subset-review (:root-id nav-map))
        :library-cards (list 'library 'cards)
-       :knowledge-entities (list 'knowledge 'entities)
-       :knowledge-questions (list 'knowledge 'questions)
+       ;; Entities/Questions carry an OPTIONAL doc-id: arriving from a document
+       ;; keeps the sub-view scoped to it. Branch rather than emit a trailing nil —
+       ;; a nil segment's encoding is the encoder's business, and an absent segment
+       ;; is unambiguously "unscoped" in every encoder.
+       :knowledge-entities (if-let [doc-id (:doc-id nav-map)]
+                             (list 'knowledge 'entities doc-id)
+                             (list 'knowledge 'entities))
+       :knowledge-questions (if-let [doc-id (:doc-id nav-map)]
+                              (list 'knowledge 'questions doc-id)
+                              (list 'knowledge 'questions))
        :knowledge-facts (list 'knowledge 'facts (:doc-id nav-map))
        ;; SearchPage seeds [mode kind query] from these segments.
        :search-query (list 'search "fuzzy" "all"

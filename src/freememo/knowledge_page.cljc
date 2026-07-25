@@ -22,6 +22,7 @@
    [freememo.typeahead :as typeahead]
    [freememo.loading :as loading]
    [freememo.util :as util]
+   #?(:clj [taoensso.telemere :as tel])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.logging :as log])
    #?(:clj [freememo.kg-extract :as kg])
@@ -60,6 +61,13 @@
 #?(:clj
    (defn get-doc-facts* [_kg-bump user-id doc-id query]
      (db/get-kg-facts user-id doc-id "approved" query)))
+
+#?(:clj
+   (defn doc-fact-ids*
+     "Every approved fact id of the document, ignoring the view's search filter —
+      the target set for \"select all in this document\"."
+     [_kg-bump user-id doc-id]
+     (db/kg-fact-ids-for-doc user-id doc-id)))
 
 #?(:clj
    (defn list-entities* [_kg-bump user-id query source-id]
@@ -116,6 +124,30 @@
        (toasts/push! user-id {:level :success :message "Fact rejected" :dedup? false
                               :actions [{:label "Undo" :undo-id undo-id}]}))
      :done))
+
+#?(:clj
+   (defn reject-facts!*
+     "Reject a selection of facts as one operation: one undo entry, one bump, one
+      audit line, one toast — the counts that a per-fact loop would multiply.
+      Post: {:success true :deleted n} with the Undo toast pushed when n > 0, or
+            {:success false :error msg}. n = 0 (everything already rejected or not
+            owned) is a success with no toast, matching the single-fact no-op."
+     [user-id fact-ids]
+     (try
+       (let [{:keys [rejected undo-id]} (db/reject-kg-facts! user-id fact-ids)]
+         (when (pos? rejected)
+           (commands/bump! user-id :bulk-reject-facts)
+           (log/audit! {:id ::reject-facts :user-id user-id :action :delete
+                        :entity :kg-fact :entity-id nil :n rejected})
+           (toasts/push! user-id
+             (cond-> {:level :success
+                      :message (str "Deleted " rejected " fact" (when (not= 1 rejected) "s"))
+                      :dedup? false}
+               undo-id (assoc :actions [{:label "Undo" :undo-id undo-id}]))))
+         {:success true :deleted rejected})
+       (catch Exception e
+         (tel/error! {:id ::reject-facts :data {:user-id user-id}} e)
+         {:success false :error (.getMessage e)}))))
 
 #?(:clj
    (defn merge-entities!*
@@ -188,51 +220,68 @@
   {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"})
 
 (e/defn TapeTable
-  "Shared virtualized zebra table (Tape idiom): fixed header + scroll body
+  "Shared virtualized zebra table (Tape idiom): sticky header + scroll body
    windowed by Scroll-window at fact-row-height rows.
+
+   Header and body are BOTH grids inside the SAME scroll box, so they share one
+   width context and one --grid-cols track set and cannot drift. The header used
+   to live outside the scroll box, which made it wider than the body by the
+   reserved `scrollbar-gutter` — a constant offset that grew across the row,
+   visibly misaligning every column label. Pinning is the existing `.tx-head`
+   class (index.css), which also un-absolutes the header's tr; the body keeps the
+   per-row `--order` C1c positioning.
+
+   Scroll-window is given the scroll box, uncompensated for the sticky header's
+   band, matching cost-history: the resulting offset error is bounded by one
+   header height (~one row) and absorbed by the overquery buffer.
    Pre:  Row is an e/fn of [i] rendering one dom/tr (nil-safe past the end);
          the caller's container bounds the height (flex column, min-height 0).
    Post: only the visible window (± overquery buffer) is mounted; total
-         scroll height equals item-count rows."
+         scroll height equals item-count rows; header column boundaries equal the
+         body's at every viewport width."
   [headers grid-cols item-count Row]
   (e/client
     (dom/div
-      (dom/props {:style {:display "flex" :flex-direction "column" :min-height "0" :flex "1"}})
-      ;; Fixed header
+      (dom/props {:class "tape-scroll"
+                  :style {:flex "1" :overflow-y "auto" :min-height "0"
+                          :scrollbar-gutter "stable"
+                          :--count item-count :--grid-cols grid-cols
+                          :--row-height (str fact-row-height "px")}})
       (dom/table
-        (dom/props {:style {:width "100%" :display "grid" :grid-template-columns grid-cols
-                            :flex-shrink "0"}})
+        (dom/props {:class "tx-head"
+                    :style {:width "100%" :grid-template-columns grid-cols}})
         (dom/thead
           (dom/props {:style {:display "contents"}})
           (dom/tr
             (dom/props {:style {:display "contents"}})
             (e/for [h (e/diff-by identity headers)]
               (dom/th (dom/props {:style th-style}) (dom/text h))))))
-      ;; Scrollable virtualized body
-      (dom/div
-        (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"
-                            :scrollbar-gutter "stable"}})
-        (let [[offset limit] (Scroll-window fact-row-height item-count dom/node
-                               {:overquery-factor 2})]
-          (dom/props {:class "tape-scroll"
-                      :style {:--count item-count :--grid-cols grid-cols
-                              :--row-height (str fact-row-height "px")}})
-          (dom/table
-            (dom/props {:style {:width "100%"}})
-            (e/for [i (Tape offset limit)]
-              (Row i))))))))
+      (let [[offset limit] (Scroll-window fact-row-height item-count dom/node
+                             {:overquery-factor 2})]
+        (dom/table
+          (dom/props {:style {:width "100%"}})
+          (e/for [i (Tape offset limit)]
+            (Row i)))))))
 
-(e/defn SubViewTabs [navigate! view]
-  ;; Settings-style horizontal nav (see settings-page/SettingsNav). Copies the
-  ;; .settings-nav markup + CSS rather than sharing the component, which is bound
-  ;; to settings-specific module state. Driven by the /knowledge/<sub> URL segment
-  ;; via navigate!; a [:facts id] vector view keeps Documents highlighted.
+(e/defn SubViewTabs
+  "Settings-style horizontal nav (see settings-page/SettingsNav). Copies the
+   .settings-nav markup + CSS rather than sharing the component, which is bound
+   to settings-specific module state. Driven by the /knowledge/<sub>[/<doc-id>]
+   URL segments via navigate!; the facts drill-down keeps Documents highlighted.
+
+   `doc-id` is taken as its OWN parameter, never derived from the sub-view value:
+   Electric keeps a branch's argument exprs live during the switch frame, so
+   seq-ing a value that has flipped to a keyword throws (see the dispatch below).
+   Pre:  sub-kw ∈ #{:documents :entities :questions :facts}; doc-id may be nil.
+   Post: Entities/Questions preserve the current doc-id; Documents drops it — it
+         is the unscoped index, where a scope has no meaning."
+  [navigate! sub-kw doc-id]
   (e/client
     (dom/nav
       (dom/props {:class "settings-nav"})
       (e/for [[k label] (e/diff-by first [[:documents "Documents"] [:entities "Entities"]
                                           [:questions "Questions"]])]
-        (let [active? (or (= view k) (and (vector? view) (= k :documents)))]
+        (let [active? (or (= sub-kw k) (and (= sub-kw :facts) (= k :documents)))]
           (dom/a
             (dom/props {:href "#"
                         :class (if active?
@@ -244,8 +293,10 @@
                 (.preventDefault e)
                 (case k
                   :documents (navigate! :knowledge)
-                  :entities  (navigate! :knowledge {:type :knowledge-entities})
-                  :questions (navigate! :knowledge {:type :knowledge-questions})))
+                  :entities (navigate! :knowledge {:type :knowledge-entities
+                                                   :doc-id doc-id})
+                  :questions (navigate! :knowledge {:type :knowledge-questions
+                                                    :doc-id doc-id})))
               nil)))))))
 
 ;; ---------------------------------------------------------------------------
@@ -456,13 +507,32 @@
       (dom/span (dom/props {:style fact-text-style})
         (dom/text (or object_label object_literal))))))
 
-(e/defn FactRow [user-id fact i !editing editing]
+(e/defn FactSelectCell
+  "Selection checkbox for one fact. stopPropagation so ticking a row never trips
+   the row's own controls."
+  [id !selected selected]
+  (e/client
+    (dom/td
+      (dom/props {:style (merge fact-cell-style
+                           {:justify-content "center" :padding-inline "4px"})})
+      (dom/input
+        (dom/props {:type "checkbox" :aria-label "Select fact"
+                    :style {:cursor "pointer"}})
+        (set! (.-checked dom/node) (contains? selected id))
+        (dom/On "click"
+          (fn [e]
+            (.stopPropagation e)
+            (swap! !selected #(if (contains? % id) (disj % id) (conj % id))))
+          nil)))))
+
+(e/defn FactRow [user-id fact i !editing editing !selected selected]
   (e/client
     (let [{:keys [id subject_label predicate_label
                   object_label object_literal page_number]} fact]
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt")
                     :style {:--order i}})
+        (FactSelectCell id !selected selected)
         (dom/td (dom/props {:style fact-cell-style})
           (dom/span (dom/props {:style fact-text-style}) (dom/text subject_label)))
         (dom/td (dom/props {:style (merge fact-cell-style
@@ -491,7 +561,21 @@
           !query-timer (atom nil)             ; debounces !query against the server search below
           facts (e/server (e/Offload #(get-doc-facts* kg-bump user-id doc-id query)))
           item-count (count facts)
-          grid-cols "minmax(140px,1fr) minmax(130px,1fr) minmax(160px,1.2fr) 60px 110px"
+          ;; Ids of what is currently VISIBLE — the filtered select-all's target.
+          ;; No extra query: FactsView already holds every filtered row client-side.
+          filtered-ids (mapv :id facts)
+          ;; Ids of the whole document — the other select-all's target. Fetched only
+          ;; while a search is active, since that is the only time it differs from
+          ;; filtered-ids; the untaken branch never mounts, so there is no query.
+          ;; Ids only (ints), and they must land client-side: the click handler is a
+          ;; plain fn and cannot reach across to the server.
+          doc-ids (if (str/blank? query)
+                    []
+                    (vec (e/server (e/Offload #(doc-fact-ids* kg-bump user-id doc-id)))))
+          !selected (atom #{}) selected (e/watch !selected)
+          !confirm-delete (atom nil) confirm-delete (e/watch !confirm-delete)
+          ;; 34px checkbox column ahead of the data columns.
+          grid-cols "34px minmax(140px,1fr) minmax(130px,1fr) minmax(160px,1.2fr) 60px 110px"
           !editing (atom nil)               ; fact id whose literal is being edited
           editing (e/watch !editing)]
       (dom/div
@@ -512,13 +596,72 @@
               nil))
           (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
             (dom/text (str item-count " fact" (when (not= 1 item-count) "s")))))
+        ;; Selection bar — the two select-alls differ in what they reach, so they are
+        ;; separate controls rather than one ambiguous "all". The document-wide one
+        ;; appears only while a search is narrowing the view; without a filter it
+        ;; would select exactly what the filtered one already does.
+        (dom/div
+          (dom/props {:style {:display "flex" :gap "8px" :align-items "center"
+                              :margin "0 0 10px" :min-height "30px" :flex-wrap "wrap"}})
+          (dom/label
+            (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
+                                :font-size "12px" :cursor "pointer"}})
+            (dom/input
+              (dom/props {:type "checkbox" :aria-label "Select all shown facts"
+                          :style {:cursor "pointer"}})
+              (set! (.-checked dom/node)
+                (boolean (and (seq filtered-ids) (every? selected filtered-ids))))
+              (dom/On "click"
+                (fn [_]
+                  (if (and (seq filtered-ids) (every? @!selected filtered-ids))
+                    (swap! !selected #(reduce disj % filtered-ids))
+                    (swap! !selected into filtered-ids)))
+                nil))
+            (dom/text (str "Select all " item-count " shown")))
+          (when (seq doc-ids)
+            (dom/button
+              (dom/props {:class "btn btn-sm"})
+              (tooltip/Tooltip! "Ignores the search box — selects the whole document")
+              (dom/text (str "Select all " (count doc-ids) " in this document"))
+              (dom/On "click" (fn [_] (swap! !selected into doc-ids)) nil)))
+          (when (seq selected)
+            (dom/div
+              (dom/props {:style {:display "flex" :gap "8px" :align-items "center"
+                                  :margin-left "auto"}})
+              (dom/span (dom/props {:style {:font-size "12px"}})
+                (dom/text (str (count selected) " selected")))
+              (dom/button
+                (dom/props {:class "btn btn-sm"})
+                (dom/text "Clear")
+                (dom/On "click" (fn [_] (reset! !selected #{})) nil))
+              (dom/button
+                (dom/props {:class "btn btn-sm btn-danger-fill"})
+                (dom/text "Delete")
+                (dom/On "click"
+                  (fn [_] (reset! !confirm-delete {:ids (vec @!selected)}))
+                  nil)))))
         (if (zero? item-count)
           (dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
             (dom/text (if (str/blank? query) "No facts yet — distill first." "No matches.")))
-          (TapeTable ["Subject" "Predicate" "Object" "Page" ""] grid-cols item-count
+          (TapeTable ["" "Subject" "Predicate" "Object" "Page" ""] grid-cols item-count
             (e/fn [i]
               (when-let [fact (nth facts i nil)]
-                (FactRow user-id fact i !editing editing)))))))))
+                (FactRow user-id fact i !editing editing !selected selected)))))
+        ;; One op, one undo entry — see db/reject-kg-facts! for why this is not a
+        ;; loop over the single-fact reject.
+        (modal/ConfirmModal !confirm-delete
+          "Delete facts?"
+          (let [n (count (:ids confirm-delete))]
+            (str "Delete " n " selected fact" (when (not= 1 n) "s")
+              "? Questions covering them are retired too. One Undo restores all of it."))
+          "Delete" "btn btn-danger-fill"
+          (e/fn [payload]
+            (let [r (e/server (e/Offload #(reject-facts!* user-id (:ids payload))))]
+              (case r
+                (when (:success r)
+                  ;; Drop exactly what was deleted; anything skipped (already
+                  ;; rejected, not owned) stays ticked rather than silently vanishing.
+                  (swap! !selected #(reduce disj % (:ids payload))))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Questions view — searchable bank browser (same Tape/zebra shape as facts).
@@ -585,22 +728,49 @@
                                      {:justify-content "flex-end"})})
           (RejectQuestionButton user-id id))))))
 
-(e/defn QuestionsView [user-id kg-bump]
+(e/defn ReflectScopeInUrl
+  "Write the source filter into the address bar. One way only: the route seeds the
+   filter atom when the view mounts, and the atom drives the URL thereafter.
+
+   Navigating updates `route-doc-id`, which makes the guard false and remounts the
+   view against the new route — so this converges instead of looping.
+   Pre:  `nav-type` is the sub-view's navigate! :type; `route-doc-id` is the id in
+         the URL now (nil = unscoped).
+   Post: the URL's doc-id equals `source-id` after any filter change, including a
+         clear."
+  [navigate! nav-type route-doc-id source-id]
+  (e/client
+    ;; A map, not the bare id: e/Token ignores nil emissions, and clearing the
+    ;; filter to nil is precisely the transition that must still fire.
+    (let [pending (when (not= source-id route-doc-id) {:doc-id source-id})
+          [t _] (e/Token pending)]
+      (when t
+        (case (navigate! :knowledge {:type nav-type :doc-id (:doc-id pending)})
+          (t))))))
+
+(e/defn QuestionsViewBody
+  "The question bank, scoped to `route-doc-id` (nil = the whole bank).
+   Pre:  mounted by QuestionsView, which keys this frame on route-doc-id — the
+         filter atom below is seeded from it and relies on that remount to follow
+         the URL."
+  [user-id kg-bump route-doc-id navigate!]
   (e/client
     (let [!query (atom "") query (e/watch !query)
           !query-timer (atom nil)             ; debounces !query against the server search below
-          !source-text (atom "") source-text (e/watch !source-text)
-          !entity-text (atom "") entity-text (e/watch !entity-text)
+          !source-id (atom route-doc-id) source-id (e/watch !source-id)
+          !entity-id (atom nil) entity-id (e/watch !entity-id)
           docs (e/server (e/Offload #(list-source-docs* kg-bump user-id)))
-          ;; Resolve the source doc first so entity options can be scoped to it.
-          source-id (some (fn [d] (when (= (:title d) source-text) (:id d))) docs)
           ents (e/server (e/Offload #(list-entity-options* kg-bump user-id source-id)))
-          entity-id (some (fn [ent] (when (= (:label ent) entity-text) (:id ent))) ents)
           ;; Worklist filters. Flagged is the "edit these later" list the in-quiz
           ;; Flag control feeds; suspended is where an in-quiz skip is undone.
           !flagged? (atom false) flagged? (e/watch !flagged?)
           !suspended? (atom false) suspended? (e/watch !suspended?)
-          grid-cols "minmax(200px,1.4fr) minmax(200px,1.4fr) 90px 55px 82px 60px"
+          ;; State track = 104px: two .btn-sm icon toggles are 38px each
+          ;; (12px padding + 14px icon + 12px padding) plus the bar's 6px gap = 82px,
+          ;; inside fact-cell-style's 10px padding-inline each side = 102px needed.
+          ;; At 82px the second toggle was clipped by `.tape-scroll table td`'s
+          ;; overflow:hidden rather than widening the cell.
+          grid-cols "minmax(200px,1.4fr) minmax(200px,1.4fr) 90px 55px 104px 60px"
           !editing (atom nil)]              ; the question map being edited, or nil
       ;; Spinner covers the first offloaded fetch chain (docs → source-id → questions);
       ;; filter changes revalidate in place via the Offload latch, no spinner reflash.
@@ -623,9 +793,13 @@
                     (fn [ev] (util/debounce! !query-timer !query (.. ev -target -value) 300))
                     nil))
                 (dom/div (dom/props {:style {:width "200px"}})
-                  (typeahead/Typeahead !source-text (mapv :title docs) "Filter by source…" nil nil))
+                  (typeahead/Typeahead !source-id
+                    (mapv (fn [d] {:id (:id d) :label (:title d)}) docs)
+                    "Filter by source…" nil nil))
                 (dom/div (dom/props {:style {:width "200px"}})
-                  (typeahead/Typeahead !entity-text (mapv :label ents) "Filter by entity…" nil nil))
+                  (typeahead/Typeahead !entity-id
+                    (mapv (fn [e] {:id (:id e) :label (:label e)}) ents)
+                    "Filter by entity…" nil nil))
                 (e/for [[k label active? !a]
                         (e/diff-by first [["flagged" "Flagged" flagged? !flagged?]
                                           ["suspended" "Suspended" suspended? !suspended?]])]
@@ -650,7 +824,22 @@
                   (e/fn [i]
                     (when-let [q (nth questions i nil)]
                       (QuestionRow user-id q i !editing)))))
-              (curate/QuestionEditorModal user-id !editing))))))))
+              (curate/QuestionEditorModal user-id !editing)
+              (ReflectScopeInUrl navigate! :knowledge-questions route-doc-id source-id))))))))
+
+(e/defn QuestionsView
+  "Remount-on-scope-change wrapper around QuestionsViewBody.
+
+   An atom in an e/defn let is created at mount and reused for the frame's life, so
+   a bare (atom route-doc-id) inside the body would hold a stale scope once the URL
+   changed under it — a back button press would leave the filter and the address
+   disagreeing, which is exactly what putting the scope in the URL was for. Keying
+   the frame on the route id re-seeds it; the list resetting is correct anyway,
+   since a new scope is a different list."
+  [user-id kg-bump route-doc-id navigate!]
+  (e/client
+    (e/for-by identity [_k [route-doc-id]]
+      (QuestionsViewBody user-id kg-bump route-doc-id navigate!))))
 
 ;; ---------------------------------------------------------------------------
 ;; Entities view
@@ -742,17 +931,18 @@
                 (fn [_] (reset! !merge-confirm {:target id :source merge-source :target-label label}))
                 nil))))))))
 
-(e/defn EntitiesView [user-id kg-bump]
+(e/defn EntitiesViewBody
+  "The entity browser, scoped to `route-doc-id` (nil = all entities).
+   Pre:  mounted by EntitiesView, which keys this frame on route-doc-id."
+  [user-id kg-bump route-doc-id navigate!]
   (e/client
     (let [!query (atom "") query (e/watch !query)
           !query-timer (atom nil)             ; debounces !query against the server search below
-          !source-text (atom "") source-text (e/watch !source-text)
+          !source-id (atom route-doc-id) source-id (e/watch !source-id)
           !merge-source (atom nil) merge-source (e/watch !merge-source)
           !merge-confirm (atom nil) merge-confirm (e/watch !merge-confirm)
           !renaming (atom nil) renaming (e/watch !renaming)
-          docs (e/server (e/Offload #(list-source-docs* kg-bump user-id)))
-          ;; Resolve the picked title → its doc id; blank / no-match = no filter.
-          source-id (some (fn [d] (when (= (:title d) source-text) (:id d))) docs)]
+          docs (e/server (e/Offload #(list-source-docs* kg-bump user-id)))]
       ;; Spinner covers the first offloaded fetch chain (docs → source-id → entities);
       ;; filter changes revalidate in place via the Offload latch, no spinner reflash.
       (loading/WithLatestLoading
@@ -773,7 +963,9 @@
                     (fn [ev] (util/debounce! !query-timer !query (.. ev -target -value) 300))
                     nil))
                 (dom/div (dom/props {:style {:width "220px"}})
-                  (typeahead/Typeahead !source-text (mapv :title docs) "Filter by source…" nil nil))
+                  (typeahead/Typeahead !source-id
+                    (mapv (fn [d] {:id (:id d) :label (:title d)}) docs)
+                    "Filter by source…" nil nil))
                 (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
                   (dom/text (str item-count " entit" (if (= 1 item-count) "y" "ies"))))
                 (when merge-source
@@ -797,14 +989,22 @@
               (modal/ConfirmModal !merge-confirm
                 "Merge entities?"
                 (str "Merge the other entity into " (:target-label merge-confirm)
-                     "? Its facts and aliases move over and the source entity is removed. This can't be undone.")
+                  "? Its facts and aliases move over and the source entity is removed. This can't be undone.")
                 "Merge" "btn btn-danger-fill"
                 (e/fn [payload]
                   ;; fire-and-forget: db/merge-kg-entities! has no :success key
                   ;; (returns a fixed truthy value; a bad merge throws instead of
                   ;; returning an error) — no failure contract to branch on here.
                   (let [r (e/server (e/Offload #(merge-entities!* user-id (:target payload) (:source payload))))]
-                    (case r (reset! !merge-source nil))))))))))))
+                    (case r (reset! !merge-source nil)))))
+              (ReflectScopeInUrl navigate! :knowledge-entities route-doc-id source-id))))))))
+
+(e/defn EntitiesView
+  "Remount-on-scope-change wrapper around EntitiesViewBody — see QuestionsView."
+  [user-id kg-bump route-doc-id navigate!]
+  (e/client
+    (e/for-by identity [_k [route-doc-id]]
+      (EntitiesViewBody user-id kg-bump route-doc-id navigate!))))
 
 ;; ---------------------------------------------------------------------------
 ;; Page
@@ -815,22 +1015,25 @@
     ;; Sub-view is the URL segment under /knowledge (router5 r/pop'd by main), so
     ;; tabs are deep-linkable and survive refresh/back. `arg` carries the doc-id
     ;; for the facts drill-down (/knowledge/facts/<id>).
+    ;; `sub-kw` and `arg` are kept as SEPARATE scalars rather than folded into a
+    ;; [sub doc-id] vector: the old shape was a keyword for two sub-views and a
+    ;; vector for the third, which forced a `vector?` test in the tabs and an
+    ;; `arg`-not-`(second view)` workaround here (Electric keeps a branch's
+    ;; argument exprs live during the switch frame, so seq-ing the value after it
+    ;; flips to a keyword throws not-ISeqable). Two scalars remove both.
     (let [[sub arg] r/route
-          view (case sub
-                 entities  :entities
-                 questions :questions
-                 facts     [:facts arg]
-                 :documents)                 ; nil / documents / unknown → documents
+          sub-kw (case sub
+                   entities :entities
+                   questions :questions
+                   facts :facts
+                   :documents)               ; nil / documents / unknown → documents
           kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))]
       (dom/div
         (dom/props {:style {:max-width "960px" :margin "0 auto" :padding-bottom "32px"}})
-        (SubViewTabs navigate! view)
+        (SubViewTabs navigate! sub-kw arg)
         (cond
-          (= view :entities) (EntitiesView user-id kg-bump)
-          (= view :questions) (QuestionsView user-id kg-bump)
-          ;; `arg` (route doc-id), not `(second view)` — Electric keeps a branch's
-          ;; argument exprs live during the switch frame, so seq-ing `view` when it
-          ;; has flipped to the :documents keyword would throw (not-ISeqable).
-          (vector? view) (FactsView user-id arg navigate! kg-bump)
+          (= sub-kw :entities) (EntitiesView user-id kg-bump arg navigate!)
+          (= sub-kw :questions) (QuestionsView user-id kg-bump arg navigate!)
+          (= sub-kw :facts) (FactsView user-id arg navigate! kg-bump)
           :else (dom/div (dom/props {:style {:padding "0 16px"}})
                   (DocumentsView user-id navigate! kg-bump)))))))
