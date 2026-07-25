@@ -6,7 +6,7 @@
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.modal-shell :as modal]
    [clojure.string :as str]
-   [freememo.typeahead :refer [Typeahead]]
+   [freememo.typeahead :refer [Suggest]]
    [freememo.quill-field :refer [QuillField flush-syntax-tokens!]]
    [freememo.commands :as commands]
    [freememo.cloze :as cloze]
@@ -326,8 +326,12 @@
             (dom/label
               (dom/props {:style {:display "block" :margin-bottom "var(--sp-2)" :font-size "14px"}})
               (dom/text "Pre-prompt (will be added to the system prompt):"))
+            ;; Suggest, not Typeahead: a novel pre-prompt is the common case, so
+            ;; the typed text must be the value. History is a shortcut, not the
+            ;; set of legal inputs.
             (let [prompt-history (e/watch !prompt-history)]
-              (Typeahead !local-prompt (take 20 prompt-history) "e.g., Focus on accounting terminology..." nil true)))
+              (Suggest !local-prompt (vec (take 20 prompt-history))
+                "e.g., Focus on accounting terminology..." true)))
           (dom/div
             (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-3)"}})
             (dom/button
