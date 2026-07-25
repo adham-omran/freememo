@@ -6,6 +6,7 @@
    persists a question — both while quietly reintroducing the 'name one of…' defect
    the rewrite exists to remove."
   (:require [clojure.test :refer [deftest is testing]]
+            [freememo.db :as db]
             [freememo.kg-questions :as kgq]
             [freememo.question-curation :as curate]))
 
@@ -101,3 +102,26 @@
   (testing "a live question emptied out still counts as changed"
     (is (true? (curate/question-edited? "What is X?" "")))
     (is (true? (curate/question-edited? "What is X?" nil)))))
+
+;; ── Empty SQL array typing ──────────────────────────────────────────────────
+;; A bare ARRAY[] is untypable for Postgres ("cannot determine type of empty
+;; array"), and the empty case is the one a happy-path test never reaches: a
+;; correct answer misses no facts. Regression guard — this defect shipped once,
+;; where it took down the Electric session mid-grade rather than surfacing as an
+;; error the UI could recover from.
+
+(def ^:private int-array-value @#'db/int-array-value)
+(def ^:private text-array-value @#'db/text-array-value)
+
+(deftest empty-arrays-carry-an-explicit-type-cast
+  (testing "empty int array is cast, never bare ARRAY[]"
+    (is (= [:raw "'{}'::integer[]"] (int-array-value [])))
+    (is (= [:raw "'{}'::integer[]"] (int-array-value nil))))
+  (testing "empty text array is cast"
+    (is (= [:raw "'{}'::text[]"] (text-array-value [])))
+    (is (= [:raw "'{}'::text[]"] (text-array-value nil)))))
+
+(deftest non-empty-arrays-use-the-array-constructor
+  (is (= [:array [1 2 3]] (int-array-value [1 2 3])))
+  (is (= [:array [7]] (int-array-value '(7))))
+  (is (= [:array ["a" "b"]] (text-array-value ["a" "b"]))))

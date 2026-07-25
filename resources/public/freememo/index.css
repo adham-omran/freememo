@@ -2726,6 +2726,22 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     transform: none;
 }
 
+/* Quiz curation-bar tooltips (Flag / Suspend & Skip / Edit): same fix as
+   `.toolbar`. These three buttons sit directly above the answer textarea, and
+   `position-try-order: most-height` reads the taller space ABOVE the bar and flips
+   the bubble up over the question text. Pin it below the button instead. */
+.curation-bar [data-tooltip]::after {
+    position: absolute;
+    position-area: none;
+    position-try-fallbacks: none;
+    top: 100%;
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    margin: 6px 0 0 0;
+    transform: translateX(-50%);
+}
+
 /* Top-nav tooltips: same fix as `.toolbar` — the anchor-positioning engine
    otherwise resolves `position-area:bottom` to a spot overlapping the button.
    Force plain below-centered absolute placement. Covers destinations (in
