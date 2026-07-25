@@ -136,26 +136,27 @@
    fire on any parent unmount, and calling it as a sibling of the e/server form
    would race it and cancel the write mid-flight.
 
-   Pass advance! = nil after grading, where Next already advances: the button then
-   suspends in place and the label drops \"& Skip\".
-   Post: the question is suspended; no answer row, no review row, no FSRS advance —
-         a skip is not an attempt."
+   Suspending ALWAYS leaves the question, before or after grading. Deciding a
+   question is bad and then having to press Next as well is two actions for one
+   intent; the caller varies what leaving means (skip unanswered, or finish with the
+   grade already recorded), not whether it happens.
+   Pre:  `advance!` is non-nil — an in-quiz suspend that stays put has no caller.
+   Post: the question is suspended and the flow has moved on. Suspending writes no
+         answer row, no review row and no FSRS change of its own; whether this card
+         counted as reviewed was settled before the click."
   [user-id question-id advance!]
   (e/client
     (dom/button
       (dom/props {:class "btn btn-sm"
-                  :aria-label (if advance! "Suspend and skip this question"
-                                "Suspend this question")})
-      (tooltip/Tooltip! (if advance!
-                          "Withhold from future review and move on — this does not count as an answer"
-                          "Withhold this question from future review"))
+                  :aria-label "Suspend and skip this question"})
+      (tooltip/Tooltip! "Withhold from future review and move on")
       (icons/Icon :eye-off :size 14)
-      (dom/text (if advance! " Suspend & Skip" " Suspend"))
+      (dom/text " Suspend & Skip")
       (let [click (dom/On "click" (fn [_] {:id (str (random-uuid))}) nil)
             [t _] (e/Token click)]
         (dom/props {:disabled (some? t)})
         (when t
-          (when advance! (e/on-unmount advance!))
+          (e/on-unmount advance!)
           (case (e/server (e/Offload #(set-flags!* user-id question-id
                                         {:suspended true})))
             (t)))))))
@@ -175,7 +176,10 @@
 
    All three quiz flows render exactly this row, so it lives here rather than being
    repeated per flow.
-   Pre:  `qdata` is a get-kg-question-for-session map (carries :id and :flagged).
+   Pre:  `qdata` is a get-kg-question-for-session map (carries :id and :flagged);
+         `advance!` is non-nil and leaves the current question — flows pass a
+         different one before and after grading, since what \"leaving\" costs the
+         sitting's tally differs.
    Post: renders nothing when qdata is nil (no question on screen to curate)."
   [user-id qdata advance! !editing]
   (e/client
