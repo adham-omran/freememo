@@ -717,6 +717,16 @@
     (jdbc/execute! ds [(str "ALTER TABLE kg_questions ADD COLUMN IF NOT EXISTS " col)]))
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_questions_fsrs_due
                       ON kg_questions(user_id, fsrs_due)"])
+  ;; Curation flags — orthogonal to status, both reversible (mirrors
+  ;; topics.dismissed). flagged = "revisit this question later"; it never filters a
+  ;; draw. suspended = withheld from every draw until cleared. Deliberately NOT
+  ;; folded into status: the fact reject/restore path rewrites status
+  ;; ('retired'/'approved'), which would silently clobber a suspension stored there.
+  (doseq [col ["flagged BOOLEAN NOT NULL DEFAULT false"
+               "suspended BOOLEAN NOT NULL DEFAULT false"]]
+    (jdbc/execute! ds [(str "ALTER TABLE kg_questions ADD COLUMN IF NOT EXISTS " col)]))
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_questions_suspended
+                      ON kg_questions(user_id) WHERE suspended"])
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS kg_question_facts (
       question_id INTEGER NOT NULL REFERENCES kg_questions(id) ON DELETE CASCADE,
@@ -764,6 +774,11 @@
     )"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_answers_session
                       ON kg_answers(session_id, position)"])
+  ;; The question's wording as first asked. History LISTS render this snapshot so a
+  ;; later edit never rewrites the record; history DETAIL reads the live question by
+  ;; id and marks the divergence. NULL on rows written before this column existed —
+  ;; "not recorded", which is not the same as "unchanged".
+  (jdbc/execute! ds ["ALTER TABLE kg_answers ADD COLUMN IF NOT EXISTS question_text TEXT"])
 
   ;; FSRS review log — append-only, one row per graded Review-quiz answer. Source
   ;; of truth for scheduling history + daily caps (mirrors topic_repetitions).
@@ -790,6 +805,16 @@
                       ON kg_reviews(user_id, reviewed_at DESC)"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_reviews_question
                       ON kg_reviews(question_id, reviewed_at DESC)"])
+  ;; Answer record. The Review flow writes no kg_answers row, so these columns ARE
+  ;; its answer history — one row per graded review. A grading failure writes no row
+  ;; at all (the FSRS schedule is untouched), so a failed grade leaves no history and
+  ;; the answer text is lost; the session flows persist before grading instead.
+  ;; question_text = the wording at grade time (see kg_answers above).
+  (doseq [col ["user_answer TEXT"
+               "explanation TEXT"
+               "question_text TEXT"
+               "missed_fact_ids INTEGER[] NOT NULL DEFAULT '{}'"]]
+    (jdbc/execute! ds [(str "ALTER TABLE kg_reviews ADD COLUMN IF NOT EXISTS " col)]))
 
   ;; Graph-view layout cache — one row per (user, scope). payload is the
   ;; positioned, wire-ready render payload {:nodes :edges :predicates :docs};
@@ -4866,20 +4891,28 @@
    source-id keeps questions with ANY linked fact in that document; entity-id
    keeps questions with a linked fact touching that entity (subject or object).
    Neither is a stored column on kg_questions — both route via kg_question_facts
-   → kg_facts. Newest first."
+   → kg_facts. Newest first.
+
+   The bank is the unflag/unsuspend surface, so a suspended question MUST stay
+   visible here — this is the one question query that does not apply
+   drawable-question-where. Opts {:flagged? true} / {:suspended? true} narrow to
+   the corresponding worklist; false and nil both mean \"don't filter\"."
   ([user-id status query] (get-kg-questions user-id status query nil))
-  ([user-id status query {:keys [source-id entity-id]}]
+  ([user-id status query {:keys [source-id entity-id flagged? suspended?]}]
    (let [q (when-not (or (nil? query) (str/blank? query))
              (str "%" (str/trim query) "%"))]
      (jdbc/execute! ds
        (sql/format {:select [[:q.id :id] [:q.kind :kind] [:q.question :question]
                              [:q.reference_answer :reference_answer]
                              [:q.status :status]
+                             [:q.flagged :flagged] [:q.suspended :suspended]
                              [[:raw "(SELECT COUNT(*) FROM kg_question_facts qf WHERE qf.question_id = q.id)"]
                               :fact_count]]
                     :from [[:kg_questions :q]]
                     :where [:and [:= :q.user_id user-id]
                             (when status [:= :q.status status])
+                            (when flagged? [:= :q.flagged true])
+                            (when suspended? [:= :q.suspended true])
                             (when q [:or [:ilike :q.question q]
                                      [:ilike :q.reference_answer q]])
                             (when source-id
@@ -4896,35 +4929,97 @@
                     :order-by [[:q.id :desc]]})
        {:builder-fn rs/as-unqualified-maps}))))
 
-(defn facts-without-atomic-question
-  "Approved facts of a document not yet covered by a live atomic question —
-   the atomic generator's work list. Rows carry the labels the prompt needs
-   plus :has_alternatives — true when sibling facts share this fact's
-   predicate+object or subject+predicate, so the generator must phrase the
-   question non-exclusively ('name one…')."
+(defn fact-clusters-without-question
+  "The atomic generator's work list, clustered by ambiguity.
+
+   A cluster is every approved fact of the document sharing one
+   (subject_entity_id, predicate_id) — the direction in which a question has more
+   than one true answer: one subject, one predicate, N objects, so \"what does S
+   P?\" is answerable N ways and is unlearnable as a single item. A cluster of size
+   1 is unambiguous and yields one direct question.
+
+   :members carries EVERY approved sibling, covered or not, because the generator
+   must know the ambiguity is over N to avoid naming one member in another's
+   question. :targets are the members with no live atomic question yet — the only
+   ones a question is written for. A cluster whose targets are all covered is
+   omitted entirely.
+
+   Post: [{:subject_label :predicate_label
+           :members [{:id :object_label :object_literal :object_entity_id
+                      :page_number}]
+           :targets #{fact-id}}], :targets non-empty, ordered by the cluster's
+         lowest fact id so two runs over unchanged data agree."
   [user-id graph-topic-id]
-  (jdbc/execute! ds
-    ["SELECT f.id, s.label AS subject_label, p.label AS predicate_label,
-             o.label AS object_label, f.object_literal,
-             EXISTS (SELECT 1 FROM kg_facts f2
-                     WHERE f2.user_id = f.user_id AND f2.status = 'approved'
-                       AND f2.id <> f.id AND f2.predicate_id = f.predicate_id
-                       AND ((f.object_entity_id IS NOT NULL
-                             AND f2.object_entity_id = f.object_entity_id)
-                            OR f2.subject_entity_id = f.subject_entity_id))
-               AS has_alternatives
-      FROM kg_facts f
-      JOIN kg_entities s ON s.id = f.subject_entity_id
-      JOIN kg_predicates p ON p.id = f.predicate_id
-      LEFT JOIN kg_entities o ON o.id = f.object_entity_id
-      WHERE f.user_id = ? AND f.graph_topic_id = ? AND f.status = 'approved'
-        AND NOT EXISTS
-          (SELECT 1 FROM kg_question_facts qf
-           JOIN kg_questions kq ON kq.id = qf.question_id
-           WHERE qf.fact_id = f.id AND kq.kind = 'atomic' AND kq.status = 'approved')
-      ORDER BY f.page_number, f.id"
-     user-id graph-topic-id]
-    {:builder-fn rs/as-unqualified-maps}))
+  (let [rows (jdbc/execute! ds
+               ["SELECT f.id, f.subject_entity_id, f.predicate_id, f.object_entity_id,
+                        f.object_literal, f.page_number,
+                        s.label AS subject_label, p.label AS predicate_label,
+                        o.label AS object_label,
+                        EXISTS (SELECT 1 FROM kg_question_facts qf
+                                JOIN kg_questions kq ON kq.id = qf.question_id
+                                WHERE qf.fact_id = f.id AND kq.kind = 'atomic'
+                                  AND kq.status = 'approved') AS covered
+                 FROM kg_facts f
+                 JOIN kg_entities s ON s.id = f.subject_entity_id
+                 JOIN kg_predicates p ON p.id = f.predicate_id
+                 LEFT JOIN kg_entities o ON o.id = f.object_entity_id
+                 WHERE f.user_id = ? AND f.graph_topic_id = ? AND f.status = 'approved'
+                 ORDER BY f.id"
+                user-id graph-topic-id]
+               {:builder-fn rs/as-unqualified-maps})]
+    (->> (group-by (juxt :subject_entity_id :predicate_id) rows)
+      (keep (fn [[_key members]]
+              (let [targets (into #{} (comp (remove :covered) (map :id)) members)]
+                (when (seq targets)
+                  {:subject_label (:subject_label (first members))
+                   :predicate_label (:predicate_label (first members))
+                   :members (mapv #(select-keys % [:id :object_label :object_literal
+                                                   :object_entity_id :page_number])
+                              members)
+                   :targets targets}))))
+      (sort-by #(reduce min (map :id (:members %))))
+      vec)))
+
+(defn kg-entity-discriminators
+  "Approved facts touching each of `entity-ids`, as compact prompt rows keyed by
+   entity id — the material that lets a question ask for one member of an ambiguous
+   cluster by a property it alone has, instead of asking for \"one of\" the group.
+
+   One query for the whole batch: called once per generation batch, never per
+   object. An entity is absent from the result when it has no approved facts at all
+   — the caller reads that as \"undiscriminable\" and omits the member.
+
+   Post: {entity-id [{:fact_id :s :p :o}]}, ≤ `per-entity` rows each, lowest fact
+         id first."
+  [user-id entity-ids per-entity]
+  (if (empty? entity-ids)
+    {}
+    (let [ids (vec (distinct entity-ids))
+          wanted (set ids)
+          rows (jdbc/execute! ds
+                 (sql/format
+                   {:select [[:f.id :fact_id] :f.subject_entity_id :f.object_entity_id
+                             [:s.label :s] [:p.label :p]
+                             [[:coalesce :o.label :f.object_literal] :o]]
+                    :from [[:kg_facts :f]]
+                    :join [[:kg_entities :s] [:= :s.id :f.subject_entity_id]
+                           [:kg_predicates :p] [:= :p.id :f.predicate_id]]
+                    :left-join [[:kg_entities :o] [:= :o.id :f.object_entity_id]]
+                    :where [:and [:= :f.user_id user-id] [:= :f.status "approved"]
+                            [:or [:in :f.subject_entity_id ids]
+                             [:in :f.object_entity_id ids]]]
+                    :order-by [[:f.id :asc]]})
+                 {:builder-fn rs/as-unqualified-maps})
+          row->prompt #(select-keys % [:fact_id :s :p :o])]
+      ;; A fact can touch two wanted entities; it discriminates both.
+      (reduce (fn [acc row]
+                (reduce (fn [a eid]
+                          (if (and (wanted eid) (< (count (get a eid)) per-entity))
+                            (update a eid (fnil conj []) (row->prompt row))
+                            a))
+                  acc
+                  [(:subject_entity_id row) (:object_entity_id row)]))
+        {} rows))))
 
 (defn entity-fact-neighborhood
   "Approved facts touching an entity (as subject or object), labeled with
@@ -5034,6 +5129,22 @@
             ["UPDATE kg_questions SET status = ? WHERE id = ? AND user_id = ?"
              status question-id user-id]))))
 
+(defn set-kg-question-flags!
+  "Set a question's curation flags; nil field = keep current. Ownership enforced in
+   SQL. Writes NO FSRS column by design (Anki parity): a suspension neither freezes
+   nor shifts the schedule, so a question unsuspended after its due date returns as
+   overdue rather than resurfacing on a fabricated timeline.
+   Post: true iff the row exists and is owned; the question's fsrs_* columns are
+         bit-identical across any suspend/unsuspend round-trip."
+  [user-id question-id {:keys [flagged suspended]}]
+  (pos? (::jdbc/update-count
+          (jdbc/execute-one! ds
+            ["UPDATE kg_questions
+              SET flagged = COALESCE(?, flagged),
+                  suspended = COALESCE(?, suspended)
+              WHERE id = ? AND user_id = ?"
+             flagged suspended question-id user-id]))))
+
 (defn update-kg-question!
   "Edit question text and/or reference answer (nil field = keep current)."
   [user-id question-id question answer]
@@ -5051,32 +5162,45 @@
 (defn- sql-int-array->vec [a]
   (some->> ^java.sql.Array a .getArray (mapv long)))
 
+(defn- drawable-question-where
+  "SQL predicate for \"this question may be drawn into a quiz or review\": approved
+   curation status AND not suspended. The single definition shared by every draw
+   site (kg-questions-per-doc, draw-kg-questions, draw-fsrs-due-queue) so the scope
+   picker's counts can never drift from what a draw actually returns, and a future
+   withholding rule is added in one place.
+   Pre:  `alias` is the kg_questions alias in the enclosing query (no user input).
+   Post: a SQL fragment safe to AND into a WHERE clause."
+  [alias]
+  (str alias ".status = 'approved' AND NOT " alias ".suspended"))
+
 (defn kg-questions-per-doc
-  "Live-question count per document, for the quiz scope picker.
+  "Drawable-question count per document, for the quiz scope picker. Counts exactly
+   what a draw over that document would be allowed to return, suspensions included.
    Post: {graph-topic-id n} (a question spanning docs counts in each)."
   [user-id]
   (into {}
     (map (juxt :graph_topic_id :n))
     (jdbc/execute! ds
-      ["SELECT f.graph_topic_id, COUNT(DISTINCT q.id) AS n
-        FROM kg_questions q
-        JOIN kg_question_facts qf ON qf.question_id = q.id
-        JOIN kg_facts f ON f.id = qf.fact_id
-        WHERE q.user_id = ? AND q.status = 'approved'
-        GROUP BY f.graph_topic_id"
+      [(str "SELECT f.graph_topic_id, COUNT(DISTINCT q.id) AS n
+             FROM kg_questions q
+             JOIN kg_question_facts qf ON qf.question_id = q.id
+             JOIN kg_facts f ON f.id = qf.fact_id
+             WHERE q.user_id = ? AND " (drawable-question-where "q")
+        " GROUP BY f.graph_topic_id")
        user-id]
       {:builder-fn rs/as-unqualified-maps})))
 
 (defn draw-kg-questions
-  "Random draw of up to n approved questions ALL of whose facts lie inside the
+  "Random draw of up to n drawable questions ALL of whose facts lie inside the
    scope documents (a question must be answerable from the chosen material).
-   Post: vector of question ids, ≤ n, random order."
+   Post: vector of question ids, ≤ n, random order; no suspended question."
   [user-id scope-topic-ids n]
   (mapv :id
     (jdbc/execute! ds
       (sql/format {:select [:q.id]
                    :from [[:kg_questions :q]]
-                   :where [:and [:= :q.user_id user-id] [:= :q.status "approved"]
+                   :where [:and [:= :q.user_id user-id]
+                           [:raw (drawable-question-where "q")]
                            [:exists {:select [1] :from [[:kg_question_facts :qf]]
                                      :join [[:kg_facts :f] [:= :f.id :qf.fact_id]]
                                      :where [:and [:= :qf.question_id :q.id]
@@ -5133,13 +5257,14 @@
    entity in the linked facts). Wire-lean. nil when not found/not owned."
   [user-id question-id]
   (when-let [q (jdbc/execute-one! ds
-                 ["SELECT id, kind, question, reference_answer FROM kg_questions
+                 ["SELECT id, kind, question, reference_answer, flagged, suspended
+                   FROM kg_questions
                    WHERE id = ? AND user_id = ?" question-id user-id]
                  {:builder-fn rs/as-unqualified-maps})]
     (let [facts (jdbc/execute! ds
                   ["SELECT f.id, s.label AS subject_label, p.label AS predicate_label,
                        o.label AS object_label, f.object_literal, f.page_number,
-                       t.title AS doc_title,
+                       t.title AS doc_title, f.graph_topic_id,
                        f.subject_entity_id, f.object_entity_id
                     FROM kg_question_facts qf
                     JOIN kg_facts f ON f.id = qf.fact_id
@@ -5166,23 +5291,57 @@
                      entities)]
       {:id (:id q) :kind (:kind q)
        :question (:question q) :reference-answer (:reference_answer q)
+       :flagged (boolean (:flagged q)) ; the in-quiz Flag toggle renders from this
+       :suspended (boolean (:suspended q))
        :facts facts ; entity ids stay on rows — feedback links through them
        :entities (or entities [])
        :keywords keywords})))
 
+(defn kg-facts-labeled
+  "The given facts with labels and provenance — same row shape as
+   entity-fact-neighborhood, so FactLine renders them unchanged. Used by the review
+   detail to show missed facts. Ownership enforced in SQL.
+   Post: labeled rows for the owned subset of `fact-ids`, lowest id first (a
+         cascade-deleted fact simply drops out)."
+  [user-id fact-ids]
+  (if (empty? fact-ids)
+    []
+    (jdbc/execute! ds
+      (sql/format
+        {:select [[:f.id :id] [:s.label :subject_label] [:p.label :predicate_label]
+                  [:o.label :object_label] [:f.object_literal :object_literal]
+                  [:f.page_number :page_number] [:t.title :doc_title]
+                  [:f.graph_topic_id :graph_topic_id]
+                  [:f.subject_entity_id :subject_entity_id]
+                  [:f.object_entity_id :object_entity_id]]
+         :from [[:kg_facts :f]]
+         :join [[:kg_entities :s] [:= :s.id :f.subject_entity_id]
+                [:kg_predicates :p] [:= :p.id :f.predicate_id]
+                [:topics :t] [:= :t.id :f.graph_topic_id]]
+         :left-join [[:kg_entities :o] [:= :o.id :f.object_entity_id]]
+         :where [:and [:= :f.user_id user-id] [:in :f.id (vec fact-ids)]]
+         :order-by [[:f.id :asc]]})
+      {:builder-fn rs/as-unqualified-maps})))
+
 (defn record-kg-answer!
   "Persist the user's answer text before grading (an LLM failure must not
    lose what they typed). Idempotent per (session, question).
-   Post: answer row id."
+
+   question_text is snapshotted here rather than passed in by each of the three
+   call sites, and is deliberately NOT touched by the upsert: it records the
+   wording as FIRST asked, so re-answering within a session cannot rewrite the
+   record the history list renders.
+   Post: answer row id; question_text set on insert and unchanged thereafter."
   [user-id session-id question-id position user-answer]
   (:id (jdbc/execute-one! ds
-         ["INSERT INTO kg_answers (session_id, question_id, position, user_answer)
-           SELECT s.id, ?, ?, ? FROM kg_sessions s
+         ["INSERT INTO kg_answers (session_id, question_id, position, user_answer, question_text)
+           SELECT s.id, ?, ?, ?, (SELECT q.question FROM kg_questions q WHERE q.id = ?)
+           FROM kg_sessions s
            WHERE s.id = ? AND s.user_id = ?
            ON CONFLICT (session_id, question_id)
              DO UPDATE SET user_answer = EXCLUDED.user_answer
            RETURNING id"
-          question-id position (sanitize-utf8 user-answer) session-id user-id]
+          question-id position (sanitize-utf8 user-answer) question-id session-id user-id]
          {:builder-fn rs/as-unqualified-maps})))
 
 (defn grade-kg-answer!
@@ -5251,7 +5410,8 @@
    (uncapped), then Review cards due today (capped at review-limit − reviews so
    far), then never-seen cards (capped at new-limit − new so far). The client
    holds this as a live queue and re-enqueues cards that fall due again today.
-   Post: vector of ids, order learning → review → new."
+   Post: vector of ids, order learning → review → new; no suspended question in
+         any of the three tiers."
   [user-id new-limit review-limit]
   (let [{:keys [new-today reviews-today]} (fsrs-daily-counts user-id)
         review-room (max 0 (- review-limit reviews-today))
@@ -5259,31 +5419,38 @@
         q (fn [where order limit]
             (mapv :id
               (jdbc/execute! ds
-                (into [(str "SELECT id FROM kg_questions
-                             WHERE user_id = ? AND status = 'approved' AND " where
+                (into [(str "SELECT q.id FROM kg_questions q
+                             WHERE q.user_id = ? AND " (drawable-question-where "q")
+                            " AND " where
                             " ORDER BY " order (when limit " LIMIT ?"))]
                   (cond-> [user-id] limit (conj limit)))
                 {:builder-fn rs/as-unqualified-maps})))
-        learning (q "fsrs_state IN (1,3) AND fsrs_due IS NOT NULL AND fsrs_due <= now()"
-                   "fsrs_due ASC" nil)
+        learning (q "q.fsrs_state IN (1,3) AND q.fsrs_due IS NOT NULL AND q.fsrs_due <= now()"
+                   "q.fsrs_due ASC" nil)
         reviews  (if (pos? review-room)
-                   (q "fsrs_state = 2 AND fsrs_due IS NOT NULL AND fsrs_due::date <= CURRENT_DATE"
-                     "fsrs_due ASC" review-room)
+                   (q "q.fsrs_state = 2 AND q.fsrs_due IS NOT NULL AND q.fsrs_due::date <= CURRENT_DATE"
+                     "q.fsrs_due ASC" review-room)
                    [])
         news     (if (pos? new-room)
-                   (q "fsrs_due IS NULL" "id ASC" new-room)
+                   (q "q.fsrs_due IS NULL" "q.id ASC" new-room)
                    [])]
     (vec (concat learning reviews news))))
 
 (defn apply-fsrs-review!
   "Advance a question's FSRS schedule by `rating` and append a kg_reviews row,
-   in one transaction. `verdict` is logged for history (may be nil). Postgres
-   now() is the transaction clock, so the elapsed gap and the new due date are
-   computed against a single consistent instant.
+   in one transaction. Postgres now() is the transaction clock, so the elapsed gap
+   and the new due date are computed against a single consistent instant.
+
+   The Review flow writes no kg_answers row, so this row IS its answer history:
+   `record` carries {:verdict :explanation :user-answer :missed-fact-ids} and the
+   question's current wording is snapshotted by subselect. Because this runs only
+   after a successful grade, a grading failure leaves no row and no answer record —
+   the session flows persist before grading instead.
    Pre:  question belongs to user-id (else returns nil, no write).
-   Post: kg_questions FSRS cols advanced; exactly one kg_reviews row inserted;
-         returns {:state :reps :lapses :scheduled-days :due-today?}."
-  [user-id question-id rating verdict scheduler enable-fuzzing]
+   Post: kg_questions FSRS cols advanced; exactly one kg_reviews row inserted
+         carrying the answer; returns {:state :reps :lapses :scheduled-days
+         :due-today?}."
+  [user-id question-id rating record scheduler enable-fuzzing]
   (jdbc/with-transaction [tx ds]
     (when-let [row (jdbc/execute-one! tx
                      ["SELECT fsrs_state, fsrs_step, fsrs_stability, fsrs_difficulty,
@@ -5322,13 +5489,20 @@
                    (if lapse? 1 0) (double secs) question-id user-id]
                   {:builder-fn rs/as-unqualified-maps})]
         (jdbc/execute-one! tx
-          ["INSERT INTO kg_reviews
-             (user_id, question_id, rating, verdict, state_before, state_after,
-              reps_before, stability_after, difficulty_after, elapsed_days,
-              scheduled_days, reviewed_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?, now())"
-           user-id question-id rating verdict state-before state-after
-           reps-before (:stability res) (:difficulty res) elapsed scheduled-days])
+          (sql/format
+            {:insert-into :kg_reviews
+             :values [{:user_id user-id :question_id question-id :rating rating
+                       :verdict (:verdict record)
+                       :state_before state-before :state_after state-after
+                       :reps_before reps-before
+                       :stability_after (:stability res) :difficulty_after (:difficulty res)
+                       :elapsed_days elapsed :scheduled_days scheduled-days
+                       :user_answer (some-> (:user-answer record) sanitize-utf8)
+                       :explanation (some-> (:explanation record) sanitize-utf8)
+                       :missed_fact_ids [:array (vec (:missed-fact-ids record))]
+                       :question_text {:select [:question] :from [:kg_questions]
+                                       :where [:= :id question-id]}
+                       :reviewed_at [:now]}]}))
         {:state state-after
          :reps (inc reps-before)
          :lapses (+ (long (:fsrs_lapses row)) (if lapse? 1 0))
@@ -5350,6 +5524,74 @@
       GROUP BY day ORDER BY day DESC"
      user-id days]
     {:builder-fn rs/as-unqualified-maps}))
+
+(defn fsrs-due-count
+  "How many questions the next Review sitting would draw — the dashboard's due
+   tile. Counts the same three tiers as draw-fsrs-due-queue under the same caps, so
+   the tile can never disagree with the queue Start opens.
+   Post: a non-negative count."
+  [user-id new-limit review-limit]
+  (count (draw-fsrs-due-queue user-id new-limit review-limit)))
+
+(defn kg-question-bank-counts
+  "Bank-wide tallies for the quiz dashboard tiles. Counts live (approved) questions
+   only — a rejected or retired question is not part of the bank.
+   Post: {:live n :flagged n :suspended n}; :flagged and :suspended overlap, since
+         the two flags are independent."
+  [user-id]
+  (let [r (jdbc/execute-one! ds
+            ["SELECT COUNT(*) AS live,
+                     COUNT(*) FILTER (WHERE flagged)   AS flagged,
+                     COUNT(*) FILTER (WHERE suspended) AS suspended
+              FROM kg_questions
+              WHERE user_id = ? AND status = 'approved'"
+             user-id]
+            {:builder-fn rs/as-unqualified-maps})]
+    {:live (long (:live r)) :flagged (long (:flagged r))
+     :suspended (long (:suspended r))}))
+
+(defn fsrs-review-log
+  "One row per graded review, newest first — the Reviews tab's list.
+
+   question_text is the wording as asked; the LIST renders that snapshot so a later
+   edit cannot rewrite the record, while the detail reads the live question by id.
+   NULL question_text marks a row written before the column existed — \"not
+   recorded\", which the UI must not present as \"unchanged\".
+   Post: ≤ `limit` rows {:id :question_id :question_text :verdict :rating
+         :reviewed_at}, newest first."
+  [user-id limit]
+  (jdbc/execute! ds
+    ["SELECT r.id, r.question_id, r.question_text, r.verdict, r.rating,
+             to_char(r.reviewed_at, 'YYYY-MM-DD HH24:MI') AS reviewed_at
+      FROM kg_reviews r
+      WHERE r.user_id = ?
+      ORDER BY r.reviewed_at DESC, r.id DESC
+      LIMIT ?"
+     user-id limit]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn kg-review-detail
+  "One review as the answer view needs it: what was answered, how it was graded, the
+   wording as asked, and the question's wording NOW (by id, so an edit is visible
+   here even though the list keeps the snapshot).
+   Post: {:review {…} :missed-facts [labeled rows]} or nil when not owned/found;
+         :question_text may be nil (pre-column row), :live_question never is."
+  [user-id review-id]
+  (when-let [r (jdbc/execute-one! ds
+                 ["SELECT r.id, r.question_id, r.verdict, r.rating, r.user_answer,
+                          r.explanation, r.question_text, r.missed_fact_ids,
+                          to_char(r.reviewed_at, 'YYYY-MM-DD HH24:MI') AS reviewed_at,
+                          q.question AS live_question, q.reference_answer,
+                          q.flagged, q.suspended
+                   FROM kg_reviews r JOIN kg_questions q ON q.id = r.question_id
+                   WHERE r.id = ? AND r.user_id = ?"
+                  review-id user-id]
+                 {:builder-fn rs/as-unqualified-maps})]
+    (let [missed (or (sql-int-array->vec (:missed_fact_ids r)) [])]
+      {:review (assoc r :missed_fact_ids missed
+                 :flagged (boolean (:flagged r))
+                 :suspended (boolean (:suspended r)))
+       :missed-facts (kg-facts-labeled user-id missed)})))
 
 (defn fsrs-question-states
   "Per-question FSRS snapshot for the history browser — reviewed questions,
@@ -5425,9 +5667,16 @@
 
 (defn kg-session-detail
   "One finished (or being-reviewed) session with its per-question record.
+
+   Both wordings are returned: :question_text is the snapshot as asked (nil on rows
+   written before that column existed) and :question is the question NOW. The list
+   renders the snapshot, the detail renders live, and their difference is what raises
+   the edited-since marker.
    Post: {:session {:id :kind :total :started} :answers [{:position :question
-   :reference_answer :user_answer :verdict :explanation}]} or nil when not
-   owned/found. Verdict nil = saved but ungraded (grading failure or skip)."
+   :question_text :reference_answer :user_answer :verdict :explanation}]} or nil
+   when not owned/found. Verdict nil = saved but ungraded (grading failure or skip);
+   a question skipped via Suspend & Skip has no row at all, so it counts toward
+   :total and shows as unanswered."
   [user-id session-id]
   (when-let [s (jdbc/execute-one! ds
                  ["SELECT id, kind, cardinality(question_ids) AS total,
@@ -5438,6 +5687,7 @@
     {:session s
      :answers (jdbc/execute! ds
                 ["SELECT a.position, a.user_answer, a.verdict, a.explanation,
+                     a.question_text, a.question_id,
                      q.question, q.reference_answer
                   FROM kg_answers a JOIN kg_questions q ON q.id = a.question_id
                   WHERE a.session_id = ? ORDER BY a.position"

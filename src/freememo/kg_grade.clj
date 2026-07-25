@@ -126,16 +126,25 @@
 
 (defn review-question!
   "FSRS Review path (H2): grade session-lessly, then advance the question's FSRS
-   schedule and append a kg_reviews row. Writes NO kg_answers/kg_sessions row.
+   schedule and append a kg_reviews row carrying the answer. Writes NO
+   kg_answers/kg_sessions row — that row IS this flow's answer history.
+
+   A failed grade writes nothing at all, so the typed answer is not retained; unlike
+   the session flows there is no pre-grade persist to fall back on, and the toast
+   pushed by grade-question is the only recovery path.
    Post: {:result <grade-question map> :schedule <apply-fsrs-review! map|nil>};
-         :schedule is nil (schedule untouched) when grading fails."
+         :schedule is nil (schedule untouched, no review row) when grading fails."
   [user-id question-id user-answer]
   (let [res (grade-question user-id question-id user-answer)]
     (if (:success res)
       (let [{:keys [scheduler enable-fuzzing]} (settings/fsrs-config user-id)]
         {:result res
          :schedule (db/apply-fsrs-review! user-id question-id
-                     (verdict->rating (:verdict res)) (:verdict res)
+                     (verdict->rating (:verdict res))
+                     {:verdict (:verdict res)
+                      :explanation (:explanation res)
+                      :user-answer user-answer
+                      :missed-fact-ids (:missed-fact-ids res)}
                      scheduler enable-fuzzing)})
       {:result res :schedule nil})))
 

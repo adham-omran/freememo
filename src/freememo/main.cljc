@@ -408,7 +408,7 @@
                     (r/pop ; consume 'knowledge from route; KnowledgePage reads the sub-view segment
                       (KnowledgePage user-id navigate!)))
                   (when (= active-tab :graph) (GraphPage user-id navigate!))
-                  (when (= active-tab :quiz) (QuizPage user-id))
+                  (when (= active-tab :quiz) (QuizPage user-id navigate!))
                   (when (= active-tab :help) (HelpPage))
                   (when (= active-tab :settings) (SettingsPage user-id username enc-key base-url client-country))
                   (when (= active-tab :credits) (CreditsReturnPage user-id navigate!))

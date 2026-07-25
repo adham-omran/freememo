@@ -17,6 +17,7 @@
    [freememo.icons :as icons]
    [freememo.commands :as commands]
    [freememo.modal-shell :as modal]
+   [freememo.question-curation :as curate]
    [freememo.tooltip :as tooltip]
    [freememo.typeahead :as typeahead]
    [freememo.loading :as loading]
@@ -66,9 +67,14 @@
      (db/list-kg-entities user-id query 1000 source-id)))
 
 #?(:clj
-   (defn get-questions* [_kg-bump user-id query source-id entity-id]
+   (defn get-questions*
+     "The bank's rows. Suspended questions are INCLUDED — the bank is the only
+      unsuspend surface, so hiding them here would strand them. `flagged?` /
+      `suspended?` narrow to the corresponding worklist."
+     [_kg-bump user-id query source-id entity-id flagged? suspended?]
      (db/get-kg-questions user-id "approved" query
-       {:source-id source-id :entity-id entity-id})))
+       {:source-id source-id :entity-id entity-id
+        :flagged? flagged? :suspended? suspended?})))
 
 #?(:clj
    (defn list-source-docs*
@@ -134,17 +140,8 @@
                       :entity :kg-entity :entity-id entity-id}))
        {:success ok? :error (when-not ok? "Entity not found")})))
 
-#?(:clj
-   (defn update-question!*
-     "Edit a KG question's Q/A text. Audits + bumps on success.
-      Returns {:success bool :error str}."
-     [user-id question-id q a]
-     (let [ok? (db/update-kg-question! user-id question-id q a)]
-       (when ok?
-         (commands/bump! user-id :generate-questions)
-         (log/audit! {:id ::update-question :user-id user-id :action :update
-                      :entity :kg-question :entity-id question-id}))
-       {:success ok? :error (when-not ok? "Question not found")})))
+;; update-question!* and QuestionEditorModal moved to freememo.question-curation:
+;; the quiz needs the same editor, and a second copy would let the two drift.
 
 #?(:clj
    (defn edit-fact-value!*
@@ -548,71 +545,16 @@
             (case result
               (t))))))))
 
-(e/defn QuestionEditorModal
-  "Edit a question's text and reference answer in a modal — plain textareas,
-   since questions carry no rich formatting. `!editing` holds the question map
-   being edited, or nil. Save writes both fields; Cancel/Escape/backdrop close."
-  [user-id !editing]
-  (e/client
-    (when-some [q (e/watch !editing)]
-      (let [qid (:id q)
-            !question (atom (or (:question q) ""))
-            !answer (atom (or (:reference_answer q) ""))
-            close! (fn [] (reset! !editing nil))]
-        (dom/div
-          (dom/props {:class "modal-backdrop"})
-          (dom/On "click" (fn [_] (close!)) nil)
-          (modal/ModalEscape close! "Edit question")
-          (dom/div
-            (dom/props {:class "modal-content"
-                        :style {:width "min(640px, 95vw)" :max-height "85vh"
-                                :display "flex" :flex-direction "column" :gap "10px"}})
-            (dom/On "click" (fn [e] (.stopPropagation e)) nil)
-            (dom/h3 (dom/props {:style {:margin "0" :font-size "16px"}}) (dom/text "Edit question"))
-            (dom/label (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
-              (dom/text "Question"))
-            (dom/textarea
-              (dom/props {:class "input" :rows 3 :aria-label "Question"
-                          :value (or (:question q) "")
-                          :style {:width "100%" :resize "vertical"}})
-              (dom/On "input" (fn [ev] (reset! !question (.. ev -target -value))) nil))
-            (dom/label (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
-              (dom/text "Reference answer"))
-            (dom/textarea
-              (dom/props {:class "input" :rows 5 :aria-label "Reference answer"
-                          :value (or (:reference_answer q) "")
-                          :style {:width "100%" :resize "vertical"}})
-              (dom/On "input" (fn [ev] (reset! !answer (.. ev -target -value))) nil))
-            (dom/div
-              (dom/props {:style {:display "flex" :gap "8px" :justify-content "flex-end"}})
-              (dom/button (dom/props {:class "btn btn-secondary"})
-                (dom/text "Cancel")
-                (dom/On "click" (fn [_] (close!)) nil))
-              (dom/button
-                (dom/props {:class "btn btn-primary"})
-                (dom/text "Save")
-                ;; Capture the edited values client-side in the click event, then
-                ;; save on the server (an e/server thunk can't deref client atoms).
-                (let [ev (dom/On "click"
-                           (fn [_] {:id (str (random-uuid)) :q @!question :a @!answer}) nil)
-                      [t _] (e/Token ev)]
-                  (dom/props {:disabled (some? t)})
-                  (when t
-                    (let [result (e/server
-                                   (e/Offload
-                                     #(update-question!* user-id qid (:q ev) (:a ev))))]
-                      (case result
-                        (if (:success result)
-                          (do (reset! !editing nil) (t))
-                          (t (:error result)))))))))))))))
-
 (e/defn QuestionRow [user-id q i !editing]
   (e/client
-    (let [{:keys [id kind question reference_answer fact_count]} q
+    (let [{:keys [id kind question reference_answer fact_count flagged suspended]} q
           open! (fn [_] (reset! !editing q))]  ; click a row cell → open the editor modal
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt")
-                    :style {:--order i}})
+                    :style {:--order i
+                            ;; A suspended question stays listed — this is its only
+                            ;; unsuspend surface — but reads as withheld.
+                            :opacity (if suspended "0.55" "1")}})
         (dom/td (dom/props {:style (merge fact-cell-style {:cursor "pointer"})})
           (dom/On "click" open! nil)
           (dom/span (dom/props {:style fact-text-style})
@@ -633,6 +575,11 @@
         (dom/td (dom/props {:style (merge fact-cell-style {:font-size "12px" :cursor "pointer"})})
           (dom/On "click" open! nil)
           (dom/text (str fact_count)))
+        ;; Flag / Suspend toggles — their own non-clickable cell so a toggle never
+        ;; opens the editor. This is where an in-quiz flag or suspension is undone.
+        (dom/td (dom/props {:style (merge fact-cell-style {:gap "4px"})})
+          (curate/FlagToggle user-id id flagged)
+          (curate/SuspendToggle user-id id suspended))
         ;; Reject lives in its own non-clickable cell so × never opens the editor.
         (dom/td (dom/props {:style (merge fact-cell-style
                                      {:justify-content "flex-end"})})
@@ -649,12 +596,17 @@
           source-id (some (fn [d] (when (= (:title d) source-text) (:id d))) docs)
           ents (e/server (e/Offload #(list-entity-options* kg-bump user-id source-id)))
           entity-id (some (fn [ent] (when (= (:label ent) entity-text) (:id ent))) ents)
-          grid-cols "minmax(220px,1.4fr) minmax(220px,1.4fr) 90px 55px 60px"
+          ;; Worklist filters. Flagged is the "edit these later" list the in-quiz
+          ;; Flag control feeds; suspended is where an in-quiz skip is undone.
+          !flagged? (atom false) flagged? (e/watch !flagged?)
+          !suspended? (atom false) suspended? (e/watch !suspended?)
+          grid-cols "minmax(200px,1.4fr) minmax(200px,1.4fr) 90px 55px 82px 60px"
           !editing (atom nil)]              ; the question map being edited, or nil
       ;; Spinner covers the first offloaded fetch chain (docs → source-id → questions);
       ;; filter changes revalidate in place via the Offload latch, no spinner reflash.
       (loading/WithLatestLoading
-        (e/fn [] (e/server (e/Offload #(get-questions* kg-bump user-id query source-id entity-id))))
+        (e/fn [] (e/server (e/Offload #(get-questions* kg-bump user-id query source-id
+                                         entity-id flagged? suspended?))))
         (e/fn [questions]
           (let [item-count (count questions)]
             (dom/div
@@ -674,19 +626,31 @@
                   (typeahead/Typeahead !source-text (mapv :title docs) "Filter by source…" nil nil))
                 (dom/div (dom/props {:style {:width "200px"}})
                   (typeahead/Typeahead !entity-text (mapv :label ents) "Filter by entity…" nil nil))
+                (e/for [[k label active? !a]
+                        (e/diff-by first [["flagged" "Flagged" flagged? !flagged?]
+                                          ["suspended" "Suspended" suspended? !suspended?]])]
+                  (let [_ k]
+                    (dom/button
+                      (dom/props {:class (str "btn btn-sm" (when active? " btn-secondary"))
+                                  :aria-pressed (if active? "true" "false")})
+                      (dom/text label)
+                      (dom/On "click" (fn [_] (swap! !a not)) nil))))
                 (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
                   (dom/text (str item-count " question" (when (not= 1 item-count) "s")
                               " — click a row to edit"))))
               (if (zero? item-count)
                 (dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
-                  (dom/text (if (and (str/blank? query) (nil? source-id) (nil? entity-id))
+                  (dom/text (cond
+                              flagged? "No flagged questions."
+                              suspended? "No suspended questions."
+                              (and (str/blank? query) (nil? source-id) (nil? entity-id))
                               "No questions yet — generate from a document or synthesize from an entity."
-                              "No matches.")))
-                (TapeTable ["Question" "Answer" "Kind" "Facts" ""] grid-cols item-count
+                              :else "No matches.")))
+                (TapeTable ["Question" "Answer" "Kind" "Facts" "State" ""] grid-cols item-count
                   (e/fn [i]
                     (when-let [q (nth questions i nil)]
                       (QuestionRow user-id q i !editing)))))
-              (QuestionEditorModal user-id !editing))))))))
+              (curate/QuestionEditorModal user-id !editing))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Entities view
