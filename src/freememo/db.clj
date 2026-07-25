@@ -565,7 +565,7 @@
       user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       action_type TEXT NOT NULL CHECK (action_type IN
         ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','move-topic',
-         'reject-question','reject-fact')),
+         'reject-question','reject-fact','bulk-reject-facts')),
       entity_type TEXT NOT NULL CHECK (entity_type IN ('flashcard','pin','setting','document','question','fact')),
       entity_refs JSONB NOT NULL,
       snapshot JSONB NOT NULL,
@@ -580,7 +580,7 @@
   (jdbc/execute! ds ["ALTER TABLE undo_log ADD CONSTRAINT undo_log_action_type_check
                       CHECK (action_type IN
                         ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','move-topic',
-                         'reject-question','reject-fact'))"])
+                         'reject-question','reject-fact','bulk-reject-facts'))"])
   (jdbc/execute! ds ["ALTER TABLE undo_log DROP CONSTRAINT IF EXISTS undo_log_entity_type_check"])
   (jdbc/execute! ds ["ALTER TABLE undo_log ADD CONSTRAINT undo_log_entity_type_check
                       CHECK (entity_type IN ('flashcard','pin','setting','document','question','fact'))"])
@@ -4526,6 +4526,21 @@
                    :order-by [[:f.page_number :asc] [:f.id :asc]]})
       {:builder-fn rs/as-unqualified-maps})))
 
+(defn kg-fact-ids-for-doc
+  "Just the ids of a document's approved facts — the target set for \"select every
+   fact in this document\", which by design ignores the view's search filter.
+   Ids only: the display-joined rows get-kg-facts returns are far more than a
+   selection needs, and the caller already holds rows for what it can see.
+   Post: vector of ids, page order then id, matching get-kg-facts."
+  [user-id graph-topic-id]
+  (mapv :id
+    (jdbc/execute! ds
+      ["SELECT id FROM kg_facts
+        WHERE user_id = ? AND graph_topic_id = ? AND status = 'approved'
+        ORDER BY page_number NULLS LAST, id"
+       user-id graph-topic-id]
+      {:builder-fn rs/as-unqualified-maps})))
+
 (defn get-kg-facts-context
   "Approved facts for assistant grounding — same display-join as get-kg-facts,
    with an optional inclusive page range and an optional row limit so a large
@@ -4731,6 +4746,89 @@
                       :retired-question-ids (vec qids)}))))]
     (when snap
       (insert-undo-entry! user-id "reject-fact" "fact" [fact-id] [snap]))))
+
+(defn reject-kg-facts!
+  "Reject many facts as ONE operation: one transaction, one undo entry.
+
+   Not a loop over reject-kg-fact!. That would write one undo entry, one toast and
+   one invalidation bump per fact — and the undo log is hard-capped at 100 rows per
+   user, so a large selection would evict the user's unrelated undo history and
+   truncate its own reversal.
+
+   Per-fact precision is preserved, which is the whole difficulty: each fact keeps
+   its own prev-status, and the retired question ids are recorded PER FACT rather
+   than unioned, so undo un-retires exactly the questions this operation retired and
+   never one that was already retired beforehand.
+   Pre:  fact-ids from the user's selection; ownership re-checked in SQL.
+   Post: {:rejected n :undo-id id-or-nil} — n counts only facts that were owned and
+         not already rejected; :undo-id is nil iff n = 0. Already-rejected and
+         foreign ids are skipped silently, exactly as the single-fact path skips
+         them."
+  [user-id fact-ids]
+  (if (empty? fact-ids)
+    {:rejected 0 :undo-id nil}
+    (let [{:keys [snaps undo-id]}
+          (jdbc/with-transaction [tx ds]
+            (let [rows (jdbc/execute! tx
+                         (sql/format {:select [:id :status] :from :kg_facts
+                                      :where [:and [:= :user_id user-id]
+                                              [:in :id (vec fact-ids)]
+                                              [:not= :status "rejected"]]
+                                      :for :update})
+                         {:builder-fn rs/as-unqualified-maps})
+                  ids (mapv :id rows)]
+              (if (empty? ids)
+                {:snaps [] :undo-id nil}
+                ;; Capture each fact's approved covering questions BEFORE retiring
+                ;; anything: after the UPDATE below there is no way to tell which
+                ;; questions this operation retired from ones already retired.
+                (let [links (jdbc/execute! tx
+                              (sql/format {:select [:qf.fact_id :q.id]
+                                           :from [[:kg_question_facts :qf]]
+                                           :join [[:kg_questions :q] [:= :q.id :qf.question_id]]
+                                           :where [:and [:in :qf.fact_id ids]
+                                                   [:= :q.status "approved"]]})
+                              {:builder-fn rs/as-unqualified-maps})
+                      by-fact (reduce (fn [m {:keys [fact_id id]}]
+                                        (update m fact_id (fnil conj []) id))
+                                {} links)
+                      snaps (mapv (fn [{:keys [id status]}]
+                                    {:fact-id id :prev-status status
+                                     :retired-question-ids (vec (get by-fact id []))})
+                              rows)
+                      qids (into [] (distinct) (map :id links))]
+                  (jdbc/execute! tx
+                    (sql/format {:update :kg_facts
+                                 :set {:status "rejected" :reviewed_at [:now]}
+                                 :where [:and [:= :user_id user-id] [:in :id ids]]}))
+                  (when (seq qids)
+                    (jdbc/execute! tx
+                      (sql/format {:update :kg_questions :set {:status "retired"}
+                                   :where [:in :id qids]})))
+                  {:snaps snaps
+                   :undo-id (insert-undo-entry-raw! tx user-id "bulk-reject-facts" "fact"
+                              ids snaps)}))))]
+      ;; Pruning is deliberately outside the transaction — insert-undo-entry-raw!
+      ;; does not prune, and the caller owns it once the mutation has committed.
+      (when undo-id (prune-undo-log! ds user-id))
+      {:rejected (count snaps) :undo-id undo-id})))
+
+(defn restore-rejected-facts!
+  "Undo a bulk-reject-facts: restore every fact's own pre-reject status and set
+   exactly the questions that operation retired back to approved.
+   Pre:  snapshot is the vector of {:fact-id :prev-status :retired-question-ids}
+         written by reject-kg-facts!.
+   Post: each fact carries its own prior status again — not a single shared one."
+  [snapshot]
+  (jdbc/with-transaction [tx ds]
+    (doseq [{:keys [fact-id prev-status]} snapshot]
+      (jdbc/execute! tx
+        ["UPDATE kg_facts SET status = ? WHERE id = ?" prev-status fact-id]))
+    (let [qids (into [] (distinct) (mapcat :retired-question-ids snapshot))]
+      (when (seq qids)
+        (jdbc/execute! tx
+          (sql/format {:update :kg_questions :set {:status "approved"}
+                       :where [:in :id qids]}))))))
 
 (defn restore-rejected-fact!
   "Undo a reject-fact: restore the fact's pre-reject status and set exactly the

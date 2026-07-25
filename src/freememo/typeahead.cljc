@@ -29,16 +29,32 @@
      :clj nil))
 
 (e/defn Typeahead
-  "Text input with filtered dropdown. Writes selected/typed value to !atom.
-   options      — seq of strings to filter
+  "Combobox over identified options: filtered dropdown, writes the selected
+   option's ID to !atom.
+
+   Keyed on id, not on the visible label. Keying on the label made every consumer
+   resolve its selection by string-matching titles back to rows, which silently
+   picked the wrong row whenever two rows shared a label.
+
+   options      — seq of {:id :label}; :label is filtered and displayed, :id is
+                  what gets written
    placeholder  — input placeholder text
-   ?!committed  — optional atom; reset to selected item only on definitive selection
-                  (mousedown or Enter), not on every keystroke. Pass nil to disable.
+   ?!committed  — optional atom; reset to the selected :id only on definitive
+                  selection (mousedown or Enter), not per keystroke. nil to disable.
    autofocus?   — when truthy, focus the input on mount (skipped on touch,
-                  where autofocus would pop the on-screen keyboard)."
+                  where autofocus would pop the on-screen keyboard)
+
+   Pre:  every option has a non-nil :id; !atom holds an :id present in `options`,
+         or nil for no selection.
+   Post: !atom holds an option's :id or nil — never free text. Typing filters
+         without selecting; emptying the field and leaving clears the selection;
+         any other uncommitted text is discarded rather than guessed at.
+   Invariant: an :id in !atom that is absent from `options` displays as blank
+         rather than as a stale label."
   [!atom options placeholder ?!committed autofocus?]
   (e/client
     (let [value (e/watch !atom)
+          selected-label (some (fn [o] (when (= (:id o) value) (:label o))) options)
           !search (atom nil)
           search (e/watch !search)
           !open? (atom false)
@@ -53,7 +69,7 @@
           ;; not on search, so focus keeps the value visible without clearing it.
           filtered (when open?
                      (if (some? search)
-                       (vec (filter #(string/includes? (string/lower-case %)
+                       (vec (filter #(string/includes? (string/lower-case (str (:label %)))
                                        (string/lower-case search))
                               options))
                        (vec options)))]
@@ -61,7 +77,7 @@
         (dom/props {:style {:position "relative"}})
         (dom/input
           (dom/props {:type "text" :dir "auto"
-                      :value (if (some? search) search (or value ""))
+                      :value (if (some? search) search (or selected-label ""))
                       :placeholder placeholder
                       :class "input"
                       :style {:width "100%"}})
@@ -73,13 +89,20 @@
           ;; the input shows the current value; Tab-through no longer loses it.
           (dom/On "focus" (fn [_] (reset! !open? true)
                             (reset! !active-idx -1)) nil)
-          (dom/On "blur" (fn [_] (reset! !open? false)
+          ;; Emptying the field and leaving is how the selection is cleared. Other
+          ;; uncommitted text is dropped: the atom holds ids, so half-typed labels
+          ;; have nothing to write, and guessing a match is what the id-keying
+          ;; exists to prevent.
+          (dom/On "blur" (fn [_] (when (= "" @!search) (reset! !atom nil))
+                           (reset! !open? false)
                            (reset! !search nil)
                            (reset! !active-idx -1)) nil)
+          ;; Typing filters only — the selection changes on definitive commit, so
+          ;; consumers reacting to !atom (URL sync, server queries) see one change
+          ;; per selection instead of one per keystroke.
           (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
             (when (some? v)
               (reset! !search v)
-              (reset! !atom v)
               (reset! !active-idx -1)))
           (dom/On "keydown"
             (fn [e]
@@ -94,9 +117,9 @@
                     (reset! !active-idx (mod (dec active-idx) n)))
                   (and (= key "Enter") (>= active-idx 0))
                   (do (.preventDefault e)
-                    (let [selected (nth filtered active-idx)]
-                      (reset! !atom selected)
-                      (when ?!committed (reset! ?!committed selected)))
+                    (let [id (:id (nth filtered active-idx))]
+                      (reset! !atom id)
+                      (when ?!committed (reset! ?!committed id)))
                     (reset! !search nil)
                     (reset! !open? false)
                     (reset! !active-idx -1))
@@ -132,16 +155,16 @@
                         (dom/tr
                           (dom/props {:style {:--order i}})
                           (dom/td
-                            (dom/props {:title item
+                            (dom/props {:title (:label item)
                                         :style {:padding "5px 8px" :cursor "pointer" :font-size "14px"
                                                 :white-space "nowrap" :overflow "hidden" :text-overflow "ellipsis"
                                                 :background (when (= i active-idx) "var(--color-highlight)")}})
-                            (dom/text item)
+                            (dom/text (:label item))
                             (dom/On "mousedown"
                               (fn [e]
                                 (.preventDefault e)
-                                (reset! !atom item)
-                                (when ?!committed (reset! ?!committed item))
+                                (reset! !atom (:id item))
+                                (when ?!committed (reset! ?!committed (:id item)))
                                 (reset! !search nil)
                                 (reset! !open? false)
                                 (reset! !active-idx -1))
