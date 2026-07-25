@@ -103,7 +103,9 @@
           refs (e/watch !refs)
           !at-open? (atom false)
           at-open? (e/watch !at-open?)
-          !pick-search (atom "")
+          ;; Typeahead is id-keyed: both atoms hold a document id or nil, never
+          ;; a title. Two documents may share a title; the id is what resolves.
+          !pick-search (atom nil)
           !picked (atom nil)
           picked (e/watch !picked)
           ;; Optimistic echo of the just-sent user turn: {:id :text} or nil.
@@ -116,8 +118,8 @@
           chats (e/server (vec (assistant/chats* assistant-rev user-id root-topic-id)))
           ;; Other documents the learner can @-reference (current doc excluded).
           docs (e/server (vec (assistant/referenceable-docs user-id root-topic-id)))
-          doc-titles (mapv :title docs)
-          by-title (into {} (map (juxt :title identity)) docs)
+          doc-options (mapv (fn [d] {:id (:id d) :label (:title d)}) docs)
+          by-id (into {} (map (juxt :id identity)) docs)
           ;; Assistant replies are Markdown + dollar-delimited math; render to
           ;; HTML, then rewrite real math to `\(…\)`/`\[…\]` so the client (KaTeX)
           ;; needs no `$` delimiter and currency `$` never opens math. User rows
@@ -165,18 +167,18 @@
                     (reset! !echo nil) ; echo already stopped rendering on id correlation
                     (t))))))))
 
-      ;; @-reference commit: Typeahead wrote the chosen title to !picked. Add the
-      ;; matching doc as a chip (dedup by id), strip the trailing `@token` the
-      ;; trigger left in the draft, and close the picker.
+      ;; @-reference commit: Typeahead wrote the chosen document's id to !picked.
+      ;; Add the matching doc as a chip (dedup by id), strip the trailing `@token`
+      ;; the trigger left in the draft, and close the picker.
       (let [[pt _] (e/Token picked)]
         (when pt
-          (when-let [doc (get by-title picked)]
+          (when-let [doc (get by-id picked)]
             (swap! !refs (fn [rs]
                            (if (some #(= (:id doc) (:id %)) rs)
                              rs
                              (conj rs {:id (:id doc) :title (:title doc)})))))
           (reset! !draft (str/replace draft #"@\S*$" ""))
-          (reset! !pick-search "")
+          (reset! !pick-search nil)
           (reset! !at-open? false)
           (reset! !picked nil)
           (pt)))
@@ -319,12 +321,13 @@
             (dom/props {:class "assistant-panel__error"})
             (dom/text error)))
 
-        ;; `@` picker: reuses Typeahead over other documents' titles. Committing
-        ;; a pick is handled by the @-reference effect above (writes to !picked).
+        ;; `@` picker: reuses Typeahead over other documents (titles shown, ids
+        ;; written). Committing a pick is handled by the @-reference effect above
+        ;; (writes the id to !picked).
         (when at-open?
           (dom/div
             (dom/props {:class "assistant-panel__at-popover"})
-            (Typeahead !pick-search doc-titles "Reference a document…" !picked true)))
+            (Typeahead !pick-search doc-options "Reference a document…" !picked true)))
 
         ;; Reference chips — one per queued @-document, removable.
         (when (seq refs)

@@ -245,6 +245,10 @@
   (e/client
     (let [scope (e/watch (:!scope form))
           decks (e/watch (:!decks conn))
+          ;; An Anki deck name IS its identity — AnkiConnect exposes no deck id,
+          ;; and :!selected-deck must keep holding the name because it flows on
+          ;; into `settings {:deck …}` and the persisted prefs row.
+          deck-options (mapv (fn [d] {:id d :label d}) decks)
           scope-ctx (e/server (e/Offload #(topic-scope-context* dctx/topic-id)))
           kind (:kind scope-ctx)
           has-children? (:has-children? scope-ctx)
@@ -277,7 +281,7 @@
         (dom/props {:style {:margin-bottom "var(--sp-3)"}})
         (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
           (dom/text "Deck"))
-        (Typeahead (:!selected-deck conn) decks "Start typing deck name..." nil nil))
+        (Typeahead (:!selected-deck conn) deck-options "Start typing deck name..." nil nil))
 
       ;; Options
       (AnkiSyncOptions user-id root-id conn form))))

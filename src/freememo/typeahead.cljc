@@ -1,8 +1,11 @@
 (ns freememo.typeahead
-  "Shared UI components."
+  "Filtered-dropdown input widgets: `Typeahead` (id-keyed combobox) and
+   `Suggest` (free text with suggestions). They differ in their postcondition,
+   not their rendering — the dropdown itself is `OptionRows`, shared."
   (:require
    [clojure.string :as string]
    [contrib.data :refer [clamp-left]]
+   [freememo.logging :as log]
    [freememo.modal-shell :as modal]
    [freememo.viewport :as viewport]
    [hyperfiddle.electric3 :as e]
@@ -28,6 +31,74 @@
          nil))
      :clj nil))
 
+(defn check-options!
+  "Dev guard: warn when a `Typeahead` option is not a map carrying a non-nil :id.
+
+   A seq of strings is the historical mistake and it fails *silently*:
+   `(:label \"Default\")` is nil, so rows paint blank, `(str nil)` makes the
+   filter match nothing on the first keystroke, and mousedown writes nil to
+   !atom — clearing the selection instead of setting it. No exception is
+   thrown anywhere along that path, so the only symptom is an empty-looking
+   dropdown. This turns it into a console warning.
+
+   Pre:  none — an empty or nil `options` is legitimate (decks not yet fetched,
+         no referenceable documents) and is not reported.
+   Post: one warning naming the first offending option; returns nil."
+  [options]
+  (when-some [bad (first (remove #(and (map? %) (some? (:id %))) options))]
+    (log/log-warn
+      (str "Typeahead: options must be {:id :label} maps with a non-nil :id; got "
+        (pr-str bad) " — rows will render blank and selection will write nil.")))
+  nil)
+
+(e/defn OptionRows
+  "The virtualized dropdown shared by `Typeahead` and `Suggest`: absolutely
+   positioned under the input, one row per label, `active-idx` highlighted,
+   `on-pick!` invoked with the row index on mousedown.
+
+   labels     — vec of display strings
+   active-idx — index of the keyboard-active row, or -1 for none
+   on-pick!   — client-side fn of the row index; mousedown is preventDefault'd
+                first so the input keeps focus
+
+   Pre:  labels is non-empty; every element is a string.
+   Post: only the visible window of rows is mounted (Scroll-window/Tape), so
+         cost is bounded regardless of option count."
+  [labels active-idx on-pick!]
+  (e/client
+    (let [n (count labels)]
+      (dom/div
+        (dom/props {:class "tape-scroll"
+                    :style {:position "absolute" :top "100%" :left "0" :right "0"
+                            :background "var(--color-bg-card)" :border "1px solid var(--color-border)"
+                            :border-radius "var(--radius-sm)" :z-index "100"
+                            :max-height "240px" :overflow-y "auto"
+                            :box-shadow "0 2px 4px rgba(0,0,0,0.15)"
+                            :--row-height (str row-height "px")}})
+        (let [[offset limit] (Scroll-window row-height n dom/node {:overquery-factor 2})]
+          (dom/props {:style {:--count n :--grid-cols "1fr"}})
+          ;; Keep the keyboard-active row on screen (case forces the call —
+          ;; a bare unused-value statement would be work-skipped).
+          (case (scroll-row-into-view! dom/node active-idx row-height) nil)
+          (dom/table
+            (dom/props {:style {:width "100%"}})
+            (e/for [i (Tape offset limit)]
+              (let [label (nth labels i nil)]
+                (when label
+                  (dom/tr
+                    (dom/props {:style {:--order i}})
+                    (dom/td
+                      (dom/props {:title label
+                                  :style {:padding "5px 8px" :cursor "pointer" :font-size "14px"
+                                          :white-space "nowrap" :overflow "hidden" :text-overflow "ellipsis"
+                                          :background (when (= i active-idx) "var(--color-highlight)")}})
+                      (dom/text label)
+                      (dom/On "mousedown"
+                        (fn [e]
+                          (.preventDefault e)
+                          (on-pick! i))
+                        nil))))))))))))
+
 (e/defn Typeahead
   "Combobox over identified options: filtered dropdown, writes the selected
    option's ID to !atom.
@@ -37,7 +108,8 @@
    picked the wrong row whenever two rows shared a label.
 
    options      — seq of {:id :label}; :label is filtered and displayed, :id is
-                  what gets written
+                  what gets written. When the domain has no id distinct from the
+                  label (Anki deck names), pass the label as the id.
    placeholder  — input placeholder text
    ?!committed  — optional atom; reset to the selected :id only on definitive
                   selection (mousedown or Enter), not per keystroke. nil to disable.
@@ -50,7 +122,10 @@
          without selecting; emptying the field and leaving clears the selection;
          any other uncommitted text is discarded rather than guessed at.
    Invariant: an :id in !atom that is absent from `options` displays as blank
-         rather than as a stale label."
+         rather than as a stale label.
+
+   A field that must accept text absent from `options` is a different widget —
+   use `Suggest`, not a mode flag on this one."
   [!atom options placeholder ?!committed autofocus?]
   (e/client
     (let [value (e/watch !atom)
@@ -75,6 +150,8 @@
                        (vec options)))]
       (dom/div
         (dom/props {:style {:position "relative"}})
+        ;; Dev guard for the option shape — case forces the call.
+        (case (check-options! options) nil)
         (dom/input
           (dom/props {:type "text" :dir "auto"
                       :value (if (some? search) search (or selected-label ""))
@@ -106,13 +183,16 @@
               (reset! !active-idx -1)))
           (dom/On "keydown"
             (fn [e]
+              ;; Arrow keys guard on (pos? n): the dropdown can be closed while
+              ;; the input has focus, and (mod _ 0) is NaN — which would stick
+              ;; in !active-idx and break every later comparison.
               (let [key (.-key e)
                     n (count filtered)]
                 (cond
-                  (= key "ArrowDown")
+                  (and (= key "ArrowDown") (pos? n))
                   (do (.preventDefault e)
                     (reset! !active-idx (mod (inc active-idx) n)))
-                  (= key "ArrowUp")
+                  (and (= key "ArrowUp") (pos? n))
                   (do (.preventDefault e)
                     (reset! !active-idx (mod (dec active-idx) n)))
                   (and (= key "Enter") (>= active-idx 0))
@@ -128,44 +208,93 @@
                     (reset! !open? false)
                     (reset! !active-idx -1)))))
             nil))
-        ;; Virtualized dropdown: only the visible window of rows renders
-        ;; (Scroll-window/Tape), so cost is bounded regardless of option count.
         ;; Mouse hover highlight is CSS (.tape-scroll table tr:hover td); the
-        ;; keyboard-active row gets an inline background.
+        ;; keyboard-active row gets an inline background (OptionRows).
         (when (seq filtered)
-          (let [n (count filtered)]
-            (dom/div
-              (dom/props {:class "tape-scroll"
-                          :style {:position "absolute" :top "100%" :left "0" :right "0"
-                                  :background "var(--color-bg-card)" :border "1px solid var(--color-border)"
-                                  :border-radius "var(--radius-sm)" :z-index "100"
-                                  :max-height "240px" :overflow-y "auto"
-                                  :box-shadow "0 2px 4px rgba(0,0,0,0.15)"
-                                  :--row-height (str row-height "px")}})
-              (let [[offset limit] (Scroll-window row-height n dom/node {:overquery-factor 2})]
-                (dom/props {:style {:--count n :--grid-cols "1fr"}})
-                ;; Keep the keyboard-active row on screen (case forces the call —
-                ;; a bare unused-value statement would be work-skipped).
-                (case (scroll-row-into-view! dom/node active-idx row-height) nil)
-                (dom/table
-                  (dom/props {:style {:width "100%"}})
-                  (e/for [i (Tape offset limit)]
-                    (let [item (nth filtered i nil)]
-                      (when item
-                        (dom/tr
-                          (dom/props {:style {:--order i}})
-                          (dom/td
-                            (dom/props {:title (:label item)
-                                        :style {:padding "5px 8px" :cursor "pointer" :font-size "14px"
-                                                :white-space "nowrap" :overflow "hidden" :text-overflow "ellipsis"
-                                                :background (when (= i active-idx) "var(--color-highlight)")}})
-                            (dom/text (:label item))
-                            (dom/On "mousedown"
-                              (fn [e]
-                                (.preventDefault e)
-                                (reset! !atom (:id item))
-                                (when ?!committed (reset! ?!committed (:id item)))
-                                (reset! !search nil)
-                                (reset! !open? false)
-                                (reset! !active-idx -1))
-                              nil)))))))))))))))
+          (OptionRows (mapv #(str (:label %)) filtered) active-idx
+            (fn [i]
+              (let [id (:id (nth filtered i))]
+                (reset! !atom id)
+                (when ?!committed (reset! ?!committed id)))
+              (reset! !search nil)
+              (reset! !open? false)
+              (reset! !active-idx -1))))))))
+
+(e/defn Suggest
+  "Free-text input with a filtered suggestion dropdown.
+
+   Unlike `Typeahead`, the typed text IS the value: every keystroke writes to
+   !atom, and `suggestions` is a convenience list, not the domain of legal
+   values. Use this whenever the user must be able to submit text that is not
+   in the list — a pre-prompt, a note, a new tag.
+
+   !atom        — holds the field's text; typing and picking both write it
+   suggestions  — seq of strings offered below the input, filtered by the
+                  current text (all of them while the field is empty)
+   placeholder  — input placeholder text
+   autofocus?   — when truthy, focus the input on mount (skipped on touch)
+
+   Pre:  !atom holds a string; \"\" for empty.
+   Post: !atom holds exactly what the user typed or picked.
+   Invariant: text absent from `suggestions` is preserved, never discarded or
+         snapped to a near match."
+  [!atom suggestions placeholder autofocus?]
+  (e/client
+    (let [value (e/watch !atom)
+          !open? (atom false)
+          open? (e/watch !open?)
+          !active-idx (atom -1)
+          active-idx (e/watch !active-idx)
+          coarse? (e/watch viewport/!coarse?)
+          ;; Filtered by the field's own text — there is no separate search
+          ;; state, because the text is the value.
+          filtered (when open?
+                     (vec (filter #(string/includes? (string/lower-case (str %))
+                                     (string/lower-case (str value)))
+                            suggestions)))]
+      (dom/div
+        (dom/props {:style {:position "relative"}})
+        (dom/input
+          (dom/props {:type "text" :dir "auto"
+                      :value (or value "")
+                      :placeholder placeholder
+                      :class "input"
+                      :style {:width "100%"}})
+          (e/snapshot (modal/focus-on-mount! (when (and autofocus? (not coarse?)) dom/node)))
+          (dom/On "focus" (fn [_] (reset! !open? true)
+                            (reset! !active-idx -1)) nil)
+          ;; Blur closes the dropdown and nothing else — the text is the value,
+          ;; so there is nothing uncommitted to discard.
+          (dom/On "blur" (fn [_] (reset! !open? false)
+                           (reset! !active-idx -1)) nil)
+          (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
+            (when (some? v)
+              (reset! !atom v)
+              (reset! !open? true)
+              (reset! !active-idx -1)))
+          (dom/On "keydown"
+            (fn [e]
+              (let [key (.-key e)
+                    n (count filtered)]
+                (cond
+                  (and (= key "ArrowDown") (pos? n))
+                  (do (.preventDefault e)
+                    (reset! !active-idx (mod (inc active-idx) n)))
+                  (and (= key "ArrowUp") (pos? n))
+                  (do (.preventDefault e)
+                    (reset! !active-idx (mod (dec active-idx) n)))
+                  (and (= key "Enter") (>= active-idx 0))
+                  (do (.preventDefault e)
+                    (reset! !atom (nth filtered active-idx))
+                    (reset! !open? false)
+                    (reset! !active-idx -1))
+                  (= key "Escape")
+                  (do (reset! !open? false)
+                    (reset! !active-idx -1)))))
+            nil))
+        (when (seq filtered)
+          (OptionRows (mapv str filtered) active-idx
+            (fn [i]
+              (reset! !atom (nth filtered i))
+              (reset! !open? false)
+              (reset! !active-idx -1))))))))
