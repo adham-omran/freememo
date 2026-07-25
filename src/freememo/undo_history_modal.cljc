@@ -24,14 +24,27 @@
 ;; ---------------------------------------------------------------------------
 
 #?(:clj
-   (defn- action-label [action-type refs]
-     (case action-type
-       "delete-card"        "Deleted a card"
-       "bulk-delete-cards"  (str "Deleted " (count refs) " cards")
-       "remove-pin"         "Removed a pin"
-       "reset-prompt"       "Reset a prompt"
-       "delete-document"    "Deleted a document"
-       "Action")))
+   (defn- action-label
+     "One row's description. EVERY undo_log action_type must appear here: the
+      fallback is indistinguishable from any other row, so a missing branch makes
+      the history useless for the actions it omits — which is what the KG rejects,
+      absent until now, looked like.
+      Pre:  action-type is one of undo_log's CHECK values.
+      Post: a phrase naming what happened, using the verb the user clicked."
+     [action-type refs]
+     (let [n (count refs)
+           plural (fn [word] (str n " " word (when (not= 1 n) "s")))]
+       (case action-type
+         "delete-card"        "Deleted a card"
+         "bulk-delete-cards"  (str "Deleted " (plural "card"))
+         "remove-pin"         "Removed a pin"
+         "reset-prompt"       "Reset a prompt"
+         "delete-document"    "Deleted a document"
+         "move-topic"         "Moved a topic"
+         "reject-question"    "Rejected a question"
+         "reject-fact"        "Rejected a fact"
+         "bulk-reject-facts"  (str "Deleted " (plural "fact"))
+         "Action"))))
 
 #?(:clj
    (defn- format-ts [ts]
