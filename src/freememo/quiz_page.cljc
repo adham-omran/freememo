@@ -293,9 +293,10 @@
                 (dom/On "click" (fn [_] (finish!)) nil)))
             (dom/h3 (dom/props {:style {:font-size "16px" :margin "14px 0"}})
               (dom/text (str (:question qdata))))
-            ;; Curation bar: pre-answer it can skip; after grading Next already
-            ;; advances, so Suspend stays in place (advance! nil).
-            (curate/CurationBar user-id qdata (when (nil? feedback) advance!) !editing)
+            ;; One advance for both states: it clears the feedback pane and steps the
+            ;; index, or finishes on the last question, so suspending after grading
+            ;; moves on exactly as Next would.
+            (curate/CurationBar user-id qdata advance! !editing)
             (if (nil? feedback)
               (dom/div
                 ;; Forms5: Input! (tracked textarea) + Button! (tracked submit),
@@ -570,19 +571,35 @@
           (let [qid (first queue)
                 remaining (count queue)
                 qdata (e/server (quiz-question* kg-bump user-id qid))
-                ;; A skip drops the card without counting it and without touching
-                ;; its schedule — Suspend & Skip is not an attempt.
-                advance! (fn []
-                           (reset! !feedback nil)
-                           (reset! !draft "")
-                           (swap! !queue (fn [q] (into [] (rest q)))))]
+                ;; Every way out of the current card goes through here, so the drop
+                ;; and the answer-box reset cannot drift between them.
+                ;; `counted?` — the learner answered it, so it belongs in the
+                ;; sitting's tally; a skip did not and must not inflate it.
+                ;; `requeue?` — bring it back later today (FSRS learning steps).
+                leave-card! (fn [counted? requeue?]
+                              (let [head (first @!queue)]
+                                (when counted? (swap! !reviewed inc))
+                                (reset! !feedback nil)
+                                (reset! !draft "")
+                                (swap! !queue
+                                  (fn [q]
+                                    (let [rest-q (into [] (rest q))]
+                                      (if requeue? (conj rest-q head) rest-q))))))
+                ;; Unanswered: no tally, no return.
+                skip! (fn [] (leave-card! false false))
+                ;; Answered, then suspended: the grade counted, but a suspended card
+                ;; must never be re-enqueued or it would reappear immediately.
+                leave-suspended! (fn [] (leave-card! true false))]
             (dom/div
               (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"
                                   :margin "10px 0"}})
               (dom/text (str remaining " due · " reviewed " reviewed")))
             (dom/h3 (dom/props {:style {:font-size "16px" :margin "14px 0"}})
               (dom/text (str (:question qdata))))
-            (curate/CurationBar user-id qdata (when (nil? feedback) advance!) !editing)
+            ;; Pre-answer a suspend is a skip; post-answer the grade already counted,
+            ;; so it leaves as a completed review that will not come back.
+            (curate/CurationBar user-id qdata
+              (if (nil? feedback) skip! leave-suspended!) !editing)
             (if (nil? feedback)
               (dom/div
                 ;; Forms5: Input! (tracked textarea) + Button! (tracked submit),
@@ -623,13 +640,8 @@
                   (dom/text "Next")
                   (dom/On "click"
                     (fn [_]
-                      (let [again-today? (get-in feedback [:schedule :due-today?])]
-                        (swap! !reviewed inc)
-                        (reset! !feedback nil)
-                        (reset! !draft "")
-                        (swap! !queue (fn [q]
-                                        (let [rest-q (into [] (rest q))]
-                                          (if again-today? (conj rest-q qid) rest-q))))))
+                      (leave-card! true
+                        (boolean (get-in feedback [:schedule :due-today?]))))
                     nil))))
             ;; Sibling of the answer/feedback `if` — must mount for the session.
             (fb/EntityCardPopover user-id !entity-card entity-card)))))))
