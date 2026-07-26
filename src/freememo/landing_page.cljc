@@ -1,44 +1,74 @@
 (ns freememo.landing-page
   "Public landing page for unauthenticated visitors. Multi-section page:
-   hero → annotated screenshot → 4-step flow → objection rebuttal →
-   feature grid → FAQ → early-user pact → footer."
+   hero → three-loop diagram → objection rebuttal → feature grid → FAQ →
+   early-user pact → footer.
+
+   The page's core claim is that FreeMemo runs three review systems, one per
+   kind of knowledge — reading on a priority queue, questions on FSRS-6, cards
+   on Anki's own scheduler. Every string here must trace to a shipped
+   capability; see plans/reposition-landing-copy-three-loops.md."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]))
 
-(def callouts
-  [["1" "PDF viewer with selectable text"        {:top "50%" :left "22%"}]
-   ["2" "Generated cards from the current page" {:top "77%" :left "61%"}]
-   ["3" "Cloze syntax with {{c1::deletions}}"   {:top "90%" :left "22%"}]
-   ["4" "One-click Anki sync"                   {:top "77%" :left "91%"}]])
-
-(def flow-steps
-  [["1" "Import"  "Drop in a PDF, EPUB, or paste a URL."]
-   ["2" "Extract" "OCR each page, then generate Q&A or cloze cards from real paragraphs."]
-   ["3" "Review"  "Edit every card before it syncs. Reject the bad ones."]
-   ["4" "Sync"    "One click pushes approved cards into your Anki collection."]])
+(def loops
+  "The three review systems, in the order material moves through them.
+   Each entry is [number name scheduler steps]. `scheduler` names the algorithm
+   that owns that loop's queue — the evidence the whole page rests on."
+  [["1" "Read"
+    "Your own priority queue"
+    ["Import a PDF, an EPUB, an article, a score, a codebase, or photos you take."
+     "Read a page at a time. Select a passage and extract it into its own topic."
+     "A Socratic tutor asks about the page you're on instead of answering for you."
+     "Due date decides what's in today's queue; priority decides the order."]]
+   ["2" "Quiz"
+    "FSRS-6, the modern spaced-repetition scheduler"
+    ["Distill a document into a graph of facts, curated by exception rather than one by one."
+     "Every fact becomes an atomic question, generated for you."
+     "Answer in prose. The model grades it ✓ Correct, ◐ Partial, or ✗ Incorrect and names the facts you missed."
+     "Or sit a timed exam: forward-only, graded at the end."]]
+   ["3" "Sync"
+    "Anki's scheduler, once the cards land"
+    ["Generate basic, cloze, or overlapping-cloze cards from the page you just read."
+     "Mask an image for occlusion, or pair a bar of notation with the audio that plays it."
+     "Edit or reject every card before it leaves."
+     "One click pushes them to your own Anki collection. Edits you make there pull back, with a diff."]]])
 
 (def features
-  [["PDF + EPUB import" "Upload books, papers, and articles. Web URLs and Wikipedia work too."]
-   ["Basic and Cloze cards" "Pick the format that fits the material. Mix both inside one source."]
-   ["Page-anchored context" "Generation reads one page at a time, so cards stay specific instead of vague."]
-   ["Prompt customization" "Swap in your own extraction prompt per card type if the defaults aren't sharp enough."]
-   ["Anki sync" "One-click push to your local Anki via AnkiConnect. Updates flow back too."]
-   ["Search across your library" "Find a card by its source paragraph, not just its front."]])
+  [["Import what you actually read"
+    "PDFs, EPUBs, HTML, Markdown, web articles, and pasted text. Wikipedia gets its own cleaner extraction."]
+   ["Zotero, without the export dance"
+    "Pull a PDF and its citation metadata straight from your local library. Zotero data goes to your browser directly — never through our server."]
+   ["Live Documents"
+    "A PDF you keep adding to. Take or upload photos, rotate and crop each one, append them as pages. HEIC converts automatically."]
+   ["Codebases as course material"
+    "Upload a Clojure repo as a .zip. FreeMemo analyzes the sources into a topic tree and a fact graph you can quiz against. Clojure-only for now; the code is read, never run."]
+   ["Sheet music and its recording"
+    "Score import pairs a notation PDF with an audio file. Drag on the waveform, box the matching bars, get audio ↔ notation cards."]
+   ["Spoken material"
+    "Import audio and transcribe it into text you can read, extract from, and turn into cards like anything else."]
+   ["Compare models before trusting one"
+    "Run the same page through two card models, or two OCR models, side by side — then keep the better set."]
+   ["Find the paragraph, not just the card"
+    "Full-text search across every topic, with card text filtered separately in the Library. Each card links back to the page it came from."]
+   ["Built to be driven"
+    "A Cmd/Ctrl-K palette reaches every action, shortcuts cover scan, extract, generate, and push, and an action history undoes what you didn't mean."]])
 
 (def faq-items
   [["What does it cost?"
-    "The app is free. Card generation, OCR, and transcription use OpenRouter — via hosted credits, or your own OpenRouter key when self-hosting. Reading, reviewing, editing, and Anki sync never touch a paid API."]
+    "The app is free. The steps that call a model spend credits: OCR, card generation, transcription, fact distillation, and grading a quiz answer. Reading, extracting, editing, reviewing, and Anki sync never touch a paid API. Credits are hosted, or you set your own OpenRouter key when self-hosting."]
    ["Where does my reading go?"
-    "PDFs, EPUBs, and extracted text live on the FreeMemo server, tied to your account. Cards stay in your browser until you push them to your own Anki collection."]
+    "PDFs, EPUBs, extracted text, and your cards all live on the FreeMemo server, tied to your account. Anki sync pushes copies into your local collection over AnkiConnect. Zotero imports are the exception: they travel from Zotero straight to your browser and never reach our server."]
    ["Will my cards work in regular Anki?"
-    "Yes. Basic cards map to Anki's Basic note type. Cloze cards use Anki's standard {{c1::}} syntax. Sync runs over AnkiConnect, so any standard Anki setup with the AnkiConnect plugin works."]
+    "Yes. FreeMemo installs and owns its own note types — FreeMemo Basic, FreeMemo Cloze, FreeMemo Overlapping Cloze, FreeMemo IO for image occlusion, and FreeMemo Score — so there is nothing for you to map. Cloze cards use Anki's standard {{c1::}} syntax. Sync runs over AnkiConnect, so any standard Anki with the AnkiConnect plugin works."]
+   ["Do quiz questions go to Anki too?"
+    "No, and that's the point. Cards go to Anki and Anki schedules them. Quiz questions stay in FreeMemo on their own FSRS-6 schedule, because grading a prose answer needs the model. Your reading queue is FreeMemo's as well. Three loops, three schedules."]
    ["What can I import?"
-    "PDFs, EPUBs, and web articles via URL. Wikipedia is supported as a special case with cleaner extraction."]
+    "PDFs, EPUBs, HTML and Markdown files, web articles by URL, Wikipedia (with cleaner extraction), pasted text, photos from your camera or library, audio for transcription, sheet music paired with a recording, PDFs from your Zotero library, and Clojure code repositories as a .zip."]
    ["Can I run it offline or self-host?"
     [{:t "Self-host, yes — the "}
      {:t "codebase" :href "https://github.com/adham-omran/freememo"}
-     {:t " is runnable locally (Postgres + JVM), so your reading and cards can live entirely on your own machine. Fully offline, no — OCR and card generation call the OpenRouter API, so those steps need an internet connection regardless of where the server runs."}]]
+     {:t " is runnable locally (Postgres + JVM), so your reading and cards can live entirely on your own machine. Fully offline, no — OCR, card generation, transcription, distillation, and quiz grading all call the OpenRouter API, so those steps need an internet connection regardless of where the server runs."}]]
    ["What does \"pre-production\" actually mean for me?"
     "You're an early user. That means direct access to the team and your feedback shapes the product. The flip side: no SLA, no uptime guarantee, no backup warranty. Export your cards regularly if they matter to you."]])
 
@@ -103,10 +133,10 @@
           (dom/text auth-error)))
       (dom/h1
         (dom/props {:class "landing-headline"})
-        (dom/text "Read, Extract, Remember."))
+        (dom/text "Read it once. Three systems make sure it sticks."))
       (dom/p
         (dom/props {:class "landing-sub"})
-        (dom/text "Turn PDFs, electronic books, and articles into Anki cards you'll actually remember."))
+        (dom/text "Papers, books, scores, codebases, whiteboard photos. Read them incrementally, quiz yourself on what you extracted, push the cards to your own Anki."))
       (when (show-password? auth-mode)
         (LoginForm :hero))
       (dom/div
@@ -121,49 +151,31 @@
                       :class "landing-cta-secondary"})
           (dom/text "How it works ↓"))))))
 
-(e/defn ProductShot []
+(e/defn ThreeLoops []
+  ;; Carries id="how-it-works" — Hero's secondary CTA anchors to it. Renaming
+  ;; the id here requires updating that href.
   (e/client
     (dom/section
-      (dom/props {:class "landing-product"})
-      (dom/figure
-        (dom/props {:class "landing-product-figure"})
-        (dom/div
-          (dom/props {:class "landing-product-frame"})
-          (dom/img
-            (dom/props {:class "landing-screenshot"
-                        :src "/freememo/landing-hero.png"
-                        :alt "FreeMemo workspace: PDF, extracted text, and generated flashcards"}))
-          (e/for-by first [c callouts]
-            (let [[n _label pos] c]
-              (dom/span
-                (dom/props {:class "landing-pin"
-                            :style pos})
-                (dom/text n)))))
-        (dom/ol
-          (dom/props {:class "landing-legend"})
-          (e/for-by first [c callouts]
-            (let [[n label _pos] c]
-              (dom/li
-                (dom/props {:class "landing-legend-item"})
-                (dom/span (dom/props {:class "landing-legend-num"}) (dom/text n))
-                (dom/span (dom/text label))))))))))
-
-(e/defn HowItWorks []
-  (e/client
-    (dom/section
-      (dom/props {:id "how-it-works" :class "landing-flow"})
+      (dom/props {:id "how-it-works" :class "landing-loops"})
       (dom/h2
         (dom/props {:class "landing-section-title"})
-        (dom/text "How it works"))
+        (dom/text "Three loops, three schedules"))
+      (dom/p
+        (dom/props {:class "landing-section-lead"})
+        (dom/text "A flashcard app has one queue. FreeMemo has three, because reading, questions, and cards do not decay at the same rate and should not be scheduled by the same algorithm."))
       (dom/div
-        (dom/props {:class "landing-flow-grid"})
-        (e/for-by first [step flow-steps]
-          (let [[n title desc] step]
+        (dom/props {:class "landing-loop-grid"})
+        (e/for-by first [l loops]
+          (let [[n nm sched steps] l]
             (dom/div
-              (dom/props {:class "landing-flow-step"})
-              (dom/span (dom/props {:class "landing-step-num"}) (dom/text n))
-              (dom/h3 (dom/props {:class "landing-step-title"}) (dom/text title))
-              (dom/p (dom/props {:class "landing-step-desc"}) (dom/text desc)))))))))
+              (dom/props {:class "landing-loop-card"})
+              (dom/span (dom/props {:class "landing-loop-num"}) (dom/text n))
+              (dom/h3 (dom/props {:class "landing-loop-name"}) (dom/text nm))
+              (dom/p (dom/props {:class "landing-loop-sched"}) (dom/text sched))
+              (dom/ul
+                (dom/props {:class "landing-loop-list"})
+                (e/for-by identity [s steps]
+                  (dom/li (dom/text s)))))))))))
 
 (e/defn Objection []
   (e/client
@@ -171,10 +183,10 @@
       (dom/props {:class "landing-objection"})
       (dom/h2
         (dom/props {:class "landing-section-title"})
-        (dom/text "Why not just let an LLM dump cards into Anki?"))
+        (dom/text "Why not just have a model generate the whole deck?"))
       (dom/p
         (dom/props {:class "landing-section-lead"})
-        (dom/text "Because the dump is usually noise. Generic prompts on whole books produce vague trivia, repeated facts, and cards no one remembers a week later. The fix is structural: generation runs at page granularity, every card is human-reviewed before it syncs, and the source paragraph stays attached so you can audit what came from where."))
+        (dom/text "Because the dump is usually noise. Generic prompts on whole books produce vague trivia, repeated facts, and cards no one remembers a week later. The fix is structural: generation runs at page granularity, every card is human-reviewed before it syncs, and the source paragraph stays attached so you can audit what came from where. The same paragraph also feeds the quiz loop, where you answer in prose instead of recognising a front."))
       (dom/div
         (dom/props {:class "landing-demo"})
         (dom/div
@@ -184,22 +196,27 @@
             (dom/text "Mitochondria are membrane-bound organelles found in most eukaryotic cells. They generate most of the cell's supply of ATP through oxidative phosphorylation, a process that takes place across the inner mitochondrial membrane.")))
         (dom/div
           (dom/props {:class "landing-demo-cards"})
-          (dom/h4 (dom/props {:class "landing-demo-label"}) (dom/text "Generated cards"))
+          (dom/h4 (dom/props {:class "landing-demo-label"}) (dom/text "What it becomes"))
           (dom/article
             (dom/props {:class "demo-card"})
-            (dom/span (dom/props {:class "demo-card-tag"}) (dom/text "Basic"))
+            (dom/span (dom/props {:class "demo-card-tag"}) (dom/text "Basic → Anki"))
             (dom/p (dom/props {:class "demo-card-q"}) (dom/text "What process do mitochondria use to generate the cell's ATP?"))
             (dom/p (dom/props {:class "demo-card-a"}) (dom/text "Oxidative phosphorylation, across the inner mitochondrial membrane.")))
           (dom/article
             (dom/props {:class "demo-card"})
-            (dom/span (dom/props {:class "demo-card-tag"}) (dom/text "Cloze"))
+            (dom/span (dom/props {:class "demo-card-tag"}) (dom/text "Cloze → Anki"))
             (dom/p
               (dom/props {:class "demo-card-cloze"})
               (dom/text "Mitochondria generate ATP through ")
               (dom/span (dom/props {:class "demo-cloze-mark"}) (dom/text "{{c1::oxidative phosphorylation}}"))
               (dom/text ", across the ")
               (dom/span (dom/props {:class "demo-cloze-mark"}) (dom/text "{{c2::inner mitochondrial membrane}}"))
-              (dom/text ".")))))
+              (dom/text ".")))
+          (dom/article
+            (dom/props {:class "demo-card"})
+            (dom/span (dom/props {:class "demo-card-tag"}) (dom/text "Quiz → stays here"))
+            (dom/p (dom/props {:class "demo-card-q"}) (dom/text "Where in the mitochondrion does ATP synthesis take place, and by what process?"))
+            (dom/p (dom/props {:class "demo-card-a"}) (dom/text "◐ Partial — you named oxidative phosphorylation but not the inner mitochondrial membrane. Graded on your prose, not a self-rating.")))))
       (dom/ul
         (dom/props {:class "landing-objection-list"})
         (dom/li
@@ -306,8 +323,7 @@
       (dom/main
         (dom/props {:class "landing-main"})
         (Hero auth-error auth-mode)
-        (ProductShot)
-        (HowItWorks)
+        (ThreeLoops)
         (Objection)
         (Features)
         (FAQ)

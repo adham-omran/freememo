@@ -1,6 +1,6 @@
 # FreeMemo
 
-Incremental reading with AI-generated flashcards. Import PDFs, EPUBs, and web articles, extract key concepts into reviewable cards, and sync with Anki.
+Three review systems over what you read: a priority queue for incremental reading, FSRS-6 for LLM-graded quiz questions, and your own Anki for flashcards. Import PDFs, EPUBs, web articles, scores, photos, and code repositories; extract, distill, and card them.
 
 **Try it at [freememo.net](https://freememo.net)** — no setup required. Or self-host using the instructions below.
 

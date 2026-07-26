@@ -118,7 +118,7 @@
       (dom/p
         (dom/props {:style {:font-size "15px" :color "var(--color-text-secondary)"
                             :margin-bottom "28px"}})
-        (dom/text "FreeMemo turns your reading into Anki cards. Here's how to use it, feature by feature."))
+        (dom/text "FreeMemo runs three review systems over what you read: a priority queue for reading, FSRS-6 for quiz questions, and your own Anki for cards. Here's how to use it, feature by feature."))
       (e/for-by :title [wf workflows]
         (dom/section
           (dom/props {:style {:margin-bottom "28px"}})
