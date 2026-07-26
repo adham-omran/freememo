@@ -1,8 +1,11 @@
 (ns dev ; jetty 10+ – the default
   (:require
-   freememo.main
+   ;; CLJ: freememo.main and dev-metadata are the Electric-heavy namespaces —
+   ;; they are NOT required here, so this ns compiles cheaply on whichever
+   ;; thread loads it. `load-app-namespaces!` pulls them in on a big stack.
+   #?(:cljs freememo.main)
    [freememo.logging :as logging]
-   #?(:clj dev-metadata)
+   #?(:clj dev-stack)
 
    #?(:clj [shadow.cljs.devtools.api :as shadow-cljs-compiler])
    #?(:clj [shadow.cljs.devtools.server :as shadow-cljs-compiler-server])
@@ -115,10 +118,24 @@
              server)
          (recur (inc port))))))
 
+#?(:clj
+   (defn load-app-namespaces!
+     "Compile `freememo.main` and `dev-metadata` — the Electric-heavy half of the
+      dev server — on a thread with a stack big enough for the macroexpander.
+
+      Pre: RT initialization has finished, so this may NOT be called from
+      `user.clj` (see `dev-stack/call-on-big-stack`).
+      Post: both namespaces are loaded; `resolve` on their vars succeeds."
+     []
+     (dev-stack/call-on-big-stack #(require 'freememo.main 'dev-metadata))))
+
 #?(:clj ; server entrypoint
    (defn -main [& args]
      (logging/init!)
      (log/info "Starting Electric compiler and server...")
+     (load-app-namespaces!)
+     (def electric-boot (requiring-resolve 'freememo.main/electric-boot))
+     (def metadata-navigator-start! (requiring-resolve 'dev-metadata/start!))
 
      ;; Initialize database
      (db/setup-schema)
@@ -139,7 +156,7 @@
                      (wrap-content-type) ; 4. boilerplate – to server assets with correct mime/type.
                      (wrap-no-store) ; 4b. dev: never cache static assets (so CSS/HTML edits show on reload)
                      (electric-ring/wrap-electric-websocket ; 3. install Electric server.
-                       (fn [ring-request] (freememo.main/electric-boot ring-request))) ; boot server-side Electric process
+                       (fn [ring-request] (electric-boot ring-request))) ; boot server-side Electric process
                      (wrap-api-routes) ; 2. API routes
                      (wrap-multipart-params) ; 1c. parse multipart form data
                      (wrap-route-body-size) ; 1b. Reject chunked + cap Content-Length (100 MB uploads, 10 MB other /api/*)
@@ -158,7 +175,22 @@
      (log/info (str "👉 http://0.0.0.0:" http-port))
 
      ;; Metadata navigator sits one port above the app (PORT+1).
-     (dev-metadata/start! (inc http-port))))
+     (metadata-navigator-start! (inc http-port))))
+
+#?(:clj
+   (defn reload!
+     "Recompile `ns-sym` and its transitive requires on a big-stack thread.
+
+      nREPL session threads get the JVM's default 1 MB stack and expose no way
+      to change it (`nrepl.SessionThread` calls `Thread.<init>()`), so a bare
+      `(require 'freememo.main :reload-all)` from the editor can blow the stack
+      inside Electric's macroexpander. This routes the reload through
+      `dev-stack/call-on-big-stack` instead.
+
+      Pre: `ns-sym` names a loadable namespace.
+      Post: `ns-sym` and everything it requires have been recompiled."
+     ([] (reload! 'freememo.main))
+     ([ns-sym] (dev-stack/call-on-big-stack #(require ns-sym :reload-all)))))
 
 (declare browser-process)
 #?(:cljs ; client entrypoint
