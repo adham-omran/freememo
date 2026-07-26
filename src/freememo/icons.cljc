@@ -103,6 +103,11 @@
     [:circle {:cx "6" :cy "18" :r "3"}]
     [:circle {:cx "18" :cy "16" :r "3"}]]
 
+   ;; Lucide `video` — the Import tile and the video kind badge.
+   :video
+   [[:path {:d "m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"}]
+    [:rect {:x "2" :y "6" :width "14" :height "12" :rx "2"}]]
+
    :rect-select
    [[:path {:d "M5 3a2 2 0 0 0-2 2"}]
     [:path {:d "M19 3a2 2 0 0 1 2 2"}]

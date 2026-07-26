@@ -7,6 +7,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.quota :as quota])
+   #?(:clj [freememo.storage-meter :as meter])
    #?(:clj [freememo.user-state :as us])))
 
 ;; Server-only wrappers — visible to both compilers, plain CLJ body.
@@ -29,6 +30,19 @@
   #?(:clj (format "%.0f" (double (or pct 0)))
      :cljs ""))
 
+(defn storage-rate-label*
+  "The storage price, or nil when metering is off (self-host, or no rate
+   configured). Formatted by `storage-meter`, which owns the number — the
+   Credits panel renders the same string.
+
+   Takes `_refresh` like every other wrapper here. The value is boot-constant
+   (config.edn is read once), so the argument buys no reactivity — it exists
+   because a zero-arity server call in this position has no reactive input for
+   Electric to key the node on."
+  [_refresh]
+  #?(:clj (meter/storage-rate-label)
+     :cljs nil))
+
 (e/defn StorageSection [user-id]
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
@@ -38,6 +52,7 @@
           used-mb (e/server (format-mb* refresh usage))
           cap-mb (e/server (format-mb* refresh cap))
           pct-str (e/server (format-pct* refresh pct))
+          rate-label (e/server (storage-rate-label* refresh))
           bar-color (cond (>= pct 100) "var(--color-danger)"
                           (>= pct 80)  "var(--color-warning, #c98a00)"
                           :else        "var(--color-primary-text)")
@@ -60,6 +75,26 @@
                                 :width (str bar-width-pct "%")
                                 :background bar-color
                                 :transition "width 0.2s"}})))
+        ;; The rate, when metering is on. Shown against the usage figure above
+        ;; so the two together answer "what is this costing me" without the user
+        ;; having to multiply in their head on another tab.
+        (when rate-label
+          (dom/div
+            (dom/props {:style {:display "flex" :align-items "center" :justify-content "space-between"
+                                :padding "8px 10px" :margin-bottom "8px"
+                                :background "var(--color-bg-subtle)"
+                                :border-radius "var(--radius-md)" :font-size "13px"}})
+            (dom/span
+              (dom/props {:style {:color "var(--color-text-label)"}})
+              (dom/text "Storage rate"))
+            (dom/span
+              (dom/props {:style {:font-weight "600" :color "var(--color-text-primary)"}})
+              (dom/text rate-label))))
         (dom/div
           (dom/props {:class "hint"})
-          (dom/text "Storage is consumed by uploaded PDFs, EPUBs, and audio files. Delete documents from the Library to free space."))))))
+          (dom/text (str "Storage is consumed by uploaded PDFs, EPUBs, audio files, and videos. "
+                      (if rate-label
+                        (str "Stored videos are billed at this rate for as long as they are kept; "
+                          "everything else is free. ")
+                        "")
+                      "Delete documents from the Library to free space.")))))))

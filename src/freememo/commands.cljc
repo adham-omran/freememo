@@ -188,6 +188,7 @@
     {:import-link    {:label "Import from link…" :class :nav}
      :import-upload  {:label "Upload file…" :class :nav}
      :import-audio   {:label "Import audio…" :class :nav}
+     :import-video   {:label "Import video…" :class :nav}
      :import-score   {:label "Import score…" :class :nav}
      :import-paste   {:label "Paste content…" :class :nav}
      :new-topic      {:label "New topic…" :class :nav}
@@ -219,6 +220,21 @@
                        :table #{:settings} :views #{:settings-refresh}}
      :transcribe      {:label "Transcribe audio" :class :mutation :palette-hidden true
                        :table #{:topics} :views #{:refresh}}
+     ;; Video pipeline: ffmpeg probe/extract + Whisper. Bumped at BOTH ends of
+     ;; the run so the in-flight indicator appears and clears; :refresh carries
+     ;; the transcript and duration back to the viewer.
+     :process-video   {:label "Process video" :class :mutation :palette-hidden true
+                       :table #{:topics :topic_files :topic_videos :video_transcripts}
+                       :views #{:refresh}}
+     ;; Video time-range extract. Same channel as :extract — it creates a child
+     ;; topic, so the tree is what changes.
+     :extract-video   {:label "Extract video range" :class :mutation :palette-hidden true
+                       :table #{:topics :video_segments} :views #{:tree-mutations}}
+     :save-video-position {:label "Save video position" :class :mutation :palette-hidden true
+                           ;; No :views — the position is written on pause and
+                           ;; unmount and read only on the next mount. Bumping
+                           ;; here would re-render the player mid-playback.
+                           :table #{:topic_videos} :views #{}}
      :push-biblio     {:label "Push bibliography to children" :class :mutation :palette-hidden true
                        :table #{:sources :topics} :views #{:refresh}}
      :refetch-biblio  {:label "Refetch bibliography" :class :mutation :palette-hidden true

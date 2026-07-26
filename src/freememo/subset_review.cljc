@@ -20,6 +20,8 @@
     ("web" "wikipedia") ["Web" "var(--color-badge-web)"]
     "markdown" ["MD" "var(--color-badge-web)"]
     "audio" ["Audio" "var(--color-badge-web)"]
+    "video" ["Video" "var(--color-badge-video)"]
+    "video-playlist" ["Playlist" "var(--color-badge-video)"]
     ["Topic" "var(--color-badge-epub)"]))
 
 ;; Bottom bar — Next button with split behavior (outstanding vs non-outstanding)

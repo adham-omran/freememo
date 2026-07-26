@@ -9,6 +9,7 @@
    [freememo.navigation :as nav]
    [freememo.command-bus :as bus]
    [freememo.import-modal :refer [ImportModal]]
+   [freememo.video-import-modal :refer [VideoImportModal]]
    [freememo.zotero-picker-modal :refer [ZoteroPickerModal]]
    [freememo.client-errors :as ce]))
 
@@ -42,6 +43,7 @@
    (do (bus/register-handler! :import-link (open-import! :link))
        (bus/register-handler! :import-upload (open-import! :upload))
        (bus/register-handler! :import-audio (open-import! :audio))
+       (bus/register-handler! :import-video (open-import! :video))
        (bus/register-handler! :import-score (open-import! :score))
        (bus/register-handler! :import-paste (open-import! :paste))
        (bus/register-handler! :new-topic (open-import! :new-topic))
@@ -81,6 +83,7 @@
     (let [!show-link (atom false)
           !show-upload (atom false)
           !show-audio (atom false)
+          !show-video (atom false)
           !show-score (atom false)
           !show-paste (atom false)
           !show-topic (atom false)
@@ -93,6 +96,7 @@
           :link (reset! !show-link true)
           :upload (reset! !show-upload true)
           :audio (reset! !show-audio true)
+          :video (reset! !show-video true)
           :score (reset! !show-score true)
           :paste (reset! !show-paste true)
           :new-topic (reset! !show-topic true)
@@ -120,6 +124,12 @@
             (ImportCard :mic "Audio" "Upload an audio file to transcribe" (fn [] (reset! !show-audio true)))
             (when show-audio
               (ImportModal !show-audio user-id :audio navigate!)))
+
+          (let [show-video (e/watch !show-video)]
+            (ImportCard :video "Video" "Upload one video or several as a playlist — transcribed after upload"
+              (fn [] (reset! !show-video true)))
+            (when show-video
+              (VideoImportModal !show-video user-id navigate!)))
 
           (let [show-score (e/watch !show-score)]
             (ImportCard :music "Score" "Sheet music PDF + recording — audio ↔ notation cards"

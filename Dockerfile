@@ -28,8 +28,12 @@ WORKDIR /app
 # lives in libgvplugin-neato-layout8 (neato/fdp/sfdp family). Without it sfdp
 # exits with "no layout engine support for sfdp", so it MUST be installed
 # explicitly (it is not a graphviz dependency or recommend).
+# ffmpeg (which also provides ffprobe) backs the video pipeline: probe duration,
+# extract a 32 kbps mono MP3, and split it into Whisper-sized chunks
+# (freememo.ffmpeg / plans/incremental-video.md §4.4). Without it a video still
+# uploads and plays; it just gets no duration, waveform, or transcript.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends imagemagick libheif1 curl graphviz libgvplugin-neato-layout8 \
+ && apt-get install -y --no-install-recommends imagemagick libheif1 curl graphviz libgvplugin-neato-layout8 ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/target/app.jar app.jar
 

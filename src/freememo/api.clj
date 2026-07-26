@@ -24,6 +24,7 @@
    [freememo.wayl :as wayl]
    [freememo.geo :as geo]
    [freememo.config :as config]
+   [freememo.video-http :as video-http]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
    [clojure.string :as str]
@@ -659,10 +660,17 @@
      :headers {"Location" "/"}
      :body ""}))
 
+(def ^:private audio-role-kinds
+  "Topic kinds whose audio lives under role='audio' rather than role='main'.
+   `score` owns a PDF at 'main' and its recording at 'audio'; `video` owns
+   nothing at 'main' (the video is a large object) and the ffmpeg-extracted MP3
+   at 'audio'. Every other kind keeps a single 'main' blob."
+  #{"score" "video"})
+
 (defn get-audio-handler
   "Serve an audio topic's file by topic ID. Unlike PDF, the Content-Type is read
-   from topic_files.mime_type since audio formats vary. Score topics keep their
-   recording under role='audio' (role='main' is the PDF)."
+   from topic_files.mime_type since audio formats vary. Score and video topics
+   keep their audio under role='audio'."
   [request]
   (if-let [user-id (require-auth request)]
     (try
@@ -671,7 +679,7 @@
             topic (db/get-topic topic-id)]
         (if (and topic (= (:topics/user_id topic) user-id))
           (if-let [file-row (db/get-topic-file topic-id
-                              (if (= "score" (:topics/kind topic)) "audio" "main"))]
+                              (if (audio-role-kinds (:topics/kind topic)) "audio" "main"))]
             {:status 200
              :headers {"Content-Type" (or (:topic_files/mime_type file-row) "audio/mpeg")
                        "Content-Disposition" (str "inline; filename=\"" (:topics/title topic) "\"")}
@@ -889,12 +897,26 @@
    {:method :post :path "/api/append-images"    :handler #'append-images-handler    :body :upload}
    {:method :post :path "/api/heic-preview"     :handler #'heic-preview-handler     :body :upload}
    {:method :post :path "/api/upload-media"     :handler #'upload-media-handler     :body :upload}
+   ;; Video chunked upload (plans/incremental-video.md §4.3). `init`/`finalize`/
+   ;; `abort` carry only metadata, so they are :small; `chunk` IS the payload and
+   ;; is :upload — 3.1.5, the per-route cap rejects an oversized chunk before any
+   ;; handler runs, which is what lets a 700 MB file through a 100 MB door.
+   {:method :post :path "/api/video/init"       :handler #'video-http/init-handler       :body :small}
+   {:method :post :path "/api/video/chunk"      :handler #'video-http/chunk-handler      :body :upload}
+   {:method :post :path "/api/video/finalize"   :handler #'video-http/finalize-handler   :body :small}
+   {:method :post :path "/api/video/abort"      :handler #'video-http/abort-handler      :body :small}
+   {:method :post :path "/api/video/position"   :handler #'video-http/position-handler   :body :small}
    {:method :post :path "/api/save-page-text"   :handler #'save-page-text-handler   :body :small}
    {:method :post :path "/api/credits/checkout" :handler #'credits-checkout-handler :body :small}
    {:method :post :path "/api/wayl/webhook"     :handler #'wayl-webhook-handler     :body :small}
    {:method :post :path "/login"                :handler #'login-post-handler       :body :small}
    {:method :get  :pattern #"/api/pdf/\d+"      :handler #'get-pdf-handler}
    {:method :get  :pattern #"/api/audio/\d+"    :handler #'get-audio-handler}
+   {:method :get  :path    "/api/video/status"  :handler #'video-http/status-handler}
+   ;; Must follow /api/video/status — match-route takes the FIRST match, and
+   ;; #"/api/video/\d+" would not match "status" anyway, but keeping the literal
+   ;; path above the pattern makes the precedence explicit rather than incidental.
+   {:method :get  :pattern #"/api/video/\d+"    :handler #'video-http/get-video-handler}
    {:method :get  :pattern #"/api/media/\d+"    :handler #'get-media-handler}
    {:method :get  :path "/auth/google"          :handler #'google-auth-handler}
    {:method :get  :path "/auth/google/callback" :handler #'google-callback-handler}])

@@ -48,7 +48,8 @@
                pdf-root-topic (cond (= kind "pdf") topic
                                     (= kind "score") topic
                                     (and (= kind "page") (= root-kind "pdf")) (or root topic)
-                                    :else nil)]
+                                    :else nil)
+               video-row (when (= kind "video") (db/get-topic-video topic-id))]
            ;; Scalars only — TopicPage destructures this map client-side, so
            ;; every key crosses the wire on each :refresh tick. Content bodies
            ;; are fetched separately: get-topic-content* (gated off for PDFs)
@@ -59,6 +60,14 @@
             :page-number page-number
             :pdf-root-id pdf-root-id
             :is-score? (= kind "score")
+            ;; Video: three scalars read once per topic load. duration and
+            ;; last-pos come from topic_videos; has-audio? gates the waveform
+            ;; strip, which cannot render before ffmpeg has produced the MP3.
+            :is-video? (= kind "video")
+            :video-duration-ms (:duration_ms video-row)
+            :video-last-pos-ms (:last_pos_ms video-row)
+            :video-has-audio? (and (some? video-row)
+                                (db/topic-file-exists? topic-id "audio"))
             ;; Live Document: drives the viewer's add-photos affordance,
             ;; empty-state, and (via page count) post-append reload.
             :is-live? (boolean (:topics/is_live pdf-root-topic))
@@ -198,6 +207,11 @@
        ;; topic facts
        :overview overview :kind kind :pdf-root-id pdf-root-id :is-pdf? is-pdf?
        :is-score? is-score?
+       :is-video? (boolean (:is-video? overview))
+       :video-title (:title overview)
+       :video-duration-ms (:video-duration-ms overview)
+       :video-last-pos-ms (:video-last-pos-ms overview)
+       :video-has-audio? (boolean (:video-has-audio? overview))
        :is-live? (:is-live? overview) :pdf-has-file? (:pdf-has-file? overview)
        :pdf-page-count (:pdf-page-count overview) :root-topic-id root-topic-id
        :extract-status (:status overview) :static-content static-content
@@ -322,6 +336,11 @@
           !score-pages (atom {})        ;; {page {:width :height :rects [{:x :y :w :h}]}}
           !score-modal-open? (atom false)
           !score-edit (atom nil)        ;; {:group-id N} while editing a pair
+          ;; Video editor state — owned here (the stable client ancestor) so the
+          ;; player, the waveform strip, the transcript pane and the extract
+          ;; button all address the SAME element and the SAME marked range.
+          !video-el (atom nil)          ;; HTMLVideoElement — the single clock
+          !video-region (atom nil)      ;; {:start-ms N :end-ms N} or nil
           !show-bib (atom false)
           show-bib? (e/watch !show-bib)
           ;; Mobile layout: reading-mode? = phone + learn origin (distraction-free
@@ -335,4 +354,5 @@
        :effective-content-topic-id effective-content-topic-id
        :!show-bib !show-bib :show-bib? show-bib? :phone? phone? :reading-mode? reading-mode?
        :!score-region !score-region :!score-pages !score-pages
-       :!score-modal-open? !score-modal-open? :!score-edit !score-edit})))
+       :!score-modal-open? !score-modal-open? :!score-edit !score-edit
+       :!video-el !video-el :!video-region !video-region})))

@@ -105,5 +105,10 @@
               dctx/reset-split! (:reset-split! m)
               dctx/is-score? (:is-score? m) dctx/!score-region (:!score-region m)
               dctx/!score-pages (:!score-pages m) dctx/!score-modal-open? (:!score-modal-open? m)
-              dctx/!score-edit (:!score-edit m)]
+              dctx/!score-edit (:!score-edit m)
+              dctx/is-video? (:is-video? m) dctx/video-title (:video-title m)
+              dctx/video-duration-ms (:video-duration-ms m)
+              dctx/video-last-pos-ms (:video-last-pos-ms m)
+              dctx/video-has-audio? (:video-has-audio? m)
+              dctx/!video-el (:!video-el m) dctx/!video-region (:!video-region m)]
       (DocumentBody))))
