@@ -57,6 +57,7 @@
     --color-badge-epub: light-dark(#f3e8ff, #3b0764);
     --color-badge-occlusion: light-dark(#ffedd5, #7c2d12);
     --color-badge-score: light-dark(#ccfbf1, #134e4a);
+    --color-badge-video: light-dark(#fee2e2, #7f1d1d);
 
     /* Sync-source chips ([FM]/[Anki]) — reused by the diff-modal legend and
        the FM/Anki change-origin filter chips. FM tracks the diff's − (removed)

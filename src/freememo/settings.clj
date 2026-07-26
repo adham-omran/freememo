@@ -7,6 +7,7 @@
    [freememo.fsrs :as fsrs]
    [freememo.input-check :as input]
    [freememo.toasts :as toasts]
+   [freememo.transcribe-language :as tlang]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
    [clojure.string :as str]))
@@ -37,6 +38,7 @@
 (def PRE_PROMPT_HISTORY "pre_prompt_history")
 (def CARD_FONT_SIZE "card_font_size")
 (def SCAN_DPI "scan_dpi")
+(def TRANSCRIBE_LANGUAGE "transcribe_language")
 (def CARD_GEN_MAX_RETRIES "card_gen_max_retries")
 (def PROMPT_SYSTEM "prompt_system")
 (def PROMPT_OCR "prompt_ocr")
@@ -649,16 +651,30 @@
 
 ;; Right-panel active tab ("pins" | "assistant"), scoped per document like the
 ;; pane open/width state above. Missing key → "pins".
-(defn get-assistant-tab [user-id topic-id]
+(def side-panel-tabs
+  "Tabs the right side panel can persist. `transcript` only exists on video
+   topics; `right-side-panel/resolve-tab` is what enforces that, since this
+   namespace has no business knowing a topic's kind."
+  #{"pins" "assistant" "transcript"})
+
+(defn get-assistant-tab
+  "The tab the user last chose for this topic, or NIL when they never chose one.
+
+   nil rather than a \"pins\" default on purpose: the sensible default depends on
+   the topic — a video should open on its transcript, everything else on pins —
+   and that decision belongs to the caller, which knows the kind. Returning
+   \"pins\" here made the caller's no-preference branch unreachable and the
+   transcript tab never opened by default."
+  [user-id topic-id]
   (try
     (let [v (db/get-setting user-id (str "assistant_tab_" (pane-scope-id topic-id)))]
-      (if (#{"pins" "assistant"} v) v "pins"))
-    (catch Exception _ "pins")))
+      (when (side-panel-tabs v) v))
+    (catch Exception _ nil)))
 
 (defn save-assistant-tab [user-id topic-id tab]
   (try
     (db/set-setting user-id (str "assistant_tab_" (pane-scope-id topic-id))
-      (if (#{"pins" "assistant"} tab) tab "pins"))
+      (if (side-panel-tabs tab) tab "pins"))
     {:success true}
     (catch Exception e
       (tel/error! {:id ::save-assistant-tab} e)
@@ -779,6 +795,37 @@
     (catch Exception e
       (tel/error! {:id ::save-scan-dpi} e)
       {:success false :error "Failed to save scan DPI"})))
+
+;; ── Transcription language ──────────────────────────────────────────────────
+;;
+;; Whisper auto-detects the spoken language when none is given, and on short or
+;; quiet audio it gets it WRONG and then hallucinates fluent text in the language
+;; it guessed. Observed: a 10 s English screen recording came back as three
+;; Arabic segments, the last two identical. The same bytes with language="en"
+;; transcribed correctly. Auto-detect stays the default because it is right on
+;; most material; this setting is the escape hatch when it is not.
+
+;; The offered list lives in `freememo.transcribe-language` (.cljc) because the
+;; Settings picker renders it client-side. See that namespace for why.
+
+(defn get-transcribe-language
+  "The user's forced transcription language as an ISO-639-1 code, or nil for
+   auto-detect. Unknown stored values read as nil — a code the API would reject
+   must not be able to break every transcription until someone notices."
+  [user-id]
+  (let [v (some-> (db/get-setting user-id TRANSCRIBE_LANGUAGE) str/trim not-empty)]
+    (when (tlang/code? v) v)))
+
+(defn save-transcribe-language
+  "Set or clear the forced transcription language.
+   Pre:  `code` is one of `tlang/options`, or blank/nil for auto-detect.
+   Post: {:success true}; an unrecognized code is rejected rather than stored."
+  [user-id code]
+  (let [v (some-> code str str/trim not-empty)]
+    (cond
+      (nil? v) (do (db/set-setting user-id TRANSCRIBE_LANGUAGE "") {:success true})
+      (tlang/code? v) (do (db/set-setting user-id TRANSCRIBE_LANGUAGE v) {:success true})
+      :else {:success false :error (str "Unknown language code: " v)})))
 
 (defn get-card-gen-max-retries
   "Max card-generation attempts on count mismatch (1–3, default 2). All attempts

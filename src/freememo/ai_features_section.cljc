@@ -1,7 +1,12 @@
 (ns freememo.ai-features-section
   "AI Features card on the Settings page: LLM toggle, provider-key status, card
-   model, reasoning, verbosity, scan DPI, system + OCR prompts. Extracted from
-   settings_page so each e/defn stays under the JVM 64KB bytecode limit."
+   model, reasoning, verbosity, scan DPI, transcription language, system + OCR
+   prompts. Extracted from settings_page so each e/defn stays under the JVM 64KB
+   bytecode limit.
+
+   The credit balance and top-up presets are NOT here — they moved to
+   freememo.credits-section, rendered from the Account tab, because storage rent
+   spends credits whether or not AI features are enabled."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -12,79 +17,11 @@
    [freememo.card-models :as card-models]
    [freememo.commands :as commands]
    #?(:clj [freememo.ocr :as ocr])
+   [freememo.transcribe-language :as tlang]
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.config :as config])
-   #?(:clj [freememo.credits :as credits])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])))
-
-;; Defined on both platforms (per CLAUDE.md) so referencing them in e/defn
-;; bodies never causes a CLJ/CLJS frame-signal mismatch.
-#?(:cljs (defn navigate-external! [url] (when url (set! (.. js/window -location -href) url)))
-   :clj (defn navigate-external! [_url] nil))
-
-#?(:clj (defn credit-balance*
-          "Reactive wrapper — _refresh forces a re-query on :credits-refresh bump."
-          [_refresh user-id]
-          (db/get-credit-balance user-id)))
-
-(e/defn CreditsSection
-  "Official-deployment credits panel: balance + top-up presets.
-   Rendered in place of the key-status block when CREDITS_ENABLED is set (§5.8).
-   `base-url` is the public origin (derived from ring-request at Main) — used
-   for the Wayl webhook + redirection URLs so dev (localhost) and prod work
-   without a config knob. `client-country` is the ISO-3166 alpha-2 code resolved
-   from the client IP at session boot (nil = unknown → USD)."
-  [user-id base-url client-country]
-  (e/client
-    (let [credits-refresh (e/server (e/watch (us/get-atom user-id :credits-refresh)))
-          balance (e/server (credit-balance* credits-refresh user-id))
-          presets (e/server (mapv (fn [amt] {:iqd amt :usd-str (credits/iqd->usd-str amt)})
-                              (config/presets)))
-          !checkout-error (atom nil)
-          checkout-error (e/watch !checkout-error)]
-      (dom/div
-        (dom/props {:class "field"
-                    :style {:padding "14px" :background "var(--color-bg-subtle)"
-                            :border-radius "var(--radius-md)" :border "1px solid var(--color-bg-hover)"}})
-        (dom/div
-          (dom/props {:style {:display "flex" :align-items "center" :justify-content "space-between"
-                              :margin-bottom "10px"}})
-          (dom/span
-            (dom/props {:style {:font-size "13px" :font-weight "500" :color "var(--color-text-label)"}})
-            (dom/text "Credit Balance"))
-          (dom/span
-            (dom/props {:style {:font-size "16px" :font-weight "600"
-                                :color (if (and balance (> balance 0))
-                                         "var(--color-text-primary)" "var(--color-danger)")}})
-            (dom/text (str (or balance 0) " credits"))))
-
-        (dom/div (dom/props {:class "hint" :style {:margin-bottom "6px"}}) (dom/text "Top up:"))
-        (dom/div
-          (dom/props {:style {:display "flex" :gap "8px" :flex-wrap "wrap"}})
-          (e/for [{:keys [iqd usd-str]} (e/diff-by :iqd presets)]
-            (dom/button
-              (dom/props {:type "button" :class "btn btn-secondary"
-                          :style {:padding "6px 14px" :font-size "13px" :cursor "pointer"}})
-              (dom/text (str iqd " credits" (when usd-str (str " (" usd-str ")"))))
-              (let [ev (dom/On "click" identity nil)
-                    [t _] (e/Token ev)]
-                (when t
-                  (let [r (e/server (e/Offload #(credits/start-checkout! user-id iqd base-url client-country)))]
-                    (case r
-                      (if (:ok r)
-                        (do (navigate-external! (:url r)) (t))
-                        (do (reset! !checkout-error (:error r)) (t (:error r)))))))))))
-
-        (dom/div
-          (dom/props {:class "hint" :style {:margin-top "8px" :font-size "12px"
-                                            :color "var(--color-text-secondary)"}})
-          (dom/text "USD prices shown here are approximate and may be adjusted if we change AI models. The amount you pay is the credits amount shown."))
-
-        (when checkout-error
-          (dom/div
-            (dom/props {:style {:margin-top "8px" :font-size "13px" :color "var(--color-danger-text)"}})
-            (dom/text checkout-error)))))))
 
 (e/defn KgModelField
   "One per-step KG model selector. Owns its value atom + server read/save so the
@@ -148,12 +85,13 @@
           (dom/div
             (dom/props {:class "hint"})
             (dom/text (if credits-enabled?
-                        "OCR text extraction and flashcard generation. Uses platform credits — top up below."
+                        "OCR text extraction and flashcard generation. Uses platform credits — see the Account tab."
                         "OCR text extraction and flashcard generation. Requires an OpenRouter API key."))))))))
 
 (e/defn ProviderKeyStatusField
-  "Self-host mode's OpenRouter API-key status card (credits mode shows
-   CreditsSection instead — the parent picks between the two)."
+  "Self-host mode's OpenRouter API-key status card. Credits mode has no
+   provider key of its own — the platform holds it — and shows the balance in
+   the Account tab instead (freememo.credits-section)."
   [api-key-configured?]
   (e/client
     (dom/div
@@ -332,6 +270,45 @@
                   (if (:success r) (t) (t (:error r))))))))
         (dom/div (dom/props {:class "hint"})
           (dom/text "Higher quality improves text recognition but increases processing time and API cost"))))))
+
+(e/defn TranscribeLanguageField
+  "Spoken language forced on audio and video transcription, or auto-detect.
+
+   Auto-detect is Whisper's default and is right on most material, so it stays
+   the default here. It is offered as a setting because when detection is wrong
+   it does not degrade gracefully: the model commits to the language it guessed
+   and writes fluent, plausible text in it. Measured on a 10 s English screen
+   recording — three Arabic segments, two of them identical. The same bytes with
+   English selected transcribed correctly."
+  [user-id]
+  (e/client
+    (let [server-lang (e/server (or (settings/get-transcribe-language user-id) ""))
+          !lang (atom server-lang)
+          lang (e/watch !lang)]
+      (dom/div
+        (dom/props {:class "field"})
+        (dom/label (dom/props {:class "label"}) (dom/text "Transcription Language"))
+        (dom/select
+          (dom/props {:value lang :class "select"})
+          ;; tlang/options is .cljc, so these are CLIENT literals — the same
+          ;; shape as ScanDpiField above. Reading the list from the CLJ-only
+          ;; `settings` ns instead crashed the page: the peers emitted different
+          ;; frame shapes and the mismatch surfaced in runtime3/socket-transfer.
+          (e/for [[code label] (e/diff-by second tlang/options)]
+            (dom/option (dom/props {:value (or code "")}) (dom/text label)))
+          ;; A1-fallback: Forms5 has no tracked select
+          (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
+                [t ?error] (e/Token change-event)]
+            (dom/props {:disabled (some? t) :aria-busy (some? t)})
+            (when (some? change-event)
+              (reset! !lang change-event))
+            (when t
+              (let [r (e/server (e/Offload #(settings/save-transcribe-language user-id change-event)))]
+                (case r
+                  (if (:success r) (t) (t (:error r))))))))
+        (dom/div (dom/props {:class "hint"})
+          (dom/text (str "Auto-detect can pick the wrong language on short or quiet audio "
+                      "and then transcribe in it. Set the language explicitly if that happens.")))))))
 
 (e/defn AssistantPdfContextField
   "Pages before AND after the current page the Socratic assistant reads
@@ -535,7 +512,7 @@
                     (do (reset! !ocr-prompt default-ocr) (t))
                     (t (:error r))))))))))))
 
-(e/defn AIFeaturesSection [user-id enc-key base-url client-country]
+(e/defn AIFeaturesSection [user-id enc-key]
   (e/client
     (let [server-llm-enabled (e/server (settings/get-llm-enabled user-id))
           !llm-enabled (atom server-llm-enabled)
@@ -557,15 +534,16 @@
                               :margin-bottom "var(--sp-4)" :font-size "13px" :line-height "1.5"
                               :color "var(--color-text-secondary)"}})
           (dom/text (if credits-enabled?
-                      "Incremental reading and Anki sync are always free. OCR and flashcard generation spend credits — top up below."
+                      "Incremental reading and Anki sync are always free. OCR and flashcard generation spend credits — your balance and top-up are in the Account tab."
                       "Incremental reading and Anki sync are always free. AI features (OCR, flashcard generation, transcription) use OpenRouter and require an OpenRouter API key set by the operator.")))
 
         (LlmToggleField user-id credits-enabled? !llm-enabled llm-enabled)
 
         (when llm-enabled
-          ;; Credits panel (official) or provider-key status (self-host).
-          (if credits-enabled?
-            (CreditsSection user-id base-url client-country)
+          ;; Self-host only. The credits panel moved to the Account tab: storage
+          ;; rent debits credits with LLM features off, so gating the balance on
+          ;; this toggle would hide it from a user who is still being charged.
+          (when-not credits-enabled?
             (ProviderKeyStatusField api-key-configured?))
 
           (CardModelField user-id card-model-ids card-label-of)
@@ -579,6 +557,8 @@
           (VerbosityField user-id)
 
           (ScanDpiField user-id)
+
+          (TranscribeLanguageField user-id)
 
           (AssistantPdfContextField user-id)
 

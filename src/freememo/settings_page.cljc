@@ -6,6 +6,7 @@
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.util :refer [mac-platform?]]
    [freememo.storage-section :refer [StorageSection]]
+   [freememo.credits-section :refer [CreditsSection]]
    [freememo.cost-history :refer [CostHistorySection]]
    [freememo.ai-features-section :refer [AIFeaturesSection]]
    [freememo.zotero-client :as zc]
@@ -436,6 +437,12 @@
         ;; Email updates toggle
             (EmailUpdatesField user-id)
 
+        ;; Credit balance + top-up (official deployments only). Sits here rather
+        ;; than in AI Features because storage rent spends credits with LLM
+        ;; features off — see freememo.credits-section.
+            (when (e/server (config/credits-enabled?))
+              (CreditsSection user-id base-url client-country))
+
         ;; Storage usage (formerly its own tab; now part of Account)
             (StorageSection user-id)
 
@@ -454,7 +461,7 @@
           (dom/div
             (dom/props {:id "settings-ai"
                         :style (tab-style active "settings-ai")})
-            (AIFeaturesSection user-id enc-key base-url client-country))
+            (AIFeaturesSection user-id enc-key))
 
       ;; ── Appearance section ──
           (dom/div

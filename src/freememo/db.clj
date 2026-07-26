@@ -13,6 +13,7 @@
    [freememo.csl-util :as csl]
    [freememo.html-cleaner :as cleaner]
    [freememo.input-check :as input]
+   [freememo.largeobj :as lo]
    [freememo.quota :as quota]
    [freememo.config :as config]
    [freememo.fsrs :as fsrs]
@@ -28,6 +29,9 @@
 (declare backfill-pdf-sources!)
 (declare run-grandfather-migration!)
 (declare start-purge-scheduler!)
+;; Defined in the Incremental Video section; called from complete-credit-order!,
+;; which sits far above it.
+(declare promote-to-paid-storage-tier!)
 
 ;; ---------------------------------------------------------------------------
 ;; Connection configuration
@@ -832,6 +836,116 @@
     )"])
 )
 
+(defn- setup-schema-video!
+  "Incremental Video (plans/incremental-video.md §4.1): the large-object anchor,
+   the reference transcript, extract ranges, chunked-upload sessions, and the
+   two storage-metering columns on users.
+
+   Video bytes live in a Postgres large object, NOT in topic_files — `bytea`
+   caps at 1 GB and cannot be range-read. topic_files still holds the
+   ffmpeg-extracted MP3 under role='audio', which is small and read whole."
+  []
+  ;; One row per kind='video' topic. lo_oid is the large object; usage_bytes
+  ;; counts byte_size, so the two must be written and cleared together.
+  ;; last_pos_ms is the resume position (§4.1 Q2) — a column rather than a
+  ;; settings key so it lives and dies with the video.
+  (let [video-table-existed?
+        (some? (jdbc/execute-one! ds
+                 ["SELECT 1 FROM information_schema.tables
+                   WHERE table_name = 'topic_videos' AND table_schema = 'public'"]))]
+    (jdbc/execute! ds ["
+      CREATE TABLE IF NOT EXISTS topic_videos (
+        topic_id INTEGER PRIMARY KEY REFERENCES topics(id) ON DELETE CASCADE,
+        lo_oid OID NOT NULL,
+        byte_size BIGINT NOT NULL,
+        mime_type TEXT NOT NULL,
+        duration_ms INTEGER,
+        last_pos_ms INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )"])
+    (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_videos_oid ON topic_videos(lo_oid)"])
+
+    ;; §4.2 2.1 — usage_bytes is now SUM(topic_files.file_size) +
+    ;; SUM(topic_videos.byte_size). Recomputed once, at the moment the table is
+    ;; introduced: the video term is provably 0 then, so this only repairs
+    ;; pre-existing drift, and every later mutation maintains the invariant.
+    (when-not video-table-existed?
+      (tel/log! :info "Recomputing users.usage_bytes over topic_files + topic_videos")
+      (jdbc/execute! ds
+        ["UPDATE users SET usage_bytes = COALESCE(
+            (SELECT SUM(tf.file_size)
+             FROM topic_files tf JOIN topics t ON tf.topic_id = t.id
+             WHERE t.user_id = users.id), 0)
+          + COALESCE(
+            (SELECT SUM(tv.byte_size)
+             FROM topic_videos tv JOIN topics t ON tv.topic_id = t.id
+             WHERE t.user_id = users.id), 0)"])))
+
+  ;; Reference transcript — one row per Whisper segment (§4.1 1.2 / decision B1).
+  ;; `ord` is the position within the whole video after chunk offsets are folded
+  ;; in, so (topic_id, ord) is the natural read order and the overlap query's
+  ;; index. Word-level timestamps would be a second table; the shape admits it.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS video_transcripts (
+      id BIGSERIAL PRIMARY KEY,
+      topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      ord INTEGER NOT NULL,
+      start_ms INTEGER NOT NULL,
+      end_ms INTEGER NOT NULL,
+      text TEXT NOT NULL
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_video_transcripts_topic_ord
+                      ON video_transcripts(topic_id, ord)"])
+
+  ;; Extract ranges (§4.1 1.3 / decision C3). topic_id is the EXTRACT topic, not
+  ;; the video — one range per extract. The range is provenance: the extract's
+  ;; text was copied in at creation and is editable thereafter, so the range
+  ;; never rewrites content (decision "derivation is initial-only").
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS video_segments (
+      id BIGSERIAL PRIMARY KEY,
+      topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      start_ms INTEGER NOT NULL,
+      end_ms INTEGER NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_video_segments_topic
+                      ON video_segments(topic_id)"])
+
+  ;; Chunked-upload sessions (§4.3). The large object is created — and the
+  ;; quota reserved — at init, so an abandoned session leaks BOTH until the
+  ;; sweep reaps it (§4.3 3.3). received_bytes is the resume cursor (§4.3 3.2).
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS video_upload_sessions (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      lo_oid OID NOT NULL,
+      total_bytes BIGINT NOT NULL,
+      received_bytes BIGINT NOT NULL DEFAULT 0,
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      parent_id INTEGER REFERENCES topics(id) ON DELETE CASCADE,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_video_upload_sessions_updated
+                      ON video_upload_sessions(updated_at)"])
+
+  ;; §4.1 1.4 — storage metering. last_metered_at seeds to now() for existing
+  ;; users so the first accrual bills from migration forward, never retroactively.
+  ;; storage_grace_started_at is NULL except while a zero-balance user's bytes
+  ;; are counting down to reclamation.
+  (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS last_metered_at TIMESTAMP"])
+  (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_grace_started_at TIMESTAMP"])
+  ;; Sub-unit carry, in millionths of an IQD. Credits are whole IQD, but one
+  ;; hourly tick of a small library prices below 1 IQD; without a carry the
+  ;; charge would round to zero every hour forever and the storage meter would
+  ;; collect nothing from exactly the users it was written for.
+  (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS
+                      storage_debt_micro BIGINT NOT NULL DEFAULT 0"])
+  (jdbc/execute! ds ["UPDATE users SET last_metered_at = now() WHERE last_metered_at IS NULL"])
+)
+
 (defn setup-schema []
   (tel/log! :info "Setting up database schema")
 
@@ -844,6 +958,7 @@
   (setup-schema-credits!)
   (setup-schema-undo!)
   (setup-schema-kg!)
+  (setup-schema-video!)
 
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
   (run-grandfather-migration!)
@@ -1445,6 +1560,12 @@
             ["UPDATE credit_orders SET status = 'complete', completed_at = CURRENT_TIMESTAMP
               WHERE reference_id = ?" reference-id])
           (credit-account! tx user-id amount "purchase" {:order-reference-id reference-id})
+          ;; §4.2 2.4 — first completed order promotes the storage cap from the
+          ;; free tier to the paid tier (decision R3: the tier caps how much may
+          ;; be stored; the meter prices how long). Guarded on quota_bytes IS
+          ;; NULL inside the fn, so repeat purchases and admin overrides are
+          ;; both no-ops. Same tx as the credit, so a rollback undoes both.
+          (promote-to-paid-storage-tier! tx user-id quota/paid-quota-bytes)
           {:credited true :amount amount :user-id user-id})))))
 
 (defn fail-credit-order!
@@ -1642,11 +1763,22 @@
                  :where [:and [:= :id id] [:= :user_id user-id] [:is :staged_delete_id nil]]})))
 
 (def ^:private topic-file-sizes
-  "Derived table summing topic_files per topic. Join THIS instead of
+  "Derived table summing STORED BYTES per topic. Join THIS instead of
    topic_files directly in list queries: score topics own TWO file rows
-   (PDF + audio), so a bare row join fans a topic out into duplicates."
-  {:select [:topic_id [[:sum :file_size] :file_size]]
-   :from [:topic_files]
+   (PDF + audio), so a bare row join fans a topic out into duplicates.
+
+   Unions in topic_videos so a video topic reports its real footprint. A video's
+   topic_files row holds only the extracted MP3 (a few MB); the video itself is
+   a large object, and without this term Library would show a 700 MB video as
+   5 MB — disagreeing with the same user's storage bar.
+
+   The cast is load-bearing: `topic_videos.byte_size` is BIGINT, and Postgres'
+   SUM(bigint) is NUMERIC, which arrives as a BigDecimal. Every consumer of
+   :file_size was written against the Long that SUM(integer) used to return."
+  {:select [:topic_id [[:cast [:sum :file_size] :bigint] :file_size]]
+   :from [[{:union-all [{:select [:topic_id :file_size] :from [:topic_files]}
+                        {:select [:topic_id [:byte_size :file_size]] :from [:topic_videos]}]}
+           :stored_bytes]]
    :group-by [:topic_id]})
 
 (defn get-root-topics
@@ -1741,8 +1873,14 @@
      (long delta) user-id]))
 
 (defn- subtree-file-bytes
-  "Sum of file_size across the topic subtree rooted at id (including id).
-   Returns 0 when nothing is found."
+  "Sum of stored bytes across the topic subtree rooted at id (including id).
+   Returns 0 when nothing is found.
+
+   Counts BOTH storage tables, matching the `usage_bytes` definition
+   (plans/incremental-video.md §4.2 2.1): `topic_files.file_size` plus
+   `topic_videos.byte_size`. This function is the deletion decrement, so
+   omitting the video term would free the wrong amount and leave the counter
+   permanently high by the size of every deleted video."
   [connectable id]
   (or (:sum (jdbc/execute-one! connectable
               ["WITH RECURSIVE subtree AS (
@@ -1751,21 +1889,47 @@
                   SELECT c.id FROM topics c
                   JOIN subtree s ON c.parent_id = s.id
                 )
-                SELECT COALESCE(SUM(tf.file_size), 0) AS sum
-                FROM topic_files tf
-                JOIN subtree s ON tf.topic_id = s.id"
+                SELECT CAST(
+                  COALESCE((SELECT SUM(tf.file_size) FROM topic_files tf
+                             JOIN subtree s ON tf.topic_id = s.id), 0)
+                + COALESCE((SELECT SUM(tv.byte_size) FROM topic_videos tv
+                             JOIN subtree s ON tv.topic_id = s.id), 0)
+                  AS bigint) AS sum"
                id]))
     0))
 
+(defn- subtree-video-oids
+  "Large-object OIDs owned by the topic subtree rooted at id (including id).
+   The list a hard-delete path must `lo_unlink` — Postgres will not do it when
+   the topic_videos row cascades away."
+  [connectable id]
+  (mapv :lo_oid
+    (jdbc/execute! connectable
+      ["WITH RECURSIVE subtree AS (
+          SELECT id FROM topics WHERE id = ?
+          UNION ALL
+          SELECT c.id FROM topics c JOIN subtree s ON c.parent_id = s.id
+        )
+        SELECT tv.lo_oid FROM topic_videos tv JOIN subtree s ON tv.topic_id = s.id"
+       id]
+      {:builder-fn rs/as-unqualified-maps})))
+
 (defn delete-topic-for-user!
   "Delete a topic scoped to user. Decrements usage_bytes by the subtree's
-   total file_size atomically."
+   total stored bytes and unlinks its large objects atomically.
+
+   §4.7 7.2: this is the hard-delete path (the staged path is
+   stage-topic-for-deletion! + purge-staged-documents!). Unlinking here is safe
+   precisely because the row disappears in the same transaction — there is no
+   undo window to preserve."
   [user-id id]
   (jdbc/with-transaction [tx ds]
     (let [freed (subtree-file-bytes tx id)
+          oids (subtree-video-oids tx id)
           result (jdbc/execute! tx
                    (sql/format {:delete-from :topics
                                 :where [:and [:= :id id] [:= :user_id user-id]]}))]
+      (doseq [oid oids] (lo/unlink! tx oid))
       (when (pos? freed)
         (bump-user-usage! tx user-id (- freed)))
       (log/audit! {:id ::topic-deleted :user-id user-id :action :delete
@@ -4300,35 +4464,738 @@
 (defn purge-staged-documents!
   "Hard-delete topic subtrees whose staging entry has aged past the 12h window,
    then drop those entries. CASCADE clears the binary + remaining rows.
-   usage_bytes is untouched (already freed at stage time). Returns topics deleted."
+   usage_bytes is untouched (already freed at stage time). Returns topics deleted.
+
+   §4.7 7.1 — this is where video large objects are unlinked, NOT at staging
+   time: staging is reversible for 12 h, and `restore-staged-document!` must be
+   able to hand back a playable video. The OIDs are read before the DELETE (the
+   topic_videos rows cascade away with the topics) and unlinked after it, in the
+   same transaction."
   []
   (jdbc/with-transaction [tx ds]
-    (let [deleted (jdbc/execute! tx
+    (let [oids (mapv :lo_oid
+                 (jdbc/execute! tx
+                   ["SELECT tv.lo_oid FROM topic_videos tv
+                     JOIN topics t ON tv.topic_id = t.id
+                     WHERE t.staged_delete_id IN
+                       (SELECT id FROM undo_log
+                        WHERE action_type = 'delete-document'
+                          AND occurred_at < now() - interval '12 hours')"]
+                   {:builder-fn rs/as-unqualified-maps}))
+          deleted (jdbc/execute! tx
                     ["DELETE FROM topics
                       WHERE staged_delete_id IN
                         (SELECT id FROM undo_log
                          WHERE action_type = 'delete-document'
                            AND occurred_at < now() - interval '12 hours')"])
           n (or (some-> deleted first ::jdbc/update-count) 0)]
+      (doseq [oid oids] (lo/unlink! tx oid))
       (jdbc/execute! tx
         ["DELETE FROM undo_log
           WHERE action_type = 'delete-document'
             AND occurred_at < now() - interval '12 hours'"])
       n)))
 
+(defn purge-orphan-video-objects!
+  "§4.7 7.4 — unlink every large object this role owns that no live row
+   references: neither a `topic_videos` row nor an in-flight
+   `video_upload_sessions` row.
+
+   Catches the leaks no deletion path can: a crashed finalize between
+   `lo_create` and the INSERT, a manual SQL delete, a restored-from-backup
+   mismatch. Scoped to `lomowner = current_user` so a large object belonging to
+   another role in the same database is never touched.
+
+   Pre:  none. Post: returns the number unlinked. Safe to run repeatedly."
+  []
+  (jdbc/with-transaction [tx ds]
+    (let [orphans (mapv :oid
+                    (jdbc/execute! tx
+                      ["SELECT m.oid FROM pg_largeobject_metadata m
+                        WHERE m.lomowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
+                          AND NOT EXISTS (SELECT 1 FROM topic_videos tv WHERE tv.lo_oid = m.oid)
+                          AND NOT EXISTS (SELECT 1 FROM video_upload_sessions s WHERE s.lo_oid = m.oid)"]
+                      {:builder-fn rs/as-unqualified-maps}))]
+      (doseq [oid orphans] (lo/unlink! tx oid))
+      (when (pos? (count orphans))
+        (tel/log! {:level :warn :id ::orphan-large-objects :data {:count (count orphans)}}
+          "Unlinked orphaned video large objects"))
+      (count orphans))))
+
+(defn reclaim-unowned-videos!
+  "§4.7 7.3 — reclaim videos whose topic has no owner.
+
+   `topics.user_id` is ON DELETE SET NULL, so deleting a user orphans their
+   topics instead of cascading them: the topic_videos row survives, the large
+   object stays referenced (so 7.4's detector will not see it), and nobody can
+   reach or be billed for the bytes. Delete those topics outright, which
+   cascades the row, then unlink.
+
+   Prefer `delete-user!` — this is the backstop for a user removed by raw SQL."
+  []
+  (jdbc/with-transaction [tx ds]
+    (let [oids (mapv :lo_oid
+                 (jdbc/execute! tx
+                   ["SELECT tv.lo_oid FROM topic_videos tv
+                     JOIN topics t ON tv.topic_id = t.id
+                     WHERE t.user_id IS NULL"]
+                   {:builder-fn rs/as-unqualified-maps}))]
+      (when (seq oids)
+        (jdbc/execute! tx
+          ["DELETE FROM topics WHERE user_id IS NULL AND id IN (SELECT topic_id FROM topic_videos)"])
+        (doseq [oid oids] (lo/unlink! tx oid))
+        (tel/log! {:level :warn :id ::unowned-videos :data {:count (count oids)}}
+          "Reclaimed videos belonging to deleted users"))
+      (count oids))))
+
+(defn delete-user!
+  "§4.7 7.3 — remove a user and everything they own. REPL/SQL admin path.
+
+   Deletes the user's topics FIRST so `topic_videos` cascades while the OIDs are
+   still reachable, unlinks them, then deletes the user row. Doing it in the
+   other order would trip `topics.user_id ON DELETE SET NULL` and strand the
+   bytes. Returns {:topics n :objects n}."
+  [user-id]
+  (jdbc/with-transaction [tx ds]
+    (let [oids (mapv :lo_oid
+                 (jdbc/execute! tx
+                   ["SELECT tv.lo_oid FROM topic_videos tv
+                     JOIN topics t ON tv.topic_id = t.id WHERE t.user_id = ?" user-id]
+                   {:builder-fn rs/as-unqualified-maps}))
+          deleted (jdbc/execute! tx ["DELETE FROM topics WHERE user_id = ?" user-id])]
+      (doseq [oid oids] (lo/unlink! tx oid))
+      (jdbc/execute! tx ["DELETE FROM users WHERE id = ?" user-id])
+      (log/audit! {:id ::user-deleted :user-id user-id :action :delete
+                   :entity :document :entity-id user-id})
+      {:topics (or (some-> deleted first ::jdbc/update-count) 0)
+       :objects (count oids)})))
+
 (defonce ^:private purge-scheduler (atom nil))
 
+(defonce ^{:doc "Extra jobs the hourly sweep runs after the staged-document purge.
+   Registered by freememo.storage-meter and freememo.video-upload at namespace
+   load so db.clj keeps no dependency on either. Each entry is [label thunk];
+   a throwing thunk is logged and does not stop the others."}
+  !sweep-jobs (atom []))
+
+(defn register-sweep-job!
+  "Add [label thunk] to the hourly sweep. Idempotent per label — re-registers
+   replace, so a namespace reload does not double up the job."
+  [label thunk]
+  (swap! !sweep-jobs (fn [jobs] (conj (vec (remove #(= label (first %)) jobs)) [label thunk])))
+  nil)
+
+(defn- run-sweep!
+  "One pass of the hourly sweep: staged purge, then the large-object reclaimers,
+   then every registered job. Total — each step's failure is logged and the rest
+   still run, because a wedged metering job must not stop deletions."
+  []
+  (doseq [[label thunk] (into [[::purge-staged-documents purge-staged-documents!]
+                               [::reclaim-unowned-videos reclaim-unowned-videos!]
+                               [::purge-orphan-video-objects purge-orphan-video-objects!]]
+                         @!sweep-jobs)]
+    (try (thunk)
+      (catch Throwable t (tel/error! {:id label} t)))))
+
 (defn start-purge-scheduler!
-  "Start the hourly staged-document purge. Idempotent — once per process."
+  "Start the hourly sweep (staged-document purge + large-object reclamation +
+   registered jobs). Idempotent — once per process."
   []
   (when-not @purge-scheduler
     (let [exec (java.util.concurrent.Executors/newSingleThreadScheduledExecutor)]
-      (.scheduleAtFixedRate exec
-        (fn [] (try (purge-staged-documents!)
-                 (catch Throwable t (tel/error! {:id ::purge-staged-documents} t))))
+      (.scheduleAtFixedRate exec run-sweep!
         1 60 java.util.concurrent.TimeUnit/MINUTES)
       (reset! purge-scheduler exec)
-      (tel/log! :info "Staged-document purge scheduler started"))))
+      (tel/log! :info "Hourly sweep scheduler started"))))
+
+;; ---------------------------------------------------------------------------
+;; Incremental Video (see plans/incremental-video.md)
+;;
+;; Byte ownership, stated once because three tables have to agree:
+;;   users.usage_bytes = SUM(topic_files.file_size) + SUM(topic_videos.byte_size)
+;; Bytes are RESERVED at upload init (against the declared total, via
+;; quota/check-and-bump!) and only released by a deletion path or by an aborted/
+;; reaped session. The large object and the reservation are created and undone
+;; together — a path that does one without the other leaks.
+;; ---------------------------------------------------------------------------
+
+;; Casting note: Postgres has no implicit bigint → oid coercion, and pgjdbc
+;; sends a Clojure long as int8. Every OID bind therefore goes through
+;; CAST(CAST(? AS bigint) AS oid).
+(def ^:private oid-param "CAST(CAST(? AS bigint) AS oid)")
+
+(defn get-topic-video
+  "topic_videos row for a topic, or nil. Unqualified keys."
+  [topic-id]
+  (jdbc/execute-one! ds
+    ["SELECT topic_id, lo_oid, byte_size, mime_type, duration_ms, last_pos_ms
+      FROM topic_videos WHERE topic_id = ?" topic-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn get-topic-video-for-user
+  "topic_videos row joined to its topic and scoped to `user-id`; nil when the
+   topic is missing, staged for deletion, or owned by somebody else.
+   The single ownership gate for playback and processing."
+  [user-id topic-id]
+  (jdbc/execute-one! ds
+    ["SELECT tv.topic_id, tv.lo_oid, tv.byte_size, tv.mime_type,
+             tv.duration_ms, tv.last_pos_ms, t.title
+      FROM topic_videos tv JOIN topics t ON tv.topic_id = t.id
+      WHERE tv.topic_id = ? AND t.user_id = ? AND t.staged_delete_id IS NULL"
+     topic-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn set-video-duration!
+  "Record the ffprobe-measured duration (§4.4 4.3)."
+  [topic-id duration-ms]
+  (jdbc/execute! ds
+    ["UPDATE topic_videos SET duration_ms = ? WHERE topic_id = ?"
+     (when duration-ms (int duration-ms)) topic-id]))
+
+(defn save-video-position!
+  "Persist the resume position (§4.8 8.7). Ownership-scoped so a forged topic-id
+   writes nothing. Clamped at 0; the caller writes on pause/unmount, not per frame."
+  [user-id topic-id pos-ms]
+  (jdbc/execute! ds
+    ["UPDATE topic_videos SET last_pos_ms = GREATEST(0, ?)
+      WHERE topic_id = ? AND topic_id IN (SELECT id FROM topics WHERE user_id = ?)"
+     (int (max 0 (or pos-ms 0))) topic-id user-id]))
+
+(defn save-video-audio!
+  "Store the ffmpeg-extracted MP3 as the video topic's role='audio' blob,
+   replacing any previous one, and keep `usage_bytes` in step.
+
+   Deliberately NOT gated by `quota/check-and-bump!`: the extraction is a
+   derived artifact of an upload the quota already accepted, and it is ~2 % of
+   the video's size. Refusing it here would leave a stored video that can never
+   be played back on the waveform or transcribed — a worse state than being a
+   few MB over. The counter is still incremented, so the overage is visible and
+   is recovered on the next deletion.
+
+   Post: exactly one role='audio' row for the topic; usage_bytes adjusted by the
+   signed difference against whatever it replaced."
+  [user-id topic-id ^bytes audio-bytes]
+  (let [size (alength audio-bytes)]
+    (jdbc/with-transaction [tx ds]
+      (let [prior (or (:file_size (jdbc/execute-one! tx
+                                    ["SELECT file_size FROM topic_files
+                                      WHERE topic_id = ? AND role = 'audio'" topic-id]
+                                    {:builder-fn rs/as-unqualified-maps}))
+                    0)]
+        (jdbc/execute! tx
+          ["INSERT INTO topic_files (topic_id, role, file_data, file_size, mime_type)
+            VALUES (?, 'audio', ?, ?, 'audio/mpeg')
+            ON CONFLICT (topic_id, role)
+            DO UPDATE SET file_data = excluded.file_data,
+                          file_size = excluded.file_size,
+                          mime_type = excluded.mime_type"
+           topic-id audio-bytes size])
+        (bump-user-usage! tx user-id (- size prior))
+        {:ok true :size size}))))
+
+;; ── Transcript (§4.4 / §4.8) ───────────────────────────────────────────────
+
+(def ^:private transcript-insert-chunk
+  "Rows per INSERT. 6 columns × 5000 rows stays far under Postgres' 65 535
+   bind-parameter ceiling."
+  5000)
+
+(defn replace-video-transcript!
+  "Replace a video's whole transcript with `segments`, each
+   {:ord :start-ms :end-ms :text}. One transaction, so a partial transcript is
+   never visible. Re-transcribing is therefore idempotent from the reader's side."
+  [topic-id segments]
+  (jdbc/with-transaction [tx ds]
+    (jdbc/execute! tx ["DELETE FROM video_transcripts WHERE topic_id = ?" topic-id])
+    (doseq [batch (partition-all transcript-insert-chunk segments)]
+      (jdbc/execute! tx
+        (sql/format {:insert-into :video_transcripts
+                     :values (mapv (fn [s]
+                                     {:topic_id topic-id
+                                      :ord (int (:ord s))
+                                      :start_ms (int (:start-ms s))
+                                      :end_ms (int (:end-ms s))
+                                      :text (sanitize-utf8 (:text s))})
+                               batch)})))
+    (count segments)))
+
+(defn get-video-transcript-count
+  "Segment count for a video — the virtual-scroll record count."
+  [topic-id]
+  (or (:c (jdbc/execute-one! ds
+            ["SELECT COUNT(*) AS c FROM video_transcripts WHERE topic_id = ?" topic-id]
+            {:builder-fn rs/as-unqualified-maps}))
+    0))
+
+(defn get-video-transcript
+  "Every transcript segment for a video, in `ord` order.
+
+   Read into a SERVER-FORM binding by the transcript pane, never into an e/defn
+   return: the caller reads `(e/server (nth segs i nil))` per visible row, so a
+   three-hour transcript stays server-side and only the scroll window crosses
+   the wire (CLAUDE.md, 'e/defn Returns Materialize at the Call Site')."
+  [topic-id]
+  (jdbc/execute! ds
+    ["SELECT id, ord, start_ms, end_ms, text FROM video_transcripts
+      WHERE topic_id = ? ORDER BY ord" topic-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn copy-video-transcript-to-content!
+  "§4.8 8.6 — replace a video topic's `content` with its whole transcript.
+
+   The one bridge between the reference transcript and the editable body. It is
+   an explicit user action, not a default, because the design decision was that
+   `content` starts empty and the user curates into it: auto-filling would make
+   every video's content a wall of unedited speech-to-text that card generation
+   then chews through.
+
+   Post: {:ok true :segments n}, or {:ok false :error S} when there is no
+   transcript to copy."
+  [topic-id]
+  (let [segs (get-video-transcript topic-id)]
+    (if (empty? segs)
+      {:ok false :error "No transcript yet"}
+      (let [html (->> segs
+                   (map :text)
+                   (map str/trim)
+                   (remove str/blank?)
+                   (map #(str "<p>" (text/escape-html %) "</p>"))
+                   (str/join))]
+        (update-topic-content! topic-id html)
+        {:ok true :segments (count segs)}))))
+
+(defn get-video-transcript-overlapping
+  "Segments of `topic-id` overlapping [start-ms, end-ms), in `ord` order.
+
+   Overlap, not containment (§4.9 9.1): a marked range whose edges fall
+   mid-segment must include both partial segments, or the extract loses the
+   half-sentences at each end. Two segments overlap iff each starts before the
+   other ends."
+  [topic-id start-ms end-ms]
+  (jdbc/execute! ds
+    ["SELECT id, ord, start_ms, end_ms, text FROM video_transcripts
+      WHERE topic_id = ? AND start_ms < ? AND end_ms > ? ORDER BY ord"
+     topic-id (int end-ms) (int start-ms)]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn get-video-segment
+  "The [start_ms, end_ms) range an extract was cut from, or nil for an ordinary
+   topic. Provenance only — it never rewrites the extract's content."
+  [topic-id]
+  (jdbc/execute-one! ds
+    ["SELECT start_ms, end_ms FROM video_segments WHERE topic_id = ? ORDER BY id LIMIT 1"
+     topic-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn create-video-extract!
+  "§4.9 — create an extract child of a video topic over [start-ms, end-ms).
+
+   The extract is an ORDINARY topic: `content` is the overlapping transcript
+   text copied in at creation, editable thereafter, and the `video_segments` row
+   records where it came from. Nothing re-derives it, so the extract survives
+   the video's bytes being reclaimed.
+
+   Pre:  user-id owns video-topic-id; end-ms > start-ms >= 0.
+   Post: {:success true :id N}, or {:success false :error S}.
+   Throws: ex-info ::bad-range before touching the DB on a malformed range
+           (mirrors score/validate-segment).
+
+   Not atomic across the topic and its range row: `create-topic!` owns its own
+   connection (audit trail, title validation), so a failure between the two
+   leaves an extract with its text but no recorded range. Tolerable precisely
+   because the range is provenance and nothing reads through it — the extract
+   is complete and reviewable without it."
+  [user-id video-topic-id start-ms end-ms title]
+  (when-not (and (int? start-ms) (int? end-ms) (>= start-ms 0) (> end-ms start-ms))
+    (throw (ex-info "Malformed video segment"
+             {:type ::bad-range :start-ms start-ms :end-ms end-ms})))
+  (if-not (get-topic-video-for-user user-id video-topic-id)
+    {:success false :error "Video not found"}
+    (let [segs (get-video-transcript-overlapping video-topic-id start-ms end-ms)
+          content (if (seq segs)
+                    (->> segs
+                      (map :text)
+                      (map str/trim)
+                      (remove str/blank?)
+                      (map #(str "<p>" (text/escape-html %) "</p>"))
+                      (str/join))
+                    "")
+          inherited (clone-source! user-id (resolve-effective-source-id video-topic-id))
+          created (create-topic! {:parent-id video-topic-id
+                                  :user-id user-id
+                                  :content content
+                                  :kind "basic"
+                                  :title title
+                                  :source-id inherited})
+          extract-id (:topics/id created)]
+      (jdbc/execute! ds
+        ["INSERT INTO video_segments (topic_id, start_ms, end_ms) VALUES (?, ?, ?)"
+         extract-id (int start-ms) (int end-ms)])
+      {:success true :id extract-id})))
+
+;; ── Chunked upload sessions (§4.3) ─────────────────────────────────────────
+
+(defn init-video-upload!
+  "§4.3 3.1/3.1.1/3.1.2 — open an upload session.
+
+   One transaction does three things that must not come apart: reserve
+   `total-bytes` against the user's quota, create the large object, and record
+   the session. A quota rejection therefore leaves no object behind, and a
+   successful init has already paid for every byte the client may send.
+
+   Gated by `quota/reserve-bytes!`, NOT `check-and-bump!`: the latter also
+   enforces `upload_max_bytes`, which is the single-HTTP-request ceiling
+   (100 MB by default) that chunking exists to get past. Applying it here
+   rejected every video over 100 MB before a byte was sent. The per-upload
+   bound for video is `video-http/max-video-bytes`, checked by the caller.
+
+   Pre:  total-bytes > 0 and within the caller's per-upload ceiling; user-id
+         exists; parent-id nil or a topic they own.
+   Post: {:ok true :session-id S :lo-oid N}.
+   Throws: quota/quota-error :over-quota — the tx aborts, unwinding both the
+           reservation and the object."
+  [user-id filename mime-type total-bytes parent-id]
+  (jdbc/with-transaction [tx ds]
+    (quota/reserve-bytes! tx user-id total-bytes)
+    (let [oid (lo/create! tx)
+          session-id (str (random-uuid))]
+      (jdbc/execute! tx
+        [(str "INSERT INTO video_upload_sessions
+                 (id, user_id, lo_oid, total_bytes, filename, mime_type, parent_id)
+               VALUES (?, ?, " oid-param ", ?, ?, ?, ?)")
+         session-id user-id oid (long total-bytes) filename mime-type parent-id])
+      {:ok true :session-id session-id :lo-oid oid})))
+
+(defn get-video-upload-session
+  "Session row scoped to its owner, or nil. Unqualified keys."
+  [user-id session-id]
+  (jdbc/execute-one! ds
+    ["SELECT id, user_id, lo_oid, total_bytes, received_bytes, filename, mime_type, parent_id
+      FROM video_upload_sessions WHERE id = ? AND user_id = ?" session-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn append-video-chunk!
+  "§4.3 3.1.2/3.1.3 — append one chunk to a session's large object.
+
+   Locks the session row FOR UPDATE, which serializes concurrent chunk POSTs
+   for the same session: `lo/append!` writes at the object's current end, so
+   two unserialized appenders would interleave bytes.
+
+   Pre:  session exists and belongs to user-id.
+   Post: {:ok true :received N :total N} with exactly one chunk in heap, or
+         {:ok false :error S :code C} — :code \"overflow\" when the chunk would
+         push past the declared total, \"not-found\" when the session is gone.
+   Invariant: received_bytes always equals the large object's real size."
+  [user-id session-id ^bytes buf n]
+  (jdbc/with-transaction [tx ds]
+    (let [row (jdbc/execute-one! tx
+                ["SELECT lo_oid, total_bytes, received_bytes FROM video_upload_sessions
+                  WHERE id = ? AND user_id = ? FOR UPDATE" session-id user-id]
+                {:builder-fn rs/as-unqualified-maps})]
+      (cond
+        (nil? row)
+        {:ok false :error "Upload session not found" :code "not-found"}
+
+        (> (+ (:received_bytes row) (long n)) (:total_bytes row))
+        {:ok false
+         :error "Chunk exceeds the declared upload size"
+         :code "overflow"}
+
+        :else
+        (let [new-size (lo/append! tx (:lo_oid row) buf n)]
+          (jdbc/execute! tx
+            ["UPDATE video_upload_sessions SET received_bytes = ?, updated_at = now()
+              WHERE id = ?" new-size session-id])
+          {:ok true :received new-size :total (:total_bytes row)})))))
+
+(defn abort-video-upload!
+  "§4.3 3.1.4 — compensate a failed or cancelled upload: unlink the object,
+   refund the reservation, drop the session. Idempotent; unknown ids are no-ops.
+
+   Refunds `total_bytes`, not `received_bytes`, because init reserved the
+   declared total."
+  [user-id session-id]
+  (jdbc/with-transaction [tx ds]
+    (when-let [row (jdbc/execute-one! tx
+                     ["SELECT lo_oid, total_bytes FROM video_upload_sessions
+                       WHERE id = ? AND user_id = ? FOR UPDATE" session-id user-id]
+                     {:builder-fn rs/as-unqualified-maps})]
+      (lo/unlink! tx (:lo_oid row))
+      (jdbc/execute! tx ["DELETE FROM video_upload_sessions WHERE id = ?" session-id])
+      (bump-user-usage! tx user-id (- (:total_bytes row)))
+      {:ok true :refunded (:total_bytes row)})))
+
+(defn finalize-video-upload!
+  "§4.3 3.1 — turn a completed session into a `video` topic.
+
+   Transfers ownership of the large object from the session row to a new
+   `topic_videos` row; the session row is deleted, NOT compensated, because the
+   bytes it reserved are now the topic's. When fewer bytes arrived than were
+   declared, the difference is refunded here — the object's real size is what
+   the topic owns.
+
+   Pre:  the session's received_bytes equals its total_bytes.
+   Post: {:ok true :topic-id N}, or {:ok false :error S} when incomplete.
+   Invariant: exactly one row references the OID at every point."
+  [user-id session-id]
+  (jdbc/with-transaction [tx ds]
+    (let [row (jdbc/execute-one! tx
+                ["SELECT lo_oid, total_bytes, received_bytes, filename, mime_type, parent_id
+                  FROM video_upload_sessions WHERE id = ? AND user_id = ? FOR UPDATE"
+                 session-id user-id]
+                {:builder-fn rs/as-unqualified-maps})]
+      (cond
+        (nil? row)
+        {:ok false :error "Upload session not found"}
+
+        (not= (:received_bytes row) (:total_bytes row))
+        {:ok false :error (str "Upload incomplete: " (:received_bytes row)
+                            " of " (:total_bytes row) " bytes")}
+
+        :else
+        (let [clean-name (input/prettify-title (input/sanitize-filename (:filename row)))
+              _ (input/check-length! :title clean-name input/title-max)
+              csl {:type "motion_picture" :title clean-name
+                   :accessed {:date-parts (now-date-parts)}}
+              source (jdbc/execute-one! tx
+                       (sql/format {:insert-into :sources
+                                    :values [{:user_id user-id
+                                              :csl_type "motion_picture"
+                                              :csl (->jsonb csl)
+                                              :title clean-name}]
+                                    :returning [:id]}))
+              topic (jdbc/execute-one! tx
+                      (sql/format {:insert-into :topics
+                                   :values [{:user_id user-id
+                                             :parent_id (:parent_id row)
+                                             :kind "video"
+                                             :title clean-name
+                                             ;; "" not NULL: the editor mounts on
+                                             ;; an empty body. Content starts
+                                             ;; empty by design — the transcript
+                                             ;; is a reference pane the user
+                                             ;; curates from, not the content.
+                                             :content ""
+                                             :source_id (:sources/id source)}]
+                                   :returning [:id]}))
+              topic-id (:topics/id topic)]
+          (jdbc/execute! tx
+            [(str "INSERT INTO topic_videos (topic_id, lo_oid, byte_size, mime_type)
+                   VALUES (?, " oid-param ", ?, ?)")
+             topic-id (:lo_oid row) (:received_bytes row) (:mime_type row)])
+          (jdbc/execute! tx ["DELETE FROM video_upload_sessions WHERE id = ?" session-id])
+          (audit-doc-created! user-id topic-id)
+          {:ok true :topic-id topic-id})))))
+
+(defn create-video-playlist!
+  "§4.10 10.1 — the parent a multi-file upload hangs its videos under.
+   An ordinary topic of kind `video-playlist` holding no bytes of its own."
+  [user-id title]
+  (let [clean-name (input/prettify-title (input/sanitize-filename title))]
+    (input/check-length! :title clean-name input/title-max)
+    (jdbc/with-transaction [tx ds]
+      (let [topic (jdbc/execute-one! tx
+                    (sql/format {:insert-into :topics
+                                 :values [{:user_id user-id
+                                           :kind "video-playlist"
+                                           :title clean-name
+                                           :content ""}]
+                                 :returning [:id]}))]
+        (audit-doc-created! user-id (:topics/id topic))
+        (:topics/id topic)))))
+
+(defn reap-stale-video-uploads!
+  "§4.3 3.3 — abort sessions untouched for longer than `ttl-hours`.
+
+   A browser tab closed mid-upload leaves both a large object and a byte
+   reservation; nothing else reclaims either, so this runs in the hourly sweep.
+   Returns the number reaped."
+  [ttl-hours]
+  (jdbc/with-transaction [tx ds]
+    (let [stale (jdbc/execute! tx
+                  [(str "SELECT id, user_id, lo_oid, total_bytes FROM video_upload_sessions
+                         WHERE updated_at < now() - make_interval(hours => ?) FOR UPDATE")
+                   (int ttl-hours)]
+                  {:builder-fn rs/as-unqualified-maps})]
+      (doseq [{:keys [id user_id lo_oid total_bytes]} stale]
+        (lo/unlink! tx lo_oid)
+        (jdbc/execute! tx ["DELETE FROM video_upload_sessions WHERE id = ?" id])
+        (bump-user-usage! tx user_id (- total_bytes)))
+      (when (seq stale)
+        (tel/log! {:level :info :id ::reaped-video-uploads :data {:count (count stale)}}
+          "Reaped abandoned video upload sessions"))
+      (count stale))))
+
+;; ── Storage metering (§4.6) ────────────────────────────────────────────────
+
+(defn get-storage-meter-state
+  "Everything one accrual pass needs about a user, read in one row:
+   `usage_bytes`, `credit_balance_iqd`, `last_metered_at`,
+   `storage_grace_started_at`, and whether they hold any video bytes at all."
+  ([user-id] (get-storage-meter-state ds user-id))
+  ([connectable user-id]
+   (jdbc/execute-one! connectable
+     ["SELECT u.usage_bytes, u.credit_balance_iqd, u.last_metered_at,
+              u.storage_grace_started_at,
+              EXISTS (SELECT 1 FROM topic_videos tv JOIN topics t ON tv.topic_id = t.id
+                      WHERE t.user_id = u.id) AS has_video
+       FROM users u WHERE u.id = ?" user-id]
+     {:builder-fn rs/as-unqualified-maps})))
+
+(defn set-storage-grace!
+  "Open or close the storage grace window. `nil` clears it (a top-up); a
+   timestamp opens it. Writes only on a real transition, so `storage-grace-days`
+   counts from the FIRST time the balance hit zero, not from the latest sweep."
+  [user-id ts]
+  (if ts
+    (jdbc/execute! ds
+      ["UPDATE users SET storage_grace_started_at = ?
+        WHERE id = ? AND storage_grace_started_at IS NULL" ts user-id])
+    (jdbc/execute! ds
+      ["UPDATE users SET storage_grace_started_at = NULL
+        WHERE id = ? AND storage_grace_started_at IS NOT NULL" user-id])))
+
+(defn storage-grace-started-at
+  "When the user's storage grace window opened, or nil when not in grace.
+   Read on the playback path (§4.6 6.3)."
+  [user-id]
+  (:storage_grace_started_at
+   (jdbc/execute-one! ds
+     ["SELECT storage_grace_started_at FROM users WHERE id = ?" user-id]
+     {:builder-fn rs/as-unqualified-maps})))
+
+(def ^:const micro-per-iqd
+  "Denominator of the storage-rent carry. Rent accrues in millionths of an IQD
+   and is debited in whole IQD once a millionth-sum crosses the unit."
+  1000000)
+
+(defn accrue-storage-charge!
+  "§4.6 6.1 — accrue one user's storage rent and advance their meter, atomically.
+
+   `micro-fn` receives {:usage-bytes :elapsed-ms} and returns the rent for that
+   interval in MICRO-IQD. The carry (`users.storage_debt_micro`) is what makes
+   the meter exact at any tick rate: an hourly pass over a small library prices
+   well below 1 IQD, so without a carry every pass would round to zero and the
+   meter would collect nothing. Whole IQD are debited as the carry crosses each
+   unit; the remainder stays.
+
+   Idempotent, which is the property the whole design hangs on: locking the row
+   and re-reading `last_metered_at` inside the transaction means a second call
+   an instant later sees elapsed ≈ 0, accrues ≈ 0, and debits nothing — and two
+   concurrent sweeps cannot bill the same interval twice.
+
+   `last_metered_at` always advances, so an interval is consumed exactly once
+   whether or not it produced a whole-IQD charge.
+
+   Pre:  micro-fn is pure and returns a non-negative long.
+   Post: {:charged n :balance-after n :elapsed-ms n :carry-micro n}, or nil when
+         the user is gone."
+  [user-id micro-fn]
+  (jdbc/with-transaction [tx ds]
+    (when-let [row (jdbc/execute-one! tx
+                     ["SELECT usage_bytes, credit_balance_iqd, last_metered_at, storage_debt_micro
+                       FROM users WHERE id = ? FOR UPDATE" user-id]
+                     {:builder-fn rs/as-unqualified-maps})]
+      (let [now (java.time.Instant/now)
+            last (some-> ^java.sql.Timestamp (:last_metered_at row) .toInstant)
+            elapsed-ms (if last
+                         (max 0 (- (.toEpochMilli now) (.toEpochMilli last)))
+                         0)
+            accrued (long (max 0 (micro-fn {:usage-bytes (or (:usage_bytes row) 0)
+                                            :elapsed-ms elapsed-ms})))
+            debt (+ (or (:storage_debt_micro row) 0) accrued)
+            cost (quot debt micro-per-iqd)
+            carry (rem debt micro-per-iqd)
+            bal (or (:credit_balance_iqd row) 0)
+            new-bal (- bal cost)]
+        (jdbc/execute! tx
+          ["UPDATE users SET last_metered_at = now(), storage_debt_micro = ? WHERE id = ?"
+           carry user-id])
+        (when (pos? cost)
+          (jdbc/execute! tx
+            ["UPDATE users SET credit_balance_iqd = ? WHERE id = ?" new-bal user-id])
+          (jdbc/execute! tx
+            (sql/format {:insert-into :credit_transactions
+                         :values [{:user_id user-id
+                                   :kind "debit"
+                                   :amount_iqd (- cost)
+                                   :balance_after new-bal
+                                   :endpoint "storage"
+                                   :model nil}]})))
+        {:charged cost
+         :balance-after (if (pos? cost) new-bal bal)
+         :elapsed-ms elapsed-ms
+         :carry-micro carry}))))
+
+(defn users-due-for-metering
+  "Ids of users whose meter is older than `stale-hours` AND who hold stored
+   bytes. §4.6 6.4 / decision T1: a dormant account never triggers lazy accrual,
+   so the sweep has to accrue for it or its bytes are stored free forever."
+  [stale-hours]
+  (mapv :id
+    (jdbc/execute! ds
+      ["SELECT id FROM users
+        WHERE usage_bytes > 0
+          AND (last_metered_at IS NULL
+               OR last_metered_at < now() - make_interval(hours => ?))"
+       (int stale-hours)]
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn users-with-expired-grace
+  "Ids of users whose grace window opened more than `grace-days` ago and who
+   still hold video bytes — the reclamation worklist (§4.6 6.4)."
+  [grace-days]
+  (mapv :id
+    (jdbc/execute! ds
+      ["SELECT DISTINCT u.id FROM users u
+        JOIN topics t ON t.user_id = u.id
+        JOIN topic_videos tv ON tv.topic_id = t.id
+        WHERE u.storage_grace_started_at IS NOT NULL
+          AND u.storage_grace_started_at < now() - make_interval(days => ?)"
+       (int grace-days)]
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn reclaim-user-videos!
+  "§4.6 6.5 / decision H3 — drop a user's video BYTES, keep everything else.
+
+   Unlinks each large object and deletes the `topic_videos` rows, decrementing
+   `usage_bytes` by exactly what was freed. The topic row, its transcript, its
+   extracts, its cards and its schedule all survive: an extract's text was
+   copied in at creation, so it reviews and generates cards unchanged — only
+   playback is gone. This is the whole reason derivation is initial-only.
+
+   Returns {:videos n :bytes n}."
+  [user-id]
+  (jdbc/with-transaction [tx ds]
+    (let [rows (jdbc/execute! tx
+                 ["SELECT tv.topic_id, tv.lo_oid, tv.byte_size FROM topic_videos tv
+                   JOIN topics t ON tv.topic_id = t.id WHERE t.user_id = ? FOR UPDATE"
+                  user-id]
+                 {:builder-fn rs/as-unqualified-maps})
+          freed (reduce + 0 (map :byte_size rows))]
+      (doseq [{:keys [topic_id lo_oid]} rows]
+        (lo/unlink! tx lo_oid)
+        (jdbc/execute! tx ["DELETE FROM topic_videos WHERE topic_id = ?" topic_id]))
+      (when (pos? freed) (bump-user-usage! tx user-id (- freed)))
+      (when (seq rows)
+        (tel/log! {:level :warn :id ::storage-reclaimed
+                   :data {:user-id user-id :videos (count rows) :bytes freed}}
+          "Reclaimed video bytes after storage grace expired"))
+      {:videos (count rows) :bytes freed})))
+
+(defn promote-to-paid-storage-tier!
+  "§4.2 2.4 — raise a user's storage cap to the paid tier on their first
+   completed credit order.
+
+   `WHERE quota_bytes IS NULL` makes this both idempotent (a second purchase is
+   a no-op) and safe against the admin override path — an operator-set
+   `quota_bytes` is never overwritten by a purchase.
+   Pre: called inside the order-completion transaction. Post: rows updated (0 or 1)."
+  [connectable user-id paid-bytes]
+  (when paid-bytes
+    (jdbc/execute! connectable
+      ["UPDATE users SET quota_bytes = ? WHERE id = ? AND quota_bytes IS NULL"
+       (long paid-bytes) user-id])))
 
 ;; ---------------------------------------------------------------------------
 ;; Knowledge graph operations (see plans/knowledge-graph-quizzes.md)

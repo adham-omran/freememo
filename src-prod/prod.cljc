@@ -177,6 +177,17 @@
                           ;; Gzip served assets
                           (.setHandler server (doto (new org.eclipse.jetty.server.handler.gzip.GzipHandler)
                                                 (.setMinGzipSize 1024)
+                                                ;; Video is already compressed, and gzipping a
+                                                ;; ranged response is worse than useless: Jetty
+                                                ;; would have to drop Content-Length and the
+                                                ;; byte offsets in Content-Range would no longer
+                                                ;; describe the body, breaking <video> seeking.
+                                                ;; (plans/incremental-video.md §4.5 5.3)
+                                                (.setExcludedPaths (into-array String ["/api/video/*"]))
+                                                (.setExcludedMimeTypes
+                                                  (into-array String ["video/mp4" "video/webm"
+                                                                      "video/ogg" "video/quicktime"
+                                                                      "audio/mpeg"]))
                                                 (.setHandler (.getHandler server)))))}))))
 
 #?(:cljs ; client entrypoint

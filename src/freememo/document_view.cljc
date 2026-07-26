@@ -13,6 +13,7 @@
    [freememo.pdf-pane :refer [PdfPane]]
    [freememo.pdf-toolbar :refer [PdfToolbar]]
    [freememo.score-toolbar :refer [ScoreToolbar ScoreWaveformStrip]]
+   [freememo.video-pane :refer [VideoPane]]
    [freememo.editor-pane :refer [EditorPane]]
    [freememo.bottom-panel :refer [ToolbarBar]]
    [freememo.bibliography-form :as bibform :refer [BibliographyForm]]
@@ -97,6 +98,14 @@
         ;; the audio segment picked here pairs with notation rects for cards.
         (when dctx/is-score?
           (ScoreWaveformStrip))
+        ;; Video topics: player + waveform strip above the content row. The
+        ;; fourth surface of §4.8 8.1, the transcript, is a tab in
+        ;; RightSidePanel beside Pins and Assistant — it is reference material
+        ;; the user consults, which is what that panel is for, and it inherits
+        ;; the panel's collapse and resize rather than owning a fixed column.
+        (when dctx/is-video?
+          (binding [dctx/video-topic-id page-topic-id]
+            (VideoPane)))
         (dom/div
           (dom/props {:style {:flex "1" :display "flex"
                               :flex-direction (if (and is-pdf? top-bottom?)

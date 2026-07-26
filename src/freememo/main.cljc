@@ -37,6 +37,7 @@
             #?(:clj [freememo.user-state :as us])
             #?(:clj [freememo.db :as db])
             #?(:clj [freememo.config :as config])
+            #?(:clj [freememo.storage-meter :as meter])
             #?(:clj [freememo.crypto :as crypto])))
 
 ;; Per-user refresh via user-state registry
@@ -82,6 +83,11 @@
   #?(:clj (when user-id
             (when-let [user (db/get-user-by-id user-id)]
               (db/insert-user-event! user-id "session_resume")
+              ;; §4.6 6.1 — lazy storage accrual on user access. Session boot is
+              ;; the coarsest honest "access" point: once per connection, not
+              ;; once per navigation. Internally throttled and total, so a
+              ;; metering failure can never block sign-in.
+              (meter/accrue! user-id)
               (let [google-id (:users/google_id user)
                     enc-key (when google-id (crypto/derive-key-for-oauth-user google-id))]
                 {:username (:users/username user)

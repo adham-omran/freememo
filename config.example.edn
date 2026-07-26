@@ -34,6 +34,17 @@
   ;; freememo.card-models/registry). Empty/unset = all registry models offered.
   :card-model-allowlist ["gpt-5.1" "gemini-3-flash" "gemini-3.5-flash" "gemini-3.6-flash" "gemini-3.5-flash-lite" "claude-haiku-4.5" "claude-sonnet-5" "deepseek-v4-flash"]
 
+  ;; Storage rent for stored video, in IQD per gigabyte-month. Env var
+  ;; STORAGE_IQD_PER_GB_MONTH wins. UNSET DISABLES STORAGE METERING ENTIRELY:
+  ;; no rent is charged, no grace window ever opens, and no video is ever
+  ;; reclaimed — the self-host default, and also what an official deployment
+  ;; gets if this is forgotten. It fails open on purpose: silently billing zero
+  ;; is recoverable, silently reclaiming a user's uploads is not.
+  ;; Accrual is lazy (on session boot) plus an hourly sweep; sub-IQD amounts are
+  ;; carried in users.storage_debt_micro, so any rate down to fractions works.
+  ;; See plans/incremental-video.md §4.6.
+  :storage-iqd-per-gb-month nil
+
   ;; Top-up amounts shown as buttons, in IQD (Wayl minimum per link is 1000).
   :presets [nil]
 

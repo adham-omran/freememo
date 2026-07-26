@@ -122,6 +122,19 @@
 (e/declare !card-type)
 (e/declare !card-count)
 
+;; ── Video state (kind='video' topics only) ─────────────────────────────────
+;; The <video> element is the single playback clock; !video-el publishes the
+;; node so the transcript pane can seek it directly (a browser-local effect,
+;; no token). See plans/incremental-video.md §4.8.
+(e/declare is-video?)
+(e/declare video-topic-id)
+(e/declare video-title)
+(e/declare video-duration-ms)
+(e/declare video-last-pos-ms)   ; resume position, read once at mount
+(e/declare video-has-audio?)    ; extracted MP3 exists ⇒ a waveform can render
+(e/declare !video-el)           ; the HTMLVideoElement, or nil before mount
+(e/declare !video-region)       ; {:start-ms N :end-ms N} or nil — marked range
+
 ;; ── Score editor state (kind='score' topics only) ──────────────────────────
 (e/declare !score-region)       ; {:start-ms N :end-ms N} or nil — waveform selection
 (e/declare !score-pages)        ; {page {:width :height :rects [{:x :y :w :h}]}} — pending rects

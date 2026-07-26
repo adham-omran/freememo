@@ -1,9 +1,17 @@
 (ns freememo.transcribe
   "Audio transcription via OpenRouter (OpenAI Whisper). Reads an audio topic's
    stored bytes, transcribes them, and writes the result into the topic's Quill
-   content body. Not billed against credits (storage-only feature)."
+   content body.
+
+   Billed against credits like every other AI lane: gated by
+   `credits/check-cost-billed-balance!` and charged from OpenRouter's returned
+   `usage.cost` via `record-cost-charge!`. It was free until now — the original
+   docstring called it a storage-only feature — but it is an LLM call with a
+   real per-minute cost, and leaving it unbilled meant the money was invisible
+   in the ledger as well as uncharged."
   (:require
    [clojure.string :as str]
+   [freememo.credits :as credits]
    [freememo.db :as db]
    [freememo.logging :as log]
    [freememo.openrouter :as openrouter]
@@ -59,7 +67,8 @@
    handler reports it."
   [user-id topic-id]
   (let [api-key (settings/get-openrouter-api-key user-id)
-        file-row (db/get-topic-file topic-id)]
+        file-row (db/get-topic-file topic-id)
+        gate (credits/check-cost-billed-balance! user-id)]
     (cond
       (str/blank? api-key)
       {:success false :error "OpenRouter API key not configured"}
@@ -67,22 +76,40 @@
       (nil? file-row)
       {:success false :error "Audio file not found"}
 
+      ;; Checked before the call, not after: an out-of-credits user must not
+      ;; incur provider cost we then cannot charge for. No-op in self-host.
+      (not (:ok gate))
+      {:success false :error (:error gate)}
+
       :else
       (let [^bytes audio-bytes (:topic_files/file_data file-row)
             fmt (mime->format (:topic_files/mime_type file-row))
+            ;; Auto-detect (nil) is Whisper's default and is usually right, but
+            ;; on short or quiet audio it mis-identifies the language and then
+            ;; hallucinates fluent text in the one it guessed — measured: a 10 s
+            ;; English clip returned as repeated Arabic. The setting is the
+            ;; escape hatch; same behaviour as the video pipeline.
+            language (settings/get-transcribe-language user-id)
             t-start (System/nanoTime)
             body (openrouter/transcription! api-key
-                   {:input_audio {:data (.encodeToString (Base64/getEncoder) audio-bytes)
-                                  :format fmt}
-                    :model model})
+                   (cond-> {:input_audio {:data (.encodeToString (Base64/getEncoder) audio-bytes)
+                                          :format fmt}
+                            :model model}
+                     language (assoc :language language)))
             duration-ms (long (/ (- (System/nanoTime) t-start) 1000000))
-            text (:text body)]
+            text (:text body)
+            cost-usd (get-in body [:usage :cost])]
         (tel/log! {:level :info :id ::transcription
                    :data {:user-id user-id :topic-id topic-id
                           :model model :duration-ms duration-ms
-                          :cost-usd (get-in body [:usage :cost])
+                          :language (or language :auto)
+                          :cost-usd cost-usd
                           :chars (count text)}}
           "Whisper transcription")
+        ;; Charge the completed call even when it returned no usable text — the
+        ;; provider billed us either way. Total: a billing failure logs
+        ;; ::credit-charge-failed and returns nil, never discarding the result.
+        (credits/record-cost-charge! user-id :transcribe model cost-usd)
         (if (str/blank? text)
           {:success false :error "Transcription returned no text"}
           (do (db/update-topic-content! topic-id (text->html text))

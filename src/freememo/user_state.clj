@@ -29,6 +29,8 @@
           :card-gen-status  (atom {})
           :scanning-pages   (atom #{})
           :transcribing-topics (atom #{})
+          :processing-videos (atom #{})     ; video topic ids in the ffmpeg/Whisper pipeline
+          :uploading-videos (atom {})       ; video upload session id -> {:filename :sent :total}
           :ocr-errors       (atom {})
           :scan-cancellers  (atom {})
           :distilling-docs  (atom #{})      ; root topic ids with a distill run in flight

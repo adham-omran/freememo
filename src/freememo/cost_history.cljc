@@ -31,7 +31,13 @@
    "kg.grade"          "KG grading"
    "kg.distill"        "KG distill"
    "kg.questions"      "KG questions"
-   "ocr.extract"       "OCR extract"})
+   "ocr.extract"       "OCR extract"
+   ;; One endpoint for both the audio kind and video: same model, same price,
+   ;; same operation — the source kind is not a billing distinction, and two
+   ;; labels would put "Transcription" in the Feature filter twice.
+   "transcribe"        "Transcription"
+   ;; Not an AI lane — storage rent, accrued by freememo.storage-meter.
+   "storage"           "Storage"})
 
 (def ^:private model-labels
   "model id → label, unioned across the card + OCR registries (ledger `model`
