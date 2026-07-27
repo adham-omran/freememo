@@ -67,6 +67,14 @@
     --color-chip-anki: light-dark(#15803d, #4ade80);
     --color-chip-anki-bg: light-dark(#dcfce7, #052e16);
 
+    /* Active filter-chip: a TINTED fill with accent text, not the filled
+       --color-primary/white pair. Browser-measured contrast of text-on-tint:
+       5.49:1 light (#1d4ed8 on #dbeafe), 5.74:1 dark (#93c5fd on #1e3a8a).
+       The nearest pre-existing pairing (--color-primary-text on
+       --color-primary-light) is 3.1:1 and fails 1.4.3 — hence new tokens. */
+    --color-primary-tint: light-dark(#dbeafe, #1e3a8a);
+    --color-primary-tint-text: light-dark(#1d4ed8, #93c5fd);
+
     /* Interactive */
     --color-highlight: light-dark(#d0e8ff, #1e3a5f);
     --color-highlight-gold: light-dark(#FBBF24, #f59e0b);
@@ -992,11 +1000,11 @@ html, body {
 .filter-chip {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    padding: 2px 10px;
+    gap: 5px;
+    padding: 3px 11px;
     border: 1px solid var(--color-border);
     border-radius: 999px;
-    background: var(--color-bg-subtle);
+    background: transparent;
     color: var(--color-text-secondary);
     font-size: 12px;
     line-height: 1.6;
@@ -1008,20 +1016,141 @@ html, body {
     border-color: var(--color-primary);
     color: var(--color-text-primary);
 }
+/* Inactive FM/Anki chips tint their border toward the dot's colour. Declared
+   BEFORE .filter-chip-active so the active fill's transparent border wins on
+   equal specificity (both are single-class selectors — source order decides). */
+.filter-chip-fm { border-color: var(--color-chip-fm); }
+.filter-chip-anki { border-color: var(--color-chip-anki); }
 .filter-chip-active {
-    background: var(--color-primary);
-    border-color: var(--color-primary);
-    color: #fff;
+    background: var(--color-primary-tint);
+    border-color: transparent;
+    color: var(--color-primary-tint-text);
+    font-weight: 500;
+}
+/* MUST restate `background` here. The global
+   `button:where(:not(:disabled):not(.btn):not(.btn-delete-x)):hover` rule is
+   (0,1,1) — :where() contributes nothing, but `button` + `:hover` do — which
+   outranks .filter-chip-active at (0,1,0) and repainted the active chip
+   --color-bg-hover grey on hover. This selector is (0,3,0) and wins. */
+.filter-chip-active:hover:not(:disabled) {
+    background: var(--color-primary-tint);
+    border-color: transparent;
+    color: var(--color-primary-tint-text);
 }
 .filter-chip:disabled {
     opacity: 0.45;
     cursor: not-allowed;
 }
 .filter-chip-dot {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     flex-shrink: 0;
+}
+/* Dot colour is driven by the same sync-source key as the border tint, so the
+   two can never disagree. Dots stay visible in the active state. */
+.filter-chip-dot-fm { background: var(--color-chip-fm); }
+.filter-chip-dot-anki { background: var(--color-chip-anki); }
+
+/* ── Cards-view toolbar ────────────────────────────────────────────
+   Three stacked rows: (1) view switcher + search + Check Anki,
+   (2) Type chips, (3) Sync chips. Shape encodes role — pills are filters,
+   rounded rects are inputs and actions. */
+.cards-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 10px;
+    flex-shrink: 0;
+}
+.cards-toolbar-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+/* Fixed width so the Type and Sync captions align and the chip columns
+   start at the same x. */
+.filter-caption {
+    flex-shrink: 0;
+    width: 38px;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+}
+/* Category break between sync-state chips and manual-flag chips. Visual
+   only — origins and flags remain separate filter groups. */
+.filter-divider {
+    flex-shrink: 0;
+    align-self: stretch;
+    width: 1px;
+    min-height: 20px;
+    background: var(--color-border);
+    margin: 0 5px;
+}
+.cards-search {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 160px;
+}
+.cards-search-icon {
+    position: absolute;
+    left: 10px;
+    display: flex;
+    color: var(--color-text-hint);
+    pointer-events: none;
+}
+.cards-search input {
+    width: 100%;
+    padding-left: 32px;
+}
+.cards-action {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Count cluster + selection cluster on ONE line, as two flex children, so the
+   line wraps between them rather than mid-button-group. */
+.cards-summary {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    padding: 8px 12px 6px;
+    flex-shrink: 0;
+    border-top: 1px solid var(--color-border);
+}
+.cards-summary-counts {
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+    color: var(--color-text-hint);
+    flex-shrink: 0;
+}
+/* Filter-in-flight indicator. Permanently present at a reserved width so the
+   selection cluster next to it never shifts when a chip is clicked; only
+   visibility flips. e/Offload latches the previous result, so the counts and
+   rows stay on screen and this marks them as superseded. */
+.cards-filtering {
+    display: inline-flex;
+    align-items: center;
+    width: 84px;
+    margin-left: 10px;
+    color: var(--color-primary-text);
+    visibility: hidden;
+}
+.cards-filtering--on { visibility: visible; }
+/* No keyframe ticking while the slot is hidden. */
+.cards-filtering:not(.cards-filtering--on) .spinner { animation: none; }
+.cards-summary-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 12px;
 }
 
 /* ── Sync-source chips ([FM]/[Anki]) ───────────────────────────── */
