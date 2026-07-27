@@ -243,6 +243,9 @@
            cmp (if (= sort-dir :asc) compare (fn [a b] (compare b a)))]
        (vec (sort-by key-fn cmp cards)))))
 
+;; Kinds with their own badge colour class; anything else renders as "basic".
+(def ^:private badge-kinds #{"overlapping" "cloze" "occlusion" "score"})
+
 ;; Kinds whose front cell spans both content columns (the back cell is hidden).
 (def ^:private span2-kinds #{"cloze" "occlusion" "score" "overlapping"})
 
@@ -541,12 +544,12 @@
 ;; ---------------------------------------------------------------------------
 
 ;; Selection checkbox cell
-(e/defn RowSelectCell [cell-style id !selected selected]
+(e/defn RowSelectCell [id !selected selected]
   (e/client
     (dom/td
-      (dom/props {:style (merge cell-style {:justify-content "center" :padding-inline "4px"})})
+      (dom/props {:class "card-cell-center"})
       (dom/input
-        (dom/props {:type "checkbox" :aria-label "Select card" :style {:cursor "pointer"}})
+        (dom/props {:type "checkbox" :aria-label "Select card"})
         (set! (.-checked dom/node) (contains? selected id))
         (dom/On "click"
           (fn [e]
@@ -555,14 +558,12 @@
           nil)))))
 
 ;; Diff cell — direction glyph + secondary Anki state icons; click → diff modal
-(e/defn RowDiffCell [cell-style sync-st flags diff-payload !diff-card]
+(e/defn RowDiffCell [sync-st flags diff-payload !diff-card]
   (e/client
     (let [direction (card-sync-direction sync-st flags)
           susp (:suspended flags)]
       (dom/td
-        (dom/props {:style (merge cell-style {:justify-content "center" :gap "3px"
-                                              :padding-inline "4px" :font-size "11px"
-                                              :cursor "pointer"})})
+        (dom/props {:class "card-cell-diff"})
         (tooltip/Tooltip! (direction-tooltip direction))
         (let [show-diff! (fn [e]
                            (.stopPropagation e)
@@ -573,13 +574,14 @@
           (dom/text (direction-glyph direction)))
         (when (:marked flags)
           (dom/span
-            (dom/props {:style {:color "var(--color-primary-text)" :font-size "9px"}})
+            (dom/props {:class "card-cell-glyph" :style {:color "var(--color-primary-text)"}})
             (tooltip/Tooltip! "Marked in Anki")
             (dom/text "★")))
         (when (and susp (pos? (:suspended susp)))
           (dom/span
-            (dom/props {:style {:color "var(--color-text-secondary)" :font-size "9px"
-                                ;; I3 tri-state: solid = all suspended, dimmed = partial
+            (dom/props {:class "card-cell-glyph"
+                        ;; I3 tri-state: solid = all suspended, dimmed = partial
+                        :style {:color "var(--color-text-secondary)"
                                 :opacity (if (= (:suspended susp) (:total susp)) "1" "0.45")}})
             (tooltip/Tooltip! (str (:suspended susp) " of " (:total susp)
                                 " card" (when (not= (:total susp) 1) "s")
@@ -589,20 +591,18 @@
 ;; Front + Back cells — span2? kinds (cloze/occlusion/score/overlapping) span
 ;; both content columns with the back cell hidden. front-html/back-html are
 ;; built server-side (card-front-html) so every kind renders one way.
-(e/defn RowContentCells [cell-style span2? id front-html back-html]
+(e/defn RowContentCells [span2? id front-html back-html]
   (e/client
     (dom/td
       (dom/props {:dir "auto"
-                  :class "card-row-cell"
-                  :style (merge cell-style (when span2? {:grid-column "span 2"}))})
+                  :class (str "card-row-cell" (when span2? " card-cell-span2"))})
       (e/for-by identity [_k [(str "f-" id)]]
         (dom/div
           (dom/props {:class "card-row-html"})
           (set-inner-html! dom/node front-html))))
     (dom/td
       (dom/props {:dir "auto"
-                  :class "card-row-cell"
-                  :style (merge cell-style (when span2? {:display "none"}))})
+                  :class (str "card-row-cell" (when span2? " card-cell-hidden"))})
       (e/for-by identity [_k [(str "b-" id)]]
         (dom/div
           (dom/props {:class "card-row-html"})
@@ -610,17 +610,16 @@
 
 ;; Document cell — "Root / Document", or "Root" alone when the card sits on the
 ;; root topic. Click navigates to the card's topic.
-(e/defn RowDocCell [cell-style doc-label topic-id navigate!]
+(e/defn RowDocCell [doc-label topic-id navigate!]
   (e/client
     (dom/td
-      (dom/props {:style (merge cell-style {:overflow "hidden" :cursor "pointer"})})
+      (dom/props {:class "card-cell-doc"})
       (let [open-document! (fn [e]
                              (.stopPropagation e)
                              (navigate! :viewer (nav/nav-topic topic-id :library)))]
         (dom/On "click" open-document! nil))
       (dom/span
-        (dom/props {:style {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"
-                            :font-size "12px" :color "var(--color-text-secondary)"}})
+        (dom/props {:class "card-cell-doc-label"})
         (tooltip/Tooltip! doc-label)
         (dom/text (or doc-label ""))))))
 
@@ -655,9 +654,6 @@
           doc-label (if (= topic-id root-topic-id)
                       root-title
                       (str root-title " / " topic-title))
-          cell-style {:padding-block "6px" :padding-inline "8px"
-                      :display "flex" :align-items "center"
-                      :border-bottom "1px solid var(--color-bg-subtle)"}
           ;; Occlusion/score have no in-place editor here — their editors live
           ;; in the topic view (occlusion modal / score toolbar), which need
           ;; doc-context /cards lacks. Route the click to the card's document
@@ -671,37 +667,34 @@
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt")
                     ;; 0-based absolute index → per-row translateY (C1c)
-                    :style {:--order i :cursor "pointer"}})
+                    :style {:--order i}})
         (dom/On "click" edit-card! nil)
-        (RowSelectCell cell-style id !selected selected)
-        (RowDiffCell cell-style sync-st (get anki-overlay id)
+        (RowSelectCell id !selected selected)
+        (RowDiffCell sync-st (get anki-overlay id)
           {:id id :kind kind :question question :answer answer
            :cloze cloze :note-id note-id}
           !diff-card)
         ;; Kind badge — clicking the row (anywhere) opens the editor via the tr.
         (dom/td
-          (dom/props {:style (merge cell-style {:padding-inline "4px"})})
+          (dom/props {:class "card-cell-badge"})
           (dom/span
-            (dom/props {:class "type-badge"
-                        :style {:background (case kind
-                                             "overlapping" "var(--color-badge-web, #7c5cbf)"
-                                             "cloze" "var(--color-badge-epub)"
-                                             "occlusion" "var(--color-badge-occlusion)"
-                                             "score" "var(--color-badge-score)"
-                                             "var(--color-badge-pdf)")}})
+            ;; Plain set membership, NOT `case` with grouped test constants —
+            ;; Electric compiles `case` specially and a ("a" "b") test list
+            ;; blanked the page (WS closed on boot).
+            (dom/props {:class (str "type-badge type-badge-"
+                                 (if (badge-kinds kind) kind "basic"))})
             (dom/text (case kind
                         "overlapping" "Overlap" "cloze" "Cloze"
                         "occlusion" "Occlusion" "score" "Score" "Basic"))))
-        (RowContentCells cell-style span2? id front-html back-html)
-        (RowDocCell cell-style doc-label topic-id navigate!)
+        (RowContentCells span2? id front-html back-html)
+        (RowDocCell doc-label topic-id navigate!)
         ;; Added
         (dom/td
-          (dom/props {:style (merge cell-style {:justify-content "flex-end" :padding-inline "6px"
-                                                :color "var(--color-text-secondary)" :font-size "12px"})})
+          (dom/props {:class "card-cell-added"})
           (dom/text (or added "")))
         ;; Delete
         (dom/td
-          (dom/props {:style (merge cell-style {:justify-content "center" :padding-inline "4px"})})
+          (dom/props {:class "card-cell-center"})
           (DeleteCardButton id user-id))))))
 
 ;; ---------------------------------------------------------------------------

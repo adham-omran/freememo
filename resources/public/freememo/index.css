@@ -3309,6 +3309,61 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     overflow: hidden;
 }
 
+/* ── Cards-table body cells ────────────────────────────────────────
+   Every body cell's layout lives here, NOT in an inline :style map. Electric
+   applies each style property as its own reactive prop, so a merged per-cell
+   map cost ~6 prop nodes × 8 cells × 22 windowed rows — measured as the
+   dominant share of row mount/unmount time. One :class string is one prop.
+   Only genuinely data-dependent colours stay inline. */
+.cards-table-body td {
+    padding-block: 6px;
+    padding-inline: 8px;
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid var(--color-bg-subtle);
+}
+.cards-table-body td.card-cell-center {
+    justify-content: center;
+    padding-inline: 4px;
+}
+.cards-table-body td.card-cell-diff {
+    justify-content: center;
+    gap: 3px;
+    padding-inline: 4px;
+    font-size: 11px;
+    cursor: pointer;
+}
+.cards-table-body td.card-cell-badge { padding-inline: 4px; }
+.cards-table-body td.card-cell-doc { cursor: pointer; }
+.cards-table-body td.card-cell-added {
+    justify-content: flex-end;
+    padding-inline: 6px;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+}
+.cards-table-body td.card-cell-span2 { grid-column: span 2; }
+.cards-table-body td.card-cell-hidden { display: none; }
+/* Static glyph sizes in the diff cell; the colours remain inline because they
+   are computed from sync direction. */
+.cards-table-body .card-cell-glyph { font-size: 9px; }
+.cards-table-body tr { cursor: pointer; }
+.cards-table-body input[type="checkbox"] { cursor: pointer; }
+/* Document cell's inner label — five static properties that were an inline map. */
+.card-cell-doc-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+}
+/* Kind badge colour by card kind, so the row passes ONE class string instead
+   of a computed inline background. */
+.type-badge-basic { background: var(--color-badge-pdf); }
+.type-badge-cloze { background: var(--color-badge-epub); }
+.type-badge-overlapping { background: var(--color-badge-web, #7c5cbf); }
+.type-badge-occlusion { background: var(--color-badge-occlusion); }
+.type-badge-score { background: var(--color-badge-score); }
+
 .card-row-html {
     overflow: hidden;
     white-space: nowrap;
