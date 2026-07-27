@@ -99,6 +99,7 @@
               dctx/bib-topic-id (:bib-topic-id m) dctx/initial-page (:initial-page m) dctx/target-page (:target-page m)
               dctx/pdf-has-file? (:pdf-has-file? m) dctx/pdf-page-count (:pdf-page-count m) dctx/top-pct (:top-pct m)
               dctx/top-bottom? (:top-bottom? m) dctx/top-split-pct (:top-split-pct m) dctx/left-pct (:left-pct m)
+              dctx/transcript-pct (:transcript-pct m) dctx/!transcript-pct (:!transcript-pct m)
               dctx/!total (:!total m) dctx/!nav-target (:!nav-target m) dctx/!top-split-pct (:!top-split-pct m)
               dctx/!left-pct (:!left-pct m) dctx/card-font-size (:card-font-size m) dctx/t-layout (:t-layout m)
               dctx/layout-save (:layout-save m) dctx/!top-pct (:!top-pct m) dctx/!top-pct-save (:!top-pct-save m)
