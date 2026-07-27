@@ -11,6 +11,7 @@
    [freememo.video :as video]
    [freememo.video-format :as vf]
    [freememo.video-http :as vh]
+   [freememo.video-import-modal :as import-modal]
    [freememo.right-side-panel :as rsp]
    [freememo.settings :as settings]
    [freememo.transcribe-language :as tlang]
@@ -122,18 +123,66 @@
   (is (= "0:00" (vf/format-ms -100)) "a negative position formats as the start, not as garbage"))
 
 (deftest mime-handling
-  (testing "only containers a browser can play are accepted — we never transcode"
+  (testing "containers ffmpeg can demux are accepted — non-MP4 is remuxed at ingest"
     (is (video/supported-mime? "video/mp4"))
     (is (video/supported-mime? "VIDEO/WEBM") "case and whitespace tolerant")
-    (is (not (video/supported-mime? "video/x-matroska")))
+    (is (video/supported-mime? "video/x-matroska"))
     (is (not (video/supported-mime? "application/octet-stream")))
     (is (not (video/supported-mime? nil))))
 
   (testing "extension is the fallback when the browser sends no usable type"
+    (is (= "video/x-matroska" (video/filename->mime "lecture.MKV"))
+      "labelled honestly, because the label seeds remux_pending")
     (is (= "video/webm" (video/filename->mime "lecture.WEBM")))
     (is (= "video/quicktime" (video/filename->mime "clip.mov")))
     (is (= "video/mp4" (video/filename->mime "unknown.bin")))
     (is (= "video/mp4" (video/filename->mime nil)))))
+
+;; ---------------------------------------------------------------------------
+;; §12.4 1 — container normalization
+;; ---------------------------------------------------------------------------
+
+(deftest container-classification
+  (testing "ffprobe's format family decides, not the filename (§12.4 1.2)"
+    (is (video/mp4-container? "mov,mp4,m4a,3gp,3g2,mj2"))
+    (is (not (video/mp4-container? "matroska,webm"))
+      "WebM shares Matroska's demuxer and is remuxed like any other non-MP4")
+    (is (not (video/mp4-container? "avi")))
+    (is (not (video/mp4-container? nil)))
+    (is (not (video/mp4-container? ""))))
+
+  (testing "a substring match would misclassify"
+    (is (not (video/mp4-container? "mp4v-es"))
+      "the family is comma-separated; only a whole element counts")))
+
+(deftest audio-remux-mode
+  (testing "codecs every browser decodes are copied"
+    (is (contains? video/browser-safe-audio "aac"))
+    (is (contains? video/browser-safe-audio "mp3")))
+
+  (testing "codecs MP4 accepts but browsers decode as silence are not"
+    (is (not (contains? video/browser-safe-audio "ac3"))
+      "measured: Chromium decodes 0 audio bytes from AC-3 and raises no error")
+    (is (not (contains? video/browser-safe-audio "dts")))
+    (is (not (contains? video/browser-safe-audio "truehd")))
+    (is (not (contains? video/browser-safe-audio "vorbis")))))
+
+;; ---------------------------------------------------------------------------
+;; §12.4 4.3 — the drop zone is the filter that actually holds
+;; ---------------------------------------------------------------------------
+
+(deftest dropped-file-filtering
+  (testing "accepted extensions, case-insensitively"
+    (is (import-modal/video-file? "lecture.mkv"))
+    (is (import-modal/video-file? "LECTURE.MKV"))
+    (is (import-modal/video-file? "clip.mp4"))
+    (is (import-modal/video-file? "clip.mov")))
+
+  (testing "everything else is rejected"
+    (is (not (import-modal/video-file? "notes.pdf")))
+    (is (not (import-modal/video-file? "mkv")) "bare word, no extension")
+    (is (not (import-modal/video-file? "")))
+    (is (not (import-modal/video-file? nil)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Transcription language — the list is .cljc so both peers resolve it

@@ -865,6 +865,14 @@
       )"])
     (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_videos_oid ON topic_videos(lo_oid)"])
 
+    ;; §12.4 3.1 — TRUE while the stored bytes are still the ones the browser
+    ;; uploaded and the pipeline may yet replace them with a remuxed MP4. The
+    ;; playback handler reads it to decide whether the response may be cached:
+    ;; `get-video-handler`'s 24-hour `max-age` rests on "the bytes behind a
+    ;; topic id never change", which is true only once this clears.
+    (jdbc/execute! ds ["ALTER TABLE topic_videos
+                        ADD COLUMN IF NOT EXISTS remux_pending BOOLEAN NOT NULL DEFAULT FALSE"])
+
     ;; §4.2 2.1 — usage_bytes is now SUM(topic_files.file_size) +
     ;; SUM(topic_videos.byte_size). Recomputed once, at the moment the table is
     ;; introduced: the video term is provably 0 then, so this only repairs
@@ -4639,11 +4647,62 @@
   [user-id topic-id]
   (jdbc/execute-one! ds
     ["SELECT tv.topic_id, tv.lo_oid, tv.byte_size, tv.mime_type,
-             tv.duration_ms, tv.last_pos_ms, t.title
+             tv.duration_ms, tv.last_pos_ms, tv.remux_pending, t.title
       FROM topic_videos tv JOIN topics t ON tv.topic_id = t.id
       WHERE tv.topic_id = ? AND t.user_id = ? AND t.staged_delete_id IS NULL"
      topic-id user-id]
     {:builder-fn rs/as-unqualified-maps}))
+
+(defn replace-video-bytes!
+  "§12.4 2.1/2.2 — swap a video's stored bytes for `file`, atomically with its
+   size, MIME and duration.
+
+   Rewrites the SAME large object rather than allocating a new OID: every sweep
+   job, the playback handler and `usage_bytes` all key off `lo_oid`, and
+   `lo/write-file!` truncates before writing, so the object ends exactly
+   `file`'s length. One transaction, because a size that disagrees with the
+   object is a `Content-Length` that lies.
+
+   Not gated by quota, matching `save-video-audio!`: the delta is a container
+   rewrite of bytes the quota already accepted (measured +0.59 % on 192 MB).
+   `usage_bytes` still moves, so any overage stays visible and is recovered on
+   deletion.
+
+   Pre:  topic-id has a topic_videos row; `file` is readable; the caller owns
+         the topic (checked upstream — this function does not re-check).
+   Post: {:ok true :size n}; remux_pending is FALSE, so the bytes are now
+         immutable and cacheable.
+   Invariant: byte_size = the object's real length = the delta applied to
+              usage_bytes."
+  [user-id topic-id ^java.io.File file mime-type duration-ms]
+  (jdbc/with-transaction [tx ds]
+    (let [row (jdbc/execute-one! tx
+                ["SELECT lo_oid, byte_size FROM topic_videos
+                  WHERE topic_id = ? FOR UPDATE" topic-id]
+                {:builder-fn rs/as-unqualified-maps})]
+      (if (nil? row)
+        {:ok false :error "Video row not found"}
+        (let [prior (long (:byte_size row))
+              size (lo/write-file! tx (:lo_oid row) file)]
+          (jdbc/execute! tx
+            ["UPDATE topic_videos
+              SET byte_size = ?, mime_type = ?, duration_ms = COALESCE(?, duration_ms),
+                  remux_pending = FALSE
+              WHERE topic_id = ?"
+             size mime-type (when duration-ms (int duration-ms)) topic-id])
+          (bump-user-usage! tx user-id (- size prior))
+          {:ok true :size size})))))
+
+(defn clear-video-remux-pending!
+  "Mark a video's bytes settled — no remux will replace them.
+
+   Called on every terminal outcome of the pipeline's normalization stage,
+   including failure: after a remux that MP4 cannot accept, the uploaded bytes
+   ARE the final bytes, and leaving the flag set would suppress caching forever
+   for a file that never changes again."
+  [topic-id]
+  (jdbc/execute! ds
+    ["UPDATE topic_videos SET remux_pending = FALSE WHERE topic_id = ?" topic-id]))
 
 (defn set-video-duration!
   "Record the ffprobe-measured duration (§4.4 4.3)."
@@ -4980,9 +5039,15 @@
                                    :returning [:id]}))
               topic-id (:topics/id topic)]
           (jdbc/execute! tx
-            [(str "INSERT INTO topic_videos (topic_id, lo_oid, byte_size, mime_type)
-                   VALUES (?, " oid-param ", ?, ?)")
-             topic-id (:lo_oid row) (:received_bytes row) (:mime_type row)])
+            [(str "INSERT INTO topic_videos (topic_id, lo_oid, byte_size, mime_type, remux_pending)
+                   VALUES (?, " oid-param ", ?, ?, ?)")
+             topic-id (:lo_oid row) (:received_bytes row) (:mime_type row)
+             ;; §12.4 3.1 — anything that is not already an MP4 is a remux
+             ;; candidate, so its bytes are not yet immutable and must not be
+             ;; cached. Derived from the declared MIME because finalize has not
+             ;; probed the file; the pipeline's probe is authoritative and
+             ;; clears this either way.
+             (not= "video/mp4" (:mime_type row))])
           (jdbc/execute! tx ["DELETE FROM video_upload_sessions WHERE id = ?" session-id])
           (audit-doc-created! user-id topic-id)
           {:ok true :topic-id topic-id})))))

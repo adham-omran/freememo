@@ -170,4 +170,8 @@
       [:audio nil]
 
       :else
-      [:reject "Unsupported file type. Supported: PDF, EPUB, HTML, Markdown, audio, code repo (.zip)."])))
+      ;; Video is deliberately absent from this dispatch — it has its own import
+      ;; modal and its own chunked-upload route — but naming it here is what
+      ;; tells a user who dropped an .mkv on the wrong target where to go.
+      [:reject (str "Unsupported file type. Supported: PDF, EPUB, HTML, Markdown, "
+                 "audio, code repo (.zip). Video has its own Import video option.")])))
