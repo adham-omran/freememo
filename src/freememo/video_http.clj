@@ -289,10 +289,20 @@
                 parsed (parse-range (get-in request [:headers "range"]) size)
                 base {"Content-Type" (or (:mime_type row) "video/mp4")
                       "Accept-Ranges" "bytes"
-                      ;; The bytes behind a topic id never change (no append
+                      ;; Settled bytes behind a topic id never change (no append
                       ;; path for video), so a long private cache is safe and
                       ;; spares repeated ranged round-trips on replay.
-                      "Cache-Control" "private, max-age=86400"}]
+                      ;;
+                      ;; While `remux_pending` is set that guarantee does not
+                      ;; hold: the pipeline may replace this object with a
+                      ;; remuxed MP4 (§12.4 3.1), and a client that cached the
+                      ;; pre-remux container would keep playing it for a day —
+                      ;; including in browsers that cannot decode it at all.
+                      ;; `no-store` for that window costs one re-fetch and keeps
+                      ;; the invariant the `max-age` branch rests on true.
+                      "Cache-Control" (if (:remux_pending row)
+                                        "no-store"
+                                        "private, max-age=86400")}]
             (cond
               (= :unsatisfiable parsed)
               {:status 416

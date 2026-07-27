@@ -83,23 +83,137 @@
   300000)
 
 (defn supported-mime?
-  "Whether a browser `<video>` can be expected to play this container.
-   Deliberately narrow: we do not transcode (§4.11 11.2), so an unplayable
-   upload would be stored bytes the user can never watch."
+  "Whether we accept this container for upload.
+
+   No longer 'whether a browser can play it': since §12 every non-MP4 container
+   is remuxed to MP4 at ingest, so acceptance is about what ffmpeg can demux,
+   not what the browser can decode. Matroska is admitted on that basis — it
+   plays in Chromium but not, as far as we have measured, in Safari."
   [mime]
-  (contains? #{"video/mp4" "video/webm" "video/ogg" "video/quicktime"}
+  (contains? #{"video/mp4" "video/webm" "video/ogg" "video/quicktime"
+               "video/x-matroska"}
     (some-> mime str/lower-case str/trim)))
 
 (defn filename->mime
-  "Best-effort video MIME from a filename extension. Defaults to video/mp4."
+  "Best-effort video MIME from a filename extension. Defaults to video/mp4.
+
+   Honest labelling matters here even though the label is provisional: it seeds
+   `topic_videos.remux_pending`, and a Matroska file recorded as video/mp4 —
+   which is what the missing .mkv branch used to produce — would be served with
+   a 24-hour cache lifetime before the pipeline replaced its bytes."
   [filename]
   (let [lower (some-> filename str/lower-case)]
     (cond
       (nil? lower) "video/mp4"
+      (str/ends-with? lower ".mkv") "video/x-matroska"
       (str/ends-with? lower ".webm") "video/webm"
       (str/ends-with? lower ".ogv") "video/ogg"
       (or (str/ends-with? lower ".mov") (str/ends-with? lower ".qt")) "video/quicktime"
       :else "video/mp4")))
+
+;; ── Container normalization (§12.4 1) ──────────────────────────────────────
+
+(defn mp4-container?
+  "Whether ffprobe's comma-joined format family names an MP4.
+
+   Matched against the family, not the filename: ffprobe reports
+   \"mov,mp4,m4a,3gp,3g2,mj2\" for MP4 and \"matroska,webm\" for Matroska, so a
+   Matroska file named `lecture.mp4` is correctly classified as needing a remux."
+  [container]
+  (contains? (set (str/split (or container "") #",")) "mp4"))
+
+(def browser-safe-audio
+  "Audio codecs every target browser decodes from an MP4.
+
+   AC-3, DTS, TrueHD and Vorbis are all legal in MP4 and all copy cleanly — and
+   Chromium then plays them as silence with no error event (measured: 0 audio
+   bytes decoded from an AC-3 track). Anything outside this set is re-encoded to
+   AAC, which is a transcode of the audio track only; §4.11 11.2's ban stays
+   intact for video."
+  #{"aac" "mp3"})
+
+(defn remux-stored-video!
+  "§12.4 1 — make a video topic's stored bytes a canonical, seekable MP4.
+
+   Stage 0 of the pipeline, run where `source` has already been streamed out of
+   the large object: remuxing anywhere else would pay a second full read of a
+   file that can be gigabytes.
+
+   Three outcomes, all of which leave a usable video:
+     :skipped   already an MP4 — nothing written, flag cleared
+     :remuxed   object replaced; returns the MP4 to continue the pipeline with
+     :failed    MP4 cannot hold this payload; the original bytes stay, and
+                duration, waveform, transcript and cards all still work
+
+   Remuxing is also the repair for an indexless Matroska file: written without
+   Cues it has no duration header and Chromium reports `seekable` [0,0], which
+   silently disables resume, transcript click-to-seek and extract ranges. The
+   MP4 written here always carries an index.
+
+   Pre:  `source` holds topic-id's stored bytes; `dir` is writable temp space
+         with room for a second copy of them.
+   Post: {:outcome kw :file F :probe P}, where `:file` is the file the rest of
+         the pipeline must read — `source` unless a remux replaced it — and
+         topic_videos.remux_pending is FALSE.
+   Invariant: on :remuxed, byte_size, mime_type and the object agree."
+  [user-id topic-id ^java.io.File source ^java.io.File dir]
+  (let [probe (ffmpeg/probe-media source)]
+    (cond
+      (not (:ok probe))
+      (do (db/clear-video-remux-pending! topic-id)
+          {:outcome :failed :file source :probe probe :error (:error probe)})
+
+      (mp4-container? (:container probe))
+      (do (db/clear-video-remux-pending! topic-id)
+          {:outcome :skipped :file source :probe probe})
+
+      ;; §12.4 2.4 — the remux writes a second full copy alongside the source.
+      ;; Refusing up front turns a disk-full into a named failure with the
+      ;; original bytes intact, rather than a half-written temp file and an
+      ;; IOException from inside ffmpeg.
+      (< (.getUsableSpace dir) (+ (.length source) (* 256 1024 1024)))
+      (do (log/log-warn (str "Video remux skipped for lack of temp space topic=" topic-id
+                          " need=" (.length source) " free=" (.getUsableSpace dir)))
+          (db/clear-video-remux-pending! topic-id)
+          {:outcome :failed :file source :probe probe
+           :error "Not enough temporary disk space to convert this video"})
+
+      :else
+      (let [audio-mode (if (or (nil? (:audio-codec probe))
+                             (contains? browser-safe-audio (:audio-codec probe)))
+                         :copy
+                         :aac)
+            out (io/file dir "normalized.mp4")
+            t-start (System/nanoTime)
+            r (ffmpeg/remux-to-mp4! source out audio-mode)]
+        (if-not (:ok r)
+          (do (log/log-warn (str "Video remux failed topic=" topic-id
+                              " container=" (:container probe)
+                              " error=" (:error r)))
+              (db/clear-video-remux-pending! topic-id)
+              {:outcome :failed :file source :probe probe :error (:error r)})
+          ;; Probe the OUTPUT for duration: an indexless source has none, and
+          ;; the MP4 just written always does.
+          (let [out-probe (ffmpeg/probe-media out)
+                saved (db/replace-video-bytes! user-id topic-id out "video/mp4"
+                        (:duration-ms out-probe))]
+            (tel/log! {:level :info :id ::remux
+                       :data {:user-id user-id :topic-id topic-id
+                              :in-container (:container probe)
+                              :video-codec (:video-codec probe)
+                              :audio-codec (:audio-codec probe)
+                              :audio-mode audio-mode
+                              :in-bytes (.length source)
+                              :out-bytes (.length out)
+                              :ms (long (/ (- (System/nanoTime) t-start) 1000000))}}
+              "Video remuxed to MP4")
+            (if (:ok saved)
+              {:outcome :remuxed :file out :probe out-probe}
+              ;; The object could not be replaced, so the stored bytes are still
+              ;; the original container — keep reading from it rather than from
+              ;; an MP4 that exists only in temp.
+              (do (db/clear-video-remux-pending! topic-id)
+                  {:outcome :failed :file source :probe probe :error (:error saved)}))))))))
 
 ;; ── Transcription ──────────────────────────────────────────────────────────
 
@@ -184,15 +298,18 @@
         (lo/copy-to-file! tx (:lo_oid row) file)))))
 
 (defn process-video!
-  "Run the full pipeline for one uploaded video.
+  "Run the full pipeline for one uploaded video: normalize → probe → extract
+   audio → chunk → transcribe.
 
    Pre:  topic-id is a kind='video' topic owned by user-id with a topic_videos
          row; ffmpeg and ffprobe are on PATH.
    Post: {:success true :segments n} with duration, extracted audio and
          transcript persisted; or {:success false :error S :stage kw}.
-   Partial success is intentional: duration and audio are committed before
-   transcription starts, so an API failure still leaves a playable, waveform-
-   scrubbable video. Re-running replaces the transcript wholesale."
+   Partial success is intentional: the container is normalized and duration and
+   audio are committed before transcription starts, so an API failure still
+   leaves a playable, waveform-scrubbable video. Re-running replaces the
+   transcript wholesale and is a no-op for normalization (§12.4 5.1) — the
+   second run probes an MP4 and skips."
   [user-id topic-id]
   (let [api-key (settings/get-openrouter-api-key user-id)]
     (ffmpeg/with-temp-dir "fm-video-"
@@ -207,14 +324,21 @@
               {:success false :error "Video not found" :stage :fetch}
 
               :else
-              (let [probe (ffmpeg/probe-duration-ms source)]
+              ;; Stage 0 (§12.4 1.1): normalize the container before anything
+              ;; reads the file, so every later stage — and the browser — sees
+              ;; one format. `media` is the file to work from: the remuxed MP4
+              ;; when there is one, else the bytes as uploaded.
+              (let [normalized (remux-stored-video! user-id topic-id source dir)
+                    ^java.io.File media (:file normalized)
+                    probe (:probe normalized)]
                 ;; A container we cannot probe is very likely one the browser
                 ;; cannot play either, but the bytes are already stored and paid
                 ;; for — record what we can and keep going rather than failing
-                ;; the whole upload.
-                (when (:ok probe)
+                ;; the whole upload. A remux has already written its duration.
+                (when (and (not= :remuxed (:outcome normalized))
+                        (:duration-ms probe))
                   (db/set-video-duration! topic-id (:duration-ms probe)))
-                (let [extracted (ffmpeg/extract-audio! source audio)]
+                (let [extracted (ffmpeg/extract-audio! media audio)]
                   (cond
                     (not (:ok extracted))
                     (do (log/log-warn (str "Video audio extraction failed topic=" topic-id

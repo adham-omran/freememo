@@ -9,6 +9,7 @@
    Every call is bounded: a malformed or adversarial container must not pin a
    worker thread forever."
   (:require
+   [cheshire.core :as json]
    [clojure.java.io :as io]
    [clojure.string :as str]
    [taoensso.telemere :as tel])
@@ -67,23 +68,75 @@
   (and (:ok (exec! ["ffprobe" "-version"] probe-timeout-ms))
        (:ok (exec! ["ffmpeg" "-version"] probe-timeout-ms))))
 
-(defn probe-duration-ms
-  "§4.4 4.3 — container duration of `file` in milliseconds.
-   Post: {:ok true :duration-ms n} or {:ok false :error S}. A container with no
-   duration header (a growing or truncated file) yields :ok false rather than 0,
-   so the caller stores NULL instead of a lie."
+(defn probe-media
+  "§4.4 4.3 / §12.4 1.2 — container, duration and first video/audio codec of
+   `file`, in one ffprobe call.
+
+   One call rather than three: ffprobe only reads headers, but each invocation
+   is a process spawn, and the pipeline needs all three facts at the same point.
+   The container name is what decides whether a remux is needed — never the
+   filename or the browser-declared MIME, both of which the user controls.
+
+   Post: {:ok true :container S :duration-ms n-or-nil :video-codec S-or-nil
+          :audio-codec S-or-nil} or {:ok false :error S}.
+   `:duration-ms` is nil — not 0, not an error — for a container with no
+   duration header (a stream-muxed or truncated file), so the caller stores
+   NULL instead of a lie. `:container` is ffprobe's comma-joined family name,
+   e.g. \"matroska,webm\" or \"mov,mp4,m4a,3gp,3g2,mj2\"."
   [^java.io.File file]
-  (let [r (exec! ["ffprobe" "-v" "error"
-                 "-show_entries" "format=duration"
-                 "-of" "default=noprint_wrappers=1:nokey=1"
+  (let [r (exec! ["ffprobe" "-v" "error" "-of" "json"
+                 "-show_entries" "format=format_name,duration:stream=codec_type,codec_name"
                  (.getAbsolutePath file)]
             probe-timeout-ms)]
     (if-not (:ok r)
       r
-      (let [secs (some-> (:out r) str/trim parse-double)]
-        (if (and secs (pos? secs))
-          {:ok true :duration-ms (long (Math/round (* 1000.0 secs)))}
-          {:ok false :error "Could not read a duration from this file"})))))
+      (try
+        (let [parsed (json/parse-string (:out r) true)
+              streams (:streams parsed)
+              codec-of (fn [t] (some #(when (= t (:codec_type %)) (:codec_name %)) streams))
+              secs (some-> (get-in parsed [:format :duration]) parse-double)]
+          {:ok true
+           :container (get-in parsed [:format :format_name])
+           :duration-ms (when (and secs (pos? secs)) (long (Math/round (* 1000.0 secs))))
+           :video-codec (codec-of "video")
+           :audio-codec (codec-of "audio")})
+        (catch Exception e
+          {:ok false :error (str "Could not read this file's format: " (.getMessage e))})))))
+
+(defn remux-to-mp4!
+  "§12.4 1.3/1.4 — rewrite `in` into `out` as MP4 without re-encoding video.
+
+   A container rewrite, not a transcode: the video stream is copied frame for
+   frame, so §4.11 11.2 (no re-encode, no resolution change) holds. Measured at
+   ≈335 MB/s — a 192 MB source remuxed in 0.60 s.
+
+   `audio-mode` is :copy or :aac. :aac re-encodes ONLY the audio track, for
+   codecs MP4 can carry but browsers cannot decode — Chromium plays an AC-3
+   track as silence with no error event, which is worse than a visible failure.
+
+   Streams are mapped explicitly. ffmpeg's default selection picks the audio
+   stream with the most channels, which on a film with a 5.1 commentary track is
+   the wrong one; `0:a:0?` takes the first and tolerates a video-only source
+   rather than erroring on it.
+
+   `+faststart` moves `moov` to the head (measured: offset 36, right after
+   `ftyp`). Without it the index sits at the tail and every seek costs a second
+   Range round-trip — and an indexless source stays unseekable.
+
+   Pre:  `in` is a readable media file; `out` does not need to exist.
+   Post: {:ok true} with `out` written, or {:ok false :error S} — including for
+         a payload MP4 cannot hold, which is the caller's fallback signal."
+  [^java.io.File in ^java.io.File out audio-mode]
+  (exec! (concat
+           ["ffmpeg" "-nostdin" "-y" "-v" "error"
+            "-i" (.getAbsolutePath in)
+            "-map" "0:v:0" "-map" "0:a:0?"
+            "-c:v" "copy"]
+           (if (= :aac audio-mode)
+             ["-c:a" "aac" "-b:a" "128k"]
+             ["-c:a" "copy"])
+           ["-movflags" "+faststart" (.getAbsolutePath out)])
+    transcode-timeout-ms))
 
 (defn extract-audio!
   "§4.4 4.4 — write `in`'s audio track to `out` as MP3, 32 kbps, mono, 16 kHz.

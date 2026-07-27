@@ -10,6 +10,7 @@
    Multi-select creates a `video-playlist` parent and hangs each video under it
    (§4.10 10.1). A single file becomes a root topic, as every other import does."
   (:require
+   [clojure.string :as str]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.modal-shell :as modal-shell]
@@ -22,10 +23,31 @@
    #?(:clj [freememo.video :as video])))
 
 (def accept-attr
-  "Containers a browser `<video>` can be expected to play. We never transcode
-   (§4.11 11.2), so offering a format the browser cannot decode would store
-   bytes the user can never watch."
-  "video/mp4,video/webm,video/ogg,video/quicktime,.mp4,.webm,.ogv,.mov")
+  "Containers we accept for upload.
+
+   Wider than what a browser can play, because since §12 anything that is not
+   already an MP4 is remuxed to one at ingest — a container rewrite, not a
+   transcode, so §4.11 11.2 still holds. Matroska is here on that basis: it
+   plays in Chromium and, as far as we have measured, not in Safari."
+  (str "video/mp4,video/webm,video/ogg,video/quicktime,video/x-matroska,"
+    ".mp4,.webm,.ogv,.mov,.mkv"))
+
+(def accepted-extensions
+  "The extension half of `accept-attr`, for filtering dropped files.
+
+   `accept` constrains the file dialog only, and every OS lets the user switch
+   it off; a drop bypasses it entirely. This is the check that actually holds."
+  #{".mp4" ".webm" ".ogv" ".mov" ".qt" ".mkv"})
+
+(defn video-file?
+  "Whether `filename` names a container we accept.
+
+   Extension, not MIME: browsers report an empty `File.type` for containers they
+   do not recognise, which would reject every .mkv on a machine with no
+   registered handler."
+  [filename]
+  (let [lower (some-> filename str/lower-case)]
+    (boolean (and lower (some #(str/ends-with? lower %) accepted-extensions)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Platform wrappers
@@ -67,6 +89,18 @@
    (defn total-bytes [files] (reduce + 0 (map (fn [^js f] (.-size f)) files)))
    :clj
    (defn total-bytes [_files] 0))
+
+#?(:cljs
+   (defn file-name [^js f] (.-name f))
+   :clj
+   (defn file-name [_f] ""))
+
+(defn partition-accepted
+  "Split chosen files into the ones we accept and the names of the ones we do not.
+   Post: {:accepted [file …] :rejected [name …]}."
+  [files]
+  {:accepted (vec (filter #(video-file? (file-name %)) files))
+   :rejected (mapv file-name (remove #(video-file? (file-name %)) files))})
 
 (defn start-upload!
   "Kick off the transfer. Returns nil immediately; results land in the atoms.
@@ -160,7 +194,21 @@
           ;; asked to abandon — the uploader then compensates the session, so the
           ;; bytes are reclaimed either way, but only after a wasted transfer.
           ;; Reached from the Cancel button, Escape (ModalEscape), and unmount.
-          close! (fn [] (reset! !cancel true) (reset! !show false))]
+          close! (fn [] (reset! !cancel true) (reset! !show false))
+          ;; One entry point for both the picker and the drop zone: `accept`
+          ;; only biases the file dialog, and a drop bypasses it entirely, so
+          ;; the filter has to live where the files arrive rather than on the
+          ;; input element.
+          choose-files! (fn [file-list]
+                          (let [{:keys [accepted rejected]}
+                                (partition-accepted (file-list->vec file-list))]
+                            (reset! !files accepted)
+                            (reset! !error
+                              (when (seq rejected)
+                                (str "Not a supported video: "
+                                  (str/join ", " (take 3 rejected))
+                                  (when (> (count rejected) 3)
+                                    (str " and " (- (count rejected) 3) " more")))))))]
 
       ;; Navigate out once the transfer finishes. Kept separate from the token
       ;; chain: the upload completes in a JS promise, long after the token's
@@ -182,8 +230,9 @@
           (dom/p
             (dom/props {:style {:margin "0 0 12px 0" :font-size "13px"
                                 :color "var(--color-text-secondary)"}})
-            (dom/text (str "MP4, WebM, OGV or MOV. Select several files to create a playlist. "
-                        "Audio is extracted and transcribed after upload.")))
+            (dom/text (str "MP4, MKV, WebM, OGV or MOV. Select several files to create a playlist. "
+                        "Anything that is not already an MP4 is converted after upload, "
+                        "then transcribed.")))
 
           ;; The two ceilings, stated before the picker. Discovering them by
           ;; having a 700 MB upload rejected is the failure this replaces.
@@ -217,7 +266,7 @@
               (fn [e]
                 (.preventDefault e)
                 (when-not busy?
-                  (reset! !files (file-list->vec (-> e .-dataTransfer .-files)))))
+                  (choose-files! (-> e .-dataTransfer .-files))))
               nil)
             (dom/div
               (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
@@ -230,7 +279,7 @@
                         :style {:display "none"}})
             (reset! !file-input dom/node)
             (dom/On "change"
-              (fn [e] (reset! !files (file-list->vec (-> e .-target .-files))))
+              (fn [e] (choose-files! (-> e .-target .-files)))
               nil))
 
           (when progress (UploadProgress progress))
