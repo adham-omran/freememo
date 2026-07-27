@@ -3309,6 +3309,24 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     overflow: hidden;
 }
 
+/* ── Cards-table header cells ──────────────────────────────────────
+   Same rule as the body cells: layout in CSS, not in a per-th inline :style
+   map. Eight merged maps in one e/defn body is both reactive-prop churn and
+   raw bytecode, and this component's body overflowed the 64 KB per-method cap
+   in the :prod build. */
+.cards-table-header th {
+    padding: 8px 6px;
+    border-bottom: 2px solid var(--color-border);
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--color-text-primary);
+    user-select: none;
+    text-align: left;
+}
+.cards-table-header th.cards-th-center { text-align: center; padding: 8px 4px; }
+.cards-table-header th.cards-th-right { text-align: right; }
+.cards-table-header th.cards-th-sortable { cursor: pointer; }
+
 /* ── Cards-table body cells ────────────────────────────────────────
    Every body cell's layout lives here, NOT in an inline :style map. Electric
    applies each style property as its own reactive prop, so a merged per-cell
