@@ -1,17 +1,16 @@
 (ns freememo.right-side-panel
-  "Right-side collapsible/resizable panel: Pins, AI Assistant, and — on video
-   topics — Transcript.
+  "Right-side collapsible/resizable panel: Pins and AI Assistant.
 
    Owns the panel chrome — collapse toggle, resize handle, and per-document
    open/width persistence (reusing the pins_open_/pins_width_ settings the pins
    panel used before it gained tabs). The active tab is persisted per document
    as assistant_tab_<root-id>. Tab bodies are rendered by freememo.pin-side-panel
-   (PinsBody), freememo.assistant-panel (AssistantPanel), and
-   freememo.video-transcript (VideoTranscriptPane).
+   (PinsBody) and freememo.assistant-panel (AssistantPanel).
 
-   The Transcript tab is conditional on kind='video'. A persisted \"transcript\"
-   tab therefore has to fall back — otherwise navigating from a video to a PDF
-   would select a tab that is not rendered and show an empty panel.
+   Video transcripts used to be a third tab here. They now render in the video's
+   own column (document-view's VideoSplitPane), because the transcript is read
+   against the video. resolve-tab still recognizes the retired \"transcript\"
+   value for users who have it persisted.
 
    Frame isolation: the subtree remounts only when root-topic-id changes (i.e.
    navigating between documents), so open/width/tab/active-chat state persists
@@ -23,31 +22,25 @@
    [freememo.hierarchy-side-panel :refer [SidePanelShell]]
    [freememo.pin-side-panel :refer [PinsBody]]
    [freememo.assistant-panel :refer [AssistantPanel]]
-   [freememo.video-transcript :refer [VideoTranscriptPane]]
    [freememo.viewport :as viewport]
    #?(:clj [freememo.settings :as settings])))
 
 (defn resolve-tab
-  "The tab actually shown, given the persisted preference and whether this topic
-   is a video.
+  "The tab actually shown, given the persisted preference.
 
-   Owns the default because it is the only place that knows the topic's kind:
-   a video with no saved preference opens on its transcript, everything else on
-   pins. `settings/get-assistant-tab` returns nil for 'never chosen' precisely
-   so this branch is reachable — it used to default to \"pins\" itself, which
-   made the video default dead code.
+   MIGRATION, not live behaviour: the Transcript tab no longer exists — the
+   transcript is rendered in the video's own column (document-view's
+   VideoSplitPane). The \"transcript\" case stays because users still carry that
+   value in assistant_tab_<root-id>; without it their panel would resolve to a
+   tab that is never rendered and show empty.
 
    Pre:  `persisted` is a tab name or nil.
-   Post: one of \"pins\" | \"assistant\" | \"transcript\"; never \"transcript\"
-         when `video?` is false, and never nil."
-  [persisted video?]
-  (cond
-    (= persisted "transcript") (if video? "transcript" "pins")
-    (= persisted "assistant")  "assistant"
-    (= persisted "pins")       "pins"
-    ;; nil (or anything unrecognized) = no preference → kind decides.
-    video?                     "transcript"
-    :else                      "pins"))
+   Post: \"pins\" or \"assistant\", never \"transcript\", never nil."
+  [persisted]
+  (case persisted
+    "assistant" "assistant"
+    ;; "transcript" (retired), "pins", nil, or anything unrecognized.
+    "pins"))
 
 (e/defn RightSidePanel [page-topic-id root-topic-id user-id]
   (e/client
@@ -69,12 +62,11 @@
             !width-save (atom nil)
             width-save (e/watch !width-save)
             [tw _] (e/Token width-save)
-            video? dctx/is-video?
             persisted-tab (e/server (settings/get-assistant-tab user-id root-topic-id))
-            !tab (atom (resolve-tab persisted-tab video?))
-            ;; Re-resolved on read, not just at seed: the seed runs once per
-            ;; root-topic-id frame, and `video?` can arrive after it.
-            tab (resolve-tab (e/watch !tab) video?)
+            !tab (atom (resolve-tab persisted-tab))
+            ;; Still re-resolved on read, not only at seed: the seed runs once
+            ;; per root-topic-id frame and persisted-tab arrives from the server.
+            tab (resolve-tab (e/watch !tab))
             !tab-save (atom nil)
             tab-save (e/watch !tab-save)
             [tt _] (e/Token tab-save)]
@@ -118,18 +110,9 @@
                 (dom/text "Assistant")
                 (dom/On "click"
                   (fn [_] (reset! !tab "assistant") (reset! !tab-save "assistant")) nil))
-              (when video?
-                (dom/button
-                  (dom/props {:class (str "side-panel__tab"
-                                       (when (= tab "transcript") " side-panel__tab--active"))
-                              :role "tab" :aria-selected (str (= tab "transcript"))})
-                  (dom/text "Transcript")
-                  (dom/On "click"
-                    (fn [_] (reset! !tab "transcript") (reset! !tab-save "transcript")) nil)))))
+))
           ;; Active tab body.
           (e/fn []
             (case tab
               "assistant" (AssistantPanel page-topic-id root-topic-id user-id)
-              "transcript" (binding [dctx/video-topic-id page-topic-id]
-                             (VideoTranscriptPane))
               (PinsBody page-topic-id user-id))))))))

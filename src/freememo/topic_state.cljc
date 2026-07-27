@@ -265,7 +265,13 @@
           !left-pct (atom 50)
           left-pct (e/watch !left-pct)
           !top-split-pct (atom 50)
-          top-split-pct (e/watch !top-split-pct)]
+          top-split-pct (e/watch !top-split-pct)
+          ;; Video column's vertical split: the video+waveform stack's share,
+          ;; the transcript below takes the rest. Its own atom rather than
+          ;; top-split-pct, whose meaning is the PDF pane's share when stacked.
+          ;; Session-only, like !left-pct — only top-pct and layout persist.
+          !transcript-pct (atom 50)
+          transcript-pct (e/watch !transcript-pct)]
       ;; Persist the split on drag-commit / double-click (global per-user).
       (when t-top-pct
         (let [r (e/server (e/Offload #(settings/save-card-split user-id top-pct-save)))]
@@ -274,7 +280,8 @@
       {:top-pct top-pct :!top-pct !top-pct :!top-pct-save !top-pct-save :reset-split! reset-split!
        :layout layout :layout-save layout-save :t-layout t-layout :toggle-layout! toggle-layout!
        :top-bottom? (= layout "top-bottom")
-       :left-pct left-pct :!left-pct !left-pct :top-split-pct top-split-pct :!top-split-pct !top-split-pct})))
+       :left-pct left-pct :!left-pct !left-pct :top-split-pct top-split-pct :!top-split-pct !top-split-pct
+       :transcript-pct transcript-pct :!transcript-pct !transcript-pct})))
 
 (e/defn DocumentViewState
   "Current PDF page, same-doc page-jump, effective content, and biblio toggle —

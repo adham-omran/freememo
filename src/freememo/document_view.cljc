@@ -14,6 +14,7 @@
    [freememo.pdf-toolbar :refer [PdfToolbar]]
    [freememo.score-toolbar :refer [ScoreToolbar ScoreWaveformStrip]]
    [freememo.video-pane :refer [VideoPane]]
+   [freememo.video-transcript :refer [VideoTranscriptPane]]
    [freememo.editor-pane :refer [EditorPane]]
    [freememo.bottom-panel :refer [ToolbarBar]]
    [freememo.bibliography-form :as bibform :refer [BibliographyForm]]
@@ -45,32 +46,29 @@
             (PdfPane)))))))
 
 (e/defn PaneDragHandle
-  "Drag handle between the PDF pane and the editor. Own e/defn for the 64KB
-   method cap."
-  []
+  "One resize handle between two panes. Own e/defn for the 64KB method cap.
+
+   Axis, target atom and label are ARGUMENTS rather than derived from
+   dctx/top-bottom?: a video document mounts two handles in one view (the
+   video|editor column split and the video-stack|transcript split), so a single
+   ambient switch can no longer identify which split a handle drives.
+
+   Pre:  `axis` is :x or :y; `!pct` holds a number 0-100; `pct` is its current
+         value; `label` names the two panes for assistive tech.
+   Post: pointer drag and arrow keys move `!pct` along `axis`.
+   Invariant: the handle mutates only `!pct` — it owns no layout state itself."
+  [axis !pct pct label]
   (e/client
-    (let [top-bottom? dctx/top-bottom? !top-split-pct dctx/!top-split-pct
-          !left-pct dctx/!left-pct
-          top-split-pct dctx/top-split-pct left-pct dctx/left-pct]
+    (let [vertical-split? (= axis :y)]
       (dom/div
-        (dom/props {:class (if top-bottom? "split-divider-v" "split-divider-h")
+        (dom/props {:class (if vertical-split? "split-divider-v" "split-divider-h")
                     :title "Drag to resize panels"
                     :role "separator"
-                    :aria-orientation (if top-bottom? "horizontal" "vertical")
-                    :aria-label "Resize PDF and editor panes" :tabindex "0"
-                    :aria-valuenow (str (int (or (if top-bottom? top-split-pct left-pct) 0)))})
-        (dom/On "pointerdown"
-          (fn [e]
-            (if top-bottom?
-              (util/start-drag! e :y !top-split-pct)
-              (util/start-drag! e :x !left-pct)))
-          nil)
-        (dom/On "keydown"
-          (fn [e]
-            (if top-bottom?
-              (util/key-resize-pct! e :y !top-split-pct nil)
-              (util/key-resize-pct! e :x !left-pct nil)))
-          nil)))))
+                    :aria-orientation (if vertical-split? "horizontal" "vertical")
+                    :aria-label label :tabindex "0"
+                    :aria-valuenow (str (int (or pct 0)))})
+        (dom/On "pointerdown" (fn [e] (util/start-drag! e axis !pct)) nil)
+        (dom/On "keydown" (fn [e] (util/key-resize-pct! e axis !pct nil)) nil)))))
 
 (e/defn PdfSplitPane
   "The PDF half of a document split: PdfPaneFrame + PaneDragHandle. Renders
@@ -80,7 +78,44 @@
   (e/client
     (when dctx/is-pdf?
       (PdfPaneFrame)
-      (PaneDragHandle))))
+      (if dctx/top-bottom?
+        (PaneDragHandle :y dctx/!top-split-pct dctx/top-split-pct
+          "Resize PDF and editor panes")
+        (PaneDragHandle :x dctx/!left-pct dctx/left-pct
+          "Resize PDF and editor panes")))))
+
+(e/defn VideoSplitPane
+  "The video half of a video document: player, waveform strip, a vertical
+   handle, then the transcript — stacked in a column sized by left-pct, with the
+   editor beside it. Renders nothing for non-video topics, mirroring
+   PdfSplitPane. Own e/defn for the 64KB method cap.
+
+   The transcript lives here rather than in RightSidePanel: it is read against
+   the video, so it belongs in the video's column. This reverses the rationale
+   previously recorded in ContentColumn.
+
+   Pre:  dctx/video-topic-id is bound by the caller (VideoTranscriptPane and
+         VideoPane both read it).
+   Post: DOM order is player, waveform, handle, transcript."
+  []
+  (e/client
+    (when dctx/is-video?
+      (dom/div
+        (dom/props {:style {:width (str dctx/left-pct "%")
+                            :display "flex" :flex-direction "column"
+                            :min-width "0" :min-height "0" :overflow "hidden"}})
+        ;; The stack's share of the column height; the transcript below is
+        ;; flex:1 and takes the remainder.
+        (dom/div
+          (dom/props {:style {:height (str dctx/transcript-pct "%")
+                              :display "flex" :flex-direction "column"
+                              :min-height "0" :overflow "hidden"}})
+          (VideoPane))
+        (PaneDragHandle :y dctx/!transcript-pct dctx/transcript-pct
+          "Resize video and transcript")
+        (VideoTranscriptPane))
+      (PaneDragHandle :x dctx/!left-pct dctx/left-pct
+        "Resize video and editor panes"))))
 
 (e/defn ContentColumn
   "Middle content column of a document view: the PdfPane/EditorPane split, laid
@@ -98,14 +133,6 @@
         ;; the audio segment picked here pairs with notation rects for cards.
         (when dctx/is-score?
           (ScoreWaveformStrip))
-        ;; Video topics: player + waveform strip above the content row. The
-        ;; fourth surface of §4.8 8.1, the transcript, is a tab in
-        ;; RightSidePanel beside Pins and Assistant — it is reference material
-        ;; the user consults, which is what that panel is for, and it inherits
-        ;; the panel's collapse and resize rather than owning a fixed column.
-        (when dctx/is-video?
-          (binding [dctx/video-topic-id page-topic-id]
-            (VideoPane)))
         (dom/div
           (dom/props {:style {:flex "1" :display "flex"
                               :flex-direction (if (and is-pdf? top-bottom?)
@@ -113,6 +140,12 @@
                                                 "row")
                               :min-height "0" :overflow "hidden"}})
           (PdfSplitPane)
+          ;; Video topics: the video column (player, waveform, transcript) sits
+          ;; INSIDE this row, so the editor is beside it rather than below it.
+          ;; All four surfaces of §4.8 8.1 remain visible and independently
+          ;; usable; only their arrangement changed.
+          (binding [dctx/video-topic-id page-topic-id]
+            (VideoSplitPane))
           (binding [dctx/topic-id page-topic-id
                     dctx/audio-topic-id (when (= kind "audio") page-topic-id)
                     dctx/is-pdf-page? is-pdf?

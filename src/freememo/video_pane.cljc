@@ -157,8 +157,14 @@
           ;; player is the element that should give up space — it has a picture
           ;; to scale, the strip has a fixed 72px canvas.
           (dom/props {:style {:background "#000" :display "flex" :justify-content "center"
-                              :align-items "center" :flex "0 1 auto" :min-height "0"
-                              :max-height "52vh" :overflow "hidden"}})
+                              :align-items "center" :flex "0 1 auto"
+                              ;; min-height, not max-height: the vertical drag
+                              ;; handle in VideoSplitPane owns this height now, and
+                              ;; a viewport-relative cap competed with it. The floor
+                              ;; keeps controls plus one line of video visible when
+                              ;; dragged to the extreme. FLAGGED: 120px is a chosen
+                              ;; starting value, not a measured one.
+                              :min-height "120px" :overflow "hidden"}})
           (dom/element "video"
             (dom/props {:controls true
                         :preload "metadata"
