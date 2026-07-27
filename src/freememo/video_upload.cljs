@@ -76,14 +76,19 @@
 (defn upload-file!
   "Upload one video end to end.
 
-   `opts`: {:file :parent-id :on-progress (fn [sent total]) :cancelled? (fn [])}
+   `opts`: {:file :parent-id :transcribe? :on-progress (fn [sent total])
+            :cancelled? (fn [])}
    Returns a Promise of the new topic id.
+
+   `:transcribe?` defaults to true and rides `finalize`, not `init`: the server
+   needs it only at the moment it launches the pipeline, and putting it on the
+   session row would be state to migrate for no gain (§15.3 3.2).
 
    `:cancelled?` is polled between chunks rather than mid-request: a chunk
    already in flight has already been paid for in bandwidth, and letting it land
    keeps `received_bytes` consistent with the object's real size."
-  [{:keys [^js file parent-id on-progress cancelled?]
-    :or {on-progress (fn [_ _]) cancelled? (fn [] false)}}]
+  [{:keys [^js file parent-id on-progress cancelled? transcribe?]
+    :or {on-progress (fn [_ _]) cancelled? (fn [] false) transcribe? true}}]
   (let [!session (atom nil)]
     (-> (post-json "/api/video/init"
           {:filename (.-name file)
@@ -96,7 +101,12 @@
                  (or (.-chunk_size d) default-chunk-bytes)
                  on-progress cancelled?)))
       (.then (fn [_]
-               (post-json "/api/video/finalize" {:session_id @!session})))
+               (post-json "/api/video/finalize"
+                 {:session_id @!session
+                  ;; Always sent, both values: `post-json` drops nil params, so
+                  ;; relying on omission to mean false would send nothing and the
+                  ;; server would read the absent-⇒-transcribe default.
+                  :transcribe (boolean transcribe?)})))
       (.then (fn [^js d] (.-doc_id d)))
       (.catch (fn [e]
                 ;; Compensate before re-throwing so the caller's error handler
@@ -116,9 +126,12 @@
 
    `on-file` receives {:index :count :filename :sent :total}. Resolves with the
    vector of created topic ids; rejects on the first failure, leaving already-
-   uploaded files in place (they are complete topics, not partial state)."
-  [{:keys [files parent-id on-file cancelled?]
-    :or {on-file (fn [_]) cancelled? (fn [] false)}}]
+   uploaded files in place (they are complete topics, not partial state).
+
+   `:transcribe?` applies to the whole batch (§15.3 3.5). Per-file would mean a
+   control on every staged row for a choice the user makes once."
+  [{:keys [files parent-id on-file cancelled? transcribe?]
+    :or {on-file (fn [_]) cancelled? (fn [] false) transcribe? true}}]
   (let [fs (vec files)
         n (count fs)]
     (letfn [(step [i acc]
@@ -128,6 +141,7 @@
                   (-> (upload-file!
                         {:file f
                          :parent-id parent-id
+                         :transcribe? transcribe?
                          :cancelled? cancelled?
                          :on-progress (fn [sent total]
                                         (on-file {:index i :count n

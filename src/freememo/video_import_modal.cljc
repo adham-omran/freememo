@@ -21,9 +21,11 @@
    [freememo.modal-shell :as modal-shell]
    [freememo.navigation :as nav]
    [freememo.commands :as commands]
-   [freememo.video-format :refer [format-bytes]]
+   [freememo.video-format :refer [format-bytes format-ms]]
    #?(:cljs [freememo.video-upload :as vu])
+   #?(:cljs [freememo.video-probe :as probe])
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.video :as video])))
 
@@ -84,6 +86,40 @@
   #?(:clj (let [id (db/create-video-playlist! user-id title)]
             (commands/bump! user-id :import-document)
             id)
+     :cljs nil))
+
+(defn transcribe-default*
+  "The user's persisted upload-time transcription default (§15.3 1.2).
+
+   `_refresh` for the same two reasons as `upload-limits*`: it keys the read, and
+   a zero-argument server call in a client `let` diverges between the two
+   compilers and kills the websocket.
+
+   Post: boolean; true for an account that has never set it."
+  [_refresh user-id]
+  #?(:clj (settings/get-video-transcribe-on-upload user-id)
+     :cljs true))
+
+(defn save-transcribe-default!*
+  "Persist the checkbox (§15.3 1.3).
+   Post: {:success true} / {:success false :error S}. Bumps nothing — the modal
+   drives its checkbox from a local atom, so there is no consumer to notify."
+  [user-id value]
+  #?(:clj (settings/save-video-transcribe-on-upload user-id value)
+     :cljs nil))
+
+(defn transcription-estimate*
+  "Credits for `seconds` of audio, plus the per-hour rate, or nils (§15.3 5.2).
+
+   Both figures in ONE server call: they need the same fx/markup lookup, and two
+   wrappers would double the round trip and the markup read for one line of copy.
+
+   Post: {:credits n-or-nil :hourly n-or-nil}. Both nil when credits are disabled
+         or fx/markup are unconfigured — self-host shows no estimate at all.
+         `:credits` alone is nil when no duration could be read."
+  [_refresh user-id seconds]
+  #?(:clj {:credits (video/transcription-cost-estimate user-id seconds)
+           :hourly (video/transcription-cost-estimate user-id 3600)}
      :cljs nil))
 
 (defn playlist-options*
@@ -158,6 +194,29 @@
       {:accepted (vec staged) :rejected [] :duplicates []}
       incoming)))
 
+(defn selection-duration
+  "Total known duration of a selection, and how much of it is unknown (§15.3 5.5).
+
+   Takes IDENTITIES rather than files so it is a pure function of data: `File` is
+   a browser type, and a fn keyed on it could not be tested on the JVM.
+
+   Pre:  `identities` are `file-identity` values for the CURRENTLY staged files,
+         in any order; `durations` maps some of them to seconds or nil.
+   Post: {:seconds n :unknown k}, where `n` sums only positive numbers and `k`
+         counts the rest — both 'probed and unreadable' (nil in the map) and
+         'not probed yet' (absent from it).
+   Invariant: derived from the passed identities, never from `durations`' own key
+         set. Summing the map would keep charging for a file the user removed —
+         entries are left behind on purpose so re-adding the same file needs no
+         second probe."
+  [identities durations]
+  (let [known (keep (fn [id]
+                      (let [s (get durations id)]
+                        (when (and (number? s) (pos? s)) s)))
+                identities)]
+    {:seconds (reduce + 0.0 known)
+     :unknown (- (count identities) (count known))}))
+
 (defn remove-from-selection
   "Drop the file at `idx`. Index, not identity: `add-to-selection` guarantees the
    vector is duplicate-free, so position is unambiguous and cheaper than
@@ -220,6 +279,119 @@
         dot (str/last-index-of nm ".")]
     (str/trim (if (and dot (pos? dot)) (subs nm 0 dot) nm))))
 
+(defn probe-durations!
+  "Probe each of `files` for its duration, recording results in `!durations`.
+
+   Pre:  `!durations` maps `file-identity` → seconds-or-nil; `files` is the whole
+         accepted selection (already-probed entries are skipped, so passing it
+         repeatedly is free).
+   Post: nil. Each unprobed file eventually gets an entry — a number when this
+         browser could read the container, nil when it could not.
+   Invariant: nil is RECORDED, never dropped. The key's PRESENCE is what prevents
+         a re-probe, and the nil value is what makes the file count as unknown
+         length in `selection-duration`.
+
+   A top-level `defn`, not a closure inside `VideoImportModal`. Two reasons, and
+   the first is a hard constraint: a reader conditional inside a `let` binding of
+   an `e/defn` body compiles to different signal counts on the two peers and
+   kills the websocket (CLAUDE.md). The second is scope — probing files is not
+   the modal's business, only calling it is."
+  [!durations files]
+  #?(:cljs (doseq [f files]
+             (let [id (file-identity f)]
+               (when-not (contains? @!durations id)
+                 (-> (probe/probe-duration-seconds! f)
+                   (.then (fn [secs] (swap! !durations assoc id secs)))))))
+     :clj nil))
+
+(defn transcription-estimate-message
+  "One line stating what transcribing this selection would cost, or nil.
+
+   Pre:  `estimate` is `transcription-estimate*`'s reading; `seconds` and
+         `unknown` come from `selection-duration`.
+   Post: nil when there is nothing honest to say — credits disabled, or fx/markup
+         unconfigured, which is the self-host case and yields both nils.
+   Invariant: an exact figure is claimed ONLY when every staged file's length was
+         read. A partial selection is stated as a floor plus what is missing
+         (§15.3 5.8), which is true; calling a partial sum 'the' cost is not.
+
+   The figure predicts; the ledger records. `usd-per-audio-minute` is list price
+   and the charge comes from the provider's own usage report, so the two differ."
+  [{:keys [credits hourly]} seconds unknown]
+  ;; Pluralized to match `storage-meter/storage-rate-label`, the app's other
+  ;; credit-figure copy — "1 credits" reads as a bug in the arithmetic.
+  (let [files (fn [n] (str n " file" (when (not= 1 n) "s")))
+        creds (fn [n] (str n " credit" (when (not= 1 n) "s")))]
+    (cond
+      (and credits (pos? unknown))
+      (str "≈ " (creds credits) " to transcribe " (format-ms (long (* 1000 seconds)))
+        " of video, plus " (files unknown) " of unknown length")
+
+      credits
+      (str "≈ " (creds credits) " to transcribe " (format-ms (long (* 1000 seconds)))
+        " of video")
+
+      ;; No duration at all — a container this browser cannot decode, or probes
+      ;; still in flight. The rate is the most specific true statement left.
+      hourly
+      (str "Transcription costs about " (creds hourly) " per hour")
+
+      :else nil)))
+
+(e/defn TranscriptionOption
+  "The skip-transcription checkbox and its cost estimate (§15.3 4.1/5.6).
+
+   Own e/defn for the 64KB method cap, as `StagedFileList` and
+   `UploadTargetControls` are. `!transcribe-choice` arrives positionally — an
+   atom inside a map is unserialisable — and does not feed an `e/Token`, so
+   passing it down is safe.
+
+   Rendered even when credits are disabled (§15.3 4.4): skipping still saves the
+   chunking and the provider calls on a self-host deployment, where `message` is
+   simply nil.
+
+   Pre:  `transcribe?` is the effective value (persisted default until the user
+         changes it). Post: on change, `!transcribe-choice` holds the new value
+         and the preference is persisted; the token spends on the server's reply."
+  [transcribe? busy? message user-id !transcribe-choice]
+  (e/client
+    (dom/div
+      (dom/props {:style {:display "flex" :flex-direction "column" :gap "4px"
+                          :margin-bottom "var(--sp-3)"}})
+      (dom/label
+        (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
+                           :font-size "13px" :cursor (if busy? "default" "pointer")}})
+        (dom/input
+          (dom/props {:type "checkbox" :disabled busy?})
+          ;; Imperative, from the effective value — the same shape the repo
+          ;; import's fact checkbox uses (import_modal.cljc:595).
+          (set! (.-checked dom/node) (boolean transcribe?))
+          ;; The handler reads `.checked` and returns it WRAPPED. Two reasons,
+          ;; both learned the hard way in this file: reading the DOM after a
+          ;; `reset!` on a watched atom reads a value the reactive `set!` above
+          ;; has already clobbered (§14.5), and a bare `false` as a token input
+          ;; is indistinguishable from 'no event yet'.
+          (let [change (dom/On "change" (fn [e] {:checked (-> e .-target .-checked)}) nil)
+                [t ?error] (e/Token change)]
+            (dom/props {:aria-busy (some? t) :aria-invalid (some? ?error)})
+            ;; Sibling guard, independent of the token chain: the local value
+            ;; must move with the click whether or not the write succeeds.
+            (when (some? change) (reset! !transcribe-choice (:checked change)))
+            (when t
+              (let [r (e/server (e/Offload #(save-transcribe-default!* user-id (:checked change))))]
+                (case r
+                  (if (:success r) (t) (t (:error r))))))))
+        (dom/text "Transcribe after upload"))
+      ;; §15.3 5.6 — gated on `transcribe?`, not just on the message existing: a
+      ;; cost quoted beside an unchecked box states a charge that will not happen.
+      ;; The gate lives here rather than in the caller because this is where the
+      ;; checkbox state is.
+      (when (and transcribe? message)
+        (dom/div
+          (dom/props {:style {:margin-left "24px" :font-size "12px"
+                              :color "var(--color-text-secondary)"}})
+          (dom/text message))))))
+
 (defn start-upload!
   "Kick off the transfer. Returns nil immediately; results land in the atoms.
 
@@ -230,13 +402,18 @@
 
    `!progress` is written per chunk, `!done` with the created topic ids,
    `!error` with a message. `!cancel` is a plain boolean atom the uploader
-   polls between chunks."
-  [files parent-id !uploading !progress !done !error !cancel]
+   polls between chunks.
+
+   `transcribe?` is a captured VALUE, not an atom: it is read once, at the moment
+   the token dispatched, so a checkbox toggled during a multi-minute transfer
+   cannot retroactively change what the already-finalized files did."
+  [files parent-id transcribe? !uploading !progress !done !error !cancel]
   #?(:cljs (do
              (reset! !uploading true)
              (-> (vu/upload-files!
                    {:files files
                     :parent-id parent-id
+                    :transcribe? transcribe?
                     :cancelled? (fn [] @!cancel)
                     :on-file (fn [p] (reset! !progress p))})
                (.then (fn [ids]
@@ -447,6 +624,25 @@
           !title (atom "")
           title (e/watch !title)
           title-default (derive-playlist-title (file-name (first files)))
+          ;; §15.3 1.5 — the persisted default governs until the user changes it,
+          ;; the same nil-means-follow shape as `!target` above. No `e/snapshot`:
+          ;; the server binding already resolves once at mount, and nothing bumps
+          ;; a channel that would re-read it mid-modal.
+          !transcribe-choice (atom nil)
+          transcribe-choice (e/watch !transcribe-choice)
+          transcribe-default (e/server (transcribe-default* refresh user-id))
+          transcribe? (if (nil? transcribe-choice) transcribe-default transcribe-choice)
+          ;; Probed durations, keyed by `file-identity`. Entries for removed files
+          ;; are left behind deliberately — `selection-duration` reads only the
+          ;; current selection, and re-adding a file then costs no second probe.
+          !durations (atom {})
+          durations (e/watch !durations)
+          {:keys [seconds unknown]} (selection-duration (mapv file-identity files) durations)
+          ;; Two ints; the whole map crosses once at the call below rather than
+          ;; per key. `(e/server …)` is the OUTERMOST form of the binding, which
+          ;; is what keeps it sited-by-use.
+          estimate (e/server (transcription-estimate* refresh user-id seconds))
+          estimate-message (transcription-estimate-message estimate seconds unknown)
           ;; Set at dispatch, read at navigation: the token frame that resolved
           ;; the parent is long gone by the time the transfer finishes.
           !uploaded-parent (atom nil)
@@ -481,6 +677,7 @@
           choose-files! (fn [file-list]
                           (let [outcome (add-to-selection @!files (file-list->vec file-list))]
                             (reset! !files (:accepted outcome))
+                            (probe-durations! !durations (:accepted outcome))
                             (reset! !error (selection-message outcome))))
           remove-file! (fn [idx] (swap! !files remove-from-selection idx))]
 
@@ -510,8 +707,8 @@
                                 :color "var(--color-text-secondary)"}})
             (dom/text (str "MP4, MKV, WebM, OGV or MOV. Add as many files as you like, "
                         "then choose whether they become separate documents or a playlist. "
-                        "Anything that is not already an MP4 is converted after upload, "
-                        "then transcribed.")))
+                        "Anything that is not already an MP4 is converted after upload. "
+                        "Transcription is optional — you can always run it later.")))
 
           ;; The two ceilings, stated before the picker. Discovering them by
           ;; having a 700 MB upload rejected is the failure this replaces.
@@ -584,6 +781,13 @@
             (UploadTargetControls target playlist-id playlist-options title-default busy?
               !target !target-chosen? !playlist-id !title))
 
+          ;; §15.3 4.1 — below the target controls, and inside the same
+          ;; staged-files gate: the estimate has nothing to compute over until a
+          ;; file exists, and an "Advanced" disclosure would bury a default that
+          ;; spends credits.
+          (when (seq files)
+            (TranscriptionOption transcribe? busy? estimate-message user-id !transcribe-choice))
+
           (when progress (UploadProgress progress))
 
           (when-let [msg (or error ?token-error)]
@@ -635,7 +839,8 @@
                                 nil))]
               (case parent-id
                 (case (reset! !uploaded-parent parent-id)
-                  (case (start-upload! files parent-id !uploading !progress !done !error !cancel)
+                  (case (start-upload! files parent-id (boolean transcribe?)
+                          !uploading !progress !done !error !cancel)
                     ;; The token is spent here, not when the upload finishes: it
                     ;; gated the parent-then-transfer ordering, and holding it for
                     ;; minutes would keep this frame alive across the whole

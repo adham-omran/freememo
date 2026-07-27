@@ -159,10 +159,46 @@
 
    Re-running is safe and total: duration and the extracted audio are
    overwritten, and `replace-video-transcript!` swaps the whole transcript in
-   one transaction. It does NOT touch `content` — only the Copy action does."
+   one transaction. It does NOT touch `content` — only the Copy action does.
+
+   Always passes transcribe? TRUE (§15.3 2.8). This button IS the request to
+   transcribe, so the upload-time preference has no bearing on it — a user who
+   skips at upload and clicks here must get a transcript."
   [user-id topic-id]
-  #?(:clj (video/start-processing! user-id topic-id)
+  #?(:clj (video/start-processing! user-id topic-id true)
      :cljs nil))
+
+(defn transcription-estimate*
+  "Credits transcribing this video would cost, or nil (§15.3 6.2).
+
+   Pre:  `duration-ms` is `dctx/video-duration-ms` — already fetched with the
+         topic overview, so this reads no row of its own. Stage 1 writes it long
+         before an empty transcript can render, which is why this needs none of
+         the import modal's browser probing.
+   Post: a long, or nil when credits are disabled, fx/markup are unconfigured, or
+         the pipeline never recorded a duration."
+  [user-id duration-ms]
+  #?(:clj (when duration-ms
+            (video/transcription-cost-estimate user-id (/ duration-ms 1000.0)))
+     :cljs nil))
+
+(defn empty-transcript-message
+  "What to show when a video has no transcript (§15.3 6.1).
+
+   Pre:  `credits` is `transcription-estimate*`'s reading — a long or nil;
+         `duration-ms` may be nil.
+   Post: a string, always. Never asserts that a transcript is on its way: the old
+         copy — \"It appears once the video has been processed\" — is false for a
+         video whose pipeline finished with transcription skipped, and equally
+         false when transcription failed. Skipped, failed and never-run are
+         indistinguishable from here, so the sentence must hold for all three.
+   Invariant: the figure is omitted, never the sentence (§15.3 6.3) — self-host
+         has no credits to quote and an unprobed video has no duration."
+  [credits duration-ms]
+  (if (and credits duration-ms)
+    (str "No transcript. Transcribe to create one — about " credits
+      " credit" (when (not= 1 credits) "s") " for " (format-ms duration-ms) ".")
+    "No transcript. Transcribe to create one."))
 
 (e/defn TranscriptRow
   "One segment: a timestamp gutter and the text. Clicking anywhere seeks.
@@ -279,7 +315,9 @@
           (dom/div
             (dom/props {:style {:padding "16px" :font-size "13px"
                                 :color "var(--color-text-secondary)"}})
-            (dom/text "No transcript yet. It appears once the video has been processed."))
+            (dom/text (empty-transcript-message
+                        (e/server (transcription-estimate* user-id dctx/video-duration-ms))
+                        dctx/video-duration-ms)))
           (dom/div
             (dom/props {:class "tape-scroll"
                         :style {:flex "1" :overflow-y "auto" :min-height "0"

@@ -140,17 +140,38 @@
         (json-response 500 {:success false :error "Chunk upload failed"})))
     (json-response 401 {:success false :error "Not authenticated"})))
 
+(defn transcribe-requested?
+  "Read the `transcribe` finalize param (§15.3 3.1).
+
+   Pre:  `params` is the request's string-keyed param map.
+   Post: false ONLY for the literal string \"false\"; true for absent, empty, and
+         anything unrecognized.
+   Invariant: absent ⇒ transcribe. The default is transcription (§15.1), so an
+         omitted param must reproduce the behaviour that shipped before the flag
+         existed — a client that does not know about it stays correct.
+
+   A named fn rather than an inline read so the fail-safe direction is testable
+   without a request map."
+  [params]
+  (not= "false" (get params "transcribe")))
+
 (defn finalize-handler
-  "POST /api/video/finalize — {session_id}.
+  "POST /api/video/finalize — {session_id, transcribe}.
 
    Creates the topic, hands the large object over to it, and kicks off the
    ffmpeg/Whisper pipeline in the background. The pipeline is deliberately not
    awaited: it runs for minutes, and the user should reach a playable video
-   immediately."
+   immediately.
+
+   `transcribe=false` still runs the pipeline — remux, duration and audio
+   extraction are what make the video playable and scrubbable — and stops before
+   the Whisper stage. Skipping `start-processing!` altogether would store an
+   unplayable file (§15.2)."
   [request]
   (if-let [user-id (require-auth request)]
     (try
-      (let [session-id (get-in request [:params "session_id"])]
+      (let [session-id (get-in request [:params "session_id"])
+            transcribe? (transcribe-requested? (:params request))]
         (if (str/blank? session-id)
           (json-response 400 {:success false :error "Missing session_id"})
           (let [r (db/finalize-video-upload! user-id session-id)]
@@ -158,7 +179,7 @@
               (json-response 400 {:success false :error (:error r)})
               (do
                 (commands/bump! user-id :import-document)
-                (video/start-processing! user-id (:topic-id r))
+                (video/start-processing! user-id (:topic-id r) transcribe?)
                 (json-response 200 {:success true :doc_id (:topic-id r)}))))))
       (catch Exception e
         (tel/error! {:id ::video-finalize} e)
