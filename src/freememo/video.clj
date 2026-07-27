@@ -14,6 +14,7 @@
    [clojure.java.io :as io]
    [clojure.string :as str]
    [freememo.commands :as commands]
+   [freememo.config :as config]
    [freememo.credits :as credits]
    [freememo.db :as db]
    [freememo.ffmpeg :as ffmpeg]
@@ -35,6 +36,41 @@
    [java.util.concurrent Executors]))
 
 (def ^:private model "openai/whisper-1")
+
+(def usd-per-audio-minute
+  "§15.3 5.1 — `model`'s list price, for the pre-flight ESTIMATE only.
+
+   Lives beside `model` rather than in `config.clj` because it is a property of
+   whisper-1, not of the deployment: changing the model is what changes the rate,
+   and a config knob would let the two drift apart silently.
+
+   The CHARGE never reads this. Every AI lane bills from OpenRouter's returned
+   `usage.cost` and the credit gate has no rate table on purpose
+   (`credits/check-cost-billed-balance!`), so this is the one place in the
+   codebase that predicts a price. Expect the estimate and the charge to differ."
+  (or (some-> (System/getenv "VIDEO_TRANSCRIBE_USD_PER_MINUTE") parse-double)
+    0.006))
+
+(defn transcription-cost-estimate
+  "Credits `seconds` of audio would cost to transcribe, or nil when unknowable.
+
+   Pre:  `seconds` is a number or nil.
+   Post: a non-negative long, or NIL when there is no honest figure to show —
+         credits disabled (self-host), fx or markup unconfigured, or a duration
+         we could not read. Callers render nil as 'no estimate', never as 0.
+   Invariant: indicative only. `record-cost-charge!` debits the provider's
+         reported cost, which this does not consult.
+
+   fx/markup are pre-checked rather than caught: `charge-iqd-from-usd` throws
+   when either is missing (it fails closed on the debit side, which is right
+   there and wrong here — an unconfigured deployment should show no estimate,
+   not 500 a modal)."
+  [user-id seconds]
+  (when (and (config/credits-enabled?)
+          (number? seconds) (pos? seconds)
+          (some? (config/fx-iqd-per-usd))
+          (some? (credits/resolve-markup user-id)))
+    (credits/charge-iqd-from-usd user-id (* (/ (double seconds) 60.0) usd-per-audio-minute))))
 
 (def max-video-bytes
   "Hard ceiling on one declared upload, independent of the user's quota.
@@ -298,19 +334,27 @@
         (lo/copy-to-file! tx (:lo_oid row) file)))))
 
 (defn process-video!
-  "Run the full pipeline for one uploaded video: normalize → probe → extract
-   audio → chunk → transcribe.
+  "Run the pipeline for one uploaded video: normalize → probe → extract audio →
+   chunk → transcribe. `transcribe?` false stops after the audio.
 
    Pre:  topic-id is a kind='video' topic owned by user-id with a topic_videos
-         row; ffmpeg and ffprobe are on PATH.
-   Post: {:success true :segments n} with duration, extracted audio and
-         transcript persisted; or {:success false :error S :stage kw}.
+         row; ffmpeg and ffprobe are on PATH. `transcribe?` is explicit — see
+         `start-processing!` for why there is no defaulting arity.
+   Post: {:success true :segments n :transcribed true} with duration, extracted
+         audio and transcript persisted; {:success true :segments 0 :transcribed
+         false} when transcription was skipped; or {:success false :error S
+         :stage kw}.
    Partial success is intentional: the container is normalized and duration and
    audio are committed before transcription starts, so an API failure still
    leaves a playable, waveform-scrubbable video. Re-running replaces the
    transcript wholesale and is a no-op for normalization (§12.4 5.1) — the
-   second run probes an MP4 and skips."
-  [user-id topic-id]
+   second run probes an MP4 and skips.
+
+   A skip (§15.3 2.2/2.3) reaches the SAME outcome the out-of-credits and
+   missing-key branches already produce, and by the same route: it exits after
+   `save-video-audio!` and before the credit gate. What differs is only that it
+   is a success, so no error toast fires for something the user asked for."
+  [user-id topic-id transcribe?]
   (let [api-key (settings/get-openrouter-api-key user-id)]
     (ffmpeg/with-temp-dir "fm-video-"
       (fn [dir]
@@ -349,7 +393,13 @@
                     (do
                       (db/save-video-audio! user-id topic-id
                         (java.nio.file.Files/readAllBytes (.toPath audio)))
-                      (let [gate (credits/check-cost-billed-balance! user-id)]
+                      ;; §15.3 2.2 — the cut, placed BEFORE the credit gate
+                      ;; rather than as a branch inside it: the gate reads the
+                      ;; user's balance from the DB, and a run the user asked not
+                      ;; to bill has no reason to ask what they can afford.
+                      (if-not transcribe?
+                        {:success true :segments 0 :transcribed false}
+                        (let [gate (credits/check-cost-billed-balance! user-id)]
                         (cond
                         (str/blank? api-key)
                         {:success false
@@ -416,7 +466,8 @@
                                                 :duration-ms (long (/ (- (System/nanoTime) t-start)
                                                                      1000000))}}
                                 "Video transcription")
-                              {:success true :segments (count segments)}))))))))))))))))
+                              {:success true :segments (count segments)
+                               :transcribed true})))))))))))))))))
 
 ;; ── Background execution (§4.4 4.8) ────────────────────────────────────────
 
@@ -436,26 +487,37 @@
 
    Deduplicated on (user, topic) through the `:processing-videos` set: a second
    request while one is in flight is dropped, which is what makes the UI's
-   disabled state honest rather than decorative."
-  [user-id topic-id]
+   disabled state honest rather than decorative.
+
+   Pre:  `transcribe?` is passed explicitly. There is deliberately NO 2-arity
+         defaulting it to true (§15.3 2.5): true is the branch that spends
+         credits, and a caller that inherits it by omission bills the user
+         without having said so. Two call sites exist — the upload's finalize
+         handler, which reads the user's preference, and the Transcribe button,
+         which always passes true."
+  [user-id topic-id transcribe?]
   (let [!in-flight (us/get-atom user-id :processing-videos)]
     (if (contains? @!in-flight topic-id)
       (do (log/log-info (str "Video processing already running topic=" topic-id)) nil)
       (do
         (swap! !in-flight conj topic-id)
         (commands/bump! user-id :process-video)
-        (log/log-info (str "Video processing started topic=" topic-id))
+        (log/log-info (str "Video processing started topic=" topic-id
+                        " transcribe=" (boolean transcribe?)))
         (letfn [(finish! []
                   (swap! !in-flight disj topic-id)
                   (commands/bump! user-id :process-video))]
           ((m/timeout
-             (m/via executor (process-video! user-id topic-id))
+             (m/via executor (process-video! user-id topic-id transcribe?))
              pipeline-timeout-ms
              {:success false :error "Video processing timed out" :stage :timeout})
            (fn [result]
              (if (:success result)
+               ;; §15.3 2.6 — `transcribed` distinguishes a skip from a run that
+               ;; transcribed silence. Both report segments=0.
                (log/log-info (str "Video processing complete topic=" topic-id
-                               " segments=" (:segments result)))
+                               " segments=" (:segments result)
+                               " transcribed=" (boolean (:transcribed result))))
                (do (log/log-warn (str "Video processing failed topic=" topic-id
                                    " stage=" (:stage result) " error=" (:error result)))
                    (toasts/push! user-id {:level :error :message (:error result)})))

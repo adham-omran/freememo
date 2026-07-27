@@ -39,6 +39,7 @@
 (def CARD_FONT_SIZE "card_font_size")
 (def SCAN_DPI "scan_dpi")
 (def TRANSCRIBE_LANGUAGE "transcribe_language")
+(def VIDEO_TRANSCRIBE_ON_UPLOAD "video_transcribe_on_upload")
 (def CARD_GEN_MAX_RETRIES "card_gen_max_retries")
 (def PROMPT_SYSTEM "prompt_system")
 (def PROMPT_OCR "prompt_ocr")
@@ -83,6 +84,35 @@
     (catch Exception e
       (tel/error! {:id ::save-email-updates} e)
       {:success false :error "Failed to save email updates preference"})))
+
+(defn get-video-transcribe-on-upload
+  "Whether an uploaded video is transcribed as part of its pipeline (§15.3 1.2).
+
+   Absent ⇒ TRUE: transcription is the default, so a user who has never touched
+   the checkbox gets the behaviour that shipped before it existed. The nil-is-true
+   shape is `get-llm-enabled`'s.
+
+   Post: boolean. Governs ONLY the upload path — the Transcribe button always
+   passes true, so this can never make that button a no-op."
+  [user-id]
+  (let [v (db/get-setting user-id VIDEO_TRANSCRIBE_ON_UPLOAD)]
+    (or (nil? v) (= "true" v))))
+
+(defn save-video-transcribe-on-upload
+  "Persist the upload-time transcription default (§15.3 1.3).
+
+   Pre:  `value` is truthy or falsey — anything, coerced by `boolean`.
+   Post: {:success true}, or {:success false :error S} with the exception logged.
+   Bumps nothing: the modal seeds its checkbox once at mount and drives display
+   from a local atom, exactly as the transcription-language field does. A
+   reactivity bump here would buy a re-read no one performs."
+  [user-id value]
+  (try
+    (db/set-setting user-id VIDEO_TRANSCRIBE_ON_UPLOAD (str (boolean value)))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-video-transcribe-on-upload} e)
+      {:success false :error "Failed to save the transcription preference"})))
 
 (defn get-openrouter-api-key
   "Resolve the OpenRouter key — the single provider key for OCR, card generation,

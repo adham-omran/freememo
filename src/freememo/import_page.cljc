@@ -126,7 +126,7 @@
               (ImportModal !show-audio user-id :audio navigate!)))
 
           (let [show-video (e/watch !show-video)]
-            (ImportCard :video "Video" "Upload one video or several as a playlist — transcribed after upload"
+            (ImportCard :video "Video" "Upload one video or several as a playlist — transcribe now or later"
               (fn [] (reset! !show-video true)))
             (when show-video
               (VideoImportModal !show-video user-id navigate!)))

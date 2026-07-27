@@ -8,6 +8,9 @@
    would silently corrupt."
   (:require
    [clojure.test :refer [deftest is testing]]
+   [freememo.config :as config]
+   [freememo.credits :as credits]
+   [freememo.db :as db]
    [freememo.video :as video]
    [freememo.video-format :as vf]
    [freememo.video-http :as vh]
@@ -359,3 +362,173 @@
         (is (= "0.50 credits per GB-month" (meter/storage-rate-label))))
       (with-redefs [meter/rate-iqd-per-gb-month (constantly 12.75)]
         (is (= "12.75 credits per GB-month" (meter/storage-rate-label)))))))
+
+;; ---------------------------------------------------------------------------
+;; §15.3 7.1 — Transcription cost estimate
+;; ---------------------------------------------------------------------------
+
+(deftest transcription-cost-estimate
+  ;; fx and markup redefined rather than read from config: the assertions below
+  ;; are the §10 pricing table, and a deployment that retunes either would make
+  ;; a correct implementation fail.
+  (with-redefs [config/credits-enabled? (constantly true)
+                config/fx-iqd-per-usd (constantly 1320)
+                credits/resolve-markup (constantly 2)]
+    (testing "reproduces §10's published table exactly"
+      (is (= 3 (video/transcription-cost-estimate 1 10)) "10 s clip")
+      (is (= 80 (video/transcription-cost-estimate 1 300)) "5 min")
+      (is (= 682 (video/transcription-cost-estimate 1 2580)) "43 min")
+      (is (= 2852 (video/transcription-cost-estimate 1 10800)) "3 h lecture"))
+
+    (testing "an unreadable duration yields nil, never 0 — the caller shows nothing"
+      (is (nil? (video/transcription-cost-estimate 1 nil)))
+      (is (nil? (video/transcription-cost-estimate 1 0)))
+      (is (nil? (video/transcription-cost-estimate 1 -5)))
+      (is (nil? (video/transcription-cost-estimate 1 "43")) "non-numeric is not a duration")))
+
+  (testing "self-host shows no estimate — there is no charge to predict"
+    (with-redefs [config/credits-enabled? (constantly false)
+                  config/fx-iqd-per-usd (constantly 1320)
+                  credits/resolve-markup (constantly 2)]
+      (is (nil? (video/transcription-cost-estimate 1 2580)))))
+
+  (testing "unconfigured pricing shows no estimate rather than throwing"
+    ;; charge-iqd-from-usd fails closed on the debit side, which is right there
+    ;; and wrong here — an unconfigured deployment must not 500 a modal.
+    (with-redefs [config/credits-enabled? (constantly true)
+                  config/fx-iqd-per-usd (constantly nil)
+                  credits/resolve-markup (constantly 2)]
+      (is (nil? (video/transcription-cost-estimate 1 2580))))
+    (with-redefs [config/credits-enabled? (constantly true)
+                  config/fx-iqd-per-usd (constantly 1320)
+                  credits/resolve-markup (constantly nil)]
+      (is (nil? (video/transcription-cost-estimate 1 2580))))))
+
+;; ---------------------------------------------------------------------------
+;; §15.3 7.2 — finalize's transcribe param
+;; ---------------------------------------------------------------------------
+
+(deftest transcribe-param-parsing
+  (testing "absent means transcribe — a client that predates the flag stays correct"
+    (is (true? (vh/transcribe-requested? {})))
+    (is (true? (vh/transcribe-requested? {"session_id" "abc"}))))
+
+  (testing "only the literal string \"false\" turns it off"
+    (is (false? (vh/transcribe-requested? {"transcribe" "false"}))))
+
+  (testing "everything else transcribes — the fail-safe direction is the default"
+    (is (true? (vh/transcribe-requested? {"transcribe" "true"})))
+    (is (true? (vh/transcribe-requested? {"transcribe" ""})))
+    (is (true? (vh/transcribe-requested? {"transcribe" "yes"})))
+    (is (true? (vh/transcribe-requested? {"transcribe" "0"}))
+      "0 is not false here — URLSearchParams sends the string \"false\"")
+    (is (true? (vh/transcribe-requested? {"transcribe" "FALSE"}))
+      "case-sensitive by design: the only writer is our own boolean->string")))
+
+;; ---------------------------------------------------------------------------
+;; §15.3 7.4 — duration summed over the CURRENT selection
+;; ---------------------------------------------------------------------------
+
+(deftest selection-duration
+  (let [a ["a.mp4" 100 1] b ["b.mp4" 200 2] c ["c.mkv" 300 3]]
+    (testing "sums the files passed, not the map's keys"
+      (is (= {:seconds 300.0 :unknown 0}
+            (import-modal/selection-duration [a b] {a 100.0 b 200.0})))
+      (is (= {:seconds 100.0 :unknown 0}
+            (import-modal/selection-duration [a] {a 100.0 b 200.0}))
+        "a removed file's leftover entry must not still be charged for"))
+
+    (testing "unprobed and unreadable both count as unknown"
+      (is (= {:seconds 100.0 :unknown 1}
+            (import-modal/selection-duration [a b] {a 100.0}))
+        "b never probed")
+      (is (= {:seconds 100.0 :unknown 1}
+            (import-modal/selection-duration [a b] {a 100.0 b nil}))
+        "b probed, browser could not decode it")
+      (is (= {:seconds 0.0 :unknown 2}
+            (import-modal/selection-duration [a b] {a nil b nil}))
+        "nothing readable — the caller falls back to the hourly rate"))
+
+    (testing "edge shapes"
+      (is (= {:seconds 0.0 :unknown 0} (import-modal/selection-duration [] {})))
+      (is (= {:seconds 0.0 :unknown 1} (import-modal/selection-duration [c] {c 0.0}))
+        "a zero duration is not a length")
+      (is (= {:seconds 0.0 :unknown 1} (import-modal/selection-duration [c] {c -1.0}))
+        "nor is a negative one"))))
+
+;; ---------------------------------------------------------------------------
+;; §15.3 5.6–5.8 / 6.1–6.3 — the two copy paths
+;; ---------------------------------------------------------------------------
+
+(deftest transcription-copy
+  (testing "an exact figure is claimed only when every file's length was read"
+    (is (= "≈ 682 credits to transcribe 43:00 of video"
+          (import-modal/transcription-estimate-message {:credits 682 :hourly 951} 2580 0))))
+
+  (testing "a partial selection is stated as a floor plus what is missing"
+    (is (= "≈ 682 credits to transcribe 43:00 of video, plus 1 file of unknown length"
+          (import-modal/transcription-estimate-message {:credits 682 :hourly 951} 2580 1)))
+    (is (= "≈ 682 credits to transcribe 43:00 of video, plus 2 files of unknown length"
+          (import-modal/transcription-estimate-message {:credits 682 :hourly 951} 2580 2))))
+
+  (testing "no readable duration falls back to the rate"
+    (is (= "Transcription costs about 951 credits per hour"
+          (import-modal/transcription-estimate-message {:credits nil :hourly 951} 0 1))))
+
+  (testing "one credit is singular — matches storage-rate-label's copy"
+    (is (= "≈ 1 credit to transcribe 0:01 of video"
+          (import-modal/transcription-estimate-message {:credits 1 :hourly 951} 1 0)))
+    (is (= "No transcript. Transcribe to create one — about 1 credit for 0:04."
+          (vt/empty-transcript-message 1 4000))))
+
+  (testing "self-host says nothing at all"
+    (is (nil? (import-modal/transcription-estimate-message {:credits nil :hourly nil} 0 1)))
+    (is (nil? (import-modal/transcription-estimate-message {} 0 0))))
+
+  (testing "the empty state never promises a transcript is coming"
+    (let [msg (vt/empty-transcript-message 682 2580000)]
+      (is (= "No transcript. Transcribe to create one — about 682 credits for 43:00." msg))
+      (is (not (re-find #"yet|once|processed" msg))
+        "the old copy was false for a video whose pipeline finished with a skip")))
+
+  (testing "the figure is omitted, never the sentence"
+    (is (= "No transcript. Transcribe to create one."
+          (vt/empty-transcript-message nil 2580000))
+      "credits disabled")
+    (is (= "No transcript. Transcribe to create one."
+          (vt/empty-transcript-message 682 nil))
+      "duration never recorded")))
+
+;; ---------------------------------------------------------------------------
+;; §15.3 7.3 — the persisted default
+;; ---------------------------------------------------------------------------
+
+(deftest transcribe-default-setting
+  (testing "absent means transcribe — the behaviour that shipped before the flag"
+    (with-redefs [db/get-setting (constantly nil)]
+      (is (true? (settings/get-video-transcribe-on-upload 1)))))
+
+  (testing "both stored values round-trip"
+    (with-redefs [db/get-setting (constantly "true")]
+      (is (true? (settings/get-video-transcribe-on-upload 1))))
+    (with-redefs [db/get-setting (constantly "false")]
+      (is (false? (settings/get-video-transcribe-on-upload 1)))))
+
+  (testing "an unrecognized stored value is not transcription"
+    (with-redefs [db/get-setting (constantly "maybe")]
+      (is (false? (settings/get-video-transcribe-on-upload 1)))
+      "only \"true\" and absence mean true — a corrupt row must not bill"))
+
+  (testing "the write coerces to a boolean string"
+    (let [!written (atom nil)]
+      (with-redefs [db/set-setting (fn [_ k v] (reset! !written [k v]))]
+        (is (= {:success true} (settings/save-video-transcribe-on-upload 1 false)))
+        (is (= [settings/VIDEO_TRANSCRIBE_ON_UPLOAD "false"] @!written))
+        (settings/save-video-transcribe-on-upload 1 "anything truthy")
+        (is (= [settings/VIDEO_TRANSCRIBE_ON_UPLOAD "true"] @!written)))))
+
+  (testing "a failed write is reported, not thrown"
+    (with-redefs [db/set-setting (fn [& _] (throw (Exception. "db down")))]
+      (let [r (settings/save-video-transcribe-on-upload 1 false)]
+        (is (false? (:success r)))
+        (is (string? (:error r)))))))
