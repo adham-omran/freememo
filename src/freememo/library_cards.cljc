@@ -623,6 +623,37 @@
         (tooltip/Tooltip! doc-label)
         (dom/text (or doc-label ""))))))
 
+(e/defn RowKindCell "
+Kind badge. Its own e/defn so LibraryCardRow's body is not a flat list of eight
+cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
+:prod build. Clicking anywhere on the row still opens the editor via the tr.
+"
+  [kind]
+  (e/client
+    (dom/td
+      (dom/props {:class "card-cell-badge"})
+      (dom/span
+        ;; Plain set membership, NOT `case` with grouped test constants —
+        ;; Electric compiles `case` specially and a ("a" "b") test list blanked
+        ;; the page (WS closed on boot).
+        (dom/props {:class (str "type-badge type-badge-"
+                             (if (badge-kinds kind) kind "basic"))})
+        (dom/text (case kind
+                    "overlapping" "Overlap" "cloze" "Cloze"
+                    "occlusion" "Occlusion" "score" "Score" "Basic"))))))
+
+(e/defn RowAddedCell [added]
+  (e/client
+    (dom/td
+      (dom/props {:class "card-cell-added"})
+      (dom/text (or added "")))))
+
+(e/defn RowDeleteCell [id user-id]
+  (e/client
+    (dom/td
+      (dom/props {:class "card-cell-center"})
+      (DeleteCardButton id user-id))))
+
 (e/defn LibraryCardRow [card navigate! !editing-card !diff-card !selected selected user-id i anki-overlay]
   (e/client
     ;; Plain client-sited keyword lookups, NOT 16 × (e/server (:k card)).
@@ -674,28 +705,11 @@
           {:id id :kind kind :question question :answer answer
            :cloze cloze :note-id note-id}
           !diff-card)
-        ;; Kind badge — clicking the row (anywhere) opens the editor via the tr.
-        (dom/td
-          (dom/props {:class "card-cell-badge"})
-          (dom/span
-            ;; Plain set membership, NOT `case` with grouped test constants —
-            ;; Electric compiles `case` specially and a ("a" "b") test list
-            ;; blanked the page (WS closed on boot).
-            (dom/props {:class (str "type-badge type-badge-"
-                                 (if (badge-kinds kind) kind "basic"))})
-            (dom/text (case kind
-                        "overlapping" "Overlap" "cloze" "Cloze"
-                        "occlusion" "Occlusion" "score" "Score" "Basic"))))
+        (RowKindCell kind)
         (RowContentCells span2? id front-html back-html)
         (RowDocCell doc-label topic-id navigate!)
-        ;; Added
-        (dom/td
-          (dom/props {:class "card-cell-added"})
-          (dom/text (or added "")))
-        ;; Delete
-        (dom/td
-          (dom/props {:class "card-cell-center"})
-          (DeleteCardButton id user-id))))))
+        (RowAddedCell added)
+        (RowDeleteCell id user-id)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Main view
@@ -1122,6 +1136,85 @@
 ;; removed by the runtime when the result's children arrive (Electric v3
 ;; mount bug, observed on the documents→cards branch switch); nothing in
 ;; this view may mount before the query result exists.
+(e/defn CardsSearchRow "
+Toolbar row 1: view switcher, search box, Check Anki.
+Split out of CardsFilterBar for the 64 KB per-e/defn bytecode cap — each
+e/defn compiles to one JVM method, and the three rows as flat siblings under
+one body overflowed it in the :prod build (dev never emits that bytecode).
+"
+  [navigate! ov-status initial-text !text !text-debounced !text-timer !check-tick]
+  (e/client
+    (dom/div
+      (dom/props {:class "cards-toolbar-row"})
+      (LibraryViewToggle navigate! true)
+      (dom/div
+        (dom/props {:class "cards-search"})
+        (dom/span
+          (dom/props {:class "cards-search-icon"})
+          (icons/Icon :search :size 15))
+        (dom/input
+          (dom/props {:type "text" :placeholder "Filter cards..." :class "input"})
+          ;; Seeded ONCE from the URL. e/snapshot freezes the first value, so
+          ;; this never fights the user's typing or moves the caret — the input
+          ;; is uncontrolled from here on.
+          (set! (.-value dom/node) (e/snapshot initial-text))
+          ;; Two writes per keystroke: !text is instant and drives the URL;
+          ;; !text-debounced lags 300 ms and drives the query. Undebounced,
+          ;; every keystroke ran a full query and typing marched through
+          ;; zero-result states, each costing ~2.4 s of main-thread block
+          ;; remounting the windowed rows.
+          (dom/On "input"
+            (fn [e]
+              (let [v (-> e .-target .-value)]
+                (reset! !text v)
+                (util/debounce! !text-timer !text-debounced v 300)))
+            nil)))
+      ;; Check Anki is an ACTION and must never share the chips' pill shape:
+      ;; shape encodes role in this toolbar.
+      (dom/button
+        (dom/props {:class "btn btn-sm btn-secondary cards-action"
+                    :disabled (= ov-status :checking)})
+        (tooltip/Tooltip! "Re-check Anki for edits, marks, suspensions and deletions")
+        (icons/Icon :refresh-cw :size 14)
+        (dom/text (if (= ov-status :checking) "Checking…" "Check Anki"))
+        (dom/On "click" (fn [_] (swap! !check-tick inc)) nil)))))
+
+(e/defn CardsKindFilterRow [kinds !kinds]
+  (e/client
+    (dom/div
+      (dom/props {:class "cards-toolbar-row" :role "group" :aria-label "Filter by card kind"})
+      (dom/span (dom/props {:class "filter-caption"}) (dom/text "Type"))
+      (e/for-by first [facet kind-facets]
+        (let [[v label] facet]
+          (FilterChip label (contains? kinds v) false nil
+            (fn [] (toggle-in! !kinds v))))))))
+
+(e/defn CardsSyncFilterRow "
+Toolbar row 3: sync-state chips, hairline divider, manual-flag chips. The
+divider is a category break for the eye only — origins and flags stay separate
+filter groups with separate atoms and separate query semantics.
+"
+  [origins flags anki-ready? !origins !flags]
+  (e/client
+    (dom/div
+      (dom/props {:class "cards-toolbar-row" :role "group" :aria-label "Filter by sync state"})
+      (dom/span (dom/props {:class "filter-caption"}) (dom/text "Sync"))
+      ;; An ACTIVE overlay-dependent chip stays clickable even without Anki:
+      ;; turning such a filter ON needs the live overlay, turning it OFF never
+      ;; does. Without this, the URL can seed ?sync=anki-changed while Anki is
+      ;; down and strand the user on 0 cards with no way to clear it.
+      (e/for-by first [facet origin-facets]
+        (let [[v label overlay? source] facet
+              active? (contains? origins v)]
+          (FilterChip label active? (and overlay? (not anki-ready?) (not active?)) source
+            (fn [] (toggle-in! !origins v)))))
+      (dom/span (dom/props {:class "filter-divider" :aria-hidden "true"}))
+      (e/for-by first [facet flag-facets]
+        (let [[v label] facet
+              active? (contains? flags v)]
+          (FilterChip label active? (and (not anki-ready?) (not active?)) nil
+            (fn [] (toggle-in! !flags v))))))))
+
 (e/defn CardsFilterBar [navigate! ov-status initial-text !text !text-debounced !text-timer
                         !kinds !origins !flags !check-tick]
   (e/client
@@ -1131,89 +1224,64 @@
           anki-ready? (= ov-status :ready)]
       (dom/div
         (dom/props {:class "cards-toolbar"})
+        (CardsSearchRow navigate! ov-status initial-text !text !text-debounced !text-timer !check-tick)
+        (CardsKindFilterRow kinds !kinds)
+        (CardsSyncFilterRow origins flags anki-ready? !origins !flags)))))
 
-        ;; Row 1 — view switcher, search, action. Check Anki is an ACTION and
-        ;; must never share the chips' pill shape: shape encodes role here.
-        (dom/div
-          (dom/props {:class "cards-toolbar-row"})
-          (LibraryViewToggle navigate! true)
-          (dom/div
-            (dom/props {:class "cards-search"})
-            (dom/span
-              (dom/props {:class "cards-search-icon"})
-              (icons/Icon :search :size 15))
-            (dom/input
-              (dom/props {:type "text" :placeholder "Filter cards..." :class "input"})
-              ;; Seeded ONCE from the URL. e/snapshot freezes the first value,
-              ;; so this never fights the user's typing or moves the caret —
-              ;; the input is uncontrolled from here on.
-              (set! (.-value dom/node) (e/snapshot initial-text))
-              ;; Two writes per keystroke: !text is instant and drives the URL;
-              ;; !text-debounced lags 300 ms and drives the query. Undebounced,
-              ;; every keystroke ran a full query and typing marched through
-              ;; zero-result states, each costing ~2.4 s of main-thread block
-              ;; remounting the windowed rows.
-              (dom/On "input"
-                (fn [e]
-                  (let [v (-> e .-target .-value)]
-                    (reset! !text v)
-                    (util/debounce! !text-timer !text-debounced v 300)))
-                nil)))
-          (dom/button
-            (dom/props {:class "btn btn-sm btn-secondary cards-action"
-                        :disabled (= ov-status :checking)})
-            (tooltip/Tooltip! "Re-check Anki for edits, marks, suspensions and deletions")
-            (icons/Icon :refresh-cw :size 14)
-            (dom/text (if (= ov-status :checking) "Checking…" "Check Anki"))
-            (dom/On "click" (fn [_] (swap! !check-tick inc)) nil)))
+(e/defn SelectAllCell "
+Header checkbox. Disabled at 0 results: with nothing to select,
+all-filtered-selected? stays false, so the reactive set! below work-skips and
+the browser's own toggle would leave the box visually checked over an empty
+selection.
+"
+  [result filtered-count all-filtered-selected? !selected]
+  (e/client
+    (dom/th
+      (dom/props {:class "cards-th-center"})
+      (dom/input
+        (dom/props {:type "checkbox" :disabled (zero? filtered-count)})
+        (tooltip/Tooltip! "Select all filtered" :aria? true)
+        (set! (.-checked dom/node) (boolean all-filtered-selected?))
+        ;; Token-gated so the id vector is subscribed only while this frame is
+        ;; mounted — from click until the swap lands. The effect is a local atom
+        ;; swap; `case` is here only to sequence it before spending the token.
+        (let [[t _err] (e/Token (dom/On "click" identity nil))]
+          (when t
+            (let [ids (e/server (vec (:filtered-ids result)))]
+              (case (if all-filtered-selected?
+                      (swap! !selected #(reduce disj % ids))
+                      (swap! !selected into ids))
+                (t)))))))))
 
-        ;; Row 2 — card-kind chips
-        (dom/div
-          (dom/props {:class "cards-toolbar-row" :role "group" :aria-label "Filter by card kind"})
-          (dom/span (dom/props {:class "filter-caption"}) (dom/text "Type"))
-          (e/for-by first [facet kind-facets]
-            (let [[v label] facet]
-              (FilterChip label (contains? kinds v) false nil
-                (fn [] (toggle-in! !kinds v))))))
-
-        ;; Row 3 — sync-state chips, hairline, manual-flag chips. The divider is
-        ;; a category break for the eye only; origins and flags stay separate
-        ;; filter groups with separate atoms and separate query semantics.
-        (dom/div
-          (dom/props {:class "cards-toolbar-row" :role "group" :aria-label "Filter by sync state"})
-          (dom/span (dom/props {:class "filter-caption"}) (dom/text "Sync"))
-          ;; An ACTIVE overlay-dependent chip stays clickable even without Anki:
-          ;; turning such a filter ON needs the live overlay, turning it OFF
-          ;; never does. Without this, the URL can seed ?sync=anki-changed while
-          ;; Anki is down and strand the user on 0 cards with no way to clear it.
-          (e/for-by first [facet origin-facets]
-            (let [[v label overlay? source] facet
-                  active? (contains? origins v)]
-              (FilterChip label active? (and overlay? (not anki-ready?) (not active?)) source
-                (fn [] (toggle-in! !origins v)))))
-          (dom/span (dom/props {:class "filter-divider" :aria-hidden "true"}))
-          (e/for-by first [facet flag-facets]
-            (let [[v label] facet
-                  active? (contains? flags v)]
-              (FilterChip label active? (and (not anki-ready?) (not active?)) nil
-                (fn [] (toggle-in! !flags v))))))))))
+(e/defn SortHeaderCell "
+One sortable column header. Extracted so CardsTableHeader's body is not a flat
+list of eight dom/th siblings — that shape overflows the 64 KB per-e/defn
+bytecode cap in the :prod build, which dev compilation never emits.
+"
+  [label col default-dir extra-class sort-col sort-dir !sort-col !sort-dir tip]
+  (e/client
+    (dom/th
+      (dom/props {:class (str "cards-th-sortable" (when extra-class (str " " extra-class)))})
+      (when tip (tooltip/Tooltip! tip))
+      (dom/text (str label (when (= sort-col col) (if (= sort-dir :asc) " \u25B2" " \u25BC"))))
+      (dom/On "click"
+        (fn [_]
+          (if (= col @!sort-col)
+            (swap! !sort-dir #(if (= % :asc) :desc :asc))
+            (do (reset! !sort-col col)
+              (reset! !sort-dir default-dir))))
+        nil))))
 
 ;; Fixed header table — sortable columns + select-all checkbox.
 ;; Takes COUNTS, not the id vector. Reading :filtered-ids in client scope — via
-;; seq/every?, or merely by closing over it in the click handler — materializes
+;; seq/every?, or merely by closing over it in a click handler — materializes
 ;; all N ids on the client on EVERY filter change (measured: 531 ms of
 ;; main-thread block at 2.9k cards). The ids now cross only while a select-all
-;; click is in flight, inside the token frame below.
+;; click is in flight, inside SelectAllCell's token frame.
 (e/defn CardsTableHeader [result filtered-count all-filtered-selected? !selected !sort-col !sort-dir]
   (e/client
     (let [sort-col (e/watch !sort-col)
-          sort-dir (e/watch !sort-dir)
-          sort-click (fn [col default-dir]
-                       (fn [_]
-                         (if (= col @!sort-col)
-                           (swap! !sort-dir #(if (= % :asc) :desc :asc))
-                           (do (reset! !sort-col col)
-                             (reset! !sort-dir default-dir)))))]
+          sort-dir (e/watch !sort-dir)]
       (dom/table
         (dom/props {:class "cards-table-header table-frame-head"
                     :style {:width "100%" :display "grid" :grid-template-columns grid-cols
@@ -1222,59 +1290,15 @@
           (dom/props {:style {:display "contents"}})
           (dom/tr
             (dom/props {:style {:display "contents"}})
-            (let [th-style {:padding "8px 6px" :border-bottom "2px solid var(--color-border)"
-                            :font-weight "600" :font-size "13px"
-                            :color "var(--color-text-primary)" :user-select "none"}
-                  arrow (fn [col] (when (= sort-col col)
-                                    (if (= sort-dir :asc) " ▲" " ▼")))]
-              (dom/th
-                (dom/props {:style (merge th-style {:text-align "center" :padding "8px 4px"})})
-                (dom/input
-                  ;; Disabled at 0 results: with nothing to select,
-                  ;; all-filtered-selected? stays false, so the reactive set!
-                  ;; below work-skips and the browser's own toggle would leave
-                  ;; the box visually checked with an empty selection.
-                  (dom/props {:type "checkbox"
-                              :disabled (zero? filtered-count)
-                              :style {:cursor "pointer"}})
-                  (tooltip/Tooltip! "Select all filtered" :aria? true)
-                  (set! (.-checked dom/node) (boolean all-filtered-selected?))
-                  ;; Token-gated so the id vector is subscribed only while this
-                  ;; frame is mounted — i.e. from click until the swap lands.
-                  ;; The effect is a local atom swap, so `case` is only here to
-                  ;; sequence it before spending the token.
-                  (let [[t _err] (e/Token (dom/On "click" identity nil))]
-                    (when t
-                      (let [ids (e/server (vec (:filtered-ids result)))]
-                        (case (if all-filtered-selected?
-                                (swap! !selected #(reduce disj % ids))
-                                (swap! !selected into ids))
-                          (t)))))))
-              (dom/th
-                (dom/props {:style (merge th-style {:text-align "center" :cursor "pointer"})})
-                (tooltip/Tooltip! "Sync direction (▲ push pending · ▼ pull pending · ▲▼ conflict · ○ unpushed) — sorts by DB state")
-                (dom/text (str "Δ" (arrow :status)))
-                (dom/On "click" (sort-click :status :asc) nil))
-              (dom/th
-                (dom/props {:style th-style})
-                (dom/text "Kind"))
-              (dom/th
-                (dom/props {:style (merge th-style {:text-align "left"})})
-                (dom/text "Front"))
-              (dom/th
-                (dom/props {:style (merge th-style {:text-align "left"})})
-                (dom/text "Back"))
-              (dom/th
-                (dom/props {:style (merge th-style {:text-align "left" :cursor "pointer"})})
-                (dom/text (str "Document" (arrow :document)))
-                (dom/On "click" (sort-click :document :asc) nil))
-              (dom/th
-                (dom/props {:style (merge th-style {:text-align "right" :cursor "pointer"})})
-                (dom/text (str "Added" (arrow :added)))
-                (dom/On "click" (sort-click :added :desc) nil))
-              (dom/th
-                (dom/props {:style th-style})
-                (dom/text "")))))))))
+            (SelectAllCell result filtered-count all-filtered-selected? !selected)
+            (SortHeaderCell "\u0394" :status :asc "cards-th-center" sort-col sort-dir !sort-col !sort-dir
+              "Sync direction (\u25B2 push pending \u00B7 \u25BC pull pending \u00B7 \u25B2\u25BC conflict \u00B7 \u25CB unpushed) — sorts by DB state")
+            (dom/th (dom/text "Kind"))
+            (dom/th (dom/text "Front"))
+            (dom/th (dom/text "Back"))
+            (SortHeaderCell "Document" :document :asc nil sort-col sort-dir !sort-col !sort-dir nil)
+            (SortHeaderCell "Added" :added :desc "cards-th-right" sort-col sort-dir !sort-col !sort-dir nil)
+            (dom/th (dom/text ""))))))))
 
 ;; Virtual-scrolled body. The table is ALWAYS mounted — it renders for every
 ;; card-count, including 0, and the empty-state message is an absolutely
@@ -1435,6 +1459,25 @@
           filters-active? filter-pending? scroll-reset-key
           anki-overlay ov-status !sort-col !sort-dir !editing-card)))))
 
+;; Pure derivations lifted OUT of LibraryCardsView's body. Each e/defn compiles
+;; to one JVM method against a 64 KB cap; plain defns get their own methods and
+;; cost the reactive method nothing. Both operate on values that are already
+;; client-side, so siting is unchanged.
+(defn- overlay-ids-for
+  "Overlay id-sets enter the query opts ONLY while a facet that needs them is
+   active — otherwise the query stays a pure function of the DB filters and
+   overlay changes trigger no re-query."
+  [origins flags anki-overlay]
+  (if (or (contains? origins "anki-changed")
+        (contains? origins "both")
+        (seq flags))
+    (overlay->filter-ids anki-overlay)
+    {:anki-changed #{} :marked #{} :suspended #{}}))
+
+(defn- build-query-opts [text kinds origins flags overlay-ids sort-col sort-dir]
+  {:text text :kinds kinds :origins origins :flags flags
+   :overlay-ids overlay-ids :sort-col sort-col :sort-dir sort-dir})
+
 (e/defn LibraryCardsView [user-id navigate! refresh]
   (e/client
     (let [;; Seed every filter from the query string, once. Read here and not
@@ -1471,17 +1514,8 @@
                                  (e/watch (us/get-atom user-id :sync-mutations)))]
                        (vec (e/Offload #(pushed-manifest* rev user-id)))))
           anki-overlay (AnkiOverlay user-id manifest !ov-status !ov-payload !check-tick)
-          ;; Overlay id-sets enter opts ONLY while a facet that needs them is
-          ;; active — otherwise the query stays a pure function of the DB filters
-          ;; and overlay changes trigger no re-query.
-          overlay-active? (or (contains? origins "anki-changed")
-                            (contains? origins "both")
-                            (seq flags))
-          overlay-ids (if overlay-active?
-                        (overlay->filter-ids anki-overlay)
-                        {:anki-changed #{} :marked #{} :suspended #{}})
-          opts {:text text-debounced :kinds kinds :origins origins :flags flags
-                :overlay-ids overlay-ids :sort-col sort-col :sort-dir sort-dir}
+          overlay-ids (overlay-ids-for origins flags anki-overlay)
+          opts (build-query-opts text-debounced kinds origins flags overlay-ids sort-col sort-dir)
           ;; URL sync — a side effect during binding evaluation, referenced by
           ;; the (when url-synced nil) below or Electric elides it. Driven by
           ;; `text` (instant), so the address bar tracks every keystroke while
