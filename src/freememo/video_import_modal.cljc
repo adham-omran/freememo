@@ -581,27 +581,196 @@
                     (reset! !title v))))
               (dom/On "input" (fn [e] (reset! !title (-> e .-target .-value))) nil))))))))
 
-(e/defn VideoImportModal
-  "Pick video files, choose where they land, and upload them.
+(e/defn StorageCeilings
+  "The two limits an upload must clear, stated before the picker.
 
-   Post: on success the modal closes and navigates to the playlist when there is
-   one, else to the first uploaded video. On failure the modal STAYS open with
-   the message — the session has already been compensated server-side, so
-   retrying is safe, and a file that finished before the failure is a complete
-   topic rather than partial state."
-  [!show user-id navigate!]
+   Discovering them by having a 700 MB upload rejected is the failure this
+   replaces. Display only — no atoms, no events.
+
+   Own e/defn for the 64KB method cap (§15.3 4.5): the prod build enforces a
+   limit the dev build does not, and `VideoImportModal` crossed it when §15 added
+   the checkbox and the estimate. Extracting whole sibling groups is the
+   documented remedy.
+
+   Pre:  `remaining-label` is nil for an account with no quota."
+  [per-video-label remaining-label]
   (e/client
-    (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
-          limits (e/server (upload-limits* refresh user-id))
-          per-video-label (e/server (:per-video-label limits))
-          remaining-label (e/server (:remaining-label limits))
-          ;; :tree-mutations, not :refresh — a playlist created here is a
-          ;; tree-shape change, and it is the channel `:import-document` bumps.
-          tree-rev (e/server (e/watch (us/get-atom user-id :tree-mutations)))
-          playlist-options (e/server (vec (playlist-options* tree-rev user-id)))
-          !files (atom [])
-          files (e/watch !files)
-          !target (atom nil)               ;; nil ⇒ still following the count
+    (dom/div
+      (dom/props {:style {:display "flex" :gap "16px" :flex-wrap "wrap"
+                          :padding "8px 10px" :margin-bottom "var(--sp-3)"
+                          :background "var(--color-bg-subtle)"
+                          :border-radius "var(--radius-md)" :font-size "12px"
+                          :color "var(--color-text-secondary)"}})
+      (dom/span
+        (dom/text "Max per video: ")
+        (dom/strong (dom/text (str per-video-label))))
+      (when remaining-label
+        (dom/span
+          (dom/text "Storage left: ")
+          (dom/strong (dom/text (str remaining-label))))))))
+
+(e/defn FilePicker
+  "The drop zone and the hidden input it opens.
+
+   One e/defn because they are one concern: `accept` only biases the file dialog
+   and a drop bypasses it entirely, so both routes must land on the same
+   `choose-files!`. Extracted for the same bytecode reason as `StorageCeilings`.
+
+   \"＋ Add more\" is deliberately NOT here — it renders below the staged list,
+   and folding it in would move it above (`AddMoreFilesButton`).
+
+   Pre:  `choose-files!` takes a FileList and owns filtering and dedupe.
+   Post: the hidden input's node is in `!file-input` while this is mounted, and
+         its value is cleared after every pick — otherwise re-picking a removed
+         file fires no `change` and the row cannot come back."
+  [files busy? !file-input choose-files!]
+  (e/client
+    (dom/div
+      (dom/props {:style {:border "2px dashed var(--color-border)"
+                          :border-radius "var(--radius-md)"
+                          :padding "28px" :text-align "center"
+                          :cursor (if busy? "default" "pointer")
+                          :opacity (if busy? "0.6" "1")
+                          :margin-bottom "var(--sp-3)"}})
+      (dom/On "click" (fn [_] (when-not busy?
+                                (when-some [inp @!file-input] (.click inp))))
+        nil)
+      (dom/On "dragover" (fn [e] (.preventDefault e)) nil)
+      (dom/On "drop"
+        (fn [e]
+          (.preventDefault e)
+          (when-not busy?
+            (choose-files! (-> e .-dataTransfer .-files))))
+        nil)
+      (dom/div
+        (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
+        (dom/text (if (seq files)
+                    (str (count files) " file" (when (> (count files) 1) "s")
+                      " · " (format-bytes (total-bytes files)))
+                    "Drop video files here or click to browse"))))
+    (dom/input
+      (dom/props {:type "file" :accept accept-attr :multiple true
+                  :style {:display "none"}})
+      (reset! !file-input dom/node)
+      (dom/On "change"
+        (fn [e]
+          (choose-files! (-> e .-target .-files))
+          (set! (-> e .-target .-value) ""))
+        nil))))
+
+(e/defn AddMoreFilesButton
+  "Reopens `FilePicker`'s hidden input without clearing what is staged (§14.3 1.4).
+
+   Pre:  `!file-input` holds the node `FilePicker` mounted — so this must render
+         inside the same modal, after it.
+   Post: a click opens the file dialog; the pick APPENDS, because `choose-files!`
+         is the only writer and it accumulates."
+  [busy? !file-input]
+  (e/client
+    (dom/div
+      (dom/props {:style {:margin-bottom "var(--sp-3)"}})
+      (dom/button
+        (dom/props {:class "btn btn-sm btn-secondary" :disabled busy?})
+        (dom/text "＋ Add more")
+        (dom/On "click"
+          (fn [_] (when-not busy?
+                    (when-some [inp @!file-input] (.click inp))))
+          nil)))))
+
+(e/defn UploadActionButtons
+  "The Cancel/Upload row.
+
+   Callbacks rather than atoms: the parent owns every atom this row would touch,
+   and passing two closures keeps this component free of them. Extracted for the
+   64KB cap (§15.3 4.5).
+
+   Pre:  `on-cancel` cancels an in-flight transfer when busy and closes the modal
+         otherwise; `on-upload` arms the dispatch token.
+   Post: Cancel stays enabled while busy — that is how a running transfer is
+         stopped, and the modal stays open so the message is readable."
+  [busy? upload-disabled? on-cancel on-upload]
+  (e/client
+    (dom/div
+      (dom/props {:style {:display "flex" :justify-content "flex-end"
+                          :gap "var(--sp-2)"}})
+      (dom/button
+        (dom/props {:class "btn btn-secondary"})
+        (dom/text (if busy? "Cancel upload" "Cancel"))
+        (dom/On "click" (fn [_] (on-cancel)) nil))
+      (dom/button
+        (dom/props {:class "btn btn-primary" :disabled upload-disabled?})
+        (dom/text (if busy? "Uploading…" "Upload"))
+        (dom/On "click" (fn [_] (on-upload)) nil)))))
+
+(e/defn ResolveParentThenStart
+  "Create or choose the parent topic, THEN begin the transfer (§14.3 5.1).
+
+   `case` sequences the two — a plain `do` is concurrent in Electric, so the
+   upload would race the playlist's creation and orphan every child at the root.
+
+   Pre:  `t` is a live token; `start!` is a 1-arg fn taking the resolved
+         parent-id (nil for `separate`) and returning nil immediately.
+   Post: `!uploaded-parent` holds the parent before the transfer starts, and the
+         token is spent once the transfer has STARTED — not when it finishes.
+         Holding it for the minutes an upload takes would pin this frame; `busy?`
+         is driven by the uploader's atoms instead.
+   Invariant: `!uploaded-parent` is written before `start!` and read later by the
+         navigation, whose own frame no longer has this one's bindings."
+  [t target playlist-id playlist-title user-id !uploaded-parent start!]
+  (e/client
+    (let [parent-id (e/server
+                      (case target
+                        "new" (e/Offload #(create-playlist!* user-id playlist-title))
+                        "existing" playlist-id
+                        nil))]
+      (case parent-id
+        (case (reset! !uploaded-parent parent-id)
+          (case (start! parent-id)
+            (t)))))))
+
+(e/defn NavigateWhenDone
+  "Leave the modal for the uploaded content once the transfer completes.
+
+   Its own token, separate from the dispatch chain: the upload finishes inside a
+   JS promise long after the dispatch token's server call returned, so it needs
+   its own trigger.
+
+   Pre:  `done` is the non-empty vector of created topic ids.
+   Post: navigates to `uploaded-parent` when there is one, else the first video
+         (§14.3 5.2), and closes the modal on unmount so the close happens after
+         the navigation rather than racing it."
+  [done uploaded-parent navigate! close!]
+  (e/client
+    (let [[nav-t _] (e/Token done)]
+      (when nav-t
+        (e/on-unmount close!)
+        (case (navigate! :viewer (nav/nav-topic (or uploaded-parent (first done)) nil))
+          (nav-t))))))
+
+(e/defn UploadOptionsAndCommit
+  "Everything the user configures about an upload, plus the commit that acts on
+   it: the target, the playlist title, the transcription choice and its estimate,
+   the Cancel/Upload row, and the parent-then-transfer dispatch.
+
+   Options and commit live in ONE component on purpose, and it is what makes the
+   split possible: every value the Upload button's disabled state and the
+   dispatch need — target, playlist-id, title, transcribe? — is derived here, so
+   none of it has to cross back up. Splitting them apart would push nineteen
+   reactive bindings into the parent, which is exactly the 64KB overflow this
+   fixes (§15.3 4.5).
+
+   Pre:  `t` is the dispatch token or nil; `start!` takes [parent-id transcribe?]
+         and returns nil immediately; `on-cancel`/`on-upload` are the parent's
+         closures over the uploader atoms; `!durations` is written by the parent's
+         file picker and only READ here.
+   Post: on commit, `!uploaded-parent` holds the resolved parent and the transfer
+         has started.
+   Invariant: `transcribe?` is captured at commit and handed to `start!`, so a
+         checkbox toggled mid-transfer cannot change what already finalized."
+  [files busy? playlist-options user-id refresh t
+   on-cancel on-upload start! !durations !uploaded-parent]
+  (e/client
+    (let [!target (atom nil)               ;; nil ⇒ still following the count
           !target-chosen? (atom false)
           target-choice (e/watch !target)
           target-chosen? (e/watch !target-chosen?)
@@ -622,17 +791,65 @@
           transcribe-choice (e/watch !transcribe-choice)
           transcribe-default (e/server (transcribe-default* refresh user-id))
           transcribe? (if (nil? transcribe-choice) transcribe-default transcribe-choice)
-          ;; Probed durations, keyed by `file-identity`. Entries for removed files
-          ;; are left behind deliberately — `selection-duration` reads only the
-          ;; current selection, and re-adding a file then costs no second probe.
-          !durations (atom {})
           durations (e/watch !durations)
           {:keys [seconds unknown]} (selection-duration (mapv file-identity files) durations)
           ;; Two ints; the whole map crosses once at the call below rather than
           ;; per key. `(e/server …)` is the OUTERMOST form of the binding, which
           ;; is what keeps it sited-by-use.
           estimate (e/server (transcription-estimate* refresh user-id seconds))
-          estimate-message (transcription-estimate-message estimate seconds unknown)
+          estimate-message (transcription-estimate-message estimate seconds unknown)]
+
+      (when (seq files)
+        (UploadTargetControls target playlist-id playlist-options title-default busy?
+          !target !target-chosen? !playlist-id !title))
+
+      ;; §15.3 4.1 — below the target controls, and inside the same staged-files
+      ;; gate: the estimate has nothing to compute over until a file exists, and
+      ;; an "Advanced" disclosure would bury a default that spends credits.
+      (when (seq files)
+        (TranscriptionOption transcribe? busy? estimate-message user-id !transcribe-choice))
+
+      ;; §14.3 3.4 — "existing" with nothing chosen is a state the UI can
+      ;; prevent, so Upload disables rather than erroring after the click.
+      (UploadActionButtons busy?
+        (or busy? (empty? files)
+          (and (= target "existing") (nil? playlist-id)))
+        on-cancel on-upload)
+
+      (when t
+        ;; Blank title falls back to the derived default rather than blocking the
+        ;; upload (§14.3 4.3); check-length! is the server's own backstop.
+        (ResolveParentThenStart t target playlist-id
+          (let [typed (str/trim (or title ""))]
+            (if (str/blank? typed) title-default typed))
+          user-id !uploaded-parent
+          (fn [parent-id] (start! parent-id (boolean transcribe?))))))))
+
+(e/defn VideoImportModal
+  "Pick video files, choose where they land, and upload them.
+
+   Post: on success the modal closes and navigates to the playlist when there is
+   one, else to the first uploaded video. On failure the modal STAYS open with
+   the message — the session has already been compensated server-side, so
+   retrying is safe, and a file that finished before the failure is a complete
+   topic rather than partial state."
+  [!show user-id navigate!]
+  (e/client
+    (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
+          limits (e/server (upload-limits* refresh user-id))
+          per-video-label (e/server (:per-video-label limits))
+          remaining-label (e/server (:remaining-label limits))
+          ;; :tree-mutations, not :refresh — a playlist created here is a
+          ;; tree-shape change, and it is the channel `:import-document` bumps.
+          tree-rev (e/server (e/watch (us/get-atom user-id :tree-mutations)))
+          playlist-options (e/server (vec (playlist-options* tree-rev user-id)))
+          !files (atom [])
+          files (e/watch !files)
+          ;; Probed durations, keyed by `file-identity`. Written here (the picker
+          ;; lives here), read by `UploadOptionsAndCommit`. Entries for removed
+          ;; files are left behind deliberately — `selection-duration` reads only
+          ;; the current selection, so re-adding a file costs no second probe.
+          !durations (atom {})
           ;; Set at dispatch, read at navigation: the token frame that resolved
           ;; the parent is long gone by the time the transfer finishes.
           !uploaded-parent (atom nil)
@@ -671,19 +888,8 @@
                             (reset! !error (selection-message outcome))))
           remove-file! (fn [idx] (swap! !files remove-from-selection idx))]
 
-      ;; Navigate out once the transfer finishes. Kept separate from the token
-      ;; chain: the upload completes in a JS promise, long after the token's
-      ;; server call returned, so it needs its own trigger.
       (when (and done (seq done))
-        (let [[nav-t _] (e/Token done)]
-          (when nav-t
-            (e/on-unmount close!)
-            ;; §14.3 5.2 — land on the playlist when there is one. It used to
-            ;; always navigate to `(first done)`, the first VIDEO, which
-            ;; contradicted this component's own docstring.
-            (case (navigate! :viewer
-                    (nav/nav-topic (or uploaded-parent (first done)) nil))
-              (nav-t)))))
+        (NavigateWhenDone done uploaded-parent navigate! close!))
 
       (dom/div
         (dom/props {:class "modal-backdrop"})
@@ -700,83 +906,11 @@
                         "Anything that is not already an MP4 is converted after upload. "
                         "Transcription is optional — you can always run it later.")))
 
-          ;; The two ceilings, stated before the picker. Discovering them by
-          ;; having a 700 MB upload rejected is the failure this replaces.
-          (dom/div
-            (dom/props {:style {:display "flex" :gap "16px" :flex-wrap "wrap"
-                                :padding "8px 10px" :margin-bottom "var(--sp-3)"
-                                :background "var(--color-bg-subtle)"
-                                :border-radius "var(--radius-md)" :font-size "12px"
-                                :color "var(--color-text-secondary)"}})
-            (dom/span
-              (dom/text "Max per video: ")
-              (dom/strong (dom/text (str per-video-label))))
-            (when remaining-label
-              (dom/span
-                (dom/text "Storage left: ")
-                (dom/strong (dom/text (str remaining-label))))))
-
-          ;; Drop zone / picker
-          (dom/div
-            (dom/props {:style {:border "2px dashed var(--color-border)"
-                                :border-radius "var(--radius-md)"
-                                :padding "28px" :text-align "center"
-                                :cursor (if busy? "default" "pointer")
-                                :opacity (if busy? "0.6" "1")
-                                :margin-bottom "var(--sp-3)"}})
-            (dom/On "click" (fn [_] (when-not busy?
-                                      (when-some [inp @!file-input] (.click inp))))
-              nil)
-            (dom/On "dragover" (fn [e] (.preventDefault e)) nil)
-            (dom/On "drop"
-              (fn [e]
-                (.preventDefault e)
-                (when-not busy?
-                  (choose-files! (-> e .-dataTransfer .-files))))
-              nil)
-            (dom/div
-              (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
-              (dom/text (if (seq files)
-                          (str (count files) " file" (when (> (count files) 1) "s")
-                            " · " (format-bytes (total-bytes files)))
-                          "Drop video files here or click to browse"))))
-          (dom/input
-            (dom/props {:type "file" :accept accept-attr :multiple true
-                        :style {:display "none"}})
-            (reset! !file-input dom/node)
-            (dom/On "change"
-              (fn [e]
-                (choose-files! (-> e .-target .-files))
-                ;; Clear the input's own value, or picking the SAME file again
-                ;; after removing it fires no "change" event and the row cannot
-                ;; be restored.
-                (set! (-> e .-target .-value) ""))
-              nil))
-
+          (StorageCeilings per-video-label remaining-label)
+          (FilePicker files busy? !file-input choose-files!)
           (StagedFileList files busy? remove-file!)
-
-          ;; "＋ Add more" — the same input, without clearing what is staged.
           (when (seq files)
-            (dom/div
-              (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-              (dom/button
-                (dom/props {:class "btn btn-sm btn-secondary" :disabled busy?})
-                (dom/text "＋ Add more")
-                (dom/On "click"
-                  (fn [_] (when-not busy?
-                            (when-some [inp @!file-input] (.click inp))))
-                  nil))))
-
-          (when (seq files)
-            (UploadTargetControls target playlist-id playlist-options title-default busy?
-              !target !target-chosen? !playlist-id !title))
-
-          ;; §15.3 4.1 — below the target controls, and inside the same
-          ;; staged-files gate: the estimate has nothing to compute over until a
-          ;; file exists, and an "Advanced" disclosure would bury a default that
-          ;; spends credits.
-          (when (seq files)
-            (TranscriptionOption transcribe? busy? estimate-message user-id !transcribe-choice))
+            (AddMoreFilesButton busy? !file-input))
 
           (when progress (UploadProgress progress))
 
@@ -786,53 +920,13 @@
                                   :margin-bottom "var(--sp-3)"}})
               (dom/text (str msg))))
 
-          ;; Actions
-          (dom/div
-            (dom/props {:style {:display "flex" :justify-content "flex-end"
-                                :gap "var(--sp-2)"}})
-            (dom/button
-              (dom/props {:class "btn btn-secondary"})
-              (dom/text (if busy? "Cancel upload" "Cancel"))
-              ;; While busy, cancel the transfer but KEEP the modal open so the
-              ;; "Upload cancelled" message lands somewhere the user can see it.
-              (dom/On "click"
-                (fn [_] (if busy? (reset! !cancel true) (close!)))
-                nil))
-            (dom/button
-              ;; §14.3 3.4 — "existing" with nothing chosen is a state the UI can
-              ;; prevent, so it disables rather than erroring after the click.
-              (dom/props {:class "btn btn-primary"
-                          :disabled (or busy? (empty? files)
-                                      (and (= target "existing") (nil? playlist-id)))})
-              (dom/text (if busy? "Uploading…" "Upload"))
-              (dom/On "click"
-                (fn [_]
-                  (reset! !error nil)
-                  (reset! !cancel false)
-                  (reset! !start (js/Date.now)))
-                nil)))
-
-          ;; Token chain: resolve the parent server-side (creating it when the
-          ;; target says so), THEN start the client transfer. `case` sequences
-          ;; them — a plain `do` is concurrent in Electric and the upload would
-          ;; race the parent's creation, orphaning every child at the root.
-          (when t
-            (let [;; Blank falls back to the derived default rather than blocking
-                  ;; the upload (§14.3 4.3); check-length! is the server's own
-                  ;; backstop.
-                  playlist-title (let [typed (str/trim (or title ""))]
-                                   (if (str/blank? typed) title-default typed))
-                  parent-id (e/server
-                              (case target
-                                "new" (e/Offload #(create-playlist!* user-id playlist-title))
-                                "existing" playlist-id
-                                nil))]
-              (case parent-id
-                (case (reset! !uploaded-parent parent-id)
-                  (case (start-upload! files parent-id (boolean transcribe?)
-                          !uploading !progress !done !error !cancel)
-                    ;; The token is spent here, not when the upload finishes: it
-                    ;; gated the parent-then-transfer ordering, and holding it for
-                    ;; minutes would keep this frame alive across the whole
-                    ;; transfer. `busy?` is driven by the atoms instead.
-                    (t)))))))))))
+          ;; While busy, Cancel stops the transfer but KEEPS the modal open so the
+          ;; "Upload cancelled" message lands somewhere the user can see it.
+          (UploadOptionsAndCommit files busy? playlist-options user-id refresh t
+            (fn [] (if busy? (reset! !cancel true) (close!)))
+            (fn [] (reset! !error nil) (reset! !cancel false)
+              (reset! !start (js/Date.now)))
+            (fn [parent-id transcribe?]
+              (start-upload! files parent-id transcribe?
+                !uploading !progress !done !error !cancel))
+            !durations !uploaded-parent))))))
