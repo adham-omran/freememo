@@ -1056,6 +1056,54 @@
    ["in-sync" "In sync" false nil]])
 (def ^:private flag-facets [["marked" "Marked"] ["suspended" "Suspended"]])
 
+;; ── URL filter state ────────────────────────────────────────────────
+;; Query-string params, written with replaceState on every change (including
+;; every keystroke) and read ONCE at mount. No history entries, therefore no
+;; popstate listener. Param names and value grammar live here; the
+;; replaceState mechanics live in freememo.util.
+;;
+;; :origins and :flags are separate params, not one merged "sync" list — they
+;; are separate atoms with different Anki-readiness semantics, and the toolbar
+;; divider between them is purely visual.
+(def ^:private kind-values (into #{} (map first) kind-facets))
+(def ^:private origin-values (into #{} (map first) origin-facets))
+(def ^:private flag-values (into #{} (map first) flag-facets))
+(def ^:private sort-col-values #{:status :document :added})
+(def ^:private sort-dir-values #{:asc :desc})
+(def ^:private default-sort [:added :desc])
+
+(defn- csv->set
+  "Comma-separated param → set, dropping anything not in `valid`.
+   Unknown values are IGNORED, never an error and never an empty result —
+   a hand-mangled URL degrades to 'no constraint', not to 'no cards'."
+  [valid s]
+  (into #{} (comp (map str/trim) (filter valid)) (str/split (or s "") #",")))
+
+(defn- set->csv [s] (str/join "," (sort s)))
+
+(defn- filters->query [text kinds origins flags sort-col sort-dir]
+  {"q" text
+   "type" (set->csv kinds)
+   "sync" (set->csv origins)
+   "flag" (set->csv flags)
+   ;; Omitted at the default so a pristine view has a clean URL.
+   "sort" (when (not= [sort-col sort-dir] default-sort)
+            (str (name sort-col) ":" (name sort-dir)))})
+
+(defn- query->filters
+  "Params map → initial filter values. Total: every malformed input falls back
+   to its default, so no URL can produce a broken view."
+  [params]
+  (let [[c d] (str/split (or (get params "sort") "") #":")
+        col (keyword c)
+        dir (keyword d)]
+    {:text (or (get params "q") "")
+     :kinds (csv->set kind-values (get params "type"))
+     :origins (csv->set origin-values (get params "sync"))
+     :flags (csv->set flag-values (get params "flag"))
+     :sort-col (if (sort-col-values col) col (first default-sort))
+     :sort-dir (if (sort-dir-values dir) dir (second default-sort))}))
+
 ;; One toggle chip. on-toggle fires only when enabled (disabled buttons emit
 ;; no click, but guard anyway). sync-source paints the leading swatch and tints
 ;; the inactive border; both colours live in CSS, keyed off the same string.
@@ -1081,7 +1129,8 @@
 ;; removed by the runtime when the result's children arrive (Electric v3
 ;; mount bug, observed on the documents→cards branch switch); nothing in
 ;; this view may mount before the query result exists.
-(e/defn CardsFilterBar [navigate! ov-status !text !text-timer !kinds !origins !flags !check-tick]
+(e/defn CardsFilterBar [navigate! ov-status initial-text !text !text-debounced !text-timer
+                        !kinds !origins !flags !check-tick]
   (e/client
     (let [kinds (e/watch !kinds)
           origins (e/watch !origins)
@@ -1102,14 +1151,20 @@
               (icons/Icon :search :size 15))
             (dom/input
               (dom/props {:type "text" :placeholder "Filter cards..." :class "input"})
-              ;; Debounced, matching search_page.cljc. Undebounced, every
-              ;; keystroke ran a full query and typing marched through
-              ;; zero-result states — each of which costs ~2.4 s of main-thread
-              ;; block unmounting and remounting the 22 windowed row frames.
-              ;; The input is UNCONTROLLED (nothing sets .value from !text), so
-              ;; the debounce delays only the query, never the visible text.
+              ;; Seeded ONCE from the URL. e/snapshot freezes the first value,
+              ;; so this never fights the user's typing or moves the caret —
+              ;; the input is uncontrolled from here on.
+              (set! (.-value dom/node) (e/snapshot initial-text))
+              ;; Two writes per keystroke: !text is instant and drives the URL;
+              ;; !text-debounced lags 300 ms and drives the query. Undebounced,
+              ;; every keystroke ran a full query and typing marched through
+              ;; zero-result states, each costing ~2.4 s of main-thread block
+              ;; remounting the windowed rows.
               (dom/On "input"
-                (fn [e] (util/debounce! !text-timer !text (-> e .-target .-value) 300))
+                (fn [e]
+                  (let [v (-> e .-target .-value)]
+                    (reset! !text v)
+                    (util/debounce! !text-timer !text-debounced v 300)))
                 nil)))
           (dom/button
             (dom/props {:class "btn btn-sm btn-secondary cards-action"
@@ -1134,14 +1189,20 @@
         (dom/div
           (dom/props {:class "cards-toolbar-row" :role "group" :aria-label "Filter by sync state"})
           (dom/span (dom/props {:class "filter-caption"}) (dom/text "Sync"))
+          ;; An ACTIVE overlay-dependent chip stays clickable even without Anki:
+          ;; turning such a filter ON needs the live overlay, turning it OFF
+          ;; never does. Without this, the URL can seed ?sync=anki-changed while
+          ;; Anki is down and strand the user on 0 cards with no way to clear it.
           (e/for-by first [facet origin-facets]
-            (let [[v label overlay? source] facet]
-              (FilterChip label (contains? origins v) (and overlay? (not anki-ready?)) source
+            (let [[v label overlay? source] facet
+                  active? (contains? origins v)]
+              (FilterChip label active? (and overlay? (not anki-ready?) (not active?)) source
                 (fn [] (toggle-in! !origins v)))))
           (dom/span (dom/props {:class "filter-divider" :aria-hidden "true"}))
           (e/for-by first [facet flag-facets]
-            (let [[v label] facet]
-              (FilterChip label (contains? flags v) (not anki-ready?) nil
+            (let [[v label] facet
+                  active? (contains? flags v)]
+              (FilterChip label active? (and (not anki-ready?) (not active?)) nil
                 (fn [] (toggle-in! !flags v))))))))))
 
 ;; Fixed header table — sortable columns + select-all checkbox.
@@ -1383,16 +1444,26 @@
 
 (e/defn LibraryCardsView [user-id navigate! refresh]
   (e/client
-    (let [!text (atom "") text (e/watch !text)
+    (let [;; Seed every filter from the query string, once. Read here and not
+          ;; in CardsFilterBar so one place owns the whole filter set.
+          initial (query->filters (util/query-params))
+          ;; Two text signals, matching search_page.cljc: !text is what the
+          ;; user has typed RIGHT NOW and drives the URL on every keystroke;
+          ;; !text-debounced lags 300 ms and drives the query, the reset-key
+          ;; and the empty-state message, so those all agree with the rows on
+          ;; screen. Nothing sets .value from either — the input is
+          ;; uncontrolled apart from its one-time seed.
+          !text (atom (:text initial)) text (e/watch !text)
+          !text-debounced (atom (:text initial)) text-debounced (e/watch !text-debounced)
           ;; Holds the in-flight setTimeout id for the text-filter debounce.
           ;; Declared here, not inside CardsFilterBar, so it survives any
           ;; re-evaluation of the bar's let and cannot drop a pending timer.
           !text-timer (atom nil)
-          !kinds (atom #{}) kinds (e/watch !kinds)
-          !origins (atom #{}) origins (e/watch !origins)
-          !flags (atom #{}) flags (e/watch !flags)
-          !sort-col (atom :added) sort-col (e/watch !sort-col)
-          !sort-dir (atom :desc) sort-dir (e/watch !sort-dir)
+          !kinds (atom (:kinds initial)) kinds (e/watch !kinds)
+          !origins (atom (:origins initial)) origins (e/watch !origins)
+          !flags (atom (:flags initial)) flags (e/watch !flags)
+          !sort-col (atom (:sort-col initial)) sort-col (e/watch !sort-col)
+          !sort-dir (atom (:sort-dir initial)) sort-dir (e/watch !sort-dir)
           !editing-card (atom nil)
           !ov-status (atom :idle) ov-status (e/watch !ov-status)
           !ov-payload (atom nil)
@@ -1416,8 +1487,16 @@
           overlay-ids (if overlay-active?
                         (overlay->filter-ids anki-overlay)
                         {:anki-changed #{} :marked #{} :suspended #{}})
-          opts {:text text :kinds kinds :origins origins :flags flags
+          opts {:text text-debounced :kinds kinds :origins origins :flags flags
                 :overlay-ids overlay-ids :sort-col sort-col :sort-dir sort-dir}
+          ;; URL sync — a side effect during binding evaluation, referenced by
+          ;; the (when url-synced nil) below or Electric elides it. Driven by
+          ;; `text` (instant), so the address bar tracks every keystroke while
+          ;; the query waits for the debounce. replaceState only: no history
+          ;; entries, hence no popstate listener anywhere in this view.
+          url-synced (do (util/set-query-params!
+                           (filters->query text kinds origins flags sort-col sort-dir))
+                       true)
           ;; Identity of the filter set the client is currently ASKING for.
           ;; e/Offload is Offload-LATCH, whose contract is that "intermediate
           ;; pending states are not seen" — it buffers the previous result
@@ -1427,12 +1506,15 @@
           ;; the gap without switching to Offload-reset, which would return
           ;; (e/amb) and blank the one-batch gate — the teardown WP2 removed.
           opts-hash (hash opts)
-          filters-active? (or (not (str/blank? text)) (seq kinds) (seq origins) (seq flags))
+          ;; Debounced text, so the empty-state message matches the rows.
+          filters-active? (or (not (str/blank? text-debounced)) (seq kinds) (seq origins) (seq flags))
           ;; Scroll resets to top only when the user navigates the list (search /
           ;; filter / sort), NOT on row-count churn from delete. Mirrors
           ;; knowledge-tree/DocumentTreeView's reset-key. Threaded down to the
           ;; CardsTableBody Scroll-window call.
-          scroll-reset-key [text kinds origins flags sort-col sort-dir]
+          ;; Debounced text: keying on the instant value would snap the list to
+          ;; the top on every keystroke, before the matching query had run.
+          scroll-reset-key [text-debounced kinds origins flags sort-col sort-dir]
           ;; Server-FORM binding, deliberately not an e/defn call: an e/defn's
           ;; return value materializes at the (client) call site, which shipped
           ;; the entire result map — every card row — to the browser on each
@@ -1452,6 +1534,8 @@
           ;; re-queries — those leave opts-hash equal, so a background sync
           ;; never flashes the indicator. Only a filter/sort change does.
           filter-pending? (not= opts-hash (e/server (:opts-hash result)))]
+      ;; Reference the URL side effect so Electric evaluates its binding.
+      (when url-synced nil)
       ;; One-batch gate: nothing mounts until the query result exists.
       ;; A solo-mounted sibling (e.g. the filter bar during the in-flight
       ;; window) is removed by the runtime when the result's children
@@ -1460,7 +1544,8 @@
       ;; re-queries, so the gate only blanks on first mount, not on
       ;; filter changes.
       (when (some? success?)
-        (CardsFilterBar navigate! ov-status !text !text-timer !kinds !origins !flags !check-tick)
+        (CardsFilterBar navigate! ov-status (:text initial) !text !text-debounced !text-timer
+          !kinds !origins !flags !check-tick)
         (CardsResultRegion user-id navigate! result anki-overlay ov-status
           filters-active? filter-pending? scroll-reset-key
           !sort-col !sort-dir !editing-card)))))

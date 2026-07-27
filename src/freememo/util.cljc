@@ -4,6 +4,42 @@
   #?(:clj (:import [java.time LocalDateTime ZoneId]
                     [java.time.format DateTimeFormatter])))
 
+;; ── URL query-string state ──────────────────────────────────────────
+;; Generic mechanics only: these know nothing about any page's filter
+;; vocabulary. Callers own the param names and the value grammar.
+;;
+;; replaceState, never pushState — no history entry and no popstate, so the
+;; SPA router never re-resolves or remounts. Same discipline as
+;; search_page.cljc's update-url! and nav/set-url-page!.
+
+(defn query-params
+  "Parse the current URL's query string into a map of string→string.
+   Pre:  none. Post: {} on the JVM or when there is no query string."
+  []
+  #?(:cljs (let [p (js/URLSearchParams. (.. js/window -location -search))]
+             (reduce (fn [m k] (assoc m k (.get p k)))
+               {} (js->clj (js/Array.from (.keys p)))))
+     :clj {}))
+
+(defn set-query-params!
+  "Rewrite the current URL's query string from `params` (string→value map),
+   omitting entries whose value is nil or blank so defaults stay out of the URL.
+   Pre:  keys are strings; values stringify meaningfully.
+   Post: window.location.search reflects `params`; history.length unchanged;
+         no-op when the resulting URL already matches."
+  [params]
+  #?(:cljs
+     (let [p (js/URLSearchParams.)]
+       (doseq [[k v] params]
+         (when-not (str/blank? (str v)) (.set p k (str v))))
+       (let [qs (.toString p)
+             path (.. js/window -location -pathname)
+             next-url (if (str/blank? qs) path (str path "?" qs))
+             cur-url (str path (.. js/window -location -search))]
+         (when (not= next-url cur-url)
+           (.replaceState js/window.history nil "" next-url))))
+     :clj nil))
+
 (defn strip-html-tags
   "Remove HTML tags from a string, collapse whitespace, and trim.
    Returns empty string for nil/non-string input."
