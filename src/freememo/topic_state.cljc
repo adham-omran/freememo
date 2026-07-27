@@ -341,6 +341,8 @@
           ;; button all address the SAME element and the SAME marked range.
           !video-el (atom nil)          ;; HTMLVideoElement — the single clock
           !video-region (atom nil)      ;; {:start-ms N :end-ms N} or nil
+          ;; {:topic-id N :ms N|nil :seeks N} — see doc-context for the contract
+          !video-playhead (atom {:topic-id nil :ms nil :seeks 0})
           !show-bib (atom false)
           show-bib? (e/watch !show-bib)
           ;; Mobile layout: reading-mode? = phone + learn origin (distraction-free
@@ -355,4 +357,5 @@
        :!show-bib !show-bib :show-bib? show-bib? :phone? phone? :reading-mode? reading-mode?
        :!score-region !score-region :!score-pages !score-pages
        :!score-modal-open? !score-modal-open? :!score-edit !score-edit
-       :!video-el !video-el :!video-region !video-region})))
+       :!video-el !video-el :!video-region !video-region
+       :!video-playhead !video-playhead})))

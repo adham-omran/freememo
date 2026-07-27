@@ -134,6 +134,20 @@
 (e/declare video-has-audio?)    ; extracted MP3 exists ⇒ a waveform can render
 (e/declare !video-el)           ; the HTMLVideoElement, or nil before mount
 (e/declare !video-region)       ; {:start-ms N :end-ms N} or nil — marked range
+;; Playhead, republished by the player on every `timeupdate` (3.6 Hz in Chromium,
+;; the browser's own throttle) and on every `seeked`:
+;;
+;;   {:topic-id N   the video this reading belongs to
+;;    :ms N|nil     currentTime in ms
+;;    :seeks N}     monotonic count of `seeked` events
+;;
+;; `:topic-id` is what makes the reading safe to consume: navigating video→video
+;; does not guarantee that the old player unmounts before the new one mounts, so
+;; a consumer compares the id rather than trusting a cleanup on teardown.
+;; `:seeks` distinguishes a scrub or a transcript-row click from ordinary
+;; playback, which is how the transcript re-arms its follow after the user has
+;; scrolled away.
+(e/declare !video-playhead)
 
 ;; ── Score editor state (kind='score' topics only) ──────────────────────────
 (e/declare !score-region)       ; {:start-ms N :end-ms N} or nil — waveform selection

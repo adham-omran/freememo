@@ -1200,6 +1200,16 @@ html, body {
    wins on equal specificity. */
 .tape-scroll table tr.row-alt td { background: light-dark(#eef2f7, #243044); }
 .tape-scroll table tr:hover td { background: light-dark(#e2e8f0, #2f3d52); }
+/* The transcript segment currently being spoken. AFTER :hover deliberately —
+   equal specificity (0,2,3), so source order decides, and the playhead must
+   stay visible while the pointer rests on its row. The left accent carries the
+   meaning where a background alone would read as another hover state. */
+.tape-scroll table tr.transcript-row--active td {
+    background: light-dark(#dbeafe, #1e3a5f);
+}
+.tape-scroll table tr.transcript-row--active td:first-child {
+    box-shadow: inset 2px 0 0 var(--color-primary);
+}
 
 /* Sticky header for the cost-history table (.tx-head). It's a grid sharing the
    body's --grid-cols, so header and body are ONE track set and cannot drift.

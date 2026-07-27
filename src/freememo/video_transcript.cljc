@@ -10,7 +10,14 @@
 
    Clicking a segment seeks the player. The interaction is browser-local (write
    `currentTime` on the element published in `dctx/!video-el`), so it needs no
-   token and no server round-trip."
+   token and no server round-trip.
+
+   The reverse direction — highlighting the segment being spoken and scrolling
+   it into view — reads `dctx/!video-playhead`. Two things make that affordable.
+   The active index is derived on the CLIENT from a server-projected vector of
+   start times, so the 3.6 Hz clock costs no round-trips; and the index changes
+   about once per segment, so Electric's work-skipping keeps the 3.6 Hz signal
+   from reaching the DOM."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -34,6 +41,90 @@
   "Taller than the 36px table convention: a transcript row wraps to two lines of
    speech, where a table row holds one line of metadata."
   46)
+
+(defn active-segment-index
+  "Index of the segment being spoken at `ms`, or -1 when none is.
+
+   Start times only, deliberately: a pause between segments keeps the previous
+   row lit rather than blanking the highlight, and one array crosses the wire
+   instead of two. The cost is that a long silence still shows the last thing
+   said, which is what a reader following along wants to see anyway.
+
+   Binary search because this runs at the clock's rate (3.6 Hz) against a
+   vector that reaches a few thousand entries on a lecture.
+
+   Pre:  `starts` is ascending (the query orders by `ord`, and `ord` is assigned
+         in chunk-offset order — `video/process-video!`).
+   Post: -1, or an index i with (<= (starts i) ms) and either i is last or
+         (< ms (starts (inc i)))."
+  [starts ms]
+  (if (or (nil? ms) (empty? starts) (< ms (nth starts 0)))
+    -1
+    (loop [lo 0 hi (dec (count starts))]
+      (if (>= lo hi)
+        lo
+        (let [mid (quot (+ lo hi 1) 2)]
+          (if (<= (nth starts mid) ms)
+            (recur mid hi)
+            (recur lo (dec mid))))))))
+
+(defn scroll-row-to-center!
+  "Park row `idx` at the vertical centre of `node`, and record where we left the
+   scroll.
+
+   Centre, not nudge-into-view: the playhead then sits at a fixed reading
+   position with context above and below it, instead of drifting to an edge and
+   jumping a screenful. The cost is a scroll on every segment change (~5 s)
+   rather than one per screenful.
+
+   Computed from the INDEX, not from the row's node: `Tape` only mounts the
+   visible window, so when the user has scrolled far away the active row has no
+   node at all and `scrollIntoView` would have nothing to call. The arithmetic
+   works whether or not the row is mounted, and it does not scroll ancestors.
+
+   Clamping is the browser's: an index near either end cannot be centred, so
+   `scrollTop` saturates at 0 or at the bottom. That is why `!last-auto-top`
+   takes the READ-BACK rather than the requested value — it is what lets the
+   scroll handler tell our write from the user's. Instant, never
+   `behavior: smooth`: an animation would both fight the segment cadence and
+   make that comparison meaningless.
+
+   Pre:  `node` is the `.tape-scroll` container; `row-height` matches the CSS
+         `--row-height` the rows are positioned by.
+   Post: the row's centre is the viewport's centre, or the scroll is saturated
+         at an end; `!last-auto-top` holds the scrollTop we are responsible for.
+   Invariant: every write to `node`'s scrollTop from this namespace updates
+   `!last-auto-top` in the same breath, or the next scroll event is misread as
+   the user's and follow suspends spuriously."
+  [node idx row-height !last-auto-top]
+  #?(:cljs (when (and node (nat-int? idx))
+             (let [view (.-clientHeight node)
+                   furthest (max 0 (- (.-scrollHeight node) view))
+                   target (-> (- (* idx row-height) (/ (- view row-height) 2))
+                            (max 0)
+                            (min furthest))]
+               ;; Skip a write that would not move anything: the row is already
+               ;; centred, or the scroll is already saturated at the end it
+               ;; would saturate at. Clamping BEFORE the comparison is what makes
+               ;; that second case detectable — an uncentrable row near either
+               ;; end otherwise re-writes the same saturated value every segment,
+               ;; and each write costs a scroll event.
+               (when (> (js/Math.abs (- target (.-scrollTop node))) 1)
+                 (set! (.-scrollTop node) target)
+                 (reset! !last-auto-top (.-scrollTop node))))
+             nil)
+     :clj nil))
+
+(defn user-scrolled?
+  "Whether `node`'s current scrollTop differs from the one we last wrote.
+
+   A programmatic write fires the same `scroll` event a wheel does, so the
+   position itself is the only honest discriminator. One pixel of tolerance
+   covers fractional scrollTop on a real display."
+  [node !last-auto-top]
+  #?(:cljs (and node
+             (> (js/Math.abs (- (.-scrollTop node) @!last-auto-top)) 1))
+     :clj false))
 
 (defn get-transcript*
   "Transcript rows for a topic.
@@ -74,11 +165,18 @@
      :cljs nil))
 
 (e/defn TranscriptRow
-  "One segment: a timestamp gutter and the text. Clicking anywhere seeks."
-  [i row]
+  "One segment: a timestamp gutter and the text. Clicking anywhere seeks.
+
+   `active?` is rendered through Electric rather than toggled imperatively on
+   the node: `Tape` recycles DOM slots as the window moves, so a class set
+   outside the reactive graph would stay with the SLOT and light whichever
+   segment scrolled into it."
+  [i row active?]
   (e/client
     (dom/tr
-      (dom/props {:style {:--order i :cursor "pointer"
+      (dom/props {:class (when active? "transcript-row--active")
+                  :aria-current (when active? "true")
+                  :style {:--order i :cursor "pointer"
                           :border-bottom "1px solid var(--color-bg-subtle)"}})
       (dom/On "click" (fn [_] (vp/seek-to! @dctx/!video-el (:start_ms row))) nil)
       (dom/td
@@ -153,7 +251,24 @@
           ;; server and only `(e/server (nth segs i nil))` window rows cross.
           refresh (e/server (e/watch (us/get-atom user-id :refresh)))
           segs (e/server (get-transcript* refresh topic-id))
-          seg-count (e/server (count segs))]
+          seg-count (e/server (count segs))
+          ;; The ONE thing the client needs the whole timeline for. Projected
+          ;; server-side so only the ints cross: `(mapv :start_ms …)` on the
+          ;; client would drag every full row over with it (CLAUDE.md's
+          ;; 372 KB → 13 KB case). ~2000 ints for a three-hour lecture.
+          starts (e/server (mapv :start_ms segs))
+          ;; Readings from another topic's player are ignored rather than
+          ;; cleaned up: video→video navigation does not order the old player's
+          ;; unmount against the new one's mount.
+          playhead (e/watch dctx/!video-playhead)
+          pos-ms (when (= topic-id (:topic-id playhead)) (:ms playhead))
+          seeks (:seeks playhead)
+          active-idx (active-segment-index starts pos-ms)
+          ;; Follow is armed until the user scrolls, and re-armed by any seek —
+          ;; which covers both re-arm cases, because clicking a row IS a seek.
+          !follow-playhead? (atom true)
+          follow? (e/watch !follow-playhead?)
+          !last-auto-top (atom -1)]
       (dom/div
         ;; Fills its tab in RightSidePanel — the panel owns width, collapse and
         ;; the border, so this must not set any of them.
@@ -169,6 +284,26 @@
             (dom/props {:class "tape-scroll"
                         :style {:flex "1" :overflow-y "auto" :min-height "0"
                                 :scrollbar-gutter "stable"}})
+            (let [scroller dom/node]
+              ;; Applying a plain fn to a reactive value runs the effect when
+              ;; that value CHANGES — the same shape Scroll-window uses for its
+              ;; reset-to-top (scroll.cljc:112). The arguments are passed rather
+              ;; than closed over so the dependency is explicit and Electric can
+              ;; work-skip: the playhead ticks at 3.6 Hz, `active-idx` changes
+              ;; about once per segment, and only the latter gets here.
+              ((fn [idx armed?]
+                 (when armed?
+                   (scroll-row-to-center! scroller idx row-height !last-auto-top)))
+               active-idx follow?)
+              ;; Re-arm on seek. `:seeks` also arrives once at mount, which is a
+              ;; no-op against the initial `true`.
+              ((fn [_] (reset! !follow-playhead? true)) seeks)
+              (dom/On "scroll"
+                (fn [_]
+                  (when (user-scrolled? scroller !last-auto-top)
+                    (reset! !follow-playhead? false))
+                  nil)
+                nil))
             (let [[offset limit] (Scroll-window row-height seg-count dom/node
                                    ;; Keyed on the topic, NOT the segment count:
                                    ;; a re-transcription that changes the count
@@ -182,4 +317,4 @@
                 (e/for [i (Tape offset limit)]
                   (let [row (e/server (nth segs i nil))]
                     (when row
-                      (TranscriptRow i row))))))))))))
+                      (TranscriptRow i row (= i active-idx)))))))))))))
