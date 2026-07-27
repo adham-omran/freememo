@@ -1148,13 +1148,23 @@
                 (dom/props {:style th-style})
                 (dom/text "")))))))))
 
-;; Virtual-scrolled body
+;; Virtual-scrolled body. The table is ALWAYS mounted — it renders for every
+;; card-count, including 0, and the empty-state message is an absolutely
+;; positioned sibling overlay rather than a branch that swaps the table out.
+;; Mirrors SearchPage's SearchResultsTable: there, unmounting the table (and
+;; with it Scroll-window + Tape + the per-row server flows) raced the cancelled
+;; query's e/Offload teardown and crashed the WS with :diff-corruption.
+;; At card-count 0 the Tape still emits its window; every nth returns nil and
+;; the rows render nothing, so the differential stays mounted and empty.
+;; position:relative is inline, not on the shared .tape-scroll class — this is
+;; the only virtual-scroll site with an overlay, and 10 others share that class.
 (e/defn CardsTableBody [cards-vec card-count row-height font-sz filters-active? scroll-reset-key
                         navigate! !editing-card !diff-card !selected selected
                         user-id anki-overlay]
   (e/client
     (dom/div
-      (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
+      (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"
+                          :scrollbar-gutter "stable" :position "relative"}})
       (let [[offset limit] (Scroll-window row-height card-count dom/node {:overquery-factor 2 :reset-key scroll-reset-key})]
         (dom/props {:class "tape-scroll table-frame-body"
                     ;; C1c per-row transform positioning (see .tape-scroll in index.css):
@@ -1165,23 +1175,22 @@
           (dom/props {:class "cards-table-body"
                       ;; display:block + column template live in index.css (C1c).
                       :style {:width "100%" :font-size (str font-sz "px")}})
-          (if (pos? card-count)
-            (e/for [i (Tape offset limit)]
-              (let [card (e/server (nth cards-vec i nil))]
-                (when card
-                  (LibraryCardRow card navigate! !editing-card !diff-card !selected
-                    selected user-id i anki-overlay))))
-            (dom/tr
-              ;; Opt out of the fixed row-height so the message isn't clipped (C1c).
-              (dom/props {:style {:height "auto"}})
-              (dom/td
-                (dom/props {:style {:grid-column "1 / -1" :text-align "center"
-                                    :padding "24px 12px" :font-size "13px"
-                                    :color "var(--color-text-secondary)"}})
-                (dom/text (if filters-active?
-                            "No cards match the current filters."
-                            "No cards yet. Generate flashcards from your documents to see them here."))))))
-        ))))
+          (e/for [i (Tape offset limit)]
+            (let [card (e/server (nth cards-vec i nil))]
+              (when card
+                (LibraryCardRow card navigate! !editing-card !diff-card !selected
+                  selected user-id i anki-overlay)))))
+        ;; Sibling overlay — never a branch that unmounts the table above.
+        (when (zero? card-count)
+          (dom/div
+            (dom/props {:style {:position "absolute" :inset "0"
+                                :display "flex" :align-items "center" :justify-content "center"
+                                :text-align "center" :padding "24px 12px" :font-size "13px"
+                                :color "var(--color-text-secondary)"
+                                :pointer-events "none"}})
+            (dom/text (if filters-active?
+                        "No cards match the current filters."
+                        "No cards yet. Generate flashcards from your documents to see them here."))))))))
 
 ;; Anki overlay (Phase 2): client fetches AnkiConnect state, server diffs +
 ;; applies F4 deletions; returns the sparse per-card flag map.
