@@ -149,15 +149,20 @@
       ;; buffered ranges still attached.
       (e/for-by identity [topic-id [dctx/video-topic-id]]
         (dom/div
-          ;; `flex: 0 1 auto`, NOT flex-shrink 0. The waveform strip is a sibling
-          ;; below and is itself unshrinkable; when the content↕cards split leaves
-          ;; the top region shorter than video + strip (the default on a <900px
-          ;; window is a 50/50 split), an unshrinkable player pushed the strip
-          ;; past the overflow:hidden boundary and it vanished entirely. The
-          ;; player is the element that should give up space — it has a picture
-          ;; to scale, the strip has a fixed 72px canvas.
+          ;; `flex: 1 1 auto`.
+          ;; SHRINK 1 is the load-bearing half, unchanged: the waveform strip is
+          ;; a sibling below and is itself unshrinkable; when the content↕cards
+          ;; split leaves the top region shorter than video + strip (the default
+          ;; on a <900px window is a 50/50 split), an unshrinkable player pushed
+          ;; the strip past the overflow:hidden boundary and it vanished
+          ;; entirely. The player is the element that should give up space — it
+          ;; has a picture to scale, the strip has a fixed 72px canvas.
+          ;; GROW 1 was added with VideoSplitPane's vertical handle. The stack
+          ;; now has a definite height, so spare space exists for the first time;
+          ;; with grow 0 the player ignored it and dragging the handle down
+          ;; enlarged the container while the picture stayed put.
           (dom/props {:style {:background "#000" :display "flex" :justify-content "center"
-                              :align-items "center" :flex "0 1 auto"
+                              :align-items "center" :flex "1 1 auto"
                               ;; min-height, not max-height: the vertical drag
                               ;; handle in VideoSplitPane owns this height now, and
                               ;; a viewport-relative cap competed with it. The floor
