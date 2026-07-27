@@ -230,11 +230,6 @@
 ;; Target — where the uploaded videos land
 ;; ---------------------------------------------------------------------------
 
-;; TEMPORARY diagnostic counter for the sticky-default investigation: a defonce
-;; survives frame remounts, so it distinguishes "the component remounted" from
-;; "the value changed".
-(defonce !dbg-mounts (atom 0))
-
 (def target-labels
   "The three places an upload can put its videos (§14.3 2.1). Order is the order
    they appear in the select."
@@ -514,12 +509,7 @@
                     (remove #(= "existing" (first %)) target-labels))]
       (dom/div
         (dom/props {:style {:display "flex" :flex-direction "column" :gap "8px"
-                            :margin-bottom "var(--sp-3)"}
-                    ;; TEMPORARY diagnostic for the sticky-default investigation.
-                    :data-dbg-target (str target)
-                    :data-dbg-chosen (str (e/watch !target-chosen?))
-                    :data-dbg-choice (str (e/watch !target))
-                    :data-dbg-mounts (str (e/snapshot (swap! !dbg-mounts inc)))})
+                            :margin-bottom "var(--sp-3)"}})
         (dom/label
           (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
                               :font-size "13px"}})
