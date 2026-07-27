@@ -222,6 +222,57 @@
     (is (not (import-modal/video-file? nil)))))
 
 ;; ---------------------------------------------------------------------------
+;; §14.3 — playlist controls in the import modal
+;; ---------------------------------------------------------------------------
+
+(deftest playlist-target-default
+  (testing "the count preselects the target, reproducing the old implicit rule"
+    (is (= "separate" (import-modal/default-target 0)))
+    (is (= "separate" (import-modal/default-target 1))
+      "one video needs no container")
+    (is (= "new" (import-modal/default-target 2))
+      "two or more used to mean a playlist with no way to say otherwise")
+    (is (= "new" (import-modal/default-target 17)))))
+
+(deftest playlist-title-derivation
+  (testing "the extension is stripped, nothing else"
+    (is (= "lecture-01" (import-modal/derive-playlist-title "lecture-01.mkv")))
+    (is (= "a.b.c" (import-modal/derive-playlist-title "a.b.c.mp4"))
+      "only the LAST dot is the extension")
+    (is (= "no-extension" (import-modal/derive-playlist-title "no-extension")))
+    (is (= ".hidden" (import-modal/derive-playlist-title ".hidden"))
+      "a leading dot is a name, not an empty stem with an extension"))
+
+  (testing "nothing to prefill"
+    (is (= "" (import-modal/derive-playlist-title nil)))
+    (is (= "" (import-modal/derive-playlist-title "")))))
+
+(deftest selection-messages
+  (testing "silence when a pick kept everything"
+    (is (nil? (import-modal/selection-message {:rejected [] :duplicates []}))))
+
+  (testing "the two causes stay distinct"
+    (is (= "Not a supported video: a.txt"
+          (import-modal/selection-message {:rejected ["a.txt"] :duplicates []})))
+    (is (= "Already staged: a.mp4"
+          (import-modal/selection-message {:rejected [] :duplicates ["a.mp4"]})))
+    (is (= "Not a supported video: a.txt · Already staged: b.mp4"
+          (import-modal/selection-message {:rejected ["a.txt"] :duplicates ["b.mp4"]}))))
+
+  (testing "long lists are summarised, not dumped"
+    (is (= "Not a supported video: a, b, c and 2 more"
+          (import-modal/selection-message {:rejected ["a" "b" "c" "d" "e"] :duplicates []})))))
+
+(deftest selection-removal
+  (let [staged [:a :b :c]]
+    (is (= [:b :c] (import-modal/remove-from-selection staged 0)))
+    (is (= [:a :c] (import-modal/remove-from-selection staged 1)) "middle")
+    (is (= [:a :b] (import-modal/remove-from-selection staged 2)) "last")
+    (is (= staged (import-modal/remove-from-selection staged 3)) "out of range is a no-op")
+    (is (= staged (import-modal/remove-from-selection staged -1)))
+    (is (= [] (import-modal/remove-from-selection [] 0)))))
+
+;; ---------------------------------------------------------------------------
 ;; Transcription language — the list is .cljc so both peers resolve it
 ;; ---------------------------------------------------------------------------
 

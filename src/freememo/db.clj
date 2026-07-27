@@ -5052,6 +5052,25 @@
           (audit-doc-created! user-id topic-id)
           {:ok true :topic-id topic-id})))))
 
+(defn list-video-playlists
+  "§14.3 3.1 — the user's playlists, newest first, for the import modal's picker.
+
+   Deliberately NOT `get-root-topics`, which would answer the same question: it
+   also selects `content` and a summed file size per root, and a title picker
+   reads neither. Two columns is the whole contract.
+
+   Staged-deleted playlists are excluded — offering one as an upload target
+   would hang new videos under a subtree already on its way out.
+
+   Post: [{:id N :title S}] ordered newest first; [] when the user has none."
+  [user-id]
+  (mapv (fn [r] {:id (:id r) :title (or (:title r) "Untitled")})
+    (jdbc/execute! ds
+      ["SELECT id, title FROM topics
+        WHERE user_id = ? AND kind = 'video-playlist' AND staged_delete_id IS NULL
+        ORDER BY created_at DESC, id DESC" user-id]
+      {:builder-fn rs/as-unqualified-maps})))
+
 (defn create-video-playlist!
   "§4.10 10.1 — the parent a multi-file upload hangs its videos under.
    An ordinary topic of kind `video-playlist` holding no bytes of its own."
