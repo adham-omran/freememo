@@ -9,7 +9,9 @@
 
    The element node is published into `dctx/!video-el` so the transcript pane
    can seek without a round-trip through the reactive graph — a browser-local
-   effect needs no token (CLAUDE.md, 'Selection that invokes a side effect')."
+   effect needs no token (CLAUDE.md, 'Selection that invokes a side effect').
+   The clock's readings go the other way through `dctx/!video-playhead`, which
+   is what lets the transcript highlight the segment being spoken."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -46,6 +48,27 @@
   #?(:cljs (when el
              (let [t (.-currentTime el)]
                (when (and (number? t) (js/isFinite t)) (js/Math.round (* 1000 t)))))
+     :clj nil))
+
+(defn publish-playhead!
+  "Republish the playhead for this topic, incrementing `:seeks` when the change
+   came from a seek rather than from ordinary playback.
+
+   Pre:  `!playhead` is dctx/!video-playhead; `topic-id` is the video being
+         played; `el` is its element.
+   Post: the atom holds {:topic-id :ms :seeks} for THIS topic.
+   Invariant: `:seeks` never decreases within one topic — the transcript treats
+   any increment as 'the user asked to jump', and a reset would re-arm follow
+   spuriously."
+  [!playhead topic-id el seek?]
+  #?(:cljs (when !playhead
+             (swap! !playhead
+               (fn [prev]
+                 {:topic-id topic-id
+                  :ms (element-time-ms el)
+                  :seeks (cond-> (if (= topic-id (:topic-id prev)) (:seeks prev 0) 0)
+                           seek? inc)}))
+             nil)
      :clj nil))
 
 (defn seek-to!
@@ -112,7 +135,8 @@
   []
   (e/client
     (let [last-pos dctx/video-last-pos-ms
-          !video-el dctx/!video-el]
+          !video-el dctx/!video-el
+          !video-playhead dctx/!video-playhead]
       ;; Frame isolation keyed on the topic. Navigating video→video re-BINDS
       ;; dctx/video-topic-id without unmounting the enclosing `when`, and
       ;; `e/on-unmount`'s closure captures that reactive value: without a keyed
@@ -148,6 +172,15 @@
               ;; Resume needs the duration, which is only known after metadata.
               (dom/On "loadedmetadata" (fn [_] (resume-at! el last-pos) nil) nil)
               (dom/On "pause" (fn [_] (save-position! topic-id (element-time-ms el)) nil) nil)
+              ;; The transcript's highlight rides on these two. `timeupdate` is
+              ;; throttled by the browser to ~250 ms (measured 3.6 Hz in
+              ;; Chromium), which is the highlight's latency floor; `seeked`
+              ;; exists so a scrub or a transcript-row click lands immediately
+              ;; instead of waiting out that quarter second.
+              (dom/On "timeupdate"
+                (fn [_] (publish-playhead! !video-playhead topic-id el false)) nil)
+              (dom/On "seeked"
+                (fn [_] (publish-playhead! !video-playhead topic-id el true)) nil)
               (e/on-unmount
                 (fn []
                   (save-position! topic-id (element-time-ms el))

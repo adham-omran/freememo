@@ -12,6 +12,7 @@
    [freememo.video-format :as vf]
    [freememo.video-http :as vh]
    [freememo.video-import-modal :as import-modal]
+   [freememo.video-transcript :as vt]
    [freememo.right-side-panel :as rsp]
    [freememo.settings :as settings]
    [freememo.transcribe-language :as tlang]
@@ -166,6 +167,42 @@
     (is (not (contains? video/browser-safe-audio "dts")))
     (is (not (contains? video/browser-safe-audio "truehd")))
     (is (not (contains? video/browser-safe-audio "vorbis")))))
+
+;; ---------------------------------------------------------------------------
+;; Transcript follows the playhead — the lookup that runs at the clock's rate
+;; ---------------------------------------------------------------------------
+
+(deftest active-segment-lookup
+  (let [starts [0 5000 10000 12500]
+        at #(vt/active-segment-index starts %)]
+    (testing "the segment holding the instant"
+      (is (= 0 (at 0)) "exactly the first start")
+      (is (= 0 (at 4999)))
+      (is (= 1 (at 5000)) "a boundary belongs to the segment it opens")
+      (is (= 2 (at 10001)))
+      (is (= 3 (at 12500)))
+      (is (= 3 (at 999999)) "past the last start stays on the last segment"))
+
+    (testing "no active segment"
+      (is (= -1 (at nil)) "no playhead yet — the video has not reported a time")
+      (is (= -1 (vt/active-segment-index [] 1000)) "no transcript")
+      (is (= -1 (vt/active-segment-index [] nil))))
+
+    (testing "before the first segment starts"
+      (is (= -1 (vt/active-segment-index [3000 8000] 2999))
+        "silence at the head of a video highlights nothing, rather than segment 0")))
+
+  (testing "a gap between segments keeps the previous one lit"
+    ;; Starts-only is the decision this encodes: with end times, 6000 would fall
+    ;; in a silence and blank the highlight.
+    (is (= 0 (vt/active-segment-index [0 10000] 6000))))
+
+  (testing "scales to a lecture-length transcript"
+    (let [starts (vec (range 0 (* 2000 5000) 5000))]
+      (is (= 2000 (count starts)))
+      (is (= 0 (vt/active-segment-index starts 1)))
+      (is (= 1234 (vt/active-segment-index starts (+ (* 1234 5000) 4999))))
+      (is (= 1999 (vt/active-segment-index starts 99999999))))))
 
 ;; ---------------------------------------------------------------------------
 ;; §12.4 4.3 — the drop zone is the filter that actually holds
