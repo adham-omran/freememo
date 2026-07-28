@@ -9,6 +9,335 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
+## v20260727-e36e8d7
+
+### For users
+
+- **Video, read the way you read a PDF.** Upload a video file and FreeMemo treats it
+  like any other document: it plays, remembers where you stopped, transcribes itself,
+  and you carve the parts worth keeping into ordinary editable topics that enter the
+  Learn queue and generate cards exactly as text does. Import → **Video**.
+  - **Playback that holds its place** - resume where you left off, a waveform strip
+    under the player for scrubbing and marking, and the whole video column beside the
+    editor with both splits resizable by drag.
+  - **A transcript that follows the playhead** - the spoken segment is highlighted and
+    scrolled into view; scroll away and it stops yanking you back until you seek
+    again. Click any segment to jump the video there. **Copy** writes the whole
+    transcript into the document so you can prune it down to what matters.
+  - **Time-range extracts** - mark a range on the waveform, press **Extract**, and you
+    get a child topic holding the transcript text that range covers. From then on it
+    is an ordinary topic: editable, schedulable, card-generatable, with no
+    video-specific special-casing anywhere downstream.
+  - **Several files at once become a playlist** - stage as many as you like (duplicate
+    detection, per-file removal, **＋ Add more**), then send them to a new playlist, an
+    existing one, or separate documents.
+  - **`.mkv`, `.mov` and `.webm` play now** - they are converted to MP4 on upload (the
+    picture is copied untouched; audio is re-encoded only when your browser could not
+    have played it), which also repairs seeking on files that carry no index.
+  - **Transcription is opt-in per upload** - a "Transcribe after upload" checkbox with
+    an estimated cost, remembered as your default. Skip it and you still get a
+    playable, seekable, scrubbable video; **Transcribe** / **Re-transcribe** in the
+    transcript pane runs it whenever you want. A re-run never touches content you
+    curated — only **Copy** writes there.
+  - **Transcription language** lives in Settings → AI features, default auto-detect.
+    Bug fix: a short English recording could come back as fluent, invented Arabic.
+    Auto-detect now pins the language detected on the first chunk across the whole
+    file, so a quiet passage mid-lecture can't flip the rest into another language.
+- **Transcription is now billed.** Both the audio kind and video, gated against your
+  balance before the call and charged from what the provider actually reports, as one
+  ledger row per run rather than one per chunk. It was an LLM call being given away,
+  which was never intentional. Roughly: 5 minutes ≈ 80 credits, 43 minutes ≈ 680, a
+  three-hour lecture ≈ 2,850.
+- **Storage is now metered.** Video moves storage from incidental to a real cost, so
+  stored bytes accrue rent at the rate now printed on the Storage card and in the
+  Credits panel (currently 40 credits per GB-month). Your free cap is 1 GB; your first
+  credit purchase raises it to 100 GB. If your balance reaches zero while you hold
+  video, playback pauses, a 14-day grace window opens with a notification, and only
+  after it expires are the video bytes reclaimed — topics, transcripts, extracts and
+  schedules all survive.
+  - **Credits moved to Settings → Account**, out from behind the Enable-LLM-features
+    toggle. Rent accrues whether or not you ever turn an AI feature on, so hiding the
+    balance behind an AI switch was wrong.
+- **The Quiz is something you can curate, not just endure.**
+  - **`/quiz` lands on a dashboard** - four tiles (Due now, Reviewed today, Flagged,
+    Suspended) over **Reviews** and **Sessions** tabs. Reviewing is one click behind
+    **Start**; an exam you left mid-way still resumes ahead of the dashboard.
+  - **Every answer is now recorded** - the Review flow used to throw yours away.
+    Clicking a Reviews row shows what you typed, the verdict, the explanation, the
+    reference answer and the facts you missed with their `(Doc, p.N)` provenance.
+  - **Flag, Suspend & Skip, and Edit** in all three flows. Flag marks a question for
+    later editing and changes nothing about scheduling; Suspend withholds it from
+    every future draw until you unsuspend it from the Questions bank; Edit opens the
+    question editor without leaving the quiz. Suspending writes no FSRS state, so a
+    suspension spanning the due date returns the card as overdue rather than
+    rescheduling it.
+  - **Submit is disabled on an empty answer** in all three flows, instead of silently
+    doing nothing.
+  - **Better questions.** `"Name one of the components that…"` was prescribed by the
+    generation prompt, not an accident. Questions are now generated per *cluster* — a
+    subject and predicate with several true objects yields one question per object,
+    each discriminated by that object's own facts and never naming its siblings — and
+    the "name one" family of phrasings is forbidden outright.
+  - **History shows the wording you actually answered.** Lists keep the recorded
+    wording; detail views lead with the live wording and raise "this question has been
+    edited since you answered" when the two differ.
+  - Bug fix: grading a *correct* answer in the Review flow crashed the session and
+    latched the UI on "Grading…" — after the LLM call had already been billed. A
+    grading step that fails now degrades to graded-but-unscheduled instead of killing
+    the session.
+- **Facts tab: scoped sub-views and bulk delete.**
+  - Pressing **Entities** or **Questions** from a document's Facts view keeps that
+    document's scope instead of dropping it. Documents stays unscoped, since a scope
+    has no meaning there.
+  - **Select facts and delete them as one operation** — either everything visible
+    under the current filter, or the whole document — with one Undo entry for the lot.
+  - Bug fix: the Questions table's headers no longer drift out of line with the
+    columns beneath them (a reserved scrollbar gutter made header and body measure
+    different widths — fixed for every table sharing that shell).
+- **Library cards view, reworked.**
+  - **Filters live in the URL** — type, sync state, flags, sort and search are all in
+    the query string, so a filtered view is reloadable and shareable. Unknown values
+    are ignored, so no URL can produce a broken view.
+  - **Redesigned toolbar** - view switcher, search and Check Anki on one row, then
+    labelled **Type** and **Sync** chip rows. Active chips are a tinted fill with
+    accent text (contrast-checked in both themes) rather than a solid block, and
+    FM/Anki chips carry their source colour in both states.
+  - **A spinner while a filter is in flight**, blind to background re-queries — an
+    Anki sync happening behind you never flashes it. Counts and rows stay on screen
+    while superseded rather than blanking.
+  - **Occlusion and score cards render properly** in the table, with their own badges,
+    and the Type/Sync filters take multiple selections at once.
+  - **Filtering no longer freezes the view.** Toggling a chip that matched nothing used
+    to block the browser for ~2.6 s and eat your next click; it is now ~1.1 s, and the
+    table is never torn down and rebuilt around an empty result.
+- **The Generate button generates again.** It is now a split button: the primary zone
+  generates immediately and reads what it will do (`Generate 2 Basic`), the caret opens
+  the options. Card type is a segmented Basic/Cloze/Overlapping pill with a one-line
+  description, the count lives in the menu only, and Compare finally has its own icon
+  instead of sharing Generate's sparkles.
+  - The editor's selection popup also gained a card count and a **Generate here**
+    action, so you can make cards from a selection without going to the toolbar.
+- **Per-document learning goal.** Document options gains a goal field — why you are
+  studying this document. The Socratic assistant grounds its questions in it and steers
+  toward facts you have not yet mastered, and card generation reads it too. The
+  assistant also now points you at the passage to re-read rather than restating it.
+- **PDF pages stop drifting.** The page you are on is part of the URL
+  (`/viewer/topic/<id>/<page>`), so reloading or sharing a link lands on that page
+  instead of somewhere near it, and the page stays anchored through zoom, fit-width,
+  fit-page and the reflow that follows.
+- **Security hardening.** An internal audit ran this cycle. Every mutation that
+  touched a card, pin, schedule, occlusion/score group, Anki sync fetch or CSV export
+  by bare id now verifies you own it first; EPUB import is capped against
+  decompression bombs; and the database and SPARQL ports no longer publish to every
+  interface by default.
+- **Two new models** for card generation and OCR: Gemini 3.6 Flash and Gemini 3.5
+  Flash-Lite.
+- Bug fix: the document editor silently stopped auto-saving. A debounce left the write
+  behind a binding whose value was discarded, which Electric never evaluated — so no
+  edit was ever persisted.
+- Bug fix: double-submitting the Add-card, Occlusion or Score modal created duplicate
+  cards. Each modal-open now carries one idempotency key, so a re-fired submit collapses
+  to a single save.
+- Bug fix: **Done** on an extract marked it done but no longer advanced the learn
+  session to the next item.
+- Bug fix: the Anki Sync modal, the delete-confirm modal, autofocusing typeaheads and
+  the command palette all opened unfocused, leaving Escape, Cmd+Enter and Tab dead
+  until you clicked inside. (HTML `autofocus` does nothing on an element inserted after
+  page load — it is the HTML spec, not a quirk.) The command palette and Anki modal
+  also trap Tab within themselves now.
+- Bug fix: hovering the selected card-type segment or the active side-panel tab left
+  white text on a light background.
+- Bug fix: a nested cloze such as `{{c3:: {{c1::x}} {{c2::y}}::hint}}` was rejected as
+  "unclosed", and a stray `}}` in pasted code could trip the same check.
+- Bug fix: three typeahead fields — the Anki deck picker, the assistant's `@`-mention
+  picker and the pre-prompt field — had silently stopped writing their value; the
+  pre-prompt field had lost its write path entirely.
+- Bug fix: Undo History rows for knowledge-graph rejections rendered as an
+  indistinguishable fallback; every action type is now named.
+- Bug fix: the AI-cost table's header no longer drifts from its columns, and it sticks
+  to the top while you scroll.
+
+### Known issues
+
+- **The free storage cap is 1 GB**, which one full-length lecture will exceed. A credit
+  purchase raises it to 100 GB. Storage rent then accrues on what you hold, with no
+  action needed on your part to incur it — that is the point of the rate being printed
+  in two places.
+- **The transcription cost estimate has not been checked against a real charge.** The
+  arithmetic and every code path are verified, but the account I test with is at a
+  negative balance and closing that gap means writing to a live financial ledger. Every
+  actual charge still comes from the provider's reported cost, never the estimate. If a
+  charge ever looks wrong against the estimate you were shown, contact me.
+- **The estimate needs your browser to read the file's duration.** A container your
+  browser cannot decode (an FFV1 `.mkv`, for instance) contributes no length, so a mixed
+  batch states a floor — "40:01 of video, plus 1 file of unknown length" — rather than
+  passing off a partial sum as the total.
+- **Skipping transcription does not skip storage.** Remux, duration and audio extraction
+  are free local work and are what make the video playable and scrubbable, so they always
+  run; the bytes still count against your quota and still accrue rent.
+- **A playlist parent enters the Learn queue** alongside its videos, matching how a PDF
+  root behaves. Whether that is what you want is genuinely undecided — tell me if it
+  isn't.
+- **The transcript highlight is segment-level and can lag up to a quarter second.**
+  Word-level timing is not stored. Chasing the last 250 ms would cost 16× the polling
+  rate for no real gain.
+- **The Transcript side-panel tab is gone** — the transcript now lives in the video's own
+  column. If you had that tab selected, the side panel opens on Pins instead.
+- **A failed grade in the Review flow discards your typed answer.** Quiz and Exam persist
+  the answer before grading precisely so it survives a grading failure; Review does not,
+  by design — a failed grade is not a review event. The existing "your answer was kept,
+  try Submit again" toast is the recovery.
+- **In an Exam, Suspend & Skip is the only way past a question you cannot answer**, and
+  it suspends that question permanently until you unsuspend it from the bank. Accepted
+  consequence of disabling empty submissions. A skipped question still counts in the
+  exam's total and reports as ungraded.
+- **Question generation is deliberately non-idempotent.** An object with nothing in the
+  graph to distinguish it from its siblings is omitted rather than turned into a "name
+  one" question — so it stays uncovered, and is re-sent and re-billed on the next run.
+  The completion toast reports the omitted count, because a run writing 12 questions for
+  40 facts otherwise reads as a silent failure.
+- **Existing questions are not regenerated.** The quality change applies to new
+  generation only; your current bank keeps whatever phrasing it was born with.
+- **Filter changes in the cards view reset scroll to the top.** By design — filter and
+  sort state is what resets the scroll position, so an in-place row-count change (a
+  background sync, a delete) does not.
+- **The two new Gemini models need a config change plus a restart on my side** before
+  they appear in the credits-mode allowlist. If one is missing from your model picker,
+  that is why.
+- The remaining findings from this cycle's security audit are tracked privately and will
+  land in later releases. None of them are reachable from the public internet.
+
+### Technical
+
+- **Video pipeline.** New `freememo.largeobj` (`lo_create`/`lo_write`/`lo_read`/
+  `lo_unlink`; `open-range-stream!` owns its own pooled connection so a Ring body can
+  outlive its handler), `freememo.ffmpeg` (bounded `ffmpeg`/`ffprobe` subprocesses),
+  `freememo.video` (probe → remux → extract → chunk → Whisper, with chunk-offset
+  arithmetic), `freememo.video-http` (`init`/`chunk`/`finalize`/`abort`/`status`/
+  `position` plus ranged `GET /api/video/:id`), and `freememo.storage-meter`. Client
+  side: `video_upload.cljs`, `video_wavesurfer.cljs`, `video_pane`, `video_transcript`,
+  `video_extract`, `video_import_modal`, `video_probe.cljs`, `video_format`.
+- **Why large objects.** Video exceeds Postgres' 1 GB `bytea` ceiling, and `lo_write` is
+  the native append primitive — so a chunked three-call upload writes straight into the
+  large object and the global 100 MB HTTP body ceiling never has to move. Heap holds one
+  chunk. The quota gate runs once at `init` against the declared size inside one
+  transaction, so two concurrent inits that would jointly exceed the cap can't both win.
+- **Four new tables** — `topic_videos` (`lo_oid`, `byte_size`, `duration_ms`,
+  `last_pos_ms`, `remux_pending`), `video_transcripts` (one row per segment),
+  `video_segments` (extract ranges), `video_upload_sessions` — plus
+  `users.last_metered_at`, `storage_grace_started_at` and `storage_debt_micro`.
+  `topics.kind` is unchanged; `video` and `video-playlist` are just new values.
+- **`usage_bytes` is now all stored bytes** — `SUM(topic_files.file_size) +
+  SUM(topic_videos.byte_size)` — backfilled once, with large-object unlinking wired into
+  every deletion path (hard delete, staged purge, user delete, orphan sweep,
+  grace reclamation) and three sweep jobs. The orphan detector excludes OIDs held by
+  live upload sessions.
+- **Metering** prices GB-months lazily on session boot (throttled, total, never able to
+  block sign-in) and carries sub-IQD remainders in `storage_debt_micro`, or an hourly
+  tick over a small library rounds to zero forever. `STORAGE_IQD_PER_GB_MONTH` unset
+  disables metering entirely — the self-host default; it fails open deliberately,
+  because billing zero by accident is recoverable and reclaiming uploads by accident is
+  not. Config: `STORAGE_PAID_QUOTA_BYTES` (100 GB), `STORAGE_GRACE_DAYS` (14),
+  `VIDEO_MAX_BYTES` (8 GB), `VIDEO_TRANSCRIBE_SEGMENT_SECONDS` (900).
+- **Serving.** `ffmpeg` added to the runtime image; without it a video still uploads and
+  plays, it just gets no duration, waveform or transcript. `/api/video/*` and the video
+  MIME types are excluded from gzip in `prod.cljc` — gzipping a ranged response forces
+  Jetty to drop `Content-Length` and invalidates the `Content-Range` offsets, which
+  breaks `<video>` seeking. Pre-remux bytes are served `no-store` rather than withheld
+  behind a 409, so a pipeline that never runs leaves an uncached working video instead
+  of a permanently unplayable one.
+- **Position is written by `navigator.sendBeacon`** on pause and unmount: an Electric
+  effect is cancelled with the frame that issued it and cannot survive teardown, but a
+  beacon is queued by the browser.
+- **Wavesurfer never owns the clock.** The extracted MP3 is decoded once in a throwaway
+  instance, `exportPeaks()` is taken, and the display instance is built over the
+  `<video>` element with those peaks — so the `<video>` is the single playback clock.
+- **Quiz schema.** `kg_questions.flagged` / `.suspended` (with a partial index),
+  `kg_reviews.user_answer` / `.explanation` / `.question_text` / `.missed_fact_ids`, and
+  `kg_answers.question_text`. One shared suspended-exclusion predicate feeds all four
+  draw/count sites; `question_text` is captured by subselect inside the writer rather
+  than threaded through call sites. New `freememo.quiz-dashboard`,
+  `freememo.quiz-feedback` and `freememo.question-curation` namespaces keep
+  `quiz_page.cljc` under the bytecode ceiling.
+- **`int-array-value` / `text-array-value`** in `db.clj`: a bare `[:array []]` renders as
+  `ARRAY[]`, which Postgres rejects as untypable. `apply-fsrs-review!` hit exactly that
+  on any correct answer, and the throw escaped an `e/Offload` and tore down the server
+  session. Both writers route through the helpers now; regression test
+  `empty-arrays-carry-an-explicit-type-cast`.
+- **Cluster question generation** in `kg_questions.clj`: the work list groups approved
+  facts by `(subject_entity_id, predicate_id)`, coverage becomes "linked to ≥1 approved
+  atomic question", and object-entity neighborhoods are fetched in one batched query per
+  batch instead of per object. `has_alternatives` is out of the work-list query and the
+  `:alt true` paragraph is out of `kg-question-atomic.md`.
+- **Cards view URL state.** `query-params` / `set-query-params!` in `freememo.util`; the
+  filter vocabulary stays in `library_cards`. `replaceState` on every change including
+  keystrokes, read once at mount — no history entries, therefore no `popstate` listener.
+  Two text signals: instant drives the URL, 300 ms-debounced drives the query, the
+  scroll reset key and `filters-active?`, so those agree with the rows on screen.
+- **Filter-pending is derived, not observed.** `Offload-latch` buffers the previous
+  result across a re-query, so there is no pending value to key an indicator off.
+  The client hashes `opts`, the hash rides into the thunk and is `assoc`'d onto the
+  result, and pending is `(not= opts-hash (:opts-hash result))` — which also makes it
+  blind to `:refresh` / `:card-mutations` / `:sync-mutations` bumps.
+- **The cards-table cost was reactive node count, not payload.** A CPU profile put all
+  self time in `incseq`/`missionary` transfer frames with no application frame present;
+  the zero-result transition moved 31 KB and burned 2.3 s. Two fixes: per-cell inline
+  `:style` maps became CSS classes (Electric applies each style property as its own
+  reactive prop — ~6 nodes × 8 cells × 22 rows), and per-row field reads are client-sited
+  keyword lookups over one transferred row instead of 16 separate `e/server` reads.
+  Empty-boundary block 2620 ms → ~1100 ms, remount 1307 → 752 ms.
+- **`Method code too large!` is a `:prod`-only failure** and the reported line always
+  names the file's *first* `e/defn`, because expanding it is what triggers loading the
+  namespace's CLJ side. `library_cards.cljc` overflowed and two splits guided by that
+  line changed nothing; a verbose load named the real file. Split into
+  `CardsSearchRow`/`CardsKindFilterRow`/`CardsSyncFilterRow`,
+  `SelectAllCell`/`SortHeaderCell`, `RowKindCell`/`RowAddedCell`/`RowDeleteCell`, with
+  `overlay-ids-for` and `build-query-opts` lifted to plain `defn`s. The `(e/server …)`
+  form binding for `result` was deliberately left in place — moving it into an `e/defn`
+  flips wire behaviour. `clj -X:build:prod build-client` is now part of this namespace's
+  done-condition; recipe recorded in `CLAUDE.md`.
+- **Structured logging.** `freememo.logging` gains `audit!` (user-content mutations, one
+  `:info` signal on a fixed `{:user-id :action :entity :entity-id :outcome}` schema) and
+  `external!` (outbound call outcome + latency); `openrouter/post!` emits one
+  `external!` per call with a feature tag. New `freememo.client-errors`: `report!`
+  enqueues from any JS callback and a headless `ClientErrorForwarder` mounted in `Main`
+  ships each entry to the server exactly once, tagged with a per-page-load session id.
+- **IDOR closure.** Ownership predicates pushed into `db.clj` for flashcard
+  edit/delete/anki-id writes, pins, topic scheduling, occlusion and score groups;
+  `get-cards-for-sync` and `export-cards-csv` gate on user-scoped topic lookups.
+  `epub/read-zip-entries` gained entry-count / per-entry / total-uncompressed caps
+  throwing `::zip-too-large`, ported from `kg-code/unzip-repo!`. Published ports are
+  `${FREEMEMO_BIND_IP:-127.0.0.1}` in tracked compose files, with the real interface in
+  the untracked `.env` — never `0.0.0.0`, since the SPARQL endpoint is unauthenticated.
+- **Dev boot stack.** `dev/-main` loads `freememo.main` on a 16 MB-stack thread via
+  `dev-stack/call-on-big-stack` (`DEV_LOADER_STACK_MB`), because the `:dev` alias carries
+  no `-Xss` and Electric's macroexpander overflowed the JVM default about one cold boot
+  in five. `dev`'s CLJ requires must stay Electric-free, and `call-on-big-stack` must
+  never be called from `user.clj` (`RT.class` monitor deadlock). Regression check:
+  `clj -J-Xss512k -M:dev -e "(dev/load-app-namespaces!) (println :OK)"`.
+- **`tools/publish-clean/`** — builds a public mirror with configured paths scrubbed from
+  all history via `git filter-repo` into a persistent sibling directory; the source repo
+  is never modified and re-running is idempotent. A standing `EXCLUDED` path list is
+  unioned onto any flags. `CLAUDE.md` and `plans/` are now tracked in the private repo
+  and scrubbed on publish.
+- **Typeahead is id-keyed.** `Typeahead` takes `{:id :label}` and writes the `:id`;
+  `Suggest` is the free-text sibling for fields where text absent from the list is a
+  legal value. A string option used to fail silently — blank rows, a filter matching
+  nothing, and `(reset! !atom nil)` *clearing* the selection. `check-options!` warns on
+  the first non-conforming option as a backstop.
+- **Add-card modal on Forms5**, with a capture-phase `submit` listener on an ancestor of
+  the form so Quill's syntax-token flush lands in the field atoms before `:Parse` stamps
+  the commit. `enqueue-pending-card!` is idempotent on a client-minted id via one atomic
+  `swap-vals!`.
+- **`HierarchySidePanel` split** into row / tree / panel — one ~190-line deeply nested
+  `e/defn` was overflowing the compiler's stack. The Anki overlay's fetch set moved to a
+  filter-independent `get-pushed-card-manifest`, so it no longer narrows with the
+  `/library/cards` filters.
+- **Tests.** New `test/freememo/video_test.clj` (range parsing, chunk offsets, storage
+  pricing, MIME classification), `test/freememo/cloze_test.clj` (V1–V10 plus nil/empty
+  against the extracted pure `freememo.cloze/validate`), and
+  `test/freememo/kg_questions_test.clj`.
+
 ## v20260716-ceeb056
 
 ### For users
