@@ -7,7 +7,8 @@
    requires this ns; this ns requires neither). CLJS side effects; the CLJ
    branch is inert so the ns loads on both peers."
   (:require [clojure.string :as str]
-            [freememo.client-errors :as ce]))
+            [freememo.client-errors :as ce]
+            [freememo.util :as util]))
 
 ;; ---------------------------------------------------------------------------
 ;; Cloze deletion — number tracking + selection wrapping (CLJS).
@@ -80,7 +81,7 @@
            _ (dotimes [i n]
                (aset buf i (.charCodeAt bin-str i)))
            blob (js/Blob. (clj->js [buf]) (clj->js {:type mime}))
-           ext (last (str/split mime #"/"))
+           ext (util/mime->ext mime)
            form (js/FormData.)]
        (.append form "file" blob (str "image." ext))
        (-> (js/fetch "/api/upload-media"

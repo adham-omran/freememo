@@ -30,6 +30,12 @@
         <link href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css" rel="stylesheet">
         <link href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.bubble.css" rel="stylesheet">
         <script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
+        <!-- Drag-to-resize for image blots. MUST load after quill.js: the UMD
+             wrapper reads window.Quill and self-registers `modules/resize`.
+             Options live in freememo.quill-field/quill-config. No CSS link —
+             the module's styles are ported into index.css so they theme with
+             light-dark() like the rest of the app. -->
+        <script src="https://cdn.jsdelivr.net/npm/quill-resize-module@2.1.3/dist/resize.js"></script>
         <!-- Konva — canvas library for the image-occlusion mask editor (freememo.occlusion-editor) -->
         <script src="https://cdn.jsdelivr.net/npm/konva@9.3.16/konva.min.js"></script>
         <!-- Quill overrides now in index.css (with dark mode support) -->

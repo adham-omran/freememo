@@ -13,23 +13,32 @@
    [freememo.occlusion-modal :refer [OcclusionModal]]
    [clojure.string :as str]
    [freememo.commands :as commands]
-   #?(:cljs [freememo.editor-pin-menu :as pin-menu])
+   #?(:cljs [freememo.editor-image-menu :as image-menu])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.web-import :as web-import])))
 
 ;; ---------------------------------------------------------------------------
-;; Pin contextmenu helper — wraps CLJS-only install-contextmenu! so the
+;; Image contextmenu helper — wraps CLJS-only install-contextmenu! so the
 ;; reader conditional lives in a plain defn body, not in the Electric graph.
 ;; ---------------------------------------------------------------------------
 
-(defn install-pin-contextmenu!
-  "Attach pin contextmenu to container-el. Returns a cleanup fn.
+(defn install-image-contextmenu!
+  "Attach the image contextmenu to container-el. Returns a cleanup fn.
    CLJS-only; returns nil on CLJ."
-  [container-el get-topic-id get-pin-count on-pin! on-occlude!]
-  #?(:cljs (pin-menu/install-contextmenu!
-             container-el get-topic-id get-pin-count on-pin! on-occlude!)
+  [container-el get-topic-id get-pin-count on-pin! on-occlude! on-error!]
+  #?(:cljs (image-menu/install-contextmenu!
+             container-el get-topic-id get-pin-count on-pin! on-occlude! on-error!)
      :clj nil))
+
+(defn push-image-menu-toast!
+  "Surface an image-menu failure to the user. Server-only; the menu itself
+   runs outside Electric's frame and cannot reach `toasts/push!`.
+   Pre : `message` is a user-presentable string. Post: returns the toast id."
+  [user-id message]
+  #?(:clj (toasts/push! user-id {:level :error :message message})
+     :cljs nil))
 
 (defn count-pins-for-topic*
   "Server-side pin count. Takes _pin-rev as first arg so the value is part of
@@ -160,6 +169,14 @@
               ;; item fires into this; OcclusionModal (mounted below) opens
               ;; while it is non-nil. Shape: see freememo.occlusion-modal.
               !occlusion-request (atom nil)
+              ;; Menu-error atom — the context menu's copy/save actions run in
+              ;; raw promise callbacks, outside Electric's frame, so they can't
+              ;; call e/server to push a toast. Same client→server bridge as
+              ;; !pin-request. Carries an :id because two consecutive identical
+              ;; messages must still be two distinct e/Token emissions.
+              ;; Shape: {:id uuid :message "..."} or nil.
+              !menu-error (atom nil)
+              menu-error (e/watch !menu-error)
               ;; Reactive pin count — used for K1 cap check in the context menu
               ;; Watch :pin-mutations so the menu's K1 cap check refreshes
               ;; after the side panel adds/removes a pin.
@@ -195,6 +212,13 @@
                       (t))
                     (do (log/log-debug (str "EditorPane set-pin! failed: " result))
                       (t)))))))
+
+          ;; e/Token: surface one image-menu failure at a time as a toast.
+          (let [[et _] (e/Token menu-error)]
+            (when et
+              (e/on-unmount #(reset! !menu-error nil))
+              (case (e/server (push-image-menu-toast! user-id (:message menu-error)))
+                (et))))
 
           ;; -----------------------------------------------------------------------
           ;; Editor area
@@ -237,12 +261,15 @@
                                         {:mode :create
                                          :image-media-id media-id
                                          :topic-id topic-id
-                                         :root-topic-id root-topic-id}))]
+                                         :root-topic-id root-topic-id}))
+                      on-error-fn (fn [message]
+                                    (reset! !menu-error {:id (random-uuid)
+                                                         :message message}))]
                   (js/setTimeout
                     (fn []
                       (reset! !cleanup-fn
-                        (install-pin-contextmenu! host get-topic-id get-pin-count
-                          on-pin-fn on-occlude-fn)))
+                        (install-image-contextmenu! host get-topic-id get-pin-count
+                          on-pin-fn on-occlude-fn on-error-fn)))
                     0)
                   (e/on-unmount (fn [] (when-let [f @!cleanup-fn] (f)))))))
 

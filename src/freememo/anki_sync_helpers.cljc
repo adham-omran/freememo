@@ -4,7 +4,8 @@
    [missionary.core :as m]
    [clojure.string :as str]
    [freememo.occlusion-svg :as osvg]
-   [freememo.logging :as log]))
+   [freememo.logging :as log]
+   [freememo.util :as util]))
 
 ;; ---------------------------------------------------------------------------
 ;; Client-side AnkiConnect wrapper
@@ -122,21 +123,8 @@
                           (throw (js/Error. (str (:error result)))))
                         (:result result))))))))))
 
-#?(:cljs
-   (defn mime->ext
-     "Derive a file extension from a MIME type string (client-side, mirrors server)."
-     [mime]
-     (case (str/lower-case (or mime ""))
-       "image/png" "png"
-       "image/jpeg" "jpg"
-       "image/jpg" "jpg"
-       "image/gif" "gif"
-       "image/webp" "webp"
-       "image/svg+xml" "svg"
-       "image/bmp" "bmp"
-       "image/tiff" "tiff"
-       "audio/mpeg" "mp3"
-       "bin")))
+;; mime->ext moved to freememo.util — it is a generic media mapping, and two
+;; other sites had drifted their own (broken) versions of it.
 
 #?(:cljs
    (defn fetch-and-store-media!
@@ -157,7 +145,7 @@
                         (throw (js/Error. (str "HTTP " (.-status resp)
                                             " fetching /api/media/" media-id))))
                       (let [ct (.get (.-headers resp) "content-type")
-                            ext (mime->ext (when ct (first (str/split ct #";"))))
+                            ext (util/mime->ext (when ct (first (str/split ct #";"))))
                             fn (str media-id "." ext)]
                         (reset! filename-atom fn)
                         (.arrayBuffer resp))))

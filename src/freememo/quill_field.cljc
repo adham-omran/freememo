@@ -86,7 +86,37 @@
                                      {:key "ruby" :label "Ruby"}
                                      {:key "rust" :label "Rust"}
                                      {:key "sql" :label "SQL"}]}
-                :table true}
+                :table true
+                ;; Drag-to-resize images. quill-resize-module 2.0.3+ is loaded
+                ;; from CDN in index*.html and self-registers `modules/resize`
+                ;; on script load, so there is no Quill.register call anywhere.
+                ;;
+                ;; `:modules` omits the module's own "Toolbar" (its align
+                ;; buttons write `ql-resize-style` classes, which `clean-html`
+                ;; strips from <img> — so alignment would persist in topic
+                ;; content and vanish on cards). "DisplaySize" is the live
+                ;; WxH readout; "Keyboard" is arrow-key nudging.
+                ;;
+                ;; `:embedTags []` skips initializeEmbed!, which otherwise
+                ;; injects a <style> node and a pointer-events class for
+                ;; VIDEO/IFRAME blots this editor never contains.
+                ;;
+                ;; `:attribute ["width"]` is the whole persistence contract:
+                ;; Quill 2.0.3's image blot keeps only alt/height/width, and
+                ;; `clean-html` allow-lists the same, so a width ATTRIBUTE is
+                ;; the only size representation that survives a reload or the
+                ;; card path. The module writes it as a bare integer and
+                ;; clears inline style. `.ql-editor img{height:auto}` would
+                ;; override any height, so height is deliberately not written.
+                ;;
+                ;; `:minWidth 40` (module default 100) — handles are withheld
+                ;; below this rendered width. Wikipedia infobox thumbnails
+                ;; render ~50px and must stay resizable; 20px marker icons
+                ;; must not, since four 12px handles would swallow them.
+                :resize {:modules ["DisplaySize" "Resize" "Keyboard"]
+                         :embedTags []
+                         :parchment {:image {:attribute ["width"]
+                                             :limit {:minWidth 40}}}}}
       :placeholder (or placeholder "Enter text...")}
      extra)))
 
