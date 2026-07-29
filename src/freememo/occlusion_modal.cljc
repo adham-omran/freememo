@@ -21,7 +21,7 @@
    [freememo.card-components :refer [try-delete-anki-notes!]]
    #?(:cljs [freememo.occlusion-editor :as occ-editor])
    #?(:clj [freememo.occlusion :as occ])
-   #?(:clj [freememo.optimistic :as opt])
+   [freememo.optimistic :as opt]
    #?(:clj [freememo.settings :as settings])))
 
 ;; ---------------------------------------------------------------------------
@@ -33,13 +33,11 @@
   #?(:clj (occ/get-group-for-edit user-id group-id)
      :cljs nil))
 
-(defn enqueue-add-occlusion!* [user-id id payload]
-  #?(:clj (opt/enqueue-pending-card! user-id :add-occlusion id payload)
-     :cljs nil))
+(defn enqueue-add-occlusion!* [id payload]
+  (opt/enqueue-pending! :add-occlusion id payload))
 
-(defn enqueue-update-occlusion!* [user-id payload]
-  #?(:clj (opt/enqueue-command! user-id {:type :update-occlusion :payload payload})
-     :cljs nil))
+(defn enqueue-update-occlusion!* [payload]
+  (opt/enqueue! {:type :update-occlusion :payload payload}))
 
 (defn get-card-font-size* [user-id]
   #?(:clj (settings/get-card-font-size user-id)
@@ -216,7 +214,7 @@
                 ;; mirrors the card delete flow (server owns rows, client
                 ;; owns AnkiConnect).
                 (case (try-delete-anki-notes! removed-note-ids)
-                  (case (e/server (enqueue-update-occlusion!* user-id payload))
+                  (case (enqueue-update-occlusion!* payload)
                     (do (e/on-unmount #(reset! !request nil))
                       (t)))))
               ;; :kind marks the overlay entry so PendingCardRow renders the
@@ -230,7 +228,7 @@
                              :io-fields @!fields}]
                 ;; Optimistic: overlay row + command, close immediately; the
                 ;; CommandDispatcher persists the group (occlusion.clj).
-                (case (e/server (enqueue-add-occlusion!* user-id add-id payload))
+                (case (enqueue-add-occlusion!* add-id payload)
                   (do (e/on-unmount #(reset! !request nil))
                     (t)))))))))))
 

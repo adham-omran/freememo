@@ -10,9 +10,8 @@
    [freememo.quill-field :refer [QuillField flush-syntax-tokens!]]
    [freememo.commands :as commands]
    [freememo.cloze :as cloze]
-   #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.toasts :as toasts])
-   #?(:clj [freememo.optimistic :as opt])
+   [freememo.optimistic :as opt]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.html-cleaner :as cleaner])
@@ -570,26 +569,23 @@
        (catch Exception e
          {:success false :error (.getMessage e)}))))
 
-;; Optimistic add-card dispatch (freememo.optimistic). Pre: payload has
-;; :topic-id :root-topic-id :kind :card-data. Post: cards saved (success toast,
-;; overlay entry flipped :confirmed with real ids) or overlay entry flipped
-;; :error + error toast. Effect + toast only — optimistic/execute! bumps the
-;; registry :views and removes the command. Returns :done.
+;; Optimistic add-card effect (freememo.optimistic). Pre: payload has
+;; :topic-id :root-topic-id :kind :card-data. Post: cards saved + success toast,
+;; or error toast. Effect + toast only, returning the outcome map — the client
+;; dispatcher flips the overlay entry (:confirmed with real ids, or :error) and
+;; run-command-effect! bumps the registry :views.
 #?(:clj
-   (defmethod opt/run-command! :add-card [user-id {:keys [id payload]}]
+   (defmethod opt/run-command! :add-card [user-id {:keys [payload]}]
      (let [{:keys [topic-id root-topic-id kind card-data]} payload
            ;; bake? false — the Add-Card modal already inlined pinned images
            ;; into card-data via pins-prefill-html; baking would duplicate them.
            result (cards/save-cards user-id topic-id root-topic-id kind card-data false)]
        (if (:success result)
-         (do (swap! (us/get-atom user-id :pending-cards) update id merge
-               {:status :confirmed :real-ids (:ids result)})
-             (toasts/push! user-id {:level :success :message "Card added"}))
-         (do (swap! (us/get-atom user-id :pending-cards) update id merge
-               {:status :error :error (:error result)})
-             (toasts/push! user-id {:level :error
-                                    :message (or (:error result) "Failed to add card")})))
-       :done)))
+         (do (toasts/push! user-id {:level :success :message "Card added"})
+             {:ok? true :real-ids (:ids result)})
+         (do (toasts/push! user-id {:level :error
+                                    :message (or (:error result) "Failed to add card")})
+             {:ok? false :error (:error result)})))))
 
 ;; Cancel affordance for the Add-Card Form!. MUST be :type "button" — a bare
 ;; <button> inside a <form> defaults to type=submit and would submit on click.
@@ -780,8 +776,8 @@
                                    (cond-> {:c (e/server (sanitize-card-field primary))}
                                      (and clean-a (not (str/blank? clean-a)))
                                      (assoc :a clean-a)))])]
-                (case (e/server (opt/enqueue-add-card! user-id add-id
-                                  {:topic-id topic-id :root-topic-id root-topic-id
-                                   :kind kind :card-data card-data}))
+                (case (opt/enqueue-add-card! add-id
+                        {:topic-id topic-id :root-topic-id root-topic-id
+                         :kind kind :card-data card-data})
                   (do (e/on-unmount #(reset! !show-add false)) (t)))))))))))
 
