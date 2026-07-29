@@ -12,6 +12,28 @@
     font-size: 1em;
 }
 
+/* Mirrors `.ql-editor img` in index.css so a card renders the same shape in
+   Anki as it did in the editor.
+
+   `height: auto` is load-bearing, not a no-op restating the initial value: an
+   HTML `height` attribute is a presentational hint, and only an author
+   declaration overrides it. The editor declares `height: auto`, so a stale
+   `height` attribute is inert there; without this rule Anki honours it and
+   renders e.g. `<img width="144" height="137">` at exactly 144x137 —
+   distorted, while the editor looked correct. Card images acquire such pairs
+   from web-page pastes and from extract-to-card, and image resize writes
+   `width` only, so it never clears a stale `height` itself.
+
+   `max-width` keeps an over-wide image inside the card.
+
+   Deliberately unscoped, and deliberately first: the IO and score rules below
+   (`#io-original img`, `#io-overlay img`, `.score-front img`) all have higher
+   specificity and continue to win. */
+img {
+    max-width: 100%;
+    height: auto;
+}
+
 /* ================================================================
    FreeMemo Anki Card Stylesheet
    ----------------------------------------------------------------
