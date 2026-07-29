@@ -99,6 +99,10 @@
   (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT UNIQUE"])
   (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT"])
   (jdbc/execute! ds ["ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL"])
+  ;; Human-readable name for addressing the user in outgoing mail. Filled from
+  ;; Google's `name` claim at login, but only when NULL — see
+  ;; `set-display-name-if-absent!`, which must never clobber a hand-set value.
+  (jdbc/execute! ds ["ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT"])
 
   ;; Storage quota: denormalized usage counter + optional per-user override.
   ;; ALTER + backfill run in one tx so partial failure rolls back; otherwise
@@ -1655,10 +1659,54 @@
                  :do-update-set {:email email}
                  :returning [:id :username]})))
 
-(defn insert-user-event! [user-id event-type]
-  (jdbc/execute! ds
-    (sql/format {:insert-into :user_events
-                 :values [{:user_id user-id :event_type event-type}]})))
+(defn set-display-name-if-absent!
+  "Fill users.display_name for `user-id`, but only when it is currently NULL.
+   Pre:  user-id identifies an existing users row; display-name is a string or nil.
+   Post: a NULL display_name becomes the trimmed display-name; an existing
+         non-NULL value is left untouched. No-op for nil/blank input.
+   Invariant: a hand-curated display_name is never clobbered by a later login."
+  [user-id display-name]
+  (when-not (str/blank? display-name)
+    (jdbc/execute! ds
+      ["UPDATE users SET display_name = ? WHERE id = ? AND display_name IS NULL"
+       (str/trim display-name) user-id])))
+
+(defn get-mail-addressees
+  "Rows needed to address outgoing mail to specific users.
+   Pre:  user-ids is a non-empty collection of ints.
+   Post: vector of {:users/id :users/email :users/display_name}, one per
+         existing id, in ascending id order; ids with no row are absent, so
+         callers MUST compare the count against what they asked for."
+  [user-ids]
+  (when (seq user-ids)
+    (jdbc/execute! ds
+      (sql/format {:select [:id :email :display_name]
+                   :from [:users]
+                   :where [:in :id (vec user-ids)]
+                   :order-by [[:id :asc]]}))))
+
+(defn user-ids-with-event
+  "Set of user ids that already have at least one `event-type` row.
+   Post: set of ints (possibly empty). Used for idempotent one-off sends."
+  [event-type]
+  (into #{}
+    (map :user_events/user_id)
+    (jdbc/execute! ds
+      (sql/format {:select-distinct [:user_id]
+                   :from [:user_events]
+                   :where [:= :event_type event-type]}))))
+
+(defn insert-user-event!
+  "Record a user event. The 3-arity stores `metadata` as jsonb.
+   Post: exactly one user_events row inserted."
+  ([user-id event-type] (insert-user-event! user-id event-type nil))
+  ([user-id event-type metadata]
+   (jdbc/execute! ds
+     (sql/format {:insert-into :user_events
+                  :values [(cond-> {:user_id user-id :event_type event-type}
+                             (some? metadata)
+                             (assoc :metadata
+                               [:cast (json/generate-string metadata) :jsonb]))]}))))
 
 ;; ---------------------------------------------------------------------------
 ;; Utility
