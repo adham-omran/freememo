@@ -19,6 +19,7 @@
    [freememo.quill-field :refer [QuillField]]
    [freememo.card-modals :refer [attach-modal-tab-nav!]]
    [freememo.card-components :refer [try-delete-anki-notes!]]
+   [freememo.occlusion-ordinals :as ord]
    #?(:cljs [freememo.occlusion-editor :as occ-editor])
    #?(:clj [freememo.occlusion :as occ])
    [freememo.optimistic :as opt]
@@ -45,17 +46,32 @@
 
 (defn init-occlusion-editor!
   "Deferred Konva init (container must be in the DOM first) — mirrors
-   quill_field/schedule-quill-init!."
-  [!handle container image-media-id rects on-change]
+   quill_field/schedule-quill-init!. `tool` is the starting tool: :draw when
+   creating (the first act is drawing), :select when editing an existing group."
+  [!handle container image-media-id rects tool on-change on-tool-change]
   #?(:cljs (do (js/setTimeout
                  (fn []
                    (reset! !handle
                      (occ-editor/init! {:container container
                                         :image-url (str "/api/media/" image-media-id)
                                         :rects rects
-                                        :on-change on-change})))
+                                        :tool tool
+                                        :on-change on-change
+                                        :on-tool-change on-tool-change})))
                  0)
              nil)
+     :clj nil))
+
+(defn set-editor-tool! [!handle tool]
+  #?(:cljs (do (occ-editor/set-tool! @!handle tool) nil)
+     :clj nil))
+
+(defn group-editor-selection! [!handle]
+  #?(:cljs (do (occ-editor/group-selection! @!handle) nil)
+     :clj nil))
+
+(defn ungroup-editor-selection! [!handle]
+  #?(:cljs (do (occ-editor/ungroup-selection! @!handle) nil)
      :clj nil))
 
 (defn destroy-occlusion-editor! [!handle]
@@ -98,21 +114,63 @@
 (def empty-io-fields
   {:header "" :footer "" :remarks "" :sources "" :extra1 "" :extra2 ""})
 
+(defn mask-summary
+  "\"5 masks → 3 cards\" — masks are rects, cards are mask groups, and grouping
+   is what makes the two numbers differ."
+  [rects]
+  (let [masks (count rects)
+        cards (ord/card-count rects)]
+    (str masks " mask" (when (not= 1 masks) "s")
+      " → " cards " card" (when (not= 1 cards) "s"))))
+
 ;; ---------------------------------------------------------------------------
 ;; Sub-components (split per the JVM 64KB method-limit convention)
 ;; ---------------------------------------------------------------------------
 
+(e/defn OcclusionToolButton
+  "One toolbar button. The effects are local to the browser (Konva state), so
+   there is no token — see the selection-side-effect pattern in CLAUDE.md."
+  [label active? on-click]
+  (e/client
+    (dom/button
+      (dom/props {:class "btn btn-sm" :type "button"
+                  :style {:background (if active? "var(--color-bg-subtle)" "transparent")
+                          :font-weight (if active? "600" "400")
+                          :border "1px solid var(--color-border)"}})
+      (dom/text label)
+      (dom/On "click" (fn [_] (on-click)) nil))))
+
+(e/defn OcclusionMaskToolbar
+  "Tool switch plus mask-group actions, mirroring the editor's own shortcuts.
+   `tool` comes from !tool, which the editor also writes on a keyboard switch,
+   so the buttons stay truthful either way."
+  [!handle !tool tool]
+  (e/client
+    (dom/div
+      (dom/props {:style {:display "flex" :gap "var(--sp-2)" :align-items "center"
+                          :margin-bottom "var(--sp-2)" :flex-wrap "wrap"}})
+      (OcclusionToolButton "Select (S)" (= tool :select)
+        (fn [] (reset! !tool :select) (set-editor-tool! !handle :select)))
+      (OcclusionToolButton "Draw (R)" (= tool :draw)
+        (fn [] (reset! !tool :draw) (set-editor-tool! !handle :draw)))
+      (dom/span (dom/props {:style {:color "var(--color-border)"}}) (dom/text "|"))
+      (OcclusionToolButton "Group (G)" false
+        (fn [] (group-editor-selection! !handle)))
+      (OcclusionToolButton "Ungroup (U)" false
+        (fn [] (ungroup-editor-selection! !handle))))))
+
 (e/defn OcclusionMasksTab
   "Konva editor host. Mounted once; hidden (not unmounted) when the Fields tab
    is active so drawn masks survive tab switches."
-  [!handle image-media-id initial-rects !rects]
+  [!handle image-media-id initial-rects !rects !tool initial-tool]
   (e/client
     (dom/div
       (dom/props {:style {:margin-bottom "var(--sp-3)"}})
+      (OcclusionMaskToolbar !handle !tool (e/watch !tool))
       (dom/div
         (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
                             :margin-bottom "var(--sp-2)"}})
-        (dom/text "Drag on the image to draw a mask. Click a mask to select it — drag to move, handles to resize, Delete/Backspace to remove."))
+        (dom/text "Draw (R): drag on the image to add a mask. Select (S): click a mask, Shift-click or drag a box to add more; drag to move, handles to resize, Delete to remove. Group (G) makes the selected masks one card; Ungroup (U) splits them."))
       (dom/div
         (dom/props {:class "occlusion-editor-host"
                     :style {:min-height "200px" :max-height "58vh"
@@ -120,14 +178,16 @@
                             :border "1px solid var(--color-border)"
                             :border-radius "var(--radius-sm)"}})
         (let [host dom/node
-              on-change (fn [rects] (reset! !rects rects))]
-          (init-occlusion-editor! !handle host image-media-id initial-rects on-change)
+              on-change (fn [rects] (reset! !rects rects))
+              on-tool-change (fn [tool] (reset! !tool tool))]
+          (init-occlusion-editor! !handle host image-media-id initial-rects
+            initial-tool on-change on-tool-change)
           (e/on-unmount (fn [] (destroy-occlusion-editor! !handle)))))
       (let [rects (e/watch !rects)]
         (dom/div
           (dom/props {:style {:font-size "12px" :color "var(--color-text-hint)"
                               :margin-top "var(--sp-1)"}})
-          (dom/text (str (count rects) " mask" (when (not= 1 (count rects)) "s"))))))))
+          (dom/text (mask-summary rects)))))))
 
 (e/defn OcclusionFieldRow [label placeholder k initial-fields !fields field-key modal-font]
   (e/client
@@ -184,12 +244,12 @@
             (dom/props {:style {:display "flex" :gap "var(--sp-2)" :order "1"}})
             (dom/button
               (dom/props {:class "btn btn-primary" :disabled (some? t)
-                          :title "One card per mask; the front hides only the asked mask."})
+                          :title "One card per mask group; the front hides only the asked group's masks."})
               (dom/text "Hide One, Guess One")
               (dom/On "click" (fn [_] (submit! "hide-one")) nil))
             (dom/button
               (dom/props {:class "btn btn-primary" :disabled (some? t)
-                          :title "One card per mask; the front hides every mask and highlights the asked one."})
+                          :title "One card per mask group; the front hides every mask and highlights the asked group's."})
               (reset! !primary-btn dom/node)
               (dom/text "Hide All, Guess One")
               (dom/On "click" (fn [_] (submit! "hide-all")) nil))))
@@ -245,6 +305,10 @@
           !handle (atom nil)
           !rects (atom initial-rects)
           !fields (atom initial-fields)
+          ;; Upstream's rule: the first act when creating is drawing, the first
+          ;; act when editing is selecting (Anki's MaskEditor.svelte).
+          initial-tool (if edit? :select :draw)
+          !tool (atom initial-tool)
           !tab (atom :masks)
           tab (e/watch !tab)
           !primary-btn (atom nil)
@@ -302,7 +366,7 @@
           ;; the Konva stage and Quill instances survive switches.
           (dom/div
             (dom/props {:style {:display (if (= tab :masks) "block" "none")}})
-            (OcclusionMasksTab !handle image-media-id initial-rects !rects))
+            (OcclusionMasksTab !handle image-media-id initial-rects !rects !tool initial-tool))
           (dom/div
             (dom/props {:style {:display (if (= tab :fields) "block" "none")}})
             (OcclusionFieldsTab initial-fields !fields field-key modal-font))

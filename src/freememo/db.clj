@@ -18,6 +18,7 @@
    [freememo.config :as config]
    [freememo.fsrs :as fsrs]
    [freememo.logging :as log]
+   [freememo.occlusion-ordinals :as ord]
    [freememo.text :as text])
   (:import [com.zaxxer.hikari HikariDataSource]
            [org.postgresql.util PGobject]))
@@ -381,10 +382,11 @@
   []
   ;; Occlusion groups — one row per image-occlusion authoring session.
   ;; geometry JSONB = {:width :height :rects [{:x :y :w :h :ordinal} ...]}
-  ;; in natural-image pixels. next_ordinal is the single ordinal authority:
-  ;; ordinals are assigned from it and NEVER reused, because they bind the
-  ;; per-mask flashcard row ↔ Anki note ↔ SVG rect id. anki_key names the
-  ;; group's Anki media files (fm-<anki_key>-…) and note IDs.
+  ;; in natural-image pixels. An ordinal identifies a MASK GROUP, so several
+  ;; rects may share one and sharing it is the grouping. next_ordinal is the
+  ;; single ordinal authority: ordinals are assigned from it and NEVER reused,
+  ;; because they bind the per-mask-group flashcard row ↔ Anki note ↔ SVG rect
+  ;; id. anki_key names the group's Anki media files (fm-<anki_key>-…) and note IDs.
   ;; Placed after media (image FK) and before the flashcards ALTERs below.
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS occlusion_groups (
@@ -402,6 +404,16 @@
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS io_fields JSONB"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_occlusion_group
                       ON flashcards(occlusion_group_id) WHERE occlusion_group_id IS NOT NULL"])
+  ;; One row per mask ordinal — the grouping invariant, enforced rather than
+  ;; conventional. Guarded like the other unique indexes above: a legacy
+  ;; duplicate must not stop the app from booting.
+  (try
+    (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS uq_flashcards_mask_ordinal
+                        ON flashcards(occlusion_group_id, mask_ordinal)
+                        WHERE occlusion_group_id IS NOT NULL"])
+    (catch Exception e
+      (tel/log! {:level :warn :id ::mask-ordinal-index :data {:error (.getMessage e)}}
+        "Could not create uq_flashcards_mask_ordinal — duplicate mask ordinals exist")))
 
   ;; Score groups — one row per (audio segment × notation rects) pair on a
   ;; kind='score' topic. geometry JSONB = {:pages [{:page :width :height
@@ -2754,6 +2766,27 @@
 ;; Flashcard operations
 ;; ---------------------------------------------------------------------------
 
+(def ^:private occlusion-mask-count-expr
+  "Rects sharing this row's mask_ordinal — the size of the row's mask group,
+   which the card tables render as \"group N · k masks\". Correlated on
+   f.mask_ordinal, so it is 0 for non-occlusion rows (a NULL ordinal matches
+   nothing) and for a group whose geometry somehow lacks :rects (coalesce)."
+  [:raw (str "(select count(*) from"
+          " jsonb_array_elements(coalesce(og.geometry->'rects', '[]'::jsonb)) as r(el)"
+          " where (r.el->>'ordinal')::int = f.mask_ordinal)")])
+
+(def ^:private card-group-selects
+  "Occlusion/score group columns every flashcard-row query projects, defined
+   once so the four queries cannot drift — the mask-count expression made the
+   copy-paste load-bearing. Aliases are the unqualified keys
+   normalize-flashcard-row promises; the count is an expression column, which
+   pgjdbc leaves unqualified already."
+  [[:og.image_media_id :occlusion_image_media_id]
+   [:og.mode :occlusion_mode]
+   [occlusion-mask-count-expr :occlusion_mask_count]
+   [:sg.start_ms :score_start_ms]
+   [:sg.end_ms :score_end_ms]])
+
 (defn- normalize-flashcard-row
   "Post-process a flashcard query row so it is plain data (Electric-wire safe):
    parse the io_fields JSONB, and move the occlusion-group and score-group
@@ -2823,11 +2856,8 @@
   (if topic-id
     (mapv (comp strip-foreign-jsonb normalize-flashcard-row)
       (jdbc/execute! ds
-        (sql/format {:select [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]
-                              [:og.image_media_id :occlusion_image_media_id]
-                              [:og.mode :occlusion_mode]
-                              [:sg.start_ms :score_start_ms]
-                              [:sg.end_ms :score_end_ms]]
+        (sql/format {:select (into [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]]
+                               card-group-selects)
                      :from [[:flashcards :f]]
                      :join [[:topics :t] [:= :f.topic_id :t.id]]
                      :left-join [[:topics :parent] [:= :t.parent_id :parent.id]
@@ -2843,11 +2873,8 @@
   [root-topic-id]
   (mapv (comp strip-foreign-jsonb normalize-flashcard-row)
     (jdbc/execute! ds
-      (sql/format {:select [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]
-                            [:og.image_media_id :occlusion_image_media_id]
-                            [:og.mode :occlusion_mode]
-                            [:sg.start_ms :score_start_ms]
-                            [:sg.end_ms :score_end_ms]]
+      (sql/format {:select (into [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]]
+                             card-group-selects)
                    :from [[:flashcards :f]]
                    :join [[:topics :t] [:= :f.topic_id :t.id]]
                    :left-join [[:topics :parent] [:= :t.parent_id :parent.id]
@@ -2874,15 +2901,12 @@
               :root_title (:topics/root_title row))
             (dissoc :topics/topic_title :topics/root_title)))
     (jdbc/execute! ds
-      (sql/format {:select [[:f.*]
-                            [[:coalesce :t.page_number :parent.page_number] :page_number]
-                            [:t.title :topic_title]
-                            [:root.title :root_title]
-                            [:og.image_media_id :occlusion_image_media_id]
-                            [:og.mode :occlusion_mode]
-                            [:sg.start_ms :score_start_ms]
-                            [:sg.end_ms :score_end_ms]
-                            [[:to_char :f.created_at [:inline "Mon DD"]] :formatted_date]]
+      (sql/format {:select (into [[:f.*]
+                                  [[:coalesce :t.page_number :parent.page_number] :page_number]
+                                  [:t.title :topic_title]
+                                  [:root.title :root_title]
+                                  [[:to_char :f.created_at [:inline "Mon DD"]] :formatted_date]]
+                             card-group-selects)
                    :from [[:flashcards :f]]
                    :join [[:topics :t] [:= :f.topic_id :t.id]
                           [:topics :root] [:= :f.root_topic_id :root.id]]
@@ -2915,12 +2939,9 @@
     []
     (mapv (comp strip-foreign-jsonb normalize-flashcard-row)
       (jdbc/execute! ds
-        (sql/format {:select [[:f.*]
-                              [[:coalesce :t.page_number :parent.page_number] :page_number]
-                              [:og.image_media_id :occlusion_image_media_id]
-                              [:og.mode :occlusion_mode]
-                              [:sg.start_ms :score_start_ms]
-                              [:sg.end_ms :score_end_ms]]
+        (sql/format {:select (into [[:f.*]
+                                    [[:coalesce :t.page_number :parent.page_number] :page_number]]
+                               card-group-selects)
                      :from [[:flashcards :f]]
                      :join [[:topics :t] [:= :f.topic_id :t.id]
                             [:topics :root] [:= :f.root_topic_id :root.id]]
@@ -3044,9 +3065,11 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Occlusion groups — geometry lives here, one 'occlusion' flashcard row per
-;; mask. Ordinal contract: assigned from the group's next_ordinal, never
-;; reused (they bind row ↔ Anki note ↔ SVG rect id). All geometry writes are
-;; transactional with their row changes.
+;; MASK GROUP. Ordinal contract: an ordinal identifies a mask group, so several
+;; rects MAY share one and sharing it IS the grouping (freememo.occlusion-ordinals
+;; owns the algebra). Ordinals are assigned from the group's next_ordinal and
+;; never reused — they bind row ↔ Anki note ↔ SVG rect id ↔ media filename.
+;; All geometry writes are transactional with their row changes.
 ;; ---------------------------------------------------------------------------
 
 (defn- parse-occlusion-group [row]
@@ -3084,25 +3107,28 @@
                    :order-by [[:mask_ordinal :asc]]}))))
 
 (defn insert-occlusion-group!
-  "Insert a group plus one 'occlusion' flashcard row per rect, transactionally.
+  "Insert a group plus one 'occlusion' flashcard row per MASK GROUP, transactionally.
    attrs = {:topic-id :root-topic-id :image-media-id :mode :geometry :io-fields}
-   geometry = {:width :height :rects [{:x :y :w :h} ...]} — ordinals are
-   assigned HERE (1..N) so the group row stays the single ordinal authority.
-   Returns {:group-id id :ids [flashcard-id ...]}."
+   Pre:  geometry = {:width :height :rects [{:x :y :w :h (:gid)} ...]}; rects
+         sharing a :gid are one mask group (no :ordinal exists yet on create).
+   Post: ordinals are assigned HERE, from 1, one per mask group — the group row
+         stays the single ordinal authority — and next_ordinal points past them;
+         stored rects carry :ordinal and no :gid.
+   Returns {:group-id id :ids [flashcard-id ...]}, one id per mask group in
+   first-appearance order."
   [{:keys [topic-id root-topic-id image-media-id mode geometry io-fields]}]
   (jdbc/with-transaction [tx ds]
-    (let [rects (mapv (fn [rect ordinal] (assoc rect :ordinal ordinal))
-                  (:rects geometry) (map inc (range)))
+    (let [[rects next-ordinal] (ord/assign-ordinals (vec (:rects geometry)) 1)
           group (jdbc/execute-one! tx
                   (sql/format {:insert-into :occlusion_groups
                                :values [{:anki_key (str (java.util.UUID/randomUUID))
                                          :image_media_id image-media-id
                                          :mode mode
                                          :geometry (->jsonb (assoc geometry :rects rects))
-                                         :next_ordinal (inc (count rects))}]
+                                         :next_ordinal next-ordinal}]
                                :returning [:id]}))
           group-id (:occlusion_groups/id group)
-          ids (mapv (fn [rect]
+          ids (mapv (fn [ordinal]
                       (:flashcards/id
                        (jdbc/execute-one! tx
                          (sql/format {:insert-into :flashcards
@@ -3110,18 +3136,21 @@
                                                 :root_topic_id root-topic-id
                                                 :kind "occlusion"
                                                 :occlusion_group_id group-id
-                                                :mask_ordinal (:ordinal rect)
+                                                :mask_ordinal ordinal
                                                 :io_fields (->jsonb (or io-fields {}))}]
                                       :returning [:id]}))))
-                rects)]
+                (ord/ordinals-in-order rects))]
       {:group-id group-id :ids ids})))
 
 (defn reconcile-occlusion-group!
   "Apply a group edit in one transaction (full reconcile).
    attrs = {:group-id :mode :geometry :io-fields}
-   Incoming rects WITH :ordinal are kept (position/size updated); rects
-   WITHOUT :ordinal are new masks, assigned fresh ordinals from next_ordinal.
-   Existing rows whose ordinal is absent from the incoming rects are deleted.
+   Pre:  every incoming :ordinal names a live row of this group (the modal got
+         them from get-occlusion-group); rects sharing an :ordinal are one mask
+         group; rects sharing a :gid are one NEW mask group.
+   Post: rects with an :ordinal are kept (position/size updated) and add no row;
+         each distinct :gid mints one ordinal from next_ordinal and gets one row;
+         rows whose ordinal is absent from the incoming rects are deleted.
    io-fields overwrite every surviving row, and every surviving row gets
    updated_at=now — geometry dirtiness is group-scoped because hide-all
    question masks embed the whole rect set.
@@ -3134,20 +3163,24 @@
       (when-not group
         (throw (ex-info "Occlusion group not found" {:group-id group-id})))
       (let [next0 (:occlusion_groups/next_ordinal group)
-            [rects next']
-            (reduce (fn [[acc n] rect]
-                      (if (:ordinal rect)
-                        [(conj acc rect) n]
-                        [(conj acc (assoc rect :ordinal n)) (inc n)]))
-              [[] next0] (vec (:rects geometry)))
-            added-rects (filterv #(>= (:ordinal %) next0) rects)
+            [rects next'] (ord/assign-ordinals (vec (:rects geometry)) next0)
             kept-ordinals (set (map :ordinal rects))
             existing (jdbc/execute! tx
                        ["SELECT id, mask_ordinal, anki_note_id, topic_id, root_topic_id
                          FROM flashcards WHERE occlusion_group_id = ?" group-id])
+            existing-ordinals (set (map :flashcards/mask_ordinal existing))
+            added-ordinals (filterv #(>= % next0) (ord/ordinals-in-order rects))
+            ;; An incoming ordinal below the watermark with no row would persist
+            ;; a rect that no card covers. Pre violated ⇒ caller bug, not a
+            ;; silent orphan.
+            orphaned (remove #(or (>= % next0) (contains? existing-ordinals %))
+                       kept-ordinals)
             template (first existing)
             removed (filterv #(not (contains? kept-ordinals (:flashcards/mask_ordinal %)))
                       existing)]
+        (when (seq orphaned)
+          (throw (ex-info "Occlusion geometry names mask ordinals with no card"
+                   {:group-id group-id :ordinals (vec orphaned)})))
         (doseq [r removed]
           (jdbc/execute-one! tx ["DELETE FROM flashcards WHERE id = ?" (:flashcards/id r)]))
         (jdbc/execute! tx
@@ -3156,7 +3189,7 @@
                              :updated_at [:now]}
                        :where [:= :occlusion_group_id group-id]}))
         (let [added-ids
-              (mapv (fn [rect]
+              (mapv (fn [ordinal]
                       (:flashcards/id
                        (jdbc/execute-one! tx
                          (sql/format {:insert-into :flashcards
@@ -3164,10 +3197,10 @@
                                                 :root_topic_id (:flashcards/root_topic_id template)
                                                 :kind "occlusion"
                                                 :occlusion_group_id group-id
-                                                :mask_ordinal (:ordinal rect)
+                                                :mask_ordinal ordinal
                                                 :io_fields (->jsonb (or io-fields {}))}]
                                       :returning [:id]}))))
-                added-rects)]
+                added-ordinals)]
           (jdbc/execute-one! tx
             (sql/format {:update :occlusion_groups
                          :set {:mode mode

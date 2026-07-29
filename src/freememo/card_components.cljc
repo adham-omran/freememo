@@ -7,6 +7,7 @@
    [clojure.string :as str]
    [freememo.logging :as log]
    [freememo.commands :as commands]
+   [freememo.occlusion-ordinals :as ord]
    #?(:clj [freememo.cards :as cards])
    #?(:cljs [freememo.anki-sync-helpers :refer [anki-call!]])
    [freememo.optimistic :as opt]))
@@ -94,13 +95,21 @@
 
 (defn occlusion-row-html
   "Compact front-cell HTML for an occlusion row: image thumbnail + mask
-   ordinal + mode + (stripped) header."
-  [image-media-id mask-ordinal mode header-html]
-  (let [header-text (some-> header-html (str/replace #"<[^>]+>" "") str/trim not-empty)]
+   ordinal + mode + (stripped) header.
+   Pre:  mask-count is how many rects share this row's ordinal (db's
+         :occlusion_mask_count); nil or ≤1 means a lone mask.
+   Post: a lone mask reads \"mask N\", a mask group reads \"group N · k masks\"."
+  [image-media-id mask-ordinal mask-count mode header-html]
+  (let [header-text (some-> header-html (str/replace #"<[^>]+>" "") str/trim not-empty)
+        k (or mask-count 1)]
     (str "<img src=\"/api/media/" image-media-id "\""
       " style=\"height:28px;max-width:60px;object-fit:cover;border-radius:3px;"
       "vertical-align:middle;margin-right:6px\" />"
-      "<span>Occlusion · mask " mask-ordinal " · "
+      "<span>Occlusion · "
+      (if (< 1 k)
+        (str "group " mask-ordinal " · " k " masks")
+        (str "mask " mask-ordinal))
+      " · "
       (if (= mode "hide-one") "Hide One" "Hide All")
       (when header-text (str " · " (truncate-html-for-row header-text 80)))
       "</span>")))
@@ -141,6 +150,7 @@
           group-id (e/server (:flashcards/occlusion_group_id card))
           mask-ordinal (e/server (:flashcards/mask_ordinal card))
           occ-image-id (e/server (:occlusion_image_media_id card))
+          occ-mask-count (e/server (:occlusion_mask_count card))
           occ-mode (e/server (:occlusion_mode card))
           score-group-id (e/server (:flashcards/score_group_id card))
           score-direction (e/server (:flashcards/score_direction card))
@@ -194,7 +204,8 @@
                                          :modified "var(--color-warning)")}}))
           ;; Front column — cloze, occlusion, and score span both content columns
           (let [front-html (cond
-                             occ? (occlusion-row-html occ-image-id mask-ordinal occ-mode io-header)
+                             occ? (occlusion-row-html occ-image-id mask-ordinal occ-mask-count
+                                    occ-mode io-header)
                              score? (score-row-html score-direction score-start-ms score-end-ms)
                              overlapping? (overlapping-row-html ol)
                              :else (card-row-html (if cloze? cloze question)))]
@@ -238,8 +249,11 @@
   (let [{:keys [kind card-data geometry directions]} (:payload entry)
         c (first card-data)]
     (case kind
-      "occlusion" (let [n (count (:rects geometry))]
-                    (str "Image occlusion · " n " mask" (when (not= 1 n) "s")))
+      "occlusion" (let [rects (:rects geometry)
+                        n (count rects)
+                        cards (ord/card-count rects)]
+                    (str "Image occlusion · " n " mask" (when (not= 1 n) "s")
+                      " → " cards " card" (when (not= 1 cards) "s")))
       "score" (let [n (transduce (map (comp count :rects)) + 0 (:pages geometry))]
                 (str "Score · " (count directions) " card"
                   (when (not= 1 (count directions)) "s")
