@@ -89,17 +89,24 @@
               img (js/Image.)]
           (set! (.-onload img)
             (fn [_]
-              (let [canvas (js/document.createElement "canvas")]
-                (set! (.-width canvas) (.-naturalWidth img))
-                (set! (.-height canvas) (.-naturalHeight img))
-                (.drawImage (.getContext canvas "2d") img 0 0)
+              (let [w (.-naturalWidth img)
+                    h (.-naturalHeight img)]
                 (.revokeObjectURL js/URL url)
-                (.toBlob canvas
-                  (fn [png]
-                    (if png
-                      (resolve png)
-                      (reject (js/Error. "Could not encode this image as PNG"))))
-                  "image/png"))))
+                ;; An SVG with no intrinsic width/height reports 0x0 in
+                ;; Chrome. Rasterising it would hand back a blank PNG, which
+                ;; is worse than a stated failure.
+                (if (or (zero? w) (zero? h))
+                  (reject (js/Error. "This image has no intrinsic size to copy"))
+                  (let [canvas (js/document.createElement "canvas")]
+                    (set! (.-width canvas) w)
+                    (set! (.-height canvas) h)
+                    (.drawImage (.getContext canvas "2d") img 0 0)
+                    (.toBlob canvas
+                      (fn [png]
+                        (if png
+                          (resolve png)
+                          (reject (js/Error. "Could not encode this image as PNG"))))
+                      "image/png"))))))
           (set! (.-onerror img)
             (fn [_]
               (.revokeObjectURL js/URL url)
@@ -146,11 +153,29 @@
 ;; Menu actions
 ;; ---------------------------------------------------------------------------
 
-(defn- copy-image!
-  "Write the image at `src` to the clipboard as PNG.
-   Pre : `src` as in `src->blob!`; caller is in a user-gesture task.
-   Post: on success the clipboard holds the image; on failure `on-error!` is
-         called once with a user-presentable message and nothing is written."
+(defn- clipboard-unavailable-message
+  "Nil when the async clipboard API is usable, else why it is not.
+
+   `navigator.clipboard` is exposed only in a secure context — https, or
+   localhost. Reaching a dev server over plain http on a LAN or tailscale IP
+   leaves it undefined, and every clipboard action fails with a TypeError
+   that means nothing to a user.
+
+   Pre : none. Post: nil, or a message naming the actual cause."
+  []
+  (cond
+    (not (.-isSecureContext js/window))
+    "Copying needs a secure connection — open the app over https or on localhost."
+
+    (nil? (.-clipboard js/navigator))
+    "This browser doesn't support copying images."
+
+    :else nil))
+
+(defn- write-image-to-clipboard!
+  "Fetch, rasterise to PNG, and write to the clipboard.
+   Pre : the clipboard API is available — `copy-image!` owns that check.
+   Post: as `copy-image!`."
   [src on-error!]
   (-> (src->blob! src)
     (.then blob->png!)
@@ -160,6 +185,17 @@
     (.catch (fn [err]
               (ce/report! :image-menu/copy err)
               (on-error! (str "Couldn't copy this image. " (.-message err)))))))
+
+(defn- copy-image!
+  "Write the image at `src` to the clipboard as PNG.
+   Pre : `src` as in `src->blob!`; caller is in a user-gesture task.
+   Post: on success the clipboard holds the image; on any failure — including
+         an unavailable clipboard API — `on-error!` is called exactly once
+         with a user-presentable message and nothing is written."
+  [src on-error!]
+  (if-let [blocked (clipboard-unavailable-message)]
+    (on-error! blocked)
+    (write-image-to-clipboard! src on-error!)))
 
 (defn- save-image!
   "Download the image at `src` under a derived filename.
@@ -184,14 +220,17 @@
 (defn- copy-image-address!
   "Write the image's absolute URL to the clipboard as text.
    Pre : `src` as in `src->blob!`.
-   Post: on success the clipboard holds the URL. This is the fallback that
-         works when the bytes are unreachable, so its own failure is reported
-         but not otherwise recoverable."
+   Post: on success the clipboard holds the URL; otherwise `on-error!` is
+         called exactly once. This is the fallback for when the bytes are
+         unreachable, so its own failure leaves the user no further option —
+         which is why the message must name the cause."
   [src on-error!]
-  (-> (.writeText js/navigator.clipboard (absolute-url src))
-    (.catch (fn [err]
-              (ce/report! :image-menu/copy-address err)
-              (on-error! "Couldn't copy the image address.")))))
+  (if-let [blocked (clipboard-unavailable-message)]
+    (on-error! blocked)
+    (-> (.writeText js/navigator.clipboard (absolute-url src))
+      (.catch (fn [err]
+                (ce/report! :image-menu/copy-address err)
+                (on-error! "Couldn't copy the image address."))))))
 
 (defn- same-origin-bytes?
   "True when the image's bytes are reachable without relying on the origin's
