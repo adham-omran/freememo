@@ -15,6 +15,7 @@
    [clojure.string :as str]
    [freememo.db :as db]
    [freememo.url-validate :as url]
+   [freememo.util :as util]
    [taoensso.telemere :as tel])
   (:import
    [java.net URI URLDecoder]
@@ -184,6 +185,96 @@
                         :error (.getMessage e)}}
         "Failed to store image — keeping hotlink")
       nil)))
+
+;; ---------------------------------------------------------------------------
+;; Entry point: rewrite only the data: <img> in user-authored content
+;; ---------------------------------------------------------------------------
+
+(defn- store-data-uri!
+  "Decode a data: URI and store it in media. Returns {:url \"/api/media/<id>\"}
+   on success or {:error msg} on failure — unlike `store-image!`, which folds
+   every failure into nil, because the save path must tell the user WHY the
+   image could not be stored (over quota reads nothing like a decode failure).
+
+   Pre  : src starts with \"data:\"; user-id owns the resulting media; budget is
+          an atom of bytes stored so far in this call.
+   Post : exactly one of :url / :error is present; on :url, the stored MIME type
+          is in `util/storable-image-mime-types`.
+   Inv  : never throws; performs no HTTP."
+  [user-id src budget]
+  (try
+    (if-let [{:keys [bytes mime-type]} (parse-data-uri src)]
+      (let [mime (str/lower-case (str mime-type))]
+        (cond
+          (not (util/storable-image-mime-types mime))
+          {:error (str "Unsupported image format: " mime)}
+
+          (> (swap! budget + (alength ^bytes bytes)) max-total-bytes-per-import)
+          {:error "Too many image bytes in one save"}
+
+          :else
+          {:url (str "/api/media/"
+                  (db/upsert-media! {:user-id user-id
+                                     :kind "image"
+                                     :bytes bytes
+                                     :mime-type mime}))}))
+      {:error "Image data could not be decoded"})
+    (catch Exception e
+      (tel/log! {:level :warn :id ::store-data-uri-failed
+                 :data {:user-id user-id :error (.getMessage e)}}
+        "Failed to store a pasted image")
+      {:error (.getMessage e)})))
+
+(defn rehost-data-uris!
+  "Replace every `data:` <img src> in `html` with /api/media/<id>.
+
+   The narrow counterpart to `rehost-html-images!`: it touches ONLY srcs that
+   start with \"data:\", and performs no HTTP and no URL absolutization. That
+   restriction is what makes it safe on the save path of user-authored content —
+   a full re-host would download every remote <img> as a side effect of typing.
+
+   This is the layer that makes \"no data: URI is ever persisted\" true rather
+   than intended: the client keeps base64 out of the editor for pastes and drops
+   (`editor-actions/install-image-rehost!`), but a save that races an in-flight
+   upload, or HTML pasted out of an EPUB import (which inlines base64), still
+   arrives here carrying bytes.
+
+   Pre  : html is an HTML string or nil; user-id owns the resulting media.
+   Post : returns {:html s :uploaded n :remaining n :error msg-or-nil}.
+          :remaining counts data: srcs still present in :html; :error is the
+          first failure's message. A caller deciding whether to reject a save
+          gates on :remaining — :error only names the reason. (The two can
+          disagree in one case: if Jsoup itself fails on html that carries no
+          data: src, :error is set and :remaining is 0, which is correct —
+          nothing was lost.)
+   Inv  : never throws."
+  [{:keys [html user-id]}]
+  (if (str/blank? html)
+    {:html html :uploaded 0 :remaining 0 :error nil}
+    (try
+      (let [doc (Jsoup/parse html)
+            _ (.prettyPrint (.outputSettings doc) false)
+            imgs (filterv (fn [^Element img] (str/starts-with? (.attr img "src") "data:"))
+                   (.select doc "img[src]"))
+            budget (atom 0)
+            results (mapv (fn [^Element img]
+                            [img (store-data-uri! user-id (.attr img "src") budget)])
+                      imgs)]
+        (doseq [[^Element img {:keys [url]}] results]
+          (when url (.attr img "src" url)))
+        (let [errors (keep (comp :error second) results)]
+          {:html (.html (.body doc))
+           :uploaded (count (filter (comp :url second) results))
+           :remaining (count errors)
+           :error (first errors)}))
+      (catch Exception e
+        (tel/log! {:level :warn :id ::rehost-data-uris-failed
+                   :data {:user-id user-id :error (.getMessage e)}}
+          "data: URI re-host failed — keeping original HTML")
+        {:html html
+         :uploaded 0
+         :remaining (count (re-seq #"(?i)src=[\"']data:" html))
+         :error (.getMessage e)}))))
 
 ;; ---------------------------------------------------------------------------
 ;; Entry point: rewrite all <img> in a page

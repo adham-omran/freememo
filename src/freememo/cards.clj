@@ -10,6 +10,7 @@
    [freememo.card-models :as card-models]
    [freememo.llm-edn :as llm-edn]
    [freememo.overlapping :as overlap]
+   [freememo.image-rehost :as image-rehost]
    [freememo.logging :as log]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
@@ -424,6 +425,31 @@
     {:front (for-placement "front")
      :back (for-placement "back")}))
 
+(defn- rehost-row-data-uris!
+  "Re-host every data: <img src> in a row's HTML fields into /api/media URLs.
+
+   The card path's half of the \"no data: URI is ever persisted\" invariant. The
+   client keeps base64 out of the editor for pastes and drops, but a Save that
+   races an in-flight upload still arrives here carrying bytes — as does HTML
+   pasted out of an EPUB import, which inlines base64.
+
+   Pre  : row is an insert-ready flashcard row; user-id owns the media.
+   Post : returns {:row row' :remaining n :error msg-or-nil} — :remaining counts
+          data: srcs still in row', :error names the first reason.
+   Inv  : :overlapping rows pass through untouched (jsonb, no HTML fields)."
+  [user-id row]
+  (reduce
+    (fn [acc k]
+      (if-let [field-html (get-in acc [:row k])]
+        (let [{:keys [html remaining error]}
+              (image-rehost/rehost-data-uris! {:html field-html :user-id user-id})]
+          {:row (assoc (:row acc) k html)
+           :remaining (+ (:remaining acc) remaining)
+           :error (or (:error acc) error)})
+        acc))
+    {:row row :remaining 0 :error nil}
+    [:question :answer :cloze]))
+
 (defn save-cards
   "Save generated cards to the database.
    For basic cards: expects [{:q \"...\" :a \"...\"}]
@@ -431,10 +457,14 @@
    user-id: owner, for the audit log (§3.1).
    topic-id: the page or extract topic that owns these cards.
    root-topic-id: the root PDF/EPUB/web/basic topic.
-   Bakes pinned images into each card's HTML before insert.
+   Bakes pinned images into each card's HTML before insert, then re-hosts any
+   remaining data: <img src> into /api/media URLs (rehost-row-data-uris!) so no
+   base64 reaches the flashcards table.
    Returns {:success true :ids [id...]} — the ids of the newly inserted cards,
    in order (may be shorter than `cards` if ON CONFLICT skipped duplicates) —
-   or {:success false :error msg} on failure.
+   or {:success false :error msg} on failure. Nothing is inserted when an image
+   could not be stored: the card is rejected with that reason rather than saved
+   without its image.
 
    bake? false skips bake-card-html — used by the manual Add-Card path, which
    prefills pinned images into the editor content itself (pins-prefill-html), so
@@ -472,14 +502,28 @@
                               :answer (:a baked)
                               :cloze (:c baked)}))))
                   cards)
-             ids (vec (db/insert-flashcards! rows))]
-       (log/audit! {:id ::save-cards :user-id user-id :action :create
-                    :entity :card :n (count ids)})
-       (tel/log! {:level :info :id ::save-cards-detail
-                  :data {:user-id user-id :topic-id topic-id :kind kind
-                         :ids ids :n (count ids) :card-hash (hash cards)}}
-         "save-cards detail")
-       {:success true :ids ids})
+             ;; Re-host pasted images BEFORE insert. A data: URI left in place
+             ;; hits insert-flashcards!' 10000-char cap and surfaces as
+             ;; "answer exceeds 10000 character limit" — a character count for
+             ;; what is really a storage failure. Reject with the real reason
+             ;; instead, and never drop the image silently.
+             rehosted (mapv #(rehost-row-data-uris! user-id %) rows)
+             unstored (reduce + 0 (map :remaining rehosted))]
+       (if (pos? unstored)
+         (let [reason (some :error rehosted)]
+           (tel/log! {:level :warn :id ::save-cards-image-unstored
+                      :data {:user-id user-id :topic-id topic-id :kind kind
+                             :unstored unstored :reason reason}}
+             "save-cards rejected — pasted image could not be stored")
+           {:success false :error (str "Image could not be stored: " reason)})
+         (let [ids (vec (db/insert-flashcards! (mapv :row rehosted)))]
+           (log/audit! {:id ::save-cards :user-id user-id :action :create
+                        :entity :card :n (count ids)})
+           (tel/log! {:level :info :id ::save-cards-detail
+                      :data {:user-id user-id :topic-id topic-id :kind kind
+                             :ids ids :n (count ids) :card-hash (hash cards)}}
+             "save-cards detail")
+           {:success true :ids ids})))
      (catch Exception e
        (tel/error! {:id ::save-cards} e)
        {:success false :error (.getMessage e)}))))

@@ -215,27 +215,12 @@
              (when (and (= source "user") on-change)
                (let [root (.-root ed)]
                  (on-change (.-innerHTML root))))))
-         ;; Paste matcher: intercept data-URI images, upload, rewrite src
-         (let [placeholder-gif "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"]
-           (.addMatcher cb js/Node.ELEMENT_NODE
-             (fn [node delta-arg]
-               (let [imgs (.querySelectorAll node "img")]
-                 (doseq [img (array-seq imgs)]
-                   (let [src (.getAttribute img "src")]
-                     (when (and src (str/starts-with? src "data:image/"))
-                       (.setAttribute img "src" placeholder-gif)
-                       (editor-actions/upload-pasted-image!
-                         src
-                         (fn [new-src]
-                           (when new-src
-                             (let [root (.-root ed)
-                                   sel (str "img[src=\"" placeholder-gif "\"]")
-                                   found (.querySelector root sel)]
-                               (when found
-                                 (.setAttribute found "src" new-src)
-                                 (when on-change
-                                   (on-change (.-innerHTML root))))))))))))
-               delta-arg)))
+         ;; Pasted/dropped images → /api/media instead of inline base64. This
+         ;; REPLACES a clipboard matcher that could never fire: Quill routes any
+         ;; clipboard payload carrying files straight to uploader.upload, and on
+         ;; the html path matchBlot has already read the src into the delta
+         ;; before an appended matcher runs. See install-image-rehost!.
+         (editor-actions/install-image-rehost! ed)
          ;; Wire the table toolbar handler + contextual action bar.
          ;; The QuillField's toolbar config includes "table", so without
          ;; this the button is rendered but inert. Cleanup is paired in

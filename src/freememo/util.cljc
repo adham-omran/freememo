@@ -42,6 +42,26 @@
 
 ;; ── Media ───────────────────────────────────────────────────────────
 
+(def storable-image-mime-types
+  "MIME types an image may declare to be pasted, dropped, or re-hosted into the
+   media table. Single source of truth for both ends of that path:
+   `editor-actions/install-image-rehost!` filters clipboard/drop files against
+   it, and `image-rehost/rehost-data-uris!` filters data: <img src> against it.
+
+   Renderable raster formats only, and the exclusions are deliberate:
+
+   - `image/svg+xml` — `get-media-handler` echoes the stored mime_type as the
+     response Content-Type with no `nosniff`, so a stored SVG is a same-origin
+     script when /api/media/<id> is navigated to directly.
+   - `image/bmp`, `image/tiff` — storable, but browsers will not render them in
+     an <img>, so accepting them trades a clear rejection for a broken image.
+
+   The server-side filter is also a type gate, not just a format preference:
+   `html-cleaner/clean-html` allow-lists the `data` protocol on <img src> with
+   no MIME restriction, so without it a crafted `data:text/html;base64,…` src
+   would be stored as kind \"image\" and echoed back as HTML."
+  #{"image/png" "image/jpeg" "image/jpg" "image/gif" "image/webp" "image/avif"})
+
 (defn mime->ext
   "File extension for a MIME type, without the dot.
 

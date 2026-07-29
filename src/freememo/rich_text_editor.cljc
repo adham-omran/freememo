@@ -6,6 +6,7 @@
    [freememo.logging :as log]
    [freememo.quill-table-ui :as table-ui]
    [freememo.quill-field :as quill-field]
+   [freememo.editor-actions :as editor-actions]
    [freememo.a11y :as a11y]
    #?(:cljs [freememo.format-menu :as format-menu])
    #?(:cljs [freememo.code-lang-picker :as code-lang-picker])
@@ -320,6 +321,11 @@
              ;; See quill-field/install-clipboard-matchers! for what each
              ;; matcher does and why (shared with QuillField's own editor).
              _ (quill-field/install-clipboard-matchers! clipboard)
+             ;; Pasted/dropped images → /api/media instead of inline base64.
+             ;; This editor never had any image-paste handling: only QuillField
+             ;; carried the (inert) matcher, so a screenshot pasted here was
+             ;; stored as base64 in topics.content, which has no length cap.
+             _ (editor-actions/install-image-rehost! editor)
              delta (.convert clipboard #js {:html cleaned-html})]
          (when (seq cleaned-html)
            (.setContents editor delta))

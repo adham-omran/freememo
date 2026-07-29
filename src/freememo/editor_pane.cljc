@@ -16,6 +16,7 @@
    #?(:cljs [freememo.editor-image-menu :as image-menu])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.image-rehost :as image-rehost])
    #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.web-import :as web-import])))
 
@@ -89,7 +90,17 @@
                           (e/server
                             (e/Offload
                               #(try
-                                 (db/update-topic-content! topic-id (:html dirty-data))
+                                 ;; Re-host pasted images before persisting.
+                                 ;; topics.content has no length cap, so a data:
+                                 ;; URI here is stored silently and unbounded —
+                                 ;; unlike the card path, which rejects. A
+                                 ;; failed re-host keeps the base64 and still
+                                 ;; saves: losing the user's text to protect the
+                                 ;; column would be the worse trade.
+                                 (let [{:keys [html]}
+                                       (image-rehost/rehost-data-uris!
+                                         {:html (:html dirty-data) :user-id user-id})]
+                                   (db/update-topic-content! topic-id html))
                                  {:success true}
                                  (catch Exception ex
                                    {:success false :error (.getMessage ex)})))))]
