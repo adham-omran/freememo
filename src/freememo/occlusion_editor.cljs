@@ -165,8 +165,15 @@
    the layer origin, and self-normalizing after every drag or resize so the
    identity invariant holds whenever geometry is read or a child is reparented."
   [handle]
-  (let [{:keys [rect-layer]} @handle
-        ^js group (new (.-Group (konva)) #js {:draggable true})]
+  ;; `Konva` MUST be a local, never `(new (.-Group (konva)) …)` inline: CLJS
+  ;; emits `new konva.call(null).Group(args)` for that, which JS parses as
+  ;; `(new konva.call(null)).Group(args)` — so Konva's Group CLASS is called
+  ;; without `new` ("Class constructor … cannot be invoked without 'new'", the
+  ;; whole grouping feature dead in dev and prod alike). `new Konva.Group(args)`
+  ;; parses correctly. Same reason at wire-marquee! and make-rect.
+  (let [Konva (konva)
+        {:keys [rect-layer]} @handle
+        ^js group (new (.-Group Konva) #js {:draggable true})]
     (.on group "dragend"
       (fn [_] (normalize-group-transform! group) (emit! handle)))
     (.on group "transformend"
@@ -371,7 +378,11 @@
 (defn- wire-marquee!
   "Drag on empty canvas rubber-band selects (:select tool only)."
   [handle]
-  (let [{:keys [tr-layer scale]} @handle
+  ;; Konva read once at wire time, not per pointerdown, and MUST be a local for
+  ;; the `new` to compile correctly — see make-mask-group!. init! has already
+  ;; verified window.Konva exists, so capturing it here is safe.
+  (let [Konva (konva)
+        {:keys [tr-layer scale]} @handle
         ^js stage (:stage @handle)
         ^js rect-layer (:rect-layer @handle)
         !band (atom nil)]                            ; {:node :ox :oy}
@@ -380,7 +391,7 @@
         (when (and (= :select (:tool @handle)) (empty-canvas-target? stage e))
           (select-nodes! handle [])
           (when-let [{:keys [x y]} (natural-pointer stage scale)]
-            (let [^js node (new (.-Rect (konva))
+            (let [^js node (new (.-Rect Konva)
                             #js {:x x :y y :width 0 :height 0
                                  :stroke "#2D6BFF" :strokeWidth 1
                                  :strokeScaleEnabled false
@@ -401,7 +412,7 @@
           (reset! !band nil)
           (let [box (.getClientRect node)
                 hit (filterv (fn [^js child]
-                               (.haveIntersection (.-Util (konva)) box (.getClientRect child)))
+                               (.haveIntersection (.-Util Konva) box (.getClientRect child)))
                       (vec (.getChildren rect-layer)))]
             (.destroy node)
             (select-nodes! handle hit)))))))
