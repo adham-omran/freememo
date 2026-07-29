@@ -2776,11 +2776,14 @@
           " where (r.el->>'ordinal')::int = f.mask_ordinal)")])
 
 (def ^:private card-group-selects
-  "Occlusion/score group columns every flashcard-row query projects, defined
-   once so the four queries cannot drift — the mask-count expression made the
-   copy-paste load-bearing. Aliases are the unqualified keys
-   normalize-flashcard-row promises; the count is an expression column, which
-   pgjdbc leaves unqualified already."
+  "Occlusion/score group columns, projected by every query that returns whole
+   flashcard rows: get-flashcards, get-all-flashcards, get-flashcards-for-subtree,
+   get-flashcards-by-ids, get-user-flashcards. Defined once so those five cannot
+   drift — the mask-count expression made the copy-paste load-bearing.
+   Pre:  the query aliases flashcards as f and left-joins occlusion_groups as og
+         and score_groups as sg.
+   Post: aliases are the unqualified keys normalize-flashcard-row promises; the
+         count is an expression column, which pgjdbc leaves unqualified already."
   [[:og.image_media_id :occlusion_image_media_id]
    [:og.mode :occlusion_mode]
    [occlusion-mask-count-expr :occlusion_mask_count]
@@ -3145,12 +3148,15 @@
 (defn reconcile-occlusion-group!
   "Apply a group edit in one transaction (full reconcile).
    attrs = {:group-id :mode :geometry :io-fields}
-   Pre:  every incoming :ordinal names a live row of this group (the modal got
-         them from get-occlusion-group); rects sharing an :ordinal are one mask
-         group; rects sharing a :gid are one NEW mask group.
-   Post: rects with an :ordinal are kept (position/size updated) and add no row;
-         each distinct :gid mints one ordinal from next_ordinal and gets one row;
-         rows whose ordinal is absent from the incoming rects are deleted.
+   Pre:  rects sharing an :ordinal are one mask group; rects sharing a :gid are
+         one NEW mask group. An :ordinal naming a row this group no longer has
+         is tolerated — the modal's snapshot goes stale whenever the card is
+         deleted elsewhere while it is open.
+   Post: rects with a live :ordinal are kept (position/size updated) and add no
+         row; each distinct :gid mints one ordinal from next_ordinal and gets one
+         row; rows whose ordinal is absent from the incoming rects are deleted;
+         rects naming a dead ordinal are DROPPED, so a concurrent card deletion
+         wins over the stale snapshot instead of persisting a rect no card covers.
    io-fields overwrite every surviving row, and every surviving row gets
    updated_at=now — geometry dirtiness is group-scoped because hide-all
    question masks embed the whole rect set.
@@ -3163,24 +3169,30 @@
       (when-not group
         (throw (ex-info "Occlusion group not found" {:group-id group-id})))
       (let [next0 (:occlusion_groups/next_ordinal group)
-            [rects next'] (ord/assign-ordinals (vec (:rects geometry)) next0)
-            kept-ordinals (set (map :ordinal rects))
             existing (jdbc/execute! tx
                        ["SELECT id, mask_ordinal, anki_note_id, topic_id, root_topic_id
                          FROM flashcards WHERE occlusion_group_id = ?" group-id])
             existing-ordinals (set (map :flashcards/mask_ordinal existing))
+            ;; Re-apply deletions that landed since the modal loaded: a rect
+            ;; whose ordinal has no row belongs to a card someone deleted.
+            {live-rects true stale-rects false}
+            (group-by (fn [rect] (or (nil? (:ordinal rect))
+                                   (contains? existing-ordinals (:ordinal rect))))
+              (:rects geometry))
+            [rects next'] (ord/assign-ordinals (vec live-rects) next0)
+            kept-ordinals (set (map :ordinal rects))
             added-ordinals (filterv #(>= % next0) (ord/ordinals-in-order rects))
-            ;; An incoming ordinal below the watermark with no row would persist
-            ;; a rect that no card covers. Pre violated ⇒ caller bug, not a
-            ;; silent orphan.
-            orphaned (remove #(or (>= % next0) (contains? existing-ordinals %))
-                       kept-ordinals)
             template (first existing)
             removed (filterv #(not (contains? kept-ordinals (:flashcards/mask_ordinal %)))
                       existing)]
-        (when (seq orphaned)
-          (throw (ex-info "Occlusion geometry names mask ordinals with no card"
-                   {:group-id group-id :ordinals (vec orphaned)})))
+        (when (seq stale-rects)
+          (tel/log! {:level :warn :id ::stale-occlusion-rects
+                     :data {:group-id group-id
+                            :ordinals (vec (distinct (keep :ordinal stale-rects)))}}
+            "Dropped occlusion rects whose card was deleted elsewhere"))
+        (when (empty? rects)
+          (throw (ex-info "Every mask in this edit was deleted elsewhere — reopen the group"
+                   {:group-id group-id})))
         (doseq [r removed]
           (jdbc/execute-one! tx ["DELETE FROM flashcards WHERE id = ?" (:flashcards/id r)]))
         (jdbc/execute! tx
@@ -4262,18 +4274,15 @@
 
 (defn get-flashcards-for-subtree
   "Flashcards for a topic and all its descendants (via parent_id). Same row
-   shape as get-all-flashcards (coalesced page_number, occlusion cols) so the
-   Anki-sync 'subtree' scope feeds the same downstream as 'self'/'document'.
+   shape as get-all-flashcards (coalesced page_number + card-group-selects) so
+   the Anki-sync 'subtree' scope feeds the same downstream as 'self'/'document'.
    Reuses get-subtree-ids for the id set (always includes topic-id itself)."
   [topic-id]
   (if topic-id
     (mapv (comp strip-foreign-jsonb normalize-flashcard-row)
       (jdbc/execute! ds
-        (sql/format {:select [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]
-                              [:og.image_media_id :occlusion_image_media_id]
-                              [:og.mode :occlusion_mode]
-                              [:sg.start_ms :score_start_ms]
-                              [:sg.end_ms :score_end_ms]]
+        (sql/format {:select (into [[:f.*] [[:coalesce :t.page_number :parent.page_number] :page_number]]
+                               card-group-selects)
                      :from [[:flashcards :f]]
                      :join [[:topics :t] [:= :f.topic_id :t.id]]
                      :left-join [[:topics :parent] [:= :t.parent_id :parent.id]

@@ -58,16 +58,21 @@
   "One rect in natural-image pixels.
    Pre:  node is a Konva Rect on the rect layer, possibly inside a group.
    Post: :x/:y/:w/:h are absolute natural pixels regardless of ancestor
-         transforms; :ordinal / :gid carry the node's mask-group membership."
+         transforms, and AT MOST ONE membership key is present — :ordinal for a
+         saved mask group, :gid for one this session made, neither for a lone
+         new mask. Absent rather than nil, so a rect read back unchanged is `=`
+         to the geometry it was loaded from (the modal's dirty check)."
   [^js node stage-scale]
   (let [pos (.getAbsolutePosition node)
-        sc (.getAbsoluteScale node)]
-    {:x (round2 (/ (.-x pos) stage-scale))
-     :y (round2 (/ (.-y pos) stage-scale))
-     :w (round2 (* (.width node) (/ (.-x sc) stage-scale)))
-     :h (round2 (* (.height node) (/ (.-y sc) stage-scale)))
-     :ordinal (.getAttr node "fmOrdinal")
-     :gid (.getAttr node "fmGid")}))
+        sc (.getAbsoluteScale node)
+        ordinal (.getAttr node "fmOrdinal")
+        gid (.getAttr node "fmGid")]
+    (cond-> {:x (round2 (/ (.-x pos) stage-scale))
+             :y (round2 (/ (.-y pos) stage-scale))
+             :w (round2 (* (.width node) (/ (.-x sc) stage-scale)))
+             :h (round2 (* (.height node) (/ (.-y sc) stage-scale)))}
+      (some? ordinal) (assoc :ordinal ordinal)
+      (and (nil? ordinal) (some? gid)) (assoc :gid gid))))
 
 (defn read-rects
   "Current rects (natural px) straight from the Konva nodes — the

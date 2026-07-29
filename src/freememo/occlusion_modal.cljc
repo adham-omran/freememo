@@ -46,23 +46,30 @@
 
 (defn init-occlusion-editor!
   "Deferred Konva init (container must be in the DOM first) — mirrors
-   quill_field/schedule-quill-init!. `tool` is the starting tool: :draw when
-   creating (the first act is drawing), :select when editing an existing group."
-  [!handle container image-media-id rects tool on-change on-tool-change]
+   quill_field/schedule-quill-init!.
+   Pre:  !tool holds the starting tool — :draw when creating (the first act is
+         drawing), :select when editing (Anki's MaskEditor rule). It is read at
+         init time, so a re-init resumes the user's current tool.
+   Post: the editor writes tool switches back through on-tool-change, making
+         !tool the single source of truth."
+  [!handle container image-media-id rects !tool on-change on-tool-change]
   #?(:cljs (do (js/setTimeout
                  (fn []
                    (reset! !handle
                      (occ-editor/init! {:container container
                                         :image-url (str "/api/media/" image-media-id)
                                         :rects rects
-                                        :tool tool
+                                        :tool @!tool
                                         :on-change on-change
                                         :on-tool-change on-tool-change})))
                  0)
              nil)
      :clj nil))
 
-(defn set-editor-tool! [!handle tool]
+(defn set-editor-tool!
+  "Switch the editor's tool. The editor echoes the change back through
+   on-tool-change, so !tool needs no write here. No-op before the stage exists."
+  [!handle tool]
   #?(:cljs (do (occ-editor/set-tool! @!handle tool) nil)
      :clj nil))
 
@@ -142,31 +149,47 @@
 
 (e/defn OcclusionMaskToolbar
   "Tool switch plus mask-group actions, mirroring the editor's own shortcuts.
-   `tool` comes from !tool, which the editor also writes on a keyboard switch,
-   so the buttons stay truthful either way."
-  [!handle !tool tool]
+   Watches !tool HERE, not in the parent: the parent's body hosts the Konva init
+   side effect, and a signal there would put that call in a body Electric may
+   re-evaluate (CLAUDE.md, JS library init). !tool is the single source of truth
+   for the tool — the editor writes it back on a keyboard switch."
+  [!handle !tool]
+  (e/client
+    (let [tool (e/watch !tool)]
+      (dom/div
+        (dom/props {:style {:display "flex" :gap "var(--sp-2)" :align-items "center"
+                            :margin-bottom "var(--sp-2)" :flex-wrap "wrap"}})
+        (OcclusionToolButton "Select (S)" (= tool :select)
+          (fn [] (set-editor-tool! !handle :select)))
+        (OcclusionToolButton "Draw (R)" (= tool :draw)
+          (fn [] (set-editor-tool! !handle :draw)))
+        (dom/span (dom/props {:style {:color "var(--color-border)"}}) (dom/text "|"))
+        (OcclusionToolButton "Group (G)" false
+          (fn [] (group-editor-selection! !handle)))
+        (OcclusionToolButton "Ungroup (U)" false
+          (fn [] (ungroup-editor-selection! !handle)))))))
+
+(e/defn OcclusionMaskSummary
+  "\"N masks → M cards\". Own component so the !rects watch lives outside the
+   editor-host body — same reason as OcclusionMaskToolbar."
+  [!rects]
   (e/client
     (dom/div
-      (dom/props {:style {:display "flex" :gap "var(--sp-2)" :align-items "center"
-                          :margin-bottom "var(--sp-2)" :flex-wrap "wrap"}})
-      (OcclusionToolButton "Select (S)" (= tool :select)
-        (fn [] (reset! !tool :select) (set-editor-tool! !handle :select)))
-      (OcclusionToolButton "Draw (R)" (= tool :draw)
-        (fn [] (reset! !tool :draw) (set-editor-tool! !handle :draw)))
-      (dom/span (dom/props {:style {:color "var(--color-border)"}}) (dom/text "|"))
-      (OcclusionToolButton "Group (G)" false
-        (fn [] (group-editor-selection! !handle)))
-      (OcclusionToolButton "Ungroup (U)" false
-        (fn [] (ungroup-editor-selection! !handle))))))
+      (dom/props {:style {:font-size "12px" :color "var(--color-text-hint)"
+                          :margin-top "var(--sp-1)"}})
+      (dom/text (mask-summary (e/watch !rects))))))
 
 (e/defn OcclusionMasksTab
   "Konva editor host. Mounted once; hidden (not unmounted) when the Fields tab
-   is active so drawn masks survive tab switches."
-  [!handle image-media-id initial-rects !rects !tool initial-tool]
+   is active so drawn masks survive tab switches.
+   Invariant: this body depends on NO signal, so the init-occlusion-editor! call
+   below cannot be re-evaluated — every reactive value lives in a child
+   component. Adding an (e/watch …) here would risk a second Konva stage."
+  [!handle image-media-id initial-rects !rects !tool]
   (e/client
     (dom/div
       (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-      (OcclusionMaskToolbar !handle !tool (e/watch !tool))
+      (OcclusionMaskToolbar !handle !tool)
       (dom/div
         (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
                             :margin-bottom "var(--sp-2)"}})
@@ -180,14 +203,12 @@
         (let [host dom/node
               on-change (fn [rects] (reset! !rects rects))
               on-tool-change (fn [tool] (reset! !tool tool))]
+          ;; The editor reads its starting tool from !tool, so a re-init (or a
+          ;; remount) resumes the user's tool instead of resetting it.
           (init-occlusion-editor! !handle host image-media-id initial-rects
-            initial-tool on-change on-tool-change)
+            !tool on-change on-tool-change)
           (e/on-unmount (fn [] (destroy-occlusion-editor! !handle)))))
-      (let [rects (e/watch !rects)]
-        (dom/div
-          (dom/props {:style {:font-size "12px" :color "var(--color-text-hint)"
-                              :margin-top "var(--sp-1)"}})
-          (dom/text (mask-summary rects)))))))
+      (OcclusionMaskSummary !rects))))
 
 (e/defn OcclusionFieldRow [label placeholder k initial-fields !fields field-key modal-font]
   (e/client
@@ -306,9 +327,9 @@
           !rects (atom initial-rects)
           !fields (atom initial-fields)
           ;; Upstream's rule: the first act when creating is drawing, the first
-          ;; act when editing is selecting (Anki's MaskEditor.svelte).
-          initial-tool (if edit? :select :draw)
-          !tool (atom initial-tool)
+          ;; act when editing is selecting (Anki's MaskEditor.svelte). Sole
+          ;; source of truth for the tool from here on.
+          !tool (atom (if edit? :select :draw))
           !tab (atom :masks)
           tab (e/watch !tab)
           !primary-btn (atom nil)
@@ -366,7 +387,7 @@
           ;; the Konva stage and Quill instances survive switches.
           (dom/div
             (dom/props {:style {:display (if (= tab :masks) "block" "none")}})
-            (OcclusionMasksTab !handle image-media-id initial-rects !rects !tool initial-tool))
+            (OcclusionMasksTab !handle image-media-id initial-rects !rects !tool))
           (dom/div
             (dom/props {:style {:display (if (= tab :fields) "block" "none")}})
             (OcclusionFieldsTab initial-fields !fields field-key modal-font))
