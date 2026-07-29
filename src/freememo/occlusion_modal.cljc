@@ -410,15 +410,17 @@
                              :!request !request :!handle !handle :!fields !fields
                              :initial-rects initial-rects :initial-geometry initial-geometry
                              :user-id user-id :close! close!}
-            !primary-btn !history-open?))
-        ;; Sibling of the modal container, not a descendant: .modal-backdrop and
-        ;; this modal are both z-index 1000 so later DOM order must win, and the
-        ;; container above is pointer-events:none, which a nested backdrop would
-        ;; inherit. Group-scoped — mask placement lives on
-        ;; occlusion_groups.geometry (plans/card-edit-history.md).
-        (when edit?
-          (CardHistoryModal [:occlusion-group (:group-id request)]
-            user-id !history-open?))))))
+            !primary-btn !history-open?)))
+      ;; Sibling of the overlay div above, NOT a descendant of it — the overlay
+      ;; is pointer-events:none and that property inherits, so nested the
+      ;; history modal's backdrop and Close button were un-hit-testable and its
+      ;; Escape bubbled into the overlay's ModalEscape. See the same comment in
+      ;; card_modals.cljc/EditCardModal. Both overlays are z-index 1000, so this
+      ;; call must stay LAST in the body. Group-scoped — mask placement lives on
+      ;; occlusion_groups.geometry (plans/card-edit-history.md).
+      (when edit?
+        (CardHistoryModal [:occlusion-group (:group-id request)]
+          user-id !history-open?)))))
 
 (e/defn OcclusionModal
   "Host entry point. Mount while @!request is non-nil."

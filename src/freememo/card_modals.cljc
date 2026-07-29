@@ -565,12 +565,19 @@
             (dom/button
               (dom/props {:class "btn btn-secondary"})
               (dom/text "Cancel")
-              (dom/On "click" (fn [_] (reset! !editing-card nil)) nil))))
-        ;; Sibling, not a child: .modal-backdrop and this modal are both
-        ;; z-index 1000, so later DOM order must win — and the edit modal's
-        ;; outer div is pointer-events:none, which a nested backdrop would
-        ;; inherit.
-        (CardHistoryModal [:card card-id] user-id !history-open?)))))
+              (dom/On "click" (fn [_] (reset! !editing-card nil)) nil)))))
+      ;; Sibling of the overlay div above, NOT a descendant of it — the overlay
+      ;; is pointer-events:none (a transparent, non-blocking layer), and that
+      ;; property inherits: nested, the history modal's own backdrop and Close
+      ;; button became un-hit-testable (elementFromPoint at Close returned the
+      ;; page BEHIND the overlay) and its Escape bubbled into the overlay's
+      ;; ModalEscape, discarding the card edit. CardHistoryModal also sets
+      ;; pointer-events:auto on its own backdrop; both are load-bearing — this
+      ;; placement fixes the Escape bubbling, that prop makes the modal
+      ;; hit-testable in any mount context. Both overlays are z-index 1000, so
+      ;; this call must stay LAST in the body: later DOM order paints on top,
+      ;; and a non-final body form's value is unused.
+      (CardHistoryModal [:card card-id] user-id !history-open?))))
 
 
 #?(:clj
