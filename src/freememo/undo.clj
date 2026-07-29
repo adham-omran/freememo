@@ -100,8 +100,8 @@
 
 (defmethod opt/run-command! :undo-newest [user-id _command]
   (undo-newest! user-id)
-  :done)
+  {:ok? true})
 
 (defmethod opt/run-command! :undo-entry [user-id command]
   (undo-entry! user-id (get-in command [:payload :id]))
-  :done)
+  {:ok? true})

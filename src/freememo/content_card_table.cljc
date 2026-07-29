@@ -11,10 +11,10 @@
    [freememo.card-modals :refer [EditCardModal]]
    [freememo.occlusion-modal :refer [OcclusionModal]]
    [freememo.score-toolbar :refer [ScoreEditLoader]]
+   [freememo.client-state :as cs]
    #?(:clj [freememo.db :as db])
    #?(:clj [taoensso.telemere :as tel])
-   #?(:clj [freememo.user-state :as us])
-   #?(:clj [freememo.optimistic :as opt])))
+   [freememo.optimistic :as opt]))
 
 ;; Query wrapper: takes refresh arg to create Electric reactive dependency
 ;; For root topics (no parent), fetches ALL descendant cards via get-all-flashcards.
@@ -66,16 +66,22 @@
               ;; font-sz drives the text line within this budget, not the row height
               ;; (adding it left an empty band below every row).
               row-height 41
-              ;; Optimistic add-card overlay (freememo.optimistic :pending-cards).
-              pending-map (e/server (e/watch (us/get-atom user-id :pending-cards)))
+              ;; Optimistic add-card overlay (freememo.optimistic :pending-cards,
+              ;; per-session client state). present-ids crosses from the server
+              ;; card query; the overlay merge is client-side.
+              pending-map (e/watch (cs/get-atom :pending-cards))
               present-ids (e/server (set (map :flashcards/id cards-vec)))
-              overlay-entries (e/server (opt/visible-pending-cards pending-map topic-id present-ids))
-              landed-tempids (e/server (opt/landed-pending-tempids pending-map topic-id present-ids))]
+              overlay-entries (opt/visible-pending-cards pending-map topic-id present-ids)
+              landed-tempids (opt/landed-pending-tempids pending-map topic-id present-ids)]
           ;; Auto-forget confirmed overlay entries once their cards have landed
-          ;; in the refetched list (keeps :pending-cards from accumulating).
-          (e/for [tid (e/server (e/diff-by identity landed-tempids))]
+          ;; in the refetched list (keeps :pending-cards from accumulating). The
+          ;; forget mutates the overlay (unmounting this branch), so it fires from
+          ;; e/on-unmount when (t) spends the token.
+          (e/for [tid (e/diff-by identity landed-tempids)]
             (let [[t _] (e/Token tid)]
-              (when t (case (e/server (opt/forget-pending-card! user-id tid)) (t)))))
+              (when t
+                (e/on-unmount #(opt/forget-pending! tid))
+                (t))))
           (dom/div
             (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
             (when (pos? card-count)
@@ -103,7 +109,7 @@
                                     :font-size (str font-sz "px")
                                     :direction (if rtl? "rtl" "ltr")}})
                 ;; Optimistic pending/error rows above the real cards.
-                (e/for [entry (e/server (e/diff-by :tempid overlay-entries))]
+                (e/for [entry (e/diff-by :tempid overlay-entries)]
                   (PendingCardRow entry user-id))
                 (if (pos? card-count)
                   (e/for [i (Tape offset limit)]

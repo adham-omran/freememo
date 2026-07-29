@@ -21,7 +21,7 @@
    #?(:cljs [freememo.score-audio :as score-audio])
    #?(:cljs [freememo.score-pdf :as score-pdf])
    #?(:clj [freememo.score :as score])
-   #?(:clj [freememo.optimistic :as opt])))
+   [freememo.optimistic :as opt]))
 
 ;; ---------------------------------------------------------------------------
 ;; Platform wrappers — reader conditionals in plain defns only.
@@ -123,13 +123,11 @@
   (reset! !score-edit nil)
   nil)
 
-(defn enqueue-add-score!* [user-id id payload]
-  #?(:clj (opt/enqueue-pending-card! user-id :add-score-group id payload)
-     :cljs nil))
+(defn enqueue-add-score!* [id payload]
+  (opt/enqueue-pending! :add-score-group id payload))
 
-(defn enqueue-update-score!* [user-id payload]
-  #?(:clj (opt/enqueue-command! user-id {:type :update-score-group :payload payload})
-     :cljs nil))
+(defn enqueue-update-score!* [payload]
+  (opt/enqueue! {:type :update-score-group :payload payload}))
 
 (defn get-score-group-for-edit* [user-id group-id]
   #?(:clj (score/get-group-for-edit user-id group-id)
@@ -368,10 +366,10 @@
           (let [payload (:payload submit)
                 add-id (e/snapshot (random-uuid))]
             (if (:group-id payload)
-              (case (e/server (enqueue-update-score!* user-id payload))
+              (case (enqueue-update-score!* payload)
                 (do (clear-selection! !score-region !score-pages !score-edit)
                   (t)))
-              (case (e/server (enqueue-add-score!* user-id add-id payload))
+              (case (enqueue-add-score!* add-id payload)
                 (do (clear-selection! !score-region !score-pages !score-edit)
                   (t))))))))))
 

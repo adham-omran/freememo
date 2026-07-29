@@ -12,7 +12,6 @@
    [freememo.db :as db]
    [freememo.optimistic :as opt]
    [freememo.toasts :as toasts]
-   [freememo.user-state :as us]
    [taoensso.telemere :as tel]))
 
 (def directions #{"audio-front" "sheet-front"})
@@ -113,24 +112,22 @@
 ;; :views and removes the command from the queue.
 ;; ---------------------------------------------------------------------------
 
-(defmethod opt/run-command! :add-score-group [user-id {:keys [id payload]}]
+(defmethod opt/run-command! :add-score-group [user-id {:keys [payload]}]
   (let [result (create-group! user-id payload)]
     (if (:success result)
-      (do (swap! (us/get-atom user-id :pending-cards) update id merge
-            {:status :confirmed :real-ids (:ids result)})
-        (toasts/push! user-id {:level :success
-                               :message (let [n (count (:ids result))]
-                                          (str n " score card" (when (not= 1 n) "s") " added"))}))
-      (do (swap! (us/get-atom user-id :pending-cards) update id merge
-            {:status :error :error (:error result)})
-        (toasts/push! user-id {:level :error
-                               :message (or (:error result) "Failed to add score cards")})))
-    :done))
+      (do (toasts/push! user-id {:level :success
+                                 :message (let [n (count (:ids result))]
+                                            (str n " score card" (when (not= 1 n) "s") " added"))})
+          {:ok? true :real-ids (:ids result)})
+      (do (toasts/push! user-id {:level :error
+                                 :message (or (:error result) "Failed to add score cards")})
+          {:ok? false :error (:error result)}))))
 
 (defmethod opt/run-command! :update-score-group [user-id {:keys [payload]}]
   (let [result (update-group! user-id payload)]
     (if (:success result)
-      (toasts/push! user-id {:level :success :message "Score card updated"})
-      (toasts/push! user-id {:level :error
-                             :message (or (:error result) "Failed to update score card")}))
-    :done))
+      (do (toasts/push! user-id {:level :success :message "Score card updated"})
+          {:ok? true})
+      (do (toasts/push! user-id {:level :error
+                                 :message (or (:error result) "Failed to update score card")})
+          {:ok? false :error (:error result)}))))

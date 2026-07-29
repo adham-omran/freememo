@@ -9,7 +9,7 @@
    [freememo.commands :as commands]
    #?(:clj [freememo.cards :as cards])
    #?(:cljs [freememo.anki-sync-helpers :refer [anki-call!]])
-   #?(:clj [freememo.optimistic :as opt])))
+   [freememo.optimistic :as opt]))
 
 (defn replace-img-with-chip
   "Replace each <img ...> tag with an inline `[image]` chip so card rows stay compact."
@@ -266,9 +266,10 @@
             [t _] (e/Token click)]
         (dom/props {:disabled (some? t)})
         (when t
-          ;; fire-and-forget: retry-pending-card! always returns :done — no
-          ;; {:success ...} contract to branch on.
-          (case (e/server (opt/retry-pending-card! user-id tempid))
+          ;; fire-and-forget: retry-pending! returns :done. Client-local: sets
+          ;; the overlay row back to :pending and re-enqueues in this session
+          ;; (the row stays mounted, so no e/on-unmount needed).
+          (case (opt/retry-pending! tempid)
             (t)))))))
 
 (e/defn DismissPendingButton [tempid user-id]
@@ -282,10 +283,10 @@
             [t _] (e/Token click)]
         (dom/props {:disabled (some? t)})
         (when t
-          ;; fire-and-forget: forget-pending-card! is idempotent and always
-          ;; returns :done — no {:success ...} contract to branch on.
-          (case (e/server (opt/forget-pending-card! user-id tempid))
-            (t)))))))
+          ;; forget-pending! removes the overlay entry, unmounting this row, so
+          ;; it fires from e/on-unmount when (t) spends the token (client-local).
+          (e/on-unmount #(opt/forget-pending! tempid))
+          (t))))))
 
 (e/defn PendingCardRow [entry user-id]
   (e/client

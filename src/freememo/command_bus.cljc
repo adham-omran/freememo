@@ -186,8 +186,8 @@
                     (e/watch !invocations)))]
       (let [[t _] (e/Token (:invocation-id inv))]
         (when t
-          (when-some [_ (e/server (opt/enqueue-command! user-id {:type (:command-id inv)
-                                                                 :payload (:payload inv)}))]
+          (when-some [_ (opt/enqueue! {:type (:command-id inv)
+                                       :payload (:payload inv)})]
             (t)
             (consume! (:invocation-id inv))))))))
 
