@@ -167,7 +167,7 @@
      :postpone-topic {:label "Postpone topic" :class :mutation :exec :ui-button
                       :when #{:viewer} :table #{:topic_repetitions} :views #{:queue-mutations}}
      :add-new        {:label "Add new card…" :class :nav :exec :ui-button
-                      :when #{:viewer} :views #{}}
+                      :bind "meta+shift+a" :when #{:viewer} :views #{}}
      :export         {:label "Export cards…" :class :query :exec :ui-button
                       :when #{:viewer} :views #{}}
      :delete-document {:label "Delete document…" :class :mutation :exec :ui-button

@@ -492,6 +492,7 @@
                                    {:key (str mod-key "+Shift+" key) :desc desc})
                     shortcuts [(shortcut-row "E" "Extract topic from selection")
                                (shortcut-row "G" "Generate cards")
+                               (shortcut-row "A" "Add card from selection")
                                (shortcut-row "S" "Scan Page (OCR)")
                                (shortcut-row "X" "Anki Sync")
                                (shortcut-row "D" "Mark Done")]]

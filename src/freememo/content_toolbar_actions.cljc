@@ -22,4 +22,4 @@
       ;; lets each stay small (JVM 64KB bytecode limit) and makes the toolbar
       ;; orchestration explicit in `content_toolbar.cljc`.
       (ExtractTopicButton user-id topic-id context-mode mod-key)
-      (AddCardButton user-id topic-id root-topic-id card-type))))
+      (AddCardButton user-id topic-id root-topic-id card-type mod-key))))
