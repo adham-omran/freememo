@@ -32,9 +32,9 @@
 
    A literal list, not a query predicate: users created between fixing this
    list and running the send MUST NOT silently join the batch. Deliberately
-   excluded — 10 (Dustin Getz), 16 (operator's own account), 25 (explicitly
-   set email_updates=false)."
-  [2 8 9 11 12 14 15 17 18 19 20 21 22 23 24 26 27 28 29 30
+   excluded — 10 (Dustin Getz), 16 (operator's own account), and 11, 12, 25
+   (email_updates=false)."
+  [2 8 9 14 15 17 18 19 20 21 22 23 24 26 27 28 29 30
    31 32 33 34 35 36 37])
 
 (def booking-link-event-type
