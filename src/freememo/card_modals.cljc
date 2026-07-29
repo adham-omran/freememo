@@ -8,6 +8,7 @@
    [clojure.string :as str]
    [freememo.typeahead :refer [Suggest]]
    [freememo.quill-field :refer [QuillField flush-syntax-tokens!]]
+   [freememo.card-history-modal :refer [CardHistoryModal]]
    [freememo.commands :as commands]
    [freememo.cloze :as cloze]
    #?(:clj [freememo.toasts :as toasts])
@@ -427,7 +428,8 @@
           ol-reveal (e/watch !ol-reveal)
           card-font-sz (e/server (settings/get-card-font-size user-id))
           modal-font (str (or card-font-sz 14) "px")
-          !primary-btn (atom nil)]
+          !primary-btn (atom nil)
+          !history-open? (atom false)]
       (dom/div
         (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
                             :background "transparent" :display "flex" :align-items "center"
@@ -556,9 +558,19 @@
                                 (t)))
                           (t (:error result)))))))))
             (dom/button
+              (dom/props {:class "btn btn-secondary" :style {:order "0"}
+                          :data-tooltip "View previous versions of this card"})
+              (dom/text "History")
+              (dom/On "click" (fn [_] (reset! !history-open? true)) nil))
+            (dom/button
               (dom/props {:class "btn btn-secondary"})
               (dom/text "Cancel")
-              (dom/On "click" (fn [_] (reset! !editing-card nil)) nil))))))))
+              (dom/On "click" (fn [_] (reset! !editing-card nil)) nil))))
+        ;; Sibling, not a child: .modal-backdrop and this modal are both
+        ;; z-index 1000, so later DOM order must win — and the edit modal's
+        ;; outer div is pointer-events:none, which a nested backdrop would
+        ;; inherit.
+        (CardHistoryModal [:card card-id] user-id !history-open?)))))
 
 
 #?(:clj
