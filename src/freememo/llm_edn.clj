@@ -47,19 +47,28 @@
    Strips markdown code fences first (```clojure/edn/json); if the cleaned
    string still won't parse, retries on the bracketed payload to survive other
    wrappers/prose (observed: single-backtick-wrapped EDN).
-   Pre:  raw-text is the model message content (may be nil).
-   Post: returns the parsed collection (vector or map); throws ex-info when no
-         collection can be recovered."
+   Pre:  raw-text is non-blank model message content — callers reach this via
+         freememo.openrouter/message-content, which owns the blank/absent case
+         and classifies it as a response-shape failure, not a parse failure.
+   Post: returns the parsed collection (vector or map); throws ex-info carrying
+         :type ::unparseable (retryable per openrouter/retryable-cause?) plus
+         :raw and :cleaned when no collection can be recovered."
   [raw-text]
   (let [cleaned (-> (str raw-text)
                   str/trim
                   (str/replace #"^```(?:clojure|edn|json)?\s*\n?" "")
                   (str/replace #"\n?```\s*$" "")
-                  str/trim)]
+                  str/trim)
+        data {:type ::unparseable :raw raw-text :cleaned cleaned}]
     (or (parse-edn-or-json cleaned)
         (some-> (extract-bracketed cleaned) parse-edn-or-json)
-        (do (tel/error! {:id ::parse-response
-                         :data {:raw raw-text :cleaned cleaned}}
+        ;; :warn, not :error — this parse is one attempt, and ::unparseable is a
+        ;; retryable cause, so a caller may recover on the next one. Severity
+        ;; belongs to whoever owns the retry budget and therefore knows the
+        ;; failure is terminal (cards/::no-content-exhausted logs :error and is
+        ;; alert-routed). Kept as a signal at all so the raw text survives for
+        ;; diagnosis even when the retry succeeds. Matches its sibling gate,
+        ;; openrouter/::no-content.
+        (do (tel/log! {:level :warn :id ::parse-response :data data}
               "Failed to parse model response (neither EDN nor JSON)")
-            (throw (ex-info "Failed to parse model response"
-                     {:raw raw-text :cleaned cleaned}))))))
+            (throw (ex-info "Failed to parse model response" data))))))

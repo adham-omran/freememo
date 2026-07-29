@@ -63,26 +63,20 @@
 
 (defn- extract-page-triples!
   "Pass 1 for one page. Post: {:triples [...] :cost usd}; triples are
-   shape-valid and tagged :page. Retries malformed output once."
+   shape-valid and tagged :page. Unusable model output is retried inside
+   llm/chat!, whose :cost covers both attempts."
   [api-key model-slug prompt page-number page-text]
-  (loop [attempt 1]
-    (let [result (try (llm/chat! api-key model-slug prompt page-text {:feature :kg-extract})
-                   (catch clojure.lang.ExceptionInfo e
-                     (if (and (= 1 attempt) (:raw (ex-data e)))
-                       ::retry
-                       (throw e))))]
-      (if (= ::retry result)
-        (recur 2)
-        (let [{:keys [parsed cost]} result
-              triples (if (sequential? parsed) parsed [])
-              valid (filterv valid-triple? triples)]
-          (when (< (count valid) (count triples))
-            (tel/log! {:level :warn :id ::invalid-triples-dropped
-                       :data {:page page-number
-                              :dropped (- (count triples) (count valid))}}
-              "Dropped shape-invalid triples from extraction output"))
-          {:triples (mapv #(assoc % :page page-number) valid)
-           :cost cost})))))
+  (let [{:keys [parsed cost]} (llm/chat! api-key model-slug prompt page-text
+                                {:feature :kg-extract})
+        triples (if (sequential? parsed) parsed [])
+        valid (filterv valid-triple? triples)]
+    (when (< (count valid) (count triples))
+      (tel/log! {:level :warn :id ::invalid-triples-dropped
+                 :data {:page page-number
+                        :dropped (- (count triples) (count valid))}}
+        "Dropped shape-invalid triples from extraction output"))
+    {:triples (mapv #(assoc % :page page-number) valid)
+     :cost cost}))
 
 (def ^:private extract-page-concurrency
   "Bounds concurrent per-page extraction calls — mirrors page-ocr's

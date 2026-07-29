@@ -135,6 +135,10 @@
               :freememo.cards/generate-cloze-cards
               :freememo.cards/save-cards
               :freememo.cards/generate-cards-count-mismatch
+              ;; Retries exhausted with no usable response. A model REFUSAL is
+              ;; deliberately absent — that is a content outcome (:info,
+              ;; ::model-refused), not a pipeline defect.
+              :freememo.cards/no-content-exhausted
               :freememo.epub/process-epub
               :freememo.pdf/save-pdf}}]))
 

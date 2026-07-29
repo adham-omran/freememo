@@ -36,3 +36,11 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
           #"Failed to parse model response"
           (llm-edn/parse-response "Sorry, I can't do that.")))))
+
+(deftest unparseable-throw-is-typed-and-retryable
+  (testing "ex-data carries the retryable cause alongside :raw and :cleaned"
+    (let [data (try (llm-edn/parse-response "Sorry, I can't do that.")
+                 (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+      (is (= :freememo.llm-edn/unparseable (:type data)))
+      (is (= "Sorry, I can't do that." (:raw data)))
+      (is (= "Sorry, I can't do that." (:cleaned data))))))

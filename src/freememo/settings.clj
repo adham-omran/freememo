@@ -858,8 +858,10 @@
       :else {:success false :error (str "Unknown language code: " v)})))
 
 (defn get-card-gen-max-retries
-  "Max card-generation attempts on count mismatch (1–3, default 2). All attempts
-   are billed (§5.4.5), so a lower value caps billed retries."
+  "Max card-generation attempts (1–3, default 2). Spent on any attempt-level
+   failure: count mismatch, no usable content, or unparseable output. Every
+   attempt of a SUCCESSFUL generation is billed (§5.4.5), so a lower value caps
+   billed retries; a generation that fails on its last attempt bills nothing."
   [user-id]
   (try
     (max 1 (min 3 (Integer/parseInt (or (db/get-setting user-id CARD_GEN_MAX_RETRIES) "2"))))
