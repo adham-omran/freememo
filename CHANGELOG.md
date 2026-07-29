@@ -9,6 +9,200 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
+## v20260729-bb11960
+
+### For users
+
+- **Card edit history.** Every card save now keeps the rendition it replaced, so you
+  can always look back at what a card used to say. **History** sits in the card edit
+  modal (basic, cloze, overlapping) and in the image-occlusion editor; each entry is
+  labelled with when it was superseded.
+  - **Occlusion history shows masks where they used to be** - a rendition written
+    before you moved or deleted a mask draws that mask at its old coordinates over
+    the same image. Removing one mask from a group no longer erases the record of
+    what it looked like.
+  - **View only** - no restore, no diff, nothing in the modal writes. It is a record,
+    not a rollback.
+- **Grouped masks in image occlusion.** Several masks can act as one card, the way
+  Anki's "group of shapes" does, instead of the old strict one-mask-one-card.
+  - **Two tools** - Draw (R) adds masks; Select (S) adjusts them. In Select,
+    Shift-click or drag a box over several masks, then Group (G) makes them one card
+    and Ungroup (U) splits them again. A group moves and resizes as one.
+  - **The counts tell you what you'll get** - the footer reads "5 masks → 3 cards",
+    and a grouped row in the card tables reads "group 3 · 2 masks" instead of
+    "mask 3". On the Anki front, every mask in the asked group hides together and
+    reveals together.
+- **Paste any image.** Screenshots, dragged files, and images copied off a web page
+  now go into your media storage, with the editor holding a link to them.
+  - Bug fix: pasting a screenshot into Add Card used to fail with "answer exceeds
+    10000 character limit" — the image was being embedded in the card's text. The
+    same paste into a document editor silently stored megabytes of it instead.
+  - **WebP, GIF and AVIF paste now** - Quill accepted only PNG and JPEG and discarded
+    everything else with no message at all. SVG, BMP and TIFF are still refused, but
+    now say so rather than doing nothing.
+  - A save that races the upload stores the image anyway, and HTML pasted out of an
+    imported EPUB gets the same treatment on its way to the database. Three old cards
+    that were already carrying embedded images were converted on this release's first
+    boot.
+- **Drag an image to resize it** - handles on any image at least 40px wide, in the
+  document editor and in card fields. The size survives a reload, the card path, and
+  a push to Anki.
+- **Right-click an image → Copy image · Save image** - in the document editor, above
+  the existing Pin and Image Occlusion items. Images hosted elsewhere also offer
+  **Copy image address**, because their bytes depend on the remote server's headers
+  and a plain copy can legitimately fail there. Escape closes the menu.
+- Bug fix: an image could render distorted in Anki while looking correct in the
+  editor. A leftover `height` attribute is inert in the editor and was being obeyed
+  by Anki; the Anki stylesheet now matches the editor.
+- **`Cmd/Ctrl+Shift+A` adds a card** - from anywhere in the viewer, and the passage
+  you had selected is marked gold in the editor, the same mark Generate leaves. The
+  mark means exactly one thing: this passage reached the modal.
+- Bug fix: **a card could be saved twice.** With two tabs open on the same account,
+  every add — cards, occlusion, score, bibliography, undo — ran once per tab, because
+  the queue of pending writes belonged to the account rather than to the tab that
+  made them.
+- Bug fix: **a generation that comes back empty is now retried.** A model
+  occasionally answers with no content at all; that was reported as an unreadable
+  response, and the toast said "please try again" while the code did not permit a
+  retry. Empty, truncated and unparseable responses now retry within your existing
+  retry setting, and a refusal stops immediately and says the model declined rather
+  than blaming the response format. A successful generation charges for every attempt
+  it took; one that fails outright charges nothing.
+- **A public roadmap** - `ROADMAP.md` lists what is under construction, what is
+  queued, and what is merely direction. Nothing in it is a commitment.
+
+### Known issues
+
+- **Pending writes no longer survive a tab reload.** Moving the queue into the tab
+  that made the writes is what removed the double-save above, so a write still in
+  flight when you reload is dropped instead of resumed. Adds are cheap to reissue;
+  that was the trade.
+- **Card history starts now.** Renditions from before this release cannot be
+  recovered, there is no restore and no diff, and a card overwritten by an Anki pull
+  records no version. The list is capped at the 500 most recent renditions and says
+  so when it hits the cap.
+- **Mask numbers show permanent gaps.** Once you group or ungroup, a number is
+  retired and never reused, because each one is bound to an uploaded Anki media file.
+  Anki refills its gaps; FreeMemo can't.
+- **Occlusion grouping shipped without its full manual pass.** Unit tests, the
+  production build, and the underlying canvas primitives were all verified, but the
+  end-to-end matrix — group two already-saved masks, ungroup, group resize, push,
+  review both modes — had not been run against a live app. If a grouped card
+  misbehaves in Anki, contact me.
+- **Cancelling Add Card leaves the gold mark.** There is no un-highlight; Generate
+  has had the same hole on a failed generation.
+- **`Ctrl+Shift+A` is untested on Firefox**, where it opens the Add-ons Manager. On
+  Chrome it is Search Tabs and FreeMemo wins the chord.
+- **A failed image upload leaves the image embedded.** You see the image plus a
+  message naming the failure, and the bytes are stored on the next save rather than
+  lost. Resizing an image also leaves a few inert leftover attributes in stored
+  document HTML.
+- **Knowledge-graph leftovers.** Most stored entity rows reference no fact — the bulk
+  of them from a document deleted long ago — and around fifty quiz questions have no
+  fact behind them, yet still appear in Review's new-card tier with nothing to grade
+  against. The sweep that collects both is specified but not written yet.
+- **The empty-response incident's cause was never established** — nothing logged the
+  response shape at the time. It does now, so a recurrence will name itself.
+
+### Technical
+
+- **`card_versions`** - write-behind (a row holds the *superseded* rendition, so the
+  first edit captures the original LLM output for free), event-scoped via
+  `scope_type`/`scope_id`, owned by `root_topic_id ON DELETE CASCADE` so history
+  outlives `reconcile-occlusion-group!`'s row churn. `db/update-flashcard-versioned!`
+  does read-old/compare/insert/update in one transaction; `db/update-flashcard!` is
+  untouched, which keeps the Anki pull path version-free by construction rather than
+  by a flag. Measured 356 B/version (225 heap + 111 index — the index term was 5×
+  the pre-implementation estimate); whole-fleet projection stays under 5 MB against
+  the 451 MB `topic_files` already holds.
+- **Boot migration `normalize-inline-card-images!`** - runs inside `setup-schema`
+  after the grandfather migration, so no inline-base64 card can exist by the time a
+  save could version one. Per-card try/catch (an escaping exception would stop the
+  server booting) and `:meter-quota? false`, since the bytes are being relocated out
+  of the user's own rows.
+- **`card_history_modal.cljc` is its own namespace** - `card_modals.cljc` is already
+  near the `:prod`-only bytecode limit. `!history-open?` is positional, never a
+  ctx-map key, and both History buttons mount the modal as a *sibling* of the edit
+  modal's container, which is `pointer-events: none`.
+- **Occlusion grouping is ordinal-as-group** - a shared `mask_ordinal` *is* the
+  group; unsaved rects carry a transient `:gid` that is never persisted, so storage
+  stays single-channel. `checked-geometry` (was `validate-geometry`) is the one
+  normalization boundary. `uq_flashcards_mask_ordinal` is created inside try/catch
+  like the other unique indexes — check the boot warn log for legacy duplicates.
+  `db/occlusion-mask-count-expr` is a correlated subquery over
+  `og.geometry->'rects'` projected through the shared `card-group-selects`, so the
+  "k masks" label needs no denormalized column. `normalize-group-transform!` folds
+  the Konva group's position *and* scale into its children after every drag and
+  resize, so reparenting a child can never shift it.
+- **`freememo.client-state`** - browser-local atom registry, fresh per page load. The
+  double-save was `:pending-commands`/`:pending-cards` living in per-user *server*
+  atoms while `CommandDispatcher` mounts once per session: N tabs meant N dispatchers
+  draining one queue, and `e/Token` dedups per dispatcher only. `optimistic/run-command!`
+  methods now return `{:ok? :real-ids :error}` and the client applies the outcome;
+  invalidation channels stay server-shared so a card added in one tab still refreshes
+  the other's table.
+- **`openrouter/message-content` + `retryable-cause?`** - typed causes
+  `::refused` > `::no-choices` > `::truncated` > `::empty-content`, plus
+  `:freememo.llm-edn/unparseable`, with one predicate owning the retry/terminal
+  mapping. Retry moved *inside* `kg-llm/chat!` for all six call sites with `:cost`
+  redefined as summed across attempts, and the two hand-rolled
+  `(:raw (ex-data e))` discriminators — which were falsy for exactly this failure, so
+  both KG lanes silently declined to retry — are gone. Terminal-empty is routed to
+  `:alert/pipeline-failures`; a refusal stays `:info`, like `::spend-refused`.
+- **`image-rehost/rehost-data-uris!`** - data-URI-only, no HTTP, no URL
+  absolutization, never throws. Deliberately *not* `rehost-html-images!`, which would
+  download every remote `<img>` as a side effect of typing. Called from
+  `cards/save-cards` and from `db/update-topic-content!` (which gained a `user-id`
+  parameter). `util/storable-image-mime-types` and `util/mime->ext` are now the single
+  sources of truth for both ends of that path; the MIME allowlist is a security gate
+  too, since `clean-html` allow-lists the `data` protocol on `img src` with no MIME
+  restriction.
+- **`editor-actions/install-image-rehost!`** overrides `uploader.upload`, not
+  `uploader.handler` - Quill 2.0.3 filters against `Uploader.DEFAULTS.mimetypes`
+  *before* the handler runs, and `Clipboard.onCapturePaste` routes any files-bearing
+  payload straight to `upload`, which is why the clipboard matcher this replaces could
+  never fire. The data URI is deliberately its own placeholder (a `blob:` URL cannot
+  be resolved server-side, so a racing save would persist a dead src), and the swap
+  goes through the blot, not `setAttribute`.
+- **`client-errors/report!` gained a 3-arity `notify`** that pushes an error toast
+  beside the log entry — for failures in JS callbacks with no Electric frame to
+  observe them, like a paste the browser rejected outright.
+- **`editor_pin_menu.cljs` → `editor_image_menu.cljs`**; `#pin-context-menu` →
+  `#image-context-menu`. `src->blob!` extracted so Copy and Save share the decode
+  path with the media upload.
+- **Dep** - `quill-resize-module@2.1.3` UMD from jsDelivr, loaded after `quill.js`;
+  it self-registers `modules/resize`, so there is no `Quill.register` call. Options
+  in `quill-field/quill-config`: `:attribute ["width"]` (Quill's image blot keeps only
+  alt/height/width and `clean-html` allow-lists the same, so a width attribute is the
+  only size representation that survives), `:minWidth 40`, `:embedTags []`, and the
+  module's align toolbar omitted — its classes are stripped on the card path, so
+  alignment would persist in documents and vanish on cards. CSS ported into
+  `index.css` with `light-dark()` instead of a CDN stylesheet.
+  `blot-formatter2` was rejected: its overlay is not click-through, so `elementFromPoint`
+  returns a `DIV` and the image context menu dies.
+- **`users.display_name`** - filled from Google's `name` claim at login but only when
+  NULL, so a hand-curated name survives later logins. `freememo.outreach` sends one
+  personalised message per recipient, which `changelog.clj` structurally cannot
+  (single BCC, rendered from `CHANGELOG.md`); recipients are a literal id vector and
+  each success writes a user event the send then skips, so a re-run after partial
+  failure resumes instead of double-mailing. New `db/get-mail-addressees`,
+  `db/user-ids-with-event`, `db/insert-user-event!` 3-arity with jsonb metadata.
+- **Desktop shell POC** - an Electron window over the deployed origin, no local
+  server and no local database, kept out of the published tree. Google blocks OAuth
+  from embedded webviews, so the shell signs in over `POST /login`. The full local app
+  is deferred: four bindings to a real PostgreSQL server (`pgcrypto`/`pg_trgm`, large
+  objects, `jsonb` round-tripping, partial-unique `ON CONFLICT … WHERE`), three
+  shelled-out native binaries, and every client library loading from a CDN.
+- **KG orphan sweep, specified only** (`plans/kg-orphan-collection-sweep.md`) - one
+  hourly job deleting unreferenced entities and *retiring* unlinked questions, never
+  deleting them, because `kg_answers.question_id` is `NO ACTION` and many orphans have
+  answer rows. Entity collection needs an age guard: distill inserts entities and
+  facts in separate transactions, so an entity legitimately has no fact for that gap.
+- **Tests** - new `openrouter_test.clj` (cause table, precedence, retryable
+  false-table), `occlusion_ordinals_test.clj` (partition/assign rule),
+  `image_rehost_test.clj`, plus an `llm_edn_test.clj` case asserting the unparseable
+  throw carries `:type` alongside `:raw`/`:cleaned`. Still not wired to CI.
+
 ## v20260727-e36e8d7
 
 ### For users
