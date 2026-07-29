@@ -162,7 +162,16 @@
             n (e/server (count versions))
             truncated? (e/server (versions-truncated? versions))]
         (dom/div
-          (dom/props {:class "modal-backdrop" :tabindex "-1"})
+          ;; pointer-events:auto explicitly, not by default: both callers open
+          ;; this modal from inside an edit modal whose overlay layer is
+          ;; pointer-events:none, and that property inherits. Nested under one,
+          ;; the backdrop, its Close button and the scrollable version list are
+          ;; all un-hit-testable — clicks pass THROUGH to the edit modal
+          ;; beneath. The callers mount this as a sibling of that layer (see
+          ;; card_modals.cljc/EditCardModal), so this prop is belt-and-braces:
+          ;; it makes the modal hit-testable wherever it is mounted.
+          (dom/props {:class "modal-backdrop" :tabindex "-1"
+                      :style {:pointer-events "auto"}})
           (modal/ModalEscape (fn [] (reset! !open? false)) "Card edit history")
           (dom/On "click" (fn [_] (reset! !open? false)) nil)
           (dom/div
