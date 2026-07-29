@@ -2868,7 +2868,10 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 }
 
 /* ── Pin Context Menu (right-click on <img> in editor) ──────────── */
-.pin-context-menu {
+/* Image context menu — right-click on an <img> in the document editor.
+   Owns Copy/Save image plus the pin and occlusion actions
+   (freememo.editor-image-menu). */
+.image-context-menu {
     position: fixed;
     z-index: 9999;
     background: var(--color-bg-card, #fff);
@@ -2880,7 +2883,7 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     font-size: 13px;
     animation: fade-in 0.1s ease;
 }
-.pin-context-menu button {
+.image-context-menu button {
     display: block;
     width: 100%;
     text-align: left;
@@ -2893,19 +2896,75 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     line-height: 1.4;
     white-space: nowrap;
 }
-.pin-context-menu button:hover:not(:disabled) {
+.image-context-menu button:hover:not(:disabled) {
     background: var(--color-bg-hover, #f3f4f6);
 }
-.pin-context-menu button:disabled {
+.image-context-menu button:disabled {
     color: var(--color-text-hint, #9ca3af);
     cursor: not-allowed;
 }
+/* Separates the clipboard/download group from the app actions below it. */
+.image-context-menu__divider {
+    height: 1px;
+    margin: 4px 0;
+    background: var(--color-border, #d1d5db);
+}
 /* Last button is "Cancel" — visually separated */
-.pin-context-menu button:last-child {
+.image-context-menu button:last-child {
     border-top: 1px solid var(--color-border, #d1d5db);
     margin-top: 2px;
     padding-top: 8px;
     color: var(--color-text-secondary, #6b7280);
+}
+
+/* Image drag-resize — quill-resize-module 2.1.3.
+   Ported from the package's dist/resize.css instead of linking it, so the
+   colours follow the app's theme tokens rather than the module's hardcoded
+   #fff/#333/#777. Rules for `.ql-resize-toolbar` and the `.ql-resize-style-*`
+   alignment classes are deliberately omitted: quill-config drops the module's
+   "Toolbar" (see freememo.quill-field/quill-config), so nothing renders them.
+
+   Handles are 12px visually with a 24px pointer target via ::before — the
+   module positions them at the image corners, where a bare 12px box is a
+   small target for a coarse pointer. */
+.ql-resize-overlay {
+    position: absolute;
+    box-sizing: border-box;
+    border: 1px dashed var(--color-border, #444);
+    pointer-events: none;
+}
+.ql-resize-handle {
+    position: absolute;
+    height: 12px;
+    width: 12px;
+    background-color: var(--color-bg-card, #fff);
+    border: 1px solid var(--color-text-secondary, #777);
+    border-radius: 2px;
+    box-sizing: border-box;
+    opacity: 0.9;
+    pointer-events: all;
+}
+.ql-resize-handle::before {
+    content: "";
+    position: absolute;
+    inset: -6px;
+}
+.ql-resize-handle.tl { top: -6px; left: -6px; cursor: nwse-resize; }
+.ql-resize-handle.tr { top: -6px; right: -6px; cursor: nesw-resize; }
+.ql-resize-handle.br { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.ql-resize-handle.bl { left: -6px; bottom: -6px; cursor: nesw-resize; }
+.ql-resize-display {
+    position: absolute;
+    padding: 4px 8px;
+    text-align: center;
+    background-color: var(--color-bg-card, #fff);
+    color: var(--color-text-primary, #333);
+    border: 1px solid var(--color-border, #777);
+    border-radius: 3px;
+    box-sizing: border-box;
+    opacity: 0.9;
+    cursor: default;
+    line-height: 1;
 }
 
 /* Pin side panel — collapsible right-side viewer for topic pins */

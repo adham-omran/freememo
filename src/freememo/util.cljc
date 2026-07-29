@@ -40,6 +40,34 @@
            (.replaceState js/window.history nil "" next-url))))
      :clj nil))
 
+;; ── Media ───────────────────────────────────────────────────────────
+
+(defn mime->ext
+  "File extension for a MIME type, without the dot.
+
+   Single source of truth for this mapping. Three sites previously carried
+   their own: `anki-sync-helpers` had this table, and `editor-actions` +
+   the image context menu each derived the extension as
+   `(last (str/split mime #\"/\"))` — which yields \"jpeg\" for image/jpeg
+   and \"svg+xml\" for image/svg+xml.
+
+   Pre : `mime` is a MIME string, or nil, with or without parameters
+         already stripped by the caller.
+   Post: returns a lowercase extension; \"bin\" for anything unrecognised.
+   Inv : total — never throws, never returns nil or a string with a dot."
+  [mime]
+  (case (str/lower-case (or mime ""))
+    "image/png"     "png"
+    "image/jpeg"    "jpg"
+    "image/jpg"     "jpg"
+    "image/gif"     "gif"
+    "image/webp"    "webp"
+    "image/svg+xml" "svg"
+    "image/bmp"     "bmp"
+    "image/tiff"    "tiff"
+    "audio/mpeg"    "mp3"
+    "bin"))
+
 (defn strip-html-tags
   "Remove HTML tags from a string, collapse whitespace, and trim.
    Returns empty string for nil/non-string input."

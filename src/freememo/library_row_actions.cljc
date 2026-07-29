@@ -8,7 +8,7 @@
 
    Positioning: the tree body is `overflow-y:auto`, so an absolute menu would
    clip at the scroll box; the menu is `position:fixed` at the trigger's rect
-   instead (mirrors editor_pin_menu). Escape / outside-mousedown / body-scroll
+   instead (mirrors editor_image_menu). Escape / outside-mousedown / body-scroll
    all close it."
   (:require
    [hyperfiddle.electric3 :as e]
