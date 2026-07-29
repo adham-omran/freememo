@@ -13,11 +13,18 @@
      fm-<anki-key>-O.svg             original mask (all rects), per group
      fm-<anki-key>-<ordinal>         note's 'ID (hidden)' field
 
+   Mask groups: an ordinal identifies a mask GROUP, so several rects may carry
+   the same one and every rect of the asked group is highlighted/revealed
+   together — the ordinal filters below need no grouping logic of their own.
+   Rects of one group therefore share an `id`; the ids are inert here (no
+   selector in freememo-anki.css and no reader in this app) and the note's
+   'ID (hidden)' field stays the per-group value.
+
    Mode semantics (mode lives entirely in the SVG contents — one Anki card
    template serves both):
-     hide-all : Q = every rect, the asked one highlighted; A = every rect
-                minus the asked one (asked area revealed, others stay hidden).
-     hide-one : Q = only the asked rect; A = no rects (everything revealed)."
+     hide-all : Q = every rect, the asked group highlighted; A = every rect
+                minus the asked group (asked area revealed, others stay hidden).
+     hide-one : Q = only the asked group's rects; A = no rects (all revealed)."
   (:require [clojure.string :as str]))
 
 (def question-fill "#FF7E7E")

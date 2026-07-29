@@ -259,7 +259,8 @@
      [c]
      (case (:flashcards/kind c)
        "occlusion"   (occlusion-row-html (:occlusion_image_media_id c) (:flashcards/mask_ordinal c)
-                       (:occlusion_mode c) (get-in c [:flashcards/io_fields :header]))
+                       (:occlusion_mask_count c) (:occlusion_mode c)
+                       (get-in c [:flashcards/io_fields :header]))
        "score"       (score-row-html (:flashcards/score_direction c) (:score_start_ms c) (:score_end_ms c))
        "overlapping" (overlapping-row-html (:flashcards/overlapping c))
        "cloze"       (card-row-html (:flashcards/cloze c))

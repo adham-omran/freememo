@@ -61,9 +61,10 @@
    {:title "Image-occlusion cards"
     :intro "Hide parts of an image and quiz yourself on what's under the mask."
     :steps [["Open the editor" "Right-click an image in the topic editor → Image Occlusion…"]
-            ["Draw masks" "In the Masks Editor tab, drag on the image to add a mask; click one to select it, drag or use its handles to adjust, Delete to remove."]
+            ["Draw masks" "In the Masks Editor tab, pick Draw (R) and drag on the image to add a mask. Pick Select (S) to adjust: click a mask, drag to move, handles to resize, Delete to remove."]
+            ["Group masks (optional)" "With Select (S), Shift-click or drag a box over several masks, then Group (G) — grouped masks are revealed together as ONE card. Ungroup (U) splits them again. The footer shows \"N masks → M cards\"."]
             ["Add fields (optional)" "The Fields tab holds Header, Footer, Remarks, Sources, and two Extra fields."]
-            ["Create the cards" "Hide One, Guess One makes one card per mask; Hide All, Guess One hides them all on every card. Push to Anki as image-occlusion notes."]]}
+            ["Create the cards" "Hide One, Guess One makes one card per mask group; Hide All, Guess One hides them all on every card. Push to Anki as image-occlusion notes."]]}
    {:title "Syncing to Anki"
     :intro "Push curated cards into your own Anki collection over AnkiConnect."
     :steps [["Push ({anki-sync})" "Choose scope (this topic, its subtree, or the whole document), deck, tags, and a custom header, then push. FreeMemo owns the Basic and Cloze note types, so there's nothing to map."]

@@ -3,13 +3,15 @@
    optimistic-queue command methods (:add-occlusion / :update-occlusion).
 
    Data shape: one occlusion_groups row (image + mode + geometry) fans out to
-   one 'occlusion' flashcards row per mask. Geometry writes go through the
+   one 'occlusion' flashcards row per MASK GROUP — rects sharing a mask ordinal
+   are one card (freememo.occlusion-ordinals). Geometry writes go through the
    transactional, ordinal-safe fns in freememo.db; this ns adds validation,
    sanitization, toasts, and the :pending-cards overlay bookkeeping.
 
    Mask SVGs are NOT stored — they are generated client-side at push time
    from the geometry here (freememo.occlusion-svg / freememo.occlusion-anki)."
   (:require
+   [clojure.string :as str]
    [freememo.db :as db]
    [freememo.html-cleaner :as cleaner]
    [freememo.input-check :as input]
@@ -35,19 +37,37 @@
              [k (or (some-> v cleaner/clean-html) "")])))
     io-field-keys))
 
-(defn- validate-geometry
-  "Throw on malformed geometry; return it unchanged otherwise.
-   Pre (caller): geometry = {:width :height :rects [{:x :y :w :h (:ordinal)}]}
-   in natural-image pixels, at least one rect."
+(defn- checked-geometry
+  "Throw on malformed geometry; otherwise return it with mask ordinals coerced
+   to long — the one place incoming geometry is normalized, so no reader below
+   has to.
+   Pre (caller): geometry = {:width :height :rects [{:x :y :w :h} ...]} in
+   natural-image pixels, at least one rect, each rect carrying at most one
+   membership key (:ordinal for an existing mask group, :gid for a new one —
+   see freememo.occlusion-ordinals).
+   Post: same shape; every present :ordinal is a positive long."
   [{:keys [width height rects] :as geometry}]
   (when-not (and (number? width) (pos? width) (number? height) (pos? height))
     (throw (ex-info "Occlusion geometry is missing image dimensions" {:geometry geometry})))
   (when (empty? rects)
     (throw (ex-info "Occlusion needs at least one mask" {})))
-  (doseq [{:keys [x y w h]} rects]
+  (doseq [{:keys [x y w h ordinal gid] :as rect} rects]
     (when-not (and (number? x) (number? y) (number? w) (number? h) (pos? w) (pos? h))
-      (throw (ex-info "Malformed occlusion mask rectangle" {:geometry geometry}))))
-  geometry)
+      (throw (ex-info "Malformed occlusion mask rectangle" {:geometry geometry})))
+    (when (and (some? ordinal) (some? gid))
+      (throw (ex-info "Occlusion mask carries both a mask ordinal and a group tag"
+               {:rect rect})))
+    (when (and (some? ordinal)
+            (not (and (number? ordinal) (pos? ordinal) (== ordinal (long ordinal)))))
+      (throw (ex-info "Malformed occlusion mask ordinal" {:rect rect})))
+    (when (and (some? gid) (or (not (string? gid)) (str/blank? gid)))
+      (throw (ex-info "Malformed occlusion mask group tag" {:rect rect}))))
+  (update geometry :rects
+    (fn [rects]
+      (mapv (fn [rect]
+              (cond-> rect
+                (some? (:ordinal rect)) (update :ordinal long)))
+        rects))))
 
 (defn create-group!
   "Create a group + its per-mask cards.
@@ -59,7 +79,7 @@
       (throw (ex-info "Not authorized for this topic" {:type ::not-owner})))
     (let [result (db/insert-occlusion-group!
                    (assoc payload
-                     :geometry (validate-geometry (:geometry payload))
+                     :geometry (checked-geometry (:geometry payload))
                      :io-fields (sanitize-io-fields (:io-fields payload))))]
       {:success true :group-id (:group-id result) :ids (:ids result)})
     (catch Exception e
@@ -77,7 +97,7 @@
     (let [result (db/reconcile-occlusion-group!
                    {:group-id (:group-id payload)
                     :mode (:mode payload)
-                    :geometry (validate-geometry (:geometry payload))
+                    :geometry (checked-geometry (:geometry payload))
                     :io-fields (sanitize-io-fields (:io-fields payload))})]
       (assoc result :success true))
     (catch Exception e
