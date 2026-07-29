@@ -50,7 +50,7 @@
     :steps [["Generate ({generate})" "Pick Basic or Cloze, a card count, and whether to include previous-page context, then generate from the current page. If the document has approved knowledge-graph facts, cards are built from those facts instead of the raw text."]
             ["Generate with a prompt" "Add a custom instruction (e.g. \"focus on definitions\") — recent prompts autocomplete."]
             ["Compare models" "Run the same content through two or more card models side by side and keep the set you prefer; each model is a separate, billed generation."]
-            ["Curate" "Add a card from a text selection, edit any card's question/answer or cloze, or delete the weak ones."]
+            ["Curate" "Add a card from a text selection ({add-new}) — the passage is marked in the editor — edit any card's question/answer or cloze, or delete the weak ones."]
             ["Export" "Export to Anki-compatible CSV by scope (current page or whole document) and kind (Basic, Cloze, or both)."]]}
    {:title "Sheet-music (Score) cards"
     :intro "Turn a score PDF and a recording into audio ↔ notation cards."
@@ -103,7 +103,7 @@
    {:title "Keyboard & command palette"
     :intro "Reach any action without hunting for its button."
     :steps [["Command palette ({toggle-palette})" "Open the palette, type to fuzzy-search every action — including ones with no shortcut, like Distill facts or Start quiz — and press Enter to run it."]
-            ["While reading" "{scan} Scan page · {extract} Extract selection · {generate} Generate cards · {done} Mark done."]
+            ["While reading" "{scan} Scan page · {extract} Extract selection · {generate} Generate cards · {add-new} Add card · {done} Mark done."]
             ["Anki" "{anki-sync} Push to Anki · {quick-sync} Quick push."]
             ["Undo" "{undo-newest} undoes your last action."]]}])
 
