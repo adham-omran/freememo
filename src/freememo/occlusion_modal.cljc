@@ -18,6 +18,7 @@
    [freememo.modal-shell :as modal]
    [freememo.quill-field :refer [QuillField]]
    [freememo.card-modals :refer [attach-modal-tab-nav!]]
+   [freememo.card-history-modal :refer [CardHistoryModal]]
    [freememo.card-components :refer [try-delete-anki-notes!]]
    [freememo.occlusion-ordinals :as ord]
    #?(:cljs [freememo.occlusion-editor :as occ-editor])
@@ -235,8 +236,11 @@
   "Create mode: two generate buttons (each = save with that mode).
    Edit mode: one Save. Plus Cancel with the dirty-discard guard.
    ctx = {:edit? :group :request :!request :!handle :!fields
-          :initial-rects :initial-geometry :user-id :close!}"
-  [ctx !primary-btn]
+          :initial-rects :initial-geometry :user-id :close!}
+   !primary-btn / !history-open? are positional, NOT ctx keys — an atom inside
+   a map passed to an e/defn is serialized as data and arrives unusable
+   (CLAUDE.md 'Never Put Atoms in Maps Passed to e/defn')."
+  [ctx !primary-btn !history-open?]
   (e/client
     (let [{:keys [edit? group request !request !handle !fields
                   initial-rects initial-geometry user-id close!]} ctx
@@ -274,6 +278,16 @@
               (reset! !primary-btn dom/node)
               (dom/text "Hide All, Guess One")
               (dom/On "click" (fn [_] (submit! "hide-all")) nil))))
+        ;; Edit mode only: a group that does not exist yet has no history.
+        ;; Opens the modal that OcclusionModalBody mounts — mounting it here
+        ;; would nest a .modal-backdrop inside this modal's pointer-events:none
+        ;; container, making its own backdrop and Close unclickable.
+        (when edit?
+          (dom/button
+            (dom/props {:class "btn btn-secondary" :style {:order "0"}
+                        :data-tooltip "View previous mask placements"})
+            (dom/text "History")
+            (dom/On "click" (fn [_] (reset! !history-open? true)) nil)))
         (dom/button
           (dom/props {:class "btn btn-secondary"})
           (dom/text "Cancel")
@@ -333,6 +347,7 @@
           !tab (atom :masks)
           tab (e/watch !tab)
           !primary-btn (atom nil)
+          !history-open? (atom false)
           close! (fn []
                    (when (or (not (occlusion-dirty? !handle initial-rects !fields initial-fields))
                            (confirm-discard!))
@@ -395,7 +410,15 @@
                              :!request !request :!handle !handle :!fields !fields
                              :initial-rects initial-rects :initial-geometry initial-geometry
                              :user-id user-id :close! close!}
-            !primary-btn))))))
+            !primary-btn !history-open?))
+        ;; Sibling of the modal container, not a descendant: .modal-backdrop and
+        ;; this modal are both z-index 1000 so later DOM order must win, and the
+        ;; container above is pointer-events:none, which a nested backdrop would
+        ;; inherit. Group-scoped — mask placement lives on
+        ;; occlusion_groups.geometry (plans/card-edit-history.md).
+        (when edit?
+          (CardHistoryModal [:occlusion-group (:group-id request)]
+            user-id !history-open?))))))
 
 (e/defn OcclusionModal
   "Host entry point. Mount while @!request is non-nil."

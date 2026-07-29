@@ -29,6 +29,7 @@
 (declare backfill-sources!)
 (declare backfill-pdf-sources!)
 (declare run-grandfather-migration!)
+(declare normalize-inline-card-images!)
 (declare start-purge-scheduler!)
 ;; Defined in the Incremental Video section; called from complete-credit-order!,
 ;; which sits far above it.
@@ -570,6 +571,62 @@
                       ON credit_transactions(user_id, created_at DESC)"])
 )
 
+(defn- setup-schema-card-versions!
+  "Card edit history — superseded card/group renditions. Must run after
+   setup-schema-topics! (FKs topics). See plans/card-edit-history.md.
+   Split out of setup-schema (see 7.4); called from it in order."
+  []
+  ;; Write-behind version log: a row holds the rendition a save REPLACED, so
+  ;; the current rendition is never duplicated here and the pre-edit state of
+  ;; an LLM-generated card is captured on its first edit for free.
+  ;; superseded_at therefore means "stopped being current at"; rendition k's
+  ;; validity interval is [row(k-1).superseded_at, row(k).superseded_at), with
+  ;; flashcards.created_at opening the first.
+  ;;
+  ;; Scope is (scope_type, scope_id), NOT an FK. Two reasons:
+  ;; reconcile-occlusion-group! deletes flashcard rows whose mask ordinal
+  ;; disappears, so an FK to flashcards would erase a mask's history during an
+  ;; ordinary EDIT; and one scope column pair needs one index where three
+  ;; nullable id columns would need three partial ones (~105 vs ~138 B/row).
+  ;; root_topic_id is the only FK — history is reclaimed with the document.
+  ;;
+  ;; Payload columns mirror their source columns and are sparse: scope_type
+  ;; selects which are non-null. geometry is shared by both group scopes
+  ;; (occlusion rects vs score pages — scope_type disambiguates the shape).
+  ;; occlusion_image_media_id is copied, not joined: remove-occlusion-mask!
+  ;; deletes the group row once its last mask card is gone, and the version
+  ;; must still render after that.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS card_versions (
+      id BIGSERIAL PRIMARY KEY,
+      root_topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      scope_type TEXT NOT NULL CHECK (scope_type IN ('card','occlusion_group','score_group')),
+      scope_id BIGINT NOT NULL,
+      kind TEXT NOT NULL,
+      superseded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      question TEXT,
+      answer TEXT,
+      cloze TEXT,
+      overlapping JSONB,
+      io_fields JSONB,
+      geometry JSONB,
+      occlusion_mode TEXT,
+      occlusion_image_media_id BIGINT,
+      score_direction TEXT,
+      score_start_ms INTEGER,
+      score_end_ms INTEGER,
+      score_clip_media_id BIGINT
+    )"])
+  ;; Reads are always "newest first, within one scope" — the composite index
+  ;; serves both the ordering and the scope filter. id DESC breaks ties when
+  ;; two versions share a microsecond (no sequence counter needed).
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_card_versions_scope
+                      ON card_versions(scope_type, scope_id, superseded_at DESC, id DESC)"])
+  ;; Unindexed FK referencing columns make ON DELETE CASCADE table-scan.
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_card_versions_root_topic
+                      ON card_versions(root_topic_id)"])
+)
+
 (defn- setup-schema-undo!
   "The undo log and topics.staged_delete_id (which FKs into it) — must run
    after setup-schema-topics! (topics must already exist).
@@ -975,6 +1032,7 @@
 
   (setup-schema-core!)
   (setup-schema-topics!)
+  (setup-schema-card-versions!)
   (setup-schema-activity!)
   (setup-schema-assistant!)
   (setup-schema-annotations!)
@@ -986,6 +1044,11 @@
 
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
   (run-grandfather-migration!)
+
+  ;; Card-history precondition: inline base64 images out of card fields, so no
+  ;; version row can ever duplicate an image payload. Idempotent; must run
+  ;; before any save can version (plans/card-edit-history.md §3).
+  (normalize-inline-card-images!)
 
   ;; Hourly purge of staged documents whose undo window has elapsed.
   (start-purge-scheduler!)
@@ -3014,6 +3077,147 @@
                          [:in :root_topic_id {:select :id :from :topics
                                               :where [:= :user_id user-id]}]]})))
 
+;; ---------------------------------------------------------------------------
+;; Card edit history — write-behind version log (plans/card-edit-history.md).
+;; Every write here logs the rendition it REPLACED. Deliberately NOT folded
+;; into update-flashcard!: the Anki pull path shares that fn
+;; (anki_sync_server/apply-pull-updates!) and pulls must not version.
+;; ---------------------------------------------------------------------------
+
+(def ^:private card-content-columns
+  "Flashcard columns that together constitute a card-scoped rendition."
+  [:question :answer :cloze :overlapping])
+
+(defn- jsonb-column? [k]
+  (contains? #{:overlapping :io_fields :geometry} k))
+
+(defn- content-changed?
+  "True when applying `fields` to `old` would change any value.
+   Pre:  every key of `fields` resolves in `old` under `qualifier`.
+   Post: JSONB values compare by parsed value, so key order is not
+         significant; numeric widening (10 vs 10.0) can read as a change.
+   A false positive costs one redundant version row; a false negative would
+   lose history, so the comparison errs toward writing."
+  [old qualifier fields]
+  (boolean
+    (some (fn [[k v]]
+            (let [old-v (get old (keyword qualifier (name k)))]
+              (if (jsonb-column? k)
+                (not= (pgobject->clj old-v) v)
+                (not= old-v v))))
+      fields)))
+
+(defn- insert-card-version!
+  "Insert one card_versions row. `payload` carries the scope keys and the
+   non-null rendition columns; JSONB values MUST already be PGobjects (passed
+   through verbatim from the row being superseded) or Clojure values wrapped by
+   the caller. Returns nil."
+  [tx payload]
+  (jdbc/execute-one! tx (sql/format {:insert-into :card_versions :values [payload]}))
+  nil)
+
+(defn update-flashcard-versioned!
+  "Log the superseded rendition, then apply `fields` to flashcard `card-id`.
+   The versioning counterpart of update-flashcard!, for user-initiated saves.
+
+   Pre:  `fields` keys ⊆ card-content-columns; :overlapping is a plain map.
+   Post: when `fields` would change at least one value, exactly one
+         card_versions row holds the FULL pre-edit rendition (all four content
+         columns, verbatim), and the card holds the new values — atomically.
+         An unchanged save writes no version row and still bumps updated_at.
+   Inv:  card_versions never holds the current rendition.
+   No-op (0 rows, no version) when the card is not `user-id`'s.
+   Returns {:updated? bool :versioned? bool}."
+  [user-id card-id fields]
+  (jdbc/with-transaction [tx ds]
+    (if-let [old (jdbc/execute-one! tx
+                   ["SELECT id, kind, root_topic_id, question, answer, cloze, overlapping
+                     FROM flashcards
+                     WHERE id = ? AND root_topic_id IN (SELECT id FROM topics WHERE user_id = ?)
+                     FOR UPDATE"
+                    card-id user-id])]
+      (let [changed? (content-changed? old "flashcards" fields)]
+        (when changed?
+          (insert-card-version! tx
+            (into {:root_topic_id (:flashcards/root_topic_id old)
+                   :scope_type "card"
+                   :scope_id card-id
+                   :kind (:flashcards/kind old)}
+              (map (fn [k] [k (get old (keyword "flashcards" (name k)))]))
+              card-content-columns)))
+        (jdbc/execute-one! tx
+          (sql/format {:update :flashcards
+                       :set (cond-> (assoc fields :updated_at [:now])
+                              (contains? fields :overlapping) (update :overlapping ->jsonb))
+                       :where [:= :id card-id]}))
+        {:updated? true :versioned? changed?})
+      {:updated? false :versioned? false})))
+
+(defn- versions-for-scopes
+  "Rows for the given scope predicates, newest first.
+   Pre:  `scopes` is a non-empty seq of HoneySQL predicates over
+         (scope_type, scope_id); ownership is ALREADY enforced by the caller —
+         this fn does no authorization.
+   Post: rows are plain data with UNQUALIFIED keys and JSONB parsed
+         (Electric-wire safe — no PGobject, and no OffsetDateTime: the
+         timestamp crosses only as the preformatted :superseded_label)."
+  [scopes]
+  (mapv (fn [row]
+          (-> (update-keys row (comp keyword name))
+            (update :overlapping pgobject->clj)
+            (update :io_fields pgobject->clj)
+            (update :geometry pgobject->clj)))
+    (jdbc/execute! ds
+      (sql/format {:select [:id :scope_type :kind
+                            [[:to_char :superseded_at "YYYY-MM-DD HH24:MI"] :superseded_label]
+                            :question :answer :cloze :overlapping :io_fields :geometry
+                            :occlusion_mode :occlusion_image_media_id
+                            :score_direction :score_start_ms :score_end_ms]
+                   :from [:card_versions]
+                   :where (into [:or] scopes)
+                   :order-by [[:superseded_at :desc] [:id :desc]]}))))
+
+(defn get-card-versions
+  "Superseded renditions visible for flashcard `card-id`, newest first.
+   Unions the card's own versions with those of the group it belongs to, so an
+   occlusion card shows every group edit — including the geometry that still
+   contained a mask this card no longer has.
+   Pre:  card owned by `user-id` (enforced; a foreign card yields []).
+   Returns a vector of rows, [] when the card has no history."
+  [user-id card-id]
+  (if-let [card (jdbc/execute-one! ds
+                  ["SELECT occlusion_group_id, score_group_id FROM flashcards
+                    WHERE id = ? AND root_topic_id IN (SELECT id FROM topics WHERE user_id = ?)"
+                   card-id user-id])]
+    (versions-for-scopes
+      (cond-> [[:and [:= :scope_type "card"] [:= :scope_id card-id]]]
+        (:flashcards/occlusion_group_id card)
+        (conj [:and [:= :scope_type "occlusion_group"]
+               [:= :scope_id (:flashcards/occlusion_group_id card)]])
+        (:flashcards/score_group_id card)
+        (conj [:and [:= :scope_type "score_group"]
+               [:= :scope_id (:flashcards/score_group_id card)]])))
+    []))
+
+(defn get-occlusion-group-versions
+  "Superseded renditions of occlusion group `group-id`, newest first — the
+   group-keyed entry point, for the occlusion editor which knows a group but no
+   single card.
+   Pre:  group owned by `user-id` — enforced here via the group's cards, which
+         carry root_topic_id (occlusion_groups has no user column). A foreign
+         group, or one whose last card is gone, yields [].
+   Returns a vector of rows, [] when the group has never been edited."
+  [user-id group-id]
+  (if (jdbc/execute-one! ds
+        ["SELECT 1 FROM flashcards
+          WHERE occlusion_group_id = ?
+            AND root_topic_id IN (SELECT id FROM topics WHERE user_id = ?)
+          LIMIT 1"
+         group-id user-id])
+    (versions-for-scopes [[:and [:= :scope_type "occlusion_group"]
+                           [:= :scope_id group-id]]])
+    []))
+
 (defn get-anki-note-ids
   "Get anki_note_ids for a specific topic's flashcards."
   [topic-id]
@@ -3170,7 +3374,7 @@
         (throw (ex-info "Occlusion group not found" {:group-id group-id})))
       (let [next0 (:occlusion_groups/next_ordinal group)
             existing (jdbc/execute! tx
-                       ["SELECT id, mask_ordinal, anki_note_id, topic_id, root_topic_id
+                       ["SELECT id, mask_ordinal, anki_note_id, topic_id, root_topic_id, io_fields
                          FROM flashcards WHERE occlusion_group_id = ?" group-id])
             existing-ordinals (set (map :flashcards/mask_ordinal existing))
             ;; Re-apply deletions that landed since the modal loaded: a rect
@@ -3184,7 +3388,16 @@
             added-ordinals (filterv #(>= % next0) (ord/ordinals-in-order rects))
             template (first existing)
             removed (filterv #(not (contains? kept-ordinals (:flashcards/mask_ordinal %)))
-                      existing)]
+                      existing)
+            ;; Superseded rendition, captured before any write. The old geometry
+            ;; still carries the rects of masks this edit removes, so a removed
+            ;; mask stays viewable even though its flashcard row is deleted
+            ;; below and card_versions is scoped to the GROUP, not the row.
+            geometry' (assoc geometry :rects rects)
+            io-fields' (or io-fields {})
+            group-changed? (or (not= (pgobject->clj (:occlusion_groups/geometry group)) geometry')
+                             (not= (:occlusion_groups/mode group) mode)
+                             (not= (pgobject->clj (:flashcards/io_fields template)) io-fields'))]
         (when (seq stale-rects)
           (tel/log! {:level :warn :id ::stale-occlusion-rects
                      :data {:group-id group-id
@@ -3193,11 +3406,23 @@
         (when (empty? rects)
           (throw (ex-info "Every mask in this edit was deleted elsewhere — reopen the group"
                    {:group-id group-id})))
+        ;; History is logged AFTER the guards: an edit that aborts must not
+        ;; leave a version row claiming a rendition was superseded.
+        (when (and group-changed? template)
+          (insert-card-version! tx
+            {:root_topic_id (:flashcards/root_topic_id template)
+             :scope_type "occlusion_group"
+             :scope_id group-id
+             :kind "occlusion"
+             :geometry (:occlusion_groups/geometry group)
+             :occlusion_mode (:occlusion_groups/mode group)
+             :occlusion_image_media_id (:occlusion_groups/image_media_id group)
+             :io_fields (:flashcards/io_fields template)}))
         (doseq [r removed]
           (jdbc/execute-one! tx ["DELETE FROM flashcards WHERE id = ?" (:flashcards/id r)]))
         (jdbc/execute! tx
           (sql/format {:update :flashcards
-                       :set {:io_fields (->jsonb (or io-fields {}))
+                       :set {:io_fields (->jsonb io-fields')
                              :updated_at [:now]}
                        :where [:= :occlusion_group_id group-id]}))
         (let [added-ids
@@ -3210,13 +3435,13 @@
                                                 :kind "occlusion"
                                                 :occlusion_group_id group-id
                                                 :mask_ordinal ordinal
-                                                :io_fields (->jsonb (or io-fields {}))}]
+                                                :io_fields (->jsonb io-fields')}]
                                       :returning [:id]}))))
                 added-ordinals)]
           (jdbc/execute-one! tx
             (sql/format {:update :occlusion_groups
                          :set {:mode mode
-                               :geometry (->jsonb (assoc geometry :rects rects))
+                               :geometry (->jsonb geometry')
                                :next_ordinal next'
                                :updated_at [:now]}
                          :where [:= :id group-id]}))
@@ -3342,29 +3567,51 @@
    Returns {:group-id id}."
   [{:keys [group-id start-ms end-ms clip-media-id geometry]}]
   (jdbc/with-transaction [tx ds]
-    (when-not (jdbc/execute-one! tx
-                ["SELECT id FROM score_groups WHERE id = ? FOR UPDATE" group-id])
-      (throw (ex-info "Score group not found" {:group-id group-id})))
-    (let [pages' (first
-                   (reduce (fn [[acc n] page]
-                             (let [rects (mapv (fn [rect ordinal] (assoc rect :ordinal ordinal))
-                                           (:rects page) (iterate inc n))]
-                               [(conj acc (assoc page :rects rects))
-                                (+ n (count rects))]))
-                     [[] 1] (vec (:pages geometry))))]
-      (jdbc/execute-one! tx
-        (sql/format {:update :score_groups
-                     :set {:start_ms start-ms
-                           :end_ms end-ms
-                           :clip_media_id clip-media-id
-                           :geometry (->jsonb {:pages pages'})
-                           :updated_at [:now]}
-                     :where [:= :id group-id]}))
-      (jdbc/execute! tx
-        (sql/format {:update :flashcards
-                     :set {:updated_at [:now]}
-                     :where [:= :score_group_id group-id]}))
-      {:group-id group-id})))
+    (let [old (jdbc/execute-one! tx
+                ["SELECT * FROM score_groups WHERE id = ? FOR UPDATE" group-id])]
+      (when-not old
+        (throw (ex-info "Score group not found" {:group-id group-id})))
+      (let [pages' (first
+                     (reduce (fn [[acc n] page]
+                               (let [rects (mapv (fn [rect ordinal] (assoc rect :ordinal ordinal))
+                                             (:rects page) (iterate inc n))]
+                                 [(conj acc (assoc page :rects rects))
+                                  (+ n (count rects))]))
+                       [[] 1] (vec (:pages geometry))))
+            geometry' {:pages pages'}
+            ;; Superseded rendition, captured before the update. Direction is
+            ;; per-card and fixed at creation, so it is not part of a group
+            ;; rendition — the renderer reads it from the surviving card row.
+            owner (jdbc/execute-one! tx
+                    ["SELECT root_topic_id FROM flashcards WHERE score_group_id = ? LIMIT 1"
+                     group-id])
+            group-changed? (or (not= (pgobject->clj (:score_groups/geometry old)) geometry')
+                             (not= (:score_groups/start_ms old) start-ms)
+                             (not= (:score_groups/end_ms old) end-ms)
+                             (not= (:score_groups/clip_media_id old) clip-media-id))]
+        (when (and group-changed? owner)
+          (insert-card-version! tx
+            {:root_topic_id (:flashcards/root_topic_id owner)
+             :scope_type "score_group"
+             :scope_id group-id
+             :kind "score"
+             :geometry (:score_groups/geometry old)
+             :score_start_ms (:score_groups/start_ms old)
+             :score_end_ms (:score_groups/end_ms old)
+             :score_clip_media_id (:score_groups/clip_media_id old)}))
+        (jdbc/execute-one! tx
+          (sql/format {:update :score_groups
+                       :set {:start_ms start-ms
+                             :end_ms end-ms
+                             :clip_media_id clip-media-id
+                             :geometry (->jsonb geometry')
+                             :updated_at [:now]}
+                       :where [:= :id group-id]}))
+        (jdbc/execute! tx
+          (sql/format {:update :flashcards
+                       :set {:updated_at [:now]}
+                       :where [:= :score_group_id group-id]}))
+        {:group-id group-id}))))
 
 (defn remove-score-card-cleanup!
   "After a single score flashcard row was deleted elsewhere: delete the group
@@ -3964,6 +4211,79 @@
                                      :source_url source-url}]
                            :returning [:id]}))
           :media/id)))))
+
+(defn- rewrite-inline-images
+  "Replace every data:image URI in `html` with /api/media/<id>, storing each
+   payload as media owned by `user-id`. Returns [html' image-count].
+   Pre : `html` may be nil or blank.
+   Post: html' contains no 'data:image'; identical payloads collapse to one
+         media row (upsert-media! dedupes on (user_id, sha256))."
+  [user-id html]
+  (if (or (str/blank? html) (not (str/includes? html "data:image")))
+    [html 0]
+    (let [n (volatile! 0)
+          ;; The payload class excludes quotes, so a match cannot run past the
+          ;; closing attribute delimiter; \s is included because HTML may wrap
+          ;; long base64, and getMimeDecoder tolerates the whitespace.
+          html' (str/replace html
+                  #"data:image/([A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)"
+                  (fn [[_ subtype payload]]
+                    (let [bytes (.decode (java.util.Base64/getMimeDecoder) ^String payload)
+                          media-id (upsert-media! {:user-id user-id :kind "image"
+                                                   :bytes bytes
+                                                   :mime-type (str "image/" subtype)})]
+                      (vswap! n inc)
+                      (str "/api/media/" media-id))))]
+      [html' @n])))
+
+(defn normalize-inline-card-images!
+  "One-time: move inline data: URIs out of card fields into media rows.
+
+   A few production cards predate the editor's upload-and-rewrite paths
+   (the quill-field paste matcher and editor-image-menu, which both produce
+   /api/media/<id>) and carry base64 inline. Left there, every version of such
+   a card would duplicate the whole payload — measured at 8.86 MB for three
+   cards, 2.6x the entire fleet's text history (plans/card-edit-history.md §3).
+   Running at boot guarantees the precondition holds before any save can
+   version anything.
+
+   Pre : none — safe on an already-clean database.
+   Post: no flashcards row contains 'data:image'; each payload is a media row
+         referenced as /api/media/<id>. updated_at is deliberately NOT touched:
+         this is not a user edit. No card_versions row is written — the
+         pre-normalization rendition is deliberately unversioned.
+   Inv : idempotent — a second run matches no rows and writes nothing.
+   Returns {:cards n :images n}."
+  []
+  (let [rows (jdbc/execute! ds
+               ["SELECT f.id, f.question, f.answer, f.cloze, t.user_id
+                 FROM flashcards f JOIN topics t ON t.id = f.root_topic_id
+                 WHERE f.question LIKE '%data:image%'
+                    OR f.answer   LIKE '%data:image%'
+                    OR f.cloze    LIKE '%data:image%'"])
+        result (reduce
+                 (fn [acc row]
+                   (let [user-id (:topics/user_id row)
+                         [q nq] (rewrite-inline-images user-id (:flashcards/question row))
+                         [a na] (rewrite-inline-images user-id (:flashcards/answer row))
+                         [c nc] (rewrite-inline-images user-id (:flashcards/cloze row))
+                         total (+ nq na nc)]
+                     (if (zero? total)
+                       acc
+                       (do
+                         ;; Direct UPDATE, deliberately NOT
+                         ;; update-flashcard-versioned! — see Post above.
+                         (jdbc/execute-one! ds
+                           (sql/format {:update :flashcards
+                                        :set {:question q :answer a :cloze c}
+                                        :where [:= :id (:flashcards/id row)]}))
+                         (-> acc (update :cards inc) (update :images + total))))))
+                 {:cards 0 :images 0}
+                 rows)]
+    (when (pos? (:cards result))
+      (tel/log! {:level :info :id ::normalize-inline-card-images :data result}
+        "Normalized inline card images to media references"))
+    result))
 
 ;; ---------------------------------------------------------------------------
 ;; Topic pins — per-topic media references with front/back placement (K1 cap = 2)

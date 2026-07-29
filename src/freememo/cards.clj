@@ -654,7 +654,10 @@
             (str/blank? (:cloze updated-fields)))
       (throw (ex-info "Cloze text cannot be empty" {})))
 
-    (db/update-flashcard! user-id card-id updated-fields)
+    ;; Versioned: logs the superseded rendition in the same transaction.
+    ;; NOT db/update-flashcard! — that one is shared with the Anki pull path,
+    ;; which must not version (plans/card-edit-history.md §2.7).
+    (db/update-flashcard-versioned! user-id card-id updated-fields)
     (log/audit! {:id ::update-card :user-id user-id :action :update
                  :entity :card :entity-id card-id})
     {:success true}
@@ -677,7 +680,7 @@
           settings (merge overlap/default-settings settings)
           ol {:question question :items items :settings settings
               :fields (overlap/expand items settings)}]
-      (db/update-flashcard! user-id card-id {:overlapping ol})
+      (db/update-flashcard-versioned! user-id card-id {:overlapping ol})
       (log/audit! {:id ::update-overlapping-card :user-id user-id :action :update
                    :entity :card :entity-id card-id})
       {:success true})

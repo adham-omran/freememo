@@ -92,11 +92,13 @@
      :add-occlusion    {:label "Add occlusion cards" :class :mutation :palette-hidden true
                         :table #{:flashcards :occlusion_groups} :views #{:card-mutations}}
      :update-occlusion {:label "Update occlusion" :class :mutation :palette-hidden true
-                        :table #{:flashcards :occlusion_groups} :views #{:card-mutations}}
+                        :table #{:flashcards :occlusion_groups :card_versions}
+                        :views #{:card-mutations}}
      :add-score-group    {:label "Add score cards" :class :mutation :palette-hidden true
                           :table #{:flashcards :score_groups :media} :views #{:card-mutations}}
      :update-score-group {:label "Update score card" :class :mutation :palette-hidden true
-                          :table #{:flashcards :score_groups :media} :views #{:card-mutations}}
+                          :table #{:flashcards :score_groups :media :card_versions}
+                          :views #{:card-mutations}}
      :undo-newest      {:label "Undo last action" :class :mutation :bind "meta+shift+z"
                         :table #{:undo_log :flashcards :topics :topic_pins :settings}
                         :views #{}} ; runtime-dynamic: undo/bump-views! by entity type
@@ -200,7 +202,11 @@
     ;; — Boundary-declared mutations (bump! called at their server boundary;
     ;;   not directly invocable, so hidden from the palette) —
     {:edit-card       {:label "Edit card" :class :mutation :palette-hidden true
-                       :table #{:flashcards} :views #{:card-mutations}}
+                       :table #{:flashcards :card_versions} :views #{:card-mutations}}
+     ;; Read-only history viewer. Palette-hidden and :views #{} because it needs
+     ;; a card context that only the open edit modal has, and it writes nothing.
+     :card-history    {:label "Card edit history" :class :query :exec :ui-button
+                       :palette-hidden true :views #{}}
      :delete-card     {:label "Delete card" :class :mutation :palette-hidden true
                        :table #{:flashcards :undo_log} :views #{:card-mutations}}
      :bulk-delete-cards {:label "Delete cards" :class :mutation :palette-hidden true
