@@ -64,13 +64,8 @@
                             (assoc :also-true (mapv fact->row also-true))))
           prompt (cards/load-prompt-template "kg-grade.md")
           gctx {:feature :kg-grade :user-id user-id}
-          ;; one retry on unparseable output, mirroring extraction
-          {:keys [parsed cost]}
-          (try (llm/chat! api-key model-slug prompt payload gctx)
-            (catch clojure.lang.ExceptionInfo e
-              (if (:raw (ex-data e))
-                (llm/chat! api-key model-slug prompt payload gctx)
-                (throw e))))
+          ;; unusable output is retried inside llm/chat!; :cost covers both attempts
+          {:keys [parsed cost]} (llm/chat! api-key model-slug prompt payload gctx)
           verdict (or (normalize-verdict (:verdict parsed))
                       (throw (ex-info "Model returned no usable verdict" {})))
           linked-ids (into #{} (map :id) facts)

@@ -148,15 +148,58 @@
   [raw-text]
   (llm-edn/parse-response raw-text))
 
+(defn- unusable-response-result!
+  "Terminal result for an attempt whose response yielded no usable cards, plus
+   its observability signal.
+
+   A refusal is a content outcome, not a pipeline defect: it logs :info (like
+   ::spend-refused) and stays off the alert-routed :error channel, because
+   retrying it would resend identical input. Everything else reaching here
+   exhausted `attempts` retries and logs :error under ::no-content-exhausted,
+   which the pipeline-failure alert route watches.
+   `unbilled-cost-usd` is the summed spend of every attempt this generation
+   made. A failed generation bills nothing, so that spend is absorbed — both
+   signals carry it, because nothing downstream can recover it from the result.
+   Pre:  `e` was thrown by openrouter/message-content or parse-card-response.
+   Post: {:success false :error msg :error-type kw} — the two error-types are
+         distinct so the toast layer can tell a refusal from a dead end."
+  [e user-id endpoint-tag attempts unbilled-cost-usd]
+  (let [data (ex-data e)
+        refused? (= :freememo.openrouter/refused (:type data))]
+    (if refused?
+      (tel/log! {:level :info :id ::model-refused
+                 :data {:user-id user-id :endpoint endpoint-tag
+                        :refusal (:refusal data)
+                        :finish-reason (:finish-reason data)
+                        :unbilled-cost-usd unbilled-cost-usd}}
+        "Card generation declined by the model")
+      (tel/log! {:level :error :id ::no-content-exhausted
+                 :data (-> data
+                         (select-keys [:type :finish-reason :native-finish-reason
+                                       :choices :api-error :usage])
+                         (assoc :user-id user-id :endpoint endpoint-tag
+                           :attempts attempts
+                           :unbilled-cost-usd unbilled-cost-usd))}
+        "Card generation produced no usable response after max retries"))
+    {:success false
+     :error (humanize-error (ex-message e))
+     :error-type (if refused? :model-refused :unusable-response)}))
+
 (defn- generate-cards*
   "Shared implementation for card generation with up to `max-retries` attempts.
    Validates that the returned card count matches the requested count; on success
    bills the summed OpenRouter usage.cost of all attempts (no charge on final
    failure). endpoint-tag is :cards.basic or :cards.cloze for the ledger.
+
+   One attempt fails three ways, and all three consume the same attempt budget:
+   the response carries no usable content (openrouter/message-content), the
+   content will not parse (parse-card-response), or the card count is wrong.
+   A model refusal is terminal on the first attempt — see
+   openrouter/retryable-cause?.
    Pre:  opts has non-empty :content; :model (or the user's saved model) resolves
          to a card-models entry; the OpenRouter key is configured.
    Post: {:success true :cards v} with (count v) = card-count, else
-         {:success false :error s}."
+         {:success false :error s [:error-type kw]}."
   [{:keys [content context card-count model user-id pre-prompt topic-id goal]} prompt-builder-fn endpoint-tag]
   (let [api-key (settings/get-openrouter-api-key user-id)
         _ (when (empty? api-key) (throw (ex-info "OpenRouter API key not configured" {})))
@@ -182,7 +225,10 @@
                  (str "\n\n# Learning goal\n\n"
                    "The learner is studying this material to: " goal "\n"
                    "Favor cards that serve this goal."))
-        content-text (if has-context? (pr-str {:content content :context context}) content)]
+        content-text (if has-context? (pr-str {:content content :context context}) content)
+        ;; Attempt-invariant: tags the transport signal and the no-content signal
+        ;; with the lane + user, which the card lane alone was omitting.
+        ctx {:feature :cards :user-id user-id}]
     (loop [attempt 1
            cost-acc 0.0]
       (let [t-start (System/nanoTime)
@@ -191,11 +237,15 @@
                     :messages [{:role "system" :content prompt}
                                {:role "user" :content content-text}]
                     :reasoning_effort reasoning
-                    :verbosity verbosity})
+                    :verbosity verbosity}
+                   ctx)
             duration-ms (long (/ (- (System/nanoTime) t-start) 1000000))
             usage (:usage body)
             cost-usd (:cost usage)
-            raw-text (-> body :choices first :message :content)
+            ;; Accumulated BEFORE extraction/parse: a discarded attempt still
+            ;; cost money, and §5.4.5 bills the sum of a successful generation's
+            ;; attempts.
+            cost-acc' (+ cost-acc (double (or cost-usd 0)))
             _ (tel/log! {:level :info :id ::cards-completion
                          :data {:user-id user-id
                                 :model (:id entry)
@@ -205,12 +255,26 @@
                                 :completion-tokens (:completion_tokens usage)
                                 :cost-usd cost-usd
                                 :duration-ms duration-ms
+                                :finish-reason (-> body :choices first :finish_reason)
                                 :attempt attempt}}
                 "Card generation completion")
-            cards (parse-card-response raw-text)
-            actual-count (count cards)
-            cost-acc' (+ cost-acc (double (or cost-usd 0)))]
+            attempt-result (try {:cards (parse-card-response
+                                          (openrouter/message-content body ctx))}
+                             (catch clojure.lang.ExceptionInfo e {:failure e}))
+            failure (:failure attempt-result)
+            cards (:cards attempt-result)
+            actual-count (count cards)]
         (cond
+          (and failure (openrouter/retryable-cause? failure) (< attempt max-retries))
+          (do (tel/log! {:level :warn :id ::no-content-retry
+                         :data {:attempt attempt :user-id user-id
+                                :cause (:type (ex-data failure))}}
+                "No usable response, retrying")
+            (recur (inc attempt) cost-acc'))
+
+          failure
+          (unusable-response-result! failure user-id endpoint-tag attempt cost-acc')
+
           (= actual-count card-count)
           ;; Success — bill the summed cost of all attempts (§5.4.5).
           ;; record-cost-charge! is total: a billing failure logs
@@ -222,8 +286,11 @@
             {:success true :cards cards :cost-credits charged})
 
           (>= attempt max-retries)
+          ;; Also absorbed spend — same discard as unusable-response-result!,
+          ;; reported the same way so the two terminal branches agree.
           (do (tel/log! {:level :error :id ::generate-cards-count-mismatch
-                         :data {:expected card-count :got actual-count :attempts attempt}}
+                         :data {:expected card-count :got actual-count :attempts attempt
+                                :user-id user-id :unbilled-cost-usd cost-acc'}}
                 "Count mismatch after max retries")
             {:success false
              :error (str "LLM returned " actual-count " cards instead of "
