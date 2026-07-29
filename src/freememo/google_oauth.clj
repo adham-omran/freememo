@@ -98,6 +98,10 @@
       (tel/log! {:level :info :id ::user-signup
                  :data {:user-id user-id :email email :username username}}
         "New user signup"))
+    ;; Google's `name` claim is the only source of a human-readable name; store
+    ;; it on every login but never over an existing value, so a hand-curated
+    ;; display_name survives.
+    (db/set-display-name-if-absent! user-id display-name)
     (db/insert-user-event! user-id "login_google")
     {:user-id  user-id
      :username (or (:users/username row) username)
