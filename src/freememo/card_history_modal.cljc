@@ -38,6 +38,14 @@
               :occlusion-group (db/get-occlusion-group-versions user-id id)))
      :cljs []))
 
+(defn versions-truncated?
+  "True when the read hit db/max-versions-read, meaning older versions exist
+   that this view is not showing. Retention is unbounded, so the cap must be
+   stated in the UI rather than silently trimming the list."
+  [versions]
+  #?(:clj (= (count versions) db/max-versions-read)
+     :cljs false))
+
 ;; ── Rendition rendering ────────────────────────────────────────────────────
 
 (defn occlusion-rendition-html
@@ -145,8 +153,14 @@
       ;; materialize the whole log at the call boundary (CLAUDE.md).
       (let [versions (e/server
                        (let [rev (e/watch (us/get-atom user-id :card-mutations))]
-                         (get-versions* rev user-id scope)))
-            n (e/server (count versions))]
+                         ;; e/Offload, not a bare call: two DB round-trips plus
+                         ;; JSONB parsing would block this session's whole
+                         ;; reactive graph, and this re-runs on every
+                         ;; :card-mutations bump. Latest-wins is what we want —
+                         ;; a newer rev supersedes an in-flight read.
+                         (e/Offload #(get-versions* rev user-id scope))))
+            n (e/server (count versions))
+            truncated? (e/server (versions-truncated? versions))]
         (dom/div
           (dom/props {:class "modal-backdrop" :tabindex "-1"})
           (modal/ModalEscape (fn [] (reset! !open? false)) "Card edit history")
@@ -169,7 +183,8 @@
                 (dom/div
                   (dom/props {:style {:font-size "13px" :margin-top "2px"
                                       :color "var(--color-text-secondary)"}})
-                  (dom/text n " previous rendition" (when (not= n 1) "s"))))
+                  (dom/text n " previous rendition" (when (not= n 1) "s")
+                    (when truncated? " (most recent — older ones not shown)"))))
               (dom/button
                 (dom/props {:aria-label "Close" :class "btn btn-secondary"})
                 (dom/text "Close")
@@ -183,7 +198,16 @@
                   (dom/text "This card has not been edited yet. Its first edit will record what it looked like beforehand."))
                 (dom/ul
                   (dom/props {:style {:margin "0" :padding "0"}})
+                  ;; Keyed by index, not by version id: the client never holds
+                  ;; the id list — each row pulls its own row across the wire, so
+                  ;; index is the only key available without shipping the whole
+                  ;; log first. Ordering is newest-first, so a new version shifts
+                  ;; every slot's content rather than mounting one row. That is
+                  ;; the same slot-recycling trade the virtual-scroll sites make,
+                  ;; and it is free at the ten-or-so versions this list holds.
                   (e/for [i (e/diff-by identity (vec (range n)))]
                     (let [version (e/server (nth versions i nil))]
+                      ;; nil during the frame where n has arrived but the row
+                      ;; has not, and for any index past a shrinking log.
                       (when version
                         (VersionEntry version (inc i))))))))))))))

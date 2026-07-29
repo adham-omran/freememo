@@ -3088,24 +3088,29 @@
   "Flashcard columns that together constitute a card-scoped rendition."
   [:question :answer :cloze :overlapping])
 
-(defn- jsonb-column? [k]
-  (contains? #{:overlapping :io_fields :geometry} k))
+(defn- any-changed?
+  "True when any [stored, incoming] pair differs — the single change-detection
+   rule for every versioned write path (card fields, occlusion group, score
+   group). Stored values may be PGobjects; they are parsed first, so JSONB
+   compares by value and key order is not significant. Non-PGobject values pass
+   through pgobject->clj untouched, so TEXT and integer columns use the same
+   path.
 
-(defn- content-changed?
-  "True when applying `fields` to `old` would change any value.
-   Pre:  every key of `fields` resolves in `old` under `qualifier`.
-   Post: JSONB values compare by parsed value, so key order is not
-         significant; numeric widening (10 vs 10.0) can read as a change.
-   A false positive costs one redundant version row; a false negative would
-   lose history, so the comparison errs toward writing."
-  [old qualifier fields]
-  (boolean
-    (some (fn [[k v]]
-            (let [old-v (get old (keyword qualifier (name k)))]
-              (if (jsonb-column? k)
-                (not= (pgobject->clj old-v) v)
-                (not= old-v v))))
-      fields)))
+   Pre:  `pairs` is a seq of 2-element [stored incoming] tuples.
+   Post: numeric widening (10 vs 10.0) reads as a change. That direction is
+         deliberate — a false positive costs one redundant version row, a false
+         negative would silently lose history."
+  [pairs]
+  (boolean (some (fn [[stored incoming]] (not= (pgobject->clj stored) incoming))
+             pairs)))
+
+(defn- card-content-changed?
+  "any-changed? for a flashcard row: resolves each key of `fields` against
+   `old`'s namespace-qualified keys.
+   Pre: `fields` keys ⊆ card-content-columns (asserted by the caller)."
+  [old fields]
+  (any-changed?
+    (map (fn [[k v]] [(get old (keyword "flashcards" (name k))) v]) fields)))
 
 (defn- insert-card-version!
   "Insert one card_versions row. `payload` carries the scope keys and the
@@ -3120,15 +3125,22 @@
   "Log the superseded rendition, then apply `fields` to flashcard `card-id`.
    The versioning counterpart of update-flashcard!, for user-initiated saves.
 
-   Pre:  `fields` keys ⊆ card-content-columns; :overlapping is a plain map.
+   Pre:  `fields` keys ⊆ card-content-columns (ASSERTED — a wider key would be
+         compared against a column this fn never selected, so it would read as
+         changed on every save and its value would be written unwrapped);
+         :overlapping is a plain map.
    Post: when `fields` would change at least one value, exactly one
          card_versions row holds the FULL pre-edit rendition (all four content
          columns, verbatim), and the card holds the new values — atomically.
-         An unchanged save writes no version row and still bumps updated_at.
+         An unchanged save writes no version row and still bumps updated_at, so
+         updated_at does NOT imply the card has history.
    Inv:  card_versions never holds the current rendition.
    No-op (0 rows, no version) when the card is not `user-id`'s.
    Returns {:updated? bool :versioned? bool}."
   [user-id card-id fields]
+  (assert (every? (set card-content-columns) (keys fields))
+    (str "update-flashcard-versioned! got non-content keys "
+      (vec (remove (set card-content-columns) (keys fields)))))
   (jdbc/with-transaction [tx ds]
     (if-let [old (jdbc/execute-one! tx
                    ["SELECT id, kind, root_topic_id, question, answer, cloze, overlapping
@@ -3136,7 +3148,7 @@
                      WHERE id = ? AND root_topic_id IN (SELECT id FROM topics WHERE user_id = ?)
                      FOR UPDATE"
                     card-id user-id])]
-      (let [changed? (content-changed? old "flashcards" fields)]
+      (let [changed? (card-content-changed? old fields)]
         (when changed?
           (insert-card-version! tx
             (into {:root_topic_id (:flashcards/root_topic_id old)
@@ -3153,14 +3165,23 @@
         {:updated? true :versioned? changed?})
       {:updated? false :versioned? false})))
 
+(def max-versions-read
+  "Read cap for one history view. Retention is unbounded by design, so without
+   a cap a pathologically-edited card would materialize its entire log server-
+   side. Callers MUST surface truncation when a result hits this count — a
+   silent cap would read as 'this is the whole history'."
+  500)
+
 (defn- versions-for-scopes
-  "Rows for the given scope predicates, newest first.
+  "Rows for the given scope predicates, newest first, capped at
+   max-versions-read.
    Pre:  `scopes` is a non-empty seq of HoneySQL predicates over
          (scope_type, scope_id); ownership is ALREADY enforced by the caller —
          this fn does no authorization.
    Post: rows are plain data with UNQUALIFIED keys and JSONB parsed
          (Electric-wire safe — no PGobject, and no OffsetDateTime: the
-         timestamp crosses only as the preformatted :superseded_label)."
+         timestamp crosses only as the preformatted :superseded_label).
+         A result of exactly max-versions-read means older versions exist."
   [scopes]
   (mapv (fn [row]
           (-> (update-keys row (comp keyword name))
@@ -3175,7 +3196,8 @@
                             :score_direction :score_start_ms :score_end_ms]
                    :from [:card_versions]
                    :where (into [:or] scopes)
-                   :order-by [[:superseded_at :desc] [:id :desc]]}))))
+                   :order-by [[:superseded_at :desc] [:id :desc]]
+                   :limit max-versions-read}))))
 
 (defn get-card-versions
   "Superseded renditions visible for flashcard `card-id`, newest first.
@@ -3373,9 +3395,16 @@
       (when-not group
         (throw (ex-info "Occlusion group not found" {:group-id group-id})))
       (let [next0 (:occlusion_groups/next_ordinal group)
+            ;; ORDER BY mask_ordinal: `template` below supplies the io_fields
+            ;; that get LOGGED as history and drives the change comparison, and
+            ;; an Anki pull can diverge io_fields per row
+            ;; (merge-flashcard-io-fields!). Unordered, which row Postgres
+            ;; returned first would decide what history records. Lowest ordinal
+            ;; matches get-group-for-edit's documented choice.
             existing (jdbc/execute! tx
                        ["SELECT id, mask_ordinal, anki_note_id, topic_id, root_topic_id, io_fields
-                         FROM flashcards WHERE occlusion_group_id = ?" group-id])
+                         FROM flashcards WHERE occlusion_group_id = ?
+                         ORDER BY mask_ordinal ASC" group-id])
             existing-ordinals (set (map :flashcards/mask_ordinal existing))
             ;; Re-apply deletions that landed since the modal loaded: a rect
             ;; whose ordinal has no row belongs to a card someone deleted.
@@ -3395,9 +3424,10 @@
             ;; below and card_versions is scoped to the GROUP, not the row.
             geometry' (assoc geometry :rects rects)
             io-fields' (or io-fields {})
-            group-changed? (or (not= (pgobject->clj (:occlusion_groups/geometry group)) geometry')
-                             (not= (:occlusion_groups/mode group) mode)
-                             (not= (pgobject->clj (:flashcards/io_fields template)) io-fields'))]
+            group-changed? (any-changed?
+                             [[(:occlusion_groups/geometry group) geometry']
+                              [(:occlusion_groups/mode group) mode]
+                              [(:flashcards/io_fields template) io-fields']])]
         (when (seq stale-rects)
           (tel/log! {:level :warn :id ::stale-occlusion-rects
                      :data {:group-id group-id
@@ -3585,10 +3615,11 @@
             owner (jdbc/execute-one! tx
                     ["SELECT root_topic_id FROM flashcards WHERE score_group_id = ? LIMIT 1"
                      group-id])
-            group-changed? (or (not= (pgobject->clj (:score_groups/geometry old)) geometry')
-                             (not= (:score_groups/start_ms old) start-ms)
-                             (not= (:score_groups/end_ms old) end-ms)
-                             (not= (:score_groups/clip_media_id old) clip-media-id))]
+            group-changed? (any-changed?
+                             [[(:score_groups/geometry old) geometry']
+                              [(:score_groups/start_ms old) start-ms]
+                              [(:score_groups/end_ms old) end-ms]
+                              [(:score_groups/clip_media_id old) clip-media-id]])]
         (when (and group-changed? owner)
           (insert-card-version! tx
             {:root_topic_id (:flashcards/root_topic_id owner)
@@ -4192,14 +4223,23 @@
 
 (defn upsert-media!
   "Insert media or return existing id if same bytes already stored for this user.
-   Charges quota only on actual insert."
-  [{:keys [user-id kind ^bytes bytes mime-type source-url]}]
+   Charges quota only on actual insert.
+
+   `:meter-quota?` defaults to true and MUST stay true for anything accepting
+   new bytes from a user. Pass false only when the bytes are already stored
+   elsewhere in this user's own rows and are merely being relocated — metering
+   those would charge for storage the user already holds, and
+   quota/check-and-bump! THROWS on cap violation, which would abort the
+   relocation. Sole such caller: normalize-inline-card-images!."
+  [{:keys [user-id kind ^bytes bytes mime-type source-url meter-quota?]
+    :or {meter-quota? true}}]
   (let [sha256 (bytes-sha256 bytes)
         byte-size (alength bytes)]
     (if-let [existing (find-media-by-sha user-id sha256)]
       (:media/id existing)
       (jdbc/with-transaction [tx ds]
-        (quota/check-and-bump! tx user-id byte-size)
+        (when meter-quota?
+          (quota/check-and-bump! tx user-id byte-size))
         (-> (jdbc/execute-one! tx
               (sql/format {:insert-into :media
                            :values [{:user_id user-id
@@ -4231,7 +4271,10 @@
                     (let [bytes (.decode (java.util.Base64/getMimeDecoder) ^String payload)
                           media-id (upsert-media! {:user-id user-id :kind "image"
                                                    :bytes bytes
-                                                   :mime-type (str "image/" subtype)})]
+                                                   :mime-type (str "image/" subtype)
+                                                   ;; Relocation, not an upload —
+                                                   ;; see upsert-media!.
+                                                   :meter-quota? false})]
                       (vswap! n inc)
                       (str "/api/media/" media-id))))]
       [html' @n])))
@@ -4248,12 +4291,17 @@
    version anything.
 
    Pre : none — safe on an already-clean database.
-   Post: no flashcards row contains 'data:image'; each payload is a media row
-         referenced as /api/media/<id>. updated_at is deliberately NOT touched:
-         this is not a user edit. No card_versions row is written — the
-         pre-normalization rendition is deliberately unversioned.
-   Inv : idempotent — a second run matches no rows and writes nothing.
-   Returns {:cards n :images n}."
+   Post: every card this run converted has no 'data:image' left, and each
+         payload is a media row referenced as /api/media/<id>. updated_at is
+         deliberately NOT touched: this is not a user edit. No card_versions row
+         is written — the pre-normalization rendition is deliberately
+         unversioned.
+   Inv : idempotent — a second run matches converted cards no more.
+   Inv : NEVER throws. It runs inside setup-schema, so an escaping exception
+         would stop the server from booting; a card that fails to convert is
+         logged and skipped, leaving it exactly as it was. Its versions will
+         duplicate its payload, which is a storage cost, not a correctness bug.
+   Returns {:cards n :images n :failed n}."
   []
   (let [rows (jdbc/execute! ds
                ["SELECT f.id, f.question, f.answer, f.cloze, t.user_id
@@ -4263,25 +4311,33 @@
                     OR f.cloze    LIKE '%data:image%'"])
         result (reduce
                  (fn [acc row]
-                   (let [user-id (:topics/user_id row)
-                         [q nq] (rewrite-inline-images user-id (:flashcards/question row))
-                         [a na] (rewrite-inline-images user-id (:flashcards/answer row))
-                         [c nc] (rewrite-inline-images user-id (:flashcards/cloze row))
-                         total (+ nq na nc)]
-                     (if (zero? total)
-                       acc
-                       (do
-                         ;; Direct UPDATE, deliberately NOT
-                         ;; update-flashcard-versioned! — see Post above.
-                         (jdbc/execute-one! ds
-                           (sql/format {:update :flashcards
-                                        :set {:question q :answer a :cloze c}
-                                        :where [:= :id (:flashcards/id row)]}))
-                         (-> acc (update :cards inc) (update :images + total))))))
-                 {:cards 0 :images 0}
+                   ;; Per-card isolation: malformed base64, a missing user, or a
+                   ;; DB error must cost one card, not the boot.
+                   (try
+                     (let [user-id (:topics/user_id row)
+                           [q nq] (rewrite-inline-images user-id (:flashcards/question row))
+                           [a na] (rewrite-inline-images user-id (:flashcards/answer row))
+                           [c nc] (rewrite-inline-images user-id (:flashcards/cloze row))
+                           total (+ nq na nc)]
+                       (if (zero? total)
+                         acc
+                         (do
+                           ;; Direct UPDATE, deliberately NOT
+                           ;; update-flashcard-versioned! — see Post above.
+                           (jdbc/execute-one! ds
+                             (sql/format {:update :flashcards
+                                          :set {:question q :answer a :cloze c}
+                                          :where [:= :id (:flashcards/id row)]}))
+                           (-> acc (update :cards inc) (update :images + total)))))
+                     (catch Exception e
+                       (tel/error! {:id ::normalize-inline-card-images
+                                    :data {:card-id (:flashcards/id row)}} e)
+                       (update acc :failed inc))))
+                 {:cards 0 :images 0 :failed 0}
                  rows)]
-    (when (pos? (:cards result))
-      (tel/log! {:level :info :id ::normalize-inline-card-images :data result}
+    (when (or (pos? (:cards result)) (pos? (:failed result)))
+      (tel/log! {:level (if (pos? (:failed result)) :warn :info)
+                 :id ::normalize-inline-card-images :data result}
         "Normalized inline card images to media references"))
     result))
 
