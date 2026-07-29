@@ -172,8 +172,11 @@
                       :bind "meta+shift+a" :when #{:viewer} :views #{}}
      :export         {:label "Export cards…" :class :query :exec :ui-button
                       :when #{:viewer} :views #{}}
+     ;; :card_versions is reached by cascade, not by a direct write — deleting
+     ;; the topics rows drops the version log that FKs them.
      :delete-document {:label "Delete document…" :class :mutation :exec :ui-button
-                       :when #{:viewer} :table #{:topics :flashcards :undo_log}
+                       :when #{:viewer}
+                       :table #{:topics :flashcards :undo_log :card_versions}
                        :views #{}} ; runtime-conditional: staged-delete/stage-deletion!
      :anki-sync      {:label "Push to Anki…" :class :mutation :exec :ui-button
                       :bind "meta+shift+x" :when #{:viewer}
@@ -203,9 +206,12 @@
     ;;   not directly invocable, so hidden from the palette) —
     {:edit-card       {:label "Edit card" :class :mutation :palette-hidden true
                        :table #{:flashcards :card_versions} :views #{:card-mutations}}
-     ;; Read-only history viewer. Palette-hidden and :views #{} because it needs
-     ;; a card context that only the open edit modal has, and it writes nothing.
-     :card-history    {:label "Card edit history" :class :query :exec :ui-button
+     ;; Read-only history viewer: a client-local modal toggle, so :exec :client
+     ;; (NOT :ui-button — that shape obliges the button to publish an invoke
+     ;; handle via command-bus/publish-invoker!, and this one cannot, because it
+     ;; needs the card context that only the open edit modal has).
+     ;; Palette-hidden for the same reason; :views #{} because it writes nothing.
+     :card-history    {:label "Card edit history" :class :query :exec :client
                        :palette-hidden true :views #{}}
      :delete-card     {:label "Delete card" :class :mutation :palette-hidden true
                        :table #{:flashcards :undo_log} :views #{:card-mutations}}
