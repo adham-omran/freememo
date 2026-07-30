@@ -17,7 +17,8 @@
    #?(:clj [freememo.kg-graph :as kgg])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [taoensso.telemere :as tel])
-   #?(:cljs [freememo.graph-render :as render])))
+   #?(:cljs [freememo.graph-render :as render])
+   #?(:cljs [freememo.vendor-libs :as vendor])))
 
 ;; ---------------------------------------------------------------------------
 ;; Server query — whole defn under #?(:clj …); called only inside e/server.
@@ -56,7 +57,11 @@
    filter controls in the reactive body can reach it)."
   [!ctx container payload on-select]
   #?(:cljs (js/setTimeout
-             (fn [] (reset! !ctx (render/init! container payload on-select)))
+             (fn []
+               ;; graphology + sigma carry no <script> tag — vendor/with! fetches
+               ;; them the first time the Graph tab is opened.
+               (vendor/with! :graph
+                 (fn [] (reset! !ctx (render/init! container payload on-select)))))
              0)
      :clj nil))
 

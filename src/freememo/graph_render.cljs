@@ -7,10 +7,12 @@
    Visibility filters and hover/click highlight are pure sigma reducers reading
    one mutable ui-atom; mutate it, then (.refresh renderer) to repaint.
 
-   sigma + graphology load as CDN UMD globals (window.Sigma / window.graphology,
-   added to index.*.html), matching Konva/Quill — the prod Docker build has no
-   npm step, so npm :require is not an option here. JS objects are ^js-hinted so
-   :advanced does not rename their (extern-less) methods.
+   sigma + graphology are vendored UMD globals (window.Sigma / window.graphology)
+   with NO <script> tag: freememo.vendor-libs injects them the first time the
+   Graph tab opens (:graph group, graphology first — sigma's Graph model comes
+   from it). npm :require is still not an option: the prod Docker build has no
+   npm step. JS objects are ^js-hinted so :advanced does not rename their
+   (extern-less) methods.
 
    ctx = {:renderer <Sigma> :graph <graphology.Graph> :ui <atom>}."
   (:require [clojure.string :as str]))

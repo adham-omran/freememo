@@ -4,7 +4,8 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [taoensso.telemere :as tel]
-   [freememo.pdf-cache :as pdf-cache]))
+   [freememo.pdf-cache :as pdf-cache]
+   #?(:cljs [freememo.vendor-libs :as vendor])))
 
 ;; Global viewer state (similar to electric-fiddle reference)
 (defonce !viewer-state (atom nil))
@@ -165,52 +166,65 @@
            (.then use-pdf)
            (.catch (fn [err] (tel/log! {:level :error :id ::pdf-load :error err} "PDF load error"))))))))
 
+#?(:cljs
+   (defn- create-viewer!
+     "Body of init-viewer!, split out so the load gate stays a one-liner.
+      Pre: window.pdfjsLib and window.pdfjsViewer exist (init-viewer! ensures it)."
+     [container viewer-div pdf-url on-ready]
+     ;; Increment generation FIRST — plain defn, so swap! always increments.
+     ;; Any previous init's async callbacks see a stale gen and skip.
+     (let [my-gen (swap! !init-gen inc)]
+       (tel/log! {:level :debug :id ::init :data {:gen my-gen :url pdf-url}} "init-viewer!")
+       (destroy-viewer!)
+       (set! (.-innerHTML viewer-div) "")
+       (set! (.-scrollTop container) 0)
+       (let [^js viewer-ns (.-pdfjsViewer js/window)
+             ^js event-bus (new (.-EventBus viewer-ns))
+             ^js link-service (new (.-PDFLinkService viewer-ns) (clj->js {:eventBus event-bus}))
+             ^js viewer (new (.-PDFViewer viewer-ns)
+                          (clj->js {:container container
+                                    :viewer viewer-div
+                                    :eventBus event-bus
+                                    :linkService link-service
+                                    :textLayerMode 2
+                                    :annotationMode 2}))]
+         (.setViewer link-service viewer)
+         (reset! !viewer-state {:viewer viewer
+                                :event-bus event-bus
+                                :link-service link-service})
+         ;; Zoom sync (once per viewer — event-bus lives for the viewer's life,
+         ;; reused across set-document! swaps, so no listener stacking). Mirrors
+         ;; PDF.js scale into !scale/!scale-mode for the toolbar to e/watch.
+         (.on event-bus "scalechanging"
+           (fn [_e]
+             (reset! !scale (.-currentScale viewer))
+             (reset! !scale-mode (.-currentScaleValue viewer))))
+         ;; ctrl+wheel zoom (native-viewer parity). passive:false so we can
+         ;; preventDefault the browser's page-zoom. zoom! keeps the page anchor.
+         (.addEventListener container "wheel"
+           (fn [^js e]
+             (when (.-ctrlKey e)
+               (.preventDefault e)
+               (zoom! (if (pos? (.-deltaY e)) 0.9 1.1))))
+           #js {:passive false})
+         (start-load! pdf-url my-gen on-ready)))))
+
 (defn init-viewer!
   "Create the PDF.js viewer ONCE in the given container and load pdf-url.
    Destroys any previous viewer first. For swapping the document on an
    already-created viewer (no recreate), use set-document! instead.
-   Calls on-ready when the PDF is loaded with (pdf viewer) args."
+   Calls on-ready when the PDF is loaded with (pdf viewer) args.
+
+   pdf.js is vendored WITHOUT a <script> tag, so this awaits
+   freememo.vendor-libs/ensure! :pdf-js first — that promise also sets
+   GlobalWorkerOptions.workerSrc. The viewer therefore appears one turn after the
+   call; set-document! needs no such gate, since a non-nil !viewer-state already
+   implies pdf.js is present."
   [container viewer-div pdf-url on-ready]
   #?(:clj nil
-     :cljs
-     (when (and container viewer-div (.-pdfjsLib js/window) (.-pdfjsViewer js/window))
-       ;; Increment generation FIRST — plain defn, so swap! always increments.
-       ;; Any previous init's async callbacks see a stale gen and skip.
-       (let [my-gen (swap! !init-gen inc)]
-         (tel/log! {:level :debug :id ::init :data {:gen my-gen :url pdf-url}} "init-viewer!")
-         (destroy-viewer!)
-         (set! (.-innerHTML viewer-div) "")
-         (set! (.-scrollTop container) 0)
-         (let [^js viewer-ns (.-pdfjsViewer js/window)
-               ^js event-bus (new (.-EventBus viewer-ns))
-               ^js link-service (new (.-PDFLinkService viewer-ns) (clj->js {:eventBus event-bus}))
-               ^js viewer (new (.-PDFViewer viewer-ns)
-                            (clj->js {:container container
-                                      :viewer viewer-div
-                                      :eventBus event-bus
-                                      :linkService link-service
-                                      :textLayerMode 2
-                                      :annotationMode 2}))]
-           (.setViewer link-service viewer)
-           (reset! !viewer-state {:viewer viewer
-                                  :event-bus event-bus
-                                  :link-service link-service})
-           ;; Zoom sync (once per viewer — event-bus lives for the viewer's life,
-           ;; reused across set-document! swaps, so no listener stacking). Mirrors
-           ;; PDF.js scale into !scale/!scale-mode for the toolbar to e/watch.
-           (.on event-bus "scalechanging"
-             (fn [_e]
-               (reset! !scale (.-currentScale viewer))
-               (reset! !scale-mode (.-currentScaleValue viewer))))
-           ;; ctrl+wheel zoom (native-viewer parity). passive:false so we can
-           ;; preventDefault the browser's page-zoom. zoom! keeps the page anchor.
-           (.addEventListener container "wheel"
-             (fn [^js e]
-               (when (.-ctrlKey e)
-                 (.preventDefault e)
-                 (zoom! (if (pos? (.-deltaY e)) 0.9 1.1))))
-             #js {:passive false})
-           (start-load! pdf-url my-gen on-ready))))))
+     :cljs (when (and container viewer-div)
+             (vendor/with! :pdf-js
+               #(create-viewer! container viewer-div pdf-url on-ready)))))
 
 (defn set-document!
   "Swap the displayed PDF on the EXISTING viewer (no destroy/recreate). Used when

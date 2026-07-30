@@ -10,3 +10,7 @@ logs
 .clj-kondo
 .lsp
 .DS_Store
+# Vendored client assets are fetched inside the build stage, so the build
+# context must NOT carry a local copy — otherwise a broken fetch is masked
+# locally and only fails in CI.
+resources/public/freememo/vendor

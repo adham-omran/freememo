@@ -22,6 +22,7 @@
    [freememo.card-components :refer [try-delete-anki-notes!]]
    [freememo.occlusion-ordinals :as ord]
    #?(:cljs [freememo.occlusion-editor :as occ-editor])
+   #?(:cljs [freememo.vendor-libs :as vendor])
    #?(:clj [freememo.occlusion :as occ])
    [freememo.optimistic :as opt]
    #?(:clj [freememo.settings :as settings])))
@@ -54,15 +55,19 @@
    Post: the editor writes tool switches back through on-tool-change, making
          !tool the single source of truth."
   [!handle container image-media-id rects !tool on-change on-tool-change]
+  ;; setTimeout 0 lets Electric finish mounting the container; vendor/with!
+  ;; then waits for Konva, which carries no <script> tag of its own.
   #?(:cljs (do (js/setTimeout
                  (fn []
-                   (reset! !handle
-                     (occ-editor/init! {:container container
-                                        :image-url (str "/api/media/" image-media-id)
-                                        :rects rects
-                                        :tool @!tool
-                                        :on-change on-change
-                                        :on-tool-change on-tool-change})))
+                   (vendor/with! :konva
+                     (fn []
+                       (reset! !handle
+                         (occ-editor/init! {:container container
+                                            :image-url (str "/api/media/" image-media-id)
+                                            :rects rects
+                                            :tool @!tool
+                                            :on-change on-change
+                                            :on-tool-change on-tool-change})))))
                  0)
              nil)
      :clj nil))

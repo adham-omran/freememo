@@ -129,9 +129,35 @@
      []
      (dev-stack/call-on-big-stack #(require 'freememo.main 'dev-metadata))))
 
+#?(:clj
+   (defn assert-vendor-assets!
+     "Refuse to boot when the vendored client assets are absent.
+
+      They are NOT in git — `clj -X:build vendor/fetch!` downloads them into
+      resources/public/freememo/vendor/ and hash-verifies them. This server serves
+      that directory straight off the classpath, so a fresh clone without it looks
+      healthy while Quill, PDF.js, KaTeX and the rest 404: the editor mounts
+      inert, and nothing appears in the server log. Failing here is louder.
+
+      Pre:  none.
+      Post: returns nil when a sentinel asset exists; throws ex-info naming the
+            fetch command otherwise. Deliberately an existence check, not a hash
+            check — integrity is the build tool's job, and this must stay cheap.
+      Inv:  never fetches anything. A server start that silently reached out to
+            cdnjs would defeat the point of vendoring."
+     []
+     (let [sentinel (clojure.java.io/file "resources/public/freememo/vendor"
+                      "quill@2.0.3" "quill.js")]
+       (when-not (.exists sentinel)
+         (throw (ex-info (str "Vendored client assets are missing.\n"
+                           "  Run once:  clj -X:build vendor/fetch!\n"
+                           "  Expected:  " (.getPath sentinel))
+                  {:type ::missing-vendor-assets :expected (.getPath sentinel)}))))))
+
 #?(:clj ; server entrypoint
    (defn -main [& args]
      (logging/init!)
+     (assert-vendor-assets!) ; before the expensive Electric compile
      (log/info "Starting Electric compiler and server...")
      (load-app-namespaces!)
      (def electric-boot (requiring-resolve 'freememo.main/electric-boot))

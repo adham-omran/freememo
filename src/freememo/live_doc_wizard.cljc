@@ -21,7 +21,8 @@
    [freememo.doc-context :as dctx]
    [freememo.modal-shell :as modal]
    [freememo.client-errors :as ce]
-   #?(:cljs [freememo.live-doc-image-editor :as img-ed])))
+   #?(:cljs [freememo.live-doc-image-editor :as img-ed])
+   #?(:cljs [freememo.vendor-libs :as vendor])))
 
 (def ^:private heic-name-rx #"(?i)\.hei[cf]$")
 (def ^:private heic-type-rx #"(?i)image/hei[cf]")
@@ -45,13 +46,17 @@
              (-> (img-ed/load-image (:url entry))
                (.then (fn [img]
                         (when (.-isConnected container)
+                          ;; load-image / oriented-canvas are plain canvas 2D;
+                          ;; only init! reaches Konva, so the gate sits here.
                           (let [oriented (img-ed/oriented-canvas img (:rotation entry))]
-                            (reset! !handle
-                              (img-ed/init!
-                                {:container container
-                                 :canvas oriented
-                                 :crop (:crop entry)
-                                 :on-change (fn [c] (set-crop! active-id c))}))))))
+                            (vendor/with! :konva
+                              (fn []
+                                (reset! !handle
+                                  (img-ed/init!
+                                    {:container container
+                                     :canvas oriented
+                                     :crop (:crop entry)
+                                     :on-change (fn [c] (set-crop! active-id c))}))))))))
                (.catch (fn [e] (js/console.error "[live-doc-wizard] editor load failed:" e))))))
          nil)
      :clj nil))

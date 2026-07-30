@@ -19,6 +19,7 @@
    [freememo.client-errors :as ce]
    #?(:cljs [freememo.score-wavesurfer :as ws])
    #?(:cljs [freememo.score-audio :as score-audio])
+   #?(:cljs [freememo.vendor-libs :as vendor])
    #?(:cljs [freememo.score-pdf :as score-pdf])
    #?(:clj [freememo.score :as score])
    [freememo.optimistic :as opt]))
@@ -42,10 +43,12 @@
   #?(:cljs (do (js/setTimeout
                  (fn []
                    (when (.-isConnected container)
-                     (reset! !handle
-                       (ws/init! {:container container
-                                  :url audio-url
-                                  :on-region on-region}))))
+                     (vendor/with! :wavesurfer
+                       (fn []
+                         (reset! !handle
+                           (ws/init! {:container container
+                                      :url audio-url
+                                      :on-region on-region}))))))
                  0)
              nil)
      :clj nil))

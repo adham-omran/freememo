@@ -84,8 +84,9 @@ Why a plugin: Zotero's built-in API sends no CORS headers, returns `file://` red
 | Framework | Electric v3 — reactive full-stack Clojure |
 | Database | PostgreSQL 16 (next.jdbc + HikariCP + HoneySQL) |
 | Build | deps.edn + shadow-cljs |
-| PDF rendering | PDF.js 3.11.174 (CDN) |
-| Rich text | Quill 2.0.3 (CDN) |
+| PDF rendering | PDF.js 3.11.174 (self-hosted) |
+| Rich text | Quill 2.0.3 (self-hosted) |
+| Client libraries | Vendored under `resources/public/freememo/vendor/` — no CDN, works offline |
 | Graph layout | Graphviz `sfdp` (server-side, Knowledge Graph view) |
 | Logging | Telemere (structured, CLJ + CLJS) |
 | AI | OpenRouter (card gen default GPT-5.1, OCR default Gemini 3 Flash; multi-model catalog) |
@@ -236,6 +237,12 @@ Alternative to the three `GOOGLE_*` envs: drop the OAuth client JSON downloaded 
 
 Self-host on Linux or macOS with Docker — username/password login, no Google account required.
 Everything (Postgres + app) is defined in a single file, `docker-compose.selfhost.yml`.
+
+> **The image build needs outbound internet.** Third-party client libraries
+> (PDF.js, Quill, Konva, KaTeX, …) are not committed; the build downloads them and
+> verifies every byte against `vendor-lock.sha256`. The **running** container needs
+> no internet for them — they are baked into the image, so a LAN-only or
+> air-gapped deployment works once built.
 
 **1. Configure `.env`:**
 
