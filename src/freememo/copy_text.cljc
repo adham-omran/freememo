@@ -15,6 +15,7 @@
    [freememo.commands :as commands]
    [freememo.command-bus :as bus]
    [freememo.loading :as loading]
+   [freememo.math :as math]
    [freememo.pdf-viewer :as pdfviewer]
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])
@@ -117,7 +118,7 @@
         (dom/props {:style {:padding "10px" :overflow "auto" :max-height "40vh" :font-size "13px"}})
         (cond
           (nil? result) (dom/text "Extracting…")
-          (:success result) (set! (.-innerHTML dom/node) (:text result))
+          (:success result) (math/set-html! dom/node (:text result))
           :else (dom/span (dom/props {:style {:color "var(--color-text-hint)"}})
                   (dom/text (or (:error result) "No text"))))))))
 

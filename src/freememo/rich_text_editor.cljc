@@ -7,6 +7,7 @@
    [freememo.quill-table-ui :as table-ui]
    [freememo.quill-field :as quill-field]
    [freememo.editor-actions :as editor-actions]
+   [freememo.math :as math]
    [freememo.a11y :as a11y]
    #?(:cljs [freememo.format-menu :as format-menu])
    #?(:cljs [freememo.code-lang-picker :as code-lang-picker])
@@ -50,13 +51,29 @@
 ;; source of truth, required above) — loading that ns installs it on both
 ;; editors' shared `Quill.import("ui/icons")` registry.
 
+;; Generation counter for init-editor!'s KaTeX wait. That wait is async, so an
+;; init can still be in flight when another init OR a teardown happens; only the
+;; newest generation may build. Both init-editor! and destroy-editor! bump it,
+;; which is what makes teardown cancel a pending build. Lives in a plain defn
+;; per CLAUDE.md's "JS Library Init Side Effects" rule — a counter incremented
+;; inside an e/defn body would not increment reliably.
+(defonce ^:private !init-gen (atom 0))
+
 (defn destroy-editor!
-  "Destroy the current global editor instance (if any)."
+  "Destroy the current global editor instance (if any).
+
+   Post: no editor is live, !editor-state is nil, AND no init still waiting on
+         KaTeX may build. That last clause is why this bumps !init-gen: without
+         it, an unmount during the wait let build-editor! construct Quill into a
+         detached container and repopulate !editor-state — after which the
+         component's `(when-not (some? (:editor @!editor-state)) …)` mount guard
+         saw a live-looking editor and never initialised again."
   []
   #?(:clj nil
      :cljs
      (do
-       (when-let [{:keys [editor container toolbar import-popover-teardown format-menu-teardown code-lang-teardown a11y-observer]} @!editor-state]
+       (swap! !init-gen inc)
+       (when-let [{:keys [editor container toolbar import-popover-teardown format-menu-teardown code-lang-teardown formula-teardown a11y-observer]} @!editor-state]
          (let [^js ed editor
                ^js ct container
                ^js tb toolbar]
@@ -69,6 +86,8 @@
            (when format-menu-teardown (format-menu-teardown))
            ;; Remove the custom code-language picker (observer + popup + triggers).
            (when code-lang-teardown (code-lang-teardown))
+           ;; Remove the formula click/blur/Escape listeners on the editor root.
+           (when formula-teardown (formula-teardown))
            ;; Tear down the table action bar (appended to document.body)
            ;; and its window scroll/resize listeners. Idempotent; safe
            ;; even if table-ui/init! never ran.
@@ -274,121 +293,173 @@
        (.observe obs root #js {:childList true :subtree true})
        obs)))
 
+(defn- build-editor!
+  "Construct the singleton Quill editor. Called by init-editor! once the KaTeX
+   wait has settled; `math?` is that outcome.
+
+   Pre  : `container` is mounted, `window.Quill` exists, no editor is live
+          (init-editor! destroyed any predecessor).
+   Post : !editor-state holds the new instance and its teardowns; returns it."
+  [container initial-html topic-id math?]
+  #?(:clj nil
+     :cljs
+     (let [Quill (.-Quill js/window)
+           cleaned-html (-> (or initial-html "")
+                        (str/replace #"^```html\s*\n?" "")
+                        (str/replace #"^```\s*\n?" "")
+                        (str/replace #"\n?```\s*$" "")
+                        ;; Cleanup of paragraphs already corrupted by a
+                        ;; previous load — the literal label string from
+                        ;; both pre-Clojure and current pickers. (Future
+                        ;; corruption is prevented by the `select.ql-ui`
+                        ;; clipboard matcher registered below — stripping
+                        ;; the <select> from the HTML pre-convert was
+                        ;; collapsing multi-line code blocks because
+                        ;; Quill's container matcher iterates children in
+                        ;; place and the regex disturbed that structure.)
+                        (str/replace #"<p>PlainBashC\+\+C#(?:Clojure)?CSSDiffHTML/XMLJavaJavaScriptMarkdownPHPPythonRubySQL</p>" "")
+                        str/trim)
+           t0 (when js/goog.DEBUG (js/performance.now))
+           ^js editor (new Quill container
+                      ;; bubble theme (E1): floating-on-selection toolbar
+                      ;; (Notion-style). Modules (toolbar/syntax/table) come
+                      ;; from quill-field/quill-config — the SAME config
+                      ;; QuillField uses (quill_field.cljc), so the two
+                      ;; editors' formatting surfaces stay identical. Extra
+                      ;; :bounds clamps the floating tooltip to this
+                      ;; container (the narrow pane), not the default wide
+                      ;; ancestor — otherwise it is positioned past the
+                      ;; pane edge and clipped by the PDF pane. QuillField
+                      ;; has no such ancestor and omits :bounds.
+                      (clj->js (quill-field/quill-config "Enter text..." {:bounds container} math?)))
+           ^js clipboard (.-clipboard editor)
+           ;; See quill-field/install-clipboard-matchers! for what each
+           ;; matcher does and why (shared with QuillField's own editor).
+           _ (quill-field/install-clipboard-matchers! clipboard)
+           ;; Pasted/dropped images → /api/media instead of inline base64.
+           ;; This editor never had any image-paste handling: only QuillField
+           ;; carried the (inert) matcher, so a screenshot pasted here was
+           ;; stored as base64 in topics.content, which has no length cap.
+           _ (editor-actions/install-image-rehost! editor)
+           ;; Stored `\(TeX\)` → span.ql-formula[data-value] for Parchment.
+           ;; Skipped without KaTeX so an unresolvable span cannot lose its
+           ;; data-value on the next save.
+           for-editor (if math? (math/stored->editor-html cleaned-html) cleaned-html)
+           delta (.convert clipboard #js {:html for-editor})]
+       (when (seq cleaned-html)
+         (.setContents editor delta))
+       ;; dir="auto" → browser resolves direction from first strong
+       ;; directional character. Paired with .ql-editor{text-align:start}
+       ;; in index.css so RTL imports (Arabic, Hebrew) render right-aligned
+       ;; without needing a stored language column. Per-block direction
+       ;; from Quill's toolbar still overrides this on its own block.
+       (.setAttribute (.-root editor) "dir" "auto")
+       (when (and js/goog.DEBUG t0)
+         (js/console.log "[Editor perf] init TOTAL:" (.toFixed (- (js/performance.now) t0) 1) "ms, html-len:" (count cleaned-html)))
+       ;; Immediate text-change: sets !dirty-html on every user edit. Other
+       ;; consumers (ToolbarBar's live-content, the unsaved-edits guard)
+       ;; need this un-debounced; editor_pane.cljc's auto-save is the one
+       ;; consumer that debounces its reaction to an idle pause before it
+       ;; writes to the DB — see that ns.
+       ;; Text-change listener reads topic-id from !editor-state (mutable ref)
+       ;; so it stays correct across page navigations without reinit
+       (.on editor "text-change"
+         (fn [_delta _oldDelta source]
+           (when (= source "user")
+             (let [current-topic-id (:topic-id @!editor-state)]
+               (reset! !dirty-html {:html (quill-field/editor-html editor)
+                                    :topic-id current-topic-id})
+               ;; User edits invalidate cached range — indices may now be stale
+               (reset! !last-selection nil)))))
+       ;; Cache last non-empty selection so toolbar buttons (Extract, etc.)
+       ;; can read it after focus moves to the button (Chrome blurs Quill on
+       ;; mousedown for buttons; Safari/Firefox on macOS do not).
+       (.on editor "selection-change"
+         (fn [^js range _old _source]
+           (when (and range (> (.-length range) 0))
+             (reset! !last-selection {:index (.-index range)
+                                      :length (.-length range)}))))
+       ;; Bubble theme has no fixed `.ql-toolbar` to relocate — its formatting
+       ;; controls live in the floating tooltip shown on selection. So no
+       ;; toolbar node is stored (:toolbar nil; destroy-editor! skips removal).
+       (reset! !editor-state {:editor editor :container container
+                              :topic-id topic-id :toolbar nil
+                              ;; The KaTeX-wait outcome, recorded rather than
+                              ;; re-derived: set-content! needs it to decide
+                              ;; whether to promote stored math to blots, and
+                              ;; probing `(.getModule ed "formula")` for it
+                              ;; depends on Quill registering the formula module
+                              ;; under that name — an assumption this does not
+                              ;; need to make.
+                              :math? (boolean math?)
+                              :a11y-observer (install-content-a11y! editor)
+                              :import-popover-teardown (setup-link-import-popover! editor)
+                              :format-menu-teardown (format-menu/install! editor {:card-gen? true
+                                                                                 :formula? (boolean math?)})
+                              :code-lang-teardown (code-lang-picker/install! editor)
+                              :formula-teardown (when math?
+                                                  (editor-actions/install-formula-editing! editor))})
+       (setup-mobile-keyboard-suppression! editor)
+       (table-ui/init! editor)
+       ;; Bubble's toolbar lives in the floating .ql-tooltip inside the
+       ;; container — label its pickers/buttons.
+       (a11y/label-quill-toolbar! container)
+       ;; Tab moves focus out (Quill's indent bindings removed); Escape
+       ;; also blurs, as belt-and-suspenders for nested contexts.
+       (a11y/free-quill-tab! editor)
+       (a11y/install-quill-tab-escape! editor)
+       editor)))
+
 (defn init-editor!
   "Initialize Quill editor in the given container with initial HTML.
    Destroys any existing editor first (singleton).
    Wires an immediate text-change listener that sets !dirty-html on user edits.
-   topic-id tags dirty-html so auto-save targets the correct topic."
+   topic-id tags dirty-html so auto-save targets the correct topic.
+
+   Construction is deferred until the KaTeX wait settles (see
+   freememo.math/on-katex-ready!) because Quill's formula module throws if KaTeX
+   is absent. The wait is capped, so a blocked CDN costs `katex-wait-ms` and then
+   yields a working editor without math rather than no editor at all.
+
+   Pre  : `container` is a mounted node; `window.Quill` exists.
+   Post : the previous editor is destroyed and !dirty-html cleared SYNCHRONOUSLY;
+          the new editor appears in !editor-state asynchronously. Returns nil —
+          callers must read !editor-state, not this value.
+   Inv  : at most one generation may build. `destroy-editor!` bumps !init-gen, so
+          this claims the generation AFTER that call — claiming it before would
+          have this call invalidate itself and never build. Any later init or
+          teardown bumps again and drops this pending wait."
   [container initial-html topic-id]
   #?(:clj nil
      :cljs
      (when (and container (.-Quill js/window))
        (log/log-debug (str "init-editor! topic-id=" topic-id " html-len=" (count initial-html)))
-       ;; Destroy previous editor if any
+       ;; Destroy previous editor if any — this also invalidates any init still
+       ;; waiting on KaTeX.
        (destroy-editor!)
        ;; Clear dirty flag — fresh content, no pending saves
        (reset! !dirty-html nil)
-       (let [Quill (.-Quill js/window)
-             cleaned-html (-> (or initial-html "")
-                            (str/replace #"^```html\s*\n?" "")
-                            (str/replace #"^```\s*\n?" "")
-                            (str/replace #"\n?```\s*$" "")
-                            ;; Cleanup of paragraphs already corrupted by a
-                            ;; previous load — the literal label string from
-                            ;; both pre-Clojure and current pickers. (Future
-                            ;; corruption is prevented by the `select.ql-ui`
-                            ;; clipboard matcher registered below — stripping
-                            ;; the <select> from the HTML pre-convert was
-                            ;; collapsing multi-line code blocks because
-                            ;; Quill's container matcher iterates children in
-                            ;; place and the regex disturbed that structure.)
-                            (str/replace #"<p>PlainBashC\+\+C#(?:Clojure)?CSSDiffHTML/XMLJavaJavaScriptMarkdownPHPPythonRubySQL</p>" "")
-                            str/trim)
-             t0 (when js/goog.DEBUG (js/performance.now))
-             ^js editor (new Quill container
-                          ;; bubble theme (E1): floating-on-selection toolbar
-                          ;; (Notion-style). Modules (toolbar/syntax/table) come
-                          ;; from quill-field/quill-config — the SAME config
-                          ;; QuillField uses (quill_field.cljc), so the two
-                          ;; editors' formatting surfaces stay identical. Extra
-                          ;; :bounds clamps the floating tooltip to this
-                          ;; container (the narrow pane), not the default wide
-                          ;; ancestor — otherwise it is positioned past the
-                          ;; pane edge and clipped by the PDF pane. QuillField
-                          ;; has no such ancestor and omits :bounds.
-                          (clj->js (quill-field/quill-config "Enter text..." {:bounds container})))
-             ^js clipboard (.-clipboard editor)
-             ;; See quill-field/install-clipboard-matchers! for what each
-             ;; matcher does and why (shared with QuillField's own editor).
-             _ (quill-field/install-clipboard-matchers! clipboard)
-             ;; Pasted/dropped images → /api/media instead of inline base64.
-             ;; This editor never had any image-paste handling: only QuillField
-             ;; carried the (inert) matcher, so a screenshot pasted here was
-             ;; stored as base64 in topics.content, which has no length cap.
-             _ (editor-actions/install-image-rehost! editor)
-             delta (.convert clipboard #js {:html cleaned-html})]
-         (when (seq cleaned-html)
-           (.setContents editor delta))
-         ;; dir="auto" → browser resolves direction from first strong
-         ;; directional character. Paired with .ql-editor{text-align:start}
-         ;; in index.css so RTL imports (Arabic, Hebrew) render right-aligned
-         ;; without needing a stored language column. Per-block direction
-         ;; from Quill's toolbar still overrides this on its own block.
-         (.setAttribute (.-root editor) "dir" "auto")
-         (when (and js/goog.DEBUG t0)
-           (js/console.log "[Editor perf] init TOTAL:" (.toFixed (- (js/performance.now) t0) 1) "ms, html-len:" (count cleaned-html)))
-         ;; Immediate text-change: sets !dirty-html on every user edit. Other
-         ;; consumers (ToolbarBar's live-content, the unsaved-edits guard)
-         ;; need this un-debounced; editor_pane.cljc's auto-save is the one
-         ;; consumer that debounces its reaction to an idle pause before it
-         ;; writes to the DB — see that ns.
-         ;; Text-change listener reads topic-id from !editor-state (mutable ref)
-         ;; so it stays correct across page navigations without reinit
-         (.on editor "text-change"
-           (fn [_delta _oldDelta source]
-             (when (= source "user")
-               (let [^js root (.-root editor)
-                     current-topic-id (:topic-id @!editor-state)]
-                 (reset! !dirty-html {:html (.-innerHTML root)
-                                      :topic-id current-topic-id})
-                 ;; User edits invalidate cached range — indices may now be stale
-                 (reset! !last-selection nil)))))
-         ;; Cache last non-empty selection so toolbar buttons (Extract, etc.)
-         ;; can read it after focus moves to the button (Chrome blurs Quill on
-         ;; mousedown for buttons; Safari/Firefox on macOS do not).
-         (.on editor "selection-change"
-           (fn [^js range _old _source]
-             (when (and range (> (.-length range) 0))
-               (reset! !last-selection {:index (.-index range)
-                                        :length (.-length range)}))))
-         ;; Bubble theme has no fixed `.ql-toolbar` to relocate — its formatting
-         ;; controls live in the floating tooltip shown on selection. So no
-         ;; toolbar node is stored (:toolbar nil; destroy-editor! skips removal).
-         (reset! !editor-state {:editor editor :container container
-                                :topic-id topic-id :toolbar nil
-                                :a11y-observer (install-content-a11y! editor)
-                                :import-popover-teardown (setup-link-import-popover! editor)
-                                :format-menu-teardown (format-menu/install! editor {:card-gen? true})
-                                :code-lang-teardown (code-lang-picker/install! editor)})
-         (setup-mobile-keyboard-suppression! editor)
-         (table-ui/init! editor)
-         ;; Bubble's toolbar lives in the floating .ql-tooltip inside the
-         ;; container — label its pickers/buttons.
-         (a11y/label-quill-toolbar! container)
-         ;; Tab moves focus out (Quill's indent bindings removed); Escape
-         ;; also blurs, as belt-and-suspenders for nested contexts.
-         (a11y/free-quill-tab! editor)
-         (a11y/install-quill-tab-escape! editor)
-         editor))))
+       (let [my-gen @!init-gen]
+         (math/on-katex-ready!
+           (fn [math?]
+             (when (= my-gen @!init-gen)
+               (build-editor! container initial-html topic-id math?)))))
+       nil)))
 
 (defn set-content!
   "Update Quill content without destroying the editor.
    Uses source 'api' so text-change listener does NOT fire.
-   Does NOT set !dirty-html — caller decides persistence."
+   Does NOT set !dirty-html — caller decides persistence.
+
+   The unchanged-content check compares stored form against stored form. Reading
+   the root's raw innerHTML would compare against Quill's RENDERED form, whose
+   KaTeX subtrees make the lengths differ on every call once a document contains
+   math — replacing the content, and losing scroll position and highlights, on
+   every reactive `initial-html` change."
   [html]
   #?(:clj nil
      :cljs
-     (when-let [{:keys [editor]} @!editor-state]
+     (when-let [{:keys [editor math?]} @!editor-state]
        (let [^js ed editor
              ^js clipboard (.-clipboard ed)
              cleaned (-> (or html "")
@@ -396,10 +467,11 @@
                        (str/replace #"^```\s*\n?" "")
                        (str/replace #"\n?```\s*$" "")
                        str/trim)
-             current-html (.-innerHTML (.-root ed))]
+             current-stored (quill-field/editor-html ed)]
          ;; Skip if content hasn't changed (preserves scroll + highlights)
-         (when (not= (count cleaned) (count current-html))
-           (let [delta (.convert clipboard #js {:html cleaned})]
+         (when (not= (count cleaned) (count current-stored))
+           (let [for-editor (if math? (math/stored->editor-html cleaned) cleaned)
+                 delta (.convert clipboard #js {:html for-editor})]
              (.setText ed "" "api")
              (.setContents ed delta "api")
              (.clear (.-history ed))))
@@ -415,14 +487,13 @@
      :clj nil))
 
 (defn get-current-html!
-  "Read innerHTML from the current editor. Client-side only, never enters Electric reactive graph."
+  "Read the current editor's content in STORED form (see quill-field/editor-html).
+   Client-side only, never enters Electric reactive graph."
   []
   #?(:clj nil
      :cljs
      (when-let [{:keys [editor]} @!editor-state]
-       (let [^js ed editor
-             ^js root (.-root ed)]
-         (.-innerHTML root)))))
+       (quill-field/editor-html editor))))
 
 (defn- effective-range
   "Live Quill range if non-empty; otherwise the cached last in-editor range.
@@ -467,7 +538,11 @@
 
 (defn get-selection-html!
   "Get selected HTML and range from Quill. Returns nil if no selection.
-   Creates a temporary Quill instance to convert Delta -> HTML."
+   Creates a temporary Quill instance to convert Delta -> HTML.
+
+   The returned :html is in STORED form. Extract creation persists it
+   (content_toolbar_helpers → clean-html), so a formula left as
+   `span.ql-formula` would lose both its class and its data-value there."
   []
   #?(:clj nil
      :cljs
@@ -478,7 +553,7 @@
                ^js temp-div (js/document.createElement "div")
                ^js temp-quill (new (.-Quill js/window) temp-div)
                _ (.setContents temp-quill delta)
-               html (.-innerHTML (.-root temp-quill))]
+               html (math/editor->stored-html (.-innerHTML (.-root temp-quill)))]
            {:html html
             :text (.getText ed index length)
             :index index
@@ -495,7 +570,8 @@
        (.formatText ^js editor index length
          (clj->js {:background color})
          "api")
-       ;; Push updated HTML so the auto-save pipeline persists the highlight
-       (let [^js root (.-root editor)]
-         (reset! !dirty-html {:html (.-innerHTML root)
-                              :topic-id topic-id})))))
+       ;; Push updated HTML so the auto-save pipeline persists the highlight.
+       ;; Stored form, like every other !dirty-html writer — a raw read here
+       ;; would persist Quill's rendered KaTeX subtree instead of the TeX.
+       (reset! !dirty-html {:html (quill-field/editor-html editor)
+                            :topic-id topic-id}))))

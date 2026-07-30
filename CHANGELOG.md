@@ -9,6 +9,57 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
+## Unreleased
+
+### For users
+
+- **Math.** Formulas work end to end — write them in the editor, generate cards from
+  them, and push them to Anki where they render as real notation instead of raw LaTeX.
+  - **Insert with the formula button** in the formatting menu (both the document
+    editor and every card field). Type LaTeX; it renders as you leave the prompt.
+    Typing `\(x^2\)` directly as text works too.
+  - **Click a formula to edit it** — it turns back into its LaTeX source, and
+    re-renders when you click away or press Escape.
+  - **Scanned pages keep their math.** OCR now transcribes equations as LaTeX, so a
+    formula on a PDF page arrives as a formula, not as garbled text.
+  - **Generated cards preserve the math in your source** and are told not to invent
+    notation where the source used words.
+  - **Anki gets `<anki-mathjax>`** on both push and CSV export, and notes edited in
+    Anki come back with their math intact.
+  - **Cloze deletions may hide a whole formula** — `{{c1::\(x^2\)}}` — but cannot cut
+    into one.
+  - Math also renders in card tables, the card-compare view, card history, search
+    result snippets, and the OCR text previews.
+
+### Known issues
+
+- **A `\(`…`\)` pair inside a code block is treated as math when pushing to Anki.**
+  It renders as a formula in Anki instead of as source. Nothing is lost — the next
+  pull restores it — but Clojure's `\(` character literal is the realistic way to hit
+  this.
+- **A long formula can be cut mid-expression** in a search snippet or a card-table
+  row, where it then shows as LaTeX source rather than rendering.
+- **If the KaTeX CDN is unreachable,** the editor still opens after a 3-second wait,
+  but with no formula button and math shown as `\(…\)` source. Your content is
+  unchanged either way.
+
+### Technical
+
+- `freememo.math` is the single owner of the stored form (`\(TeX\)` inline text) and
+  of all four boundary conversions. See `plans/math-support.md` and the CLAUDE.md
+  pattern entry; the delimiter form was chosen specifically so `clean-html` needs no
+  allow-list change and `strip-html` carries math into `content_text` for search.
+- Every read of a Quill root's innerHTML now goes through `quill-field/editor-html`
+  (seven sites). A raw read persists the KaTeX subtree, which `clean-html` reduces to
+  duplicated fallback text.
+- `init-editor!` is asynchronous now — it waits on `math/on-katex-ready!` (a 3 s race
+  against `window.__katexReady`, which never resolves on a blocked CDN) and is guarded
+  by a generation counter. It returns nil; read `!editor-state`.
+- Anki push mapping is applied to the whole field map in `build-note` /
+  `build-update-fields`, not inside the five per-kind builders.
+- The Anki-modified overlay diff now normalises both sides before comparing, so math
+  cards do not read as perpetually modified.
+
 ## v20260729-bb11960
 
 ### For users

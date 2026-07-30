@@ -7,7 +7,12 @@
    balances openers against closers with a depth counter, so nested clozes match
    correctly and stray braces from code content (a trailing }} that closes two
    Java blocks) are ignored rather than miscounted. Pure: no I/O, no platform
-   deps beyond integer parsing.")
+   deps beyond integer parsing.
+
+   Math regions are removed before the scan (`freememo.math/strip-tex`): TeX brace
+   nesting (`x^{a^{b}}`) emits `}}` that the scan would otherwise count as a cloze
+   closer. A cloze may wrap a whole formula; it may not cut into one."
+  (:require [freememo.math :as math]))
 
 (defn- parse-cloze-int [s]
   #?(:cljs (js/parseInt s 10)
@@ -26,7 +31,8 @@
 
    pre : `text` is a string or nil.
    post: nil ⟺ text has ≥1 opener, every opener is closed, and numbering is a
-         gap-free 1..max; otherwise a human-readable reason string."
+         gap-free 1..max; otherwise a human-readable reason string. Braces inside
+         `\\(…\\)` math regions are invisible to the scan."
   [text]
   (let [{:keys [nums depth]}
         (reduce (fn [acc tok]
@@ -36,7 +42,7 @@
                     (cond-> acc                          ; closer: }} (pop if open)
                       (pos? (:depth acc)) (update :depth dec))))
           {:nums #{} :depth 0}
-          (re-seq token-re (or text "")))
+          (re-seq token-re (math/strip-tex text)))
         max-n    (if (seq nums) (apply max nums) 0)
         expected (set (range 1 (inc max-n)))]
     (cond

@@ -11,6 +11,7 @@
    [freememo.commands :as commands]
    [freememo.command-bus :as bus]
    [freememo.loading :as loading]
+   [freememo.math :as math]
    [freememo.ocr-models :as ocr-models]
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.ocr :as ocr])
@@ -85,7 +86,7 @@
                                   :gap "8px" :padding "28px 8px" :color "var(--color-text-secondary)"}})
               (dom/span (dom/props {:class "spinner"}))
               (dom/text "Running…"))
-            (:success result) (set! (.-innerHTML dom/node) (:text result))
+            (:success result) (math/set-html! dom/node (:text result))
             :else (dom/span (dom/props {:style {:color "var(--color-text-hint)"}})
                     (dom/text (or (:error result) "Failed")))))))))
 

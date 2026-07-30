@@ -7,6 +7,7 @@
    [freememo.commands :as commands]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.bibliography-form :as bibform]
+   [freememo.math :as math]
    [taoensso.telemere :as tel]))
 
 (defn load-anki-preferences
@@ -254,10 +255,21 @@
 
 (defn- stripped=
   "Compare a client-stripped Anki field value against local field HTML,
-   stripping the local side the same way. nil and \"\" are equal."
-  [anki-val local-html]
+   stringing the local side through the same normalisation. nil and \"\" are equal.
+
+   `kind` is required because the push side spaces TeX close braces for
+   cloze-bearing kinds ONLY (`math/stored->anki-html`). Normalising the local side
+   unconditionally would make every BASIC card whose TeX nests braces
+   (`x^{a^{b}}`) compare unequal forever — flagging it Anki-modified, which
+   `library_cards` also treats as a delete-danger row. `math/stored->compare-html`
+   owns the same kind predicate as the push path.
+
+   pre : `kind` is the local card's kind; the caller has already converted Anki's
+         side out of `<anki-mathjax>` and stripped it.
+   post: true iff the two fields carry the same visible text."
+  [anki-val local-html kind]
   (= (or anki-val "")
-    (or (helpers/strip-html (or local-html "")) "")))
+    (or (helpers/strip-html (math/stored->compare-html local-html kind)) "")))
 
 (defn apply-anki-overlay!
   "Diff live Anki note state against local cards; delete cards whose
@@ -303,9 +315,9 @@
                               ;; single-field inverse. The overlay only surfaces
                               ;; marked/suspended for these rows.
                               (contains? #{"occlusion" "score" "overlapping"} kind) false
-                              basic? (or (not (stripped= (first stripped-fields) (:flashcards/question card)))
-                                       (not (stripped= (second stripped-fields) (:flashcards/answer card))))
-                              :else (not (stripped= (first stripped-fields) (:flashcards/cloze card))))
+                              basic? (or (not (stripped= (first stripped-fields) (:flashcards/question card) kind))
+                                       (not (stripped= (second stripped-fields) (:flashcards/answer card) kind)))
+                              :else (not (stripped= (first stripped-fields) (:flashcards/cloze card) kind)))
                             marked? (boolean (some #{"marked"} tags))
                             suspended-n (or (:suspended suspended) 0)
                             flags (cond-> {}
@@ -439,17 +451,29 @@
    Bumps :sync-mutations so the client toolbar refreshes counts.
    updates: [{:card-id N :question Q :answer A :cloze C} ...] or
             [{:card-id N :io-fields {partial map}} ...] for occlusion cards
-   deleted-card-ids: [N ...] — cards whose Anki notes no longer exist"
+   deleted-card-ids: [N ...] — cards whose Anki notes no longer exist
+
+   Anki's `<anki-mathjax>` is converted back to the stored `\\(TeX\\)` form here,
+   the last point before the write: `db/update-flashcard!` is a bare UPDATE with
+   no sanitization, so a vendor tag reaching it would persist in the database and
+   then be stripped — silently losing the formula — the next time the card is
+   edited in the app through `clean-html`. The brace spacing applied on push is
+   deliberately NOT reversed: the extra space is valid TeX, and undoing it would
+   have to guess which spaces the user typed."
   [user-id updates deleted-card-ids]
   (try
     (doseq [{:keys [card-id question answer cloze io-fields]} updates]
       (if (seq io-fields)
         ;; Occlusion: shallow JSONB merge — unchanged keys keep local values.
-        (db/merge-flashcard-io-fields! user-id card-id io-fields)
+        ;; Values are converted individually; the map shape is the caller's.
+        (db/merge-flashcard-io-fields! user-id card-id
+          (reduce-kv (fn [m k v]
+                       (assoc m k (if (string? v) (math/anki->stored-html v) v)))
+            {} io-fields))
         (let [fields (cond-> {}
-                       question (assoc :question question)
-                       answer (assoc :answer answer)
-                       cloze (assoc :cloze cloze))]
+                       question (assoc :question (math/anki->stored-html question))
+                       answer (assoc :answer (math/anki->stored-html answer))
+                       cloze (assoc :cloze (math/anki->stored-html cloze)))]
           (when (seq fields)
             (db/update-flashcard! user-id card-id fields)
             (db/mark-anki-synced user-id card-id)))))

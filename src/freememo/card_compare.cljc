@@ -12,6 +12,7 @@
    [freememo.doc-context :as dctx]
    [freememo.rich-text-editor :as editor]
    [freememo.card-models :as card-models]
+   [freememo.math :as math]
    [freememo.command-bus :as bus]
    [freememo.loading :as loading]
    [freememo.icons :as icons]
@@ -64,12 +65,14 @@
      :clj nil))
 
 (e/defn CardHtml
-  "Render one card field's HTML. `dir=\"auto\"` flips to RTL for Arabic content."
+  "Render one card field's HTML. `dir=\"auto\"` flips to RTL for Arabic content.
+   Writes through math/set-html! so candidate cards typeset math the same way
+   saved ones do."
   [html]
   (e/client
     (dom/div
       (dom/props {:dir "auto" :style {:font-size "13px" :line-height "1.4" :text-align "start"}})
-      (set! (.-innerHTML dom/node) (or html "")))))
+      (math/set-html! dom/node html))))
 
 (e/defn CardResultColumn
   "One model's labelled candidate set: header (label + card count), then each
