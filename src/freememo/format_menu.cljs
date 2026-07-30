@@ -17,10 +17,12 @@
    the card once, and returns a teardown fn that removes them and the card.
 
    `opts` (2-arity install!) turns on optional controls: `:image?` adds an
-   image-insert button, `:cloze?` adds a cloze-deletion row (both drive
+   image-insert button, `:formula?` a LaTeX-insert button,
+   `:cloze?` adds a cloze-deletion row (all drive
    freememo.editor-actions), `:card-gen?` adds the document editor's card-count
    stepper + Generate-here row (drives freememo.card-count + the command bus).
-   The document editor passes `:card-gen?`; card fields pass `:image?/:cloze?`."
+   The document editor passes `:card-gen?`; card fields pass `:image?/:cloze?`;
+   both pass `:formula?` when KaTeX is available."
   (:require [clojure.string :as str]
             [freememo.editor-actions :as editor-actions]
             [freememo.card-count :as cc]
@@ -53,6 +55,12 @@
     "<rect x=\"2.5\" y=\"3.5\" width=\"13\" height=\"11\" rx=\"1.5\"/>"
     "<circle cx=\"6.3\" cy=\"7.3\" r=\"1.3\" fill=\"currentColor\" stroke=\"none\"/>"
     "<path d=\"M3 13 L7 9 L9.5 11.5 L12 9 L15 12.5\"/></svg>"))
+
+;; Radical over a fraction bar — reads as "math" without needing a glyph font.
+(def ^:private formula-glyph
+  (str "<svg viewBox=\"0 0 18 18\" width=\"16\" height=\"16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\">"
+    "<path d=\"M2.5 9 L4.5 9 L6.5 14 L9.5 4 L15.5 4\"/>"
+    "<line x1=\"7.5\" y1=\"15.5\" x2=\"15.5\" y2=\"15.5\"/></svg>"))
 
 ;; Sparkles — matches freememo.icons :sparkles (24-viewBox Lucide path); marks
 ;; the Generate-here action on the card-gen row.
@@ -314,9 +322,11 @@
    mutating the document, calls `(@!sync)` — install! sets that to
    refresh + re-place, so active-state and geometry stay current after a format
    (e.g. a heading changes line height). `get-rng` returns the cached
-   {:index :length}. `opts` = {:image? :cloze? :card-gen?}: :image?/:cloze?
-   toggle card-editor controls; :card-gen? adds the document-editor card-count
-   row (§ ns docstring). Returns :card-count-sync (nil unless :card-gen?)."
+   {:index :length}. `opts` = {:image? :cloze? :formula? :card-gen?}:
+   :image?/:cloze? toggle card-editor controls; :formula? adds the LaTeX insert
+   button (both editors, gated on KaTeX); :card-gen? adds the document-editor
+   card-count row (§ ns docstring). Returns :card-count-sync (nil unless
+   :card-gen?)."
   [^js q get-rng opts]
   (let [card    (el "div" "format-menu")
         section (fn [] (el "div" "fmt-row"))
@@ -373,6 +383,12 @@
       (.appendChild row-blockfmt
         (glyph-button image-glyph "Insert image"
           (after #(editor-actions/insert-image! q (:index (get-rng)))))))
+    ;; Formula insert. Only present when KaTeX arrived (`:formula?`) — Quill's
+    ;; formula module is not enabled otherwise and insertEmbed would throw.
+    (when (:formula? opts)
+      (.appendChild row-blockfmt
+        (glyph-button formula-glyph "Insert formula (LaTeX)"
+          (after #(editor-actions/insert-formula! q (:index (get-rng)))))))
     (.appendChild card row-block)
     (.appendChild card (el "div" "fmt-divider"))
     (.appendChild card row-inline)

@@ -105,3 +105,11 @@ Card content is rendered as HTML. Use HTML — never markdown — when formattin
 - Inside code blocks, escape `<`, `>`, `&` as `&lt;`, `&gt;`, `&amp;`; preserve line breaks literally
 - Do NOT wrap code in markdown fences (``` ``` ```) — they are not converted
 - Prefer code blocks when the answer is itself code (function signature, snippet, command); short identifiers stay inline
+
+# Math
+
+- Write mathematical notation as LaTeX between `\(` and `\)` — for example `\(x \times (y + z)\)`
+- Use `\(...\)` for every formula, whether it sits mid-sentence or alone; there is no separate display form
+- PRESERVE the notation already present in the source material. Do NOT invent notation: if the source writes "x times y" as words, keep the words
+- Never use `$` or `$$` as math delimiters — they are not converted
+- Inside a cloze card, a deletion may hide a WHOLE formula — `{{c1::\(x^2\)}}` — but must never start or end inside one

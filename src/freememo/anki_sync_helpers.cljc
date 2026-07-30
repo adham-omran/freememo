@@ -5,6 +5,7 @@
    [clojure.string :as str]
    [freememo.occlusion-svg :as osvg]
    [freememo.logging :as log]
+   [freememo.math :as math]
    [freememo.util :as util]))
 
 ;; ---------------------------------------------------------------------------
@@ -804,6 +805,26 @@
    :tags (:tags settings)
    :options (note-dupe-options settings)})
 
+(defn math->anki-fields
+  "Rewrite stored math to Anki's `<anki-mathjax>` in every string value of an Anki
+   field map.
+
+   Applied at the two points where every FM-owned field map passes through
+   (`build-note`, `build-update-fields`) rather than inside the five per-kind
+   builders — one call covers Front/Back, Text, Question/Full/Original/Text1..20,
+   the IO fields and the score fields, and a new builder cannot forget it.
+
+   Per-value conversion (including the kind-dependent cloze brace spacing) is
+   `math/stored->anki-html`; the kind predicate lives there so the CSV export and
+   the Anki-modified diff cannot disagree with this path.
+
+   pre : `fields` is a map of field name → value; `kind` is a card kind string.
+   post: no value contains a `\\(…\\)` region; non-string values are untouched."
+  [fields kind]
+  (reduce-kv (fn [m k v]
+               (assoc m k (if (string? v) (math/stored->anki-html v kind) v)))
+    {} fields))
+
 #?(:cljs
    (defn build-note
      "Build an AnkiConnect addNote map, routing by card kind to the app-owned
@@ -811,12 +832,13 @@
       Every kind is app-owned: occlusion→IO, score→Score, cloze→FreeMemo Cloze,
       else→FreeMemo Basic."
      [card settings filename-map]
-     (cond
-       (occlusion-card? card) (build-io-note card settings filename-map)
-       (score-card? card) (build-score-note card settings filename-map)
-       (overlapping-card? card) (build-overlapping-note card settings filename-map)
-       (= "cloze" (:flashcards/kind card)) (build-cloze-note card settings filename-map)
-       :else (build-basic-note card settings filename-map))))
+     (-> (cond
+           (occlusion-card? card) (build-io-note card settings filename-map)
+           (score-card? card) (build-score-note card settings filename-map)
+           (overlapping-card? card) (build-overlapping-note card settings filename-map)
+           (= "cloze" (:flashcards/kind card)) (build-cloze-note card settings filename-map)
+           :else (build-basic-note card settings filename-map))
+       (update :fields math->anki-fields (:flashcards/kind card)))))
 
 #?(:cljs
    (defn build-update-fields
@@ -825,12 +847,13 @@
       fields, score→score fields, cloze→cloze content, else→basic content.
       filename-map = {media-id -> \"<id>.<ext>\"} for src rewrite."
      [card settings filename-map]
-     (cond
-       (occlusion-card? card) (build-io-fields card filename-map)
-       (score-card? card) (build-score-fields card settings filename-map)
-       (overlapping-card? card) (build-overlapping-content-fields card settings filename-map)
-       (= "cloze" (:flashcards/kind card)) (build-cloze-content-fields card settings filename-map)
-       :else (build-basic-content-fields card settings filename-map))))
+     (-> (cond
+           (occlusion-card? card) (build-io-fields card filename-map)
+           (score-card? card) (build-score-fields card settings filename-map)
+           (overlapping-card? card) (build-overlapping-content-fields card settings filename-map)
+           (= "cloze" (:flashcards/kind card)) (build-cloze-content-fields card settings filename-map)
+           :else (build-basic-content-fields card settings filename-map))
+       (math->anki-fields (:flashcards/kind card)))))
 
 (defn owned-model-name
   "The app-owned Anki model name for a card kind. Every kind is app-owned."

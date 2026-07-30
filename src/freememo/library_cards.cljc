@@ -19,6 +19,7 @@
                                      score-row-html try-delete-anki-notes!]]
    [freememo.card-modals :refer [EditCardModal]]
    [freememo.icons :as icons]
+   [freememo.math :as math]
    [freememo.tooltip :as tooltip]
    [freememo.util :as util]
    #?(:clj [freememo.anki-sync-server :as sync-server])
@@ -375,7 +376,13 @@
                           (keep (fn [[nid note]]
                                   (when (and (map? note) (:noteId note))
                                     {:note-id nid
-                                     :stripped-fields (mapv helpers/strip-html
+                                     ;; Anki→stored form BEFORE stripping: strip-html
+                                     ;; erases <anki-mathjax> but keeps a stored
+                                     ;; `\(TeX\)`, so comparing the two raw would
+                                     ;; flag every math card as Anki-modified on
+                                     ;; every diff, forever.
+                                     :stripped-fields (mapv (comp helpers/strip-html
+                                                              math/anki->stored-html)
                                                         (helpers/ordered-field-values (:fields note)))
                                      :tags (vec (:tags note))
                                      :card-ids (vec (:cards note))})))

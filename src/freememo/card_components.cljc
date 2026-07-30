@@ -8,6 +8,7 @@
    [freememo.logging :as log]
    [freememo.commands :as commands]
    [freememo.occlusion-ordinals :as ord]
+   [freememo.math :as math]
    #?(:clj [freememo.cards :as cards])
    #?(:cljs [freememo.anki-sync-helpers :refer [anki-call!]])
    [freememo.optimistic :as opt]))
@@ -37,12 +38,15 @@
     (truncate-html-for-row 200)))
 
 (defn set-inner-html!
-  "CLJS-only side effect: write html into node.innerHTML. CLJ no-op.
-   Plain defn so the reader conditional is invisible to Electric's reactive
-   compiler — keeps CLJ/CLJS signal counts identical (CLAUDE.md frame-mismatch rule)."
+  "Write html into node.innerHTML and typeset its math. CLJ no-op.
+
+   Kept as the name every card display site already calls; the behaviour lives in
+   `freememo.math/set-html!` so non-card sites (search snippets, OCR previews) can
+   share it without depending on this ns. That fn holds the reader conditional
+   that keeps CLJ/CLJS signal counts identical inside reactive bodies (CLAUDE.md
+   frame-mismatch rule); this wrapper needs none."
   [node html]
-  #?(:cljs (set! (.-innerHTML node) (str (or html "")))
-     :clj nil))
+  (math/set-html! node html))
 
 ;; RTL detection — checks if text starts with Arabic/Hebrew characters
 (defn rtl-text? [text]

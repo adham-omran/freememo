@@ -7,6 +7,7 @@
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [hyperfiddle.router5 :as r]
    [clojure.string :as str]
+   [freememo.math :as math]
    [freememo.navigation :as nav]
    [freememo.tooltip :as tooltip]
    [freememo.util :as util]
@@ -123,8 +124,12 @@
             (dom/props {:dir "auto"
                         :style {:overflow "hidden" :white-space "nowrap"
                                 :width "100%"}})
-            (set! (.-innerHTML dom/node) (or snippet ""))
-            (snippet-center! dom/node)))))))
+            ;; Snippets are built from `content_text` (plain text + <mark>), so a
+            ;; stored `\(TeX\)` arrives here as literal text and needs typesetting
+            ;; like any other display site. Centering runs in the after-render
+            ;; callback: KaTeX renders async and changes the line's width, so
+            ;; centering before it lands leaves the <mark> off-centre.
+            (math/set-html! dom/node snippet #(snippet-center! dom/node))))))))
 
 ;; Always-mounted: SearchPage renders this unconditionally, never gated by a
 ;; cond branch. row-count drives the Tape window; 0 → an empty (but mounted)

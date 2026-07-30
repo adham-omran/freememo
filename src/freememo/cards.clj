@@ -9,6 +9,7 @@
    [freememo.openrouter :as openrouter]
    [freememo.card-models :as card-models]
    [freememo.llm-edn :as llm-edn]
+   [freememo.math :as math]
    [freememo.overlapping :as overlap]
    [freememo.image-rehost :as image-rehost]
    [freememo.logging :as log]
@@ -776,12 +777,20 @@
           csv-lines (map (fn [card]
                            (let [card-kind (:flashcards/kind card)
                                  tag doc-filename
-                                 front (if (= card-kind "basic")
-                                         (str (when header-html header-html)
-                                           "<p>" (:flashcards/question card) "</p>")
-                                         (str "<p>" (:flashcards/cloze card) "</p>"))
+                                 ;; Same conversion as the AnkiConnect push path —
+                                 ;; this CSV is imported into Anki, so stored
+                                 ;; `\(TeX\)` must become <anki-mathjax> or it
+                                 ;; renders as literal source there. Keyed on the
+                                 ;; card's own kind, so the cloze brace spacing
+                                 ;; matches what push would have done.
+                                 for-anki #(math/stored->anki-html % card-kind)
+                                 front (for-anki
+                                         (if (= card-kind "basic")
+                                           (str (when header-html header-html)
+                                             "<p>" (:flashcards/question card) "</p>")
+                                           (str "<p>" (:flashcards/cloze card) "</p>")))
                                  back (if (= card-kind "basic")
-                                        (str "<p>" (:flashcards/answer card) "</p>")
+                                        (for-anki (str "<p>" (:flashcards/answer card) "</p>"))
                                         "")
                                  escape-csv (fn [s]
                                               (str "\"" (str/replace (or s "") "\"" "\"\"") "\""))]

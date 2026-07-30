@@ -14,6 +14,7 @@
    [freememo.quill-table-ui :as table-ui]
    [freememo.a11y :as a11y]
    [freememo.editor-actions :as editor-actions]
+   [freememo.math :as math]
    #?(:cljs [freememo.format-menu :as format-menu])
    #?(:cljs [freememo.code-lang-picker :as code-lang-picker])
    [clojure.string :as str]))
@@ -49,13 +50,19 @@
    colouring and tables. Image insertion and cloze deletion are provided by
    format-menu opts in init-quill-field! (not the Quill toolbar), so the hidden
    bubble toolbar carries neither.
-   `extra` (optional) is merged in last, letting a caller add ctor options
-   this ns has no use for — e.g. rich_text_editor.cljc passes {:bounds
-   container} to clamp its floating tooltip to the editor pane; QuillField
-   has no such ancestor to clamp to and omits it."
-  ([placeholder] (quill-config placeholder nil))
-  ([placeholder extra]
-   (merge
+   `extra` is merged in last, letting a caller add ctor options this ns has no
+   use for — e.g. rich_text_editor.cljc passes {:bounds container} to clamp its
+   floating tooltip to the editor pane; QuillField has no such ancestor to clamp
+   to and passes nil.
+
+   `math?` enables Quill's built-in formula module (KaTeX). It MUST be false
+   unless KaTeX is on window — the module throws otherwise. No \"formula\" entry
+   is added to the toolbar: the bubble theme's tooltip is hidden in index.css, so
+   a toolbar button would be invisible. The insert affordance is a format-menu
+   button (`:formula?`, see freememo.editor-actions/insert-formula!); the module
+   is enabled here only so the Formula blot resolves and insertEmbed works."
+  [placeholder extra math?]
+  (merge
      {:theme "bubble"
       :modules {:toolbar [["bold" "italic" "underline" "strike"]
                           [{"header" 1} {"header" 2} {"header" 3}]
@@ -116,9 +123,10 @@
                 :resize {:modules ["DisplaySize" "Resize" "Keyboard"]
                          :embedTags []
                          :parchment {:image {:attribute ["width"]
-                                             :limit {:minWidth 40}}}}}
+                                             :limit {:minWidth 40}}}}
+                :formula (boolean math?)}
       :placeholder (or placeholder "Enter text...")}
-     extra)))
+     extra))
 
 (defn install-clipboard-matchers!
   "Register the clipboard matchers that keep Quill's syntax-highlighted code
@@ -168,20 +176,41 @@
 ;; Quill instance lifecycle — plain defns so side effects are stable.
 ;; ---------------------------------------------------------------------------
 
+(defn editor-html
+  "The editor's content in STORED form — the single read accessor for every
+   caller that persists or compares Quill's HTML.
+
+   Quill renders math as `span.ql-formula` with a KaTeX subtree inside it; the
+   stored form is `\\(TeX\\)` text. Reading `.root.innerHTML` directly would
+   persist the rendered subtree, which `clean-html` then strips down to KaTeX's
+   duplicated fallback text. Every read goes through here so that cannot happen
+   at one site and not another.
+
+   Pre  : `ed` is a Quill instance or nil.
+   Post : stored-form HTML, or nil iff `ed` is nil."
+  [ed]
+  #?(:cljs (when ed (math/editor->stored-html (.-innerHTML (.-root ed))))
+     :clj nil))
+
 (defn init-quill-field!
   "Initialize a standalone Quill editor (bubble theme) in container with
    initial-html. Wires text-change → on-change on each user edit, a clipboard
    matcher that uploads data-URI images, and the custom format-menu +
    code-lang-picker (the same components as the main document editor). When
-   `cloze?` is true the format-menu gains the cloze-deletion row.
+   `cloze?` is true the format-menu gains the cloze-deletion row. When `math?`
+   is true (KaTeX present — see freememo.math/on-katex-ready!) the formula module
+   is enabled, stored `\\(TeX\\)` is promoted to formula embeds on load, and the
+   format-menu gains the LaTeX-insert button. When it is false the delimiters are
+   deliberately left as text so a save cannot lose them.
    Returns {:editor <Quill> :teardowns [fn ...]} (CLJS) or nil (CLJ); the
-   teardowns remove the format-menu / code-lang picker on destroy.
+   teardowns remove the format-menu / code-lang picker / formula listeners on
+   destroy.
    No ^js on parameters — CLJ compiler sees the parameter list."
-  [container initial-html placeholder on-change cloze?]
+  [container initial-html placeholder on-change cloze? math?]
   #?(:cljs
      (when (and container (.-Quill js/window))
        (let [Quill (.-Quill js/window)
-             cfg (clj->js (quill-config placeholder))
+             cfg (clj->js (quill-config placeholder nil math?))
              ed (new Quill container cfg)
              cb (.-clipboard ed)
              ;; See install-clipboard-matchers! above for what each matcher
@@ -199,7 +228,11 @@
                        ;; registered below.)
                        (str/replace (js/RegExp. "<p>PlainBashC\\+\\+C#(?:Clojure)?CSSDiffHTML/XMLJavaJavaScriptMarkdownPHPPythonRubySQL</p>" "g") "")
                        str/trim)
-             delta (.convert cb (clj->js {:html cleaned}))]
+             ;; Stored `\(TeX\)` → span.ql-formula[data-value], which Parchment
+             ;; resolves to Quill's Formula blot during convert. Skipped without
+             ;; KaTeX: an unresolvable span would lose its data-value on save.
+             for-editor (if math? (math/stored->editor-html cleaned) cleaned)
+             delta (.convert cb (clj->js {:html for-editor}))]
          (when (seq cleaned)
            (.setContents ed delta))
          ;; See rich_text_editor.cljc for the dir="auto" rationale.
@@ -213,8 +246,7 @@
          (.on ed "text-change"
            (fn [_delta _old source]
              (when (and (= source "user") on-change)
-               (let [root (.-root ed)]
-                 (on-change (.-innerHTML root))))))
+               (on-change (editor-html ed)))))
          ;; Pasted/dropped images → /api/media instead of inline base64. This
          ;; REPLACES a clipboard matcher that could never fire: Quill routes any
          ;; clipboard payload carrying files straight to uploader.upload, and on
@@ -239,8 +271,11 @@
          ;; cloze?. Teardowns are returned so destroy-quill-field! can remove
          ;; the body cards + document listeners on modal close.
          {:editor ed
-          :teardowns [(format-menu/install! ed {:image? true :cloze? (boolean cloze?)})
-                      (code-lang-picker/install! ed)]}))
+          :teardowns [(format-menu/install! ed {:image? true
+                                                :cloze? (boolean cloze?)
+                                                :formula? (boolean math?)})
+                      (code-lang-picker/install! ed)
+                      (when math? (editor-actions/install-formula-editing! ed))]}))
      :clj nil))
 
 (defn destroy-quill-field!
@@ -279,16 +314,20 @@
   [!ed-state container value-string placeholder on-change !editor-atom cloze? autofocus?]
   #?(:cljs (js/setTimeout
              (fn []
-               (let [result (init-quill-field! container value-string placeholder on-change cloze?)
-                     ^js ed (:editor result)]
-                 ;; !ed-state holds the {:editor :teardowns} map for destroy;
-                 ;; !editor-atom + focus use the raw Quill instance.
-                 (reset! !ed-state result)
-                 (when !editor-atom (reset! !editor-atom ed))
-                 ;; Focus after construction — Quill has no autofocus option and
-                 ;; is built on this deferred tick, so the modal can't focus it at
-                 ;; mount. Focusing here lands the cursor in the editor on open.
-                 (when (and autofocus? ed) (.focus ed))))
+               ;; KaTeX gate INSIDE the existing tick, not replacing it: the tick
+               ;; is what lets Electric finish mounting the container first.
+               (math/on-katex-ready!
+                (fn [math?]
+                 (let [result (init-quill-field! container value-string placeholder on-change cloze? math?)
+                       ^js ed (:editor result)]
+                   ;; !ed-state holds the {:editor :teardowns} map for destroy;
+                   ;; !editor-atom + focus use the raw Quill instance.
+                   (reset! !ed-state result)
+                   (when !editor-atom (reset! !editor-atom ed))
+                   ;; Focus after construction — Quill has no autofocus option and
+                   ;; is built on this deferred tick, so the modal can't focus it at
+                   ;; mount. Focusing here lands the cursor in the editor on open.
+                   (when (and autofocus? ed) (.focus ed))))))
              0)
      :clj nil))
 
@@ -310,8 +349,8 @@
 
    Pre  : `ed` is a Quill instance (CLJS) or nil.
    Post : DOM under `ed.root` carries up-to-date hljs-* spans for every
-          `.ql-code-block-container`; returned string is the editor's
-          innerHTML after the flush.
+          `.ql-code-block-container`; returned string is the editor's content in
+          stored form after the flush (see `editor-html`).
    Inv  : returns nil iff `ed` is nil; never throws on nil input."
   [ed]
   #?(:cljs
@@ -319,7 +358,7 @@
        (let [^js ed ed
              ^js syntax (.getModule ed "syntax")]
          (when syntax (.highlight syntax))
-         (.-innerHTML (.-root ed))))
+         (editor-html ed)))
      :clj nil))
 
 (e/defn QuillField

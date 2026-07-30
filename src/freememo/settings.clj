@@ -985,7 +985,9 @@
 - <strong> for bold/important text
 - <em> for italic/emphasized text
 - <br> for line breaks within paragraphs
+- LaTeX between \\( and \\) for mathematical notation, e.g. \\(x \\times (y + z)\\)
 Preserve the reading order and document structure. Return only the HTML body content (no <html> or <body> tags).
+Transcribe formulas as LaTeX in \\(...\\) whether they sit mid-sentence or on their own line. Never use $ or $$ as delimiters. Do not convert prose into notation — only text that is already mathematical.
 IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return raw HTML only.")
 
 (defn get-default-system-prompt [] @default-system-prompt)
