@@ -2121,6 +2121,69 @@ textarea:hover {
 .ql-lang-item:hover { background: light-dark(rgba(0,0,0,0.06), rgba(255,255,255,0.09)); }
 .ql-lang-item.active { background: light-dark(rgba(35,131,226,0.14), rgba(35,131,226,0.32)); }
 
+/* Formula edit popover (freememo.formula-ui). Anchored above a clicked
+   `span.ql-formula`; top/left are set inline by its place!. Shell values match
+   .ql-lang-popup so the two read as one family; the structure (field, preview,
+   actions) is its own. Not a reuse of .ql-lang-popup — that one is styled as a
+   list of .ql-lang-item buttons. */
+.ql-formula-popover {
+    position: fixed;
+    z-index: 1100;  /* clear .modal-backdrop (1000) — see .format-menu */
+    display: none;  /* set to flex by open! */
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px;
+    min-width: 240px;
+    max-width: min(360px, calc(100vw - 16px));
+    box-sizing: border-box;
+    background: var(--color-bg-card, light-dark(#fff, #1f1f1f));
+    border: 1px solid var(--color-border, light-dark(#e5e5e5, #3a3a3a));
+    border-radius: 9px;
+    box-shadow: 0 8px 24px light-dark(rgba(0,0,0,0.16), rgba(0,0,0,0.5));
+    color: var(--color-text-primary, light-dark(#1a1a1a, #eaeaea));
+}
+.ql-formula-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 5px 8px;
+    border: 1px solid var(--color-border, light-dark(#e5e5e5, #3a3a3a));
+    border-radius: 6px;
+    background: var(--color-bg-input, light-dark(#fff, #171717));
+    color: inherit;
+    /* Monospace: the field holds LaTeX source, not prose. */
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+    font-size: 13px;
+}
+.ql-formula-input:focus {
+    outline: none;
+    border-color: var(--color-accent, #2383e2);
+}
+/* Min-height reserves the row so the popover does not resize (and re-place)
+   between an empty field and a rendered formula. */
+.ql-formula-preview {
+    min-height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 6px;
+    overflow-x: auto;
+    font-size: 15px;
+}
+.ql-formula-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+.ql-formula-delete {
+    padding: 4px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-danger, #d94a3d);
+    font-size: 13px;
+    cursor: pointer;
+}
+.ql-formula-delete:hover { background: light-dark(rgba(217,74,61,0.10), rgba(217,74,61,0.22)); }
+
 /* Quill tooltip — Import button for Wikipedia links. Theme-agnostic: the main
    editor uses bubble (dark tooltip), so the button is light for contrast. */
 .ql-tooltip .ql-import {

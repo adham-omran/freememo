@@ -27,6 +27,22 @@
   (testing "an unclosed \\( is not a region and must survive untouched"
     (is (= "a \\(x" (math/strip-tex "a \\(x")))))
 
+;; ── wrap / unwrap ───────────────────────────────────────────────────────────
+;; unwrap-tex is what lets the edit popover's field accept either a bare body or
+;; a pasted stored-form formula without the caller knowing which it got.
+
+(deftest t23-unwrap-round-trips-wrap
+  (doseq [tex ["x^2" "a < b" "\\frac{1}{2}" ""]]
+    (is (= tex (math/unwrap-tex (math/wrap-tex tex))) tex)))
+
+(deftest t24-unwrap-is-a-no-op-on-a-bare-body
+  (is (= "x^2" (math/unwrap-tex "x^2"))))
+
+(deftest t25-unwrap-strips-every-delimiter
+  (testing "a paste of two regions collapses to their bodies, not to nested delimiters"
+    (is (= "ab" (math/unwrap-tex "\\(a\\)\\(b\\)"))))
+  (is (= "" (math/unwrap-tex nil))))
+
 ;; ── Cloze × TeX braces ──────────────────────────────────────────────────────
 
 (deftest t4-cloze-validate-accepts-formula-in-deletion

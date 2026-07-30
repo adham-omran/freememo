@@ -11,6 +11,7 @@
    [freememo.a11y :as a11y]
    #?(:cljs [freememo.format-menu :as format-menu])
    #?(:cljs [freememo.code-lang-picker :as code-lang-picker])
+   #?(:cljs [freememo.formula-ui :as formula-ui])
    [clojure.string :as str]))
 
 ;; Global singleton — mirrors pdf_viewer.cljc pattern
@@ -394,11 +395,13 @@
                               :math? (boolean math?)
                               :a11y-observer (install-content-a11y! editor)
                               :import-popover-teardown (setup-link-import-popover! editor)
-                              :format-menu-teardown (format-menu/install! editor {:card-gen? true
-                                                                                 :formula? (boolean math?)})
+                              :format-menu-teardown (format-menu/install! editor {:card-gen? true})
                               :code-lang-teardown (code-lang-picker/install! editor)
+                              ;; Formula popover + typed-source conversion. Only
+                              ;; when KaTeX arrived — Formula.create throws without
+                              ;; it, and there is no insert button to gate instead.
                               :formula-teardown (when math?
-                                                  (editor-actions/install-formula-editing! editor))})
+                                                  (formula-ui/install! editor))})
        (setup-mobile-keyboard-suppression! editor)
        (table-ui/init! editor)
        ;; Bubble's toolbar lives in the floating .ql-tooltip inside the
