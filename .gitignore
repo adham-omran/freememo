@@ -34,3 +34,7 @@ logs/
 /.deploy.lock
 # Cloudflare tunnel launcher — contains the tunnel TOKEN; never commit.
 /tunnel.sh
+
+# Third-party client assets: downloaded by `clj -X:build vendor/fetch!` and
+# hash-verified against vendor-lock.sha256. Never committed (3.4 MB of binaries).
+/resources/public/freememo/vendor/

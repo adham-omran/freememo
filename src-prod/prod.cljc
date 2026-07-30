@@ -34,7 +34,8 @@
 
 (defmacro comptime-resource [filename] (some-> filename clojure.java.io/resource slurp clojure.edn/read-string))
 
-(declare wrap-prod-index-page wrap-ensure-cache-bust-on-server-deployment)
+(declare wrap-prod-index-page wrap-ensure-cache-bust-on-server-deployment
+         wrap-vendor-cache-headers)
 
 #?(:clj
    (defn require-env!
@@ -153,6 +154,7 @@
          (-> (fn [ring-request] (-> (ring-response/not-found "Page not found") (ring-response/content-type "text/plain")))
            (wrap-prod-index-page config) ; defined below
            (wrap-resource (:resources-path config))
+           (wrap-vendor-cache-headers)
            (wrap-content-type)
            (wrap-not-modified)
            (wrap-ensure-cache-bust-on-server-deployment)
@@ -213,6 +215,25 @@
            (clojure.edn/read-string)
            (reduce (fn [r module] (assoc r (keyword "hyperfiddle.client.module" (name (:name module)))
                                     (str manifest-folder (:output-name module)))) {}))))))
+
+#?(:clj
+   (defn wrap-vendor-cache-headers
+     "Serve /freememo/vendor/** as immutable for a year.
+
+      Every vendored path carries its version (`quill@2.0.3/quill.js`), so the
+      bytes behind a URL never change — a version bump is a new URL. Without this
+      the vendor tree would inherit wrap-ensure-cache-bust-on-server-deployment's
+      `max-age=0, must-revalidate` default and pay ~10 conditional requests on
+      every page load, where the CDN it replaced cost zero.
+
+      Must be threaded BEFORE that middleware so the header is already set when
+      it applies its `or`-default."
+     [next-handler]
+     (fn [ring-req]
+       (let [response (next-handler ring-req)]
+         (if (clojure.string/starts-with? (str (:uri ring-req)) "/freememo/vendor/")
+           (ring-response/header response "Cache-Control" "public, max-age=31536000, immutable")
+           response)))))
 
 #?(:clj
    (defn wrap-ensure-cache-bust-on-server-deployment [next-handler]

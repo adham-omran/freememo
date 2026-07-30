@@ -19,7 +19,8 @@
    [freememo.tooltip :as tooltip]
    [freememo.video-format :refer [format-ms]]
    [freememo.video-extract :refer [VideoExtractButton]]
-   #?(:cljs [freememo.video-wavesurfer :as vws])))
+   #?(:cljs [freememo.video-wavesurfer :as vws])
+   #?(:cljs [freememo.vendor-libs :as vendor])))
 
 ;; ---------------------------------------------------------------------------
 ;; Platform wrappers — reader conditionals live in plain defns, never in an
@@ -105,11 +106,13 @@
                  (fn []
                    (when-let [media @!video-el]
                      (when (.-isConnected container)
-                       (reset! !handle
-                         (vws/init! {:container container
-                                     :media media
-                                     :audio-url audio-url
-                                     :on-region on-region})))))
+                       (vendor/with! :wavesurfer
+                         (fn []
+                           (reset! !handle
+                             (vws/init! {:container container
+                                         :media media
+                                         :audio-url audio-url
+                                         :on-region on-region})))))))
                  0)
              nil)
      :clj nil))

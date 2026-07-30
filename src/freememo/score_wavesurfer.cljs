@@ -1,8 +1,9 @@
 (ns freememo.score-wavesurfer
   "CLJS-only wavesurfer.js v7 wrapper for the Score waveform strip.
 
-   Loaded as CDN globals (window.WaveSurfer + window.WaveSurfer.Regions),
-   matching the pdf.js/Konva/Quill precedent. One instance at a time — the
+   Reads the globals window.WaveSurfer + window.WaveSurfer.Regions, which
+   freememo.vendor-libs injects on demand (:wavesurfer) — callers go through
+   `vendor/with!` before calling init!. One instance at a time — the
    Score editor is per-document like pdf-viewer's singleton viewer state; the
    live handle is kept module-level so the card-creation pipeline can reuse
    the ALREADY-DECODED AudioBuffer (getDecodedData) instead of re-fetching

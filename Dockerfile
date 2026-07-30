@@ -8,11 +8,27 @@ ENV GIT_COMMIT=$GIT_COMMIT
 RUN clojure -A:prod -M -e ::ok       # preload – rebuilds if deps or commit version changes
 RUN clojure -A:build:prod -M -e ::ok # preload
 
+# Third-party client assets (PDF.js, Quill, Konva, KaTeX, …) are NOT in git.
+# They are downloaded here and every byte is checked against the committed
+# vendor-lock.sha256, so a compromised or drifted upstream fails the build
+# instead of shipping. JDK-only — no curl, node or python in this stage.
+#
+# This runs BEFORE `COPY src` so editing a namespace does not re-download 3.4 MB;
+# the layer is keyed on the lockfile and the fetcher alone.
+COPY vendor-lock.sha256 vendor-lock.sha256
+COPY src-build src-build
+COPY resources/public/freememo/open-sans.css resources/public/freememo/open-sans.css
+RUN clojure -X:build vendor/fetch!
+
 COPY shadow-cljs.edn shadow-cljs.edn
 COPY src src
 COPY src-prod src-prod
-COPY src-build src-build
 COPY resources resources
+
+# `COPY resources` above merges into the directory the fetch already populated.
+# If that assumption ever breaks, the vendor tree would vanish and we would ship
+# a jar whose every asset 404s — silently. This fails the build instead.
+RUN clojure -X:build vendor/verify! && clojure -X:build vendor/check-refs!
 
 RUN clojure -X:prod:build uberjar :version "\"$VERSION\"" :git-commit "\"$GIT_COMMIT\"" :build/jar-name "app.jar"
 

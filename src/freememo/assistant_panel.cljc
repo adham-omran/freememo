@@ -16,6 +16,7 @@
    [clojure.string :as str]
    [freememo.typeahead :refer [Typeahead]]
    [freememo.viewport :as viewport]
+   #?(:cljs [freememo.vendor-libs :as vendor])
    #?(:clj [freememo.assistant :as assistant])
    #?(:clj [freememo.markdown :as markdown])
    #?(:clj [freememo.settings :as settings])
@@ -42,12 +43,11 @@
   "CLJS-only: render KaTeX math (`\\(…\\)` inline, `\\[…\\]` display) in `node`.
    CLJ no-op. Call AFTER node's innerHTML is set.
 
-   KaTeX's auto-render script loads async from a CDN; `window.__katexReady`
-   (defined in index.html) resolves with `renderMathInElement` once it is
-   available. Chaining each message's render on that promise means a message
-   mounted before KaTeX loads still renders the instant it arrives — no polling,
-   and no bounded timer that could lose the race or leak. A blocked CDN simply
-   leaves the promise pending, so math stays literal (no crash, no hang).
+   KaTeX is vendored without a `<script>` tag; `vendor-libs/ensure! :katex`
+   returns the one shared load promise, so a message mounted before KaTeX
+   arrives still renders the instant it does — no polling, and no bounded timer
+   that could lose the race or leak. A failed load rejects, the `.then` never
+   runs, and math stays literal (no crash, no hang).
 
    The client carries no `$` delimiter: `freememo.markdown/dollar-math->tex` has
    already rewritten real math to `\\(…\\)`/`\\[…\\]` server-side, so a currency
@@ -58,13 +58,12 @@
    compiler (CLJ/CLJS signal parity)."
   [node]
   #?(:cljs
-     (when-let [ready (.-__katexReady js/window)]
-       (.then ready
-         (fn [render]
-           (render node
-             #js {:delimiters #js [#js {:left "\\[" :right "\\]" :display true}
-                                   #js {:left "\\(" :right "\\)" :display false}]
-                  :throwOnError false}))))
+     (.then (vendor/ensure! :katex)
+       (fn [_]
+         (js/renderMathInElement node
+           #js {:delimiters #js [#js {:left "\\[" :right "\\]" :display true}
+                                 #js {:left "\\(" :right "\\)" :display false}]
+                :throwOnError false})))
      :clj nil))
 
 (defn scroll-to-bottom!

@@ -96,7 +96,7 @@
                                      {:key "sql" :label "SQL"}]}
                 :table true
                 ;; Drag-to-resize images. quill-resize-module 2.0.3+ is loaded
-                ;; from CDN in index*.html and self-registers `modules/resize`
+                ;; from /freememo/vendor/ in index*.html and self-registers `modules/resize`
                 ;; on script load, so there is no Quill.register call anywhere.
                 ;;
                 ;; `:modules` omits the module's own "Toolbar" (its align

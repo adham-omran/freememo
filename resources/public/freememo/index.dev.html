@@ -5,67 +5,51 @@
         <title>FreeMemo</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="color-scheme" content="light dark">
+        <!-- Open Sans, self-hosted (committed text; its woff2 files live in the
+	     gitignored vendor tree). A <link> rather than index.css's old @import:
+             an @import chained a second request behind our own stylesheet. -->
+        <link rel="stylesheet" href="/freememo/open-sans.css">
         <link rel="stylesheet" href="/freememo/index.css" type="text/css" />
         <link rel="icon" type="image/svg+xml" href="/freememo/favicon.svg">
         <link rel="apple-touch-icon" sizes="180x180" href="/freememo/favicon.svg">
 
-        <!-- PDF.js Core + Viewer -->
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf_viewer.min.css">
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf_viewer.min.js"></script>
-        <script>
-            if (typeof pdfjsLib !== 'undefined') {
-                pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-            }
-        </script>
+        <!-- ── Vendored third-party assets ──────────────────────────────────
+             Everything below is served from /freememo/vendor/<lib>@<version>/,
+             downloaded by `clj -X:build vendor/fetch!` (NOT in git) and
+	     cached immutably.
 
-        <!-- highlight.js — required by Quill 2 syntax module. MUST load before quill.js -->
-        <!-- No theme CSS — freememo-anki.css + index.css own the palette. -->
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-        <!-- Clojure language pack (not in the common bundle). MUST load after highlight.min.js -->
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/clojure.min.js"></script>
+             Only the libraries that MUST exist before the app boots are tagged
+             here. pdf.js, Konva, graphology+sigma, wavesurfer+regions, lamejs
+             and KaTeX carry no tag: freememo.vendor-libs injects them on demand,
+             which keeps ~305 KB (gzip) of JS off the boot path.
 
-        <!-- Quill Rich Text Editor (alternative to TipTap, better CDN support) -->
-        <!-- snow: card-field editors (quill_field). bubble: main doc editor (floating-on-selection toolbar). -->
-        <link href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css" rel="stylesheet">
-        <link href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.bubble.css" rel="stylesheet">
-        <script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
+             Keep this block byte-identical to index.prod.html's. -->
+
+        <!-- Stylesheets for the on-demand libraries load eagerly anyway —
+             together they are ~17 KB gzip, and deferring them would flash
+             unstyled content the first time an editor or the viewer mounts. -->
+        <link rel="stylesheet" href="/freememo/vendor/pdf.js@3.11.174/pdf_viewer.min.css">
+        <link rel="stylesheet" href="/freememo/vendor/katex@0.16.11/katex.min.css">
+        <!-- snow: card-field editors (quill_field). bubble: main doc editor. -->
+        <link rel="stylesheet" href="/freememo/vendor/quill@2.0.3/quill.snow.css">
+        <link rel="stylesheet" href="/freememo/vendor/quill@2.0.3/quill.bubble.css">
+
+        <!-- highlight.js — required by the Quill 2 syntax module, which reads
+             window.hljs when an editor is constructed. MUST precede quill.js.
+             No theme CSS — freememo-anki.css + index.css own the palette. -->
+        <script src="/freememo/vendor/highlight.js@11.9.0/highlight.min.js"></script>
+        <!-- Clojure language pack (not in the common bundle). MUST follow highlight.min.js -->
+        <script src="/freememo/vendor/highlight.js@11.9.0/languages/clojure.min.js"></script>
+
+        <!-- Quill. Eager because quill_field's namespace-load `defonce` patches
+             Quill's icon registry before any load guard could run. -->
+        <script src="/freememo/vendor/quill@2.0.3/quill.js"></script>
         <!-- Drag-to-resize for image blots. MUST load after quill.js: the UMD
              wrapper reads window.Quill and self-registers `modules/resize`.
              Options live in freememo.quill-field/quill-config. No CSS link —
              the module's styles are ported into index.css so they theme with
              light-dark() like the rest of the app. -->
-        <script src="https://cdn.jsdelivr.net/npm/quill-resize-module@2.1.3/dist/resize.js"></script>
-        <!-- Konva — canvas library for the image-occlusion mask editor (freememo.occlusion-editor) -->
-        <script src="https://cdn.jsdelivr.net/npm/konva@9.3.16/konva.min.js"></script>
-        <!-- Quill overrides now in index.css (with dark mode support) -->
-
-        <!-- graphology + sigma.js — WebGL knowledge-graph view (freememo.graph-render).
-             UMD globals window.graphology / window.Sigma. graphology MUST load first
-             (sigma's Graph model). -->
-        <script src="https://cdn.jsdelivr.net/npm/graphology@0.26.0/dist/graphology.umd.min.js"></script>
-        <script src="https://cdn.jsdelivr.net/npm/sigma@3.0.2/dist/sigma.min.js"></script>
-
-        <!-- Score + Video kinds: waveform + regions (freememo.score-wavesurfer,
-	     freememo.video-wavesurfer) and
-             client-side MP3 clip encoding (freememo.score-audio) -->
-        <script src="https://cdn.jsdelivr.net/npm/wavesurfer.js@7.8.6/dist/wavesurfer.min.js"></script>
-        <script src="https://cdn.jsdelivr.net/npm/wavesurfer.js@7.8.6/dist/plugins/regions.min.js"></script>
-        <script src="https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js"></script>
-
-        <!-- KaTeX — renders math in the AI assistant chat (freememo.assistant-panel).
-             Real math is rewritten to \(…\)/\[…\] server-side
-             (freememo.markdown/dollar-math->tex), so NO `$` delimiter is configured
-             here and a currency `$` can never open math. window.__katexReady resolves
-             with renderMathInElement once the async auto-render script loads;
-             assistant-panel's render-math! chains each message's render on it. -->
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-        <script>
-            window.__katexReady = new Promise(function (resolve) { window.__katexResolve = resolve; });
-        </script>
-        <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-        <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
-                onload="window.__katexResolve(window.renderMathInElement)"></script>
+        <script src="/freememo/vendor/quill-resize-module@2.1.3/resize.js"></script>
 
         <script defer type="text/javascript" src="/freememo/js/shared.js"></script>
         <script defer type="text/javascript" src="/freememo/js/main.js"></script>
