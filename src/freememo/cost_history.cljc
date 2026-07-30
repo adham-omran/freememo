@@ -27,6 +27,7 @@
    "cards.cloze"       "Cloze cards"
    "cards.overlapping" "Overlapping cards"
    "cards.fact-select" "Fact selection"
+   "cards.grade"       "Card grading"
    "assistant.chat"    "Assistant chat"
    "kg.grade"          "KG grading"
    "kg.distill"        "KG distill"

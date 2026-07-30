@@ -1,19 +1,26 @@
 (ns freememo.quiz-page
-  "Quiz tab: three answering flows over the same question bank.
+  "Quiz tab: three answering flows over the question bank, plus card items.
 
      ReviewFlow  — the FSRS due queue; grades instantly, advances the schedule,
                    keeps no session row (kg_reviews carries the answer)
      QuizActive  — a custom quiz session; frozen draw, instant feedback
      ExamActive  — a timed sitting; answers saved ungraded, graded at submit
 
+   ReviewFlow's queue holds ITEM REFS — [:question id] or [:card flashcard-id ord] —
+   and dispatches each turn on the ref's type; a card turn lives in
+   freememo.quiz-card-turn. The custom quiz and the exam draw questions only
+   (plans/cards-in-quiz-queue.md §8.3).
+
    Landing is freememo.quiz-dashboard, not a flow: tiles plus the review and
    session histories. Session state lives in kg_sessions/kg_answers, so a reload
    lands back in the active session at the first unanswered question; client atoms
    only steer the in-page flow.
 
-   Every flow renders the same three curation controls (Flag, Suspend & Skip, Edit)
-   from freememo.question-curation. A skip suspends the question and writes nothing:
-   it is not an attempt, so it never scores and never advances a schedule."
+   Every QUESTION turn renders the same three curation controls (Flag, Suspend &
+   Skip, Edit) from freememo.question-curation. A skip suspends the question and
+   writes nothing: it is not an attempt, so it never scores and never advances a
+   schedule. Card items have no curation controls — those act on kg_questions and
+   have no target for a card."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -24,6 +31,7 @@
    [freememo.command-bus :as bus]
    [freememo.navigation :as nav]
    [freememo.question-curation :as curate]
+   [freememo.quiz-card-turn :as card-turn]
    [freememo.quiz-dashboard :as qd]
    [freememo.quiz-feedback :as fb]
    #?(:clj [freememo.db :as db])
@@ -100,11 +108,12 @@
 
 #?(:clj
    (defn review-queue*
-     "Ordered question ids due today, capped per the user's FSRS settings.
-      Post: vector of ids (learning → review → new)."
+     "Ordered item refs due today, capped per the user's FSRS settings. Mixes
+      questions and card items, alternating inside each capped tier.
+      Post: vector of [:question id] / [:card id ord] (learning → review → new)."
      [_kg-bump user-id]
      (let [{:keys [new-per-day review-per-day]} (settings/fsrs-config user-id)]
-       (db/draw-fsrs-due-queue user-id new-per-day review-per-day))))
+       (db/draw-review-queue user-id new-per-day review-per-day))))
 
 #?(:clj
    (defn review-answer!*
@@ -525,7 +534,7 @@
                     (str "Done for today — " reviewed " reviewed.")
                     "Nothing due right now.")))
       (dom/p (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
-        (dom/text "New questions surface here as you generate them and as cards come due."))
+        (dom/text "New questions and cards surface here as you generate them and as items come due."))
       (dom/div
         (dom/props {:style {:display "flex" :gap "8px" :justify-content "center" :margin-top "12px"}})
         (dom/button (dom/props {:class "btn"})
@@ -535,11 +544,86 @@
           (dom/text "Dashboard")
           (dom/On "click" (fn [_] (reset! !view :dashboard)) nil))))))
 
-(e/defn ReviewFlow
-  "Live FSRS due-today queue. `!queue` holds the remaining question ids; a
-   graded card that is still due today is appended back (learning steps).
+(e/defn QuestionTurn
+  "One question item's turn: the wording, the curation controls, then either the
+   answer box or the graded feedback. Unchanged behaviour — extracted from
+   ReviewFlow so the card branch does not grow that method (`:prod` bytecode limits
+   bite per method).
 
-   A skipped card is dropped from the queue and not counted as reviewed — the
+   `advance!` takes counted? and requeue?; `skip!` is the curation bar's
+   suspend-and-skip, which is not an attempt and so never counts."
+  [user-id qid !feedback feedback !draft draft !grading? grading?
+   !entity-card entity-card !editing navigate-source! advance!]
+  (e/client
+    (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
+          qdata (e/server (quiz-question* kg-bump user-id qid))
+          ;; Unanswered: no tally, no return.
+          skip! (fn [] (advance! false false))
+          ;; Answered, then suspended: the grade counted, but a suspended question
+          ;; must never be re-enqueued or it would reappear immediately.
+          leave-suspended! (fn [] (advance! true false))]
+      (dom/div
+        (dom/h3 (dom/props {:style {:font-size "16px" :margin "14px 0"}})
+          (dom/text (str (:question qdata))))
+        ;; Pre-answer a suspend is a skip; post-answer the grade already counted,
+        ;; so it leaves as a completed review that will not come back.
+        (curate/CurationBar user-id qdata
+          (if (nil? feedback) skip! leave-suspended!) !editing)
+        (if (nil? feedback)
+          (dom/div
+            ;; Forms5: Input! (tracked textarea) + Button! (tracked submit),
+            ;; via e/amb — never `do` here, it would swallow whichever token
+            ;; isn't last and hang that control. Field edits mirror into
+            ;; !draft and ack immediately (no server round-trip per
+            ;; keystroke); the submit command grades on the server.
+            (e/for [[t edit] (e/amb
+                               (forms/Input! :review/answer draft :as :textarea
+                                 :class "form-input" :rows 4
+                                 :placeholder "Answer in your own words…"
+                                 :aria-label "Your answer"
+                                 :style {:width "100%" :resize "vertical"})
+                               (forms/Button! [::submit]
+                                 :class "btn btn-primary" :style {:margin-top "8px"}
+                                 :label (if grading? "Grading…" "Submit")
+                                 :disabled (or grading? (str/blank? (str draft)))))]
+              (if (map? edit)
+                (do (reset! !draft (:review/answer edit)) (t))
+                (let [answer (str/trim (str draft))]
+                  (if (str/blank? answer)
+                    (t) ; defence in depth — the button is disabled for this
+                    (do (reset! !grading? true)
+                      (let [res (e/server
+                                  (e/Offload #(review-answer!* user-id qid answer)))]
+                        (case res ; wait on the value — do would race the token
+                          (do (reset! !grading? false)
+                            (when (:success (:result res))
+                              (reset! !feedback {:result (:result res)
+                                                 :answer answer
+                                                 :schedule (:schedule res)}))
+                            (t))))))))))
+          (dom/div
+            (fb/QuizFeedback (:result feedback) (:answer feedback)
+              (:entities qdata) !entity-card navigate-source!)
+            (dom/button
+              (dom/props {:class "btn btn-primary" :style {:margin-top "12px"}})
+              (dom/text "Next")
+              (dom/On "click"
+                (fn [_]
+                  (advance! true (boolean (get-in feedback [:schedule :due-today?]))))
+                nil))))
+        ;; Sibling of the answer/feedback `if` — must mount for the whole turn.
+        (fb/EntityCardPopover user-id !entity-card entity-card)))))
+
+(e/defn ReviewFlow
+  "Live FSRS due-today queue. `!queue` holds the remaining ITEM REFS; a graded item
+   still due today is appended back (learning steps).
+
+   Each turn dispatches on the ref's type: a question renders QuestionTurn, a card
+   renders freememo.quiz-card-turn/CardTurn. The queue, the tally and the
+   leave-the-item bookkeeping are shared — the item types differ in how they are
+   asked and graded, not in how the sitting advances.
+
+   A skipped item is dropped from the queue and not counted as reviewed — the
    `::unset` seed guard means the KG bump a suspension triggers recomputes
    `initial` without reshuffling the sitting in progress."
   [user-id !view !editing navigate-source!]
@@ -568,83 +652,43 @@
           (= ::unset queue) (do (reset! !queue (vec initial)) nil)
           (empty? queue) (ReviewDone reviewed !view)
           :else
-          (let [qid (first queue)
+          (let [item (first queue)
                 remaining (count queue)
-                qdata (e/server (quiz-question* kg-bump user-id qid))
-                ;; Every way out of the current card goes through here, so the drop
+                ;; Every way out of the current item goes through here, so the drop
                 ;; and the answer-box reset cannot drift between them.
                 ;; `counted?` — the learner answered it, so it belongs in the
                 ;; sitting's tally; a skip did not and must not inflate it.
                 ;; `requeue?` — bring it back later today (FSRS learning steps).
-                leave-card! (fn [counted? requeue?]
-                              (let [head (first @!queue)]
-                                (when counted? (swap! !reviewed inc))
-                                (reset! !feedback nil)
-                                (reset! !draft "")
-                                (swap! !queue
-                                  (fn [q]
-                                    (let [rest-q (into [] (rest q))]
-                                      (if requeue? (conj rest-q head) rest-q))))))
-                ;; Unanswered: no tally, no return.
-                skip! (fn [] (leave-card! false false))
-                ;; Answered, then suspended: the grade counted, but a suspended card
-                ;; must never be re-enqueued or it would reappear immediately.
-                leave-suspended! (fn [] (leave-card! true false))]
+                advance! (fn [counted? requeue?]
+                           (let [head (first @!queue)]
+                             (when counted? (swap! !reviewed inc))
+                             (reset! !feedback nil)
+                             (reset! !draft "")
+                             (swap! !queue
+                               (fn [q]
+                                 (let [rest-q (into [] (rest q))]
+                                   (if requeue? (conj rest-q head) rest-q))))))]
             (dom/div
               (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"
                                   :margin "10px 0"}})
               (dom/text (str remaining " due · " reviewed " reviewed")))
-            (dom/h3 (dom/props {:style {:font-size "16px" :margin "14px 0"}})
-              (dom/text (str (:question qdata))))
-            ;; Pre-answer a suspend is a skip; post-answer the grade already counted,
-            ;; so it leaves as a completed review that will not come back.
-            (curate/CurationBar user-id qdata
-              (if (nil? feedback) skip! leave-suspended!) !editing)
-            (if (nil? feedback)
-              (dom/div
-                ;; Forms5: Input! (tracked textarea) + Button! (tracked submit),
-                ;; via e/amb — never `do` here, it would swallow whichever token
-                ;; isn't last and hang that control. Field edits mirror into
-                ;; !draft and ack immediately (no server round-trip per
-                ;; keystroke); the submit command grades on the server.
-                (e/for [[t edit] (e/amb
-                                   (forms/Input! :review/answer draft :as :textarea
-                                     :class "form-input" :rows 4
-                                     :placeholder "Answer in your own words…"
-                                     :aria-label "Your answer"
-                                     :style {:width "100%" :resize "vertical"})
-                                   (forms/Button! [::submit]
-                                     :class "btn btn-primary" :style {:margin-top "8px"}
-                                     :label (if grading? "Grading…" "Submit")
-                                     :disabled (or grading? (str/blank? (str draft)))))]
-                  (if (map? edit)
-                    (do (reset! !draft (:review/answer edit)) (t))
-                    (let [answer (str/trim (str draft))]
-                      (if (str/blank? answer)
-                        (t) ; defence in depth — the button is disabled for this
-                        (do (reset! !grading? true)
-                          (let [res (e/server
-                                      (e/Offload #(review-answer!* user-id qid answer)))]
-                            (case res ; wait on the value — do would race the token
-                              (do (reset! !grading? false)
-                                (when (:success (:result res))
-                                  (reset! !feedback {:result (:result res)
-                                                     :answer answer
-                                                     :schedule (:schedule res)}))
-                                (t))))))))))
-              (dom/div
-                (fb/QuizFeedback (:result feedback) (:answer feedback)
-                  (:entities qdata) !entity-card navigate-source!)
-                (dom/button
-                  (dom/props {:class "btn btn-primary" :style {:margin-top "12px"}})
-                  (dom/text "Next")
-                  (dom/On "click"
-                    (fn [_]
-                      (leave-card! true
-                        (boolean (get-in feedback [:schedule :due-today?]))))
-                    nil))))
-            ;; Sibling of the answer/feedback `if` — must mount for the session.
-            (fb/EntityCardPopover user-id !entity-card entity-card)))))))
+            ;; Frame isolation, keyed on the item AND the tally. Every turn-local
+            ;; atom (a card's revealed?/draft) must start fresh on the next item, and
+            ;; the item ref alone is not enough: requeueing the only card in the queue
+            ;; leaves the same ref at the head, which would keep a revealed answer
+            ;; revealed. The tally changes on every answered exit, so the pair always
+            ;; changes. Skips do not bump it, but they do drop the item, so the ref
+            ;; changes instead.
+            (e/for-by identity [_k [[item reviewed]]]
+              (if (= :card (first item))
+                ;; A rating or a graded answer counts; the skip is reachable only when
+                ;; the card has vanished, and must not inflate the tally.
+                (card-turn/CardTurn user-id item !feedback feedback
+                  (fn [requeue?] (advance! true requeue?))
+                  (fn [] (advance! false false)))
+                (QuestionTurn user-id (second item) !feedback feedback !draft draft
+                  !grading? grading? !entity-card entity-card !editing
+                  navigate-source! advance!)))))))))
 
 (defonce !pending-preset
   ;; Palette → QuizPage handoff ({:mode "quiz"|"exam"} or {:view :history}),

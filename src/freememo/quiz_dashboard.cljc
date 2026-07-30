@@ -17,6 +17,7 @@
    [freememo.scroll :refer [Scroll-window]]
    [freememo.icons :as icons]
    [freememo.question-curation :as curate]
+   [freememo.quiz-card-turn :as card-turn]
    [freememo.quiz-feedback :as fb]
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])
@@ -47,7 +48,7 @@
      (let [{:keys [new-per-day review-per-day]} (settings/fsrs-config user-id)
            {:keys [new-today reviews-today]} (db/fsrs-daily-counts user-id)]
        (merge (db/kg-question-bank-counts user-id)
-         {:due (db/fsrs-due-count user-id new-per-day review-per-day)
+         {:due (db/review-due-count user-id new-per-day review-per-day)
           :reviewed-today (+ new-today reviews-today)
           :new-today new-today}))))
 
@@ -209,11 +210,12 @@
     (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
           detail (e/server (review-detail* kg-bump user-id review-id))
           {:keys [review missed-facts]} detail
-          {:keys [verdict user_answer explanation question_text live_question
-                  reference_answer reviewed_at flagged suspended question_id]} review
+          {:keys [verdict rating user_answer explanation question_text live_question
+                  reference_answer reviewed_at flagged suspended question_id
+                  flashcard_id]} review
           !entity-card (atom nil) entity-card (e/watch !entity-card)
           !editing (atom nil)
-          [label color] (get fb/verdict-badge verdict ["— Ungraded" "var(--color-text-secondary)"])]
+          [label color] (fb/grade-badge verdict rating)]
       (dom/div
         (dom/props {:style panel-style})
         (dom/div
@@ -227,9 +229,16 @@
           (dom/span (dom/props {:style {:font-weight "700" :color color :font-size "14px"
                                         :margin-left "auto"}})
             (dom/text label)))
-        (if (nil? review)
+        (cond
+          (nil? review)
           (dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
             (dom/text "That review is no longer available."))
+
+          ;; A card review has no question id, so none of the question-shaped
+          ;; presentation below applies — see quiz-card-turn/CardReviewBody.
+          (some? flashcard_id) (card-turn/CardReviewBody review)
+
+          :else
           (dom/div
             ;; Live wording: the row is traversed by question id, so clicking through
             ;; shows what the question says now. The recorded wording follows below
@@ -283,10 +292,11 @@
           (dom/table
             (dom/props {:style {:width "100%"}})
             (e/for [i (Tape offset limit)]
-              (when-let [{:keys [id question_text verdict reviewed_at]}
+              (when-let [{:keys [id prompt verdict rating reviewed_at]}
                          (e/server (nth rows i nil))]
-                (let [[label color] (get fb/verdict-badge verdict
-                                      ["—" "var(--color-text-secondary)"])]
+                ;; A self-rated card row has no verdict, so it shows its rating —
+                ;; never an empty badge.
+                (let [[label color] (fb/grade-badge verdict rating)]
                   (dom/tr
                     (dom/props {:class (when (even? i) "row-alt")
                                 :style {:--order i :height (str row-height "px")
@@ -299,8 +309,8 @@
                       (dom/span
                         (dom/props {:style {:font-size "13px" :white-space "nowrap"
                                             :overflow "hidden" :text-overflow "ellipsis"}})
-                        (tooltip/Tooltip! (str question_text))
-                        (dom/text (or (not-empty (str question_text)) "(question not recorded)"))))
+                        (tooltip/Tooltip! (str prompt))
+                        (dom/text (or (not-empty (str prompt)) "(wording not recorded)"))))
                     (dom/td
                       (dom/props {:style {:display "flex" :align-items "center"
                                           :font-size "13px" :font-weight "600" :color color

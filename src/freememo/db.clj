@@ -10,6 +10,7 @@
    [cheshire.core :as json]
    [taoensso.telemere :as tel]
    [clojure.string :as str]
+   [freememo.cloze :as cloze]
    [freememo.csl-util :as csl]
    [freememo.html-cleaner :as cleaner]
    [freememo.input-check :as input]
@@ -909,6 +910,58 @@
     )"])
 )
 
+(defn- setup-schema-card-quiz!
+  "Flashcards as Quiz items: per-deletion FSRS state, and kg_reviews widened to log
+   a card review. See plans/cards-in-quiz-queue.md §1. Runs after
+   setup-schema-kg! — it alters kg_reviews."
+  []
+  ;; One row per QUIZ ITEM, not per card. A cloze card yields one item per
+  ;; deletion (ord = the N in {{cN::…}}); a basic card yields exactly one (ord 0).
+  ;; Rows are created lazily on first review, so an ABSENT row means "never
+  ;; introduced" — the same signal `fsrs_due IS NULL` carries for a question.
+  ;; Columns mirror kg_questions' FSRS set; freememo.fsrs owns their meaning.
+  ;; No user_id: a card is scoped through flashcards.root_topic_id → topics.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS card_schedules (
+      flashcard_id INTEGER NOT NULL REFERENCES flashcards(id) ON DELETE CASCADE,
+      ord SMALLINT NOT NULL,
+      state SMALLINT NOT NULL DEFAULT 1,
+      step SMALLINT DEFAULT 0,
+      stability REAL,
+      difficulty REAL,
+      due TIMESTAMPTZ,
+      reps INTEGER NOT NULL DEFAULT 0,
+      lapses INTEGER NOT NULL DEFAULT 0,
+      last_review TIMESTAMPTZ,
+      PRIMARY KEY (flashcard_id, ord)
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_card_schedules_due
+                      ON card_schedules(due) WHERE due IS NOT NULL"])
+
+  ;; kg_reviews logs BOTH item types: exactly one of question_id / flashcard_id is
+  ;; set, and a card row also carries its ord. One log table is what keeps
+  ;; fsrs-daily-counts — and so the shared daily cap — a single query.
+  (jdbc/execute! ds ["ALTER TABLE kg_reviews ALTER COLUMN question_id DROP NOT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE kg_reviews ADD COLUMN IF NOT EXISTS flashcard_id INTEGER
+                      REFERENCES flashcards(id) ON DELETE CASCADE"])
+  (jdbc/execute! ds ["ALTER TABLE kg_reviews ADD COLUMN IF NOT EXISTS ord SMALLINT"])
+  ;; Which arm produced the rating. Without it a self-graded Good (rating 3, NULL
+  ;; verdict) cannot be told apart from a row written before this column existed.
+  (jdbc/execute! ds ["ALTER TABLE kg_reviews ADD COLUMN IF NOT EXISTS grade_source TEXT
+                      NOT NULL DEFAULT 'ai'"])
+  ;; Drop-then-add is the idempotent shape for a named CHECK (ADD CONSTRAINT has no
+  ;; IF NOT EXISTS).
+  (jdbc/execute! ds ["ALTER TABLE kg_reviews DROP CONSTRAINT IF EXISTS kg_reviews_grade_source"])
+  (jdbc/execute! ds ["ALTER TABLE kg_reviews ADD CONSTRAINT kg_reviews_grade_source
+                      CHECK (grade_source IN ('ai','self'))"])
+  (jdbc/execute! ds ["ALTER TABLE kg_reviews DROP CONSTRAINT IF EXISTS kg_reviews_one_item"])
+  (jdbc/execute! ds ["ALTER TABLE kg_reviews ADD CONSTRAINT kg_reviews_one_item
+                      CHECK ((question_id IS NULL) <> (flashcard_id IS NULL)
+                             AND (flashcard_id IS NULL OR ord IS NOT NULL))"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_reviews_card
+                      ON kg_reviews(flashcard_id, ord, reviewed_at DESC)
+                      WHERE flashcard_id IS NOT NULL"]))
+
 (defn- setup-schema-video!
   "Incremental Video (plans/incremental-video.md §4.1): the large-object anchor,
    the reference transcript, extract ranges, chunked-upload sessions, and the
@@ -1040,6 +1093,7 @@
   (setup-schema-credits!)
   (setup-schema-undo!)
   (setup-schema-kg!)
+  (setup-schema-card-quiz!)
   (setup-schema-video!)
 
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
@@ -6934,19 +6988,130 @@
               {:builder-fn rs/as-unqualified-maps})]
     {:new-today (long (:new_today row)) :reviews-today (long (:reviews_today row))}))
 
-(defn draw-fsrs-due-queue
-  "Ordered question ids for a Review session: learning/relearning due now
-   (uncapped), then Review cards due today (capped at review-limit − reviews so
-   far), then never-seen cards (capped at new-limit − new so far). The client
-   holds this as a live queue and re-enqueues cards that fall due again today.
-   Post: vector of ids, order learning → review → new; no suspended question in
-         any of the three tiers."
+;; --- Card quiz items -------------------------------------------------------
+;; A quiz item is [:question id] or [:card flashcard-id ord]. The draw, the client
+;; queue, apply-fsrs-review! and the review log all speak this one shape
+;; (plans/cards-in-quiz-queue.md §1.5).
+
+(defn- card-quiz-where
+  "SQL predicate for \"this flashcard yields quiz items\". Occlusion, score and
+   overlapping cards carry no typed answer, so the quiz never asks them.
+   Pre:  `alias` is the flashcards alias in the enclosing query (no user input).
+   Post: a SQL fragment safe to AND into a WHERE clause."
+  [alias]
+  (str alias ".kind IN ('basic','cloze')"))
+
+(defn- live-ord?
+  "Whether `ord` still exists in this card's text — the guard that keeps a stale
+   schedule row (its deletion edited away) out of a draw. A basic card has exactly
+   ord 0; a cloze card's ords come from freememo.cloze, the single scan.
+   Pre:  `kind` is 'basic' or 'cloze' (card-quiz-where guarantees it)."
+  [kind cloze-text ord]
+  (if (= "basic" kind)
+    (zero? ord)
+    (boolean (some #{ord} (cloze/ords cloze-text)))))
+
+(defn- card-refs
+  "Rows of {:flashcard_id :ord :kind :cloze} → [:card id ord] refs, dropping any
+   whose ord no longer exists in the card text.
+   Post: order preserved; every ref's ord is live."
+  [rows]
+  (into []
+    (comp (filter #(live-ord? (:kind %) (:cloze %) (:ord %)))
+      (map (fn [r] [:card (:flashcard_id r) (long (:ord r))])))
+    rows))
+
+(defn- due-card-items
+  "Card items whose schedule is due, for one tier. Not SQL-limited: the ord-liveness
+   filter runs in Clojure, so a LIMIT here could silently under-fill. The caller's
+   cap bounds the result instead.
+   Post: refs ordered by due ascending."
+  [user-id where]
+  (card-refs
+    (jdbc/execute! ds
+      [(str "SELECT cs.flashcard_id, cs.ord, f.kind, f.cloze
+             FROM card_schedules cs
+             JOIN flashcards f ON f.id = cs.flashcard_id
+             JOIN topics root ON root.id = f.root_topic_id
+             WHERE root.user_id = ? AND " (card-quiz-where "f")
+        " AND " where
+        " ORDER BY cs.due ASC")
+       user-id]
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn- fresh-card-items
+  "Card items never yet reviewed, up to `room`.
+
+   Two passes, cheap first. An untouched card (no schedule row at all) yields every
+   ord it has, so a SQL LIMIT over untouched cards is safe and usually fills the
+   room on its own. Only when it does not do we scan partially-reviewed cloze cards,
+   whose fresh ords need the text parsed.
+   Post: ≤ room refs; none has a card_schedules row."
+  [user-id room]
+  (let [untouched
+        (into []
+          (mapcat (fn [{:keys [id kind cloze]}]
+                    (if (= "basic" kind)
+                      [[:card id 0]]
+                      (map (fn [n] [:card id n]) (cloze/ords cloze)))))
+          (jdbc/execute! ds
+            [(str "SELECT f.id, f.kind, f.cloze FROM flashcards f
+                   JOIN topics root ON root.id = f.root_topic_id
+                   WHERE root.user_id = ? AND " (card-quiz-where "f")
+              " AND NOT EXISTS (SELECT 1 FROM card_schedules cs
+                                WHERE cs.flashcard_id = f.id)
+                ORDER BY f.id LIMIT ?")
+             user-id room]
+            {:builder-fn rs/as-unqualified-maps}))]
+    (if (>= (count untouched) room)
+      (into [] (take room) untouched)
+      (let [partial-refs
+            (into []
+              (mapcat (fn [{:keys [id cloze ords]}]
+                        (let [seen (set (sql-int-array->vec ords))]
+                          (into [] (comp (remove seen) (map (fn [n] [:card id n])))
+                            (cloze/ords cloze)))))
+              (jdbc/execute! ds
+                ["SELECT f.id, f.cloze, array_agg(cs.ord) AS ords
+                  FROM flashcards f
+                  JOIN topics root ON root.id = f.root_topic_id
+                  JOIN card_schedules cs ON cs.flashcard_id = f.id
+                  WHERE root.user_id = ? AND f.kind = 'cloze'
+                  GROUP BY f.id, f.cloze
+                  ORDER BY f.id"
+                 user-id]
+                {:builder-fn rs/as-unqualified-maps}))]
+        (into [] (take room) (concat untouched partial-refs))))))
+
+(defn- alternate
+  "Lazily take from `a` and `b` in turn; when one runs out the other supplies the
+   rest. Post: a seq of (count a) + (count b) items, each input's order preserved."
+  [a b]
+  (lazy-seq
+    (cond
+      (empty? a) b
+      (empty? b) a
+      :else (cons (first a) (cons (first b) (alternate (rest a) (rest b)))))))
+
+(defn draw-review-queue
+  "Ordered quiz items for a Review sitting, mixing questions and card items.
+
+   Three tiers in order: learning/relearning due now (uncapped), then Review items
+   due today (capped at review-limit − reviews so far), then never-introduced items
+   (capped at new-limit − new so far). Inside each capped tier, questions and cards
+   alternate, so a card bank several times the size of the question bank cannot
+   crowd questions out (plans/cards-in-quiz-queue.md D11). One budget spans both
+   types — fsrs_daily_counts reads the single kg_reviews log.
+
+   The client holds this as a live queue and re-enqueues items still due today.
+   Post: vector of item refs, order learning → review → new; no suspended question
+         and no stale cloze ord in any tier."
   [user-id new-limit review-limit]
   (let [{:keys [new-today reviews-today]} (fsrs-daily-counts user-id)
         review-room (max 0 (- review-limit reviews-today))
         new-room    (max 0 (- new-limit new-today))
         q (fn [where order limit]
-            (mapv :id
+            (mapv (fn [r] [:question (:id r)])
               (jdbc/execute! ds
                 (into [(str "SELECT q.id FROM kg_questions q
                              WHERE q.user_id = ? AND " (drawable-question-where "q")
@@ -6954,89 +7119,161 @@
                             " ORDER BY " order (when limit " LIMIT ?"))]
                   (cond-> [user-id] limit (conj limit)))
                 {:builder-fn rs/as-unqualified-maps})))
-        learning (q "q.fsrs_state IN (1,3) AND q.fsrs_due IS NOT NULL AND q.fsrs_due <= now()"
-                   "q.fsrs_due ASC" nil)
+        ;; Uncapped, so alternating cannot starve either type — it only mixes them.
+        learning (alternate
+                   (q "q.fsrs_state IN (1,3) AND q.fsrs_due IS NOT NULL AND q.fsrs_due <= now()"
+                     "q.fsrs_due ASC" nil)
+                   (due-card-items user-id
+                     "cs.state IN (1,3) AND cs.due IS NOT NULL AND cs.due <= now()"))
         reviews  (if (pos? review-room)
-                   (q "q.fsrs_state = 2 AND q.fsrs_due IS NOT NULL AND q.fsrs_due::date <= CURRENT_DATE"
-                     "q.fsrs_due ASC" review-room)
+                   (take review-room
+                     (alternate
+                       (q "q.fsrs_state = 2 AND q.fsrs_due IS NOT NULL AND q.fsrs_due::date <= CURRENT_DATE"
+                         "q.fsrs_due ASC" review-room)
+                       (due-card-items user-id
+                         "cs.state = 2 AND cs.due IS NOT NULL AND cs.due::date <= CURRENT_DATE")))
                    [])
         news     (if (pos? new-room)
-                   (q "q.fsrs_due IS NULL" "q.id ASC" new-room)
+                   (take new-room
+                     (alternate (q "q.fsrs_due IS NULL" "q.id ASC" new-room)
+                       (fresh-card-items user-id new-room)))
                    [])]
     (vec (concat learning reviews news))))
 
+(defn- load-question-memory!
+  "The question's FSRS state, row-locked. nil when it is not this user's.
+   Post: {:state :step :stability :difficulty :reps :lapses :gap_secs} or nil."
+  [tx user-id question-id]
+  (jdbc/execute-one! tx
+    ["SELECT fsrs_state AS state, fsrs_step AS step, fsrs_stability AS stability,
+             fsrs_difficulty AS difficulty, fsrs_reps AS reps, fsrs_lapses AS lapses,
+             EXTRACT(EPOCH FROM (now() - fsrs_last_review)) AS gap_secs
+      FROM kg_questions
+      WHERE id = ? AND user_id = ? FOR UPDATE"
+     question-id user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn- load-card-memory!
+  "The card item's FSRS state, row-locked, creating the row on first review.
+
+   A missing row means never introduced, so it is inserted at fsrs/new-card state
+   before the advance — this is where §2.3's lazy materialization happens. Ownership
+   comes from flashcards.root_topic_id → topics; nil when the card is not this
+   user's, in which case nothing is written.
+   Post: the same shape load-question-memory! returns, or nil."
+  [tx user-id card-id ord]
+  (when (= user-id (:user_id (jdbc/execute-one! tx
+                               ["SELECT root.user_id FROM flashcards f
+                                 JOIN topics root ON root.id = f.root_topic_id
+                                 WHERE f.id = ?" card-id]
+                               {:builder-fn rs/as-unqualified-maps})))
+    (jdbc/execute-one! tx
+      ["INSERT INTO card_schedules (flashcard_id, ord, state, step)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT (flashcard_id, ord) DO NOTHING"
+       card-id ord (:state fsrs/new-card) (:step fsrs/new-card)])
+    (jdbc/execute-one! tx
+      ["SELECT state, step, stability, difficulty, reps, lapses,
+               EXTRACT(EPOCH FROM (now() - last_review)) AS gap_secs
+        FROM card_schedules
+        WHERE flashcard_id = ? AND ord = ? FOR UPDATE"
+       card-id ord]
+      {:builder-fn rs/as-unqualified-maps})))
+
 (defn apply-fsrs-review!
-  "Advance a question's FSRS schedule by `rating` and append a kg_reviews row,
+  "Advance one quiz item's FSRS schedule by `rating` and append a kg_reviews row,
    in one transaction. Postgres now() is the transaction clock, so the elapsed gap
    and the new due date are computed against a single consistent instant.
 
+   `item-ref` is [:question id] or [:card flashcard-id ord]. Both types advance by
+   the same freememo.fsrs step and land in the same log; only the state table and
+   the wording snapshot differ.
+
    The Review flow writes no kg_answers row, so this row IS its answer history:
-   `record` carries {:verdict :explanation :user-answer :missed-fact-ids} and the
-   question's current wording is snapshotted by subselect. Because this runs only
-   after a successful grade, a grading failure leaves no row and no answer record —
-   the session flows persist before grading instead.
-   Pre:  question belongs to user-id (else returns nil, no write).
-   Post: kg_questions FSRS cols advanced; exactly one kg_reviews row inserted
-         carrying the answer; returns {:state :reps :lapses :scheduled-days
-         :due-today?}."
-  [user-id question-id rating record scheduler enable-fuzzing]
-  (jdbc/with-transaction [tx ds]
-    (when-let [row (jdbc/execute-one! tx
-                     ["SELECT fsrs_state, fsrs_step, fsrs_stability, fsrs_difficulty,
-                              fsrs_reps, fsrs_lapses,
-                              EXTRACT(EPOCH FROM (now() - fsrs_last_review)) AS gap_secs
-                       FROM kg_questions
-                       WHERE id = ? AND user_id = ? FOR UPDATE"
-                      question-id user-id]
-                     {:builder-fn rs/as-unqualified-maps})]
-      (let [state-before (long (:fsrs_state row))
-            reps-before  (long (:fsrs_reps row))
-            gap          (:gap_secs row)
-            days-since   (when gap (long (Math/floor (/ (double gap) 86400.0))))
-            elapsed      (max 0 (or days-since 0))
-            card {:state state-before
-                  :step (some-> (:fsrs_step row) long)
-                  :stability (some-> (:fsrs_stability row) double)
-                  :difficulty (some-> (:fsrs_difficulty row) double)}
-            res (fsrs/review-card scheduler card rating elapsed days-since)
-            state-after (:state res)
-            base-secs (:interval-seconds res)
-            secs (if (and enable-fuzzing (= 2 state-after) (>= base-secs 86400))
-                   (* 86400 (fsrs/fuzz-interval-days scheduler (quot base-secs 86400) (rand)))
-                   base-secs)
-            scheduled-days (quot secs 86400)
-            lapse? (and (= 2 state-before) (= 1 rating))
-            upd (jdbc/execute-one! tx
-                  ["UPDATE kg_questions
-                    SET fsrs_state = ?, fsrs_step = ?, fsrs_stability = ?,
-                        fsrs_difficulty = ?, fsrs_reps = fsrs_reps + 1,
-                        fsrs_lapses = fsrs_lapses + ?, fsrs_last_review = now(),
-                        fsrs_due = now() + make_interval(secs => ?)
-                    WHERE id = ? AND user_id = ?
-                    RETURNING (fsrs_due::date <= CURRENT_DATE) AS due_today"
-                   state-after (:step res) (:stability res) (:difficulty res)
-                   (if lapse? 1 0) (double secs) question-id user-id]
-                  {:builder-fn rs/as-unqualified-maps})]
-        (jdbc/execute-one! tx
-          (sql/format
-            {:insert-into :kg_reviews
-             :values [{:user_id user-id :question_id question-id :rating rating
-                       :verdict (:verdict record)
-                       :state_before state-before :state_after state-after
-                       :reps_before reps-before
-                       :stability_after (:stability res) :difficulty_after (:difficulty res)
-                       :elapsed_days elapsed :scheduled_days scheduled-days
-                       :user_answer (some-> (:user-answer record) sanitize-utf8)
-                       :explanation (some-> (:explanation record) sanitize-utf8)
-                       :missed_fact_ids (int-array-value (:missed-fact-ids record))
-                       :question_text {:select [:question] :from [:kg_questions]
-                                       :where [:= :id question-id]}
-                       :reviewed_at [:now]}]}))
-        {:state state-after
-         :reps (inc reps-before)
-         :lapses (+ (long (:fsrs_lapses row)) (if lapse? 1 0))
-         :scheduled-days scheduled-days
-         :due-today? (boolean (:due_today upd))}))))
+   `record` carries {:verdict :explanation :user-answer :missed-fact-ids
+   :grade-source} and the item's current wording is snapshotted by subselect. On the
+   self-graded arm there is no verdict, explanation or answer — :grade-source 'self'
+   is what tells that row apart from one written before grade_source existed.
+   Pre:  the item belongs to user-id (else returns nil, no write); rating ∈ 1..4.
+   Post: the item's FSRS state advanced; exactly one kg_reviews row inserted;
+         returns {:state :reps :lapses :scheduled-days :due-today?}."
+  [user-id item-ref rating record scheduler enable-fuzzing]
+  (let [[item-kind a b] item-ref
+        card-id (when (= :card item-kind) a)
+        ord (when (= :card item-kind) b)
+        question-id (when (= :question item-kind) a)]
+    (jdbc/with-transaction [tx ds]
+      (when-let [row (if card-id
+                       (load-card-memory! tx user-id card-id ord)
+                       (load-question-memory! tx user-id question-id))]
+        (let [state-before (long (:state row))
+              reps-before  (long (:reps row))
+              gap          (:gap_secs row)
+              days-since   (when gap (long (Math/floor (/ (double gap) 86400.0))))
+              elapsed      (max 0 (or days-since 0))
+              card {:state state-before
+                    :step (some-> (:step row) long)
+                    :stability (some-> (:stability row) double)
+                    :difficulty (some-> (:difficulty row) double)}
+              res (fsrs/review-card scheduler card rating elapsed days-since)
+              state-after (:state res)
+              base-secs (:interval-seconds res)
+              secs (if (and enable-fuzzing (= 2 state-after) (>= base-secs 86400))
+                     (* 86400 (fsrs/fuzz-interval-days scheduler (quot base-secs 86400) (rand)))
+                     base-secs)
+              scheduled-days (quot secs 86400)
+              lapse? (and (= 2 state-before) (= 1 rating))
+              upd (if card-id
+                    (jdbc/execute-one! tx
+                      ["UPDATE card_schedules
+                        SET state = ?, step = ?, stability = ?, difficulty = ?,
+                            reps = reps + 1, lapses = lapses + ?, last_review = now(),
+                            due = now() + make_interval(secs => ?)
+                        WHERE flashcard_id = ? AND ord = ?
+                        RETURNING (due::date <= CURRENT_DATE) AS due_today"
+                       state-after (:step res) (:stability res) (:difficulty res)
+                       (if lapse? 1 0) (double secs) card-id ord]
+                      {:builder-fn rs/as-unqualified-maps})
+                    (jdbc/execute-one! tx
+                      ["UPDATE kg_questions
+                        SET fsrs_state = ?, fsrs_step = ?, fsrs_stability = ?,
+                            fsrs_difficulty = ?, fsrs_reps = fsrs_reps + 1,
+                            fsrs_lapses = fsrs_lapses + ?, fsrs_last_review = now(),
+                            fsrs_due = now() + make_interval(secs => ?)
+                        WHERE id = ? AND user_id = ?
+                        RETURNING (fsrs_due::date <= CURRENT_DATE) AS due_today"
+                       state-after (:step res) (:stability res) (:difficulty res)
+                       (if lapse? 1 0) (double secs) question-id user-id]
+                      {:builder-fn rs/as-unqualified-maps}))]
+          (jdbc/execute-one! tx
+            (sql/format
+              {:insert-into :kg_reviews
+               :values [{:user_id user-id :rating rating
+                         :question_id question-id
+                         :flashcard_id card-id :ord ord
+                         :grade_source (or (:grade-source record) "ai")
+                         :verdict (:verdict record)
+                         :state_before state-before :state_after state-after
+                         :reps_before reps-before
+                         :stability_after (:stability res) :difficulty_after (:difficulty res)
+                         :elapsed_days elapsed :scheduled_days scheduled-days
+                         :user_answer (some-> (:user-answer record) sanitize-utf8)
+                         :explanation (some-> (:explanation record) sanitize-utf8)
+                         :missed_fact_ids (int-array-value (:missed-fact-ids record))
+                         ;; The wording as asked. A cloze card stores its RAW text —
+                         ;; with `ord` alongside, history can re-derive the exact
+                         ;; prompt, and a later edit cannot rewrite the record.
+                         :question_text (if card-id
+                                          {:select [[[:coalesce :question :cloze]]]
+                                           :from [:flashcards] :where [:= :id card-id]}
+                                          {:select [:question] :from [:kg_questions]
+                                           :where [:= :id question-id]})
+                         :reviewed_at [:now]}]}))
+          {:state state-after
+           :reps (inc reps-before)
+           :lapses (+ (long (:lapses row)) (if lapse? 1 0))
+           :scheduled-days scheduled-days
+           :due-today? (boolean (:due_today upd))})))))
 
 (defn fsrs-review-history-daily
   "Per-day Review tallies over the last `days` days (server-local).
@@ -7054,13 +7291,39 @@
      user-id days]
     {:builder-fn rs/as-unqualified-maps}))
 
-(defn fsrs-due-count
-  "How many questions the next Review sitting would draw — the dashboard's due
-   tile. Counts the same three tiers as draw-fsrs-due-queue under the same caps, so
-   the tile can never disagree with the queue Start opens.
+(defn review-due-count
+  "How many items the next Review sitting would draw — the dashboard's due tile.
+   Runs the same draw under the same caps, so the tile can never disagree with the
+   queue Start opens. Counts questions and card items together.
    Post: a non-negative count."
   [user-id new-limit review-limit]
-  (count (draw-fsrs-due-queue user-id new-limit review-limit)))
+  (count (draw-review-queue user-id new-limit review-limit)))
+
+(defn get-card-item
+  "One card quiz item, as the review turn needs it.
+
+   `prompt` is what the learner sees: a basic card's question, or the cloze text with
+   this ord hidden and every other deletion revealed. `answer` is what it hides. Both
+   are stored HTML — the caller renders them through freememo.math.
+   Pre:  ord is live for this card (the draw guarantees it).
+   Post: {:card-id :ord :kind :prompt :answer} or nil when not found, not owned, or
+         the ord no longer exists in the card text."
+  [user-id card-id ord]
+  (when-let [c (jdbc/execute-one! ds
+                 ["SELECT f.id, f.kind, f.question, f.answer, f.cloze
+                   FROM flashcards f
+                   JOIN topics root ON root.id = f.root_topic_id
+                   WHERE f.id = ? AND root.user_id = ?"
+                  card-id user-id]
+                 {:builder-fn rs/as-unqualified-maps})]
+    (when (live-ord? (:kind c) (:cloze c) ord)
+      {:card-id (:id c) :ord ord :kind (:kind c)
+       :prompt (if (= "basic" (:kind c))
+                 (:question c)
+                 (cloze/mask-ord (:cloze c) ord))
+       :answer (if (= "basic" (:kind c))
+                 (:answer c)
+                 (cloze/answer-for-ord (:cloze c) ord))})))
 
 (defn kg-question-bank-counts
   "Bank-wide tallies for the quiz dashboard tiles. Counts live (approved) questions
@@ -7079,45 +7342,77 @@
     {:live (long (:live r)) :flagged (long (:flagged r))
      :suspended (long (:suspended r))}))
 
-(defn fsrs-review-log
-  "One row per graded review, newest first — the Reviews tab's list.
+(defn- review-row-prompt
+  "The wording to show for one kg_reviews row.
 
-   question_text is the wording as asked; the LIST renders that snapshot so a later
-   edit cannot rewrite the record, while the detail reads the live question by id.
-   NULL question_text marks a row written before the column existed — \"not
+   A question row's snapshot is already display text. A CARD row's snapshot is the
+   card's raw text, so a cloze snapshot still carries its {{cN::…}} markers and must
+   be masked back to the prompt that ord was asked as. ord 0 means a basic card —
+   cloze numbering is a gap-free 1..max, so 0 can only be the basic ord.
+   Post: a string, or nil when the row predates the snapshot column."
+  [{:keys [flashcard_id ord question_text]}]
+  (cond
+    (nil? question_text) nil
+    (nil? flashcard_id) question_text
+    (zero? (long ord)) question_text
+    :else (cloze/mask-ord question_text (long ord))))
+
+(defn fsrs-review-log
+  "One row per graded review, newest first — the Reviews tab's list. Covers both
+   item types: a card row carries :flashcard_id + :ord instead of :question_id.
+
+   :prompt is the wording as asked; the LIST renders that snapshot so a later edit
+   cannot rewrite the record, while the detail reads the live item by id. A nil
+   :prompt marks a row written before the snapshot column existed — \"not
    recorded\", which the UI must not present as \"unchanged\".
-   Post: ≤ `limit` rows {:id :question_id :question_text :verdict :rating
-         :reviewed_at}, newest first."
+   Post: ≤ `limit` rows {:id :question_id :flashcard_id :ord :prompt :question_text
+         :verdict :rating :grade_source :reviewed_at}, newest first."
   [user-id limit]
-  (jdbc/execute! ds
-    ["SELECT r.id, r.question_id, r.question_text, r.verdict, r.rating,
-             to_char(r.reviewed_at, 'YYYY-MM-DD HH24:MI') AS reviewed_at
-      FROM kg_reviews r
-      WHERE r.user_id = ?
-      ORDER BY r.reviewed_at DESC, r.id DESC
-      LIMIT ?"
-     user-id limit]
-    {:builder-fn rs/as-unqualified-maps}))
+  (into []
+    (map (fn [r] (assoc r :prompt (review-row-prompt r))))
+    (jdbc/execute! ds
+      ["SELECT r.id, r.question_id, r.flashcard_id, r.ord, r.question_text,
+               r.verdict, r.rating, r.grade_source,
+               to_char(r.reviewed_at, 'YYYY-MM-DD HH24:MI') AS reviewed_at
+        FROM kg_reviews r
+        WHERE r.user_id = ?
+        ORDER BY r.reviewed_at DESC, r.id DESC
+        LIMIT ?"
+       user-id limit]
+      {:builder-fn rs/as-unqualified-maps})))
 
 (defn kg-review-detail
   "One review as the answer view needs it: what was answered, how it was graded, the
-   wording as asked, and the question's wording NOW (by id, so an edit is visible
-   here even though the list keeps the snapshot).
+   wording as asked, and the item's wording NOW (by id, so an edit is visible here
+   even though the list keeps the snapshot).
+
+   The joins are LEFT joins because exactly one of them matches: a question row has
+   no flashcard and a card row has no question. A card row's live wording comes from
+   get-card-item, so an edited deletion shows here the same way an edited question
+   does; a card whose ord was edited away has no live wording at all.
    Post: {:review {…} :missed-facts [labeled rows]} or nil when not owned/found;
-         :question_text may be nil (pre-column row), :live_question never is."
+         :question_text may be nil (pre-column row); :live_question is nil only for a
+         card item whose ord is gone."
   [user-id review-id]
   (when-let [r (jdbc/execute-one! ds
-                 ["SELECT r.id, r.question_id, r.verdict, r.rating, r.user_answer,
+                 ["SELECT r.id, r.question_id, r.flashcard_id, r.ord, r.verdict,
+                          r.rating, r.grade_source, r.user_answer,
                           r.explanation, r.question_text, r.missed_fact_ids,
                           to_char(r.reviewed_at, 'YYYY-MM-DD HH24:MI') AS reviewed_at,
                           q.question AS live_question, q.reference_answer,
                           q.flagged, q.suspended
-                   FROM kg_reviews r JOIN kg_questions q ON q.id = r.question_id
+                   FROM kg_reviews r
+                   LEFT JOIN kg_questions q ON q.id = r.question_id
                    WHERE r.id = ? AND r.user_id = ?"
                   review-id user-id]
                  {:builder-fn rs/as-unqualified-maps})]
-    (let [missed (or (sql-int-array->vec (:missed_fact_ids r)) [])]
+    (let [missed (or (sql-int-array->vec (:missed_fact_ids r)) [])
+          card (when-let [cid (:flashcard_id r)]
+                 (get-card-item user-id cid (long (:ord r))))]
       {:review (assoc r :missed_fact_ids missed
+                 :prompt (review-row-prompt r)
+                 :live_question (or (:live_question r) (:prompt card))
+                 :reference_answer (or (:reference_answer r) (:answer card))
                  :flagged (boolean (:flagged r))
                  :suspended (boolean (:suspended r)))
        :missed-facts (kg-facts-labeled user-id missed)})))

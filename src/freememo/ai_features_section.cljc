@@ -140,6 +140,49 @@
         (dom/div (dom/props {:class "hint"})
           (dom/text "Model used for flashcard generation."))))))
 
+(e/defn CardQuizGradingField
+  "Whether the Quiz grades CARD items with the LLM, or the learner rates them 1-4.
+
+   Card items carry no facts, so the LLM can only grade against the card's own
+   answer — a weaker rubric than a question's fact set, and the reason this switch
+   exists (plans/cards-in-quiz-queue.md D3). Questions are always LLM-graded and
+   this never affects them.
+
+   Lives inside the parent's `when llm-enabled` block, so with LLM features off it
+   is not shown AND settings/card-quiz-llm-grading? already reads false — the Quiz
+   falls back to self-rating rather than offering an arm it cannot run."
+  [user-id credits-enabled?]
+  (e/client
+    (let [server-on? (e/server (settings/get-card-quiz-llm-grading user-id))
+          !on? (atom server-on?)
+          on? (e/watch !on?)]
+      (dom/div
+        (dom/props {:class "field"})
+        (dom/label
+          (dom/props {:style {:display "flex" :align-items "center" :gap "10px"
+                              :cursor "pointer"}})
+          (e/for [[t {:keys [card-quiz-llm]}] (forms/Checkbox! :card-quiz-llm on?
+                                                :style {:width "18px" :height "18px"
+                                                        :accent-color "var(--color-primary)"})]
+            (reset! !on? card-quiz-llm)
+            (let [r (e/server (e/Offload #(settings/save-card-quiz-llm-grading
+                                            user-id card-quiz-llm)))]
+              (case r
+                (if (:success r)
+                  (case (e/server (commands/bump! user-id :set-setting))
+                    (t))
+                  (t (:error r))))))
+          (dom/div
+            (dom/span
+              (dom/props {:style {:font-size "14px" :font-weight "500"
+                                  :color "var(--color-text-primary)"}})
+              (dom/text "Use LLM for Generated Cards in Quiz"))
+            (dom/div
+              (dom/props {:class "hint"})
+              (dom/text (if credits-enabled?
+                          "Cards are graded against their own answer, which spends credits per review. Off: reveal the answer and rate it yourself, Again to Easy."
+                          "Cards are graded against their own answer, one model call per review. Off: reveal the answer and rate it yourself, Again to Easy.")))))))))
+
 (e/defn AssistantModelField
   "Assistant model — Socratic reading-view chatbot. Same registry as card
    generation; defaults to Gemini 3 Flash."
@@ -547,6 +590,8 @@
             (ProviderKeyStatusField api-key-configured?))
 
           (CardModelField user-id card-model-ids card-label-of)
+
+          (CardQuizGradingField user-id credits-enabled?)
 
           (AssistantModelField user-id card-model-ids card-label-of)
 

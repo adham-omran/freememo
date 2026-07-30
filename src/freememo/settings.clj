@@ -52,6 +52,7 @@
 (def FSRS_NEW_PER_DAY "fsrs_new_per_day")
 (def FSRS_REVIEW_PER_DAY "fsrs_review_per_day")
 (def FSRS_FUZZ "fsrs_fuzz")
+(def CARD_QUIZ_LLM_GRADING "card_quiz_llm_grading")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
 
 (def kg-default-model-id
@@ -810,6 +811,31 @@
      :enable-fuzzing fuzz
      :new-per-day (get-fsrs-new-per-day user-id)
      :review-per-day (get-fsrs-review-per-day user-id)}))
+
+(defn get-card-quiz-llm-grading
+  "Whether the Quiz grades CARD items with the LLM; default true.
+
+   Off means the learner self-rates 1-4 instead (plans/cards-in-quiz-queue.md D3).
+   Questions are always LLM-graded and never consult this. The master LLM switch
+   outranks it — see card-quiz-llm-grading?, which every caller should use."
+  [user-id]
+  (not= "false" (db/get-setting user-id CARD_QUIZ_LLM_GRADING)))
+
+(defn save-card-quiz-llm-grading [user-id value]
+  (try
+    (db/set-setting user-id CARD_QUIZ_LLM_GRADING (str (boolean value)))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-card-quiz-llm-grading} e)
+      {:success false :error "Failed to save card grading mode"})))
+
+(defn card-quiz-llm-grading?
+  "The EFFECTIVE card grading arm: LLM grading needs both the master LLM switch and
+   the card-quiz setting. With LLM features off there is no grader to call, so the
+   Quiz must fall back to self-rating whatever the card-quiz setting holds.
+   Post: true ⇒ grade card items with the LLM; false ⇒ the learner rates 1-4."
+  [user-id]
+  (and (get-llm-enabled user-id) (get-card-quiz-llm-grading user-id)))
 
 (defn get-scan-dpi [user-id]
   (try
