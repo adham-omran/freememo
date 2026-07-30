@@ -67,6 +67,24 @@
    "partial"   ["◐ Partial" "#b26a00"]
    "incorrect" ["✗ Incorrect" "var(--color-danger, #c62828)"]})
 
+(def rating-badge
+  "FSRS rating → label + colour, keyed by the integer stored in kg_reviews.rating.
+   The single definition of how a rating reads, shared by the self-rating buttons and
+   the review-history list. A self-graded review has no verdict, so this is what its
+   row shows instead of an empty badge (plans/cards-in-quiz-queue.md §8.2)."
+  {1 ["Again" "var(--color-danger, #c62828)"]
+   2 ["Hard" "#b26a00"]
+   3 ["Good" "var(--color-success-dark, #2e7d32)"]
+   4 ["Easy" "var(--color-primary, #1565c0)"]})
+
+(defn grade-badge
+  "The badge for one review row: its verdict when an LLM graded it, else its own
+   rating. Post: [label colour]; never nil, so a row always renders something."
+  [verdict rating]
+  (or (get verdict-badge verdict)
+    (get rating-badge (some-> rating long))
+    ["—" "var(--color-text-secondary)"]))
+
 (e/defn EntityLinkedText
   "Text with entity mentions as concept links (click → popover via
    !entity-card) and matched keywords highlighted. Highlight ⊆ links: every
