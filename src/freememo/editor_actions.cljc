@@ -26,6 +26,27 @@
          0))
      :clj 0))
 
+(defn- inline-format-reset
+  "A Quill formats object clearing every inline format the editors can carry.
+
+   Do NOT reach for `removeFormat` instead: Quill 2.0.3's `Editor.removeFormat`
+   rebuilds the remainder of the line ending in a bare `.insert(\"\\n\")`, and the
+   newline is where BLOCK formats live (header, list, code-block, align,
+   indent) — so clozing a word inside a heading or a list item would silently
+   un-heading or un-list that line. `formatText` with inline-only keys cannot
+   reach the newline.
+
+   Fresh object per call: Quill's `overload` treats the formats argument as its
+   own to reshape, so a shared `#js` literal must not be handed to it.
+
+   Post: every key is an inline format registered by Quill's default registry;
+         no key is block-scoped."
+  []
+  #?(:cljs #js {:bold false :italic false :underline false :strike false
+                :code false :color false :background false
+                :size false :font false :link false :script false}
+     :clj nil))
+
 (defn insert-cloze!
   "Wrap the current Quill selection in an Anki cloze deletion {{cN::...}}.
      mode :inc → next cloze number (inc of the current max in the editor);
@@ -33,10 +54,29 @@
    Collapsed selection inserts an empty {{cN::}} with the cursor between
    :: and }}. No selection (editor never focused) → no-op. CLJS only.
 
+   The selected content is NEVER read, deleted, or re-inserted — only the two
+   marker strings are inserted, at the selection's boundaries. A prior version
+   round-tripped the selection through `(.getText ed index length)` +
+   `deleteText` + `insertText`, which silently destroyed everything Quill's
+   text API cannot represent: bold/italic/code/link/colour inside the range,
+   any <img> (getText drops non-string inserts outright), and the block format
+   of every line after the first. Bolding a word and then clozing it lost the
+   bold — the symptom that motivated this shape.
+
+   The markers themselves are reset to plain via `inline-format-reset`:
+   `insertText` at a boundary inherits the adjacent leaf's formats, and at the
+   two ends of a bold run those leaves differ — the opener lands in the plain
+   text before it, the closer inside the <strong> — emitting
+   `{{c1::<strong>www}}</strong>`, a closer trapped in the tag. Plain markers
+   keep the braces out of the formatting entirely.
+
    Pre  : `ed` is a Quill instance or nil; `mode` ∈ {:inc :eq}.
-   Post : on a live selection, editor text gains the wrapper and the cursor
-          sits after }} (selection) or inside (collapsed); the user-source
-          edit fires text-change → the field's :on-change → !cloze sync."
+   Post : the selected range is byte-identical in the Delta apart from being
+          surrounded by two unformatted marker runs; the cursor sits after }}
+          (selection) or between :: and }} (collapsed); the user-source edits
+          fire text-change → the field's :on-change → !cloze sync.
+   Inv  : end-boundary insert precedes start-boundary insert, so `index` stays
+          valid for the second insert."
   [ed mode]
   #?(:cljs
      (when ed
@@ -50,15 +90,17 @@
                  index  (.-index sel)
                  length (.-length sel)
                  prefix (str "{{c" n "::")
-                 suffix "}}"]
+                 suffix "}}"
+                 insert-plain! (fn [at text]
+                                 (.insertText ed at text "user")
+                                 (.formatText ed at (count text)
+                                   (inline-format-reset) "user"))]
              (if (pos? length)
-               (let [selected (.getText ed index length)]
-                 (.deleteText ed index length "user")
-                 (.insertText ed index (str prefix selected suffix) "user")
-                 (.setSelection ed (+ index (count prefix) (count selected) (count suffix)) 0 "user"))
-               (do
-                 (.insertText ed index (str prefix suffix) "user")
-                 (.setSelection ed (+ index (count prefix)) 0 "user")))))))
+               (do (insert-plain! (+ index length) suffix)   ; end first — see Inv
+                   (insert-plain! index prefix)
+                   (.setSelection ed (+ index (count prefix) length (count suffix)) 0 "user"))
+               (do (insert-plain! index (str prefix suffix))
+                   (.setSelection ed (+ index (count prefix)) 0 "user")))))))
      :clj nil))
 
 ;; ---------------------------------------------------------------------------
