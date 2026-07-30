@@ -58,6 +58,21 @@
   [tex]
   (str "\\(" tex "\\)"))
 
+(defn unwrap-tex
+  "The TeX body of `s`, with every `\\(` and `\\)` removed.
+
+   Inverse of `wrap-tex` on a wrapped string, and a no-op on a bare body — so a
+   formula editor can accept either without the caller knowing which it got.
+   Stripping unconditionally is safe: `\\(` and `\\)` are TeX's own inline-math
+   delimiters and cannot appear inside a formula body.
+
+   pre : `s` is a string or nil.
+   post: the result contains no `\\(` and no `\\)`."
+  [s]
+  (-> (or s "")
+    (str/replace "\\(" "")
+    (str/replace "\\)" "")))
+
 ;; ---------------------------------------------------------------------------
 ;; Pure conversions — cloze validation and the Anki boundary
 ;; ---------------------------------------------------------------------------

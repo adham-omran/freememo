@@ -17,6 +17,7 @@
    [freememo.math :as math]
    #?(:cljs [freememo.format-menu :as format-menu])
    #?(:cljs [freememo.code-lang-picker :as code-lang-picker])
+   #?(:cljs [freememo.formula-ui :as formula-ui])
    [clojure.string :as str]))
 
 ;; ---------------------------------------------------------------------------
@@ -57,10 +58,10 @@
 
    `math?` enables Quill's built-in formula module (KaTeX). It MUST be false
    unless KaTeX is on window — the module throws otherwise. No \"formula\" entry
-   is added to the toolbar: the bubble theme's tooltip is hidden in index.css, so
-   a toolbar button would be invisible. The insert affordance is a format-menu
-   button (`:formula?`, see freememo.editor-actions/insert-formula!); the module
-   is enabled here only so the Formula blot resolves and insertEmbed works."
+   is added to the toolbar, and there is no insert button anywhere: formulas are
+   created by typing `\\(…\\)` and edited through freememo.formula-ui's popover.
+   The module is enabled here purely so the Formula blot resolves — which is what
+   both the typed-source converter and the popover depend on."
   [placeholder extra math?]
   (merge
      {:theme "bubble"
@@ -272,10 +273,11 @@
          ;; the body cards + document listeners on modal close.
          {:editor ed
           :teardowns [(format-menu/install! ed {:image? true
-                                                :cloze? (boolean cloze?)
-                                                :formula? (boolean math?)})
+                                                :cloze? (boolean cloze?)})
                       (code-lang-picker/install! ed)
-                      (when math? (editor-actions/install-formula-editing! ed))]}))
+                      ;; Formula popover + typed-source conversion. Only when KaTeX
+                      ;; arrived — Formula.create throws without it.
+                      (when math? (formula-ui/install! ed))]}))
      :clj nil))
 
 (defn destroy-quill-field!

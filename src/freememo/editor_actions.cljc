@@ -104,62 +104,85 @@
      :clj nil))
 
 ;; ---------------------------------------------------------------------------
-;; Formula — insert via prompt, edit by revealing the TeX source (CLJS).
+;; Formula — document mutations (CLJS). The UI is freememo.formula-ui.
 ;; ---------------------------------------------------------------------------
-;; Quill's own formula tooltip is unreachable here: both editors use the bubble
+;; There is no insert dialog. Typing `\(…\)` is the only way to create a formula,
+;; and `install-typed-formula-conversion!` turns it into a rendered embed the
+;; moment the closing delimiter completes a region. Editing goes through the
+;; anchored popover in freememo.formula-ui, which calls `replace-formula!` here.
+;;
+;; Quill's own formula tooltip is not an option: both editors use the bubble
 ;; theme and `index.css` hides `.ql-bubble .ql-tooltip` outright, because the
-;; custom format-menu is the formatting UI. So insertion is a prompt (the same
-;; single-line-input affordance the stock tooltip offers) driven from a
-;; format-menu button, and editing reveals the TeX inline rather than reopening
-;; a dialog.
+;; custom format-menu is the formatting UI.
 
-(defn insert-formula!
-  "Prompt for TeX and insert it at `index` as a Quill formula embed.
+(defn replace-formula!
+  "Replace the formula embed rendered at `el` with `tex`, or delete it when `tex`
+   is blank. The one mutation behind every popover exit.
 
-   Pre  : `ed` is a Quill instance or nil; `index` is a cached 0-based position or
-          nil (nil → editor end); Quill's formula module is enabled, i.e. KaTeX
-          is present (see `freememo.math/on-katex-ready!`).
-   Post : on a non-blank answer, one formula embed is inserted at the index
-          (clamped to the live length) with source \"user\" — firing text-change so
-          the caller's on-change persists it. A cancelled or blank prompt inserts
-          nothing."
-  [ed index]
-  #?(:cljs
-     (when ed
-       (let [^js ed ed
-             tex (js/prompt "LaTeX (rendered by KaTeX):" "")]
-         (when-not (str/blank? tex)
-           (let [at (min (or index (.getLength ed)) (.getLength ed))]
-             (.insertEmbed ed at "formula" (str/trim tex) "user")
-             (.setSelection ed (inc at) 0 "user")))))
-     :clj nil))
-
-(defn reveal-formula-source!
-  "Replace the formula embed rendered at `el` with its TeX as editable text.
-
-   This is the edit affordance: the canonical stored form IS `\\(TeX\\)`, so
-   revealing the source shows exactly what will be saved, and no separate dialog
-   has to round-trip a value.
-
-   Pre  : `ed` is a Quill instance; `el` is a `span.ql-formula` inside it.
-   Post : the embed is gone and `\\(TeX\\)` text sits at its index with the cursor
-          after it; source \"user\", so on-change fires."
-  [ed el]
+   Pre  : `ed` is a Quill instance; `el` is a `span.ql-formula` still connected to
+          `ed`'s document; the formula module is enabled.
+   Post : with a non-blank `tex`, one embed carrying it sits where `el` was and the
+          caret is after it. With a blank `tex`, nothing sits there and the caret
+          is where the formula was. Source \"user\", so text-change fires and the
+          caller's on-change persists it. No-op if `el` is no longer a live blot.
+   Inv  : the index is resolved from `el` at call time, not cached — the document
+          may have changed since the popover opened."
+  [ed el tex]
   #?(:cljs
      (let [^js ed ed
            ^js Quill (.-Quill js/window)
            blot (.find Quill el)]
        (when blot
-         (let [index (.getIndex ed blot)
-               src (math/wrap-tex (or (.getAttribute el "data-value") ""))]
+         (let [index (.getIndex ed blot)]
            (.deleteText ed index 1 "user")
-           (.insertText ed index src "user")
-           (.setSelection ed (+ index (count src)) 0 "user"))))
+           (if (str/blank? tex)
+             (.setSelection ed index 0 "user")
+             (do (.insertEmbed ed index "formula" tex "user")
+                 (.setSelection ed (inc index) 0 "user"))))))
      :clj nil))
 
-(defn- formula-sources
+(defn formula-caret-index
+  "The index just after the formula embed rendered at `el`, or nil when `el` is no
+   longer a live blot. Used to restore the caret on a cancelled edit.
+
+   Pre  : `ed` is a Quill instance; `el` is a `span.ql-formula`.
+   Post : nil, or an index in [1, document length]."
+  [ed el]
+  #?(:cljs
+     (let [^js ed ed
+           ^js Quill (.-Quill js/window)
+           blot (.find Quill el)]
+       (when blot (inc (.getIndex ed blot))))
+     :clj nil))
+
+(defn- code-region?
+  "True iff the range [index, index+length) carries a code format, so a `\\(…\\)`
+   there is source rather than math.
+
+   Quill's `getFormat` over a RANGE reports only the formats common to all of it,
+   which is what we want: a region wholly inside a code block or an inline `<code>`
+   run reports the format and is skipped. A region straddling a code boundary
+   reports neither and converts — pathological, and no cheaper reading of
+   `getFormat` distinguishes it.
+
+   Mirrors the `pre, code, .ql-code-block-container` exclusion that
+   `freememo.math/stored->editor-html` applies on the load path; Clojure's `\\(`
+   character literal is the motivating case."
+  [ed index length]
+  #?(:cljs
+     (let [^js ed ed
+           ^js fmt (.getFormat ed index length)]
+       ;; hasOwnProperty, not `(.-code-block fmt)`: CLJS munges `-` to `_` in
+       ;; property access, so that form would read `fmt.code_block` and the
+       ;; exclusion would silently never fire. Quill's key is literally
+       ;; \"code-block\", and getFormat omits keys that are not set.
+       (or (.hasOwnProperty fmt "code-block")
+         (.hasOwnProperty fmt "code")))
+     :clj nil))
+
+(defn- typed-formula-regions
   "Every `\\(…\\)` region in `ed`'s content as {:index :length :tex}, in document
-   order.
+   order, excluding regions inside code.
 
    Walks the Delta rather than `getText`: embeds already in the document occupy
    one index each but are not text, and `getText`'s placeholder characters make
@@ -178,60 +201,67 @@
                  (recur (inc i) (+ idx (count ins))
                    (loop [acc out]
                      (if-let [m (.exec re ins)]
-                       (recur (conj acc {:index (+ idx (.-index m))
-                                         :length (count (aget m 0))
-                                         :tex (aget m 1)}))
+                       (let [start (+ idx (.-index m))
+                             len (count (aget m 0))]
+                         (recur (if (code-region? ed start len)
+                                  acc
+                                  (conj acc {:index start :length len :tex (aget m 1)}))))
                        acc))))
                (recur (inc i) (inc idx) out))))))
      :clj nil))
 
-(defn render-formula-sources!
-  "Convert every `\\(…\\)` in `ed` back into a formula embed. Idempotent.
+(defn convert-typed-formulas!
+  "Turn every typed `\\(…\\)` in `ed` into a rendered formula embed. Idempotent.
 
-   Applied in reverse document order so each replacement leaves the indices of
-   the ones still to come untouched.
+   Applied in reverse document order so each replacement leaves the indices of the
+   ones still to come untouched. Source \"user\", so the change enters undo history
+   and Ctrl+Z can reach it — the escape hatch when a `\\(` typed as prose (writing
+   ABOUT LaTeX) converts unintentionally.
 
    Pre  : `ed` is a Quill instance or nil; the formula module is enabled.
-   Post : the editor's text contains no `\\(…\\)` region; each became one embed."
+   Post : `ed`'s text contains no `\\(…\\)` region outside code; each became one
+          embed, with the caret left after the last one converted.
+   Inv  : self-terminating — after conversion no region remains, so the
+          text-change this fires finds nothing on its next pass."
   [ed]
   #?(:cljs
      (when ed
        (let [^js ed ed]
-         (doseq [{:keys [index length tex]} (reverse (formula-sources ed))]
+         (doseq [{:keys [index length tex]} (reverse (typed-formula-regions ed))]
            (.deleteText ed index length "user")
-           (.insertEmbed ed index "formula" tex "user"))))
+           (.insertEmbed ed index "formula" tex "user")
+           (.setSelection ed (inc index) 0 "user"))))
      :clj nil))
 
-(defn install-formula-editing!
-  "Wire click-to-reveal and blur/Escape-to-render on `ed`. Returns a teardown fn.
+(defn install-typed-formula-conversion!
+  "Convert typed `\\(…\\)` to a formula embed as soon as the closing delimiter
+   completes a region. Returns a teardown fn.
 
-   Pre  : `ed` is a Quill instance; the formula module is enabled.
-   Post : clicking a rendered formula reveals its TeX; blurring the editor or
-          pressing Escape re-renders every revealed formula. The returned fn
-          removes all three listeners.
-   Inv  : a formula left revealed at save time persists as `\\(TeX\\)` text, which
-          the next load promotes back to an embed — no state is lost either way."
+   Runs in a microtask rather than inline: the conversion modifies the document
+   from within a handler for that document's own text-change, which Quill does not
+   invite. A microtask defers past the handler without costing a frame, so the
+   formula still appears in the same frame as the keystroke.
+
+   Pre  : `ed` is a Quill instance; the formula module is enabled (KaTeX present).
+   Post : a `\\(…\\)` typed outside code renders immediately; one inside a code
+          block stays text. The returned fn detaches the listener AND marks the
+          install dead, so a microtask already queued cannot write into a
+          torn-down editor.
+   Inv  : only `\"user\"` changes are considered. Programmatic writes (`set-content!`,
+          the load path) have already been through
+          `freememo.math/stored->editor-html`."
   [ed]
   #?(:cljs
      (let [^js ed ed
-           ^js root (.-root ed)
-           ;; No preventDefault: caret placement is decided at mousedown, so
-           ;; cancelling the click would change nothing, and reveal-formula-source!
-           ;; sets the selection itself.
-           on-click (fn [e]
-                      (when-let [el (some-> (.-target e) (.closest "span.ql-formula"))]
-                        (reveal-formula-source! ed el)))
-           ;; Escape also blurs (a11y/install-quill-tab-escape!), so both
-           ;; handlers can fire for one keypress; render is idempotent.
-           on-keydown (fn [e] (when (= "Escape" (.-key e)) (render-formula-sources! ed)))
-           on-blur (fn [_] (render-formula-sources! ed))]
-       (.addEventListener root "click" on-click)
-       (.addEventListener root "keydown" on-keydown)
-       (.addEventListener root "blur" on-blur)
-       (fn []
-         (.removeEventListener root "click" on-click)
-         (.removeEventListener root "keydown" on-keydown)
-         (.removeEventListener root "blur" on-blur)))
+           !live? (atom true)
+           on-text-change (fn [_delta _old source]
+                            (when (= source "user")
+                              (.then (js/Promise.resolve)
+                                (fn [] (when @!live? (convert-typed-formulas! ed))))))]
+       (.on ed "text-change" on-text-change)
+       (fn teardown []
+         (reset! !live? false)
+         (.off ed "text-change" on-text-change)))
      :clj nil))
 
 ;; ---------------------------------------------------------------------------

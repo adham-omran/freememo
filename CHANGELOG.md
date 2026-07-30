@@ -15,11 +15,12 @@ Format contract (see freememo.changelog):
 
 - **Math.** Formulas work end to end — write them in the editor, generate cards from
   them, and push them to Anki where they render as real notation instead of raw LaTeX.
-  - **Insert with the formula button** in the formatting menu (both the document
-    editor and every card field). Type LaTeX; it renders as you leave the prompt.
-    Typing `\(x^2\)` directly as text works too.
-  - **Click a formula to edit it** — it turns back into its LaTeX source, and
-    re-renders when you click away or press Escape.
+  - **Write `\(x^2\)` and it becomes a formula** the moment you type the closing
+    `\)`. No button, no dialog — the delimiters are the whole gesture, in the
+    document editor and in every card field.
+  - **Click a formula to edit it.** A small panel opens above it with the LaTeX, a
+    live preview that updates as you type, and Delete. Enter or clicking away saves;
+    Escape leaves it alone; clearing the field removes the formula.
   - **Scanned pages keep their math.** OCR now transcribes equations as LaTeX, so a
     formula on a PDF page arrives as a formula, not as garbled text.
   - **Generated cards preserve the math in your source** and are told not to invent
@@ -36,11 +37,14 @@ Format contract (see freememo.changelog):
 - **A `\(`…`\)` pair inside a code block is treated as math when pushing to Anki.**
   It renders as a formula in Anki instead of as source. Nothing is lost — the next
   pull restores it — but Clojure's `\(` character literal is the realistic way to hit
-  this.
+  this. In the editor itself, code blocks are excluded: typing `\(x\)` in one leaves
+  it as source.
+- **Writing prose *about* LaTeX can produce an unwanted formula.** Typing `\(` and
+  later `\)` in ordinary text converts on the closing delimiter. Ctrl+Z undoes it.
 - **A long formula can be cut mid-expression** in a search snippet or a card-table
   row, where it then shows as LaTeX source rather than rendering.
 - **If the KaTeX CDN is unreachable,** the editor still opens after a 3-second wait,
-  but with no formula button and math shown as `\(…\)` source. Your content is
+  but math stays as `\(…\)` source and clicking it does nothing. Your content is
   unchanged either way.
 
 ### Technical
@@ -59,6 +63,14 @@ Format contract (see freememo.changelog):
   `build-update-fields`, not inside the five per-kind builders.
 - The Anki-modified overlay diff now normalises both sides before comparing, so math
   cards do not read as perpetually modified.
+- `freememo.formula-ui` owns the authoring UI: the anchored edit popover plus the
+  typed-source converter it installs. It is the fifth hand-rolled anchored popover in
+  the app and the first to hold a text input — which is why it is the only one where
+  an outside click commits rather than dismissing, and why scroll repositions instead
+  of closing. Both departures are recorded in `plans/math-support.md` round two.
+- Formula creation is Delta-driven, not focus-driven: a `text-change` schedules a
+  microtask that converts complete `\(…\)` regions outside code (`quill.getFormat`)
+  in reverse document order, with source `"user"` so undo can reach it.
 
 ## v20260729-bb11960
 
