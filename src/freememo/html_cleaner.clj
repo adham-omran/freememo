@@ -1,11 +1,24 @@
 (ns freememo.html-cleaner
   "HTML sanitization using Jsoup. Strips scripts, iframes, event handlers,
-   and unsafe attributes. Allows `style` only for `background-color: <safe-value>`
-   to preserve auto-extract highlights. Allows `class` only for allow-listed
-   Quill format tokens (code-block, align, indent, size, syntax, ui) and the
-   Quill `data-language` / `data-list` / `data-row` attributes — so the extract
-   path (and every other `clean-html` consumer) preserves Quill-rendered
-   formatting on round-trip."
+   and unsafe attributes. Allows `style` only for the colour declarations in
+   `safe-color-props` (`color`, `background-color`) with a safe value — text
+   colour presets and auto-extract highlights. Allows `class` only for
+   allow-listed Quill format tokens (code-block, align, direction, indent,
+   size, font, syntax, ui) and the Quill `data-language` / `data-list` /
+   `data-row` attributes — so the extract path (and every other `clean-html`
+   consumer) preserves Quill-rendered formatting on round-trip.
+
+   The allow-list is coupled to what `freememo.format-menu` can apply; that
+   coupling spans the CLJS/CLJ split and cannot be a shared constant, so
+   `test/freememo/html_cleaner_test.clj` asserts it fixture-by-fixture.
+
+   Scope of a class token: Quill's stylesheet scopes every format rule under
+   `.ql-editor` (`quill.snow.css`, e.g. `.ql-editor .ql-font-monospace{…}`), and
+   neither `index.css` nor `freememo-anki.css` defines a format rule of its own,
+   so an admitted class round-trips through the editors but is inert in
+   read-only card views and in Anki. Inline `style` colours render everywhere.
+   Admitting a token is therefore a fidelity fix, not a rendering one —
+   rendering outside an editor needs a matching CSS rule."
   (:require [clojure.string :as str])
   (:import [org.jsoup Jsoup]
            [org.jsoup.nodes Document$OutputSettings]
@@ -28,20 +41,55 @@
     )
     \s*$")
 
+;; Colour words that name no colour: `transparent` erases the text, and the
+;; CSS-wide keywords defer to whatever context the HTML lands in. Nothing in the
+;; app emits either (the format menu's Default preset removes the declaration
+;; rather than setting one), and both can render imported text invisible against
+;; an unknown background — so they are refused even though safe-color-re's
+;; named-colour branch matches them.
+(def ^:private non-literal-color-words
+  #{"transparent" "currentcolor" "inherit" "initial" "unset" "revert"})
+
+(defn- literal-color?
+  "True when `val` names a literal colour — hex, `rgb()`/`rgba()`, or a colour
+   word outside `non-literal-color-words`.
+
+   Pre : `val` is the raw text right of a declaration's first `:`.
+   Post: true ⇒ `val` trimmed is safe to re-emit verbatim.
+   Inv : rejects every value carrying `url(...)`, `expression(...)`, a
+         backslash escape, a comment, or a second declaration."
+  [val]
+  (boolean (and (re-matches safe-color-re val)
+             (not (non-literal-color-words (str/lower-case (str/trim val)))))))
+
+;; The only CSS properties whose values are colour-typed, hence fully covered by
+;; literal-color?. `background-color` carries auto-extract highlights; `color`
+;; carries the format-menu's text-colour presets (freememo.format-menu
+;; `text-colours`), which Quill writes as an inline style because the default
+;; registry binds `formats/color` to ColorStyle, not ColorClass.
+(def ^:private safe-color-props #{"background-color" "color"})
+
 (defn- sanitize-style-value
-  "Keep only `background-color: <safe-value>` declarations. Drop everything
-   else. Returns the cleaned style string, or nil if nothing remained."
+  "Keep only `safe-color-props` declarations carrying a literal colour value.
+
+   Pre : `style` is a style-attribute string or nil.
+   Post: nil, or a `; `-joined string of surviving declarations with
+         lower-cased property names and their values verbatim (trimmed).
+         Two colour declarations on one element both survive.
+   Inv : no declaration outside `safe-color-props`, and no value rejected by
+         `literal-color?`, can leave this fn."
   [style]
   (when style
     (let [decls (->> (str/split style #";")
                   (map str/trim)
                   (remove str/blank?)
                   (keep (fn [decl]
-                          (let [[prop val] (str/split decl #":" 2)]
+                          (let [[prop val] (str/split decl #":" 2)
+                                prop (some-> prop str/trim str/lower-case)]
                             (when (and prop val
-                                    (= "background-color" (str/lower-case (str/trim prop)))
-                                    (re-matches safe-color-re val))
-                              (str "background-color: " (str/trim val)))))))]
+                                    (safe-color-props prop)
+                                    (literal-color? val))
+                              (str prop ": " (str/trim val)))))))]
       (when (seq decls)
         (str/join "; " decls)))))
 
@@ -55,13 +103,29 @@
         (.removeAttr el "style"))))
   doc)
 
-;; Allow-listed Quill format classes. `ql-cursor` is intentionally absent —
-;; it marks transient editor state that must not persist.
+;; Allow-listed Quill classes: the format attributors' full value space, plus
+;; the structural classes of code blocks and list UI.
+;;
+;; The format tokens are literal values from Quill 2.0.3's own attributor
+;; whitelists (`formats/align.ts` right|center|justify, `direction.ts` rtl,
+;; `indent.ts` 1-8, `size.ts` small|large|huge, `font.ts` serif|monospace), so
+;; those five families are complete — a further value of them cannot exist
+;; without a Quill upgrade. The editor does produce classes beyond this set,
+;; and two of those exclusions are deliberate:
+;;   `ql-cursor`       — transient editor state that must not persist.
+;;   `ql-resize-style` — written by quill-resize-module's align buttons, which
+;;                       is why that toolbar is omitted (freememo.quill-field).
+;; `hljs-*` is a third: stripped in prose, passed through inside
+;; `.ql-code-block-container` by the carve-out below, and re-applied on load by
+;; the syntax module.
 (def ^:private quill-class-allow-list
   #{"ql-code-block-container" "ql-code-block"
-    "ql-align-center" "ql-align-justify"
-    "ql-indent-1" "ql-indent-2"
+    "ql-align-center" "ql-align-justify" "ql-align-right"
+    "ql-direction-rtl"
+    "ql-indent-1" "ql-indent-2" "ql-indent-3" "ql-indent-4"
+    "ql-indent-5" "ql-indent-6" "ql-indent-7" "ql-indent-8"
     "ql-size-small" "ql-size-large" "ql-size-huge"
+    "ql-font-serif" "ql-font-monospace"
     "ql-syntax" "ql-ui"})
 
 (defn- sanitize-class-value
@@ -124,7 +188,15 @@
 (defn clean-html
   "Sanitize HTML using a whitelist of safe tags and attributes.
    Strips scripts, iframes, event handlers, and most attributes.
-   Preserves only `style=\"background-color: <safe>\"` (used by extract highlights)."
+   Of `style`, preserves only the `safe-color-props` declarations with a safe
+   value — `background-color` (extract highlights) and `color` (text-colour
+   presets); of `class`, only `quill-class-allow-list` tokens.
+
+   Pre : `html` is a string or nil.
+   Post: nil iff `html` is nil; otherwise HTML whose every tag, attribute,
+         class token, and style declaration is allow-listed.
+   Inv : every format `freememo.format-menu` can apply survives unchanged
+         (asserted in test/freememo/html_cleaner_test.clj)."
   [html]
   (when html
     (let [;; Pre-strip `<select>...</select>` (including content) before
