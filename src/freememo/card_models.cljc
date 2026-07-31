@@ -15,6 +15,15 @@
   [{:id "gpt-5.1"
     :label "OpenAI · GPT-5.1"
     :openrouter-model "openai/gpt-5.1"}
+   {:id "gpt-5.6-luna"
+    :label "OpenAI · GPT-5.6 Luna"
+    :openrouter-model "openai/gpt-5.6-luna"}
+   {:id "gpt-5.6-terra"
+    :label "OpenAI · GPT-5.6 Terra"
+    :openrouter-model "openai/gpt-5.6-terra"}
+   {:id "gpt-5.6-sol"
+    :label "OpenAI · GPT-5.6 Sol"
+    :openrouter-model "openai/gpt-5.6-sol"}
    {:id "gemini-3-flash"
     :label "Google · Gemini 3 Flash"
     :openrouter-model "google/gemini-3-flash-preview"}
