@@ -23,6 +23,7 @@
    [clj-kondo.core :as clj-kondo]
    [clojure.java.io :as io]
    [clojure.string :as str]
+   [freememo.archive :as archive]
    [freememo.db :as db]
    [freememo.user-state :as us]
    [freememo.commands :as commands]
@@ -220,67 +221,25 @@
 ;; ---------------------------------------------------------------------------
 
 (defn delete-dir!
-  "Recursively delete `dir`. Best-effort; never throws."
+  "Recursively delete `dir`. Best-effort; never throws.
+   Retained as this namespace's name for the operation; the implementation
+   lives with the extractor in `freememo.archive`."
   [^File dir]
-  (when (and dir (.exists dir))
-    (doseq [^File f (reverse (file-seq dir))]
-      (try (.delete f) (catch Exception _ nil)))))
-
-(def ^:private max-zip-entries 50000)
-(def ^:private max-entry-bytes (* 20 1024 1024))
-(def ^:private max-total-uncompressed-bytes (* 300 1024 1024))
-
-(defn- safe-target
-  "File for `entry-name` under `dir`, or nil if it escapes `dir` (zip-slip /
-   absolute path). Canonical-path containment is the real guard.
-   Pre: dir a File. Post: a File strictly under dir, or nil."
-  [^File dir ^String entry-name]
-  (let [f (File. dir entry-name)
-        base (str (.getCanonicalPath dir) File/separator)]
-    (when (.startsWith (.getCanonicalPath f) base) f)))
+  (archive/delete-dir! dir))
 
 (defn unzip-repo!
   "Extract a repo zip's Clojure sources to a fresh temp directory for static
-   analysis + topic storage. Bomb-guarded: caps entry count, per-entry bytes,
-   and total uncompressed bytes → ex-info {:type ::zip-too-large}. Zip-slip
-   entries and non-Clojure files are skipped. NEVER evaluates extracted code.
+   analysis + topic storage. Bomb-guarded and zip-slip-guarded by
+   `freememo.archive`; non-Clojure files are skipped. NEVER evaluates
+   extracted code.
    Pre:  zip-bytes is a byte[] ZIP archive.
    Post: a temp dir File holding the extracted .clj/.cljc/.cljs tree; on any
          failure the temp dir is removed and the error rethrown. Caller (or
          start-repo-distill!) MUST delete the returned dir."
   [^bytes zip-bytes]
-  (let [dir (.toFile (Files/createTempDirectory "repo-ingest" (make-array FileAttribute 0)))]
-    (try
-      (with-open [zis (ZipInputStream. (ByteArrayInputStream. zip-bytes))]
-        (loop [n-entries 0 total 0]
-          (when (> n-entries max-zip-entries)
-            (throw (ex-info "Zip has too many entries" {:type ::zip-too-large})))
-          (if-let [^ZipEntry e (.getNextEntry zis)]
-            (let [nm (.getName e)
-                  target (when-not (.isDirectory e) (safe-target dir nm))]
-              (if (or (nil? target) (not (re-find clojure-ext-re nm)))
-                (recur (inc n-entries) total)
-                (let [baos (ByteArrayOutputStream.)
-                      buf (byte-array 8192)
-                      written (loop [w 0]
-                                (let [r (.read zis buf)]
-                                  (if (pos? r)
-                                    (let [w2 (+ w r)]
-                                      (when (> w2 max-entry-bytes)
-                                        (throw (ex-info "Zip entry too large" {:type ::zip-too-large})))
-                                      (.write baos buf 0 r)
-                                      (recur w2))
-                                    w)))
-                      total2 (+ total written)]
-                  (when (> total2 max-total-uncompressed-bytes)
-                    (throw (ex-info "Zip too large uncompressed" {:type ::zip-too-large})))
-                  (io/make-parents target)
-                  (io/copy (.toByteArray baos) target)
-                  (recur (inc n-entries) total2))))
-            dir)))
-      (catch Throwable t
-        (delete-dir! dir)
-        (throw t)))))
+  (archive/extract-to-temp-dir! zip-bytes
+    {:prefix "repo-ingest"
+     :keep? #(boolean (re-find clojure-ext-re %))}))
 
 ;; ---------------------------------------------------------------------------
 ;; Orchestrator

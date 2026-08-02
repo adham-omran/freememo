@@ -253,6 +253,12 @@
                        :table #{:sources} :views #{:refresh}}
      :import-document {:label "Import document" :class :mutation :palette-hidden true
                        :table #{:topics :topic_files :sources} :views document-views}
+     ;; A SuperMemo collection lands a whole tree at once — topics, their
+     ;; cards, their bibliography and an archived repetition log — so it
+     ;; declares more tables than :import-document and adds :card-mutations.
+     :import-supermemo {:label "Import SuperMemo collection" :class :mutation :palette-hidden true
+                        :table #{:topics :flashcards :sources :media :topic_repetitions}
+                        :views (conj document-views :card-mutations)}
      :append-images   {:label "Append images" :class :mutation :palette-hidden true
                        :table #{:topics :topic_files} :views document-views}
      :credits-granted {:label "Credits granted" :class :mutation :palette-hidden true

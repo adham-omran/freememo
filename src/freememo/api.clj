@@ -207,6 +207,11 @@
                       (json-response 400 {:success false :error "Not a valid EPUB file"
                                           :code "invalid-file-type"})))
 
+                :supermemo
+                (let [upload-id (staging/stage! user-id bytes filename :supermemo)]
+                  (json-response 200 {:success true :upload_id upload-id :flow "supermemo"
+                                      :filename filename :size size}))
+
                 :repo
                 (let [upload-id (staging/stage! user-id bytes filename :repo)]
                   (json-response 200 {:success true :upload_id upload-id :flow "repo"
