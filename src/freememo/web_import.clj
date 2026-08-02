@@ -10,7 +10,8 @@
 
    Both fns return the canonical `{:ok true …}` / `{:ok false :error …}`
    shape expected by Forms5 services."
-  (:require [freememo.audio :as audio]
+  (:require [freememo.archive :as archive]
+            [freememo.audio :as audio]
             [freememo.biblio-import :as biblio-import]
             [freememo.db :as db]
             [freememo.epub :as epub]
@@ -22,6 +23,7 @@
             [freememo.quota :as quota]
             [freememo.commands :as commands]
             [freememo.kg-code :as kg-code]
+            [freememo.supermemo-import :as sm-import]
             [clojure.string :as str]
             [freememo.wikipedia :as wiki]))
 
@@ -166,6 +168,41 @@
     (catch Exception e
       (log/log-error (str "confirm-repo-upload!* failed: " (.getMessage e)))
       {:ok false :error (.getMessage e)})))
+
+(defn confirm-supermemo-upload!*
+  "Finalize a staged SuperMemo collection (.zip) into a topic tree.
+   Pre  : user-id owns the staged upload; upload-id is unclaimed; the entry's
+          flow is :supermemo.
+   Post : {:ok true :topic-id N :report {...}} on success, {:ok false :error S}
+          otherwise. The report accounts for everything the import did not
+          carry over and is the caller's to surface.
+   Invariant: claim is one-shot — replays return {:ok false}. The extracted
+          temp dir has exactly one owner: this fn, which deletes it on every
+          path. The import is synchronous because the caller navigates to the
+          returned root as soon as it commits."
+  [user-id upload-id]
+  (try
+    (if-let [entry (staging/claim! user-id upload-id)]
+      (let [{:keys [^bytes bytes flow]} entry]
+        (if (not= :supermemo flow)
+          {:ok false :error (str "Not a SuperMemo collection: " flow)}
+          ;; A collection is routinely >150 MB uncompressed — well past the
+          ;; code-repo default — so the total cap is raised for this flow only.
+          (let [dir (archive/extract-to-temp-dir! bytes
+                      {:prefix "supermemo-import"
+                       :max-total-bytes (* 1024 1024 1024)})]
+            (try
+              (let [r (sm-import/import-collection! user-id dir)]
+                (when (:ok r) (commands/bump! user-id :import-supermemo))
+                r)
+              (finally
+                (archive/delete-dir! dir))))))
+      {:ok false :error "Upload not found or expired"})
+    (catch Exception e
+      (log/log-error (str "confirm-supermemo-upload!* failed: " (.getMessage e)))
+      {:ok false :error (if (= ::archive/archive-too-large (:type (ex-data e)))
+                          "Collection archive is too large to import"
+                          (.getMessage e))})))
 
 (defn confirm-score-upload!*
   "Finalize a Score import from TWO staged uploads (sheet-music PDF + recording).

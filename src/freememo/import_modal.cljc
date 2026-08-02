@@ -62,6 +62,7 @@
        "audio" "Audio"
        "score" "Score"
        "repo" "Code Repository"
+       "supermemo" "SuperMemo Collection"
        "Item")))
 
 ;; ── Paste-source detection ─────────────────────────────────────────
@@ -608,9 +609,10 @@
                     :type :command
                     :show-buttons false
                     :Parse (e/fn [_ _tempid]
-                             (if (= flow "repo")
-                               [`Confirm-repo-upload upload-id extract-facts?]
-                               [`Confirm-staged-upload upload-id (keyword image-mode)])))]
+                             (cond
+                               (= flow "repo") [`Confirm-repo-upload upload-id extract-facts?]
+                               (= flow "supermemo") [`Confirm-supermemo-upload upload-id nil]
+                               :else [`Confirm-staged-upload upload-id (keyword image-mode)])))]
       ;; Cancel button — local-only reset, not part of the form's commit stream.
       (dom/div
         (dom/props {:style {:display "flex" :gap "var(--sp-2)" :justify-content "flex-end"
@@ -625,7 +627,8 @@
                             (reset! !stage :collecting))
             nil)))
       ;; `Confirm-repo-upload carries the extract-facts? flag and gates async
-      ;; fact distillation; every other flow carries the image-mode keyword.
+      ;; fact distillation; `Confirm-supermemo-upload carries no argument;
+      ;; every other flow carries the image-mode keyword.
       (e/for [[token [head u-id arg]] (e/diff-by first (e/as-vec commits))]
         (when token
           ;; Busy overlay while the staged upload commits (sibling of the
@@ -633,8 +636,12 @@
           (e/on-unmount #(reset! !busy-msg nil))
           (case (reset! !busy-msg "Importing…")
             (case (reset-error! !error !quota-error?)
-              (let [r (e/server (e/Offload #(if (= head `Confirm-repo-upload)
+              (let [r (e/server (e/Offload #(cond
+                                              (= head `Confirm-repo-upload)
                                               (web-import/confirm-repo-upload!* user-id u-id arg)
+                                              (= head `Confirm-supermemo-upload)
+                                              (web-import/confirm-supermemo-upload!* user-id u-id)
+                                              :else
                                               (web-import/confirm-staged-upload!* user-id u-id arg))))]
                 (case r
                   (if (:ok r)
@@ -930,10 +937,10 @@
                              !stage !staged !flow !error !quota-error? !busy-msg)
               :file (let [cap-label (when (pos? cap-bytes) (format-mb cap-bytes))]
                       (FilePicker !file !file-input handle-file
-                                  ".pdf,.epub,.html,.htm,.md,.markdown,.zip"
+                                  ".pdf,.epub,.html,.htm,.md,.markdown,.zip,.7z"
                                   (if cap-label
-                                    (str "PDF, EPUB, HTML, Markdown, or a code repo (.zip) — file extension picks the flow. Maximum " cap-label ".")
-                                    "PDF, EPUB, HTML, Markdown, or a code repo (.zip) — file extension picks the flow.")))
+                                    (str "PDF, EPUB, HTML, Markdown, a code repo, or a SuperMemo collection (.zip / .7z) — file extension picks the flow. Maximum " cap-label ".")
+                                    "PDF, EPUB, HTML, Markdown, a code repo, or a SuperMemo collection (.zip / .7z) — file extension picks the flow.")))
               :audio (FilePicker !file !file-input handle-file
                                  ".mp3,.m4a,.mp4,.wav,.webm,.ogg,.oga,.flac,.mpeg,.mpga"
                                  "Audio file (mp3, m4a, wav, webm, ogg, flac). Maximum 25 MB.")

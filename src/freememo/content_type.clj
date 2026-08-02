@@ -1,7 +1,8 @@
 (ns freememo.content-type
   "Content-Type classification, filename derivation, and charset extraction
    for the import pipeline. Pure CLJ; server-only."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [freememo.archive :as archive]))
 
 (defn- strip-params
   "Strip MIME params after `;`; case-insensitive lowercase return."
@@ -93,7 +94,8 @@
   [content-disposition url flow]
   (let [from-cd (parse-content-disposition-filename content-disposition)
         from-url (url-path-tail url)
-        ext (case flow :pdf ".pdf" :epub ".epub" :html ".html" :markdown ".md" :repo ".zip" "")
+        ext (case flow :pdf ".pdf" :epub ".epub" :html ".html" :markdown ".md" :repo ".zip"
+                     :supermemo ".zip" :sevenz ".7z" "")
         fallback (str "Untitled" ext)]
     (or from-cd from-url fallback)))
 
@@ -112,15 +114,30 @@
        (= (byte 0x03) (aget b 2))
        (= (byte 0x04) (aget b 3))))
 
+(defn supermemo-archive?
+  "True when an archive holds a SuperMemo collection.
+   Pre : `bytes` is a ZIP or 7z archive.
+   Post: true iff some directory inside contains both `info/contents.dat` and
+         `info/ElementInfo.dat` — the two files the decoder cannot work
+         without. Reads entry names only; nothing is decompressed.
+   Both names are required because a lone `contents.dat` is a common enough
+   filename that matching on it alone would misroute ordinary archives."
+  [^bytes bytes]
+  (let [names (map str/lower-case (archive/entry-names bytes))]
+    (and (some #(str/ends-with? % "info/contents.dat") names)
+      (some #(str/ends-with? % "info/elementinfo.dat") names)
+      true)))
+
 (defn classify-multipart
   "Pre:  filename and content-type are strings (possibly nil); bytes is a byte
          array of the multipart-uploaded file.
    Post: returns [:pdf nil] | [:epub nil] | [:html nil] | [:markdown nil] |
-         [:audio nil] | [:reject <msg>]. Magic bytes win over extension wins
-         over content-type. EPUB magic check is structural (ZIP header);
-         EPUB-specific validation is deferred to the handler via
-         `epub/epub-magic-bytes?`. Audio has no reliable cross-container magic,
-         so it resolves by extension/content-type only."
+         [:audio nil] | [:supermemo nil] | [:repo nil] | [:reject <msg>].
+         Magic bytes win over extension wins over content-type. EPUB magic
+         check is structural (ZIP header); EPUB-specific validation is
+         deferred to the handler via `epub/epub-magic-bytes?`. Audio has no
+         reliable cross-container magic, so it resolves by extension/
+         content-type only."
   [filename content-type ^bytes bytes]
   (let [lower-name (when filename (str/lower-case filename))
         ext (cond
@@ -132,6 +149,7 @@
               (str/ends-with? lower-name ".md") :markdown
               (str/ends-with? lower-name ".markdown") :markdown
               (str/ends-with? lower-name ".zip") :repo
+              (str/ends-with? lower-name ".7z") :sevenz
               (some #(str/ends-with? lower-name %)
                     [".mp3" ".m4a" ".mp4" ".wav" ".webm" ".ogg" ".oga" ".flac" ".mpeg" ".mpga"]) :audio
               :else nil)
@@ -149,10 +167,27 @@
                      :else nil)
         kind (or magic-kind ext ct-kind)]
     (cond
+      ;; A .zip holding a SuperMemo collection. Must precede :repo, which
+      ;; claims every remaining .zip.
+      (and (= ext :repo) (zip-magic? bytes) (supermemo-archive? bytes))
+      [:supermemo nil]
+
       ;; A .zip archive with ZIP magic → code repo. Checked before :epub, which
       ;; also matches ZIP magic; .epub keeps its own branch via ext/magic below.
       (and (= ext :repo) (zip-magic? bytes))
       [:repo nil]
+
+      ;; 7z exists in this dispatch only because SuperMemo collections are
+      ;; commonly distributed that way. A 7z of anything else has no flow, and
+      ;; saying so beats staging it for an importer that will reject it.
+      (= ext :sevenz)
+      (cond
+        (not= :sevenz (archive/archive-kind bytes))
+        [:reject "Not a valid 7z archive."]
+        (supermemo-archive? bytes)
+        [:supermemo nil]
+        :else
+        [:reject "A .7z file can only be imported as a SuperMemo collection."])
 
       (= kind :pdf)
       (if (pdf-magic? bytes) [:pdf nil] [:reject "Not a valid PDF file."])

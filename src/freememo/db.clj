@@ -207,7 +207,25 @@
   ;; (the inline CHECK above only applies to a freshly-created table).
   (jdbc/execute! ds ["ALTER TABLE topic_repetitions DROP CONSTRAINT IF EXISTS topic_repetitions_event_type_check"])
   (jdbc/execute! ds ["ALTER TABLE topic_repetitions ADD CONSTRAINT topic_repetitions_event_type_check
-                      CHECK (event_type IN ('advance','touch','postpone','done','restore','priority-change','dismiss','undismiss'))"])
+                      CHECK (event_type IN ('advance','touch','postpone','done','restore','priority-change',
+                                            'dismiss','undismiss','import'))"])
+
+  ;; 'import' rows come from a SuperMemo collection, which records WHEN each
+  ;; repetition happened but not the interval, A-factor or status in force at
+  ;; the time. Those three columns become nullable so an imported repetition
+  ;; reads as "unknown" rather than carrying an invented value; every native
+  ;; writer still supplies them (see log-topic-repetition!).
+  (jdbc/execute! ds ["ALTER TABLE topic_repetitions ALTER COLUMN status_before DROP NOT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE topic_repetitions ALTER COLUMN interval_days_before DROP NOT NULL"])
+  (jdbc/execute! ds ["ALTER TABLE topic_repetitions ALTER COLUMN a_factor_before DROP NOT NULL"])
+
+  ;; SuperMemo import provenance. sm_rank is the topic's exact position in the
+  ;; source collection's priority order; `priority` holds the same ordering
+  ;; rounded to 0-100, and sm_rank restores the precision that rounding loses
+  ;; (get-learning-queue orders by it before the daily hash). sm_element_id is
+  ;; the element id it came from. Both NULL for natively created topics.
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS sm_rank INTEGER"])
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS sm_element_id INTEGER"])
 
   ;; Live Document flag — a kind='pdf' root that the user keeps appending
   ;; camera/upload image pages to. Stays a first-class PDF everywhere; this
@@ -2960,26 +2978,94 @@
    Uses ON CONFLICT DO NOTHING to prevent duplicates.
    Returns a vector of the inserted flashcards' ids in insertion order; rows
    skipped by ON CONFLICT DO NOTHING return no id, so the result may be shorter
-   than `rows`. Returns nil when `rows` is empty."
-  [rows]
+   than `rows`. Returns nil when `rows` is empty.
+
+   The 2-arity takes the connectable. Pass an open transaction when the cards'
+   topics were inserted in that same transaction — on `ds` this runs on a
+   different connection, cannot see the uncommitted parents, and fails the
+   flashcards_topic_id_fkey constraint."
+  ([rows] (insert-flashcards! ds rows))
+  ([connectable rows]
+   (when (seq rows)
+     (doseq [row rows]
+       (input/check-length! :question (:question row) input/card-max)
+       (input/check-length! :answer (:answer row) input/card-max)
+       (input/check-length! :cloze (:cloze row) input/card-max))
+     ;; :overlapping is a plain map at the call site; convert to jsonb here so
+     ;; callers never touch PGobject (same ownership as the io_fields path).
+     (let [rows (mapv (fn [row]
+                        (cond-> row
+                          (some? (:overlapping row)) (update :overlapping ->jsonb)))
+                  rows)]
+       (mapv :flashcards/id
+         (jdbc/execute! connectable
+           (sql/format {:insert-into :flashcards
+                        :values rows
+                        :on-conflict []
+                        :do-nothing true
+                        :returning [:id]})))))))
+
+;; ── Batch inserts for collection import ────────────────────────────
+;; An importer owns values the user never typed — titles from a foreign
+;; registry, schedules from a foreign algorithm — so these three bypass the
+;; single-row creators (create-topic!, create-source!, log-topic-repetition!)
+;; and their prettification, defaulting and per-row audit logging. They take
+;; an explicit `tx` so a whole collection commits or rolls back as one unit.
+
+(defn insert-topic-rows!
+  "Batch-insert fully-formed topic rows; return their ids in insertion order.
+   Pre : `tx` is an open transaction. Every row carries :user_id, :kind,
+         :title, :status and :priority. A :parent_id, when present, names a
+         topic already committed in `tx` — callers insert breadth-first so a
+         parent precedes its children. Titles are already within title-max;
+         over-length is a caller bug because only the caller can decide
+         whether to truncate or reject.
+   Post: vector of ids positionally aligned with `rows`; nil when empty.
+   Invariant: no ON CONFLICT — topics have no natural key here, so a conflict
+         would mean a malformed row rather than a duplicate."
+  [tx rows]
   (when (seq rows)
     (doseq [row rows]
-      (input/check-length! :question (:question row) input/card-max)
-      (input/check-length! :answer (:answer row) input/card-max)
-      (input/check-length! :cloze (:cloze row) input/card-max))
-    ;; :overlapping is a plain map at the call site; convert to jsonb here so
-    ;; callers never touch PGobject (same ownership as the io_fields path).
-    (let [rows (mapv (fn [row]
-                       (cond-> row
-                         (some? (:overlapping row)) (update :overlapping ->jsonb)))
-                 rows)]
-      (mapv :flashcards/id
-        (jdbc/execute! ds
-          (sql/format {:insert-into :flashcards
-                       :values rows
-                       :on-conflict []
-                       :do-nothing true
-                       :returning [:id]}))))))
+      (input/check-length! :title (:title row) input/title-max))
+    (mapv :topics/id
+      (jdbc/execute! tx
+        (sql/format {:insert-into :topics :values (vec rows) :returning [:id]})))))
+
+(defn insert-source-rows!
+  "Batch-insert sources rows; return their ids in insertion order.
+   Pre : `tx` is an open transaction; each row carries :user_id and :csl_type,
+         and :csl is a plain Clojure map.
+   Post: vector of ids positionally aligned with `rows`; nil when empty.
+   `:csl` is converted to jsonb here so callers never touch PGobject — the
+   same ownership rule insert-flashcards! applies to :overlapping."
+  [tx rows]
+  (when (seq rows)
+    (let [rows (mapv #(update % :csl ->jsonb) rows)]
+      (mapv :sources/id
+        (jdbc/execute! tx
+          (sql/format {:insert-into :sources :values rows :returning [:id]}))))))
+
+(defn insert-topic-repetitions!
+  "Batch-append rows to topic_repetitions; return the number inserted.
+   Pre : `tx` is an open transaction. Each row carries :topic_id, :user_id,
+         :event_type and :event_at. The three snapshot columns
+         (:status_before, :interval_days_before, :a_factor_before) MAY be nil
+         only when :event_type is \"import\" — a foreign collection records
+         when a repetition happened but not the state it replaced. The
+         database can no longer enforce this, so it is enforced here.
+   Post: row count.
+   Invariant: violating the nil rule throws rather than writing an
+         unattributable gap into a log the history view presents as fact."
+  [tx rows]
+  (when (seq rows)
+    (doseq [{:keys [event_type status_before interval_days_before a_factor_before] :as row} rows]
+      (when (and (not= "import" event_type)
+              (or (nil? status_before) (nil? interval_days_before) (nil? a_factor_before)))
+        (throw (ex-info "Non-import repetition rows must carry their before-snapshot"
+                 {:type ::incomplete-repetition-snapshot :event-type event_type
+                  :topic-id (:topic_id row)}))))
+    (count (jdbc/execute! tx
+             (sql/format {:insert-into :topic_repetitions :values (vec rows) :returning [:id]})))))
 
 (defn- strip-foreign-jsonb
   "Remove map entries whose value is an unparsed org.postgresql.util.PGobject.
@@ -4009,6 +4095,10 @@
    priority orders the queue; a per-day hash of the id breaks ties within a
    priority band, so equal-priority topics shuffle daily (stable within a day,
    immune to mid-session :refresh) rather than ordering by due date.
+   `sm_rank` sits between the two: rounding a SuperMemo collection's priority
+   order into 0-100 collapses ~15 topics per band, and without this term the
+   daily hash would discard the order the import went to the trouble of
+   preserving. NULLS LAST keeps natively created topics on the hash.
    Selects `t.content` for the overview's preview titles; the session reads it
    per-row via nth, so it stays server-side until a row is accessed.
    Joins `sources` to surface bibliography fields (source_url, source_title,
@@ -4028,7 +4118,8 @@
          AND (t.next_review_at::date <= CURRENT_DATE OR t.next_review_at IS NULL)
          AND (t.status = 'active' OR t.status IS NULL)
          AND NOT t.dismissed
-       ORDER BY t.priority ASC, md5(t.id::text || CURRENT_DATE::text) ASC, t.id ASC" user-id])
+       ORDER BY t.priority ASC, t.sm_rank ASC NULLS LAST,
+                md5(t.id::text || CURRENT_DATE::text) ASC, t.id ASC" user-id])
     (catch Exception e
       (tel/error! {:id ::get-learning-queue} e)
       [])))
