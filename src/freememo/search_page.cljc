@@ -24,7 +24,8 @@
    ["pages" "PDF pages"]
    ["articles" "Articles"]
    ["epub" "EPUB"]
-   ["markdown" "Markdown"]])
+   ["markdown" "Markdown"]
+   ["supermemo" "SuperMemo"]])
 
 (defn kind-badge [kind]
   (case kind
@@ -36,6 +37,7 @@
     "audio" ["Audio" "var(--color-badge-web)"]
     "video" ["Video" "var(--color-badge-video)"]
     "video-playlist" ["Playlist" "var(--color-badge-video)"]
+    "supermemo" ["SuperMemo" "var(--color-badge-supermemo)"]
     ["Topic" "var(--color-badge-epub)"]))
 
 (defn encode-query [q]

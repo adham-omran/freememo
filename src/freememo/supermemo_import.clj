@@ -5,7 +5,7 @@
      collection root element  -> the imported topic tree's root
      ConceptGroup (non-root)  -> dropped; children reparent to the nearest
                                  non-ConceptGroup ancestor
-     Topic, Task              -> topics row, kind 'basic'
+     Topic, Task              -> topics row, kind 'supermemo'
      Item                     -> flashcards row on its nearest Topic ancestor
      reference                -> sources row, linked via topics.source_id
      image component          -> media row, appended to the topic's HTML
@@ -500,7 +500,7 @@
                                     day (nth next-rep (dec (:id el)) 0)
                                     rank (rank-of (:id el))]
                                 (cond-> {:user_id user-id
-                                         :kind "basic"
+                                         :kind "supermemo"
                                          :title title
                                          :status "active"
                                          :priority (priority-of rank n-ranked)

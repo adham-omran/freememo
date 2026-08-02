@@ -56,7 +56,7 @@
   "Return a SQL fragment for the kind filter. Friendly labels:
    \"all\" → no filter; \"topics\" → basic (incl. extracts & chapters);
    \"pages\" → page; \"articles\" → web; \"epub\" → basic under epub root;
-   \"markdown\" → markdown."
+   \"markdown\" → markdown; \"supermemo\" → an imported SuperMemo collection."
   [kind-filter]
   (case kind-filter
     "topics" " AND t.kind = 'basic'"
@@ -64,6 +64,7 @@
     "articles" " AND t.kind = 'web'"
     "epub" " AND t.kind = 'basic' AND EXISTS (SELECT 1 FROM topics p WHERE p.id = t.parent_id AND p.kind = 'epub')"
     "markdown" " AND t.kind = 'markdown'"
+    "supermemo" " AND t.kind = 'supermemo'"
     ;; "all" or unknown
     ""))
 

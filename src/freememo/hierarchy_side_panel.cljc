@@ -62,6 +62,7 @@
     "audio"      ["Audio"   "var(--color-badge-web)"]
     "video"      ["Video"   "var(--color-badge-video)"]
     "video-playlist" ["Playlist" "var(--color-badge-video)"]
+    "supermemo"  ["SuperMemo" "var(--color-badge-supermemo)"]
     "basic"      ["E"       "var(--color-badge-epub)"]
     nil))
 
