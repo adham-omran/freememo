@@ -9,35 +9,41 @@
 
    Reactivity: subscribes to :assistant-mutations (bumped on chat create + each
    message insert) so the list and transcript re-query. The learner's own turn
-   appears before the reply because send! bumps right after persisting it."
+   appears before the reply because send! bumps right after persisting it.
+
+   Persona: each chat carries its own mode (freememo.assistant-modes). The Mode
+   pills therefore show the OPEN chat's persona, not a standing preference; with
+   no chat open they stage `!pending-mode`, which rides chat creation. The chrome
+   rows live in freememo.assistant-panel-rows — this ns keeps every
+   `(e/server …)` form binding, so window rows and scalars cross the wire instead
+   of whole collections."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
+   [freememo.assistant-modes :as modes]
+   [freememo.assistant-panel-rows :as rows]
    [freememo.typeahead :refer [Typeahead]]
    [freememo.viewport :as viewport]
    #?(:cljs [freememo.vendor-libs :as vendor])
    #?(:clj [freememo.assistant :as assistant])
    #?(:clj [freememo.markdown :as markdown])
-   #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])))
-
-(def ^:private suggested-prompts
-  "First-message starters shown on an empty chat. The first is the learner's
-   own seed; the rest cover prerequisites, plain-language recall and connection."
-  ["What prerequisites do I need to understand this material?"
-   "Explain the core idea of this page in simple terms."
-   "What questions should I be able to answer after reading this?"
-   "How does this connect to things I might already know?"])
 
 (defn- submit-edit
   "Snapshot the composer state into a one-shot submit token payload, including
-   the current @-referenced document ids."
-  [draft-atom active-atom refs-atom]
+   the current @-referenced document ids and the persona in force.
+
+   `:mode` is frozen here rather than read during the send, so a pill tapped
+   while the request is in flight cannot change which persona the new chat is
+   created with. It is used only when `:chat` is nil — an existing chat keeps its
+   own mode.
+   Pre:  `mode-id` is a mode :id. Post: nil when the draft is blank."
+  [draft-atom active-atom refs-atom mode-id]
   (let [text (str/trim @draft-atom)]
     (when-not (str/blank? text)
       {:id (str (random-uuid)) :text text :chat @active-atom
-       :refs (mapv :id @refs-atom)})))
+       :refs (mapv :id @refs-atom) :mode mode-id})))
 
 (defn render-math!
   "CLJS-only: render KaTeX math (`\\(…\\)` inline, `\\[…\\]` display) in `node`.
@@ -113,8 +119,20 @@
           ;; bumps before the reply), so the echo and the real row never both show.
           !echo (atom nil)
           echo (e/watch !echo)
+          ;; Mode staged for the NEXT chat: the pills write it, chat creation
+          ;; consumes it. An open chat's persona comes off its own row instead.
+          !pending-mode (atom modes/default-id)
+          pending-mode (e/watch !pending-mode)
           assistant-rev (e/server (e/watch (us/get-atom user-id :assistant-mutations)))
-          chats (e/server (vec (assistant/chats* assistant-rev user-id root-topic-id)))
+          ;; Server-sited so one vector crosses instead of a row at a time; the
+          ;; chat Typeahead filters client-side, so it needs the whole list. :mode
+          ;; rides along, which is how the pills learn the open chat's persona
+          ;; without a second query.
+          chat-options (e/server
+                         (mapv (fn [c] {:id (:assistant_chats/id c)
+                                        :label (or (:assistant_chats/title c) "Untitled")
+                                        :mode (:assistant_chats/mode c)})
+                           (assistant/chats* assistant-rev user-id root-topic-id)))
           ;; Other documents the learner can @-reference (current doc excluded).
           docs (e/server (vec (assistant/referenceable-docs user-id root-topic-id)))
           doc-options (mapv (fn [d] {:id (:id d) :label (:title d)}) docs)
@@ -134,6 +152,16 @@
                                m))
                        (or (assistant/messages* assistant-rev user-id active) [])))
           sending? (some? t)
+          ;; The persona in force: the open chat's own mode, else the staged one.
+          ;; The fallback also covers the gap right after ＋ New, before the
+          ;; :assistant-mutations bump puts the new chat in chat-options — the
+          ;; staged value is exactly what the row was created with, so the pills
+          ;; do not flash the default. Chat ids are ints, so a nil `active`
+          ;; matches nothing and falls through. resolve-mode is total, so a NULL
+          ;; column (every chat predating it) reads as Socratic.
+          mode-entry (modes/resolve-mode
+                       (or (some (fn [c] (when (= active (:id c)) (:mode c))) chat-options)
+                         pending-mode))
           ;; Touch devices: never steal focus into the composer — an autofocus
           ;; here pops the on-screen keyboard the moment the panel opens.
           coarse? (e/watch viewport/!coarse?)]
@@ -142,7 +170,7 @@
       ;; suggested prompt). ensure-and-send! creates the chat when :chat is nil,
       ;; so the very first message auto-creates a chat carrying this page context.
       (when t
-        (let [{:keys [id text chat] ref-ids :refs} submit
+        (let [{:keys [id text chat mode] ref-ids :refs} submit
               refs-snapshot (e/snapshot refs)] ; frozen at mount for failure-restore
           (if (str/blank? text)
             (t)
@@ -154,7 +182,8 @@
               (reset! !echo {:id id :text text})
               (let [r (e/server (e/Offload
                                   #(assistant/ensure-and-send!
-                                     user-id root-topic-id page-topic-id chat text ref-ids id)))]
+                                     user-id root-topic-id page-topic-id chat mode
+                                     text ref-ids id)))]
                 (case r
                   (do
                     (reset! !active (:chat-id r)) ; select the (possibly new) chat
@@ -185,56 +214,14 @@
       (dom/div
         (dom/props {:class "assistant-panel"})
 
-        ;; Controls: New Chat + chat picker + model badge.
-        (dom/div
-          (dom/props {:class "assistant-panel__bar"})
-          (dom/button
-            (dom/props {:class "btn btn-secondary assistant-panel__new"
-                        :type "button" :title "Start a new chat about this page"})
-            (dom/text "＋ New")
-            (let [ev (dom/On "click" identity nil)
-                  [nt _] (e/Token ev)]
-              (when nt
-                (let [cid (e/server (e/Offload
-                                      #(assistant/start-chat! user-id root-topic-id)))]
-                  (case cid
-                    (do (reset! !active cid) (reset! !draft "") (reset! !error nil) (nt)))))))
-          (dom/select
-            (dom/props {:class "select assistant-panel__chats" :value (str active)})
-            (dom/option (dom/props {:value ""}) (dom/text "Chats…"))
-            (e/for-by :assistant_chats/id [c chats]
-              (dom/option (dom/props {:value (str (:assistant_chats/id c))})
-                (dom/text (or (:assistant_chats/title c) "Untitled"))))
-            (let [v (dom/On "change" #(-> % .-target .-value) nil)]
-              (when (some? v)
-                (reset! !active (when (seq v) (js/parseInt v 10)))
-                (reset! !error nil)))))
-        ;; Per-document assistant model. "" = use my global default.
-        (dom/div
-          (dom/props {:class "assistant-panel__model"
-                      :style {:display "flex" :align-items "center" :gap "8px"}})
-          (dom/span (dom/text "Socratic tutor ·"))
-          (let [current (e/server (settings/get-assistant-model-for user-id root-topic-id))
-                default-id (e/server (settings/get-assistant-model user-id))
-                choices (e/server (settings/card-model-choices))
-                ;; Name the global default that "" resolves to, minus the
-                ;; "Provider · " prefix (registry labels are "Google · Gemini 3 Flash").
-                default-name (str/trim (last (str/split (get (into {} choices) default-id default-id) #"·")))
-                options (into [["" (str "Use my default (" default-name ")")]] choices)
-                !amodel (atom (e/snapshot (or current "")))
-                amodel (e/watch !amodel)]
-            (dom/select
-              (dom/props {:class "select"})
-              (e/for [[v label] (e/diff-by first options)]
-                (dom/option (dom/props {:value v :selected (= v amodel)}) (dom/text label)))
-              (let [change-event (dom/On "change" #(-> % .-target .-value) nil)
-                    [mt _] (e/Token change-event)]
-                (when (some? change-event)
-                  (reset! !amodel change-event))
-                (when mt
-                  (let [r (e/server (e/Offload #(settings/save-assistant-model-for user-id root-topic-id change-event)))]
-                    (case r
-                      (if (:success r) (mt) (mt (:error r))))))))))
+        ;; Row 2: ＋ New + the chat picker.
+        (rows/ChatRow user-id root-topic-id chat-options pending-mode
+          !active !draft !error)
+        ;; Row 3: Mode pills. Shows the OPEN chat's persona; with no chat open a
+        ;; tap only stages !pending-mode for the chat about to be created.
+        (rows/ModeRow user-id active mode-entry !pending-mode)
+        ;; Row 4: per-document assistant model. "" = use my global default.
+        (rows/ModelRow user-id root-topic-id)
 
         ;; Transcript — every stored row is a real learner/assistant turn now
         ;; (reading context is injected transiently server-side, not persisted).
@@ -242,25 +229,11 @@
           (dom/props {:class "assistant-panel__transcript"})
           (let [visible (vec messages)]
             (if (empty? visible)
-              ;; Empty state: starters — hidden once a send is in flight (echo up
-              ;; or awaiting reply) so they don't sit beside the echoed turn.
+              ;; Empty state: this persona's hint + starters — hidden once a send
+              ;; is in flight (echo up or awaiting reply) so they don't sit beside
+              ;; the echoed turn.
               (when (and (not sending?) (nil? echo))
-                (dom/div
-                  (dom/props {:class "assistant-panel__hint"})
-                  (dom/text "Ask a question about this page and I'll help you think it through.")
-                  (dom/div
-                    (dom/props {:class "assistant-panel__suggestions"})
-                    (e/for [p (e/diff-by identity suggested-prompts)]
-                      (dom/button
-                        (dom/props {:class "assistant-panel__suggestion" :type "button"})
-                        (dom/text p)
-                        (let [ev (dom/On "click" identity nil)
-                              [st _] (e/Token ev)]
-                          (when st
-                            ;; Send immediately as the chat's first message.
-                            (reset! !submit {:id (str (random-uuid)) :text p
-                                             :chat @!active :refs (mapv :id @!refs)})
-                            (st))))))))
+                (rows/EmptyChatStarters mode-entry !submit !active !refs))
               (e/for-by :assistant_messages/id [m visible]
                 (if (= "assistant" (:assistant_messages/role m))
                   ;; Assistant: rendered Markdown HTML (math typeset) + a per-reply
@@ -361,7 +334,7 @@
                 (cond
                   (and (= (.-key e) "Enter") (not (.-shiftKey e)))
                   (do (.preventDefault e)
-                    (when-let [ed (submit-edit !draft !active !refs)]
+                    (when-let [ed (submit-edit !draft !active !refs (:id mode-entry))]
                       (reset! !submit ed)))
                   (= (.-key e) "@")
                   (reset! !at-open? true))) ; the `@` still types into the draft
@@ -376,6 +349,6 @@
                           :disabled (or sending? (str/blank? draft))})
               (dom/text "↑")
               (dom/On "click"
-                (fn [_] (when-let [ed (submit-edit !draft !active !refs)]
+                (fn [_] (when-let [ed (submit-edit !draft !active !refs (:id mode-entry))]
                           (reset! !submit ed)))
                 nil))))))))

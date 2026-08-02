@@ -374,6 +374,11 @@
   (jdbc/execute! ds ["ALTER TABLE assistant_messages ADD COLUMN IF NOT EXISTS client_id TEXT"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_assistant_messages_chat
                       ON assistant_messages(chat_id, id)"])
+  ;; Persona for this chat, an :id from freememo.assistant-modes/registry. Mode
+  ;; is per chat so a transcript is one persona end to end. NULL on every chat
+  ;; that predates the column, which resolve-mode maps to the Socratic default —
+  ;; correct, since Socratic was the only persona that ever existed before it.
+  (jdbc/execute! ds ["ALTER TABLE assistant_chats ADD COLUMN IF NOT EXISTS mode TEXT"])
 )
 
 (defn- setup-schema-annotations!
@@ -1425,30 +1430,38 @@
 ;; ---------------------------------------------------------------------------
 
 (defn create-assistant-chat!
-  "Insert a chat for (user-id, root-topic-id) with `title`. Returns new id."
-  [user-id root-topic-id title]
+  "Insert a chat for (user-id, root-topic-id) with `title` and `mode`.
+   Pre:  `mode` is an assistant-modes :id — the caller validates, this fn does
+         not (freememo.assistant/start-chat! resolves it first).
+   Post: the row's mode = `mode`. Returns new id."
+  [user-id root-topic-id title mode]
   (-> (jdbc/execute-one! ds
         (sql/format {:insert-into :assistant_chats
                      :values [{:user_id user-id
                                :root_topic_id root-topic-id
-                               :title title}]
+                               :title title
+                               :mode mode}]
                      :returning [:id]}))
     :assistant_chats/id))
 
 (defn get-assistant-chat
   "Chat row for `chat-id` IFF owned by `user-id`, else nil (ownership gate).
-   Post: {:assistant_chats/id … :assistant_chats/title …} or nil."
+   Post: {:assistant_chats/id … :assistant_chats/title … :assistant_chats/mode …}
+   or nil. :mode may be NULL on a chat that predates the column — callers
+   resolve it through assistant-modes/resolve-mode, never read it raw."
   [user-id chat-id]
   (jdbc/execute-one! ds
-    (sql/format {:select [:id :root_topic_id :title]
+    (sql/format {:select [:id :root_topic_id :title :mode]
                  :from [:assistant_chats]
                  :where [:and [:= :id chat-id] [:= :user_id user-id]]})))
 
 (defn get-assistant-chats
-  "Chats for (user-id, root-topic-id), newest-touched first, without bodies."
+  "Chats for (user-id, root-topic-id), newest-touched first, without bodies.
+   :mode rides along so the panel reads the active chat's persona out of this
+   already-watched list instead of issuing a second query for it."
   [user-id root-topic-id]
   (jdbc/execute! ds
-    (sql/format {:select [:id :title :updated_at]
+    (sql/format {:select [:id :title :updated_at :mode]
                  :from [:assistant_chats]
                  :where [:and [:= :user_id user-id] [:= :root_topic_id root-topic-id]]
                  :order-by [[[:coalesce :updated_at :created_at] :desc] [:id :desc]]})))
@@ -1488,6 +1501,19 @@
     (sql/format {:update :assistant_chats
                  :set {:title title}
                  :where [:= :id chat-id]})))
+
+(defn set-assistant-chat-mode!
+  "Switch a chat's persona IFF owned by `user-id`.
+   Pre:  `mode` is an assistant-modes :id — validated by the caller
+         (freememo.assistant/set-chat-mode!).
+   Post: the row's mode = `mode` when owned; nothing changes otherwise. Does NOT
+   touch updated_at — switching a persona is not activity in the chat, and the
+   picker orders on that column."
+  [user-id chat-id mode]
+  (jdbc/execute! ds
+    (sql/format {:update :assistant_chats
+                 :set {:mode mode}
+                 :where [:and [:= :id chat-id] [:= :user_id user-id]]})))
 
 (defn delete-assistant-chat!
   "Delete a chat (cascades to messages) IFF owned by `user-id`."

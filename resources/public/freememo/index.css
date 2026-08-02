@@ -3186,13 +3186,43 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 }
 
 .assistant-panel__new { flex-shrink: 0; padding: 4px 8px; font-size: 12px; }
-.assistant-panel__chats { flex: 1; min-width: 0; font-size: 12px; }
+
+/* Chat picker. The flex child is Typeahead's position:relative wrapper, not a
+   <select> — the widget sets width:100% on the input inside it, so the wrapper
+   is what has to flex. */
+.assistant-panel__chats { flex: 1; min-width: 0; }
 
 .assistant-panel__model {
     padding: 0 8px 6px;
+    flex-shrink: 0;
+}
+
+/* Both panel picklists are Typeaheads (bare input, no dropdown arrow). Pull the
+   widget's 14px input and 14px rows down to the panel's own 12-13px scale. */
+.assistant-panel__chats .input,
+.assistant-panel__model .input { font-size: 12px; padding: 4px 8px; }
+
+.assistant-panel__chats .tape-scroll td,
+.assistant-panel__model .tape-scroll td { font-size: 12px; }
+
+/* Mode pills: one row of personas, reusing the Pins/Assistant tab styling
+   (.side-panel__tab) so the two toggles in this panel read as one system. */
+.assistant-panel__modes {
+    padding: 0 8px 6px;
+    flex-shrink: 0;
+}
+
+.assistant-panel__modes-label {
+    display: block;
     font-size: 11px;
     color: var(--color-text-secondary);
-    flex-shrink: 0;
+    margin-bottom: 4px;
+}
+
+.assistant-panel__mode-pills {
+    display: flex;
+    gap: 2px;
+    min-width: 0;
 }
 
 .assistant-panel__transcript {

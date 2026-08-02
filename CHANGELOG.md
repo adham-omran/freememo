@@ -13,6 +13,22 @@ Format contract (see freememo.changelog):
 
 ### For users
 
+- **Three ways to ask the assistant.** A **Mode** row in the assistant panel picks
+  who answers you, and each chat remembers its own choice.
+  - **General** answers the question outright and names the page it read. If the
+    material does not cover your question, it says so instead of guessing. It then
+    points you at the nearest thing the document does cover.
+  - **Tutor** guides you with questions, in plain conversational prose.
+  - **Socratic** guides you with questions in the fixed *"Where you are" /
+    "Consider next"* shape, unchanged from before.
+  - The starter suggestions on an empty chat now match the mode you picked.
+  - **The ✦ button on a reply works in every mode.** A Socratic reply still
+    contributes only its *"Where you are"* half, never the question. A Tutor or
+    General reply contributes the whole answer.
+- **Searchable chat and model pickers.** Both dropdowns in the assistant panel now
+  filter as you type. Find one chat among many, or any model in the list, without
+  scrolling.
+
 - **Math.** Formulas work end to end — write them in the editor, generate cards from
   them, and push them to Anki where they render as real notation instead of raw LaTeX.
   - **Write `\(x^2\)` and it becomes a formula** the moment you type the closing
