@@ -65,6 +65,7 @@
                 (dom/option (dom/props {:value "epub"}) (dom/text "EPUB"))
                 (dom/option (dom/props {:value "web"}) (dom/text "Web"))
                 (dom/option (dom/props {:value "markdown"}) (dom/text "Markdown"))
+                (dom/option (dom/props {:value "supermemo"}) (dom/text "SuperMemo"))
                 (dom/On "change" (fn [e] (reset! !kind-filter (-> e .-target .-value))) nil))
 
               (dom/select

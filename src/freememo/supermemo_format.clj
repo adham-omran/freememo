@@ -259,21 +259,21 @@
 
 (def ^:private component-group-magic [0x31 0xD4])
 
-(def ^:private component-struct-bytes
-  "uint16 type header -> bytes of the struct that follows it.
-   Low byte is SuperMemoAssistant's ComponentType; the high byte is a
-   size/version marker we do not interpret."
-  {0x1C0D 29    ; Html
-   0x1C00 35    ; Text
-   0x1C0C 30    ; Rtf
-   0x1C01 35    ; Spelling
-   0x1902 26    ; Image
-   0x1C02 26    ; Image (alternate marker)
-   0x1C03 49    ; Sound
-   0x1C04 32    ; Video
-   0x1C05 28    ; Shape ellipse
-   0x1C06 28    ; Shape rectangle
-   0x1C07 28})  ; Shape rounded rectangle
+(defn- component-struct-bytes
+  "Bytes of the struct that follows a component's uint16 type header.
+
+   The header is self-describing: the low byte is SuperMemoAssistant's
+   ComponentType and the high byte is the struct size minus one. Every size
+   SMA documents agrees — Html 29 encodes as 0x1C0D, Image 26 as 0x1902,
+   Text 35 as 0x2200, Sound 49 as 0x3003.
+
+   Deriving the size beats a lookup table because the walk then survives a
+   component type we have never seen. A table built from the types one
+   collection happens to contain stops the walk at the first unlisted header,
+   and every later component of that element is lost — which is exactly what
+   a table did to the Text components carrying 289 answers in one collection."
+  [header]
+  (inc (bit-shift-right header 8)))
 
 (def ^:private component-kind
   {0x0D :html 0x00 :text 0x0C :rtf 0x01 :spelling
@@ -282,8 +282,9 @@
 (defn- read-component-group
   "Decode the group at byte offset `pos` in compon.dat.
    Post: {:element-id :components [{:kind :registry-id}...]} or nil when the
-   magic does not match. Stops early at an unknown type header — the group's
-   remaining components cannot be located without their struct size."
+   magic does not match. Every header carries its own struct size, so an
+   unfamiliar component type is recorded as :unknown and the walk continues
+   to the components after it."
   [^bytes b pos]
   (when (and (>= pos 0) (< (+ pos 11) (alength b))
           (= (u8 b pos) (first component-group-magic))
@@ -297,19 +298,21 @@
            :components acc
            :truncated? (or truncated? (pos? left))}
           (let [header (u16 b p)
-                size (component-struct-bytes header)]
-            (if-not size
+                size (component-struct-bytes header)
+                ;; Every component struct places registryId at struct offset
+                ;; 18: the 10-byte geometry prefix (unknown1/left/top/width/
+                ;; height/displayAt) is followed by 8 bytes that differ per
+                ;; type but never change length.
+                reg-at (+ p 2 18)
+                reg (when (<= (+ reg-at 4) (alength b)) (i32 b reg-at))]
+            ;; A size of 1 means the high byte was 0, which no real component
+            ;; has — treat it as desynchronization rather than looping.
+            (if (< size 2)
               {:element-id element-id :components acc :truncated? true}
-              (let [;; Every component struct places registryId at struct
-                    ;; offset 18: the 10-byte geometry prefix
-                    ;; (unknown1/left/top/width/height/displayAt) is followed
-                    ;; by 8 bytes that differ per type but never change length.
-                    reg-at (+ p 2 18)
-                    reg (when (<= (+ reg-at 4) (alength b)) (i32 b reg-at))]
-                (recur (+ p 2 size) (dec left)
-                  (conj acc {:kind (component-kind (bit-and header 0xFF) :unknown)
-                             :registry-id reg})
-                  truncated?)))))))))
+              (recur (+ p 2 size) (dec left)
+                (conj acc {:kind (component-kind (bit-and header 0xFF) :unknown)
+                           :registry-id reg})
+                truncated?))))))))
 
 ;; ── repetitions.dat / RepetitionHistory.dat / .sub ─────────────────
 
