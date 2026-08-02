@@ -40,11 +40,12 @@
             ["Extract the text ({scan})" "Scan Page runs OCR on the current page into clean, editable HTML. Copy-text pulls the PDF's own text layer when it has one."]
             ["Edit & split ({extract})" "Fix the text in the editor. Select a passage and Extract turns it into a child topic linked back to the page."]
             ["Mark done ({done})" "Mark a page Done to drop it from your review queue while keeping the content."]]}
-   {:title "Asking the AI tutor"
-    :intro "Think a page through with a Socratic assistant that asks rather than answers."
+   {:title "Asking the AI assistant"
+    :intro "Work a page through with an assistant that either answers you or questions you — your choice."
     :steps [["Open it" "Right side panel → AI Assistant tab. New Chat starts a conversation scoped to the current document; your chats and transcripts are saved."]
-            ["Ask about the page" "Type a question about what you're reading. The tutor replies with questions to guide you, grounded in the page — it won't just hand you the answer. Markdown and math render inline."]
-            ["Pick its model" "The panel's model selector sets the tutor's model for this document; leave it on your default otherwise."]]}
+            ["Pick a mode" "General answers directly and names the page it came from. Tutor guides you with questions. Socratic does the same in a fixed \"Where you are / Consider next\" shape. Each chat keeps its own mode."]
+            ["Ask about the page" "Type a question about what you're reading. Every mode is grounded in the page in front of you. Markdown and math render inline."]
+            ["Pick its model" "The panel's model selector sets the assistant's model for this document; leave it on your default otherwise. Type to search it."]]}
    {:title "Making a deck"
     :intro "Generate flashcards from the page you're reading, then curate them."
     :steps [["Generate ({generate})" "Pick Basic or Cloze, a card count, and whether to include previous-page context, then generate from the current page. If the document has approved knowledge-graph facts, cards are built from those facts instead of the raw text."]
