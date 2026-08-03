@@ -2996,6 +2996,45 @@
     (dissoc :occlusion_groups/occlusion_image_media_id :occlusion_groups/occlusion_mode
       :score_groups/score_start_ms :score_groups/score_end_ms)))
 
+;; ── Parameter ceiling for multi-row INSERTs ────────────────────────
+;; Every batch insert below renders one `VALUES (…), (…), …` statement, and
+;; PostgreSQL's wire protocol caps a prepared statement at 65 535 bound
+;; parameters. A collection import reaches five figures of rows in one call, so
+;; the batch fns partition rather than trusting the caller to keep lists small —
+;; only this layer knows the column count, so only this layer can compute the
+;; bound.
+
+(def ^:private max-statement-params
+  "PostgreSQL's ceiling on bound parameters in one prepared statement. The
+   driver refuses the whole statement past it; it does not truncate."
+  65535)
+
+(defn- param-bounded-batches
+  "Partition `rows` so each batch renders as one INSERT within
+   `max-statement-params`.
+
+   Rows are first normalized to the union of every row's keys, so each batch
+   emits the same column list the unpartitioned statement would have. Without
+   that step a key present in one batch and absent from another would be an
+   explicit NULL in the first and a column DEFAULT in the second.
+
+   Batch size uses the column count as the per-row parameter bound. That
+   over-counts — HoneySQL renders nil as inline NULL rather than a parameter —
+   which is the safe direction to err.
+
+   Pre : `rows` is a non-empty seq of maps.
+   Post: seq of row vectors that concatenate to `rows` in order. A row wider
+         than the ceiling still gets its own batch rather than none, so the
+         driver reports the real problem instead of this fn hanging on a
+         zero-sized partition.
+   Invariant: order is preserved — callers align returned ids positionally
+         against the rows they passed."
+  [rows]
+  (let [cols (into [] (distinct) (mapcat keys rows))
+        blanks (zipmap cols (repeat nil))]
+    (partition-all (max 1 (quot max-statement-params (max 1 (count cols))))
+      (mapv #(merge blanks %) rows))))
+
 (defn insert-flashcards!
   "Batch insert flashcards. Rows should include :topic_id and :root_topic_id.
    Uses ON CONFLICT DO NOTHING to prevent duplicates.
@@ -3006,7 +3045,12 @@
    The 2-arity takes the connectable. Pass an open transaction when the cards'
    topics were inserted in that same transaction — on `ds` this runs on a
    different connection, cannot see the uncommitted parents, and fails the
-   flashcards_topic_id_fkey constraint."
+   flashcards_topic_id_fkey constraint.
+
+   Large lists are split across statements by `param-bounded-batches`, so the
+   insert is atomic only to the extent `connectable` makes it so: a transaction
+   covers every batch, `ds` covers one batch each. Every caller past a single
+   batch (collection import) already passes a transaction."
   ([rows] (insert-flashcards! ds rows))
   ([connectable rows]
    (when (seq rows)
@@ -3020,13 +3064,16 @@
                         (cond-> row
                           (some? (:overlapping row)) (update :overlapping ->jsonb)))
                   rows)]
-       (mapv :flashcards/id
-         (jdbc/execute! connectable
-           (sql/format {:insert-into :flashcards
-                        :values rows
-                        :on-conflict []
-                        :do-nothing true
-                        :returning [:id]})))))))
+       (into []
+         (comp (mapcat (fn [batch]
+                         (jdbc/execute! connectable
+                           (sql/format {:insert-into :flashcards
+                                        :values (vec batch)
+                                        :on-conflict []
+                                        :do-nothing true
+                                        :returning [:id]}))))
+           (map :flashcards/id))
+         (param-bounded-batches rows))))))
 
 ;; ── Batch inserts for collection import ────────────────────────────
 ;; An importer owns values the user never typed — titles from a foreign
@@ -3045,14 +3092,21 @@
          whether to truncate or reject.
    Post: vector of ids positionally aligned with `rows`; nil when empty.
    Invariant: no ON CONFLICT — topics have no natural key here, so a conflict
-         would mean a malformed row rather than a duplicate."
+         would mean a malformed row rather than a duplicate.
+   Invariant: `param-bounded-batches` splits wide lists across statements, all
+         inside `tx`, so the whole depth level still commits or rolls back as
+         one unit."
   [tx rows]
   (when (seq rows)
     (doseq [row rows]
       (input/check-length! :title (:title row) input/title-max))
-    (mapv :topics/id
-      (jdbc/execute! tx
-        (sql/format {:insert-into :topics :values (vec rows) :returning [:id]})))))
+    (into []
+      (comp (mapcat (fn [batch]
+                      (jdbc/execute! tx
+                        (sql/format {:insert-into :topics :values (vec batch)
+                                     :returning [:id]}))))
+        (map :topics/id))
+      (param-bounded-batches rows))))
 
 (defn insert-source-rows!
   "Batch-insert sources rows; return their ids in insertion order.
@@ -3064,9 +3118,13 @@
   [tx rows]
   (when (seq rows)
     (let [rows (mapv #(update % :csl ->jsonb) rows)]
-      (mapv :sources/id
-        (jdbc/execute! tx
-          (sql/format {:insert-into :sources :values rows :returning [:id]}))))))
+      (into []
+        (comp (mapcat (fn [batch]
+                        (jdbc/execute! tx
+                          (sql/format {:insert-into :sources :values (vec batch)
+                                       :returning [:id]}))))
+          (map :sources/id))
+        (param-bounded-batches rows)))))
 
 (defn insert-topic-repetitions!
   "Batch-append rows to topic_repetitions; return the number inserted.
@@ -3087,8 +3145,12 @@
         (throw (ex-info "Non-import repetition rows must carry their before-snapshot"
                  {:type ::incomplete-repetition-snapshot :event-type event_type
                   :topic-id (:topic_id row)}))))
-    (count (jdbc/execute! tx
-             (sql/format {:insert-into :topic_repetitions :values (vec rows) :returning [:id]})))))
+    (transduce (map (fn [batch]
+                      (count (jdbc/execute! tx
+                               (sql/format {:insert-into :topic_repetitions
+                                            :values (vec batch)
+                                            :returning [:id]})))))
+      + 0 (param-bounded-batches rows))))
 
 (defn- strip-foreign-jsonb
   "Remove map entries whose value is an unparsed org.postgresql.util.PGobject.
@@ -4415,36 +4477,91 @@
                  :from [:media]
                  :where [:= :id id]})))
 
-(defn upsert-media!
-  "Insert media or return existing id if same bytes already stored for this user.
-   Charges quota only on actual insert.
+(defn upsert-media-row!
+  "Insert media, or return the existing row's id if the same bytes are already
+   stored for this user. Charges quota only on actual insert.
+
+   Reports WHICH of the two happened, because a caller that must undo its own
+   writes may only delete rows it created — deleting a reused row would destroy
+   content the user already owned. `upsert-media!` is the id-only wrapper for
+   the callers that do not compensate.
 
    `:meter-quota?` defaults to true and MUST stay true for anything accepting
    new bytes from a user. Pass false only when the bytes are already stored
    elsewhere in this user's own rows and are merely being relocated — metering
    those would charge for storage the user already holds, and
    quota/check-and-bump! THROWS on cap violation, which would abort the
-   relocation. Sole such caller: normalize-inline-card-images!."
+   relocation. Sole such caller: normalize-inline-card-images!.
+
+   Pre : `bytes` is non-nil; `user-id` owns the write.
+   Post: {:media/id N :media/inserted? bool}. `:media/inserted?` is true only
+         when this call created the row, i.e. only then is the row this
+         caller's to delete."
   [{:keys [user-id kind ^bytes bytes mime-type source-url meter-quota?]
     :or {meter-quota? true}}]
   (let [sha256 (bytes-sha256 bytes)
         byte-size (alength bytes)]
     (if-let [existing (find-media-by-sha user-id sha256)]
-      (:media/id existing)
+      {:media/id (:media/id existing) :media/inserted? false}
       (jdbc/with-transaction [tx ds]
         (when meter-quota?
           (quota/check-and-bump! tx user-id byte-size))
-        (-> (jdbc/execute-one! tx
-              (sql/format {:insert-into :media
-                           :values [{:user_id user-id
-                                     :kind (or kind "image")
-                                     :bytes bytes
-                                     :mime_type mime-type
-                                     :sha256 sha256
-                                     :byte_size byte-size
-                                     :source_url source-url}]
-                           :returning [:id]}))
-          :media/id)))))
+        {:media/id (-> (jdbc/execute-one! tx
+                         (sql/format {:insert-into :media
+                                      :values [{:user_id user-id
+                                                :kind (or kind "image")
+                                                :bytes bytes
+                                                :mime_type mime-type
+                                                :sha256 sha256
+                                                :byte_size byte-size
+                                                :source_url source-url}]
+                                      :returning [:id]}))
+                     :media/id)
+         :media/inserted? true}))))
+
+(defn upsert-media!
+  "Insert media or return existing id if same bytes already stored for this user.
+   See `upsert-media-row!`, which this wraps; use that one when the caller has
+   to undo what it stored.
+   Post: media id."
+  [opts]
+  (:media/id (upsert-media-row! opts)))
+
+(defn delete-media-rows!
+  "Delete `ids` from `media` for `user-id` and refund their bytes.
+
+   The compensating action for an import that stored media before opening its
+   transaction: the bytes are too large to hold a transaction across, so a
+   rolled-back import must undo them explicitly or bill the user for content
+   nothing references.
+
+   Pre : every id in `ids` was CREATED by the caller — an id that merely
+         matched an existing sha256 belongs to content the user already owns,
+         and deleting it would destroy it. `upsert-media-row!`'s
+         `:media/inserted?` is how a caller knows the difference.
+   Post: {:deleted N :refunded B}. `usage_bytes` is down by exactly the summed
+         `byte_size` of the rows actually deleted.
+   Invariant: every statement is scoped by user_id, so a guessed id cannot
+         reach another user's row.
+   Invariant: the id list is itself partitioned against
+         `max-statement-params` — a failed import can have stored more images
+         than one IN list can bind."
+  [user-id ids]
+  (if (empty? ids)
+    {:deleted 0 :refunded 0}
+    (jdbc/with-transaction [tx ds]
+      (let [deleted (into []
+                      (mapcat (fn [id-batch]
+                                (jdbc/execute! tx
+                                  (sql/format {:delete-from :media
+                                               :where [:and [:= :user_id user-id]
+                                                       [:in :id (vec id-batch)]]
+                                               :returning [:byte_size]}))))
+                      (partition-all (dec max-statement-params) (vec ids)))
+            bytes (transduce (map :media/byte_size) + 0 deleted)]
+        (when (pos? bytes)
+          (bump-user-usage! tx user-id (- bytes)))
+        {:deleted (count deleted) :refunded bytes}))))
 
 (defn- rewrite-inline-images
   "Replace every data:image URI in `html` with /api/media/<id>, storing each

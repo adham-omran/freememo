@@ -12,11 +12,14 @@
      repetition               -> topic_repetitions row, event_type 'import'
 
    Transaction boundary: media rows are written first, outside the main
-   transaction, because upsert-media! meters quota in a transaction of its
-   own. They are content-addressed, so a failed import leaves reusable
-   (not duplicated) blobs and a retry costs no additional quota. Everything
-   else — sources, topics, flashcards, repetitions — commits or rolls back
-   as one unit.
+   transaction, because upsert-media! meters quota in a transaction of its own
+   and the blobs are far too large to hold one open across. The rollback
+   therefore cannot reach them, so import-collection!'s failure path deletes
+   them explicitly and refunds the bytes — content-addressing alone would leave
+   the user billed for a collection that never imported. Only rows THIS import
+   inserted are deleted; bytes the user already held are left alone. Everything
+   else — sources, topics, flashcards, repetitions — commits or rolls back as
+   one unit.
 
    Every element the mapping drops, moves or truncates is counted into the
    returned report. Nothing is discarded silently."
@@ -220,25 +223,30 @@
   "Write every distinct image file in the collection to `media`, once.
    Runs before the main transaction; see the namespace docstring.
    Pre : `user-id` owns the import.
-   Post: {File media-id} for files that stored successfully. A file that
-         fails (unreadable, over quota) is absent from the map and counted
-         by the caller, rather than aborting the import."
+   Post: {:media-by-file {File media-id} :created-ids #{media-id}}. A file that
+         fails (unreadable, over quota) is absent from `:media-by-file` and
+         counted by the caller, rather than aborting the import.
+         `:created-ids` holds only the rows THIS import inserted — a file whose
+         bytes the user already had contributes to `:media-by-file` but not to
+         `:created-ids`, so a failed import's compensation cannot delete
+         content that predates it."
   [user-id collection elements]
   (let [files (distinct (mapcat #(smf/element-images collection %) elements))]
     (reduce (fn [acc ^File f]
               (try
                 (let [bytes (with-open [in (clojure.java.io/input-stream f)] (.readAllBytes in))
-                      id (db/upsert-media!
-                           {:user-id user-id :kind "image" :bytes bytes
-                            :mime-type (or (java.net.URLConnection/guessContentTypeFromName (.getName f))
-                                         "application/octet-stream")})]
-                  (assoc acc f id))
+                      row (db/upsert-media-row!
+                            {:user-id user-id :kind "image" :bytes bytes
+                             :mime-type (or (java.net.URLConnection/guessContentTypeFromName (.getName f))
+                                          "application/octet-stream")})]
+                  (cond-> (assoc-in acc [:media-by-file f] (:media/id row))
+                    (:media/inserted? row) (update :created-ids conj (:media/id row))))
                 (catch Exception e
                   (tel/log! {:level :warn :id ::image-skipped
                              :data {:file (.getName f) :error (.getMessage e)}}
                     "SuperMemo image skipped")
                   acc)))
-      {} files)))
+      {:media-by-file {} :created-ids #{}} files)))
 
 (defn- item-text-components
   "The element's textual components, in component order, raw.
@@ -431,9 +439,14 @@
          the collection folder within it); the caller owns `dir` and deletes
          it afterwards, on both the success and failure paths.
    Post: {:ok true :topic-id N :report {...}} when the tree committed, or
-         {:ok false :error S} when it did not. On failure no topics, sources,
-         flashcards or repetitions rows exist; content-addressed media rows
-         written before the transaction may remain and are reused on retry.
+         {:ok false :error S} when it did not. On failure NOTHING persists:
+         topics, sources, flashcards and repetitions roll back with the
+         transaction, and the media rows written before it opened are deleted
+         and their bytes refunded. A failed import therefore costs the user no
+         storage — it trades the old reuse-on-retry shortcut, which billed for
+         a collection that was never imported, for re-storing those images if
+         they retry (the archive is re-extracted on every attempt anyway).
+         Media whose bytes the user already held is untouched.
    Invariant: every element that is skipped, flattened, moved or truncated is
          counted in :report — the report is the import's account of itself,
          not a summary of the happy path."
@@ -454,7 +467,10 @@
             next-rep (:next-rep-day collection)
             ;; Items carry images too, and their cards append them, so both
             ;; element classes go in — one pass, deduped by sha256.
-            media-by-file (store-images! user-id collection (concat topic-els item-els))
+            ;; `created-media-ids` is what the failure path gives back; see the
+            ;; catch below.
+            {media-by-file :media-by-file created-media-ids :created-ids}
+            (store-images! user-id collection (concat topic-els item-els))
             ;; Counters the report owes the user.
             !truncated (atom 0)
             !missing-images (atom 0)]
@@ -592,4 +608,19 @@
                 :not-carried not-carried}}))
           (catch Exception e
             (tel/error! {:id ::import-failed :data {:user-id user-id}} e)
+            ;; Media is written before the transaction opens, so the rollback
+            ;; cannot reach it. Give back only the rows this import created,
+            ;; or the user is billed for content nothing references. Guarded
+            ;; separately so a failed compensation cannot mask the real error.
+            (try
+              (let [r (db/delete-media-rows! user-id created-media-ids)]
+                (when (pos? (long (:deleted r)))
+                  (tel/log! {:level :info :id ::import-media-reverted
+                             :data {:user-id user-id :deleted (:deleted r)
+                                    :refunded (:refunded r)}}
+                    "Reverted media stored by a failed SuperMemo import")))
+              (catch Exception ce
+                (tel/error! {:id ::import-media-revert-failed
+                             :data {:user-id user-id
+                                    :media-ids (count created-media-ids)}} ce)))
             {:ok false :error (or (.getMessage e) "Import failed")}))))))
