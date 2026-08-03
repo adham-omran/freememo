@@ -131,6 +131,7 @@ Format contract (see freememo.changelog):
   later `\)` in ordinary text converts on the closing delimiter. Ctrl+Z undoes it.
 - **A long formula can be cut mid-expression** in a search snippet or a card-table
   row, where it then shows as LaTeX source rather than rendering.
+<<<<<<< Updated upstream
 - **The SuperMemo layouts were confirmed against one collection.** SuperMemo publishes
   no specification for its collection files, and no library reads them on Linux, so
   every scheduling field was recovered by measurement against a single real SM19
@@ -169,6 +170,11 @@ Format contract (see freememo.changelog):
   not in the repository. The build downloads them and checks every byte against a
   committed lockfile, so a drifted or tampered upstream fails the build instead of
   shipping. The running container needs no internet for them.
+=======
+- **If the math renderer cannot load,** the editor still opens after a 3-second wait,
+  but math stays as `\(…\)` source and clicking it does nothing. Your content is
+  unchanged either way.
+>>>>>>> Stashed changes
 
 ### Technical
 
@@ -179,11 +185,22 @@ Format contract (see freememo.changelog):
 - Every read of a Quill root's innerHTML now goes through `quill-field/editor-html`
   (seven sites). A raw read persists the KaTeX subtree, which `clean-html` reduces to
   duplicated fallback text.
+<<<<<<< Updated upstream
 - `init-editor!` is asynchronous now — it waits on `math/on-katex-ready!` and a
   generation counter guards it. It returns nil, so read `!editor-state`. **Correction:**
   that gate races `window.__katexReady`, which `0604fe6` deleted from both HTML files
   later in this release. It resolves `false` on every page load, which is the regression
   in the first known issue.
+=======
+- `init-editor!` is asynchronous now — it waits on `math/on-katex-ready!` (a 3 s race
+  against `vendor-libs/ensure! :katex`, which stays pending on a stalled request) and
+  is guarded by a generation counter. It returns nil; read `!editor-state`.
+- KaTeX loads through `freememo.vendor-libs`, lazily: the gate starts the load on the
+  first editor mount, `math/render-math!` starts it on the first display site, and
+  `/library/cards` warms it at the route boundary. `freememo.math` is the sole owner
+  of the group key, and its `render-math!` replaces the private copy that lived in
+  `assistant_panel`.
+>>>>>>> Stashed changes
 - Anki push mapping is applied to the whole field map in `build-note` /
   `build-update-fields`, not inside the five per-kind builders.
 - The Anki-modified overlay diff now normalises both sides before comparing, so math

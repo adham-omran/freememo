@@ -23,9 +23,9 @@
    [clojure.string :as str]
    [freememo.assistant-modes :as modes]
    [freememo.assistant-panel-rows :as rows]
+   [freememo.math :as math]
    [freememo.typeahead :refer [Typeahead]]
    [freememo.viewport :as viewport]
-   #?(:cljs [freememo.vendor-libs :as vendor])
    #?(:clj [freememo.assistant :as assistant])
    #?(:clj [freememo.markdown :as markdown])
    #?(:clj [freememo.user-state :as us])))
@@ -44,33 +44,6 @@
     (when-not (str/blank? text)
       {:id (str (random-uuid)) :text text :chat @active-atom
        :refs (mapv :id @refs-atom) :mode mode-id})))
-
-(defn render-math!
-  "CLJS-only: render KaTeX math (`\\(…\\)` inline, `\\[…\\]` display) in `node`.
-   CLJ no-op. Call AFTER node's innerHTML is set.
-
-   KaTeX is vendored without a `<script>` tag; `vendor-libs/ensure! :katex`
-   returns the one shared load promise, so a message mounted before KaTeX
-   arrives still renders the instant it does — no polling, and no bounded timer
-   that could lose the race or leak. A failed load rejects, the `.then` never
-   runs, and math stays literal (no crash, no hang).
-
-   The client carries no `$` delimiter: `freememo.markdown/dollar-math->tex` has
-   already rewritten real math to `\\(…\\)`/`\\[…\\]` server-side, so a currency
-   `$` can never open math here. `throwOnError:false` shows a bad expression as
-   source instead of throwing. Code/`pre` are skipped (KaTeX default ignoredTags).
-
-   Plain defn so the reader conditional stays invisible to Electric's reactive
-   compiler (CLJ/CLJS signal parity)."
-  [node]
-  #?(:cljs
-     (.then (vendor/ensure! :katex)
-       (fn [_]
-         (js/renderMathInElement node
-           #js {:delimiters #js [#js {:left "\\[" :right "\\]" :display true}
-                                 #js {:left "\\(" :right "\\)" :display false}]
-                :throwOnError false})))
-     :clj nil))
 
 (defn scroll-to-bottom!
   "CLJS-only: pin `node`'s scroll position to its bottom. CLJ no-op.
@@ -243,8 +216,11 @@
                     (dom/props {:class "assistant-msg-group"})
                     (dom/div
                       (dom/props {:class "assistant-msg assistant-msg--assistant" :dir "auto"})
+                      ;; innerHTML + render-math!, NOT math/set-html!: that fn
+                      ;; short-circuits on a missing `\(`, and a reply may carry
+                      ;; only display math (`\[…\]`), which it would skip.
                       (set! (.-innerHTML dom/node) (or (:assistant_messages/content-html m) ""))
-                      (render-math! dom/node))
+                      (math/render-math! dom/node))
                     (dom/div
                       (dom/props {:class "assistant-msg-actions"})
                       (dom/button
