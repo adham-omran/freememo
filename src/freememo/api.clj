@@ -24,6 +24,8 @@
    [freememo.wayl :as wayl]
    [freememo.geo :as geo]
    [freememo.config :as config]
+   [freememo.archive-http :as archive-http]
+   [freememo.upload-http :as upload-http]
    [freememo.video-http :as video-http]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
@@ -907,17 +909,28 @@
    ;; is :upload — 3.1.5, the per-route cap rejects an oversized chunk before any
    ;; handler runs, which is what lets a 700 MB file through a 100 MB door.
    {:method :post :path "/api/video/init"       :handler #'video-http/init-handler       :body :small}
-   {:method :post :path "/api/video/chunk"      :handler #'video-http/chunk-handler      :body :upload}
+   {:method :post :path "/api/video/chunk"      :handler #'upload-http/chunk-handler     :body :upload}
    {:method :post :path "/api/video/finalize"   :handler #'video-http/finalize-handler   :body :small}
-   {:method :post :path "/api/video/abort"      :handler #'video-http/abort-handler      :body :small}
+   {:method :post :path "/api/video/abort"      :handler #'upload-http/abort-handler     :body :small}
    {:method :post :path "/api/video/position"   :handler #'video-http/position-handler   :body :small}
+   ;; Archive chunked upload (plans/supermemo-import-large-archives.md §6.1).
+   ;; Same three-call shape as video and the same reason for it: a 7.5 GB
+   ;; SuperMemo collection cannot go through a 100 MB request cap. `chunk` IS
+   ;; the payload and is :upload; init/finalize/abort carry only metadata.
+   ;; Chunk and abort are the shared flow-blind handlers — the archive flow adds
+   ;; no second implementation of appending a chunk.
+   {:method :post :path "/api/archive/init"     :handler #'archive-http/init-handler     :body :small}
+   {:method :post :path "/api/archive/chunk"    :handler #'upload-http/chunk-handler     :body :upload}
+   {:method :post :path "/api/archive/finalize" :handler #'archive-http/finalize-handler :body :small}
+   {:method :post :path "/api/archive/abort"    :handler #'upload-http/abort-handler     :body :small}
    {:method :post :path "/api/save-page-text"   :handler #'save-page-text-handler   :body :small}
    {:method :post :path "/api/credits/checkout" :handler #'credits-checkout-handler :body :small}
    {:method :post :path "/api/wayl/webhook"     :handler #'wayl-webhook-handler     :body :small}
    {:method :post :path "/login"                :handler #'login-post-handler       :body :small}
    {:method :get  :pattern #"/api/pdf/\d+"      :handler #'get-pdf-handler}
    {:method :get  :pattern #"/api/audio/\d+"    :handler #'get-audio-handler}
-   {:method :get  :path    "/api/video/status"  :handler #'video-http/status-handler}
+   {:method :get  :path    "/api/video/status"  :handler #'upload-http/status-handler}
+   {:method :get  :path    "/api/archive/status" :handler #'upload-http/status-handler}
    ;; Must follow /api/video/status — match-route takes the FIRST match, and
    ;; #"/api/video/\d+" would not match "status" anyway, but keeping the literal
    ;; path above the pattern makes the precedence explicit rather than incidental.

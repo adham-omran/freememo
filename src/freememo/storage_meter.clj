@@ -220,7 +220,7 @@
    the leak is a large object plus a byte reservation, and both exist in a
    self-host install too."
   []
-  (db/reap-stale-video-uploads! upload-session-ttl-hours))
+  (db/reap-stale-upload-sessions! upload-session-ttl-hours))
 
 ;; Registered at namespace load so db.clj carries no dependency on this ns.
 ;; Registration is idempotent per label, so a REPL reload replaces rather than

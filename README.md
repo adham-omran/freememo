@@ -223,7 +223,11 @@ Schema auto-creates on first startup (no migration framework). Configure via env
 | `PORT` | `8080` | HTTP port |
 | `STORAGE_QUOTA_BYTES` | `1073741824` (1 GB) | Total per-user storage. `0` = unlimited. |
 | `STORAGE_PER_FILE_MAX_BYTES` | `104857600` (100 MB) | Default per-upload cap (per-user override via `users.upload_max_bytes`). `0` = unlimited. Also sizes the WebSocket message limit. |
-| `STORAGE_REQUEST_MAX_BYTES` | `104857600` (100 MB) | Absolute HTTP request-body ceiling for upload routes (per-user-blind). `0` = unlimited. A per-user cap above this is still bounded here — raise this too to allow larger uploads. |
+| `STORAGE_REQUEST_MAX_BYTES` | `104857600` (100 MB) | Absolute HTTP request-body ceiling for upload routes (per-user-blind). `0` = unlimited. A per-user cap above this is still bounded here — raise this too to allow larger uploads. Archive and video uploads chunk, so they are not bounded by it. |
+| `ARCHIVE_MAX_BYTES` | `17179869184` (16 GB) | Ceiling on one declared `.zip` / `.7z` upload. A bound on what a single bad request can reserve, not a product limit. |
+| `SUPERMEMO_MAX_EXTRACT_BYTES` | `17179869184` (16 GB) | Total uncompressed bytes a SuperMemo collection may extract to. **This is the cap that binds against disk** — the extracted tree lands in the container's temp directory. |
+| `SUPERMEMO_MAX_EXTRACT_ENTRIES` | `1000000` | Entry-count ceiling for a SuperMemo collection. A collection stores one file per element component, so a large one runs to hundreds of thousands. |
+| `SUPERMEMO_MAX_EXTRACT_ENTRY_BYTES` | `2147483648` (2 GB) | Per-entry ceiling. Embedded audio and video slots exceed the code-repo default of 20 MB. |
 | `APP_BASE_URL` | `https://freememo.net` | Public base URL embedded in Anki card source anchors. Set to your domain when self-hosting. |
 | `GOOGLE_CLIENT_ID` | _(none)_ | Google OAuth client ID. Required when `AUTH_MODE` is `google`/`both`. |
 | `GOOGLE_CLIENT_SECRET` | _(none)_ | Google OAuth client secret. |
