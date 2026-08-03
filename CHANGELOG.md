@@ -9,6 +9,136 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
+## v20260803-dad3fce
+
+### For users
+
+- **A SuperMemo collection of any size now imports.** A large collection used to fail
+  on the way up, and no setting could carry it. A `.zip` or a `.7z` now travels in
+  8 MB pieces, so the size of the file no longer decides whether it arrives.
+  - **The modal shows the upload as it goes** — the percentage and the total size.
+  - **A collection costs you no storage.** The archive is only transport, so the
+    import gives every one of its bytes back. Only the images it stored stay counted
+    against you.
+  - **A code repository takes the same route.** A repo `.zip` above the 100 MB
+    request limit imports now too.
+  - Measured on a real 1.7 GB collection: 5 seconds to extract and 110 seconds to
+    import, for 59 109 topics, 36 305 cards, 1 879 sources, 106 208 repetitions and
+    2 365 images.
+- Bug fix: **a large collection died at the last step, after the upload, the
+  extraction and the read had all worked.** 
+- Bug fix: **a card longer than about 2 700 bytes could not be saved, by any path.**
+- Bug fix: **a failed import no longer bills you for it.** The importer stores images
+  before it opens its transaction, because the blobs are too large to hold one open
+  across, so a rollback could never reach them. 
+- Bug fix: **math renders again, everywhere.** Last release shipped math and then
+  removed the CDN, which deleted the small script the math loader waited on — the
+  first known issue of that release. 
+- **The Push to Anki buttons and the Sync menu carry Anki's own mark** instead of a
+  generic refresh arrow, and that menu reads **Anki Sync** rather than **Sync**.
+- **A link to freememo.net now shows a card.** A shared link carries a title, a
+  description and a preview image, and a search engine sees a description rather than
+  an empty page.
+
+### Known issues
+
+- **If the math renderer cannot load,** the editor still opens after a 3-second wait,
+  but math stays as `\(…\)` source and clicking it does nothing. Your content is
+  unchanged either way.
+- **An interrupted archive upload starts over.** The server keeps the bytes it already
+  holds and can report how many, but the browser always sends from the first byte.
+  There is no cancel button while an upload runs either.
+- **A failed import keeps the archive, so you can retry without uploading it again.**
+  Its bytes stay counted against your storage until the retry works, or until the
+  sweep collects the session six hours after the last piece arrived.
+- **A collection's sound and video files extract to disk and are then discarded.** The
+  importer reads text and images only. Dropping those files before extraction was
+  specified and not built, so they still cost disk while an import runs.
+- **Disk is the limit now, not memory.** During an import the archive exists twice —
+  once inside the database and once as a local file — and the extracted tree sits
+  beside them. A collection may extract to 16 GB by default. Lower
+  `SUPERMEMO_MAX_EXTRACT_BYTES` if the container has less room.
+- **The import report is still not shown to you**, as last release said. The importer
+  counts everything it could not carry and the app then drops that count. If an import
+  looks short, contact me.
+
+### Technical
+
+- **`upload_sessions`** — was `video_upload_sessions`, renamed in place at boot when
+  the old table is present. One flow-discriminated table backs both flows, so the
+  orphan-object sweep still names exactly one table. New `archive_path` column caches
+  the materialized file. The large object stays authoritative, so a deploy that lands
+  the import in another container re-materializes rather than fails.
+- **`freememo.chunked-upload`** (CLJS) and **`freememo.upload-http`** hold the shared
+  transport: `init`, `chunk`, `finalize`, `abort`, `status`. Chunk, abort and status
+  are flow-blind, so the archive flow added no second way to append a chunk.
+  **`freememo.archive-upload`** and **`freememo.archive-http`** hold the two halves
+  that differ. `finalize` deliberately does not import — it resolves the flow and
+  returns in under a second, and the import stays in the Electric service where it
+  already ran inside `e/Offload`.
+- **No threshold.** A 30 MB collection and a 7.5 GB one take the same path, because a
+  threshold would keep the heap-bound path alive for small files.
+  `STORAGE_REQUEST_MAX_BYTES` stays at 100 MB and still bounds one chunk.
+- **`freememo.archive` reads a `File` or an `InputStream` next to `byte[]`**, and
+  `copy-entry!` streams to the target file instead of buffering each entry in a
+  `ByteArrayOutputStream`. Heap high-water is one copy buffer whatever the source,
+  which is what allows the 2 GB per-entry cap. 7z entries stay in stream order, for
+  the solid-LZMA2 reason recorded last release. `every-entry-name?` classifies from
+  entry names and decompresses nothing.
+- **`content-type/classify-archive`** is the single definition of archive routing.
+  `classify-multipart` delegates to it and the chunked `finalize` calls it with a
+  `File`, so a `.zip` cannot route to `:supermemo` in one and `:repo` in the other.
+- **`db/param-bounded-batches`** partitions rows so each rendered statement stays
+  under PostgreSQL's 65 535 bound parameters. It normalizes rows to the union of all
+  keys first, or a key present in one batch and absent from another would be an
+  explicit NULL in the first and a column DEFAULT in the second. All four batch
+  inserts use it. `test/freememo/batch_insert_test.clj` guards it in 7 tests.
+- **`idx_flashcards_unique_basic_digest` / `..._cloze_digest`** index `md5(question)`
+  and `md5(cloze)`. A `left(question, N)` prefix would not do: two cards differing
+  only past N would collide and `ON CONFLICT DO NOTHING` would drop one silently. The
+  replacements are created before the old indexes drop, so a failed migration cannot
+  leave the table with no uniqueness, and a failure logs at `:error` — without the
+  indexes inserts still succeed and stop deduping, which would surface much later as
+  duplicate cards.
+- **`upsert-media-row!` reports `:media/inserted?`**, `store-images!` accumulates
+  `:created-ids`, and the import's catch calls `db/delete-media-rows!` with only
+  those. A row that merely matched an existing sha256 is content the user already
+  owned. That trades the old reuse-on-retry shortcut for re-storing images on a retry,
+  which costs nothing in practice because the archive is re-extracted every attempt.
+  The compensation is guarded separately so its own failure cannot mask the real error.
+- **New env vars** — `ARCHIVE_MAX_BYTES` (16 GB, a bound on what one bad request can
+  reserve), `SUPERMEMO_MAX_EXTRACT_BYTES` (16 GB, the cap that binds against disk),
+  `SUPERMEMO_MAX_EXTRACT_ENTRIES` (1 000 000), `SUPERMEMO_MAX_EXTRACT_ENTRY_BYTES`
+  (2 GB). `web-import/supermemo-extract-limits` is the one place they are set.
+  `test/freememo/archive_test.clj` adds 14 tests over both source types, the guards,
+  and the routing agreement.
+- **The KaTeX gate is a `defonce` atom holding a promise**, claimed on the first
+  `on-katex-ready!` call rather than at namespace load — an eager `defonce` would
+  fetch 275 KB on every route and start the timer before an editor existed. It races
+  `vendor-libs/ensure! :katex` against `katex-wait-ms` and resolves `false` on
+  rejection, so no caller needs a `.catch`. `render-math!` is uncapped, because a late
+  typeset is harmless where a late editor is not, and it calls `after-render` on the
+  failure path so `set-html!`'s once-only postcondition holds with the vendor path
+  blocked. `math/prefetch-katex!` warms the load at the `/library/cards` boundary, the
+  one editor-bearing route with no other trigger. `freememo.math` owns the group key,
+  and its `render-math!` replaces the private copy in `assistant_panel`. See
+  `plans/katex-gate-vendor-ensure.md`.
+- **`freememo.brand-icons`** — third-party brand marks as inline SVG, kept out of
+  `freememo.icons` because that namespace's contract is the Lucide stroke contract and
+  89 call sites depend on it. Children must come from `hyperfiddle.electric-svg3`
+  macros, since `dom/element` creates HTML-namespace nodes that render invisibly
+  inside an `<svg>`. No mark defines an `id`: the Sync dropdown mounts four instances
+  at once, and a `<defs>` id would make every `url(#…)` resolve to whichever mounted
+  first.
+- **Page metadata** — `description`, Open Graph and `twitter:card` in both HTML
+  shells. The body is empty and every word renders client-side over the WebSocket, so
+  those tags are the only text a crawler without JavaScript sees. `og:url` and
+  `og:image` must be absolute, so a self-hoster has to change the `freememo.net`
+  origin.
+- **`plans/supermemo-import-large-archives.md`** records the eleven bounds between the
+  browser and `import-collection!`, why A1 (large object) won over A2 (temp file), and
+  the two requirements this work shipped unmet or unbuilt.
+
 ## v20260802-2770fe9
 
 ### For users
@@ -131,7 +261,6 @@ Format contract (see freememo.changelog):
   later `\)` in ordinary text converts on the closing delimiter. Ctrl+Z undoes it.
 - **A long formula can be cut mid-expression** in a search snippet or a card-table
   row, where it then shows as LaTeX source rather than rendering.
-<<<<<<< Updated upstream
 - **The SuperMemo layouts were confirmed against one collection.** SuperMemo publishes
   no specification for its collection files, and no library reads them on Linux, so
   every scheduling field was recovered by measurement against a single real SM19
@@ -170,11 +299,6 @@ Format contract (see freememo.changelog):
   not in the repository. The build downloads them and checks every byte against a
   committed lockfile, so a drifted or tampered upstream fails the build instead of
   shipping. The running container needs no internet for them.
-=======
-- **If the math renderer cannot load,** the editor still opens after a 3-second wait,
-  but math stays as `\(…\)` source and clicking it does nothing. Your content is
-  unchanged either way.
->>>>>>> Stashed changes
 
 ### Technical
 
@@ -185,22 +309,11 @@ Format contract (see freememo.changelog):
 - Every read of a Quill root's innerHTML now goes through `quill-field/editor-html`
   (seven sites). A raw read persists the KaTeX subtree, which `clean-html` reduces to
   duplicated fallback text.
-<<<<<<< Updated upstream
 - `init-editor!` is asynchronous now — it waits on `math/on-katex-ready!` and a
   generation counter guards it. It returns nil, so read `!editor-state`. **Correction:**
   that gate races `window.__katexReady`, which `0604fe6` deleted from both HTML files
   later in this release. It resolves `false` on every page load, which is the regression
   in the first known issue.
-=======
-- `init-editor!` is asynchronous now — it waits on `math/on-katex-ready!` (a 3 s race
-  against `vendor-libs/ensure! :katex`, which stays pending on a stalled request) and
-  is guarded by a generation counter. It returns nil; read `!editor-state`.
-- KaTeX loads through `freememo.vendor-libs`, lazily: the gate starts the load on the
-  first editor mount, `math/render-math!` starts it on the first display site, and
-  `/library/cards` warms it at the route boundary. `freememo.math` is the sole owner
-  of the group key, and its `render-math!` replaces the private copy that lived in
-  `assistant_panel`.
->>>>>>> Stashed changes
 - Anki push mapping is applied to the whole field map in `build-note` /
   `build-update-fields`, not inside the five per-kind builders.
 - The Anki-modified overlay diff now normalises both sides before comparing, so math
