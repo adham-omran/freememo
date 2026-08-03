@@ -7,7 +7,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.anki-sync-panels :as panels]
-   [freememo.icons :as icons]
+   [freememo.brand-icons :refer [AnkiMark]]
    [freememo.command-bus :as bus]
    [freememo.tooltip :as tooltip]))
 
@@ -59,7 +59,7 @@
         (dom/props {:class "btn btn-sm btn-secondary"
                     :style {:background "var(--color-bg-subtle)" :color "var(--color-text-primary)" :font-weight "500"}})
         (tooltip/Tooltip! "Push to Anki" :aria? true)
-        (icons/Icon :refresh-cw :size 16)
+        (AnkiMark :size 16)
         (dom/span (dom/props {:class "icon-label"})
           (dom/text (if (and unsynced-count (pos? unsynced-count))
                       (str "Push to Anki (" unsynced-count ")...")
