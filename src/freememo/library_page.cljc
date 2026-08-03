@@ -7,7 +7,8 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.router5 :as r]
    [freememo.knowledge-tree :refer [DocumentTreeView]]
-   [freememo.library-cards :refer [LibraryCardsView LibraryViewToggle]]))
+   [freememo.library-cards :refer [LibraryCardsView LibraryViewToggle]]
+   [freememo.math :as math]))
 
 (e/defn LibraryPage [user-id navigate! refresh]
   (e/client
@@ -16,6 +17,14 @@
       (dom/div
         (dom/props {:class "page-container"
                     :style {:height "100%" :display "flex" :flex-direction "column"}})
+        ;; Warm KaTeX for the card editors a row click opens. This is the one
+        ;; editor-bearing route with nothing else to start the load, so without it
+        ;; the whole 275 KB fetch sits inside the mount's katex-wait-ms race.
+        ;; A sibling form, not a form inside the `if` branch: a non-final form
+        ;; there would be an unused expression Electric may drop (CLAUDE.md,
+        ;; 'Every Expression in a `let` Body Must Be Used'). Toggling sub-routes
+        ;; re-runs it for free — `ensure!` memoizes per group.
+        (when cards-view? (e/snapshot (math/prefetch-katex!)))
         (if cards-view?
           (LibraryCardsView user-id navigate! refresh)
           (let [!filter-text (atom "")

@@ -39,7 +39,8 @@
    document structure, so a literal `\\(`…`\\)` pair typed inside a code block is
    rewritten as math on push. Display-only and reversed by the next pull — no data
    loss. The editor-direction fns DO exclude code (see `code-selector`)."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            #?(:cljs [freememo.vendor-libs :as vendor])))
 
 ;; ---------------------------------------------------------------------------
 ;; The canonical form
@@ -309,25 +310,54 @@
 (def katex-wait-ms
   "How long an editor mount waits for KaTeX before giving up on math.
 
-   `window.__katexReady` never rejects and never times out — a blocked CDN leaves
-   it pending forever (see `render-math!`). Awaiting it unguarded would mean no
-   editor at all, silently and permanently, so the wait is raced against this."
+   `vendor-libs/ensure!` rejects when a script reports an error, but `inject!`
+   sets no request timeout, so a stalled response leaves its promise pending
+   forever. Awaiting it unguarded would mean no editor at all, silently and
+   permanently, so the wait is raced against this.
+
+   Sized against a stalled request, NOT against a slow one. KaTeX is served with
+   an immutable cache header, so a first load slower than this costs math once
+   and every later page load has it warm; raising the cap would trade that for a
+   longer editor-less window every time a request hangs."
   3000)
 
 #?(:cljs
-   (defonce ^:private katex-ready
-     ;; Promise<boolean>. Resolved ONCE per page load, not once per editor mount:
-     ;; a page can mount the document editor and several card fields, and a
-     ;; per-mount timer would race N ways for no benefit.
-     (if-let [ready (.-__katexReady js/window)]
-       (js/Promise.race
-         #js [(.then ready (fn [_] true))
-              (js/Promise. (fn [resolve] (js/setTimeout #(resolve false) katex-wait-ms)))])
-       (js/Promise.resolve false))))
+   (defonce ^:private !katex-gate
+     ;; Promise<boolean> once claimed, nil until the first `on-katex-ready!`.
+     ;; Lazy on purpose: a `defonce` holding the promise itself would fetch
+     ;; 275 KB at namespace load on every route, including ones that mount no
+     ;; editor and display no math, and would start the timer below before any
+     ;; editor existed to wait on it.
+     (atom nil)))
+
+(defn- katex-gate!
+  "The page's one KaTeX-readiness promise. The first call starts the load.
+
+   pre : CLJS.
+   post: a Promise<boolean> that always resolves — true iff `window.katex` and
+         `renderMathInElement` are usable, false on a failed load or a stall past
+         `katex-wait-ms`. It never rejects, so no caller needs a `.catch`.
+   inv : one promise and one timer per page, however many editors mount; with
+         `ensure!`'s own memo, one script injection."
+  []
+  #?(:cljs
+     (or @!katex-gate
+       ;; Nothing awaits between the read above and the write below, and JS is
+       ;; single-threaded, so two callers cannot both claim the gate.
+       (let [p (js/Promise.race
+                 #js [(-> (vendor/ensure! :katex)
+                        (.then (fn [_] true))
+                        (.catch (fn [_] false)))
+                      (js/Promise.
+                        (fn [resolve]
+                          (js/setTimeout #(resolve false) katex-wait-ms)))])]
+         (reset! !katex-gate p)
+         p))
+     :clj nil))
 
 (defn on-katex-ready!
-  "Call `k` with true once KaTeX is usable, or false if it did not arrive within
-   `katex-wait-ms`.
+  "Call `k` with true once KaTeX is usable, or false if it failed to load or did
+   not arrive within `katex-wait-ms`. The first call starts the load.
 
    Callers use the boolean to decide whether to enable Quill's formula module. On
    false they MUST also skip `stored->editor-html`: converting math to spans with
@@ -337,7 +367,28 @@
    pre : `k` is a 1-arg fn.
    post: `k` is called exactly once, asynchronously, with a boolean. CLJ: no-op."
   [k]
-  #?(:cljs (.then katex-ready k)
+  #?(:cljs (.then (katex-gate!) k)
+     :clj nil))
+
+(defn prefetch-katex!
+  "Start the KaTeX load without waiting on it. CLJ no-op.
+
+   For a route that will mount a Quill editor but has nothing else to start the
+   load: the editor's own `on-katex-ready!` starts it at mount, which leaves the
+   entire fetch inside the `katex-wait-ms` race. Calling this at the route
+   boundary moves the fetch ahead of that race.
+
+   `vendor/prefetch!` and not `katex-gate!` on purpose — warming the load must not
+   start the timer, which exists only to bound an editor's wait.
+
+   pre : called from a plain fn or through `e/snapshot`, never on every
+         re-evaluation of a reactive body (CLAUDE.md, 'JS Library Init Side
+         Effects in e/defn').
+   post: the `:katex` load is in flight or already settled; returns nil, and a
+         failure is logged by `ensure!` rather than thrown. Repeat calls are free
+         — `ensure!` memoizes per group."
+  []
+  #?(:cljs (vendor/prefetch! :katex)
      :clj nil))
 
 ;; ---------------------------------------------------------------------------
@@ -348,12 +399,12 @@
   "CLJS-only: render KaTeX math (`\\(…\\)` inline, `\\[…\\]` display) in `node`.
    CLJ no-op. Call AFTER node's innerHTML is set.
 
-   KaTeX's auto-render script loads async from a CDN; `window.__katexReady`
-   (defined in index.html) resolves with `renderMathInElement` once it is
-   available. Chaining each render on that promise means a node mounted before
-   KaTeX loads still renders the instant it arrives — no polling, and no bounded
-   timer that could lose the race or leak. A blocked CDN simply leaves the promise
-   pending, so math stays literal (no crash, no hang).
+   KaTeX carries no `<script>` tag; `vendor-libs/ensure! :katex` returns the one
+   shared load promise, so a node mounted before KaTeX arrives still renders the
+   instant it does — no polling, and no bounded timer that could lose the race or
+   leak. Deliberately uncapped, unlike `katex-gate!`: a late typeset is harmless
+   where a late editor is not, and a display site that gave up would have to be
+   re-rendered to recover.
 
    No `$` delimiter is configured: stored content carries `\\(…\\)` (this ns) and
    assistant replies are rewritten to the same form server-side by
@@ -361,24 +412,35 @@
    `throwOnError:false` shows a bad expression as source instead of throwing.
    Code/`pre` are skipped (KaTeX default ignoredTags).
 
-   `after-render` (optional) runs once typesetting has completed. It exists for
-   callers whose own work depends on the post-typeset layout — scrolling a
-   snippet to centre its match, for example — since rendering is async and would
-   otherwise land after them.
+   `after-render` (optional) runs once typesetting has completed, or once the load
+   has failed. It exists for callers whose own work depends on the post-typeset
+   layout — scrolling a snippet to centre its match, for example — since
+   rendering is async and would otherwise land after them; running it on the
+   failure path too is what keeps those callers working with the vendor path
+   blocked.
+
+   pre : `node` is a DOM element (CLJS); `after-render` is a 0-arg fn or nil.
+   post: math in `node` is typeset once KaTeX is available, and `after-render` has
+         been called exactly once either way. Returns nil — the promise is
+         deliberately not exposed, so an Electric body in tail position cannot
+         leak it. CLJ: nil.
 
    Plain defn so the reader conditional stays invisible to Electric's reactive
    compiler (CLJ/CLJS signal parity)."
   ([node] (render-math! node nil))
   ([node after-render]
    #?(:cljs
-      (when-let [ready (.-__katexReady js/window)]
-        (.then ready
-          (fn [render]
-            (render node
-              #js {:delimiters #js [#js {:left "\\[" :right "\\]" :display true}
-                                    #js {:left "\\(" :right "\\)" :display false}]
-                   :throwOnError false})
-            (when after-render (after-render)))))
+      (do (-> (vendor/ensure! :katex)
+            (.then (fn [_]
+                     (js/renderMathInElement node
+                       #js {:delimiters #js [#js {:left "\\[" :right "\\]" :display true}
+                                             #js {:left "\\(" :right "\\)" :display false}]
+                            :throwOnError false})))
+            ;; Swallowed, not logged: `ensure!` already logged the load failure,
+            ;; and an unhandled rejection here would surface once per card row.
+            (.catch (fn [_] nil))
+            (.then (fn [_] (when after-render (after-render)))))
+          nil)
       :clj nil)))
 
 (defn set-html!

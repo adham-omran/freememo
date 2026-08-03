@@ -3,12 +3,12 @@
    index*.html.
 
    All third-party JS lives under /freememo/vendor/<lib>@<version>/ and is served
-   with an immutable cache header (src-prod/prod.cljc). Quill, quill-resize,
-   highlight.js and KaTeX stay as <script> tags in the HTML: Quill's syntax
-   module reads window.hljs at editor construction, and quill_field's
-   namespace-load `defonce` patches Quill's icon registry before any guard runs.
-   The five groups here have no tag at all — nothing fetches them until a feature
-   asks, which keeps ~305 KB (gzip) of JS off the boot path.
+   with an immutable cache header (src-prod/prod.cljc). Quill, quill-resize and
+   highlight.js stay as <script> tags in the HTML: Quill's syntax module reads
+   window.hljs at editor construction, and quill_field's namespace-load `defonce`
+   patches Quill's icon registry before any guard runs. The six groups here have
+   no tag at all — nothing fetches them until a feature asks, which keeps ~305 KB
+   (gzip) of JS off the boot path.
 
    ensure!
      Pre  — `group` is a key of `specs`.
@@ -63,11 +63,16 @@
    {:files ["lamejs@1.2.1/lame.min.js"]
     :probes ["lamejs"]}
 
-   ;; KaTeX is prefetched at boot rather than tagged in the HTML. It was two
-   ;; `defer` tags plus an inline promise and an onload= attribute; routing it
-   ;; through ensure! deletes all three inline snippets (the precondition for a
-   ;; `script-src 'self'` CSP) while keeping the same non-blocking arrival.
-   ;; auto-render must follow the core, which defines window.katex.
+   ;; KaTeX has no tag in the HTML. It was two `defer` tags plus an inline promise
+   ;; and an onload= attribute; routing it through ensure! deletes all three
+   ;; inline snippets (the precondition for a `script-src 'self'` CSP) while
+   ;; keeping the same non-blocking arrival.
+   ;;
+   ;; Nothing loads it at boot. freememo.math is the only consumer and holds both
+   ;; entry points: `on-katex-ready!` (editor mounts, capped by katex-wait-ms) and
+   ;; `render-math!` (display sites, uncapped). `math/prefetch-katex!` warms it at
+   ;; the /library/cards boundary — the one editor-bearing route with no other
+   ;; trigger. auto-render must follow the core, which defines window.katex.
    :katex
    {:files ["katex@0.16.11/katex.min.js"
             "katex@0.16.11/contrib/auto-render.min.js"]
