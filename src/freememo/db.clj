@@ -300,14 +300,39 @@
       (jdbc/execute! ds ["ALTER TABLE flashcards DROP COLUMN IF EXISTS content_item_id"])
       (catch Exception _ nil))
     ;; Unique constraints — two partial indexes to handle NULLs correctly
-    ;; (PostgreSQL treats NULL != NULL in B-tree indexes, so a single index with nullable columns can't prevent duplicates)
+    ;; (PostgreSQL treats NULL != NULL in B-tree indexes, so a single index with
+    ;; nullable columns can't prevent duplicates).
+    ;;
+    ;; They index md5(question) / md5(cloze), NOT the text itself. A B-tree index
+    ;; row cannot exceed 1/3 of an 8 KB page (~2704 bytes), while input-check/
+    ;; card-max permits 10 000 characters — so indexing the text made any card
+    ;; past ~2704 bytes UNINSERTABLE, with the driver reporting "index row size
+    ;; N exceeds btree version 4 maximum 2704" and no hint that two layers
+    ;; disagreed. A SuperMemo item carries full HTML plus appended <img> tags and
+    ;; clears that ceiling routinely; it was the first path to expose it.
+    ;;
+    ;; The digest preserves the constraint exactly — a collision is what would
+    ;; weaken it, and md5 collisions on same-topic card text are not a practical
+    ;; concern — while a `left(question, N)` prefix would NOT: two cards
+    ;; differing only past N would collide and `insert-flashcards!`'s
+    ;; ON CONFLICT DO NOTHING would silently drop one.
     (try
       (jdbc/execute! ds ["DROP INDEX IF EXISTS idx_flashcards_unique_topic"])
-      (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_unique_basic
-                          ON flashcards(topic_id, kind, question) WHERE cloze IS NULL"])
-      (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_unique_cloze
-                          ON flashcards(topic_id, kind, cloze) WHERE question IS NULL"])
-      (catch Exception _ nil)))
+      (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_unique_basic_digest
+                          ON flashcards(topic_id, kind, md5(question)) WHERE cloze IS NULL"])
+      (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_unique_cloze_digest
+                          ON flashcards(topic_id, kind, md5(cloze)) WHERE question IS NULL"])
+      ;; Only after the replacements exist, so a failed CREATE never leaves the
+      ;; table with no uniqueness at all.
+      (jdbc/execute! ds ["DROP INDEX IF EXISTS idx_flashcards_unique_basic"])
+      (jdbc/execute! ds ["DROP INDEX IF EXISTS idx_flashcards_unique_cloze"])
+      (catch Exception e
+        ;; Never silent: without these indexes `insert-flashcards!` still runs
+        ;; (a bare ON CONFLICT DO NOTHING needs no arbiter) but stops deduping,
+        ;; so a swallowed failure here shows up later as duplicate cards.
+        (tel/log! {:level :error :id ::flashcard-unique-index-migration
+                   :data {:error (.getMessage e)}}
+          "Could not install the flashcard uniqueness indexes — card dedupe is OFF"))))
 )
 
 (defn- setup-schema-activity!

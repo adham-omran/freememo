@@ -409,7 +409,7 @@
          remaining text components joined into the answer. nil when the item
          has no readable text.
    Invariant: a cloze row sets `:question` nil, which the partial unique index
-         idx_flashcards_unique_cloze requires.
+         idx_flashcards_unique_cloze_digest requires.
    Images append after the card's content, outside any deletion, so the same
    rule applies whichever shape the item takes."
   [collection element topic-id root-topic-id media-ids]
