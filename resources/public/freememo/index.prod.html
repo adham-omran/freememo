@@ -23,6 +23,26 @@
 	<title>FreeMemo</title>
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<meta name="color-scheme" content="light dark">
+
+	<!-- Search snippet + social card. The body is empty and every word is
+	     rendered client-side over the WebSocket, so these tags are the ONLY
+	     text a non-JS crawler sees.
+	     og:url and og:image must be absolute per the Open Graph spec —
+	     self-hosters must change the freememo.net origin below. -->
+	<meta name="description" content="Turn PDFs, EPUBs, articles and video into flashcards for your own Anki, paced reading, and AI-graded quizzes. Open source, free during early access.">
+	<meta property="og:type" content="website">
+	<meta property="og:site_name" content="FreeMemo">
+	<meta property="og:title" content="FreeMemo — read it once, remember it">
+	<meta property="og:description" content="Turn PDFs, EPUBs, articles and video into flashcards for your own Anki, paced reading, and AI-graded quizzes. Open source, free during early access.">
+	<meta property="og:url" content="https://freememo.net/">
+	<meta property="og:image" content="https://freememo.net/freememo/landing-hero.png">
+	<meta property="og:image:width" content="3840">
+	<meta property="og:image:height" content="2400">
+	<meta property="og:image:alt" content="FreeMemo showing a PDF page beside its extracted text, with generated basic and cloze flashcards below.">
+	<!-- Twitter reads og:title/og:description/og:image as fallbacks; only the
+	     card type has no Open Graph equivalent. -->
+	<meta name="twitter:card" content="summary_large_image">
+
 	<!-- Google AdSense site verification. -->
 	<meta name="google-adsense-account" content="ca-pub-2105898724643889">
 	<!-- Open Sans, self-hosted (committed text; its woff2 files live in the
