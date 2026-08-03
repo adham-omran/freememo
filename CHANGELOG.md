@@ -9,10 +9,51 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
-## Unreleased
+## v20260802-2770fe9
 
 ### For users
 
+- **Import a SuperMemo collection.** Drop a SuperMemo 17, 18, or 19 collection into
+  Import as a `.zip` or a `.7z`. It arrives as a topic tree with its cards,
+  schedules, priorities, images, and bibliography.
+  - **Your schedule comes with it** - interval, last review, next review, and
+    A-factor transfer to each topic. Nothing restarts from zero.
+  - **Priority keeps its order** - SuperMemo stores priority only as a queue
+    position, so the import writes both a percentile and the exact rank. Two topics
+    in one priority band still review in the order the collection had them.
+  - **Items become cards** - an item marked with a cloze deletion becomes a cloze
+    card. One whose deletion cannot be cut cleanly becomes a question-and-answer
+    card instead, and the importer counts how many took that route.
+  - **References become bibliography sources**, images move into your media storage,
+    and the importer rewrites SuperMemo's own font, size, and extract formatting into
+    shapes the editor keeps.
+  - **The repetition log is archived, not replayed** - imported repetitions carry
+    their own event type, so they cannot inflate your review streak or your review
+    counts.
+  - Library and Search gained a **SuperMemo** kind, with its own badge and filter.
+- **Cards now enter the Quiz queue.** Every basic and cloze card joins the
+  spaced-repetition queue beside knowledge-graph questions — one queue, one shared
+  daily budget, filled round-robin between the two.
+  - **A cloze card becomes one item per deletion**, masked the way Anki masks it:
+    the asked deletion is blank, the others read normally.
+  - **Two ways to grade a card**, set by **Use LLM for Generated Cards in Quiz** in
+    AI settings, on by default. With it on, you type an answer and the model returns
+    a verdict. With it off, you reveal the answer and rate it yourself — Again,
+    Hard, Good, or Easy — with no model call and no cost.
+  - **A card renders as a card** - your formatting survives, and the prompt is the
+    card's own text rather than a plain-text copy of it.
+  - The due tile counts card items. Review history shows each card row with its
+    rating and with who graded it, the model or you.
+  - Occlusion, score, and overlapping cards stay out of the queue. So does the Learn
+    queue, which is unchanged.
+- **No third-party CDN.** Every client library — PDF.js, Quill, Konva, KaTeX,
+  wavesurfer, and the rest — now comes from FreeMemo's own origin.
+  - **The app starts faster.** Blocking third-party JavaScript is now 108 KB
+    compressed, down from 413 KB. PDF.js, Konva, KaTeX, the graph libraries, and the
+    audio libraries load when you open something that needs them, not at boot.
+  - **No request leaves for anyone else.** Open Sans is served locally too, so no
+    visitor's address reaches Google Fonts.
+  - **A self-host runs without internet access** once its image is built.
 - **Three ways to ask the assistant.** A **Mode** row in the assistant panel picks
   who answers you, and each chat remembers its own choice.
   - **General** answers the question outright and names the page it read. If the
@@ -28,15 +69,17 @@ Format contract (see freememo.changelog):
 - **Searchable chat and model pickers.** Both dropdowns in the assistant panel now
   filter as you type. Find one chat among many, or any model in the list, without
   scrolling.
-
-- **Math.** Formulas work end to end — write them in the editor, generate cards from
-  them, and push them to Anki where they render as real notation instead of raw LaTeX.
+- **Math.** Formulas now have a whole pipeline — write them in the editor, generate
+  cards from them, and push them to Anki as real notation instead of raw LaTeX. **One
+  caveat before the list: dropping the CDN, later in this same release, broke the
+  loader that every surface below waits on, so none of it typesets yet.** The first
+  known issue has the detail.
   - **Write `\(x^2\)` and it becomes a formula** the moment you type the closing
     `\)`. No button, no dialog — the delimiters are the whole gesture, in the
     document editor and in every card field.
   - **Click a formula to edit it.** A small panel opens above it with the LaTeX, a
-    live preview that updates as you type, and Delete. Enter or clicking away saves;
-    Escape leaves it alone; clearing the field removes the formula.
+    live preview that updates as you type, and Delete. Enter or clicking away saves.
+    Escape leaves it alone. Clearing the field removes the formula.
   - **Scanned pages keep their math.** OCR now transcribes equations as LaTeX, so a
     formula on a PDF page arrives as a formula, not as garbled text.
   - **Generated cards preserve the math in your source** and are told not to invent
@@ -47,9 +90,38 @@ Format contract (see freememo.changelog):
     into one.
   - Math also renders in card tables, the card-compare view, card history, search
     result snippets, and the OCR text previews.
+- **Three new models** - GPT-5.6 Luna, Terra, and Sol, for card generation and for
+  OCR.
+- Bug fix: **clozing formatted text no longer destroys the formatting.** Wrapping a
+  selection in `{{c1::…}}` used to read that selection back through Quill's
+  plain-text API and re-insert it. That silently dropped bold, italic, code, links,
+  and colour inside the range, removed any image, and reset the block format of every
+  line after the first. Bolding a word and then clozing it lost the bold. The two
+  markers now go in at the selection's boundaries and nothing else moves.
+- Bug fix: **text colour, Align Right, and right-to-left survive a card save.** The
+  sanitizer dropped all three, so they reverted every time you reopened the card.
+  Nothing logged and nothing failed. Indent levels 3 to 8 and the serif and monospace
+  fonts were lost the same way.
+- Bug fix: **grouped masks in image occlusion did not work at all.** Group,
+  rubber-band selection, and opening any card that already held a mask group were all
+  dead, in development and in production alike. One mis-compiled constructor call took
+  out the whole feature that shipped last release.
+- Bug fix: **card edit history opened from a card was unusable.** Clicks passed
+  through it to the edit modal underneath, its Close button did nothing, its version
+  list would not scroll, and Escape closed both modals at once and discarded the edit
+  in progress.
+- The Help page now describes the assistant modes rather than a single Socratic tutor.
 
 ### Known issues
 
+- **Math does not render yet, anywhere except the assistant chat.** Removing the CDN
+  deleted the small bootstrap that `freememo.math` waits on, and that commit landed
+  after the math work in this same release. Every editor therefore mounts without its
+  formula module. A formula stays as literal `\(x^2\)` text in the document editor, in
+  card fields, in card tables, in card history, in search snippets, and in the Quiz,
+  and clicking one does nothing. **No content is lost** — those delimiters are the
+  stored form, and everything you have written is intact — but nothing typesets until
+  I ship the repair. It is specified and it is next.
 - **A `\(`…`\)` pair inside a code block is treated as math when pushing to Anki.**
   It renders as a formula in Anki instead of as source. Nothing is lost — the next
   pull restores it — but Clojure's `\(` character literal is the realistic way to hit
@@ -59,22 +131,59 @@ Format contract (see freememo.changelog):
   later `\)` in ordinary text converts on the closing delimiter. Ctrl+Z undoes it.
 - **A long formula can be cut mid-expression** in a search snippet or a card-table
   row, where it then shows as LaTeX source rather than rendering.
-- **If the KaTeX CDN is unreachable,** the editor still opens after a 3-second wait,
-  but math stays as `\(…\)` source and clicking it does nothing. Your content is
-  unchanged either way.
+- **The SuperMemo layouts were confirmed against one collection.** SuperMemo publishes
+  no specification for its collection files, and no library reads them on Linux, so
+  every scheduling field was recovered by measurement against a single real SM19
+  collection. Each claim states the check that confirms it, and the checks pass on that
+  collection. A collection from another SuperMemo version may still decode wrongly. If
+  an import looks wrong, contact me and keep the archive.
+- **Grade and lapse count do not import.** No byte in SuperMemo's repetition record
+  has a grade-shaped distribution, so those two values stay out rather than being
+  guessed. An imported repetition also carries no before-snapshot, because SuperMemo
+  records when a repetition happened and not what it replaced.
+- **The import report is not shown to you.** The importer counts everything it did not
+  carry — unresolved images, undated repetitions, repetitions belonging to elements
+  that became cards, truncated titles, items it could not read, cloze items that fell
+  back to question-and-answer — and then the app opens the new tree and drops that
+  count on the floor. Surfacing it is a small follow-up. Until then, if an import looks
+  short, contact me.
+- **Re-importing the same collection makes a second tree.** There is no merge, and no
+  duplicate check.
+- **Cards in the Quiz queue shipped without the full manual pass.** The unit tests, an
+  integration suite against a real Postgres, and the production build are all green,
+  but the browser matrix — both grading arms end to end, the setting toggle, the due
+  tile, and the two history views — has not been walked against a live app. If a card
+  review misbehaves, contact me.
+- **A cloze card multiplies your queue** by its deletion count, and generated cloze
+  cards carry at least three deletions. The shared daily budget is first come, first
+  served: a morning sitting that spends all of it on cards leaves questions unseen that
+  day.
+- **Renumbering a cloze card moves a schedule with it.** Delete `c2` from a
+  three-deletion card and `c3` becomes `c2`, so the old memory history attaches to
+  different text. Anki behaves the same way.
+- **A card can carry two schedules.** A card you pushed to Anki keeps its Anki
+  interval, which a pull never returns, and FreeMemo's own schedule is independent of
+  it. The AI grading arm also rates only Again and Good, where self-rating gives all
+  four, so one card's history can hold both grains.
+- **Building a self-host image now needs outbound internet.** The client libraries are
+  not in the repository. The build downloads them and checks every byte against a
+  committed lockfile, so a drifted or tampered upstream fails the build instead of
+  shipping. The running container needs no internet for them.
 
 ### Technical
 
-- `freememo.math` is the single owner of the stored form (`\(TeX\)` inline text) and
-  of all four boundary conversions. See `plans/math-support.md` and the CLAUDE.md
-  pattern entry; the delimiter form was chosen specifically so `clean-html` needs no
-  allow-list change and `strip-html` carries math into `content_text` for search.
+- `freememo.math` is the single owner of the stored form (`\(TeX\)` inline text)
+  and of all four boundary conversions. The delimiter form was chosen
+  specifically so `clean-html` needs no allow-list change and `strip-html`
+  carries math into `content_text` for search.
 - Every read of a Quill root's innerHTML now goes through `quill-field/editor-html`
   (seven sites). A raw read persists the KaTeX subtree, which `clean-html` reduces to
   duplicated fallback text.
-- `init-editor!` is asynchronous now — it waits on `math/on-katex-ready!` (a 3 s race
-  against `window.__katexReady`, which never resolves on a blocked CDN) and is guarded
-  by a generation counter. It returns nil; read `!editor-state`.
+- `init-editor!` is asynchronous now — it waits on `math/on-katex-ready!` and a
+  generation counter guards it. It returns nil, so read `!editor-state`. **Correction:**
+  that gate races `window.__katexReady`, which `0604fe6` deleted from both HTML files
+  later in this release. It resolves `false` on every page load, which is the regression
+  in the first known issue.
 - Anki push mapping is applied to the whole field map in `build-note` /
   `build-update-fields`, not inside the five per-kind builders.
 - The Anki-modified overlay diff now normalises both sides before comparing, so math
@@ -87,6 +196,108 @@ Format contract (see freememo.changelog):
 - Formula creation is Delta-driven, not focus-driven: a `text-change` schedules a
   microtask that converts complete `\(…\)` regions outside code (`quill.getFormat`)
   in reverse document order, with source `"user"` so undo can reach it.
+- **`plans/katex-gate-vendor-ensure.md`** specifies the repair for the gate above:
+  route `freememo.math` through `vendor/ensure! :katex`, memoize on the first
+  `on-katex-ready!` call rather than at namespace load, keep the 3 s cap for the
+  request-stall case, resolve `false` on rejection, prefetch at the `/library/cards`
+  boundary, and collapse the duplicate `render-math!` that `assistant_panel` carries.
+  That duplicate is why the assistant chat is the one surface still typesetting.
+- **`freememo.supermemo-format`** decodes `contents.dat`, `ElementInfo.dat`,
+  `compon.dat`, `repetitions.dat`, `RepetitionHistory.dat`, `reference.dat`, the
+  `.mem`/`.rtx` registries, and the `.sub` subset files. Four record layouts come from
+  SuperMemoAssistant. Every scheduling field, Borland Real48, and the per-collection day
+  epoch were recovered by measurement. `plans/supermemo-import.md` records each layout
+  beside the check that confirms it — item burden against `collection.ini`, the embedded
+  element id in each component group, the trailing member id in each `.rtx` record.
+- **A component header carries its own struct size** — the high byte is the size minus
+  one, so `(inc (bit-shift-right header 8))` derives it. The first version used a lookup
+  table built from the types one collection happened to contain, and the walk stopped at
+  the first unlisted header, losing every later component of that element. That cost 289
+  items their answer.
+- **Priority is rank, not a stored number.** Every `ElementInfo` offset was scored
+  against the `priority.sub` ordering at five widths and the best correlation was 0.72
+  at a derived date. `topics.sm_rank` therefore joins the queue `ORDER BY`, or the
+  per-day hash would discard the order the import preserved. Natively created topics
+  hold null and keep the daily shuffle.
+- **`freememo.archive`** reads ZIP and 7z behind one function, with the same guards on
+  each: path traversal, entry count, per-entry bytes, and total uncompressed bytes.
+  7z entries are read in **stream order** — SuperMemo archives are solid LZMA2, and
+  `SevenZFile.getInputStream` per entry re-decompresses the whole block, which turned a
+  26 MB archive into more than ten minutes. Stream order does it in 1.8 seconds. The
+  SuperMemo flow raises the total cap to 1 GB, since a collection is routinely past
+  150 MB uncompressed.
+- **Deps** — added `org.apache.commons/commons-compress 1.27.1` and
+  `org.tukaani/xz 1.10`, both for 7z.
+- **Cloze conversion order matters.** The SuperMemo marker is matched as a class token,
+  not as the string `class=cloze`, and the conversion to `{{c1::…}}` runs **before**
+  `clean-html`, which strips the unlisted `cloze` class and would leave an
+  unidentifiable `[...]`. `cloze/validate` alone is not sufficient either: a glossary
+  laid out as a definition list puts the opener and closer on opposite sides of a block
+  boundary, which the character-level parse accepts. An item becomes a cloze card only
+  when `validate` passes, `mask-ord` output has balanced tags, and `answer-for-ord` is
+  non-blank.
+- **`card_schedules`** — new table keyed `(flashcard_id, ord)` carrying the same eight
+  FSRS columns as `kg_questions`. No column was added to `flashcards`. Rows are created
+  lazily on an item's first review, so no card write path needed a trigger or a
+  materialize call, and an orphan ord left by an edit is simply never drawn.
+- **`kg_reviews` holds both item types** — `question_id` relaxed to nullable,
+  `flashcard_id` and `ord` added, and a CHECK requires exactly one of the two ids. A new
+  `grade_source` column separates `ai` from `self`, without which `rating=3` and a null
+  verdict is ambiguous against a legacy row. One log table leaves `fsrs-daily-counts`
+  untouched, which is what makes the shared daily cap free.
+- **One item reference shape** — `[:question <id>]` or `[:card <flashcard-id> <ord>]`,
+  through the draw, the client queue, the apply function, and the log.
+  `draw-fsrs-due-queue` is now `draw-review-queue` and `fsrs-due-count` is now
+  `review-due-count`. New: `freememo.quiz-card-turn` (both arms plus the card history
+  body) and `resources/prompts/card-grade.md`. Card grading bills under `:cards.grade`.
+- **`freememo.cloze` was rebuilt on one shared `parse`** — `validate`, `ords`,
+  `mask-ord`, and `answer-for-ord` all read it, so nesting, hints, repeated ords, and
+  math regions behave identically everywhere. `test/freememo/cloze_test.clj` covers it
+  in 16 tests, and `test/freememo/fsrs_integration_test.clj` adds 3 tests against a real
+  Postgres for the mixed draw, lazy schedule creation, prompt re-masking, a stale ord
+  after an edit, and cross-user isolation of both read and write.
+- **`src-build/vendor.clj`** — JDK-only `fetch!`, `verify!`, `check-refs!`, and
+  `write-lock!`. `vendor-lock.sha256` pins 47 files, 3.4 MB. A fresh clone must run
+  `fetch!` before `clj -M:dev -m dev`, and `dev/assert-vendor-assets!` refuses to boot
+  without it. The Dockerfile fetches before `COPY src` and verifies after
+  `COPY resources`, because that merge is an assumption whose failure would ship a jar
+  whose every asset 404s.
+- **`freememo.vendor-libs`** returns one shared promise per group, resolving only after
+  every file executes and every `:probes` global is defined. Never call it from an
+  `e/defn` body. The `.cljs` wrappers keep their own presence guards, so a call site
+  that forgets `with!` degrades silently instead of throwing. Open Sans ships as
+  committed CSS with hash-locked woff2, because Google's `css2` endpoint serves
+  release-hashed filenames.
+- **`assistant_chats.mode`** — persona per chat, an `:id` from
+  `freememo.assistant-modes/registry`. NULL on rows predating the column, which
+  `resolve-mode` maps to Socratic, correctly: Socratic was the only persona that ever
+  existed before it. `set-assistant-chat-mode!` deliberately does not touch
+  `updated_at`, because the chat picker orders on that column.
+- **`html_cleaner` allow-list** — 10 class tokens added (`ql-align-right`,
+  `ql-direction-rtl`, `ql-indent-3`..`8`, `ql-font-serif`, `ql-font-monospace`), and
+  `safe-color-props` replaces the hard-coded `background-color` test in
+  `sanitize-style-value`. Every value is a literal from Quill 2.0.3's own attributor
+  whitelists, so the set is closed. `ql-cursor` and `ql-resize-style` stay excluded.
+  `test/freememo/html_cleaner_test.clj` holds a fixture per control, so it fails if the
+  allow-list stops covering a format it covered — but a control added without a fixture
+  still produces no failure. An admitted class token stays inert outside an editor,
+  which is pre-existing: Quill scopes every format rule under `.ql-editor`.
+- **`new` needs a plain name in the constructor position.** `(new (.-Group (konva)) …)`
+  emits `new konva.call(null).Group(…)`, which JS parses as calling the class without
+  `new`. Bind the library to a local first. The symptom names a minified class and comes
+  from inside the library's own stack, so it is not greppable. Audit with
+  `grep -rn '(new (\.-[A-Za-z]* (' src/`.
+- **A stacked modal must be a DOM sibling of a `pointer-events: none` overlay**, never a
+  descendant of it. The property inherits, so a nested modal is un-hit-testable while
+  its Escape still bubbles into the outer `ModalEscape`. It must also be the last form
+  of the body, since both overlays sit at `z-index: 1000`.
+- **`broadcast-changelog.sh`** wraps `freememo.changelog` with preflight checks, a
+  confirmation, and a per-version double-send guard whose markers live outside the repo.
+  It renders nothing itself, so the email cannot drift from `render-broadcast`. Dry run
+  by default. `--send` is the only path that delivers.
+- **`docs/`** — the Done/Delete/Dismiss distinction, the Learn dashboard spec, and the
+  Learn queue ordering contract. Added to `tools/publish-clean/EXCLUDED`, along with the
+  broadcast script.
 
 ## v20260729-bb11960
 
