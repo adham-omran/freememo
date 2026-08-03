@@ -2,6 +2,24 @@
 <html lang="en">
     <head>
 	<meta charset="utf-8"/>
+
+	<!-- Google tag (gtag.js) — Google Ads conversion tracking, AW-18368580767.
+	     The ONE documented exception to "no third-party asset is fetched from a
+	     CDN at runtime" (see CLAUDE.md): gtag.js must be served by Google for
+	     conversion attribution to work, so it cannot be vendored. It is also the
+	     only page-load request that reaches a third party, which is why the Open
+	     Sans @import was removed. Do not add a second Google tag to this page.
+	     Deliberately absent from index.dev.html / index.metadata.html so local
+	     dev traffic never enters Ads conversion or audience data. -->
+	<script async src="https://www.googletagmanager.com/gtag/js?id=AW-18368580767"></script>
+	<script>
+	  window.dataLayer = window.dataLayer || [];
+	  function gtag(){dataLayer.push(arguments);}
+	  gtag('js', new Date());
+
+	  gtag('config', 'AW-18368580767');
+	</script>
+
 	<title>FreeMemo</title>
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<meta name="color-scheme" content="light dark">
