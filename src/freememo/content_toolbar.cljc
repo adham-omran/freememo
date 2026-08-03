@@ -23,6 +23,7 @@
    #?(:clj [freememo.settings :as user-settings])
    #?(:clj [freememo.user-state :as us])
    [freememo.icons :as icons]
+   [freememo.brand-icons :refer [AnkiMark]]
    [freememo.command-bus :as bus]
    [freememo.toolbar-overflow :refer [install-overflow-detector!]]
    [freememo.tooltip :as tooltip]
@@ -132,7 +133,7 @@
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-sync"
                     :aria-label "Push to Anki"})
-        (icons/Icon :refresh-cw :size 16)
+        (AnkiMark :size 16)
         (dom/span (dom/props {:class "icon-label"})
           (dom/text (if (and unsynced-count (pos? unsynced-count))
                       (str "Push to Anki (" unsynced-count ")...")

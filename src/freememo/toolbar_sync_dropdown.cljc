@@ -21,6 +21,7 @@
    [freememo.anki-pull-button :refer [PullFromAnkiButton]]
    [freememo.export-button :refer [ExportButton]]
    [freememo.icons :as icons]
+   [freememo.brand-icons :refer [AnkiMark]]
    [freememo.command-bus :as bus]
    [freememo.toolbar-overflow :as overflow]
    [freememo.tooltip :as tooltip]))
@@ -60,8 +61,8 @@
           open (e/watch !open)
           has-unsynced? (and unsynced-count (pos? unsynced-count))
           trigger-label (if has-unsynced?
-                          (str "Sync (" unsynced-count ")")
-                          "Sync")]
+                          (str "Anki Sync (" unsynced-count ")")
+                          "Anki Sync")]
 
       ;; Hidden source buttons — mount them so their refs/modals/tokens stay
       ;; live. CSS hides the buttons themselves (direct-child `button` rule);
@@ -90,9 +91,9 @@
                               :font-weight "500"}
                       :aria-haspopup "menu"
                       :aria-expanded (if open "true" "false")
-                      :aria-label "Sync menu"})
+                      :aria-label "Anki Sync menu"})
           (tooltip/Tooltip! "Sync with Anki, or export cards")
-          (icons/Icon :refresh-cw :size 16)
+          (AnkiMark :size 16)
           (dom/span (dom/props {:class "icon-label"}) (dom/text trigger-label))
           (icons/Icon :chevron-down :size 14)
           (dom/On "click"
@@ -116,7 +117,7 @@
                 (dom/props {:class "toolbar-dropdown-item"
                             :role "menuitem"
                             :aria-label "Push to Anki"})
-                (icons/Icon :refresh-cw :size 16)
+                (AnkiMark :size 16)
                 (dom/span (dom/text (if has-unsynced?
                                       (str "Push to Anki (" unsynced-count ")...")
                                       "Push to Anki...")))
