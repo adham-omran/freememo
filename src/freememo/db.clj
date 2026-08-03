@@ -1072,8 +1072,21 @@
   ;; Chunked-upload sessions (§4.3). The large object is created — and the
   ;; quota reserved — at init, so an abandoned session leaks BOTH until the
   ;; sweep reaps it (§4.3 3.3). received_bytes is the resume cursor (§4.3 3.2).
+  ;;
+  ;; Was `video_upload_sessions`. Renamed because the archive import flow needs
+  ;; the same three-call transport for the same reason video did — a 7.5 GB
+  ;; SuperMemo collection cannot go through a 100 MB request cap — and a second
+  ;; table would be a second place for the reap sweep, the orphan sweep and the
+  ;; compensation path to drift. `flow` discriminates what finalize does; the
+  ;; transport above it is identical.
+  (let [table? (fn [nm] (some? (jdbc/execute-one! ds
+                                 ["SELECT 1 FROM information_schema.tables
+                                   WHERE table_schema = 'public' AND table_name = ?" nm])))]
+    (when (and (table? "video_upload_sessions") (not (table? "upload_sessions")))
+      (tel/log! :info "Renaming video_upload_sessions to upload_sessions")
+      (jdbc/execute! ds ["ALTER TABLE video_upload_sessions RENAME TO upload_sessions"])))
   (jdbc/execute! ds ["
-    CREATE TABLE IF NOT EXISTS video_upload_sessions (
+    CREATE TABLE IF NOT EXISTS upload_sessions (
       id TEXT PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       lo_oid OID NOT NULL,
@@ -1085,8 +1098,18 @@
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )"])
-  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_video_upload_sessions_updated
-                      ON video_upload_sessions(updated_at)"])
+  ;; 'video' is the default so the rename above backfills in-flight sessions
+  ;; correctly — every row that predates this column IS a video upload.
+  (jdbc/execute! ds ["ALTER TABLE upload_sessions
+                      ADD COLUMN IF NOT EXISTS flow TEXT NOT NULL DEFAULT 'video'"])
+  ;; Path of the archive materialized out of the large object at finalize. A
+  ;; CACHE, never state: the large object stays authoritative, and the import
+  ;; re-materializes when this path is absent or stale (a blue-green deploy
+  ;; flip lands the import in a different container than the upload).
+  (jdbc/execute! ds ["ALTER TABLE upload_sessions ADD COLUMN IF NOT EXISTS archive_path TEXT"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_upload_sessions_updated
+                      ON upload_sessions(updated_at)"])
+  (jdbc/execute! ds ["DROP INDEX IF EXISTS idx_video_upload_sessions_updated"])
 
   ;; §4.1 1.4 — storage metering. last_metered_at seeds to now() for existing
   ;; users so the first accrual bills from migration forward, never retroactively.
@@ -5144,7 +5167,7 @@
 (defn purge-orphan-video-objects!
   "§4.7 7.4 — unlink every large object this role owns that no live row
    references: neither a `topic_videos` row nor an in-flight
-   `video_upload_sessions` row.
+   `upload_sessions` row.
 
    Catches the leaks no deletion path can: a crashed finalize between
    `lo_create` and the INSERT, a manual SQL delete, a restored-from-backup
@@ -5159,7 +5182,7 @@
                       ["SELECT m.oid FROM pg_largeobject_metadata m
                         WHERE m.lomowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
                           AND NOT EXISTS (SELECT 1 FROM topic_videos tv WHERE tv.lo_oid = m.oid)
-                          AND NOT EXISTS (SELECT 1 FROM video_upload_sessions s WHERE s.lo_oid = m.oid)"]
+                          AND NOT EXISTS (SELECT 1 FROM upload_sessions s WHERE s.lo_oid = m.oid)"]
                       {:builder-fn rs/as-unqualified-maps}))]
       (doseq [oid orphans] (lo/unlink! tx oid))
       (when (pos? (count orphans))
@@ -5531,8 +5554,8 @@
 
 ;; ── Chunked upload sessions (§4.3) ─────────────────────────────────────────
 
-(defn init-video-upload!
-  "§4.3 3.1/3.1.1/3.1.2 — open an upload session.
+(defn init-upload-session!
+  "§4.3 3.1/3.1.1/3.1.2 — open an upload session for `flow`.
 
    One transaction does three things that must not come apart: reserve
    `total-bytes` against the user's quota, create the large object, and record
@@ -5543,34 +5566,41 @@
    enforces `upload_max_bytes`, which is the single-HTTP-request ceiling
    (100 MB by default) that chunking exists to get past. Applying it here
    rejected every video over 100 MB before a byte was sent. The per-upload
-   bound for video is `video-http/max-video-bytes`, checked by the caller.
+   bound is the caller's: `video-http/max-video-bytes` for video,
+   `archive-http/max-archive-bytes` for an archive.
+
+   `flow` decides what finalize does with the completed object, and nothing
+   else. Video keeps it as the stored artifact; an archive extracts it and
+   refunds every reserved byte.
 
    Pre:  total-bytes > 0 and within the caller's per-upload ceiling; user-id
-         exists; parent-id nil or a topic they own.
+         exists; parent-id nil or a topic they own; flow is \"video\" or
+         \"archive\".
    Post: {:ok true :session-id S :lo-oid N}.
    Throws: quota/quota-error :over-quota — the tx aborts, unwinding both the
            reservation and the object."
-  [user-id filename mime-type total-bytes parent-id]
+  [user-id flow filename mime-type total-bytes parent-id]
   (jdbc/with-transaction [tx ds]
     (quota/reserve-bytes! tx user-id total-bytes)
     (let [oid (lo/create! tx)
           session-id (str (random-uuid))]
       (jdbc/execute! tx
-        [(str "INSERT INTO video_upload_sessions
-                 (id, user_id, lo_oid, total_bytes, filename, mime_type, parent_id)
-               VALUES (?, ?, " oid-param ", ?, ?, ?, ?)")
-         session-id user-id oid (long total-bytes) filename mime-type parent-id])
+        [(str "INSERT INTO upload_sessions
+                 (id, user_id, lo_oid, total_bytes, filename, mime_type, parent_id, flow)
+               VALUES (?, ?, " oid-param ", ?, ?, ?, ?, ?)")
+         session-id user-id oid (long total-bytes) filename mime-type parent-id flow])
       {:ok true :session-id session-id :lo-oid oid})))
 
-(defn get-video-upload-session
+(defn get-upload-session
   "Session row scoped to its owner, or nil. Unqualified keys."
   [user-id session-id]
   (jdbc/execute-one! ds
-    ["SELECT id, user_id, lo_oid, total_bytes, received_bytes, filename, mime_type, parent_id
-      FROM video_upload_sessions WHERE id = ? AND user_id = ?" session-id user-id]
+    ["SELECT id, user_id, lo_oid, total_bytes, received_bytes, filename, mime_type,
+             parent_id, flow, archive_path
+      FROM upload_sessions WHERE id = ? AND user_id = ?" session-id user-id]
     {:builder-fn rs/as-unqualified-maps}))
 
-(defn append-video-chunk!
+(defn append-upload-chunk!
   "§4.3 3.1.2/3.1.3 — append one chunk to a session's large object.
 
    Locks the session row FOR UPDATE, which serializes concurrent chunk POSTs
@@ -5585,7 +5615,7 @@
   [user-id session-id ^bytes buf n]
   (jdbc/with-transaction [tx ds]
     (let [row (jdbc/execute-one! tx
-                ["SELECT lo_oid, total_bytes, received_bytes FROM video_upload_sessions
+                ["SELECT lo_oid, total_bytes, received_bytes FROM upload_sessions
                   WHERE id = ? AND user_id = ? FOR UPDATE" session-id user-id]
                 {:builder-fn rs/as-unqualified-maps})]
       (cond
@@ -5600,26 +5630,95 @@
         :else
         (let [new-size (lo/append! tx (:lo_oid row) buf n)]
           (jdbc/execute! tx
-            ["UPDATE video_upload_sessions SET received_bytes = ?, updated_at = now()
+            ["UPDATE upload_sessions SET received_bytes = ?, updated_at = now()
               WHERE id = ?" new-size session-id])
           {:ok true :received new-size :total (:total_bytes row)})))))
 
-(defn abort-video-upload!
-  "§4.3 3.1.4 — compensate a failed or cancelled upload: unlink the object,
-   refund the reservation, drop the session. Idempotent; unknown ids are no-ops.
+(defn release-upload-session!
+  "§4.3 3.1.4 — give back everything a session holds: unlink the object, delete
+   the materialized archive, refund the reservation, drop the row. Idempotent;
+   unknown ids are no-ops.
+
+   Two callers, one operation. A cancelled or failed upload releases because
+   the bytes were never wanted. A COMPLETED archive import releases for the
+   opposite reason — the archive was transport, the import already stored what
+   it needed through `upsert-media!`, and leaving the reservation would bill the
+   user for a file that no longer exists. Video's finalize is the only path that
+   does NOT release: it transfers the object to `topic_videos` instead, because
+   there the bytes ARE the artifact.
 
    Refunds `total_bytes`, not `received_bytes`, because init reserved the
-   declared total."
+   declared total.
+
+   Pre:  none — an unknown or already-released id is a no-op.
+   Post: nil for an unknown id, else {:ok true :refunded N}. No
+         `pg_largeobject` row and no `archive_path` file remain, and
+         `usage_bytes` is down by exactly `total_bytes`.
+   Invariant: the file delete is best-effort and must not roll the tx back — a
+         refund lost to a stuck file handle is worse than a stray temp file,
+         which the reap sweep would collect anyway."
   [user-id session-id]
   (jdbc/with-transaction [tx ds]
     (when-let [row (jdbc/execute-one! tx
-                     ["SELECT lo_oid, total_bytes FROM video_upload_sessions
+                     ["SELECT lo_oid, total_bytes, archive_path FROM upload_sessions
                        WHERE id = ? AND user_id = ? FOR UPDATE" session-id user-id]
                      {:builder-fn rs/as-unqualified-maps})]
       (lo/unlink! tx (:lo_oid row))
-      (jdbc/execute! tx ["DELETE FROM video_upload_sessions WHERE id = ?" session-id])
+      (when-let [p (:archive_path row)]
+        (try (.delete (java.io.File. ^String p)) (catch Exception _ nil)))
+      (jdbc/execute! tx ["DELETE FROM upload_sessions WHERE id = ?" session-id])
       (bump-user-usage! tx user-id (- (:total_bytes row)))
       {:ok true :refunded (:total_bytes row)})))
+
+(defn materialize-upload-archive!
+  "Put a completed archive session's bytes on local disk and return the File.
+
+   The large object is authoritative; `archive_path` is a cache. A cached path
+   that still exists and matches `received_bytes` is returned as is, so the
+   common case reads the object once (at finalize) rather than twice. A blue-
+   green deploy flip lands the import in a different container, where the path
+   does not exist — that re-materializes rather than failing, which is the whole
+   reason the object stays authoritative.
+
+   Pre:  session exists, belongs to user-id, and has flow 'archive'.
+   Post: {:ok true :file F :filename S} where F holds exactly `received_bytes`
+         bytes, or {:ok false :error S} when the session is missing or the
+         upload is short of its declared total.
+   Invariant: heap high-water is one `largeobj/io-buffer-bytes` buffer — the
+         copy streams, so a 7.5 GB archive never exists in heap.
+   Invariant: the returned File is owned by the SESSION, not the caller. Only
+         `release-upload-session!` and the reap sweep delete it, so a retried
+         import reuses it."
+  [user-id session-id]
+  (jdbc/with-transaction [tx ds]
+    (let [row (jdbc/execute-one! tx
+                ["SELECT lo_oid, total_bytes, received_bytes, filename, flow, archive_path
+                  FROM upload_sessions WHERE id = ? AND user_id = ? FOR UPDATE"
+                 session-id user-id]
+                {:builder-fn rs/as-unqualified-maps})]
+      (cond
+        (nil? row)
+        {:ok false :error "Upload not found or expired"}
+
+        (not= "archive" (:flow row))
+        {:ok false :error (str "Not an archive upload: " (:flow row))}
+
+        (not= (:received_bytes row) (:total_bytes row))
+        {:ok false :error (str "Upload incomplete: " (:received_bytes row)
+                            " of " (:total_bytes row) " bytes")}
+
+        :else
+        (let [cached (some-> (:archive_path row) (java.io.File.))]
+          (if (and cached (.exists cached) (= (.length cached) (:received_bytes row)))
+            {:ok true :file cached :filename (:filename row)}
+            (let [f (.toFile (java.nio.file.Files/createTempFile
+                               "upload-archive" ".bin"
+                               (make-array java.nio.file.attribute.FileAttribute 0)))]
+              (lo/copy-to-file! tx (:lo_oid row) f)
+              (jdbc/execute! tx
+                ["UPDATE upload_sessions SET archive_path = ?, updated_at = now()
+                  WHERE id = ?" (.getAbsolutePath f) session-id])
+              {:ok true :file f :filename (:filename row)})))))))
 
 (defn finalize-video-upload!
   "§4.3 3.1 — turn a completed session into a `video` topic.
@@ -5637,7 +5736,7 @@
   (jdbc/with-transaction [tx ds]
     (let [row (jdbc/execute-one! tx
                 ["SELECT lo_oid, total_bytes, received_bytes, filename, mime_type, parent_id
-                  FROM video_upload_sessions WHERE id = ? AND user_id = ? FOR UPDATE"
+                  FROM upload_sessions WHERE id = ? AND user_id = ? FOR UPDATE"
                  session-id user-id]
                 {:builder-fn rs/as-unqualified-maps})]
       (cond
@@ -5685,7 +5784,7 @@
              ;; probed the file; the pipeline's probe is authoritative and
              ;; clears this either way.
              (not= "video/mp4" (:mime_type row))])
-          (jdbc/execute! tx ["DELETE FROM video_upload_sessions WHERE id = ?" session-id])
+          (jdbc/execute! tx ["DELETE FROM upload_sessions WHERE id = ?" session-id])
           (audit-doc-created! user-id topic-id)
           {:ok true :topic-id topic-id})))))
 
@@ -5725,26 +5824,38 @@
         (audit-doc-created! user-id (:topics/id topic))
         (:topics/id topic)))))
 
-(defn reap-stale-video-uploads!
+(defn reap-stale-upload-sessions!
   "§4.3 3.3 — abort sessions untouched for longer than `ttl-hours`.
 
-   A browser tab closed mid-upload leaves both a large object and a byte
-   reservation; nothing else reclaims either, so this runs in the hourly sweep.
-   Returns the number reaped."
+   A browser tab closed mid-upload leaves a large object, a byte reservation
+   and — for an archive session that reached finalize — a materialized temp
+   file. Nothing else reclaims any of the three, so this runs in the hourly
+   sweep.
+
+   Pre:  ttl-hours > 0. Callers pass `storage-meter/upload-session-ttl-hours`,
+         which is generous on purpose: `updated_at` advances on every chunk, so
+         only a genuinely abandoned upload goes stale.
+   Post: returns the number reaped. Each reaped session leaves no
+         `pg_largeobject` row, no `archive_path` file, and `usage_bytes`
+         restored by exactly `total_bytes`.
+   Invariant: the temp file is deleted outside the SQL but inside the tx —
+         a failed delete must not roll back the refund, so it is best-effort."
   [ttl-hours]
   (jdbc/with-transaction [tx ds]
     (let [stale (jdbc/execute! tx
-                  [(str "SELECT id, user_id, lo_oid, total_bytes FROM video_upload_sessions
+                  [(str "SELECT id, user_id, lo_oid, total_bytes, archive_path FROM upload_sessions
                          WHERE updated_at < now() - make_interval(hours => ?) FOR UPDATE")
                    (int ttl-hours)]
                   {:builder-fn rs/as-unqualified-maps})]
-      (doseq [{:keys [id user_id lo_oid total_bytes]} stale]
+      (doseq [{:keys [id user_id lo_oid total_bytes archive_path]} stale]
         (lo/unlink! tx lo_oid)
-        (jdbc/execute! tx ["DELETE FROM video_upload_sessions WHERE id = ?" id])
+        (when archive_path
+          (try (.delete (java.io.File. ^String archive_path)) (catch Exception _ nil)))
+        (jdbc/execute! tx ["DELETE FROM upload_sessions WHERE id = ?" id])
         (bump-user-usage! tx user_id (- total_bytes)))
       (when (seq stale)
-        (tel/log! {:level :info :id ::reaped-video-uploads :data {:count (count stale)}}
-          "Reaped abandoned video upload sessions"))
+        (tel/log! {:level :info :id ::reaped-upload-sessions :data {:count (count stale)}}
+          "Reaped abandoned upload sessions"))
       (count stale))))
 
 ;; ── Storage metering (§4.6) ────────────────────────────────────────────────

@@ -8,59 +8,20 @@
    206 Partial Content, and every other blob route in this app answers 200 with
    the whole body.
 
-   The route table in `freememo.api` classifies /api/video/chunk as `:body
-   :upload`, so an oversized single chunk is rejected by the middleware and
-   never reaches a handler here."
+   Only `init` and `finalize` live here. Chunk, abort and status are flow-blind
+   and moved to `freememo.upload-http`, which the archive upload flow shares —
+   see plans/supermemo-import-large-archives.md §6.1."
   (:require
-   [cheshire.core :as json]
-   [clojure.java.io :as io]
    [clojure.string :as str]
    [freememo.commands :as commands]
    [freememo.db :as db]
    [freememo.largeobj :as lo]
    [freememo.quota :as quota]
    [freememo.storage-meter :as meter]
+   [freememo.upload-http :as uh :refer [json-response require-auth]]
    [freememo.video :as video]
    [freememo.video-format :refer [format-bytes]]
    [taoensso.telemere :as tel]))
-
-(defn- json-response [status body]
-  {:status status
-   :headers {"Content-Type" "application/json"}
-   :body (json/generate-string body)})
-
-(defn- require-auth [request]
-  (get-in request [:session :user-id]))
-
-(defn- quota-error->response [data]
-  (case (:reason data)
-    :file-too-large (json-response 413 {:success false
-                                        :error (str "Video exceeds per-upload limit ("
-                                                 (:limit data) " bytes)")
-                                        :code "file-too-large"
-                                        :limit (:limit data) :incoming (:incoming data)})
-    :over-quota (let [free (max 0 (- (or (:limit data) 0) (or (:used data) 0)))]
-                  (json-response 507
-                    {:success false
-                     ;; Name the shortfall, not just the failure — "needs 700 MB,
-                     ;; 312 MB free" tells the user how much to delete.
-                     :error (str "Not enough storage: this video needs "
-                              (format-bytes (:incoming data)) " and only "
-                              (format-bytes free) " is free")
-                     :code "over-quota"
-                     :used (:used data) :limit (:limit data)
-                     :incoming (:incoming data)}))
-    (json-response 500 {:success false :error "Quota check failed"})))
-
-(defn- body-bytes
-  "Raw request body as a byte array. The chunk route posts
-   application/octet-stream, which no param middleware consumes, so the stream
-   is intact here. Bounded upstream by `wrap-route-body-size`."
-  ^bytes [request]
-  (when-let [^java.io.InputStream in (:body request)]
-    (let [baos (java.io.ByteArrayOutputStream.)]
-      (io/copy in baos)
-      (.toByteArray baos))))
 
 ;; ── Upload ─────────────────────────────────────────────────────────────────
 
@@ -96,7 +57,7 @@
           (json-response 404 {:success false :error "Playlist not found"})
 
           :else
-          (let [r (db/init-video-upload! user-id filename mime total parent-id)]
+          (let [r (db/init-upload-session! user-id "video" filename mime total parent-id)]
             (json-response 200 {:success true
                                 :session_id (:session-id r)
                                 :chunk_size (min quota/request-max-bytes
@@ -104,40 +65,12 @@
       (catch clojure.lang.ExceptionInfo e
         (let [data (ex-data e)]
           (if (quota/quota-error? data)
-            (quota-error->response data)
+            (uh/quota-error->response "video" data)
             (do (tel/error! {:id ::video-init} e)
                 (json-response 500 {:success false :error "Upload could not be started"})))))
       (catch Exception e
         (tel/error! {:id ::video-init} e)
         (json-response 500 {:success false :error "Upload could not be started"})))
-    (json-response 401 {:success false :error "Not authenticated"})))
-
-(defn chunk-handler
-  "POST /api/video/chunk?session=S — raw bytes appended to the session's object.
-
-   The session id travels in the query string, not the body, because the body
-   IS the payload. Returns the running total so a client can verify or resume."
-  [request]
-  (if-let [user-id (require-auth request)]
-    (try
-      (let [session-id (get-in request [:params "session"])
-            ^bytes buf (body-bytes request)]
-        (cond
-          (str/blank? session-id)
-          (json-response 400 {:success false :error "Missing session"})
-
-          (or (nil? buf) (zero? (alength buf)))
-          (json-response 400 {:success false :error "Empty chunk"})
-
-          :else
-          (let [r (db/append-video-chunk! user-id session-id buf (alength buf))]
-            (if (:ok r)
-              (json-response 200 {:success true :received (:received r) :total (:total r)})
-              (json-response (if (= "not-found" (:code r)) 404 400)
-                {:success false :error (:error r) :code (:code r)})))))
-      (catch Exception e
-        (tel/error! {:id ::video-chunk} e)
-        (json-response 500 {:success false :error "Chunk upload failed"})))
     (json-response 401 {:success false :error "Not authenticated"})))
 
 (defn transcribe-requested?
@@ -184,38 +117,6 @@
       (catch Exception e
         (tel/error! {:id ::video-finalize} e)
         (json-response 500 {:success false :error "Could not finish the upload"})))
-    (json-response 401 {:success false :error "Not authenticated"})))
-
-(defn abort-handler
-  "POST /api/video/abort — {session_id}. Client-driven cancellation (§4.3 3.1.4).
-   The sweep would reap the session eventually; this frees the bytes now."
-  [request]
-  (if-let [user-id (require-auth request)]
-    (try
-      (let [session-id (get-in request [:params "session_id"])]
-        (if (str/blank? session-id)
-          (json-response 400 {:success false :error "Missing session_id"})
-          (do (db/abort-video-upload! user-id session-id)
-              (json-response 200 {:success true}))))
-      (catch Exception e
-        (tel/error! {:id ::video-abort} e)
-        (json-response 500 {:success false :error "Abort failed"})))
-    (json-response 401 {:success false :error "Not authenticated"})))
-
-(defn status-handler
-  "GET /api/video/status?session=S — the resume cursor (§4.3 3.2).
-   A client that lost its connection asks how many bytes we actually hold and
-   restarts from there instead of re-sending everything."
-  [request]
-  (if-let [user-id (require-auth request)]
-    (let [session-id (get-in request [:params "session"])
-          row (when-not (str/blank? session-id)
-                (db/get-video-upload-session user-id session-id))]
-      (if row
-        (json-response 200 {:success true
-                            :received (:received_bytes row)
-                            :total (:total_bytes row)})
-        (json-response 404 {:success false :error "Upload session not found"})))
     (json-response 401 {:success false :error "Not authenticated"})))
 
 (defn position-handler

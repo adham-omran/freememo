@@ -232,12 +232,13 @@
    analysis + topic storage. Bomb-guarded and zip-slip-guarded by
    `freememo.archive`; non-Clojure files are skipped. NEVER evaluates
    extracted code.
-   Pre:  zip-bytes is a byte[] ZIP archive.
+   Pre:  `src` is a byte[] or a File holding a ZIP or 7z archive. A File comes
+         from a chunked upload, whose archive is too large for a byte[].
    Post: a temp dir File holding the extracted .clj/.cljc/.cljs tree; on any
          failure the temp dir is removed and the error rethrown. Caller (or
          start-repo-distill!) MUST delete the returned dir."
-  [^bytes zip-bytes]
-  (archive/extract-to-temp-dir! zip-bytes
+  [src]
+  (archive/extract-to-temp-dir! src
     {:prefix "repo-ingest"
      :keep? #(boolean (re-find clojure-ext-re %))}))
 

@@ -114,19 +114,55 @@
        (= (byte 0x03) (aget b 2))
        (= (byte 0x04) (aget b 3))))
 
+(def ^:private supermemo-required-entries
+  "The two files `freememo.supermemo-format/read-collection` cannot work
+   without. Both are required because a lone `contents.dat` is a common enough
+   filename that matching on it alone would misroute ordinary archives."
+  [#(str/ends-with? % "info/contents.dat")
+   #(str/ends-with? % "info/elementinfo.dat")])
+
 (defn supermemo-archive?
   "True when an archive holds a SuperMemo collection.
-   Pre : `bytes` is a ZIP or 7z archive.
+   Pre : `src` is a byte[] or a File holding a ZIP or 7z archive.
    Post: true iff some directory inside contains both `info/contents.dat` and
-         `info/ElementInfo.dat` — the two files the decoder cannot work
-         without. Reads entry names only; nothing is decompressed.
-   Both names are required because a lone `contents.dat` is a common enough
-   filename that matching on it alone would misroute ordinary archives."
-  [^bytes bytes]
-  (let [names (map str/lower-case (archive/entry-names bytes))]
-    (and (some #(str/ends-with? % "info/contents.dat") names)
-      (some #(str/ends-with? % "info/elementinfo.dat") names)
-      true)))
+         `info/ElementInfo.dat`. Reads entry names only; nothing is
+         decompressed, and the walk stops once both names are seen.
+   Invariant: never throws — an unreadable archive is the routine answer
+         \"not this flow\", not an error."
+  [src]
+  (archive/every-entry-name? src supermemo-required-entries))
+
+(defn classify-archive
+  "Resolve an archive to its import flow, from the filename plus the container.
+
+   The single definition of archive routing. `classify-multipart` delegates its
+   `.zip` / `.7z` branches here, and the chunked-upload finalize calls it with a
+   File — the two callers must not drift, because a `.zip` that routes to
+   `:supermemo` in one and `:repo` in the other imports as the wrong thing.
+
+   Pre : `src` is a byte[] or a File; `filename` is a string or nil.
+   Post: [:supermemo nil] | [:repo nil] | [:reject <msg>].
+         A `.zip` holding a SuperMemo collection wins over `:repo`, which
+         claims every remaining `.zip`. A `.7z` has no flow other than
+         SuperMemo, and saying so beats staging it for an importer that will
+         reject it.
+   Invariant: reads entry names only; decompresses nothing."
+  [filename src]
+  (let [lower (some-> filename str/lower-case)
+        sevenz? (and lower (str/ends-with? lower ".7z"))
+        kind (archive/archive-kind src)]
+    (cond
+      sevenz?
+      (cond
+        (not= :sevenz kind) [:reject "Not a valid 7z archive."]
+        (supermemo-archive? src) [:supermemo nil]
+        :else [:reject "A .7z file can only be imported as a SuperMemo collection."])
+
+      (not= :zip kind)
+      [:reject "Not a valid ZIP archive."]
+
+      (supermemo-archive? src) [:supermemo nil]
+      :else [:repo nil])))
 
 (defn classify-multipart
   "Pre:  filename and content-type are strings (possibly nil); bytes is a byte
@@ -167,27 +203,14 @@
                      :else nil)
         kind (or magic-kind ext ct-kind)]
     (cond
-      ;; A .zip holding a SuperMemo collection. Must precede :repo, which
-      ;; claims every remaining .zip.
-      (and (= ext :repo) (zip-magic? bytes) (supermemo-archive? bytes))
-      [:supermemo nil]
-
-      ;; A .zip archive with ZIP magic → code repo. Checked before :epub, which
-      ;; also matches ZIP magic; .epub keeps its own branch via ext/magic below.
+      ;; Archive routing lives in `classify-archive`, which the chunked-upload
+      ;; finalize also calls. Checked before :epub, which matches ZIP magic too;
+      ;; .epub keeps its own branch via ext/magic below.
       (and (= ext :repo) (zip-magic? bytes))
-      [:repo nil]
+      (classify-archive filename bytes)
 
-      ;; 7z exists in this dispatch only because SuperMemo collections are
-      ;; commonly distributed that way. A 7z of anything else has no flow, and
-      ;; saying so beats staging it for an importer that will reject it.
       (= ext :sevenz)
-      (cond
-        (not= :sevenz (archive/archive-kind bytes))
-        [:reject "Not a valid 7z archive."]
-        (supermemo-archive? bytes)
-        [:supermemo nil]
-        :else
-        [:reject "A .7z file can only be imported as a SuperMemo collection."])
+      (classify-archive filename bytes)
 
       (= kind :pdf)
       (if (pdf-magic? bytes) [:pdf nil] [:reject "Not a valid PDF file."])

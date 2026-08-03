@@ -16,6 +16,7 @@
    [freememo.modal-shell :as modal]
    [freememo.navigation :as nav]
    [freememo.client-errors :as ce]
+   #?(:cljs [freememo.archive-upload :as archive-upload])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.quota :as quota])
    #?(:clj [freememo.web-import :as web-import])))
@@ -166,6 +167,45 @@
                      (js/console.error "Upload failed:" err)
                      (ce/report! :import/upload err)
                      (on-error "Upload failed — please try again.")))))))
+
+;; ── Chunked archive upload ─────────────────────────────────────────
+;; A `.zip` / `.7z` cannot go through /api/upload-file, which reads its whole
+;; body into a byte[] — see plans/supermemo-import-large-archives.md §2. These
+;; three fns are the client half of the chunked route that replaces it.
+
+#?(:cljs
+   (defn- archive-file?
+     "Whether `f` takes the chunked route. Extension only; the server derives
+      the real flow from the archive's entry names at finalize."
+     [^js f]
+     (archive-upload/archive-file? f)))
+
+#?(:cljs
+   (defn- upload-percent
+     "Progress as a whole-number percentage string, or \"0%\" when total is 0."
+     [sent total]
+     (str (if (pos? total) (js/Math.floor (* 100 (/ sent total))) 0) "%")))
+
+#?(:cljs
+   (defn- upload-archive!
+     "Chunk-upload `f`, then hand the resolved flow to `:on-staged`.
+
+      Pre : `f` is a `.zip` or `.7z` File.
+      Post: `:on-staged` receives {:session-id :flow :filename :size} — the same
+            shape `!staged` already holds for a staged multipart upload, minus
+            `:upload-id` and plus `:session-id`, which is what tells
+            `ConfirmingStage` to confirm against a session rather than the heap
+            staging area. `:on-error` receives a message; the session is already
+            released by then, so there is nothing for the caller to clean up."
+     [^js f {:keys [on-progress on-staged on-error]}]
+     (-> (archive-upload/upload-archive! {:file f :on-progress on-progress})
+       (.then (fn [{:keys [session-id flow filename]}]
+                (on-staged {:session-id session-id
+                            :filename filename
+                            :size (.-size f)
+                            :flow flow})))
+       (.catch (fn [e]
+                 (on-error (or (some-> e .-message) "Upload failed — please try again.")))))))
 
 ;; ── Atoms reset ────────────────────────────────────────────────────
 
@@ -542,6 +582,10 @@
           image-mode (e/watch !image-mode)
           extract-facts? (e/watch !extract-facts?)
           upload-id (:upload-id staged)
+          ;; An archive arrived through the chunked route, so its bytes live in
+          ;; an upload session's large object rather than the heap staging area.
+          ;; Exactly one of the two is present.
+          session-id (:session-id staged)
           commits (forms/Form! {}
                     (e/fn Fields [_]
                       (e/amb
@@ -610,6 +654,10 @@
                     :show-buttons false
                     :Parse (e/fn [_ _tempid]
                              (cond
+                               (and session-id (= flow "repo"))
+                               [`Confirm-repo-session session-id extract-facts?]
+                               (and session-id (= flow "supermemo"))
+                               [`Confirm-supermemo-session session-id nil]
                                (= flow "repo") [`Confirm-repo-upload upload-id extract-facts?]
                                (= flow "supermemo") [`Confirm-supermemo-upload upload-id nil]
                                :else [`Confirm-staged-upload upload-id (keyword image-mode)])))]
@@ -628,7 +676,9 @@
             nil)))
       ;; `Confirm-repo-upload carries the extract-facts? flag and gates async
       ;; fact distillation; `Confirm-supermemo-upload carries no argument;
-      ;; every other flow carries the image-mode keyword.
+      ;; every other flow carries the image-mode keyword. The two `-session`
+      ;; commands are the chunked-upload siblings: same arguments, but `u-id` is
+      ;; an upload-session id rather than a staging id.
       (e/for [[token [head u-id arg]] (e/diff-by first (e/as-vec commits))]
         (when token
           ;; Busy overlay while the staged upload commits (sibling of the
@@ -637,6 +687,10 @@
           (case (reset! !busy-msg "Importing…")
             (case (reset-error! !error !quota-error?)
               (let [r (e/server (e/Offload #(cond
+                                              (= head `Confirm-repo-session)
+                                              (web-import/confirm-repo-session!* user-id u-id arg)
+                                              (= head `Confirm-supermemo-session)
+                                              (web-import/confirm-supermemo-session!* user-id u-id)
                                               (= head `Confirm-repo-upload)
                                               (web-import/confirm-repo-upload!* user-id u-id arg)
                                               (= head `Confirm-supermemo-upload)
@@ -812,6 +866,32 @@
                         (reset-error! !error !quota-error?)
                         (reset! !file f)
                         (cond
+                          ;; Archives take the chunked route, whatever their
+                          ;; size — no threshold, so one code path serves a
+                          ;; 30 MB collection and a 7.5 GB one. `cap-bytes` is
+                          ;; deliberately NOT applied: it is the single-request
+                          ;; ceiling, which chunking exists to get past. Same
+                          ;; reasoning as `quota/reserve-bytes!` over
+                          ;; `check-and-bump!` on the server.
+                          (archive-file? f)
+                          (do (reset! !stage :fetching)
+                              (upload-archive! f
+                                {:on-progress
+                                 (fn [sent total]
+                                   (reset! !busy-msg
+                                     (str "Uploading… " (upload-percent sent total)
+                                          " of " (format-mb total))))
+                                 :on-staged
+                                 (fn [staged]
+                                   (reset! !busy-msg nil)
+                                   (reset! !staged staged)
+                                   (reset! !flow (:flow staged))
+                                   (reset! !stage :confirming))
+                                 :on-error
+                                 (fn [msg]
+                                   (reset! !busy-msg nil)
+                                   (handle-fetch-err msg))}))
+
                           (and (pos? cap-bytes) (> (.-size f) cap-bytes))
                           (do (reset! !error (str "File is " (format-mb (.-size f))
                                                " — limit is " (format-mb cap-bytes) "."))
