@@ -44,7 +44,7 @@
     :openrouter-model "anthropic/claude-sonnet-5"}
    {:id "deepseek-v4-flash"
     :label "DeepSeek · V4 Flash"
-    :openrouter-model "deepseek/deepseek-v4-flash"}])
+    :openrouter-model "deepseek/deepseek-v4-flash-latest"}])
 
 (def default-id
   "System-wide default card model when a user has no saved selection and no prod
