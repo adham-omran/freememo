@@ -1773,6 +1773,22 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
     text-align: right;
 }
 
+/* ── Bidi: per-block direction ─────────────────────────────────────
+   `dir="auto"` resolves ONE direction for a whole element, from the first
+   strong character anywhere in its subtree. A stored-HTML container holds
+   several blocks, so a card whose first block is Latin and whose body is
+   Arabic renders LTR throughout. `unicode-bidi: plaintext` makes each block
+   child its own bidi paragraph, so every block picks its own base direction
+   and the initial `text-align: start` resolves per paragraph.
+
+   Never add `text-align` here. An explicitly set `start` is not resolved
+   against a dir="auto"-computed rtl direction in Chromium (see .ql-editor
+   below), and the initial value already aligns correctly.
+   Callers: quiz-card-turn/CardHtml. */
+.bidi-per-block {
+    unicode-bidi: plaintext;
+}
+
 /* ── Help Icon ─────────────────────────────────────────────────── */
 .help-icon {
     display: inline-flex;

@@ -89,8 +89,12 @@
     (when (curate/question-edited? snapshot live)
       (dom/div
         (fb/EditedSinceNote true)
+        ;; "You answered: " shares this paragraph's bidi run, so dir="auto" resolves
+        ;; from the label and an RTL snapshot stays LTR — recorded limitation
+        ;; (plans/quiz-rtl-support.md §5).
         (dom/p
-          (dom/props {:style {:font-size "13px" :margin "2px 0 0"
+          (dom/props {:dir "auto"
+                      :style {:font-size "13px" :margin "2px 0 0"
                               :color "var(--color-text-secondary)"}})
           (dom/text (str "You answered: " snapshot)))))))
 
@@ -179,18 +183,25 @@
                 (dom/span (dom/props {:style {:font-weight "700" :color color :font-size "13px"
                                               :flex-shrink "0"}})
                   (dom/text label))
-                (dom/span (dom/props {:style {:font-size "14px" :font-weight "600"}})
+                ;; dir="auto" resolves from the question here, not from the "N. "
+                ;; prefix: digits are directionally weak.
+                (dom/span (dom/props {:dir "auto"
+                                      :style {:font-size "14px" :font-weight "600"}})
                   ;; Live wording — this is a detail view, reached by clicking the
                   ;; session row, so it shows the question as it is now.
                   (dom/text (str (inc position) ". " question))))
               (AnsweredAs question_text question)
-              (dom/p (dom/props {:style {:font-size "13px" :margin "6px 0 0"}})
+              ;; This line and the Reference line below carry an English label in
+              ;; the same bidi run, so RTL content stays LTR — see AnsweredAs.
+              (dom/p (dom/props {:dir "auto" :style {:font-size "13px" :margin "6px 0 0"}})
                 (dom/text (str "Your answer: " user_answer)))
               (when explanation
-                (dom/p (dom/props {:style {:font-size "13px" :margin "4px 0 0"
+                (dom/p (dom/props {:dir "auto"
+                                   :style {:font-size "13px" :margin "4px 0 0"
                                            :color "var(--color-text-secondary)"}})
                   (dom/text explanation)))
-              (dom/p (dom/props {:style {:font-size "13px" :margin "4px 0 0"
+              (dom/p (dom/props {:dir "auto"
+                                 :style {:font-size "13px" :margin "4px 0 0"
                                          :color "var(--color-text-secondary)"}})
                 (dom/text (str "Reference: " reference_answer))))))))))
 
@@ -243,7 +254,7 @@
             ;; Live wording: the row is traversed by question id, so clicking through
             ;; shows what the question says now. The recorded wording follows below
             ;; only when the two diverge.
-            (dom/h3 (dom/props {:style {:font-size "16px" :margin "14px 0 0"}})
+            (dom/h3 (dom/props {:dir "auto" :style {:font-size "16px" :margin "14px 0 0"}})
               (dom/text (str live_question)))
             (AnsweredAs question_text live_question)
             ;; Curation from history: this is where a bad question found in review
@@ -306,8 +317,13 @@
                       (dom/props {:style {:display "flex" :align-items "center"
                                           :padding "0 12px" :overflow "hidden"
                                           :border-bottom "1px solid var(--color-bg-subtle)"}})
+                      ;; dir="auto" on the text span only, NOT on the table: the
+                      ;; .tape-scroll grid is shared by ~11 sites, and one RTL row
+                      ;; must not flip every other row's columns
+                      ;; (plans/quiz-rtl-support.md D5).
                       (dom/span
-                        (dom/props {:style {:font-size "13px" :white-space "nowrap"
+                        (dom/props {:dir "auto"
+                                    :style {:font-size "13px" :white-space "nowrap"
                                             :overflow "hidden" :text-overflow "ellipsis"}})
                         (tooltip/Tooltip! (str prompt))
                         (dom/text (or (not-empty (str prompt)) "(wording not recorded)"))))

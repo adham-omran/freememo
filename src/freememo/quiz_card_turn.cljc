@@ -75,13 +75,21 @@
   [[1 "Again"] [2 "Hard"] [3 "Good"] [4 "Easy"]])
 
 (e/defn CardHtml
-  "One card field's HTML. `dir=\"auto\"` flips to RTL for Arabic content; math is
-   typeset by math/set-html!, never by a bare innerHTML write."
+  "One card field's HTML. Math is typeset by math/set-html!, never by a bare
+   innerHTML write.
+
+   Direction: `dir=\"auto\"` picks the container's direction from its content, and
+   `.bidi-per-block` (`unicode-bidi: plaintext`) makes each block child resolve its
+   own — a card whose first block is Latin and whose body is Arabic needs both.
+   Sets NO `text-align`: an explicit `start` is not resolved against a
+   dir=\"auto\"-computed rtl direction in Chromium (index.css, .ql-editor), while
+   the initial value aligns per paragraph correctly
+   (plans/quiz-rtl-support.md §3.1, §4.1)."
   [html size]
   (e/client
     (dom/div
-      (dom/props {:dir "auto" :style {:font-size size :line-height "1.5"
-                                      :text-align "start"}})
+      (dom/props {:dir "auto" :class "bidi-per-block"
+                  :style {:font-size size :line-height "1.5"}})
       (math/set-html! dom/node html))))
 
 (e/defn CardFeedback
@@ -102,12 +110,12 @@
         (dom/div
           (dom/props {:style {:font-weight "700" :color color :font-size "15px"}})
           (dom/text label))
-        (dom/p (dom/props {:style {:margin "8px 0" :font-size "14px"}})
+        (dom/p (dom/props {:dir "auto" :style {:margin "8px 0" :font-size "14px"}})
           (dom/text explanation))
         (dom/div (dom/props {:style label-style}) (dom/text "Reference answer"))
         (CardHtml reference-answer "14px")
         (dom/div (dom/props {:style label-style}) (dom/text "Your answer"))
-        (dom/p (dom/props {:style {:font-size "14px" :margin "4px 0"}})
+        (dom/p (dom/props {:dir "auto" :style {:font-size "14px" :margin "4px 0"}})
           (dom/text user-answer))))))
 
 (e/defn AnswerForm
@@ -121,7 +129,7 @@
     (dom/div
       (e/for [[t edit] (e/amb
                          (forms/Input! :card/answer draft :as :textarea
-                           :class "form-input" :rows 4
+                           :class "form-input" :rows 4 :dir "auto"
                            :placeholder "Answer in your own words…"
                            :aria-label "Your answer"
                            :style {:width "100%" :resize "vertical"})
@@ -250,12 +258,12 @@
         (when (not-empty (str explanation))
           (dom/div
             (dom/div (dom/props {:style label-style}) (dom/text "Grader"))
-            (dom/p (dom/props {:style {:font-size "14px" :margin "4px 0"}})
+            (dom/p (dom/props {:dir "auto" :style {:font-size "14px" :margin "4px 0"}})
               (dom/text (str explanation)))))
         (when (not-empty (str user_answer))
           (dom/div
             (dom/div (dom/props {:style label-style}) (dom/text "Your answer"))
-            (dom/p (dom/props {:style {:font-size "14px" :margin "4px 0"}})
+            (dom/p (dom/props {:dir "auto" :style {:font-size "14px" :margin "4px 0"}})
               (dom/text (str user_answer)))))))))
 
 (e/defn CardTurn

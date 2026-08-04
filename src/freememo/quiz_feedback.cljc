@@ -88,7 +88,12 @@
 (e/defn EntityLinkedText
   "Text with entity mentions as concept links (click → popover via
    !entity-card) and matched keywords highlighted. Highlight ⊆ links: every
-   mention comes from the graph's labels/aliases, so a click always resolves."
+   mention comes from the graph's labels/aliases, so a click always resolves.
+
+   Pre: the CALLER owns text direction. This writes bare spans and text nodes into
+   the caller's block, so a per-segment `dir=\"auto\"` would make every segment its
+   own bidi run and scramble mixed-script text. Put `dir=\"auto\"` on the enclosing
+   paragraph instead (plans/quiz-rtl-support.md §1.2.2)."
   [text entities matched-keywords !entity-card]
   (e/client
     (let [lex (entity-lexicon entities)
@@ -134,7 +139,7 @@
    !entity-card navigate-source!]
   (e/client
     (dom/li
-      (dom/props {:style {:font-size "13px" :padding "2px 0"}})
+      (dom/props {:dir "auto" :style {:font-size "13px" :padding "2px 0"}})
       (EntityMention subject_label subject_entity_id !entity-card)
       (dom/text (str " — " predicate_label " → "))
       (if object_label
@@ -175,10 +180,14 @@
                                 :max-height "70vh" :overflow-y "auto"
                                 :box-shadow "0 8px 32px rgba(0,0,0,0.25)"}})
             (dom/On "click" (fn [e] (.stopPropagation e) nil) nil)
-            (dom/h3 (dom/props {:style {:font-size "16px" :margin "0 0 4px"}})
+            (dom/h3 (dom/props {:dir "auto" :style {:font-size "16px" :margin "0 0 4px"}})
               (dom/text (:label card)))
+            ;; The "Also: " prefix shares this paragraph's bidi run, so dir="auto"
+            ;; resolves from it and RTL aliases stay LTR — a recorded limitation
+            ;; (plans/quiz-rtl-support.md §5, "Accepted limitations" 1).
             (when (seq (:aliases card))
-              (dom/p (dom/props {:style {:font-size "12px" :margin "0 0 8px"
+              (dom/p (dom/props {:dir "auto"
+                                 :style {:font-size "12px" :margin "0 0 8px"
                                          :color "var(--color-text-secondary)"}})
                 (dom/text (str "Also: " (str/join ", " (:aliases card))))))
             (if (empty? (:facts card))
@@ -202,17 +211,17 @@
         (dom/div
           (dom/props {:style {:font-weight "700" :color color :font-size "15px"}})
           (dom/text label))
-        (dom/p (dom/props {:style {:margin "8px 0" :font-size "14px"}})
+        (dom/p (dom/props {:dir "auto" :style {:margin "8px 0" :font-size "14px"}})
           (dom/text explanation))
         (dom/div (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
                                      :margin-top "10px"}})
           (dom/text "Reference answer"))
-        (dom/p (dom/props {:style {:font-size "14px" :margin "4px 0"}})
+        (dom/p (dom/props {:dir "auto" :style {:font-size "14px" :margin "4px 0"}})
           (EntityLinkedText reference-answer entities matched-keywords !entity-card))
         (dom/div (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
                                      :margin-top "10px"}})
           (dom/text "Your answer"))
-        (dom/p (dom/props {:style {:font-size "14px" :margin "4px 0"}})
+        (dom/p (dom/props {:dir "auto" :style {:font-size "14px" :margin "4px 0"}})
           (EntityLinkedText user-answer entities matched-keywords !entity-card))
         (when (seq missed-facts)
           (dom/div

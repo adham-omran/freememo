@@ -206,7 +206,7 @@
                               (e/for [[t edit] (forms/Checkbox! id (contains? scope id))]
                                 (swap! !scope (fn [s] (if (get edit id) (conj s id) (disj s id))))
                                 (t))
-                              (do (dom/span (dom/text title))
+                              (do (dom/span (dom/props {:dir "auto"}) (dom/text title))
                                 (dom/span (dom/props {:style {:color "var(--color-text-secondary)"
                                                               :font-size "12px" :margin-left "auto"}})
                                   (dom/text (str questions " questions")))
@@ -300,7 +300,7 @@
                 (dom/props {:class "btn btn-sm" :aria-label "End quiz"})
                 (dom/text "End quiz")
                 (dom/On "click" (fn [_] (finish!)) nil)))
-            (dom/h3 (dom/props {:style {:font-size "16px" :margin "14px 0"}})
+            (dom/h3 (dom/props {:dir "auto" :style {:font-size "16px" :margin "14px 0"}})
               (dom/text (str (:question qdata))))
             ;; One advance for both states: it clears the feedback pane and steps the
             ;; index, or finishes on the last question, so suspending after grading
@@ -315,7 +315,7 @@
                 ;; round-trip per keystroke); the submit command grades on the server.
                 (e/for [[t edit] (e/amb
                                    (forms/Input! :quiz/answer draft :as :textarea
-                                     :class "form-input" :rows 4
+                                     :class "form-input" :rows 4 :dir "auto"
                                      :placeholder "Answer in your own words…"
                                      :aria-label "Your answer"
                                      :style {:width "100%" :resize "vertical"})
@@ -484,7 +484,7 @@
                 (dom/On "click" (fn [_] (when (nil? @!submit-req)
                                           (reset! !submit-req {:draft @!draft})))
                   nil)))
-            (dom/h3 (dom/props {:style {:font-size "16px" :margin "14px 0"}})
+            (dom/h3 (dom/props {:dir "auto" :style {:font-size "16px" :margin "14px 0"}})
               (dom/text (str (:question qdata))))
             (curate/CurationBar user-id qdata advance! !editing)
             ;; Forms5: Input! (tracked textarea) + Button! (tracked save), via
@@ -494,7 +494,7 @@
             ;; command persists the answer.
             (e/for [[t edit] (e/amb
                                (forms/Input! :exam/answer draft :as :textarea
-                                 :class "form-input" :rows 4
+                                 :class "form-input" :rows 4 :dir "auto"
                                  :placeholder "Answer in your own words — graded when you submit the exam"
                                  :aria-label "Your answer"
                                  :style {:width "100%" :resize "vertical"})
@@ -563,7 +563,7 @@
           ;; must never be re-enqueued or it would reappear immediately.
           leave-suspended! (fn [] (advance! true false))]
       (dom/div
-        (dom/h3 (dom/props {:style {:font-size "16px" :margin "14px 0"}})
+        (dom/h3 (dom/props {:dir "auto" :style {:font-size "16px" :margin "14px 0"}})
           (dom/text (str (:question qdata))))
         ;; Pre-answer a suspend is a skip; post-answer the grade already counted,
         ;; so it leaves as a completed review that will not come back.
@@ -578,7 +578,7 @@
             ;; keystroke); the submit command grades on the server.
             (e/for [[t edit] (e/amb
                                (forms/Input! :review/answer draft :as :textarea
-                                 :class "form-input" :rows 4
+                                 :class "form-input" :rows 4 :dir "auto"
                                  :placeholder "Answer in your own words…"
                                  :aria-label "Your answer"
                                  :style {:width "100%" :resize "vertical"})

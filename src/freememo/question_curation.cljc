@@ -225,14 +225,14 @@
             (dom/label (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
               (dom/text "Question"))
             (dom/textarea
-              (dom/props {:class "input" :rows 3 :aria-label "Question"
+              (dom/props {:class "input" :rows 3 :aria-label "Question" :dir "auto"
                           :value (or (:question q) "")
                           :style {:width "100%" :resize "vertical"}})
               (dom/On "input" (fn [ev] (reset! !question (.. ev -target -value))) nil))
             (dom/label (dom/props {:style {:font-size "13px" :color "var(--color-text-secondary)"}})
               (dom/text "Reference answer"))
             (dom/textarea
-              (dom/props {:class "input" :rows 5 :aria-label "Reference answer"
+              (dom/props {:class "input" :rows 5 :aria-label "Reference answer" :dir "auto"
                           :value (or (:reference_answer q) "")
                           :style {:width "100%" :resize "vertical"}})
               (dom/On "input" (fn [ev] (reset! !answer (.. ev -target -value))) nil))
