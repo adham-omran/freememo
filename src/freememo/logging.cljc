@@ -117,14 +117,14 @@
               :freememo.wayl/create-link
               :freememo.wayl/create-link-failed
               :freememo.wayl/get-link-status
-              ;; Ad spend, not revenue, but the same pool: both of these mean the
-              ;; Ads account is being billed for clicks whose conversions are no
-              ;; longer measured, so bidding optimizes against bad data. Neither
-              ;; raises anything user-visible. ::conversion-reported is
-              ;; deliberately absent — ::user-signup below already mails on every
-              ;; signup, so routing it too would double every one of them.
-              :freememo.google-ads/conversion-guard
-              :freememo.config/malformed-google-ads-conversion}}
+              ;; Deployment-hook failures, in the money pool because a configured
+              ;; hook that stops measuring leaves downstream spending decisions
+              ;; running on bad data. Neither raises anything user-visible.
+              ;; The hook's own success id is deliberately absent — ::user-signup
+              ;; below already mails on every signup, so routing it too would
+              ;; double every one of them.
+              :freememo.deployment-hook-impl/guard-failure
+              :freememo.deployment-hook-impl/config-malformed}}
       {:handler-id :alert/business-events
        :subject-tag "event"
        :min-level :info

@@ -3,16 +3,15 @@
     <head>
 	<meta charset="utf-8"/>
 
-	<!-- Google tag — composed per request by freememo.google-ads/shell-tag and
-	     substituted here by freememo.shell/wrap-prod-index-page, which both
-	     production entrypoints mount. Empty
-	     unless GOOGLE_ADS_CONVERSION is set, so self-host deployments emit no
-	     tag at all. The conversion event is inlined into the same <script> on
-	     the one landing response that follows a signup — never a second block,
-	     never hardcoded here. Do not put a Google tag in this file.
+	<!-- This deployment's head contribution — composed per request by
+	     freememo.deployment-hook/shell-head and substituted here by
+	     freememo.shell/wrap-prod-index-page, which both production entrypoints
+	     mount. Empty on a deployment that adds nothing, which is the default.
+	     Never write third-party markup into this file: anything here ships to
+	     every deployment, including self-hosted ones, with no way to turn it off.
 	     Deliberately absent from index.dev.html / index.metadata.html so local
-	     dev traffic never enters Ads conversion or audience data. -->
-	$:freememo/google-tag$
+	     dev traffic never reaches a third party. -->
+	$:freememo/deployment-head$
 
 	<title>FreeMemo</title>
 	<meta name="viewport" content="width=device-width, initial-scale=1">
@@ -37,8 +36,6 @@
 	     card type has no Open Graph equivalent. -->
 	<meta name="twitter:card" content="summary_large_image">
 
-	<!-- Google AdSense site verification. -->
-	<meta name="google-adsense-account" content="ca-pub-2105898724643889">
 	<!-- Open Sans, self-hosted (committed text; its woff2 files live in the
 	     gitignored vendor tree). A <link> rather than index.css's old @import:
 	     an @import chained a second request behind our own stylesheet. -->

@@ -10,13 +10,14 @@
    Two substitutions, and they differ in lifetime:
      - the compiled javascript module paths, read once from the shadow-cljs
        manifest and fingerprinted for cache busting;
-     - the Google tag, resolved per request because it carries the signup
-       conversion event exactly once (see `freememo.google-ads`)."
+     - this deployment's head contribution, resolved per request because it may
+       carry a one-shot event (see `freememo.deployment-hook`). It is \"\" on a
+       deployment that adds nothing, which is the default."
   (:require
    [clojure.edn :as edn]
    [clojure.java.io :as io]
    [clojure.string :as str]
-   [freememo.google-ads :as google-ads]
+   [freememo.deployment-hook :as hook]
    [ring.util.response :as ring-response]))
 
 (defn template
@@ -57,7 +58,7 @@
    inspects neither method nor path, so it is the catch-all for everything no API
    route and no static resource matched. Falls through to `next-handler` only when
    the shell itself is missing from the classpath.
-   `:session` is attached only when `google-ads/shell-tag` returns one; attaching
+   `:session` is attached only when `hook/shell-head` returns one; attaching
    nil would DELETE the session, because ring rewrites the cookie whenever the
    response map contains the key."
   [next-handler config]
@@ -67,10 +68,10 @@
     (if-let [response (ring-response/resource-response
                         (str (:resources-path config) "/freememo/index.prod.html"))]
       (if-let [module (compiled-javascript-modules (:manifest-path config))]
-        (let [{:keys [html session]} (google-ads/shell-tag ring-req)]
+        (let [{:keys [html session]} (hook/shell-head ring-req)]
           (cond-> (-> (ring-response/response
                         (template (slurp (:body response))
-                          (merge config module {:freememo/google-tag html})))
+                          (merge config module {:freememo/deployment-head html})))
                     (ring-response/content-type "text/html")
                     ;; never cache – this is dynamically generated content.
                     (ring-response/header "Cache-Control" "no-store"))

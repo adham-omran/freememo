@@ -64,36 +64,31 @@ Format contract (see freememo.changelog):
 
 ### Technical
 
-<!-- Google Ads conversion landed after this release was cut. Move these four
-     entries into the next `## <version>` block when you cut it. They sit here
-     rather than in an `## Unreleased` block because `changelog/latest-release`
-     takes the first `## ` block, so an Unreleased block would make
-     `broadcast-latest!` silently send nothing. `### Technical` is never
-     broadcast, so their placement here reaches no subscriber. -->
+<!-- These entries landed after this release was cut. Move them into the next
+     `## <version>` block when you cut it. They sit here rather than in an
+     `## Unreleased` block because `changelog/latest-release` takes the first
+     `## ` block, so an Unreleased block would make `broadcast-latest!` silently
+     send nothing. `### Technical` is never broadcast, so their placement here
+     reaches no subscriber. -->
 
-- **`freememo.google-ads`** — Google Ads signup conversion, reported server-side
-  because the app has no conversion page. Every unmatched path is served the same
-  shell and the OAuth callback redirects new and returning users alike, so a
-  snippet in the head would report a conversion on every page load by every
-  visitor. Instead the callback arms the session with the path it redirects to,
-  and the next real navigation to exactly that path gets the event call inlined
-  into the Google tag. `navigation-request?` rejects a HEAD and a prefetch: both
-  reach the shell handler, and both would spend the flag on a response that never
-  runs the script. An `ads_conversion_sent` `user_events` row stops a replay.
-  That row is advisory, because the table has no unique constraint, and Ads
-  counting mode **One** is what absorbs the concurrent case.
-- **`GOOGLE_ADS_CONVERSION` gates the whole tag, base tag included.**
-  `index.prod.html` holds a `$:freememo/google-tag$` placeholder and no hardcoded
-  id. Before this, every self-hosted instance reported into our Ads account on
-  every page load. The official deployment supplies the value through the mounted
-  `config.edn`, and self-host uses the env var.
+- **`freememo.deployment-hook`** — a seam for behavior a particular deployment
+  adds and the app itself does not need. Two entry points: one may annotate the
+  session of a newly created account, and one may contribute markup to a single
+  shell response. Both are no-ops here: the implementation namespace is optional
+  and resolves dynamically, so a build without it emits an empty head and arms no
+  session. That is the default, and it is what a self-hosted instance runs.
+- **No third-party markup ships in the HTML shells.** `index.prod.html` holds one
+  `$:freememo/deployment-head$` placeholder and no vendor id of any kind.
+  `index.dev.html` and `index.metadata.html` hold neither, so local dev reaches no
+  third party. Before this, a hardcoded verification tag put one publisher id on
+  every self-hosted page with no way to turn it off.
 - **`freememo.shell`** — `wrap-prod-index-page`, `template` and the manifest
   reader moved here out of `prod.cljc` and `prod_jetty9.cljc`, which carried
   byte-identical copies. Both entrypoints now mount one handler. Verified by
   booting both and diffing the served head region.
-- **Consent Mode v2 is not implemented.** Google requires a consent signal for
-  EEA and UK traffic, and this tag sends none. See
-  `plans/google-ads-signup-conversion.md` §8.1.
+- **`config/env-or-config` is public.** Deployment values resolve env-first and
+  fall back to `config.edn`. Callers outside `freememo.config` now reuse that
+  precedence instead of reimplementing it.
 - **`upload_sessions`** — was `video_upload_sessions`, renamed in place at boot when
   the old table is present. One flow-discriminated table backs both flows, so the
   orphan-object sweep still names exactly one table. New `archive_path` column caches

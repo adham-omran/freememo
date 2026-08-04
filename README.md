@@ -232,7 +232,6 @@ Schema auto-creates on first startup (no migration framework). Configure via env
 | `GOOGLE_CLIENT_ID` | _(none)_ | Google OAuth client ID. Required when `AUTH_MODE` is `google`/`both`. |
 | `GOOGLE_CLIENT_SECRET` | _(none)_ | Google OAuth client secret. |
 | `GOOGLE_REDIRECT_URI` | `http://localhost:8080/auth/google/callback` | Must match the URI registered in Google Cloud Console. |
-| `GOOGLE_ADS_CONVERSION` | _(none)_ | Google Ads conversion identity, `AW-<id>/<label>`. Unset ⇒ **no Google tag is served at all**, so no page load reaches `googletagmanager.com`. Set it and every page load makes that third-party request, and a new sign-up reports one conversion. |
 
 Alternative to the three `GOOGLE_*` envs: drop the OAuth client JSON downloaded from Google Cloud Console at `resources/google_client.json` (gitignored).
 

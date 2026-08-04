@@ -85,8 +85,8 @@
 (defn find-or-create-user
   "Look up or create a user row for the given Google identity.
    Returns {:user-id ... :username ... :enc-key ... :new? ...}.
-   `:new?` is true only on the sign-up path — the caller needs it to report the
-   Ads conversion (freememo.google-ads) and must not infer it any other way."
+   `:new?` is true only on the sign-up path — the caller passes it to
+   `freememo.deployment-hook/on-signup` and must not infer it any other way."
   [google-sub email display-name]
   (let [username (or (first (clojure.string/split (or email "") #"@"))
                      (str "user-" (subs google-sub 0 8)))

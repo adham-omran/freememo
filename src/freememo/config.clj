@@ -4,7 +4,8 @@
    1. Secrets — env vars only, never committed (Wayl token, webhook secret,
       platform OpenRouter key).
    2. Deployment flags — env vars (CREDITS_ENABLED, WAYL_HOST, WAYL_LINK_ENV).
-   3. Economic tunables — config.edn (gitignored); config.example.edn committed.
+   3. Economic tunables — config.edn; config.example.edn committed. config.edn is
+      TRACKED in git, not gitignored — see the warning below.
 
    config.edn is read once at load from the working directory (or classpath
    fallback). Editing it requires a restart — pricing must not drift mid-run."
@@ -29,9 +30,11 @@
 ;; is untracked and those credentials are rotated, treat every :secrets value as
 ;; published: prefer env vars for anything newly added.
 
-(defn- env-or-config
+(defn env-or-config
   "Resolve `env-var` from env, falling back to `config-path` in config.edn.
-   Returns nil if neither is set."
+   Returns nil if neither is set.
+   Public because namespaces outside this one resolve their own deployment keys
+   and MUST NOT reimplement this precedence."
   [env-var config-path]
   (or (some-> (System/getenv env-var) str/trim not-empty)
       (get-in config config-path)))
@@ -82,51 +85,11 @@
     (not (or (false? v)
              (= "false" (some-> v str str/lower-case str/trim))))))
 
-;; ── Google Ads conversion tracking ──
-;;
-;; ONE var carries both values the Google tag needs, so they cannot drift apart
-;; and one absent value removes the whole tag (base tag included — that is what
-;; keeps self-host deployments out of our Ads account). The value reaches an
-;; inline <script>, so a malformed value would be script injection: anything
-;; that does not match `conversion-pattern` is treated as absent.
-
-(def ^:private conversion-pattern
-  "Google Ads send-to: `AW-<conversion id>/<conversion label>`."
-  #"AW-\d+/[A-Za-z0-9_-]+")
-
-(defn- parse-google-ads-conversion
-  "Configured send-to string → conversion identity, or nil.
-   Pre: `raw` is whatever the env var or config.edn holds (any type, or nil).
-   Post: nil for blank and for anything not matching `conversion-pattern`;
-   otherwise {:send-to :tag-id} where neither value can contain a quote or an
-   angle bracket. A malformed value logs exactly one :warn.
-   Pure apart from that log — the caching lives in `google-ads-conversion*`."
-  [raw]
-  (let [raw (some-> raw str str/trim not-empty)]
-    (cond
-      (nil? raw) nil
-
-      (re-matches conversion-pattern raw)
-      {:send-to raw :tag-id (subs raw 0 (str/index-of raw "/"))}
-
-      :else
-      (do (tel/log! {:level :warn :id ::malformed-google-ads-conversion
-                     :data {:value raw}}
-            "GOOGLE_ADS_CONVERSION does not match AW-<id>/<label> — Google tag disabled")
-          nil))))
-
-(defonce ^:private google-ads-conversion*
-  (delay (parse-google-ads-conversion
-           (env-or-config "GOOGLE_ADS_CONVERSION"
-             [:deployment :google-ads-conversion]))))
-
-(defn google-ads-conversion
-  "Google Ads conversion identity, or nil when unconfigured or malformed.
-   Post: nil, or {:send-to \"AW-123/abc\" :tag-id \"AW-123\"} where neither
-   value can contain a quote or an angle bracket (see `conversion-pattern`).
-   Read and validated once — a change needs a restart, as with `credentials`."
-  []
-  @google-ads-conversion*)
+;; Values a deployment MAY add on top of the app itself are not read here — they
+;; belong to `freememo.deployment-hook` and its optional implementation, which
+;; resolves them through `env-or-config` above. Keeping their patterns out of
+;; this namespace is what lets that implementation be excluded from public
+;; history without leaving its vocabulary behind.
 
 (defn platform-openrouter-api-key
   "OpenRouter key for the OCR model picker (topology A1: all OCR lanes route

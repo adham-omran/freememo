@@ -86,10 +86,6 @@ services:
       GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
       GOOGLE_REDIRECT_URI: "${GOOGLE_REDIRECT_URI:-}"
       APP_BASE_URL: "${APP_BASE_URL:-http://localhost:8080}"
-      # Google Ads conversion tracking — "AW-<id>/<label>". Leave unset (the
-      # default) and no Google tag is served at all: no page load reaches
-      # googletagmanager.com and nothing is reported to any Ads account.
-      GOOGLE_ADS_CONVERSION: "${GOOGLE_ADS_CONVERSION:-}"
       LOG_LEVEL: "${LOG_LEVEL:-info}"
       STORAGE_QUOTA_BYTES: "${STORAGE_QUOTA_BYTES:-0}"
       STORAGE_PER_FILE_MAX_BYTES: "${STORAGE_PER_FILE_MAX_BYTES:-0}"
