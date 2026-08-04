@@ -77,6 +77,21 @@ Format contract (see freememo.changelog):
   shell response. Both are no-ops here: the implementation namespace is optional
   and resolves dynamically, so a build without it emits an empty head and arms no
   session. That is the default, and it is what a self-hosted instance runs.
+- **freememo.net now shows ads. A self-hosted build never does.** The ad script is
+  a third contribution to the deployment hook, so it is gated the same way the
+  rest of that markup is: a build without the optional implementation namespace
+  fetches nothing and shows nothing. Nothing in the client renders an ad unit.
+  <!-- This change IS user-visible. Write the `### For users` line when the next
+       release is cut, or drop it deliberately. It is here rather than there
+       because `### Technical` never broadcasts, and this entry landed after
+       v20260803 was cut. Keep the wording free of key names and publisher ids —
+       CHANGELOG.md is NOT in tools/publish-clean/EXCLUDED. -->
+
+<!-- Deliberately not recorded here: the config key names, the vendor, the script
+     URL and the reader that validates the configured values. CHANGELOG.md is
+     public, and the committed file names no ad vendor anywhere. That detail
+     lives in CLAUDE.md and in plans/, both excluded. -->
+
 - **No third-party markup ships in the HTML shells.** `index.prod.html` holds one
   `$:freememo/deployment-head$` placeholder and no vendor id of any kind.
   `index.dev.html` and `index.metadata.html` hold neither, so local dev reaches no
