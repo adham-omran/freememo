@@ -20,9 +20,14 @@
 
 ;; ── Deployment flags + secrets — env first, config.edn fallback ──
 ;;
-;; Env vars take precedence (matches 12-factor / CI patterns). config.edn is
-;; gitignored, so storing secrets there is no less safe than env — it's just
-;; less ergonomic for multi-stage deploys. Either source works.
+;; Env vars take precedence (matches 12-factor / CI patterns).
+;;
+;; WARNING: config.edn is NOT gitignored in this repo — `git ls-files config.edn`
+;; lists it, and its history already carries the Wayl token, the platform
+;; OpenRouter key and the SMTP password. This comment previously claimed the
+;; opposite and used that claim to justify putting secrets there. Until the file
+;; is untracked and those credentials are rotated, treat every :secrets value as
+;; published: prefer env vars for anything newly added.
 
 (defn- env-or-config
   "Resolve `env-var` from env, falling back to `config-path` in config.edn.

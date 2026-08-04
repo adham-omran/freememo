@@ -15,11 +15,11 @@
    #?(:clj clojure.edn)
    #?(:clj clojure.java.io)
    #?(:clj [clojure.tools.logging :as log])
-   #?(:clj [freememo.google-ads :as google-ads])))
+   #?(:clj [freememo.shell :as shell])))
 
 (defmacro comptime-resource [filename] (some-> filename clojure.java.io/resource slurp clojure.edn/read-string))
 
-(declare wrap-prod-index-page wrap-ensure-cache-bust-on-server-deployment)
+(declare wrap-ensure-cache-bust-on-server-deployment)
 
 #?(:clj ; server entrypoint
    (defn -main [& {:strs [http-port] :as args}] ; clojure.main entrypoint, args are strings
@@ -39,7 +39,7 @@
        (assert (string? (:hyperfiddle/electric-user-version config)))
        (ring/run-jetty
          (-> (fn [ring-request] (-> (ring-response/not-found "Page not found") (ring-response/content-type "text/plain")))
-           (wrap-prod-index-page config) ; defined below
+           (shell/wrap-prod-index-page config)
            (wrap-resource (:resources-path config))
            (wrap-content-type)
            (wrap-not-modified)
@@ -65,51 +65,11 @@
 
 
 #?(:clj
-   (defn template
-     "In string template `\"<div>$:foo/bar$</div>\"`, replace all instances of $key$
-  with target specified by map `m`. Target values are coerced to string with `str`.
-  E.g. (template \"<div>$:foo$</div>\" {:foo 1}) => \"<div>1</div>\" - 1 is coerced to string."
-     [t m] (reduce-kv (fn [acc k v] (clojure.string/replace acc (str "$" k "$") (str v))) t m)))
-
-#?(:clj
-   (defn get-compiled-javascript-modules [manifest-path]
-     (when-let [manifest (clojure.java.io/resource manifest-path)]
-       (let [manifest-folder (when-let [folder-name (second (rseq (clojure.string/split manifest-path #"\/")))]
-                               (str folder-name "/"))]
-         (->> (slurp manifest)
-           (clojure.edn/read-string)
-           (reduce (fn [r module] (assoc r (keyword "hyperfiddle.client.module" (name (:name module)))
-                                    (str manifest-folder (:output-name module)))) {}))))))
-
-#?(:clj
    (defn wrap-ensure-cache-bust-on-server-deployment [next-handler]
      (fn [ring-req]
        (-> (next-handler ring-req)
          (ring-response/update-header "Cache-Control" (fn [cache-control] (or cache-control "public, max-age=0, must-revalidate")))))))
 
-#?(:clj
-   (defn wrap-prod-index-page
-     "Serves `index.prod.html` with injected javascript modules from `manifest.edn`.
-  `manifest.edn` is generated at client build time and contains javascript modules
-  information (e.g. file location and file hash)."
-     [next-handler config]
-     (fn [ring-req]
-       (assert (string? (:resources-path config)))
-       (assert (string? (:manifest-path config)))
-       (if-let [response (ring-response/resource-response (str (:resources-path config) "/freememo/index.prod.html"))]
-         (if-let [module (get-compiled-javascript-modules (:manifest-path config))]
-           ;; Same shape as prod.cljc — one shared helper, no second copy of the
-           ;; logic. This entrypoint installs no wrap-session and no auth routes,
-           ;; so `shell-tag` never sees an armed session here and always returns
-           ;; the tag without the conversion event.
-           (let [{:keys [html session]} (google-ads/shell-tag ring-req)]
-             (cond-> (-> (ring-response/response
-                           (template (slurp (:body response))
-                             (merge config module {:freememo/google-tag html})))
-                       (ring-response/content-type "text/html")
-                       (ring-response/header "Cache-Control" "no-store")) ; never cache – this is dynamically generated content.
-               session (assoc :session session)))
-           (-> (ring-response/not-found (pr-str ::missing-shadow-build-manifest)) ; can't inject js modules
-             (ring-response/content-type "text/plain")))
-         ;; else – index.prod.html wasn't not found on classpath
-         (next-handler ring-req)))))
+;; wrap-prod-index-page lives in freememo.shell — prod mounts the same one. This
+;; entrypoint installs no wrap-session and no auth routes, so the shell's Google
+;; tag never sees an armed session here and never carries the conversion event.

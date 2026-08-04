@@ -4,7 +4,8 @@
 	<meta charset="utf-8"/>
 
 	<!-- Google tag — composed per request by freememo.google-ads/shell-tag and
-	     substituted here (see src-prod/prod.cljc/wrap-prod-index-page). Empty
+	     substituted here by freememo.shell/wrap-prod-index-page, which both
+	     production entrypoints mount. Empty
 	     unless GOOGLE_ADS_CONVERSION is set, so self-host deployments emit no
 	     tag at all. The conversion event is inlined into the same <script> on
 	     the one landing response that follows a signup — never a second block,

@@ -64,6 +64,36 @@ Format contract (see freememo.changelog):
 
 ### Technical
 
+<!-- Google Ads conversion landed after this release was cut. Move these four
+     entries into the next `## <version>` block when you cut it. They sit here
+     rather than in an `## Unreleased` block because `changelog/latest-release`
+     takes the first `## ` block, so an Unreleased block would make
+     `broadcast-latest!` silently send nothing. `### Technical` is never
+     broadcast, so their placement here reaches no subscriber. -->
+
+- **`freememo.google-ads`** — Google Ads signup conversion, reported server-side
+  because the app has no conversion page. Every unmatched path is served the same
+  shell and the OAuth callback redirects new and returning users alike, so a
+  snippet in the head would report a conversion on every page load by every
+  visitor. Instead the callback arms the session with the path it redirects to,
+  and the next real navigation to exactly that path gets the event call inlined
+  into the Google tag. `navigation-request?` rejects a HEAD and a prefetch: both
+  reach the shell handler, and both would spend the flag on a response that never
+  runs the script. An `ads_conversion_sent` `user_events` row stops a replay.
+  That row is advisory, because the table has no unique constraint, and Ads
+  counting mode **One** is what absorbs the concurrent case.
+- **`GOOGLE_ADS_CONVERSION` gates the whole tag, base tag included.**
+  `index.prod.html` holds a `$:freememo/google-tag$` placeholder and no hardcoded
+  id. Before this, every self-hosted instance reported into our Ads account on
+  every page load. The official deployment supplies the value through the mounted
+  `config.edn`, and self-host uses the env var.
+- **`freememo.shell`** — `wrap-prod-index-page`, `template` and the manifest
+  reader moved here out of `prod.cljc` and `prod_jetty9.cljc`, which carried
+  byte-identical copies. Both entrypoints now mount one handler. Verified by
+  booting both and diffing the served head region.
+- **Consent Mode v2 is not implemented.** Google requires a consent signal for
+  EEA and UK traffic, and this tag sends none. See
+  `plans/google-ads-signup-conversion.md` §8.1.
 - **`upload_sessions`** — was `video_upload_sessions`, renamed in place at boot when
   the old table is present. One flow-discriminated table backs both flows, so the
   orphan-object sweep still names exactly one table. New `archive_path` column caches

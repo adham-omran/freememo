@@ -1,8 +1,11 @@
 ;; FreeMemo credit system configuration.
 ;;
-;; Copy this file to `config.edn` (gitignored) and fill real values.
+;; Copy this file to `config.edn` and fill real values.
 ;; config.edn is read once at startup from the working directory — restart to
 ;; pick up changes.
+;;
+;; WARNING: config.edn is currently TRACKED in git, not gitignored. Anything you
+;; put under :secrets is committed. See the warning in freememo.config.
 ;;
 ;; Three sections:
 ;;   :credits     — economic tunables (rates, FX, markup, presets, grants).

@@ -738,10 +738,14 @@
                (catch Exception e (tel/error! {:id ::signup-grant} e)))
           ;; `new?` is the only signal that this is a signup rather than a login,
           ;; and it survives only as far as the session — the shell response this
-          ;; redirect provokes is what reports the Ads conversion.
-          {:status 302
-           :headers {"Location" google-ads/signup-landing-path}
-           :session (google-ads/mark-conversion-pending {:user-id user-id} new?)})
+          ;; redirect provokes is what reports the Ads conversion. `landing` is
+          ;; bound once and used twice on purpose: the conversion may only be
+          ;; reported on a request for the path we send the browser to, so the
+          ;; two must be the same value, not two literals that agree today.
+          (let [landing "/"]
+            {:status 302
+             :headers {"Location" landing}
+             :session (google-ads/mark-conversion-pending {:user-id user-id} new? landing)}))
         (catch Exception e
           (tel/error! {:id ::google-callback-handler} e)
           {:status 302
