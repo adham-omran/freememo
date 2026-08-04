@@ -62,9 +62,13 @@
 ;; Views
 ;; ---------------------------------------------------------------------------
 
+;; Both maps below are applied as a text `color` on the card/page background
+;; (RenderFeedback, quiz-dashboard rows), so every colour MUST be a theme token:
+;; --color-warning-dark replaced a raw `#b26a00`, which was 3.46:1 in dark and
+;; 4.24:1 in light — the only two non-tokenized entries across both maps.
 (def verdict-badge
   {"correct"   ["✓ Correct" "var(--color-success-dark, #2e7d32)"]
-   "partial"   ["◐ Partial" "#b26a00"]
+   "partial"   ["◐ Partial" "var(--color-warning-dark, #b26a00)"]
    "incorrect" ["✗ Incorrect" "var(--color-danger, #c62828)"]})
 
 (def rating-badge
@@ -73,7 +77,7 @@
    the review-history list. A self-graded review has no verdict, so this is what its
    row shows instead of an empty badge (plans/cards-in-quiz-queue.md §8.2)."
   {1 ["Again" "var(--color-danger, #c62828)"]
-   2 ["Hard" "#b26a00"]
+   2 ["Hard" "var(--color-warning-dark, #b26a00)"]
    3 ["Good" "var(--color-success-dark, #2e7d32)"]
    4 ["Easy" "var(--color-primary, #1565c0)"]})
 

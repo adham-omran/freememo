@@ -155,7 +155,8 @@
               (dom/On "click" (fn [_] (reset! !active-id id)) nil)
               (case st
                 :converting (dom/text "…")
-                :error (dom/div (dom/props {:style {:color "#c0392b" :padding "4px"
+                :error (dom/div (dom/props {:style {:color "var(--color-danger-text, #c0392b)"
+                                                    :padding "4px"
                                                     :text-align "center"}})
                          (dom/text "!"))
                 (e/for-by identity [_k [[(:rotation entry) (:crop entry)]]]
@@ -210,7 +211,9 @@
               (case (:status active)
                 :converting (dom/div (dom/props {:style {:padding "40px" :font-size "13px"}})
                               (dom/text "Preparing…"))
-                :error (dom/div (dom/props {:style {:padding "40px" :color "#c0392b" :font-size "13px"}})
+                :error (dom/div (dom/props {:style {:padding "40px"
+                                                   :color "var(--color-danger-text, #c0392b)"
+                                                   :font-size "13px"}})
                          (dom/text (or (:error active) "Couldn’t read this image")))
                 (e/for-by identity [[aid _rot] [[active-id active-rot]]]
                   (dom/div
@@ -233,7 +236,8 @@
           (StagingStrip staged active-id !active-id remove!)
 
           (when commit-error
-            (dom/div (dom/props {:style {:color "#c0392b" :font-size "12px"}})
+            (dom/div (dom/props {:style {:color "var(--color-danger-text, #c0392b)"
+                                         :font-size "12px"}})
               (dom/text commit-error)))
 
           ;; Footer: add another + commit.

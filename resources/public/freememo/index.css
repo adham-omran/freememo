@@ -1688,15 +1688,38 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
 .tree-title:hover { text-decoration: underline; }
 
 /* ── Inline <code> ───────────────────────────────────────────── */
-/* Mirrors the Anki-side pill at freememo-anki.css:97-99 so the editor
-   renders inline code with the same affordance the learner will see. */
-.ql-editor :not(pre) > code {
-    font-family: monospace;
-    background: #f5f5f5;
-    padding: 1px 4px;
-    border-radius: 2px;
+/* Mirrors the Anki-side pill (freememo-anki.css `:not(pre) > code` for light,
+   `.nightMode :not(pre) > code` for dark) so the editor renders inline code
+   with the same affordance the learner will see. freememo-anki.css is NOT
+   loaded in-app — it is served to Anki — so the dark half has to be restated
+   here.
+
+   BOTH themes MUST be given a `color`. Quill ships
+   `.ql-snow .ql-editor code` / `.ql-bubble .ql-editor code {background-color:#f0f0f0}`
+   at specificity (0,2,1), which outranks a bare `.ql-editor :not(pre) > code`
+   (0,1,2) — so the pill was ALWAYS Quill's near-white `#f0f0f0` while the text
+   inherited --color-text-primary (`#e5e7eb` in dark): 1.09:1, invisible. Hence
+   the theme prefixes below, which take this to (0,2,2) and win, and hence the
+   explicit `color` — a background alone re-creates the bug on the other theme.
+   Keep the two selectors: they name exactly the rules being beaten. */
+.ql-snow .ql-editor :not(pre) > code,
+.ql-bubble .ql-editor :not(pre) > code {
+    font-family: "Fira Code", Menlo, Consolas, "Liberation Mono", monospace;
     font-size: 0.9em;
+    padding: 0.1em 0.4em;
+    background: light-dark(#f0f0f0, #2c313a);
+    border: 1px solid light-dark(#ddd, #3e4451);
+    border-radius: 3px;
+    color: light-dark(#24292e, #e6e6e6);
 }
+
+/* Links inside either editor. Quill snow ships `.ql-snow a{color:#06c}`
+   (0,2,0) — `#0066cc` on the dark card background is 2.64:1 — and bubble ships
+   nothing, so the doc editor fell back to the UA dark-scheme link colour and
+   the two editors disagreed. --color-primary-text is the accent-TEXT role
+   (5.17:1 light, 5.77:1 dark on card). (0,2,1) beats snow's rule. */
+.ql-snow .ql-editor a,
+.ql-bubble .ql-editor a { color: var(--color-primary-text); }
 
 /* ── highlight.js Token Palette (in-editor) ──────────────────── */
 /* Quill snow.css keeps `.ql-code-block-container` on a dark olive
@@ -4020,7 +4043,10 @@ form[aria-busy="true"] {
     top: 0;
     z-index: 1000;
     padding: 8px 16px;
-    background: var(--color-bg-primary, #fff);
+    /* --color-bg-card, NOT --color-bg-primary: that token does not exist (it was
+       this file's only mention of it), so the `#fff` fallback always won and
+       dark mode put --color-primary-text `#60a5fa` on white at 2.54:1. */
+    background: var(--color-bg-card);
     color: var(--color-primary-text);
     border: 2px solid var(--color-primary);
     border-radius: 4px;
@@ -4058,6 +4084,40 @@ form[aria-busy="true"] {
    the theme text (#e5e7eb) sits on them at ~1:1. Force dark text on any
    inline-highlighted span, both themes (dark-on-pastel passes both). */
 .ql-editor [style*="background-color"] { color: #111; }
+
+/* The dual of the rule above, for inline TEXT colour, dark mode only.
+   format-menu's presets and OCR/EPUB imports write `style="color:#…"` chosen
+   against a light page: 7 of the 9 presets fall under 4.5:1 on the dark editor
+   background (Brown #64473a is 1.75:1). One hex cannot serve both themes — Gray
+   #9b9a97 is 5.22:1 dark but 2.60:1 light — so dark mode drops the hue and
+   restores the theme text colour. Light mode keeps every authored colour.
+
+   Three details are each load-bearing:
+   • `!important` is REQUIRED. Unlike the background rule above, which sets a
+     DIFFERENT property than the inline style it keys off, this rule sets the
+     very property the inline style declares — and inline wins every
+     non-important stylesheet declaration.
+   • `:not([style*="background-color"])` is REQUIRED. `[style*="color:"]`
+     substring-matches `background-color:` too, so without it a pastel-highlight
+     span would take the light theme text colour and land back at ~1:1,
+     silently undoing the rule above (this selector outranks it at (0,4,1)).
+   • The theme test is on `body`, NOT `:root` — main.cljc binds dom/node to
+     js/document.body before writing :data-theme. `:not([data-theme="light"])`
+     covers the "auto" setting, which writes no attribute at all.
+
+   Scope note: `.ql-editor` only, matching the background rule's scope. The same
+   stored colours also render in card-table rows, quiz fields and the assistant
+   transcript, which share no common container class — widening this needs a
+   seam that does not exist yet, and the background rule above has the identical
+   gap. */
+@media (prefers-color-scheme: dark) {
+    body:not([data-theme="light"]) .ql-editor [style*="color:"]:not([style*="background-color"]) {
+        color: var(--color-text-primary) !important;
+    }
+}
+body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-color"]) {
+    color: var(--color-text-primary) !important;
+}
 
 /* Reference-list links in imported documents: give the anchor a ≥24px hit box
    (WCAG 2.5.8) — list rows of stacked short citation links measured 18.5px. */

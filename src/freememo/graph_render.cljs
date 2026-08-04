@@ -14,7 +14,10 @@
    npm step. JS objects are ^js-hinted so :advanced does not rename their
    (extern-less) methods.
 
-   ctx = {:renderer <Sigma> :graph <graphology.Graph> :ui <atom>}."
+   ctx = {:renderer <Sigma> :graph <graphology.Graph> :ui <atom>
+          :stop-label-colour! <0-arg fn>}.
+   :stop-label-colour! detaches the theme listeners that keep canvas-drawn
+   labels readable — destroy! owns calling it; nothing else may."
   (:require [clojure.string :as str]))
 
 (defn- sigma-ctor [] (.-Sigma js/window))
@@ -99,6 +102,43 @@
         (merge-js data {:hidden true})
         :else data))))
 
+(defn- inherited-text-colour
+  "The container's computed CSS `color`. index.css sets `color` from
+   --color-text-primary on body, so this resolves to whatever the ACTIVE theme
+   computes — an explicit body[data-theme], or the OS preference under \"auto\".
+   Pre: `container` is attached to the document (else the cascade has no root to
+   inherit through). Post: an rgb() string, never nil."
+  [^js container]
+  (.-color (js/getComputedStyle container)))
+
+(defn- track-label-colour!
+  "Keep sigma's labelColor in step with the theme, and return a 0-arg stop fn.
+
+   Labels are drawn on canvas, so they never see the CSS cascade; sigma's
+   default is labelColor {color: \"#000\"}, which is 1.43:1 on the dark page
+   background (#111827) — every label but the hovered one (sigma paints that
+   over a #FFF halo) was invisible. Reading the inherited colour keeps one
+   source of truth for \"what colour is text\" instead of a second palette here.
+
+   Two triggers, and both are needed: main.cljc writes body[data-theme] for an
+   explicit choice, and under \"auto\" it writes no attribute at all, so the OS
+   preference moves with no DOM mutation to observe.
+
+   Post: labelColor equals (inherited-text-colour container) until the returned
+   stop fn runs. Invariant: one observer + one media listener per live ctx —
+   destroy! MUST call the stop fn or both outlive the killed renderer."
+  [^js renderer ^js container]
+  (let [sync! (fn [_]
+                ;; setSetting schedules its own refresh — do not add one.
+                (.setSetting renderer "labelColor"
+                  #js {:color (inherited-text-colour container)}))
+        ^js obs (js/MutationObserver. sync!)
+        ^js mq (.matchMedia js/window "(prefers-color-scheme: dark)")]
+    (.observe obs js/document.body #js {:attributes true
+                                        :attributeFilter #js ["data-theme"]})
+    (.addEventListener mq "change" sync!)
+    (fn [] (.disconnect obs) (.removeEventListener mq "change" sync!))))
+
 (defn init!
   "Create a sigma renderer over `container` for `payload`. Wires clickNode →
    (on-select entity-id-int), clickStage → (on-select nil), and hover
@@ -117,8 +157,10 @@
                                 :labelRenderedSizeThreshold 12
                                 :defaultNodeColor "#5b8def"
                                 :defaultEdgeColor "#dbe0e8"
+                                :labelColor #js {:color (inherited-text-colour container)}
                                 :nodeReducer (node-reducer g !ui)
-                                :edgeReducer (edge-reducer g !ui)})]
+                                :edgeReducer (edge-reducer g !ui)})
+            stop-label-colour! (track-label-colour! renderer container)]
         (recompute-visibility! g !ui)
         (.refresh renderer)
         (.on renderer "clickNode"
@@ -136,7 +178,8 @@
           (fn [^js e] (swap! !ui assoc :hover (.-node e)) (.refresh renderer)))
         (.on renderer "leaveNode"
           (fn [_] (swap! !ui assoc :hover nil) (.refresh renderer)))
-        {:renderer renderer :graph g :ui !ui}))))
+        {:renderer renderer :graph g :ui !ui
+         :stop-label-colour! stop-label-colour!}))))
 
 (defn apply-filters!
   "Set the filter state (source topic-id or :all; pred-set = allowed pred idx
@@ -175,5 +218,10 @@
               #js {:x (.-x disp) :y (.-y disp) :ratio 0.35}
               #js {:duration 500})))))))
 
-(defn destroy! [ctx]
+(defn destroy!
+  "Kill the renderer and detach the theme listeners track-label-colour!
+   registered. Both MUST go: they close over the renderer and would call
+   setSetting on a killed instance on the next theme change."
+  [ctx]
+  (when-let [stop! (:stop-label-colour! ctx)] (stop!))
   (when-let [^js r (:renderer ctx)] (.kill r)))
