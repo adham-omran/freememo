@@ -24,6 +24,7 @@
    #?(:clj [freememo.api :as api])
    #?(:clj [freememo.auth :as auth])
    #?(:clj [freememo.google-oauth :as google-oauth])
+   #?(:clj [freememo.google-ads :as google-ads])
    #?(:clj [freememo.config :as config])
    #?(:clj [freememo.quota :as quota])))
 
@@ -252,9 +253,17 @@
        (assert (string? (:manifest-path config)))
        (if-let [response (ring-response/resource-response (str (:resources-path config) "/freememo/index.prod.html"))]
          (if-let [module (get-compiled-javascript-modules (:manifest-path config))]
-           (-> (ring-response/response (template (slurp (:body response)) (merge config module)))
-             (ring-response/content-type "text/html")
-             (ring-response/header "Cache-Control" "no-store")) ; never cache – this is dynamically generated content.
+           ;; The Google tag is per-request (it carries the signup conversion
+           ;; event exactly once), so it cannot live in `config` — that map is
+           ;; built once at boot. `:session` is attached only when non-nil:
+           ;; ring deletes the session when a response carries the key as nil.
+           (let [{:keys [html session]} (google-ads/shell-tag ring-req)]
+             (cond-> (-> (ring-response/response
+                           (template (slurp (:body response))
+                             (merge config module {:freememo/google-tag html})))
+                       (ring-response/content-type "text/html")
+                       (ring-response/header "Cache-Control" "no-store")) ; never cache – this is dynamically generated content.
+               session (assoc :session session)))
            (-> (ring-response/not-found (pr-str ::missing-shadow-build-manifest)) ; can't inject js modules
              (ring-response/content-type "text/plain")))
          ;; else – index.prod.html wasn't not found on classpath

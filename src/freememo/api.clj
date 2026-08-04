@@ -8,6 +8,7 @@
    [freememo.db :as db]
    [freememo.auth :as auth]
    [freememo.google-oauth :as google-oauth]
+   [freememo.google-ads :as google-ads]
    [freememo.extractor :as extractor]
    [freememo.html-cleaner :as cleaner]
    [freememo.quota :as quota]
@@ -731,13 +732,16 @@
               google-sub (str (:sub claims))
               email (str (:email claims))
               display-name (str (:name claims))
-              {:keys [user-id]} (google-oauth/find-or-create-user google-sub email display-name)]
+              {:keys [user-id new?]} (google-oauth/find-or-create-user google-sub email display-name)]
           ;; One-time signup credit grant (idempotent; no-op in self-host).
           (try (db/grant-signup-credits! user-id)
                (catch Exception e (tel/error! {:id ::signup-grant} e)))
+          ;; `new?` is the only signal that this is a signup rather than a login,
+          ;; and it survives only as far as the session — the shell response this
+          ;; redirect provokes is what reports the Ads conversion.
           {:status 302
-           :headers {"Location" "/"}
-           :session {:user-id user-id}})
+           :headers {"Location" google-ads/signup-landing-path}
+           :session (google-ads/mark-conversion-pending {:user-id user-id} new?)})
         (catch Exception e
           (tel/error! {:id ::google-callback-handler} e)
           {:status 302

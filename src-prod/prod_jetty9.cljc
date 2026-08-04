@@ -14,7 +14,8 @@
 
    #?(:clj clojure.edn)
    #?(:clj clojure.java.io)
-   #?(:clj [clojure.tools.logging :as log])))
+   #?(:clj [clojure.tools.logging :as log])
+   #?(:clj [freememo.google-ads :as google-ads])))
 
 (defmacro comptime-resource [filename] (some-> filename clojure.java.io/resource slurp clojure.edn/read-string))
 
@@ -97,9 +98,17 @@
        (assert (string? (:manifest-path config)))
        (if-let [response (ring-response/resource-response (str (:resources-path config) "/freememo/index.prod.html"))]
          (if-let [module (get-compiled-javascript-modules (:manifest-path config))]
-           (-> (ring-response/response (template (slurp (:body response)) (merge config module)))
-             (ring-response/content-type "text/html")
-             (ring-response/header "Cache-Control" "no-store")) ; never cache – this is dynamically generated content.
+           ;; Same shape as prod.cljc — one shared helper, no second copy of the
+           ;; logic. This entrypoint installs no wrap-session and no auth routes,
+           ;; so `shell-tag` never sees an armed session here and always returns
+           ;; the tag without the conversion event.
+           (let [{:keys [html session]} (google-ads/shell-tag ring-req)]
+             (cond-> (-> (ring-response/response
+                           (template (slurp (:body response))
+                             (merge config module {:freememo/google-tag html})))
+                       (ring-response/content-type "text/html")
+                       (ring-response/header "Cache-Control" "no-store")) ; never cache – this is dynamically generated content.
+               session (assoc :session session)))
            (-> (ring-response/not-found (pr-str ::missing-shadow-build-manifest)) ; can't inject js modules
              (ring-response/content-type "text/plain")))
          ;; else – index.prod.html wasn't not found on classpath

@@ -1917,6 +1917,15 @@
                    :from [:user_events]
                    :where [:= :event_type event-type]}))))
 
+(defn user-has-event?
+  "Whether `user-id` already has at least one `event-type` row.
+   Post: boolean. Advisory only — `user_events` has no unique constraint, so a
+   concurrent check-then-insert pair can both see false."
+  [user-id event-type]
+  (some? (jdbc/execute-one! ds
+           ["SELECT 1 FROM user_events WHERE user_id = ? AND event_type = ? LIMIT 1"
+            user-id event-type])))
+
 (defn insert-user-event!
   "Record a user event. The 3-arity stores `metadata` as jsonb.
    Post: exactly one user_events row inserted."

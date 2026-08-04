@@ -77,6 +77,52 @@
     (not (or (false? v)
              (= "false" (some-> v str str/lower-case str/trim))))))
 
+;; ── Google Ads conversion tracking ──
+;;
+;; ONE var carries both values the Google tag needs, so they cannot drift apart
+;; and one absent value removes the whole tag (base tag included — that is what
+;; keeps self-host deployments out of our Ads account). The value reaches an
+;; inline <script>, so a malformed value would be script injection: anything
+;; that does not match `conversion-pattern` is treated as absent.
+
+(def ^:private conversion-pattern
+  "Google Ads send-to: `AW-<conversion id>/<conversion label>`."
+  #"AW-\d+/[A-Za-z0-9_-]+")
+
+(defn- parse-google-ads-conversion
+  "Configured send-to string → conversion identity, or nil.
+   Pre: `raw` is whatever the env var or config.edn holds (any type, or nil).
+   Post: nil for blank and for anything not matching `conversion-pattern`;
+   otherwise {:send-to :tag-id} where neither value can contain a quote or an
+   angle bracket. A malformed value logs exactly one :warn.
+   Pure apart from that log — the caching lives in `google-ads-conversion*`."
+  [raw]
+  (let [raw (some-> raw str str/trim not-empty)]
+    (cond
+      (nil? raw) nil
+
+      (re-matches conversion-pattern raw)
+      {:send-to raw :tag-id (subs raw 0 (str/index-of raw "/"))}
+
+      :else
+      (do (tel/log! {:level :warn :id ::malformed-google-ads-conversion
+                     :data {:value raw}}
+            "GOOGLE_ADS_CONVERSION does not match AW-<id>/<label> — Google tag disabled")
+          nil))))
+
+(defonce ^:private google-ads-conversion*
+  (delay (parse-google-ads-conversion
+           (env-or-config "GOOGLE_ADS_CONVERSION"
+             [:deployment :google-ads-conversion]))))
+
+(defn google-ads-conversion
+  "Google Ads conversion identity, or nil when unconfigured or malformed.
+   Post: nil, or {:send-to \"AW-123/abc\" :tag-id \"AW-123\"} where neither
+   value can contain a quote or an angle bracket (see `conversion-pattern`).
+   Read and validated once — a change needs a restart, as with `credentials`."
+  []
+  @google-ads-conversion*)
+
 (defn platform-openrouter-api-key
   "OpenRouter key for the OCR model picker (topology A1: all OCR lanes route
    through one OpenRouter key). nil when unconfigured."

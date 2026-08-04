@@ -3,22 +3,15 @@
     <head>
 	<meta charset="utf-8"/>
 
-	<!-- Google tag (gtag.js) — Google Ads conversion tracking, AW-18368580767.
-	     The ONE documented exception to "no third-party asset is fetched from a
-	     CDN at runtime" (see CLAUDE.md): gtag.js must be served by Google for
-	     conversion attribution to work, so it cannot be vendored. It is also the
-	     only page-load request that reaches a third party, which is why the Open
-	     Sans @import was removed. Do not add a second Google tag to this page.
+	<!-- Google tag — composed per request by freememo.google-ads/shell-tag and
+	     substituted here (see src-prod/prod.cljc/wrap-prod-index-page). Empty
+	     unless GOOGLE_ADS_CONVERSION is set, so self-host deployments emit no
+	     tag at all. The conversion event is inlined into the same <script> on
+	     the one landing response that follows a signup — never a second block,
+	     never hardcoded here. Do not put a Google tag in this file.
 	     Deliberately absent from index.dev.html / index.metadata.html so local
 	     dev traffic never enters Ads conversion or audience data. -->
-	<script async src="https://www.googletagmanager.com/gtag/js?id=AW-18368580767"></script>
-	<script>
-	  window.dataLayer = window.dataLayer || [];
-	  function gtag(){dataLayer.push(arguments);}
-	  gtag('js', new Date());
-
-	  gtag('config', 'AW-18368580767');
-	</script>
+	$:freememo/google-tag$
 
 	<title>FreeMemo</title>
 	<meta name="viewport" content="width=device-width, initial-scale=1">
