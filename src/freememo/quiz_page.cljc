@@ -217,14 +217,14 @@
               ;; Local-only (!count-str only feeds the "Start quiz" command below)
               ;; — Input! + inline mirror-ack, no server round-trip per keystroke.
               (e/for [[t {v :count}] (forms/Input! :count count-str :type "number" :min "1" :max "50"
-                                        :class "form-input" :style {:width "70px"}
+                                        :class "input" :style {:width "70px"}
                                         :aria-label "Question count")]
                 (reset! !count-str v)
                 (t))
               (when (= mode "exam")
                 (dom/label (dom/props {:style {:font-size "13px"}}) (dom/text "Minutes:"))
                 (e/for [[t {v :limit}] (forms/Input! :limit limit-str :type "number" :min "1" :max "180"
-                                          :class "form-input" :style {:width "70px"}
+                                          :class "input" :style {:width "70px"}
                                           :aria-label "Time limit in minutes")]
                   (reset! !limit-str v)
                   (t)))
@@ -315,7 +315,7 @@
                 ;; round-trip per keystroke); the submit command grades on the server.
                 (e/for [[t edit] (e/amb
                                    (forms/Input! :quiz/answer draft :as :textarea
-                                     :class "form-input" :rows 4 :dir "auto"
+                                     :class "input" :rows 4 :dir "auto"
                                      :placeholder "Answer in your own words…"
                                      :aria-label "Your answer"
                                      :style {:width "100%" :resize "vertical"})
@@ -494,7 +494,7 @@
             ;; command persists the answer.
             (e/for [[t edit] (e/amb
                                (forms/Input! :exam/answer draft :as :textarea
-                                 :class "form-input" :rows 4 :dir "auto"
+                                 :class "input" :rows 4 :dir "auto"
                                  :placeholder "Answer in your own words — graded when you submit the exam"
                                  :aria-label "Your answer"
                                  :style {:width "100%" :resize "vertical"})
@@ -578,7 +578,7 @@
             ;; keystroke); the submit command grades on the server.
             (e/for [[t edit] (e/amb
                                (forms/Input! :review/answer draft :as :textarea
-                                 :class "form-input" :rows 4 :dir "auto"
+                                 :class "input" :rows 4 :dir "auto"
                                  :placeholder "Answer in your own words…"
                                  :aria-label "Your answer"
                                  :style {:width "100%" :resize "vertical"})

@@ -129,7 +129,7 @@
     (dom/div
       (e/for [[t edit] (e/amb
                          (forms/Input! :card/answer draft :as :textarea
-                           :class "form-input" :rows 4 :dir "auto"
+                           :class "input" :rows 4 :dir "auto"
                            :placeholder "Answer in your own words…"
                            :aria-label "Your answer"
                            :style {:width "100%" :resize "vertical"})
