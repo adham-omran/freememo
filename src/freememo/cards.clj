@@ -8,6 +8,7 @@
    [freememo.toasts :as toasts]
    [freememo.openrouter :as openrouter]
    [freememo.card-models :as card-models]
+   [freememo.pre-prompt-mode :as ppm]
    [freememo.llm-edn :as llm-edn]
    [freememo.math :as math]
    [freememo.overlapping :as overlap]
@@ -66,33 +67,62 @@
 
 ;; Prompt building
 (def ^:private prompt-configs
-  "Per-card-type knobs for build-prompt: the body template file, the optional
-   context template file (nil = no context support), and the two nouns that
-   vary in the trailing count-instruction sentence."
-  {:basic {:template "basic.md" :context-template "context.md"
+  "Per-card-type knobs for build-prompt: the card-type string (which selects the
+   pre-prompt wrapper), the body template file, the optional context template
+   file (nil = no context support), and the two nouns that vary in the trailing
+   count-instruction sentence.
+
+   :card-type lives here rather than in each build-*-prompt wrapper's signature
+   so the pre-prompt mode is the only new argument those three gained."
+  {:basic {:card-type "basic" :template "basic.md" :context-template "context.md"
            :item-noun "flashcards" :collection-noun "items"}
-   :cloze {:template "cloze.md" :context-template "context-cloze.md"
+   :cloze {:card-type "cloze" :template "cloze.md" :context-template "context-cloze.md"
            :item-noun "flashcards" :collection-noun "items"}
-   :overlapping {:template "overlapping.md" :context-template "context.md"
+   :overlapping {:card-type "overlapping" :template "overlapping.md" :context-template "context.md"
                  :item-noun "overlapping-cloze cards" :collection-noun "maps"}})
+
+(defn- pre-prompt-wrapper-file
+  "The wrapper template that frames the pre-prompt for this (mode, card-type).
+
+   Nine combinations, four files. Cloze collapses onto the bounded wrapper at
+   both strict modes because it has no question field to hold the pre-prompt —
+   `ppm/question-kind?` owns that distinction.
+   Pre:  mode is any value (normalized here); card-type is a card-kind string.
+   Post: a filename that exists under resources/prompts/."
+  [mode card-type]
+  (let [mode (ppm/normalize mode)]
+    (cond
+      (= ppm/guide mode) "pre-prompt-guide.md"
+      (not (ppm/question-kind? card-type)) "pre-prompt-bounded.md"
+      (= ppm/clarify mode) "pre-prompt-clarify.md"
+      :else "pre-prompt-verbatim.md")))
 
 (defn- build-prompt
   "Build a card-generation prompt per `config` (a prompt-configs entry).
    Concatenates effective system prompt (global + nearest per-item prompt for
-   topic-id) + optional pre-prompt + the config's template + optional context
-   template."
-  [{:keys [template context-template item-noun collection-noun]}
-   card-count has-context? pre-prompt user-id topic-id]
+   topic-id) + optional pre-prompt (framed by its mode's wrapper) + the config's
+   template + optional context template.
+
+   The wrapper is str/trim'd because slurp keeps the file's trailing newline;
+   without the trim the guide wrapper would emit three newlines where the
+   previously-inlined text emitted two, and \"guide\" would stop being a
+   byte-identical no-op.
+   Pre:  pre-prompt-mode is any value (normalized downstream).
+   Post: nil when any required template failed to load — including the wrapper
+         when a pre-prompt is present, which the caller reports as \"Failed to
+         load prompt templates\" rather than silently generating without it."
+  [{:keys [card-type template context-template item-noun collection-noun]}
+   card-count has-context? pre-prompt pre-prompt-mode user-id topic-id]
   (let [system (settings/get-effective-system-prompt user-id topic-id)
         body (load-prompt-template template)
-        context (when has-context? (load-prompt-template context-template))]
-    (when (and system body)
+        context (when has-context? (load-prompt-template context-template))
+        use-pre-prompt? (and pre-prompt (not (str/blank? pre-prompt)))
+        wrapper (when use-pre-prompt?
+                  (load-prompt-template (pre-prompt-wrapper-file pre-prompt-mode card-type)))]
+    (when (and system body (or (not use-pre-prompt?) wrapper))
       (str system
-        (when (and pre-prompt (not (str/blank? pre-prompt)))
-          (str "\n\n## Custom Question Format\n\n"
-            "Use the following pattern for your questions:\n\n"
-            pre-prompt
-            "\n\n"))
+        (when use-pre-prompt?
+          (str "\n\n" (str/trim wrapper) "\n\n" pre-prompt "\n\n"))
         body
         (when context (str "\n\n" context))
         "\n\n# Instructions\n\n"
@@ -104,23 +134,26 @@
   "Build prompt for basic Q&A cards.
    Concatenates effective system prompt (global + nearest per-item prompt for
    topic-id) + optional pre-prompt + basic.md + optional context.md."
-  [card-count has-context? pre-prompt user-id topic-id]
-  (build-prompt (:basic prompt-configs) card-count has-context? pre-prompt user-id topic-id))
+  [card-count has-context? pre-prompt pre-prompt-mode user-id topic-id]
+  (build-prompt (:basic prompt-configs) card-count has-context? pre-prompt
+    pre-prompt-mode user-id topic-id))
 
 (defn build-cloze-prompt
   "Build prompt for cloze deletion cards.
    Concatenates effective system prompt (global + nearest per-item prompt for
    topic-id) + optional pre-prompt + cloze.md + optional context-cloze.md."
-  [card-count has-context? pre-prompt user-id topic-id]
-  (build-prompt (:cloze prompt-configs) card-count has-context? pre-prompt user-id topic-id))
+  [card-count has-context? pre-prompt pre-prompt-mode user-id topic-id]
+  (build-prompt (:cloze prompt-configs) card-count has-context? pre-prompt
+    pre-prompt-mode user-id topic-id))
 
 (defn build-overlapping-prompt
   "Build prompt for overlapping-cloze cards.
    Concatenates effective system prompt + optional pre-prompt + overlapping.md.
    card-count is the number of LISTS to produce (each becomes one note that
    Anki fans out into N+1 cards)."
-  [card-count has-context? pre-prompt user-id topic-id]
-  (build-prompt (:overlapping prompt-configs) card-count has-context? pre-prompt user-id topic-id))
+  [card-count has-context? pre-prompt pre-prompt-mode user-id topic-id]
+  (build-prompt (:overlapping prompt-configs) card-count has-context? pre-prompt
+    pre-prompt-mode user-id topic-id))
 
 ;; Context retrieval
 (defn get-context-pages
@@ -202,7 +235,8 @@
          to a card-models entry; the OpenRouter key is configured.
    Post: {:success true :cards v} with (count v) = card-count, else
          {:success false :error s [:error-type kw]}."
-  [{:keys [content context card-count model user-id pre-prompt topic-id goal]} prompt-builder-fn endpoint-tag]
+  [{:keys [content context card-count model user-id pre-prompt pre-prompt-mode topic-id goal]}
+   prompt-builder-fn endpoint-tag]
   (let [api-key (settings/get-openrouter-api-key user-id)
         _ (when (empty? api-key) (throw (ex-info "OpenRouter API key not configured" {})))
         _ (when (empty? content) (throw (ex-info "No content provided" {})))
@@ -218,7 +252,7 @@
         reasoning (settings/get-reasoning user-id)
         verbosity (settings/get-verbosity user-id)
         has-context? (not (empty? context))
-        prompt (prompt-builder-fn card-count has-context? pre-prompt user-id topic-id)
+        prompt (prompt-builder-fn card-count has-context? pre-prompt pre-prompt-mode user-id topic-id)
         _ (when-not prompt (throw (ex-info "Failed to load prompt templates" {})))
         ;; Document-scoped learning goal (per root-topic), appended so generated
         ;; cards serve why the learner is studying. Absent/blank ⇒ prompt unchanged.
@@ -330,7 +364,9 @@
    - :context - Optional context text from previous pages
    - :card-count - Number of cards to generate (default from settings)
    - :model - card-models id to use (default from settings/get-model)
-   - :pre-prompt - Optional custom formatting instructions
+   - :pre-prompt - Optional user text framing the questions
+   - :pre-prompt-mode - How literally to read it (freememo.pre-prompt-mode;
+     absent or nil = \"guide\", the pre-strictness behaviour)
    Returns {:success true :cards [...]} or {:success false :error \"msg\"}"
   [opts]
   (generate-cards-wrapped opts build-basic-prompt :cards.basic

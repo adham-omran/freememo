@@ -16,6 +16,8 @@
    [freememo.ocr-models :as ocr-models]
    [freememo.card-models :as card-models]
    [freememo.commands :as commands]
+   [freememo.segmented :as seg]
+   [freememo.pre-prompt-mode :as ppm]
    #?(:clj [freememo.ocr :as ocr])
    [freememo.transcribe-language :as tlang]
    #?(:clj [freememo.settings :as settings])
@@ -453,6 +455,38 @@
         (dom/div (dom/props {:class "hint"})
           (dom/text "If the model returns the wrong number of cards, retry up to N times. Each attempt uses tokens and is billed."))))))
 
+(e/defn PrePromptModeField
+  "Pre-prompt strictness — how literally card generation reads the text typed in
+   Generate with Prompt. This is the default for every generation; the dialog
+   itself can override it for one run without changing this value.
+
+   A segmented control rather than a select (the idiom of the fields above)
+   because all three positions must be readable at once: the choice is a
+   guarantee about the output, not a preference among interchangeable presets."
+  [user-id]
+  (e/client
+    (let [server-mode (e/server (settings/get-pre-prompt-mode user-id))
+          !mode (atom server-mode)
+          mode (e/watch !mode)
+          SaveMode (e/fn [t value]
+                     (e/client
+                       (reset! !mode value)
+                       (let [r (e/server (e/Offload #(settings/save-pre-prompt-mode user-id value)))]
+                         (when (some? r)
+                           (if (:success r) (t) (t (:error r)))))))]
+      (dom/div
+        (dom/props {:class "field"})
+        (dom/label (dom/props {:class "label"}) (dom/text "Pre-prompt Strictness"))
+        (dom/div
+          (dom/props {:class "segmented" :role "radiogroup" :aria-label "Pre-prompt strictness"})
+          (seg/Segment mode ppm/guide (ppm/label ppm/guide) SaveMode)
+          (seg/Segment mode ppm/clarify (ppm/label ppm/clarify) SaveMode)
+          (seg/Segment mode ppm/verbatim (ppm/label ppm/verbatim) SaveMode))
+        (dom/div (dom/props {:class "hint"})
+          (dom/text (ppm/description mode)))
+        (dom/div (dom/props {:class "hint"})
+          (dom/text "Clarify and Verbatim generate a single card. Cloze has no question field, so it is bounded to the prompt's topic instead."))))))
+
 (e/defn SystemPromptField
   "Card Generation System Prompt — collapsed accordion. Controls the persona,
    rules, and style for flashcard generation; format-specific instructions
@@ -612,5 +646,6 @@
           (CardGenRetriesField user-id)
 
           ;; ── Prompts (inside when llm-enabled) ──
+          (PrePromptModeField user-id)
           (SystemPromptField user-id)
           (OcrPromptField user-id))))))

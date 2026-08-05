@@ -7,6 +7,8 @@
    [freememo.modal-shell :as modal]
    [clojure.string :as str]
    [freememo.typeahead :refer [Suggest]]
+   [freememo.segmented :as seg]
+   [freememo.pre-prompt-mode :as ppm]
    [freememo.quill-field :refer [QuillField flush-syntax-tokens!]]
    [freememo.card-history-modal :refer [CardHistoryModal]]
    [freememo.commands :as commands]
@@ -290,13 +292,26 @@
 ;; Pre-prompt dialog
 ;; state map keys: :!show :!prompt-submit :!pre-prompt :!prompt-history
 ;;                 :!history-save-trigger :captured-selection :prompt-dialog-kind
+;;                 :kind-label :initial-mode
+;;
+;; The strictness segments write a LOCAL atom and never touch the server: the
+;; dialog's choice governs this one generation, and the persisted default lives
+;; in Settings (PrePromptModeField). `initial-mode` seeds it and `kind-label`
+;; arrives pre-formatted because content-toolbar-helpers owns card-type
+;; capitalization — the label is not re-derived here.
 (e/defn PromptDialog [state]
   (e/client
     (let [{:keys [!show !prompt-submit !pre-prompt !prompt-history
-                  !history-save-trigger captured-selection prompt-dialog-kind]} state
+                  !history-save-trigger captured-selection prompt-dialog-kind
+                  kind-label initial-mode]} state
           pre-prompt-value (e/watch !pre-prompt)
           !local-prompt (atom pre-prompt-value)
           local-prompt (e/watch !local-prompt)
+          !mode (atom initial-mode)
+          mode (e/watch !mode)
+          SelectMode (e/fn [t value]
+                       (e/client (reset! !mode value) (t)))
+          one-card? (ppm/single-card? mode prompt-dialog-kind local-prompt)
           !primary-btn (atom nil)]
       (dom/div
         (dom/props {:style {:position "fixed" :top "0" :left "0" :width "100%" :height "100%"
@@ -305,7 +320,7 @@
                             :pointer-events "none"}
                     :tabindex "-1"})
         (modal/ModalEscape (fn [] (reset! !show false))
-          (str "Generate " (if (= prompt-dialog-kind "basic") "Basic" "Cloze") " Cards"))
+          (str "Generate " kind-label " Cards"))
         (dom/On "keydown"
           (fn [e] (modal/mod-enter-submit! e !primary-btn))
           nil)
@@ -320,7 +335,7 @@
             (dom/props {:style {:margin-top "0" :cursor "move" :user-select "none"
                                 :padding-bottom "var(--sp-2)" :margin-bottom "var(--sp-3)"
                                 :border-bottom "1px solid var(--color-border)" :font-size "18px"}})
-            (dom/text "Generate " (if (= prompt-dialog-kind "basic") "Basic" "Cloze") " Cards"))
+            (dom/text "Generate " kind-label " Cards"))
           (dom/div
             (dom/props {:style {:margin-bottom "20px"}})
             (dom/label
@@ -332,6 +347,20 @@
             (let [prompt-history (e/watch !prompt-history)]
               (Suggest !local-prompt (vec (take 20 prompt-history))
                 "e.g., Focus on accounting terminology..." true)))
+          (dom/div
+            (dom/props {:style {:margin-bottom "20px"}})
+            (dom/label
+              (dom/props {:style {:display "block" :margin-bottom "var(--sp-2)" :font-size "14px"}})
+              (dom/text "Strictness:"))
+            (dom/div
+              (dom/props {:class "segmented" :role "radiogroup" :aria-label "Pre-prompt strictness"})
+              (seg/Segment mode ppm/guide (ppm/label ppm/guide) SelectMode)
+              (seg/Segment mode ppm/clarify (ppm/label ppm/clarify) SelectMode)
+              (seg/Segment mode ppm/verbatim (ppm/label ppm/verbatim) SelectMode))
+            (dom/div
+              (dom/props {:class "segmented-description" :style {:margin-top "var(--sp-2)"}})
+              (dom/text (ppm/description mode)
+                (if one-card? " Generates 1 card." ""))))
           (dom/div
             (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-3)"}})
             (dom/button
@@ -350,7 +379,8 @@
                       (reset! !history-save-trigger new-history)))
                   (reset! !prompt-submit {:selection captured-selection
                                           :pre-prompt local-prompt
-                                          :kind prompt-dialog-kind})
+                                          :kind prompt-dialog-kind
+                                          :pre-prompt-mode @!mode})
                   (reset! !show false))
                 nil))
             (dom/button

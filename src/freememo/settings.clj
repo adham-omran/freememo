@@ -6,6 +6,7 @@
    [freememo.config :as config]
    [freememo.fsrs :as fsrs]
    [freememo.input-check :as input]
+   [freememo.pre-prompt-mode :as ppm]
    [freememo.toasts :as toasts]
    [freememo.transcribe-language :as tlang]
    [taoensso.telemere :as tel]
@@ -36,6 +37,7 @@
 (def LLM_ENABLED "llm_enabled")
 (def LAST_DOCUMENT "last_document")
 (def PRE_PROMPT_HISTORY "pre_prompt_history")
+(def PRE_PROMPT_MODE "pre_prompt_mode")
 (def CARD_FONT_SIZE "card_font_size")
 (def SCAN_DPI "scan_dpi")
 (def TRANSCRIBE_LANGUAGE "transcribe_language")
@@ -734,6 +736,22 @@
     (catch Exception e
       (tel/error! {:id ::save-pre-prompt-history} e)
       {:success false :error "Failed to save prompt history"})))
+
+;; How literally card generation reads the pre-prompt — see
+;; freememo.pre-prompt-mode for the vocabulary. Normalized on BOTH sides of the
+;; database: a read never returns a value the wrapper table has no file for, and
+;; a write never stores one. No channel bump, like save-reasoning — generation
+;; reads the value fresh server-side and the dialog re-reads it on mount.
+(defn get-pre-prompt-mode [user-id]
+  (ppm/normalize (db/get-setting user-id PRE_PROMPT_MODE)))
+
+(defn save-pre-prompt-mode [user-id value]
+  (try
+    (db/set-setting user-id PRE_PROMPT_MODE (ppm/normalize value))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-pre-prompt-mode} e)
+      {:success false :error "Failed to save pre-prompt strictness"})))
 
 (defn get-card-font-size [user-id]
   (try

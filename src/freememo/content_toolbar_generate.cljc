@@ -28,6 +28,7 @@
           ;; any map key change re-derives all destructured values, making
           ;; e/Token re-fire on unchanged values.
           server-prompt-history (e/server (settings/get-pre-prompt-history user-id))
+          server-pre-prompt-mode (e/server (settings/get-pre-prompt-mode user-id))
           !gen-click (atom nil)
           gen-click (e/watch !gen-click)
           !prompt-history (atom server-prompt-history)
@@ -37,6 +38,7 @@
           !show-prompt-dialog (atom false)
           show-prompt-dialog (e/watch !show-prompt-dialog)
           !prompt-dialog-kind (atom nil)
+          prompt-dialog-kind (e/watch !prompt-dialog-kind)
           !captured-selection (atom nil)
           captured-selection (e/watch !captured-selection)
           !prompt-submit (atom nil)
@@ -131,7 +133,11 @@
                        :enc-key enc-key
                        :topic-id topic-id
                        :root-topic-id root-topic-id
-                       :pre-prompt nil})))
+                       ;; Plain Generate sends no pre-prompt, so strictness has
+                       ;; nothing to govern — the wrapper is suppressed by the
+                       ;; blank check in cards/build-prompt either way.
+                       :pre-prompt nil
+                       :pre-prompt-mode nil})))
             (t))))
 
       ;; Pre-prompt modal dialog (LLM only)
@@ -142,14 +148,16 @@
                        :!prompt-history !prompt-history
                        :!history-save-trigger !history-save-trigger
                        :captured-selection captured-selection
-                       :prompt-dialog-kind (e/watch !prompt-dialog-kind)}))
+                       :prompt-dialog-kind prompt-dialog-kind
+                       :kind-label (helpers/card-type-label prompt-dialog-kind)
+                       :initial-mode server-pre-prompt-mode}))
 
       ;; Process prompt dialog submissions via e/Token
       (let [submit prompt-submit
             [t _] (e/Token submit)]
         (when t
           (case (e/server
-                  (let [{:keys [selection pre-prompt kind]} submit
+                  (let [{:keys [selection pre-prompt kind pre-prompt-mode]} submit
                         ct (or kind card-type)
                         {:keys [content context]}
                         (helpers/build-gen-context*
@@ -168,5 +176,6 @@
                        :enc-key enc-key
                        :topic-id topic-id
                        :root-topic-id root-topic-id
-                       :pre-prompt pre-prompt})))
+                       :pre-prompt pre-prompt
+                       :pre-prompt-mode pre-prompt-mode})))
             (t)))))))

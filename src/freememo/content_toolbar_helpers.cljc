@@ -5,6 +5,7 @@
    [clojure.string :as str]
    [freememo.logging :as log]
    [freememo.commands :as commands]
+   [freememo.pre-prompt-mode :as ppm]
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.cards-from-facts :as cff])
    #?(:clj [freememo.settings :as settings])
@@ -169,7 +170,11 @@
    (defn generate-and-save! [item]
      (try
        (let [{:keys [content context card-type card-count user-id enc-key
-                     topic-id root-topic-id pre-prompt]} item
+                     topic-id root-topic-id pre-prompt pre-prompt-mode]} item
+             ;; A strict pre-prompt IS the question, so the card count collapses
+             ;; to 1. Forced here, where opts is owned — never written back to
+             ;; the user's saved count, which still governs plain Generate.
+             one-card? (ppm/single-card? pre-prompt-mode card-type pre-prompt)
              ;; Per-document model override; falls back to the user's global
              ;; default when the document has no selection (effective-card-model).
              model (settings/effective-card-model user-id root-topic-id)
@@ -183,9 +188,11 @@
                  ;; the facts-only source, so drop it on the fact path.
                  gen-context (when-not (:from-facts? resolved) context)
                  opts (cond-> {:content gen-content :context gen-context
-                               :card-count card-count :user-id user-id :enc-key enc-key
+                               :card-count (if one-card? 1 card-count)
+                               :user-id user-id :enc-key enc-key
                                :topic-id topic-id :model model :goal goal}
-                        pre-prompt (assoc :pre-prompt pre-prompt))
+                        pre-prompt (assoc :pre-prompt pre-prompt
+                                     :pre-prompt-mode pre-prompt-mode))
                  gen-result (case card-type
                               "basic" (cards/generate-basic-cards opts)
                               "overlapping" (cards/generate-overlapping-cards opts)
