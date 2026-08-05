@@ -23,13 +23,17 @@
         (tel/log! :info "Google OAuth: google_client.json not found, using env vars")
         nil))))
 
-(defn- client-id []
+;; Public because `freememo.google-drive` requests a SECOND authorization with
+;; the same client. Duplicating the credential lookup there would let the two
+;; flows drift onto different clients, which Google would reject at the token
+;; exchange with nothing in the app to explain it.
+(defn client-id []
   (or (:client_id @credentials) (System/getenv "GOOGLE_CLIENT_ID")))
 
-(defn- client-secret []
+(defn client-secret []
   (or (:client_secret @credentials) (System/getenv "GOOGLE_CLIENT_SECRET")))
 
-(defn- redirect-uri []
+(defn redirect-uri []
   ;; Env var takes precedence; otherwise pick the localhost callback from the file,
   ;; falling back to the first entry (production), then a hardcoded default.
   (or (System/getenv "GOOGLE_REDIRECT_URI")

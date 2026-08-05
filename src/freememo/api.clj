@@ -8,6 +8,9 @@
    [freememo.db :as db]
    [freememo.auth :as auth]
    [freememo.google-oauth :as google-oauth]
+   [freememo.google-drive :as drive]
+   [freememo.neoreader-sync :as neoreader]
+   [freememo.toasts :as toasts]
    [freememo.deployment-hook :as hook]
    [freememo.extractor :as extractor]
    [freememo.html-cleaner :as cleaner]
@@ -753,6 +756,153 @@
            :headers {"Location" "/"}
            :session {:auth-error "Google sign-in failed — please try again"}})))))
 
+;; ── NeoReader sync (plans/boox-neoreader-google-drive-sync.md) ─────────────
+;;
+;; These live on HTTP rather than in an Electric server block on purpose.
+;; `freememo.neoreader-sync` and `freememo.google-drive` are `.clj` namespaces,
+;; and `(e/server (neoreader/sync-document! …))` compiles the symbol on the CLJS
+;; peer too, where a CLJ-only var does not exist. `epub.clj`, reached from this
+;; file, is the precedent.
+
+(defn drive-authorize-handler
+  "GET /auth/google/drive — start the Drive consent flow.
+   Pre:  authenticated; Google OAuth is configured.
+   Post: 302 to Google, with a CSRF nonce in the session. `return_to` is echoed
+         through Google's `state` so the callback can send the user back to the
+         document they clicked from."
+  [request]
+  (if-not (require-auth request)
+    (json-response 401 {:success false :error "Not authenticated"})
+    (if-not (google-oauth/configured?)
+      (json-response 503 {:success false :error "Google is not configured"})
+      (let [state (str (random-uuid))
+            return-to (or (get-in request [:params "return_to"]) "/library/documents")]
+        {:status 302
+         :headers {"Location" (drive/authorize-url state return-to)}
+         :session (assoc (:session request) :drive-oauth-state state)}))))
+
+(defn drive-callback-handler
+  "GET /auth/google/drive/callback — store the refresh token.
+   Pre:  the session holds the nonce this request's `state` carries.
+   Post: 302 back to `return_to`. The session gains :drive-error on any failure,
+         and nothing else changes — the user stays signed in either way."
+  [request]
+  (let [raw-state (or (get-in request [:params "state"]) "")
+        [state return-to] (str/split raw-state #"\|" 2)
+        expected (get-in request [:session :drive-oauth-state])
+        code (get-in request [:params "code"])
+        user-id (require-auth request)
+        landing (or (when (str/starts-with? (or return-to "") "/") return-to)
+                  "/library/documents")
+        back (fn [session] {:status 302 :headers {"Location" landing} :session session})
+        session (dissoc (:session request) :drive-oauth-state)]
+    (cond
+      (nil? user-id) (back (assoc session :drive-error "Sign in before connecting Drive"))
+      (not= state expected) (back (assoc session :drive-error "Drive authorization state mismatch"))
+      (str/blank? code) (back (assoc session :drive-error "Drive authorization was cancelled"))
+      :else
+      (try
+        (if (drive/store-refresh-token! user-id code)
+          (back session)
+          (back (assoc session :drive-error
+                  "Google granted no offline access — try again and accept the prompt")))
+        (catch Exception e
+          (tel/error! {:id ::drive-callback-handler} e)
+          (back (assoc session :drive-error "Connecting Google Drive failed")))))))
+
+(defn drive-picker-token-handler
+  "GET /api/neoreader/picker-token — vend the token the Google Picker needs.
+   Pre:  authenticated.
+   Post: {:success true :token s} when Drive is connected, else
+         {:success false :reauthorize true} — the browser then sends the user
+         through /auth/google/drive. The same credential serves the Picker and
+         the server-side download, so there is one grant and one consent."
+  [request]
+  (if-let [user-id (require-auth request)]
+    (if-let [token (drive/access-token user-id)]
+      (json-response 200 {:success true :token token :client_id (google-oauth/client-id)})
+      (json-response 200 {:success false :reauthorize true}))
+    (json-response 401 {:success false :error "Not authenticated"})))
+
+(defn- param-long
+  "Pre : `request` is a Ring request; `k` is a param name.
+   Post: the param as a long, or nil when absent or not an integer. A caller
+         that gets nil owes the client a 400 — never a parse exception."
+  [request k]
+  (let [v (get-in request [:params k])]
+    (when-not (str/blank? v)
+      (try (Long/parseLong (str/trim v)) (catch Exception _ nil)))))
+
+(defn- epub-topic-for
+  "Pre : `user-id` is authenticated.
+   Post: the topic row when it exists, belongs to this user, and is kind
+         `epub`; otherwise nil. One check for both handlers, so neither can
+         sync a document the user does not own."
+  [user-id topic-id]
+  (let [t (db/get-topic-for-user user-id topic-id)]
+    (when (= "epub" (:topics/kind t)) t)))
+
+(defn neoreader-bind-handler
+  "POST /api/neoreader/bind — remember which Drive file a document syncs from.
+   Pre:  authenticated; params topic_id and file_id; the user picked `file_id` in
+         the Picker, which is what grants the app per-file access to it.
+   Post: {:success true :name s}. `name` is best-effort and nil on failure — it
+         is shown to the user and nothing branches on it."
+  [request]
+  (if-let [user-id (require-auth request)]
+    (let [topic-id (param-long request "topic_id")
+          file-id (get-in request [:params "file_id"])]
+      (cond
+        (nil? topic-id) (json-response 400 {:success false :error "Missing topic_id"})
+        (str/blank? file-id) (json-response 400 {:success false :error "Missing file_id"})
+        (nil? (epub-topic-for user-id topic-id))
+        (json-response 404 {:success false :error "No EPUB document with that id"})
+        :else
+        (do (neoreader/bind-file! user-id topic-id file-id)
+            (json-response 200 {:success true
+                                :name (some-> (drive/access-token user-id)
+                                        (drive/file-name file-id))}))))
+    (json-response 401 {:success false :error "Not authenticated"})))
+
+(defn neoreader-sync-handler
+  "POST /api/neoreader/sync — run one sync.
+   Pre:  authenticated; param topic_id names an EPUB document this user owns.
+   Post: {:success true …}, or {:success false :error msg} with :reauthorize or
+         :needs_pick set when the browser can act on it. The status is 200 for a
+         reported failure — the browser reads :success, and a 5xx here would look
+         like a server fault rather than a sync that could not run.
+   Post: every outcome the user should see is ALSO pushed as a toast, so the
+         message lives beside the counts that produced it. :needs_pick is the one
+         exception: the browser answers it by opening the Picker, and a toast for
+         a step that resolves itself would be noise."
+  [request]
+  (if-let [user-id (require-auth request)]
+    (let [topic-id (param-long request "topic_id")]
+      (if (or (nil? topic-id) (nil? (epub-topic-for user-id topic-id)))
+        (json-response 400 {:success false :error "Missing or unknown topic_id"})
+        (try
+          (let [r (neoreader/sync-document! user-id topic-id)]
+            (cond
+              (:ok r)
+              (do (toasts/push! user-id {:level :success :message (neoreader/summary r)})
+                  (json-response 200 {:success true
+                                      :counts (:counts r)
+                                      :chapters (:chapters-written r)
+                                      :notes (:notes r)}))
+
+              (:needs-pick? r)
+              (json-response 200 {:success false :needs_pick true :error (:error r)})
+
+              :else
+              (do (toasts/push! user-id {:level :error :message (:error r)})
+                  (json-response 200 (cond-> {:success false :error (:error r)}
+                                       (:reauthorize? r) (assoc :reauthorize true))))))
+          (catch Exception e
+            (tel/error! {:id ::neoreader-sync-handler} e)
+            (toasts/push! user-id {:level :error :message "NeoReader sync failed. Please try again."})
+            (json-response 500 {:success false :error "Sync failed. Please try again."})))))
+    (json-response 401 {:success false :error "Not authenticated"})))
+
 (defn- authenticate->session-response
   "Shared username/password auth → 302 redirect carrying the session.
    Post: success → :session {:user-id N}; blank/failure → :session {:auth-error …}."
@@ -977,7 +1127,14 @@
    ;; shell catch-all, which answers every unmatched path with HTML.
    {:method :get  :path "/ads.txt"              :handler #'ads-txt-handler}
    {:method :get  :path "/auth/google"          :handler #'google-auth-handler}
-   {:method :get  :path "/auth/google/callback" :handler #'google-callback-handler}])
+   {:method :get  :path "/auth/google/callback" :handler #'google-callback-handler}
+   ;; NeoReader sync. All four carry metadata only — the export body is
+   ;; downloaded server-side and never passes through a request.
+   {:method :get  :path "/auth/google/drive"          :handler #'drive-authorize-handler}
+   {:method :get  :path "/auth/google/drive/callback" :handler #'drive-callback-handler}
+   {:method :get  :path "/api/neoreader/picker-token" :handler #'drive-picker-token-handler}
+   {:method :post :path "/api/neoreader/bind"         :handler #'neoreader-bind-handler   :body :small}
+   {:method :post :path "/api/neoreader/sync"         :handler #'neoreader-sync-handler   :body :small}])
 
 (defn- match-route
   "First route whose method and path/pattern match, else nil.

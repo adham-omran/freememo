@@ -271,6 +271,12 @@
                        :views (conj document-views :card-mutations :settings-refresh)}
      :append-images   {:label "Append images" :class :mutation :palette-hidden true
                        :table #{:topics :topic_files} :views document-views}
+     ;; A NeoReader sync rewrites chapter CONTENT, so it bumps :refresh — the
+     ;; editor has to re-fetch to show the new marks. Not :sync-mutations, which
+     ;; belongs to Anki push/pull and is watched by the Anki UI. :settings-refresh
+     ;; covers the Drive file-id binding row this flow writes.
+     :neoreader-sync  {:label "Sync with NeoReader" :class :mutation :palette-hidden true
+                       :table #{:topics :settings} :views #{:refresh :settings-refresh}}
      :credits-granted {:label "Credits granted" :class :mutation :palette-hidden true
                        :table #{:credit_orders :credit_transactions} :views #{:credits-refresh}}}))
 

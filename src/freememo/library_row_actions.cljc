@@ -16,7 +16,29 @@
    [freememo.navigation :as nav]
    [freememo.icons :as icons]
    [freememo.document-options :refer [DocumentOptionsButton]]
-   [freememo.tooltip :as tooltip]))
+   [freememo.tooltip :as tooltip]
+   #?(:cljs [freememo.neoreader-picker :as neoreader])))
+
+;; NeoReader sync — EPUB rows only. Kept a plain defn, not inline in the
+;; reactive body: it loads the Google Picker and stores a shared promise in a
+;; defonce atom, and Electric re-evaluates a dom body unpredictably (CLAUDE.md
+;; 'JS Library Init Side Effects in e/defn'). The reader conditional lives here,
+;; OUTSIDE any e/defn, for the same reason — a #?(:cljs …) inside a reactive
+;; body compiles a different signal count per peer.
+;;
+;; Every outcome the user should see arrives as a server-pushed toast, because
+;; the server holds the counts. The two phases the server never sees — a
+;; cancelled Picker and a Picker that will not load — reach the console only.
+;; That is a real gap: a blocked Google request looks like nothing happening.
+(defn start-neoreader-sync! [topic-id]
+  #?(:cljs (neoreader/sync-document! topic-id
+             (str (.-pathname js/location) (.-search js/location))
+             (fn [status]
+               (case (:phase status)
+                 :error (js/console.error "NeoReader sync:" (:message status))
+                 :cancelled (js/console.info "NeoReader sync cancelled")
+                 nil)))
+     :clj nil))
 
 ;; Escape + click-outside + body-scroll → close. Kept a plain (defn) so the
 ;; addEventListener calls run once per (when open …) mount/unmount cycle, never
@@ -119,6 +141,20 @@
                   (dom/On "click"
                     (fn [e] (.stopPropagation e)
                       (navigate! :viewer (nav/nav-subset-review id title))
+                      (reset! !open false))
+                    nil)))
+
+              ;; Sync with NeoReader — EPUB roots only. A Boox export exists per
+              ;; book, so a chapter row has nothing to sync. The first click
+              ;; opens the Google Picker to bind a file; later clicks reuse it.
+              (when (and is-root (= kind "epub"))
+                (dom/button
+                  (dom/props {:class "toolbar-dropdown-item" :role "menuitem"})
+                  (icons/Icon :cloud-download :size 16)
+                  (dom/span (dom/text "Sync with NeoReader"))
+                  (dom/On "click"
+                    (fn [e] (.stopPropagation e)
+                      (start-neoreader-sync! id)
                       (reset! !open false))
                     nil)))
 
