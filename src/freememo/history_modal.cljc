@@ -6,10 +6,12 @@
    ContentToolbar/ExtractActions. Past rows come from db/get-topic-history;
    current scheduling state comes from db/get-topic-next-review."
   (:require
+   [clojure.string :as str]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.icons :as icons]
    [freememo.modal-shell :as modal]
+   [freememo.priority :as priority]
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])))
 
@@ -64,8 +66,18 @@
               :clj  (format "%.2f" d))
            "d"))))
 
-(defn fmt-priority [p]
-  (if (nil? p) "—" (str p)))
+(defn fmt-priority
+  "Priority rendered at up to three decimals with trailing zeros trimmed:
+   50.0 → \"50\", 12.345 → \"12.345\", 12.300 → \"12.3\". nil → em dash.
+   fmt-num always emits a decimal point, so the two trims cannot eat the
+   zeros of a whole number."
+  [p]
+  (let [d (coerce-double p)]
+    (if (nil? d)
+      "—"
+      (-> (fmt-num d priority/priority-decimals)
+        (str/replace #"0+$" "")
+        (str/replace #"\.$" "")))))
 
 (defn- fmt-interval-days
   "Interval rendered with explicit unit suffix for the metric card."

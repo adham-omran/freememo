@@ -44,7 +44,7 @@
                       (do (reset! !use-context new-use-context) (t))
                       (t (:error r))))))
               (do (dom/text "Include context") (e/amb))))
-          (NumberStepper context-window context-pages-min context-pages-max
+          (NumberStepper context-window context-pages-min context-pages-max 0
             :context-pages nil "Context pages"
             (if (= 1 context-window) "page" "pages") (not use-context)
             !context-window
@@ -128,7 +128,7 @@
 ;; Invariant: clamp to [1,20] on both the button and typed-input paths.
 (e/defn CardCountStepper [user-id card-count-val !card-count]
   (e/client
-    (NumberStepper card-count-val card-count-min card-count-max
+    (NumberStepper card-count-val card-count-min card-count-max 0
       :card-count "Cards" "Cards to generate" nil nil
       !card-count
       (e/fn [nv] (e/server (e/Offload #(settings/save-card-count user-id nv)))))))

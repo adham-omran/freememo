@@ -691,6 +691,9 @@ html, body {
 .number-stepper-input::-webkit-inner-spin-button,
 .number-stepper-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .number-stepper-input:disabled { color: var(--color-text-secondary); }
+/* Decimal steppers (priority: 0-100 at three places). 34px fits "100" but
+   clips "12.345". NumberStepper adds this class whenever decimals > 0. */
+.number-stepper-input-wide { width: 58px; }
 
 /* Group-boundary divider — taller, more deliberate than .toolbar-sep `|`
    characters. Used between every visual group in the toolbar: cluster →

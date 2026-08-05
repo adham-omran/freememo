@@ -28,6 +28,7 @@
             [freememo.db :as db]
             [freememo.html-cleaner :as cleaner]
             [freememo.input-check :as input]
+            [freememo.priority :as priority]
             [freememo.supermemo-format :as smf]
             [freememo.text :as text]
             [next.jdbc :as jdbc]
@@ -196,12 +197,16 @@
 (defn- priority-of
   "Map a position in the collection's priority order onto FreeMemo's 0-100.
    Pre : `rank` is 0-based; `n` is the number of ranked elements.
-   Post: 0 for the most important element, 100 for the least, 50 when the
-         element carries no rank (matching topics.priority's own default)."
+   Post: 0 for the most important element, 100 for the least, and
+         priority/priority-default when the element carries no rank.
+   Three decimal places give 100001 distinct values, so every rank in a
+   collection below ~100000 ranked elements gets its own priority. Above that
+   the mapping collides again and `sm_rank` carries the residual order — which
+   is why get-learning-queue still orders by sm_rank after priority."
   [rank n]
   (if (or (nil? rank) (< n 2))
-    50
-    (long (Math/round (* 100.0 (/ (double rank) (double (dec n))))))))
+    (priority/normalize nil)
+    (priority/normalize (* 100.0 (/ (double rank) (double (dec n)))))))
 
 ;; ── Report ─────────────────────────────────────────────────────────
 

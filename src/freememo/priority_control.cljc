@@ -10,7 +10,8 @@
    reconciled to the server value whenever (topic-id, server-priority) changes —
    on topic switch or after the write lands — keeping it correct across topics.
 
-   Priority: 0 = highest … 100 = lowest. Reads default to 50.
+   Priority: 0 = highest … 100 = lowest, three decimal places. Reads default
+   to 50. freememo.priority owns the domain and the rounding.
 
    Mounted twice (inline beside History + overflow proxy); they are never
    co-visible, so each owns its own mirror and reconciles to the DB via :refresh."
@@ -18,16 +19,37 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.number-stepper :refer [NumberStepper]]
-   #?(:clj [freememo.db :as db])))
+   [freememo.priority :as priority]
+   #?(:clj [freememo.db :as db])
+   #?(:clj [taoensso.telemere :as tel])))
 
 ;; Server bridges — plain defns with reader conditionals so both peers see the
 ;; var (CLJS gets a no-op) while the DB call only runs on CLJ.
 (defn get-topic-priority* [_refresh topic-id]
-  #?(:clj (or (db/get-topic-priority topic-id) 50)
-     :cljs 50))
+  ;; normalize, not `or`: a missing row must yield the SAME type as a present
+  ;; one. Returning a Long default beside a Double column would make
+  ;; PriorityControl's [topic-id priority] reconcile key compare unequal for
+  ;; 50 and 50.0 on the JVM.
+  #?(:clj (priority/normalize (db/get-topic-priority topic-id))
+     :cljs priority/priority-default))
 
-(defn update-priority!* [user-id topic-id priority]
-  #?(:clj (do (db/update-topic-priority! user-id topic-id priority) :ok)
+(defn update-priority!* [user-id topic-id new-priority]
+  ;; Returns the {:success …} shape NumberStepper's `spend` reads, matching
+  ;; freememo.settings' save fns. :denied is reported as a failure — the owner
+  ;; gate is silent, so without this the control would claim it saved a value
+  ;; the database never took.
+  ;; The catch is not decoration: the write can violate
+  ;; topics_priority_range_check, and an escaping exception would return nil to
+  ;; `spend`, which leaves the token unspent and freezes the stepper. The raw
+  ;; SQLSTATE text is logged, never surfaced.
+  #?(:clj (try
+            (if (= :denied (db/update-topic-priority! user-id topic-id new-priority))
+              {:success false :error "Could not save priority"}
+              {:success true})
+            (catch Exception e
+              (tel/error! {:id ::update-priority
+                           :data {:topic-id topic-id :priority new-priority}} e)
+              {:success false :error "Could not save priority"}))
      :cljs nil))
 
 (e/defn PriorityControl
@@ -53,7 +75,8 @@
       ;; topic-id changes, so within a topic the optimistic mirror is the truth.
       (e/for-by identity [_pair [[topic-id priority]]]
         (let [v (reset! !mirror priority)] (when v nil)))
-      (NumberStepper mirror-val 0 100
+      (NumberStepper mirror-val
+        priority/priority-min priority/priority-max priority/priority-decimals
         topic-id "Priority" "Priority" nil nil
         !mirror
         (e/fn [nv]

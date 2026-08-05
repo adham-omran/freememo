@@ -20,6 +20,7 @@
    [freememo.fsrs :as fsrs]
    [freememo.logging :as log]
    [freememo.occlusion-ordinals :as ord]
+   [freememo.priority :as priority]
    [freememo.text :as text])
   (:import [com.zaxxer.hikari HikariDataSource]
            [org.postgresql.util PGobject]))
@@ -165,7 +166,7 @@
       page_number INTEGER,
       source_url TEXT,
       status TEXT DEFAULT 'active',
-      priority INTEGER DEFAULT 50,
+      priority DOUBLE PRECISION DEFAULT 50,
       interval_days REAL DEFAULT 1.0,
       a_factor REAL DEFAULT 2.0,
       next_review_at TIMESTAMP,
@@ -195,7 +196,7 @@
         CHECK (event_type IN ('advance','touch','postpone','done','restore','priority-change','dismiss','undismiss')),
       event_at TIMESTAMP NOT NULL DEFAULT NOW(),
       status_before TEXT NOT NULL,
-      priority_before INTEGER,
+      priority_before DOUBLE PRECISION,
       interval_days_before REAL NOT NULL,
       a_factor_before REAL NOT NULL,
       next_review_at_before TIMESTAMP,
@@ -218,6 +219,41 @@
   (jdbc/execute! ds ["ALTER TABLE topic_repetitions ALTER COLUMN status_before DROP NOT NULL"])
   (jdbc/execute! ds ["ALTER TABLE topic_repetitions ALTER COLUMN interval_days_before DROP NOT NULL"])
   (jdbc/execute! ds ["ALTER TABLE topic_repetitions ALTER COLUMN a_factor_before DROP NOT NULL"])
+
+  ;; Priority carries three decimal places (freememo.priority). Both columns
+  ;; started as INTEGER, so widen them on installs created before that.
+  ;; The data_type guard is load-bearing: ALTER COLUMN ... TYPE rewrites the
+  ;; whole table, and an unguarded statement would rewrite it on every boot.
+  (doseq [[table column] [["topics" "priority"] ["topic_repetitions" "priority_before"]]]
+    (when (some? (jdbc/execute-one! ds
+                   ["SELECT 1 FROM information_schema.columns
+                     WHERE table_name = ? AND column_name = ? AND data_type = 'integer'"
+                    table column]))
+      (tel/log! {:level :info :id ::widen-priority :data {:table table :column column}}
+        "Widening priority column to DOUBLE PRECISION")
+      (jdbc/execute! ds [(str "ALTER TABLE " table " ALTER COLUMN " column " TYPE DOUBLE PRECISION")])))
+  (jdbc/execute! ds ["ALTER TABLE topics ALTER COLUMN priority SET DEFAULT 50"])
+
+  ;; Range backstop for the insert paths that never reach
+  ;; freememo.priority/normalize (create-topic!, insert-topic-rows!, the
+  ;; migration inserts). PostgreSQL orders NaN above every non-NaN value, so
+  ;; `<= 100` rejects NaN and no separate NaN clause is needed — a NaN priority
+  ;; would otherwise sort last forever and bury the topic at the foot of the
+  ;; learning queue. NULL passes, as it does for every CHECK, so the column
+  ;; stays nullable.
+  ;;
+  ;; PostgreSQL has no ADD CONSTRAINT IF NOT EXISTS, so presence is tested by
+  ;; name. Add-when-absent, NOT the DROP-then-ADD used for event_type above:
+  ;; ADD CONSTRAINT takes ACCESS EXCLUSIVE and scans the whole table, and
+  ;; `topics` is read on every page. Paying that per boot is what the guard on
+  ;; the type change above exists to avoid. Changing the RANGE later therefore
+  ;; needs an explicit DROP — comparing definition text does not work, because
+  ;; PostgreSQL rewrites it (`priority >= (0)::double precision`).
+  (when-not (some? (jdbc/execute-one! ds
+                     ["SELECT 1 FROM pg_constraint WHERE conname = 'topics_priority_range_check'"]))
+    (tel/log! {:level :info :id ::add-priority-range-check} "Adding topics priority range CHECK")
+    (jdbc/execute! ds ["ALTER TABLE topics ADD CONSTRAINT topics_priority_range_check
+                        CHECK (priority >= 0 AND priority <= 100)"]))
 
   ;; SuperMemo import provenance. sm_rank is the topic's exact position in the
   ;; source collection's priority order; `priority` holds the same ordering
@@ -1246,7 +1282,7 @@
                              (:user_id p) (:document_id p) (str "Page " (:page_number p))
                              (:text p) (:page_number p)
                              (if (true? (:is_done p)) "done" "active")
-                             (or (:priority p) 50)
+                             (or (:priority p) priority/priority-default)
                              (or (:interval_days p) 1.0)
                              (or (:a_factor p) 2.0)
                              (:next_review_at p) (:last_review_at p)
@@ -1307,7 +1343,7 @@
                                                    :title title
                                                    :content (sanitize-utf8 (:content ci))
                                                    :status (or (:status ci) "active")
-                                                   :priority (or (:priority ci) 50)
+                                                   :priority (or (:priority ci) priority/priority-default)
                                                    :interval_days (or (:interval_days ci) 1.0)
                                                    :a_factor (or (:a_factor ci) 2.0)
                                                    :next_review_at (:next_review_at ci)
@@ -1352,7 +1388,7 @@
                                                    :title title
                                                    :content (sanitize-utf8 (:content ci))
                                                    :status (or (:status ci) "active")
-                                                   :priority (or (:priority ci) 50)
+                                                   :priority (or (:priority ci) priority/priority-default)
                                                    :interval_days (or (:interval_days ci) 1.0)
                                                    :a_factor (or (:a_factor ci) 2.0)
                                                    :next_review_at (:next_review_at ci)
@@ -2018,7 +2054,7 @@
         row (cond-> {:kind (or (:kind attrs) "basic")
                      :title clean-title
                      :status (or (:status attrs) "active")
-                     :priority (or (:priority attrs) 50)}
+                     :priority (or (:priority attrs) priority/priority-default)}
               (:user-id attrs) (assoc :user_id (:user-id attrs))
               (:parent-id attrs) (assoc :parent_id (:parent-id attrs))
               sanitized (assoc :content sanitized
@@ -2041,8 +2077,9 @@
                  :where [:and [:= :id id] [:is :staged_delete_id nil]]})))
 
 (defn get-topic-priority
-  "Current review priority for a topic (0=highest…100=lowest). Returns nil for
-   a missing or staged-for-deletion topic; callers default to 50."
+  "Current review priority for a topic (0=highest…100=lowest, three decimal
+   places). Returns nil for a missing or staged-for-deletion topic; callers
+   default to priority/priority-default."
   [id]
   (some-> (jdbc/execute-one! ds
             (sql/format {:select [:priority]
@@ -2892,7 +2929,7 @@
                                   :content_text (text/strip-html sanitized)
                                   :page_number (inc i)
                                   :status "active"
-                                  :priority 50}))
+                                  :priority priority/priority-default}))
                              chapters)
               chapter-ids (when (seq chapter-rows)
                             (let [returned (jdbc/execute! tx
@@ -4115,16 +4152,36 @@
          id])))))
 
 (defn update-topic-priority!
-  "Update a topic's priority (0=highest, 100=lowest). Owner-gated by `user-id`.
-   Logs 'priority-change' event only when new value differs from current (no-op skipped)."
-  [user-id id priority]
-  (jdbc/with-transaction [tx ds]
-    (when (= user-id (subtree-owner tx id))
-     (when-let [before (snapshot-topic-row tx id)]
-      (when (not= (:priority before) priority)
-        (insert-repetition! tx id "priority-change" before)
-        (jdbc/execute-one! tx
-          ["UPDATE topics SET priority = ? WHERE id = ?" priority id]))))))
+  "Update a topic's priority (0=highest … 100=lowest, three decimal places).
+   Owner-gated by `user-id`.
+   Pre : `raw-priority` is unvalidated caller input — priority/normalize is
+         the write boundary, so nil, NaN and out-of-range all arrive legally.
+   Post: topics.priority holds the normalized value.
+   Logs 'priority-change' only when the normalized value differs from the
+   stored one. BOTH SIDES ARE COERCED TO double before that comparison: the
+   column reads back as a Double while Transit delivers a whole number as a
+   Long, and (not= 50.0 50) is true — an uncoerced compare would log a
+   priority-change event on every save of an unchanged whole number.
+   A stored NULL stays distinct from every normalized value, so the first
+   write to a NULL row always lands.
+   Returns the outcome, because a caller cannot otherwise tell a refused write
+   from a completed one: :updated, :unchanged (already at that value), or
+   :denied (not the owner, or no such topic). :unchanged and :updated are both
+   successes — only :denied means the stored value is not what was asked for."
+  [user-id id raw-priority]
+  (let [normalized (priority/normalize raw-priority)]
+    (jdbc/with-transaction [tx ds]
+      (if (not= user-id (subtree-owner tx id))
+        :denied
+        (if-let [before (snapshot-topic-row tx id)]
+          (if (= (some-> (:priority before) double) normalized)
+            :unchanged
+            (do
+              (insert-repetition! tx id "priority-change" before)
+              (jdbc/execute-one! tx
+                ["UPDATE topics SET priority = ? WHERE id = ?" normalized id])
+              :updated))
+          :denied)))))
 
 (defn postpone-topic!
   "Postpone a topic by N days without changing interval/a-factor. Owner-gated by
