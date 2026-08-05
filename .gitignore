@@ -35,6 +35,16 @@ logs/
 # Cloudflare tunnel launcher — contains the tunnel TOKEN; never commit.
 /tunnel.sh
 
+# Playwright suite output. `npm run fixtures` regenerates the fixtures
+# deterministically, so none of this belongs in history.
+/playwright/fixtures/out/
+/playwright/reports/
+/playwright/test-results/
+/playwright/playwright-report/
+# Playwright writes its run state beside the invoking directory, which is the
+# repo root whenever a command runs from there.
+/test-results/
+
 # Third-party client assets: downloaded by `clj -X:build vendor/fetch!` and
 # hash-verified against vendor-lock.sha256. Never committed (3.4 MB of binaries).
 /resources/public/freememo/vendor/
