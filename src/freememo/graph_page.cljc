@@ -217,7 +217,13 @@
               ;; on the mutation counter + node count.
               (e/for-by identity [_k [[kg-bump node-count]]]
                 (dom/div
-                  (dom/props {:style {:position "absolute" :inset "0"}})
+                  ;; The background is what body already paints here, stated as
+                  ;; a value so graph-render can READ it: canvas chrome (hover
+                  ;; pill, dimmed nodes) cannot inherit a colour, and deriving
+                  ;; it keeps the palette in index.css. Dropping it degrades
+                  ;; those two to light-theme constants.
+                  (dom/props {:style {:position "absolute" :inset "0"
+                                      :background-color "var(--color-bg-page)"}})
                   (schedule-graph-init! !ctx dom/node payload
                     (fn [id] (reset! !entity-card (when id {:id id}))))
                   (e/on-unmount
