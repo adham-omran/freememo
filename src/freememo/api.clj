@@ -25,6 +25,7 @@
    [freememo.wayl :as wayl]
    [freememo.geo :as geo]
    [freememo.config :as config]
+   [freememo.account-export :as account-export]
    [freememo.archive-http :as archive-http]
    [freememo.upload-http :as upload-http]
    [freememo.video-http :as video-http]
@@ -935,6 +936,9 @@
    {:method :post :path "/api/credits/checkout" :handler #'credits-checkout-handler :body :small}
    {:method :post :path "/api/wayl/webhook"     :handler #'wayl-webhook-handler     :body :small}
    {:method :post :path "/login"                :handler #'login-post-handler       :body :small}
+   ;; No :body key — that cap governs REQUEST bodies, and this route's body is
+   ;; the response (plans/user-data-export-import.md §5.3.4).
+   {:method :get  :path    "/api/account/export" :handler #'account-export/download-handler}
    {:method :get  :pattern #"/api/pdf/\d+"      :handler #'get-pdf-handler}
    {:method :get  :pattern #"/api/audio/\d+"    :handler #'get-audio-handler}
    {:method :get  :path    "/api/video/status"  :handler #'upload-http/status-handler}

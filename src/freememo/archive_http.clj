@@ -106,8 +106,10 @@
 
    Pre:  authenticated; session_id names a complete session the caller owns
          whose flow is 'archive'.
-   Post: 200 {session_id, flow, filename} where flow is \"supermemo\" or
-         \"repo\", or 400 with the reason. The session survives a 200 — the
+   Post: 200 {session_id, flow, filename} where flow is whatever
+         `ct/classify-archive` resolved — \"account\", \"supermemo\" or \"repo\" —
+         or 400 with the reason. No flow is whitelisted here, so a new archive
+         flow needs no change to this handler. The session survives a 200 — the
          Electric confirm service consumes it."
   [request]
   (if-let [user-id (require-auth request)]

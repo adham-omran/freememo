@@ -177,20 +177,33 @@
                                 Long/MAX_VALUE quota/default-upload-max-bytes)
           :configurator (fn [server]
                           ;; Gzip served assets
-                          (.setHandler server (doto (new org.eclipse.jetty.server.handler.gzip.GzipHandler)
-                                                (.setMinGzipSize 1024)
-                                                ;; Video is already compressed, and gzipping a
-                                                ;; ranged response is worse than useless: Jetty
-                                                ;; would have to drop Content-Length and the
-                                                ;; byte offsets in Content-Range would no longer
-                                                ;; describe the body, breaking <video> seeking.
-                                                ;; (plans/incremental-video.md §4.5 5.3)
-                                                (.setExcludedPaths (into-array String ["/api/video/*"]))
-                                                (.setExcludedMimeTypes
-                                                  (into-array String ["video/mp4" "video/webm"
-                                                                      "video/ogg" "video/quicktime"
-                                                                      "audio/mpeg"]))
-                                                (.setHandler (.getHandler server)))))}))))
+                          (let [gzip (new org.eclipse.jetty.server.handler.gzip.GzipHandler)]
+                            (.setHandler server
+                              (doto gzip
+                                (.setMinGzipSize 1024)
+                                ;; Video is already compressed, and gzipping a
+                                ;; ranged response is worse than useless: Jetty
+                                ;; would have to drop Content-Length and the
+                                ;; byte offsets in Content-Range would no longer
+                                ;; describe the body, breaking <video> seeking.
+                                ;; (plans/incremental-video.md §4.5 5.3)
+                                (.setExcludedPaths (into-array String ["/api/video/*"]))
+                                ;; ADD to Jetty's excludes, never replace them.
+                                ;; setExcludedMimeTypes REPLACES the 47 defaults, and
+                                ;; those defaults are what keep already-compressed
+                                ;; responses out of the compressor — every image type,
+                                ;; application/zip, application/zstd, text/event-stream.
+                                ;; Passing a bare five-element list dropped all 47, so
+                                ;; prod gzipped every JPEG and PNG it served from
+                                ;; /api/media/:id, and would gzip a user-data export.
+                                ;; video/mp4, video/quicktime and audio/mpeg are already
+                                ;; defaults; webm and ogg are the only real additions.
+                                ;; (plans/user-data-export-import.md §5.3.6)
+                                (.setExcludedMimeTypes
+                                  (into-array String
+                                    (into (vec (.getExcludedMimeTypes gzip))
+                                      ["video/webm" "video/ogg"])))
+                                (.setHandler (.getHandler server))))))}))))
 
 #?(:cljs ; client entrypoint
    (defn ^:export -main []

@@ -64,6 +64,7 @@
        "score" "Score"
        "repo" "Code Repository"
        "supermemo" "SuperMemo Collection"
+       "account" "FreeMemo Account Export"
        "Item")))
 
 ;; ── Paste-source detection ─────────────────────────────────────────
@@ -570,7 +571,7 @@
 ;;       dispatches `[Confirm-staged-upload upload-id image-mode] to
 ;;       web-import/confirm-staged-upload!*. Both via e/server, navigate on ok.
 ;; Cancel button: locally resets staged state without claiming the upload.
-(e/defn ConfirmingStage [user-id navigate-to-viewer! !stage !staged !flow
+(e/defn ConfirmingStage [user-id navigate-to-viewer! navigate-to-library! !stage !staged !flow
                          !image-mode !advanced-open !extract-facts? !error !quota-error? !busy-msg]
   (e/client
     (let [staged (e/watch !staged)
@@ -658,6 +659,12 @@
                                [`Confirm-repo-session session-id extract-facts?]
                                (and session-id (= flow "supermemo"))
                                [`Confirm-supermemo-session session-id nil]
+                               ;; nil is the destination parent: the tree root.
+                               ;; A picker is not built yet — see
+                               ;; plans/user-data-export-import.md §9.
+                               (and session-id (= flow "account"))
+                               [`Confirm-account-session session-id nil]
+                               (= flow "account") [`Confirm-account-upload upload-id nil]
                                (= flow "repo") [`Confirm-repo-upload upload-id extract-facts?]
                                (= flow "supermemo") [`Confirm-supermemo-upload upload-id nil]
                                :else [`Confirm-staged-upload upload-id (keyword image-mode)])))]
@@ -691,6 +698,10 @@
                                               (web-import/confirm-repo-session!* user-id u-id arg)
                                               (= head `Confirm-supermemo-session)
                                               (web-import/confirm-supermemo-session!* user-id u-id)
+                                              (= head `Confirm-account-session)
+                                              (web-import/confirm-account-session!* user-id u-id arg false)
+                                              (= head `Confirm-account-upload)
+                                              (web-import/confirm-account-upload!* user-id u-id arg false)
                                               (= head `Confirm-repo-upload)
                                               (web-import/confirm-repo-upload!* user-id u-id arg)
                                               (= head `Confirm-supermemo-upload)
@@ -699,7 +710,13 @@
                                               (web-import/confirm-staged-upload!* user-id u-id arg))))]
                 (case r
                   (if (:ok r)
-                    (case (navigate-to-viewer! (:topic-id r)) (token))
+                    ;; An account import returns no topic id — it lands a whole
+                    ;; tree, not one document — so it navigates to the Library
+                    ;; rather than to a viewer.
+                    (case (if (:import-id r)
+                            (navigate-to-library!)
+                            (navigate-to-viewer! (:topic-id r)))
+                      (token))
                     (case (url-set-error! !error !quota-error? !stage (:error r)) (token))))))))))))
 
 ;; Pre:  !score-pdf / !score-audio hold nil or {:upload-id :filename :size} —
@@ -854,6 +871,12 @@
           navigate-to-viewer! (fn [doc-id]
                                 (reset! !show false)
                                 (navigate! :viewer (nav/nav-topic doc-id nil)))
+          ;; An account import lands a whole tree, so there is no single topic to
+          ;; open. Kept separate from navigate-to-viewer! rather than folded into
+          ;; it on a nil doc-id: one name, one destination.
+          navigate-to-library! (fn []
+                                 (reset! !show false)
+                                 (navigate! :library))
           ctx {:!stage !stage :!flow !flow :!staged !staged :!filename !filename
                :!error !error :!quota-error? !quota-error?
                :!title !title :!html-text !html-text :!md-text !md-text
@@ -1003,7 +1026,7 @@
           (case stage
             :fetching (StatusStage "Fetching…")
             :importing (StatusStage "Importing…")
-            :confirming (ConfirmingStage user-id navigate-to-viewer!
+            :confirming (ConfirmingStage user-id navigate-to-viewer! navigate-to-library!
                                          !stage !staged !flow
                                          !image-mode !advanced-open !extract-facts?
                                          !error !quota-error? !busy-msg)

@@ -10,7 +10,8 @@
 
    Both fns return the canonical `{:ok true …}` / `{:ok false :error …}`
    shape expected by Forms5 services."
-  (:require [freememo.archive :as archive]
+  (:require [freememo.account-import :as account-import]
+            [freememo.archive :as archive]
             [freememo.audio :as audio]
             [freememo.biblio-import :as biblio-import]
             [freememo.db :as db]
@@ -203,6 +204,59 @@
       (log/log-error (str "confirm-supermemo-session!* failed: " (.getMessage e)))
       {:ok false :error (archive-too-large-message e "Import failed")})))
 
+(def account-extract-limits
+  "Extraction caps for an account transfer archive
+   (plans/user-data-export-import.md §5.6.3).
+
+   `archive/default-limits` are sized for a code repo and every one of the three
+   binds well below a real account: 300 MB total against a corpus that carries
+   PDFs and video, 20 MB per entry against a single video large object, and
+   50 000 entries against one file per blob. `:max-total-bytes` is the cap that
+   binds against DISK, so it is env-tunable rather than generous by default —
+   same reasoning as `supermemo-extract-limits`."
+  {:prefix "account-import"
+   :max-total-bytes (env-bytes "ACCOUNT_MAX_EXTRACT_BYTES" (* 32 1024 1024 1024))
+   :max-entries (env-bytes "ACCOUNT_MAX_EXTRACT_ENTRIES" 200000)
+   :max-entry-bytes (env-bytes "ACCOUNT_MAX_EXTRACT_ENTRY_BYTES" (* 8 1024 1024 1024))})
+
+(defn confirm-account-session!*
+  "Import an account export from a completed chunked upload session.
+
+   The account sibling of `confirm-supermemo-session!*`, and it reads from the
+   session's large object for the same reason: an export carrying video cannot
+   enter heap.
+
+   Pre  : user-id owns session-id; the session is complete and has flow
+          'archive'; the archive holds a FreeMemo account export.
+          `parent-topic-id` is a topic user-id owns, or nil for the tree root.
+   Post : {:ok true :import-id N :resumed? bool :report {...}} on success,
+          {:ok false :error S} otherwise. On SUCCESS the session is released —
+          large object unlinked, materialized archive deleted, and every reserved
+          byte refunded, because the archive was transport and only what the
+          import stored should stay counted.
+   Invariant: on failure the session SURVIVES, so a retry needs no re-upload.
+          That is what makes a resume possible after a blob write fails.
+   Invariant: the extracted temp dir has exactly one owner — this fn, which
+          deletes it on every path."
+  [user-id session-id parent-topic-id allow-second-copy?]
+  (try
+    (let [m (db/materialize-upload-archive! user-id session-id)]
+      (if-not (:ok m)
+        m
+        (let [dir (archive/extract-to-temp-dir! (:file m) account-extract-limits)]
+          (try
+            (let [r (account-import/import-archive! db/ds user-id dir parent-topic-id
+                      {:allow-second-copy? allow-second-copy?})]
+              (when (:ok r)
+                (commands/bump! user-id :import-account)
+                (db/release-upload-session! user-id session-id))
+              r)
+            (finally
+              (archive/delete-dir! dir))))))
+    (catch Exception e
+      (log/log-error (str "confirm-account-session!* failed: " (.getMessage e)))
+      {:ok false :error (archive-too-large-message e "Import failed")})))
+
 (defn confirm-repo-session!*
   "Import a code repository from a completed chunked upload session.
 
@@ -299,6 +353,39 @@
       {:ok false :error "Upload not found or expired"})
     (catch Exception e
       (log/log-error (str "confirm-supermemo-upload!* failed: " (.getMessage e)))
+      {:ok false :error (archive-too-large-message e "Import failed")})))
+
+(defn confirm-account-upload!*
+  "Finalize a staged account export into this account.
+
+   The staging sibling of `confirm-account-session!*`. Staging holds bytes in JVM
+   heap, so this path serves only an export small enough to have gone through
+   multipart — anything larger arrives as an upload session.
+
+   Pre  : user-id owns the staged upload; upload-id is unclaimed; the entry's
+          flow is :account. `parent-topic-id` is a topic user-id owns, or nil.
+   Post : {:ok true :import-id N :resumed? bool :report {...}} on success,
+          {:ok false :error S} otherwise.
+   Invariant: claim is one-shot — a replay returns {:ok false}, which also means
+          a failed import here cannot be resumed without re-uploading. That is
+          the cost of the heap path, and why the session path exists."
+  [user-id upload-id parent-topic-id allow-second-copy?]
+  (try
+    (if-let [entry (staging/claim! user-id upload-id)]
+      (let [{:keys [^bytes bytes flow]} entry]
+        (if (not= :account flow)
+          {:ok false :error (str "Not a FreeMemo account export: " flow)}
+          (let [dir (archive/extract-to-temp-dir! bytes account-extract-limits)]
+            (try
+              (let [r (account-import/import-archive! db/ds user-id dir parent-topic-id
+                        {:allow-second-copy? allow-second-copy?})]
+                (when (:ok r) (commands/bump! user-id :import-account))
+                r)
+              (finally
+                (archive/delete-dir! dir))))))
+      {:ok false :error "Upload not found or expired"})
+    (catch Exception e
+      (log/log-error (str "confirm-account-upload!* failed: " (.getMessage e)))
       {:ok false :error (archive-too-large-message e "Import failed")})))
 
 (defn confirm-score-upload!*

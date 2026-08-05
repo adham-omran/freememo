@@ -259,6 +259,16 @@
      :import-supermemo {:label "Import SuperMemo collection" :class :mutation :palette-hidden true
                         :table #{:topics :flashcards :sources :media :topic_repetitions}
                         :views (conj document-views :card-mutations)}
+     ;; An account import lands everything :import-supermemo does plus the
+     ;; knowledge graph, the card schedules and the settings — it is the widest
+     ;; mutation in the app, so it declares every table it writes.
+     :import-account  {:label "Import account export" :class :mutation :palette-hidden true
+                       :table #{:topics :flashcards :sources :media :topic_repetitions
+                                :topic_pins :occlusion_groups :score_groups
+                                :card_schedules :card_versions :assistant_chats
+                                :kg_entities :kg_predicates :kg_facts :kg_questions
+                                :kg_reviews :settings :topic_files :topic_videos}
+                       :views (conj document-views :card-mutations :settings-refresh)}
      :append-images   {:label "Append images" :class :mutation :palette-hidden true
                        :table #{:topics :topic_files} :views document-views}
      :credits-granted {:label "Credits granted" :class :mutation :palette-hidden true

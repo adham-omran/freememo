@@ -1187,6 +1187,65 @@
   (jdbc/execute! ds ["UPDATE users SET last_metered_at = now() WHERE last_metered_at IS NULL"])
 )
 
+(defn- setup-schema-account-transfer!
+  "Import bookkeeping for account transfer (plans/user-data-export-import.md
+   §5.5). Must run after setup-schema-topics! — `parent_topic_id` FKs topics.
+
+   Two tables rather than one. `account_imports` is one row per import RUN, and
+   `account_import_ids` is the source-id to new-id map for that run. Folding the
+   run header into the map table would need a nullable source_kind and
+   source_id, which the primary key cannot carry.
+
+   The map is what makes three things possible from one place: the
+   already-imported warning, the resume that skips rows already created, and
+   blob-gap detection. It is target-instance state and is never exported.
+
+   `copy_ordinal` is what separates a RESUME from a deliberate second copy. A
+   rerun of the same export resumes the newest row for it; the explicit override
+   inserts a fresh row at the next ordinal, so both copies keep their own map and
+   neither can be mistaken for the other.
+
+   `metadata_done_at` and `blobs_done_at` are the two phases. Metadata commits
+   in one transaction, so its stamp is written inside that transaction and a
+   crash leaves the whole run absent. Blobs commit one at a time, so their stamp
+   lands only when every blob is present — an unstamped run with a stamped
+   metadata phase is exactly what a resume looks for."
+  []
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS account_imports (
+      id BIGSERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      export_id TEXT NOT NULL,
+      copy_ordinal INTEGER NOT NULL DEFAULT 0,
+      format_version INTEGER NOT NULL,
+      source_instance TEXT,
+      exported_at TEXT,
+      parent_topic_id INTEGER REFERENCES topics(id) ON DELETE SET NULL,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      metadata_done_at TIMESTAMPTZ,
+      blobs_done_at TIMESTAMPTZ,
+      report JSONB,
+      UNIQUE (user_id, export_id, copy_ordinal)
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_account_imports_user
+                      ON account_imports(user_id, started_at DESC)"])
+
+  ;; source_kind is a table name, not an enum: the exported table set lives in
+  ;; freememo.account-transfer-format and a CHECK here would be a second copy of
+  ;; it, free to drift. source_id is BIGINT because media and card_versions are
+  ;; BIGSERIAL on the source side.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS account_import_ids (
+      import_id BIGINT NOT NULL REFERENCES account_imports(id) ON DELETE CASCADE,
+      source_kind TEXT NOT NULL,
+      source_id BIGINT NOT NULL,
+      new_id BIGINT NOT NULL,
+      PRIMARY KEY (import_id, source_kind, source_id)
+    )"])
+  ;; Unindexed FK referencing columns make ON DELETE CASCADE table-scan.
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_account_import_ids_import
+                      ON account_import_ids(import_id)"]))
+
 (defn setup-schema []
   (tel/log! :info "Setting up database schema")
 
@@ -1202,6 +1261,7 @@
   (setup-schema-kg!)
   (setup-schema-card-quiz!)
   (setup-schema-video!)
+  (setup-schema-account-transfer!)
 
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
   (run-grandfather-migration!)

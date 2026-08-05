@@ -6,6 +6,7 @@
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.util :refer [mac-platform?]]
    [freememo.storage-section :refer [StorageSection]]
+   [freememo.account-transfer-section :refer [AccountTransferSection]]
    [freememo.credits-section :refer [CreditsSection]]
    [freememo.cost-history :refer [CostHistorySection]]
    [freememo.ai-features-section :refer [AIFeaturesSection]]
@@ -445,6 +446,10 @@
 
         ;; Storage usage (formerly its own tab; now part of Account)
             (StorageSection user-id)
+
+        ;; Account export — sits under Storage because both answer questions
+        ;; about the bytes the account holds (§5.7.1).
+            (AccountTransferSection user-id)
 
         ;; AI cost history — the user's credit ledger (searchable/filterable)
             (CostHistorySection user-id)

@@ -132,6 +132,25 @@
   [src]
   (archive/every-entry-name? src supermemo-required-entries))
 
+(def ^:private account-required-entries
+  "Both names an account transfer archive must hold.
+
+   `manifest.edn` alone is not enough — a code repository can contain a file by
+   that name, and `:repo` claims every unrecognised `.zip`, so a single-name test
+   would hijack such a repo. Requiring an `entities/*.ndjson` sibling makes the
+   pair specific to `freememo.account-export`, and the manifest is validated
+   again at import."
+  [#(= % "manifest.edn")
+   #(and (str/starts-with? % "entities/") (str/ends-with? % ".ndjson"))])
+
+(defn account-archive?
+  "True when an archive holds a FreeMemo account export.
+   Pre : `src` is a byte[] or a File holding a ZIP or 7z archive.
+   Post: true iff it holds both `manifest.edn` and an `entities/*.ndjson`.
+         Reads entry names only. Never throws."
+  [src]
+  (archive/every-entry-name? src account-required-entries))
+
 (defn classify-archive
   "Resolve an archive to its import flow, from the filename plus the container.
 
@@ -141,11 +160,11 @@
    `:supermemo` in one and `:repo` in the other imports as the wrong thing.
 
    Pre : `src` is a byte[] or a File; `filename` is a string or nil.
-   Post: [:supermemo nil] | [:repo nil] | [:reject <msg>].
-         A `.zip` holding a SuperMemo collection wins over `:repo`, which
-         claims every remaining `.zip`. A `.7z` has no flow other than
-         SuperMemo, and saying so beats staging it for an importer that will
-         reject it.
+   Post: [:account nil] | [:supermemo nil] | [:repo nil] | [:reject <msg>].
+         `:repo` claims every remaining `.zip`, so both specific flows must be
+         tested before it — an account export left to fall through would import
+         as a code repository. A `.7z` has no flow other than SuperMemo, and
+         saying so beats staging it for an importer that will reject it.
    Invariant: reads entry names only; decompresses nothing."
   [filename src]
   (let [lower (some-> filename str/lower-case)
@@ -161,6 +180,7 @@
       (not= :zip kind)
       [:reject "Not a valid ZIP archive."]
 
+      (account-archive? src) [:account nil]
       (supermemo-archive? src) [:supermemo nil]
       :else [:repo nil])))
 
