@@ -9,50 +9,39 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
-## Unreleased
-
-### Technical
-
-- **Crawlers now receive a static document, because they cannot run the app.**
-  Google's renderer supports no WebSocket connection, and this app sends every
-  word over one, so a crawler read zero words at every address. Measured on the
-  deployed page: an empty body, and 46 readable words in total, all of them in one
-  meta tag. `freememo.shell` now recognizes a crawler and serves a plain document
-  built from the landing page's own copy.
-  - **The words moved into `freememo.landing-copy`, a data namespace both
-    renderers read.** One home per sentence. A crawler that reads different words
-    than a visitor sees is what search engines call cloaking.
-  - That namespace holds no requires on purpose. The document renderer is plain
-    Clojure on the boot path, and a require of the Electric page would pull the
-    Electric compiler into the server's boot.
-  - The document carries no script, no stylesheet and no font. A crawler runs no
-    JavaScript here, so those would cost it four round-trips for nothing.
-  - Only the root address gets the document. Every other address answers 404 to a
-    crawler, so identical text never appears on many addresses. A future public
-    page needs an entry in the renderer, or crawlers will not see it.
-  - Link previews keep working. The document carries the full Open Graph set,
-    which is all a chat or social preview reads.
-- **`/robots.txt` is a real file, `/ads.txt` is a real route, and three
-  machine-read paths now answer 404.** All of them used to return the app page as
-  markup, because the page handler answers every address that matched nothing
-  else. A machine that asks for a text file and receives markup treats the file as
-  missing. `/ads.txt` answers 404 unless the deployment configures a body, which
-  is the honest answer for a deployment that authorizes no seller.
-
-## v20260805-aa496f6
+## v20260805-eb9cb3c
 
 ### For users
 
-- **Your whole account now leaves this instance in one file.** Settings → Account
-  has an **Export your data** card. It names what the archive will carry, and it
-  downloads a `.zip`.
+- **The Import page now leads with one place to put anything.** It was nine cards
+  of equal weight and no drop target. You could not drag a file onto it, could not
+  paste a link into it, and had to read nine descriptions before choosing.
+  - **Drop a file anywhere on the page, paste a link or text, or press Browse
+    files.** All three reach the same router, and it picks the import for you.
+  - **A row of chips names every format the page takes, each beside its own size
+    limit.** The number that governs a type now sits on that type. One list of
+    four ceilings read as a comparison, and 25 MB next to 8 GB invited the wrong
+    conclusion.
+  - **The Upload card is gone.** Uploading a document is what the intake area
+    does, and a card two hundred pixels away that opened a file dialog competed
+    with the control the page is built around.
+  - **Three cards stay in front — Link, Audio and Video — and six moved behind
+    "More sources".**
+  - Bug fix: **an oversized audio file used to upload in full before the server
+    refused it.** The page checked the document limit alone, so a 40 MB recording
+    travelled the whole way and then met the 25 MB transcription limit. The check
+    now reads the limit that the file's own type carries.
+  - Bug fix: **the source cards, the score toolbar and the video toolbar painted
+    transparent.** All three named a color that no stylesheet defined.
+- **Export your data.** Settings → Account has an **Export your data** card. It
+  names what the archive will carry, and it downloads a `.zip`.
   - **The archive holds the account, not a summary.** Documents and their files,
     cards and their review schedule, the knowledge graph, your review history and
     your settings all travel.
-  - **To load it, open another FreeMemo instance and drop the `.zip` on the
-    Import page's Upload card.** The contents of an archive pick the flow now,
-    not the file name, so one card takes an account export, a SuperMemo
-    collection or a code repository.
+  - **To load it, open another FreeMemo instance and drop the `.zip` on its
+    Import page.** The contents of an archive pick the import now, not the file
+    name, so the same drop takes an account export, a SuperMemo collection or a
+    code repository.
   - **An import adds to what is already there.** It replaces nothing. Every
     identifier is renumbered for the target instance, so the links between your
     documents, cards and images survive the move.
@@ -62,10 +51,6 @@ Format contract (see freememo.changelog):
     the next attempt continues from there.
   - **The same export cannot import twice by accident.** A second attempt is
     refused and names the date of the first one.
-- **freememo.net now shows ads, and anyone who has bought credits sees none.** A
-  self-hosted build shows no ad and contacts no ad service, whatever it is
-  configured with. If you have paid and an ad still reaches you, contact me and I
-  will clear it by hand.
 - **Review priority takes decimals now, to three places.** `12.345` is a legal
   value. The column held whole numbers before, so a collection above a hundred
   topics could not state a stable order — topics shared a priority and the queue
@@ -85,14 +70,34 @@ Format contract (see freememo.changelog):
   seven of the nine presets fell under the contrast floor — dark mode now drops
   the hue and keeps the theme text color, while light mode keeps every authored
   color. The keyboard skip link drew blue on white.
-- Bug fix: **knowledge-graph labels were invisible in dark mode.** The graph draws
-  its labels on a canvas, which page styles never reach, so they stayed black on
-  the dark background. They follow the theme now, including a change of the
-  operating system preference while the graph is open.
+- Bug fix: **the knowledge graph now follows the theme, and hovering a node no
+  longer hides its label.** The graph paints on a canvas, which page styles never
+  reach, so every color in it was a light-theme constant. Labels stayed black on
+  the dark background. The pill under a hovered node was filled white, which put
+  the label at about 1.1:1 — hovering a node hid the word you were reaching for.
+  Labels, that pill, the dimmed nodes outside your focus and the edges are now all
+  mixed from the page's own text and background colors, so both themes get
+  readable values from one palette. A change of the operating system preference
+  while the graph is open moves with it.
 - **The Zotero plugin reads its updates from the current repository address.**
 
 ### Known issues
 
+- **The Settings export card still tells you to drop the archive on the Upload
+  card, and that card no longer exists.** The archive imports either way — the
+  Import page takes it. The sentence is wrong, not the behavior.
+- **One unreadable file refuses a whole drop, and so does a mixed one.** A
+  selection holding a format the page does not take imports nothing, and a
+  selection mixing kinds asks you to drop them separately. Importing the readable
+  part would hide the refusal.
+- **An audio-only `.mp4` or `.webm` lands as a video topic.** Both containers hold
+  either kind, and one drop target has no signal to tell them apart, so the
+  extension decides and it decides video. It still transcribes. The Audio card no
+  longer offers either extension.
+- **Four things the Import page is specified to do are not built yet** — a list of
+  recent imports, a link to the migration sources, the number keys that select a
+  card, and remembering whether "More sources" was open. Escape does not close that
+  disclosure either.
 - **An account import always lands at the top of your tree.** A picker for the
   destination parent is not built. Move the imported root yourself afterwards.
 - **An import tells you almost nothing about what it did.** The report is
@@ -125,6 +130,75 @@ Format contract (see freememo.changelog):
      CHANGELOG.md is public, and the committed file names no ad vendor anywhere.
      That detail lives in CLAUDE.md and in plans/, both excluded. -->
 
+- **Crawlers now receive a static document, because they cannot run the app.**
+  Google's renderer supports no WebSocket connection, and this app sends every
+  word over one, so a crawler read zero words at every address. Measured on the
+  deployed page: an empty body, and 46 readable words in total, all of them in one
+  meta tag. `freememo.shell` now recognizes a crawler and serves a plain document
+  built from the landing page's own copy.
+  - **The words moved into `freememo.landing-copy`, a data namespace both
+    renderers read.** One home per sentence. A crawler that reads different words
+    than a visitor sees is what search engines call cloaking.
+  - That namespace holds no requires on purpose. The document renderer is plain
+    Clojure on the boot path, and a require of the Electric page would pull the
+    Electric compiler into the server's boot.
+  - The document carries no script, no stylesheet and no font. A crawler runs no
+    JavaScript here, so those would cost it four round-trips for nothing.
+  - Only the root address gets the document. Every other address answers 404 to a
+    crawler, so identical text never appears on many addresses. A future public
+    page needs an entry in the renderer, or crawlers will not see it.
+  - Link previews keep working. The document carries the full Open Graph set,
+    which is all a chat or social preview reads.
+- **`/robots.txt` is a real file, `/ads.txt` is a real route, and three
+  machine-read paths now answer 404.** All of them used to return the app page as
+  markup, because the page handler answers every address that matched nothing
+  else. A machine that asks for a text file and receives markup treats the file as
+  missing. `/ads.txt` answers 404 unless the deployment configures a body, which
+  is the honest answer for a deployment that authorizes no seller.
+- **`freememo.import-types` is the single definition of the accepted extension
+  set.** That set existed four times before — the document and audio `accept`
+  strings, `video-import-modal/accepted-extensions`, and
+  `archive-upload/archive-file?` — and nothing kept them in agreement. The chips,
+  the drop router, each card's file dialog and the rejection message all read from
+  it, so adding an extension is one edit. `:transport` names the protocol that
+  carries the bytes, not the server's import flow: the server still resolves an
+  archive's flow from its entry names.
+- **The intake area owns no transport.** It classifies what arrived, decides which
+  modal opens, and hands the file over. Every ceiling check and every upload
+  protocol stays in the modal that already had it, because a second copy of the
+  archive-versus-multipart split is a second place for it to drift. `ImportModal`
+  and `VideoImportModal` each took one more positional atom for that handoff.
+- **Which modal is open is one fact.** `!open-source` holds the source keyword,
+  and a modal closes itself by writing `false` there, so `nil` and `false` both
+  read as closed. Eight independent booleans made "is anything open" a question
+  you had to ask eight times.
+- **`plan-drop` and `plan-paste` are pure**, and the reactive layer only applies
+  what they return. The page-level `dragover` and `paste` listeners install
+  through `e/snapshot` and are torn down by `e/on-unmount`, so they die with the
+  page instead of surviving into another tab.
+- **`max-archive-bytes` moved from `archive-http` to `archive`** for the reason
+  `video/upload-limits` records: the import UI needs the number, and a UI
+  namespace requiring an HTTP-handler namespace breaks Electric's JVM reload.
+- **Every canvas color in the graph is mixed from the container's own computed
+  `color` and `background-color`,** so `graph_render.cljs` holds no second
+  palette. `graph_page` paints `--color-bg-page` on the container for exactly that
+  read — canvas chrome cannot inherit a background. An unparseable or transparent
+  surface falls back to sigma's light-theme constants rather than to a color
+  derived from the wrong surface.
+  - **The edge color is applied in the reducer and cannot be a tracked setting.**
+    sigma bakes `:defaultEdgeColor` into each edge's display data during
+    indexation, and `handleSettingsUpdate` re-indexes nothing, so a `setSetting`
+    on a theme change repaints the old color. Reducers run on every refresh.
+  - **`:colours` is seeded before the renderer is constructed.** The Sigma
+    constructor indexes and refreshes, so both reducers read the atom before the
+    tracker has run, and a nil color would reach sigma's parser.
+  - `defaultDrawNodeHover` is replaced, because sigma 3.0.2 hardcodes a `#FFF`
+    fill and a `#000` shadow for that pill. The replacement keeps the geometry,
+    fills with the page background, outlines instead of shadowing, and delegates
+    the label to sigma's own drawer.
+- **`src/hyperfiddle/history4.cljc` is deleted.** It shadowed the namespace the
+  `com.hyperfiddle/hyperfiddle` dependency already provides, which `CLAUDE.md`
+  says not to do.
 - **`freememo.account-export`, `freememo.account-import` and
   `freememo.account-transfer-format`** — the archive is one `.zip`:
   `manifest.edn` first, then one newline-delimited JSON file per table under
@@ -251,9 +325,15 @@ Format contract (see freememo.changelog):
   server holds.
 - **New tests.** `priority_test`, `account_transfer_format_test` and
   `archive_zip64_test` run 25 tests and 158 assertions green together.
-  `account_import_test` and the deployment-hook suite cover the rest.
-  `every-table-has-a-disposition` is the one that will catch a new table with no
-  export decision — and `:test` is still not in CI, so run it by hand.
+  `account_import_test`, `crawler_page_test` and the deployment-hook suite cover
+  the rest. `every-table-has-a-disposition` is the one that will catch a new table
+  with no export decision — and `:test` is still not in CI, so run it by hand.
+- **`crawler_page_test` needs a prod client build in the tree.** Eight of its nine
+  tests pass anywhere. The ninth asserts that a request with a browser
+  user-agent gets the app rather than the crawler document, and with no
+  `resources/public/freememo/js` present the shell answers 404 with
+  `::missing-shadow-build-manifest` instead. Run `clj -X:build:prod build-client`
+  before reading that one as a failure.
 
 ## v20260803-dad3fce
 
