@@ -9,6 +9,22 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
+## Unreleased
+
+### Technical
+
+- **A deployment can now place its own content in one named spot in the app.**
+  `freememo.deployment-slot` renders an empty container and asks the deployment to
+  fill it. The first spot is the empty band under the Home page's quick links.
+  Nothing renders unless the deployment supplies a filler, so a self-hosted build
+  shows no container and contacts nobody, and dev never reaches the seam at all.
+  - Electric owns the container. A container appended by plain JavaScript into a
+    parent whose children change makes Electric remove the wrong node and leave
+    orphaned subtrees behind, with nothing in the console. Injecting into an
+    Electric-created leaf is safe. A browser check confirmed both cases.
+  - `CLAUDE.md` records the narrow rule, which replaces a broader claim that said
+    no injection inside an Electric element was safe.
+
 ## v20260803-dad3fce
 
 ### For users
