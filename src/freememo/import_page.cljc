@@ -116,7 +116,7 @@
               (ImportModal !show-link user-id :url navigate!)))
 
           (let [show-upload (e/watch !show-upload)]
-            (ImportCard :upload "Upload" "PDF, EPUB, HTML, Markdown, a ZIP code base, or a SuperMemo collection, chosen by file extension" (fn [] (reset! !show-upload true)))
+            (ImportCard :upload "Upload" "PDF, EPUB, HTML, Markdown, or a .zip — a FreeMemo account export, a SuperMemo collection, or a code base" (fn [] (reset! !show-upload true)))
             (when show-upload
               (ImportModal !show-upload user-id :file navigate!)))
 

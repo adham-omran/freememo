@@ -58,7 +58,7 @@
           (dom/props {:class "hint"})
           (dom/text (str "The archive holds your whole account: documents and their files, "
                       "cards and their review schedule, the knowledge graph, and your "
-                      "settings. Import it into another FreeMemo instance from the Import "
-                      "page. Large accounts take a while to start downloading, and the "
-                      "browser cannot show progress because the size is not known in "
-                      "advance.")))))))
+                      "settings. To load it into another FreeMemo instance, open that "
+                      "instance's Import page and drop the .zip on the Upload card. "
+                      "Large accounts take a while to start downloading, and the browser "
+                      "cannot show progress because the size is not known in advance.")))))))

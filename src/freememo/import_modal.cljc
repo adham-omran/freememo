@@ -1041,9 +1041,16 @@
               :file (let [cap-label (when (pos? cap-bytes) (format-mb cap-bytes))]
                       (FilePicker !file !file-input handle-file
                                   ".pdf,.epub,.html,.htm,.md,.markdown,.zip,.7z"
+                                  ;; An archive's CONTENTS pick its flow, not its
+                                  ;; name: ct/classify-archive tests for a
+                                  ;; FreeMemo account export, then a SuperMemo
+                                  ;; collection, then falls back to a code repo.
+                                  ;; Saying "extension picks the flow" was already
+                                  ;; wrong for the two zip flows and is wrong for
+                                  ;; three now.
                                   (if cap-label
-                                    (str "PDF, EPUB, HTML, Markdown, a code repo, or a SuperMemo collection (.zip / .7z) — file extension picks the flow. Maximum " cap-label ".")
-                                    "PDF, EPUB, HTML, Markdown, a code repo, or a SuperMemo collection (.zip / .7z) — file extension picks the flow.")))
+                                    (str "PDF, EPUB, HTML, Markdown, or a .zip / .7z holding a FreeMemo account export, a SuperMemo collection, or a code repo — an archive's contents pick the flow. Maximum " cap-label ".")
+                                    "PDF, EPUB, HTML, Markdown, or a .zip / .7z holding a FreeMemo account export, a SuperMemo collection, or a code repo — an archive's contents pick the flow.")))
               :audio (FilePicker !file !file-input handle-file
                                  ".mp3,.m4a,.mp4,.wav,.webm,.ogg,.oga,.flac,.mpeg,.mpga"
                                  "Audio file (mp3, m4a, wav, webm, ogg, flac). Maximum 25 MB.")
