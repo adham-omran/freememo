@@ -41,33 +41,36 @@
 
    `:id` is the card's identity everywhere — the palette intent, the open-modal
    atom, and the key mapping all use it. `:key` is the digit that selects the
-   card (spec §11.2). Code and Live Document carry no key yet: §11.2.2 covers
-   only eight cards, and the mapping for the ninth and tenth is an open
-   parameter (§16.3)."
-  [{:id :upload    :group :primary   :key "1" :icon :upload    :title "Upload"
-    :desc "Add a PDF, EPUB, HTML, or Markdown file"}
-   {:id :link      :group :primary   :key "2" :icon :link      :title "Link"
+   card (spec §11.2); Live Document carries none while §16.3 is open.
+
+   There is NO Upload card. Uploading a document is what the intake area does,
+   and a card two hundred pixels away that opens a file dialog was competing with
+   the control the whole page is built around. The `:upload` source id survives
+   without a card: the intake area's single-file route and the palette's
+   `:import-upload` command both open that modal directly."
+  [{:id :link      :group :primary   :key "1" :icon :link      :title "Link"
     :desc "Fetch a web page or a Wikipedia article"}
-   {:id :audio     :group :primary   :key "3" :icon :mic       :title "Audio"
+   {:id :audio     :group :primary   :key "2" :icon :mic       :title "Audio"
     :desc "Transcribe an audio file"}
-   {:id :video     :group :primary   :key "4" :icon :video     :title "Video"
+   {:id :video     :group :primary   :key "3" :icon :video     :title "Video"
     :desc "Transcribe one video or a playlist"}
-   {:id :new-topic :group :secondary :key "5" :icon :file-plus :title "New Topic"
+   {:id :new-topic :group :secondary :key "4" :icon :file-plus :title "New Topic"
     :desc "Write in a blank topic"}
-   {:id :paste     :group :secondary :key "6" :icon :clipboard :title "Paste"
+   {:id :paste     :group :secondary :key "5" :icon :clipboard :title "Paste"
     :desc "Paste HTML or Markdown"}
-   {:id :score     :group :secondary :key "7" :icon :music     :title "Score"
+   {:id :score     :group :secondary :key "6" :icon :music     :title "Score"
     :desc "Match sheet music to a recording"}
-   {:id :zotero    :group :secondary :key "8" :icon :library   :title "Zotero"
+   {:id :zotero    :group :secondary :key "7" :icon :library   :title "Zotero"
     :desc "Select a PDF from your Zotero library"}
-   {:id :code      :group :secondary          :icon :code      :title "Code"
+   {:id :code      :group :secondary :key "8" :icon :code      :title "Code"
     :desc "Add a code base as a .zip file"}
    {:id :live-doc  :group :secondary          :icon :scan-text :title "Live Document"
     :desc "Photograph pages into a growing PDF"}])
 
 (defn sources-in
-  "The cards of one group, in order. Post: 4 cards for :primary, 6 for
-   :secondary — the counts §7.3's column table depends on."
+  "The cards of one group, in order. Post: 3 cards for :primary, 6 for
+   :secondary — both counts divide by the three columns §7.3 asks for, so no row
+   is short at any breakpoint."
   [group]
   (filterv #(= group (:group %)) sources))
 
@@ -311,38 +314,57 @@
         (dom/div (dom/props {:class "import-card-title"}) (dom/text title))
         (dom/div (dom/props {:class "import-card-desc"}) (dom/text desc))))))
 
+;; The primary group carries a modifier class because its card count is odd: three
+;; cards in the two-column band would leave a row of one, so that band gives it a
+;; single column. The secondary group's six cards divide by both counts.
 (e/defn SourceGrid [group activate!]
   (e/client
     (dom/div
-      (dom/props {:class (str "import-grid"
-                           (when (= group :secondary) " import-grid-secondary"))})
+      (dom/props {:class (if (= group :primary)
+                           "import-grid import-grid-primary"
+                           "import-grid")})
       (e/for-by :id [source (sources-in group)]
         (SourceCard source activate!)))))
 
-;; Pre:  `chips` is an `itypes/chips` result; `limits` is a display string.
+;; Pre:  `chips` is an `itypes/chips` result; `open-file-dialog!` is 0-arg.
 ;; Post: the intake area, showing the drag state when `dragging?`.
-;; Its own e/defn to keep ImportPage's method small (the 64KB cap is prod-only).
-(e/defn IntakeArea [dragging? chips limits open-file-dialog!]
+;;
+;; The Browse button is the accessible control, and the box around it is a mouse
+;; convenience that opens the same dialog. Dragging is one of three ways in, and
+;; the least discoverable: nothing about a dashed rectangle says a click also
+;; works. The button says it.
+;;
+;; The box therefore carries NO role and NO tabindex. A real <button> inside an
+;; element with role="button" is nested interactive content, which is invalid, and
+;; it would put two stops in the tab order for one action.
+(e/defn IntakeArea [dragging? chips open-file-dialog!]
   (e/client
     (dom/div
       (dom/props {:class (str "import-intake" (when dragging? " is-dragging"))})
-      (a11y/KeyActivate {:label "Choose a file to import" :role "button"}
-        (fn [_] (open-file-dialog!)))
       (dom/On "click" (fn [_] (open-file-dialog!)) nil)
       (dom/div
         (dom/props {:class "import-intake-prompt"})
         (dom/text (if dragging?
                     "Release to import"
                     "Drop a file, paste a link, or paste text")))
+      (dom/button
+        (dom/props {:class "btn btn-secondary import-browse" :type "button"})
+        (dom/text "Browse files")
+        ;; stopPropagation: the click would otherwise also reach the box's handler
+        ;; and open a second file dialog.
+        (dom/On "click"
+          (fn [^js e] (.stopPropagation e) (open-file-dialog!))
+          nil))
       (dom/div
         (dom/props {:class "import-chips"})
-        (e/for-by identity [label (:labels chips)]
-          (dom/span (dom/props {:class "import-chip"}) (dom/text label)))
-        (when (pos? (:more chips))
+        (e/for-by :label [chip chips]
           (dom/span
-            (dom/props {:class "import-chip import-chip-more"})
-            (dom/text (str "+ " (:more chips) " more")))))
-      (dom/div (dom/props {:class "import-limits"}) (dom/text limits)))))
+            (dom/props {:class "import-chip"})
+            (dom/text (:label chip))
+            (when-some [limit (:limit chip)]
+              (dom/span
+                (dom/props {:class "import-chip-limit"})
+                (dom/text (str " · " limit))))))))))
 
 ;; The hidden input behind the intake area's click. Its `accept` names every
 ;; group, because the intake area accepts everything the app imports; the drop
@@ -374,24 +396,6 @@
       (SourceGrid :secondary activate!))))
 
 ;; ── Page ───────────────────────────────────────────────────────────
-
-(defn- limits-line
-  "One line naming every ceiling (spec §6.6.1, answered by §16.1).
-   Pre : `ceilings` is an `itypes/ceilings*` result or nil.
-   Post: a non-blank string; an unlimited or missing ceiling is left out."
-  [ceilings]
-  (let [mb (fn [n] (let [m (/ (double n) 1048576.0)]
-                     (if (>= m 1024)
-                       (str (Math/round (/ m 1024.0)) " GB")
-                       (str (Math/round m) " MB"))))
-        part (fn [k label] (when-some [n (get ceilings k)]
-                             (when (pos? n) (str (mb n) " " label))))]
-    (if-some [parts (seq (keep identity [(part :document "documents")
-                                         (part :audio "audio")
-                                         (part :video "video")
-                                         (part :archive "archives")]))]
-      (str "Up to " (str/join " · " parts))
-      "")))
 
 (e/defn ImportPage [user-id navigate! _enc-key _llm-enabled?]
   (e/client
@@ -454,8 +458,11 @@
               (dom/props {:class "import-intro"})
               (dom/text "Add material to your library. FreeMemo makes cards from it.")))
 
-          (IntakeArea (e/watch !dragging?) (itypes/chips)
-            (e/server (limits-line ceilings)) open-file-dialog!)
+          ;; The chip row is derived server-side: `ceilings` is a server-form
+          ;; binding, and formatting there ships the seven small chip maps instead
+          ;; of pulling the ceilings map across to format them here.
+          (IntakeArea (e/watch !dragging?) (e/server (itypes/chips ceilings))
+            open-file-dialog!)
           (IntakeFileInput !file-input on-files!)
 
           (when-some [msg (e/watch !message)]

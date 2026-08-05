@@ -27,6 +27,7 @@
    container lands as a video topic; it still transcribes."
   (:require
    [clojure.string :as str]
+   [freememo.video-format :refer [format-bytes]]
    #?(:clj [freememo.archive :as archive])
    #?(:clj [freememo.audio :as audio])
    #?(:clj [freememo.db :as db])
@@ -38,10 +39,10 @@
 (def groups
   "Every accepted extension, grouped by what the user calls it.
 
-   Order is display order: the intake area shows the first six `:label`s as
-   chips and counts the rest behind `+ more`. `:ceiling` names which of the four
-   ceilings `ceilings*` returns applies to the group — the numbers themselves are
-   per-user or env-configured, so they are read at runtime, never inlined here."
+   Order is display order: the intake area shows one chip per group, all of them.
+   `:ceiling` names which of the four ceilings `ceilings*` returns applies to the
+   group — the numbers themselves are per-user or env-configured, so they are read
+   at runtime, never inlined here."
   [{:label "PDF"      :transport :multipart       :ceiling :document
     :extensions [".pdf"]}
    {:label "EPUB"     :transport :multipart       :ceiling :document
@@ -54,19 +55,32 @@
     :extensions [".mp3" ".m4a" ".wav" ".flac" ".ogg" ".oga" ".mpeg" ".mpga"]}
    {:label "Video"    :transport :video-session   :ceiling :video
     :extensions [".mp4" ".webm" ".mov" ".mkv" ".ogv" ".qt"]}
-   {:label "Archive"  :transport :archive-session :ceiling :archive
+   ;; Named for both containers it accepts. "Archive" would be the category, and
+   ;; the Code card already says ".zip" — the chip row must use the words the rest
+   ;; of the interface uses.
+   {:label "ZIP/7z"   :transport :archive-session :ceiling :archive
     :extensions [".zip" ".7z"]}])
 
-(def ^:private chip-limit
-  "How many chips the intake area shows before `+ more` (spec §6.3)."
-  6)
-
 (defn chips
-  "Post: {:labels [S…] :more N} — at most `chip-limit` labels, and how many
-   groups the row does not name."
-  []
-  {:labels (mapv :label (take chip-limit groups))
-   :more   (max 0 (- (count groups) chip-limit))})
+  "One chip per accepted group, each carrying the ceiling that governs it.
+
+   Pre : `ceilings` is a `ceilings*` result, or nil before it arrives.
+   Post: a vector of {:label S :limit S-or-nil}, one entry per group, in display
+         order. NOTHING is elided behind a `+ more`: a format the interface names
+         elsewhere — the Code card names .zip — has to appear in the row whose job
+         is to enumerate formats.
+   Invariant: `:limit` is nil only when that ceiling is unlimited or has not
+         arrived yet, so a chip never shows a wrong number while loading.
+
+   The limit rides the chip rather than a sentence below the row, so each number
+   sits beside the type it governs. A single list of four ceilings reads as a
+   comparison, and 25 MB next to 8 GB invites the wrong conclusion."
+  [ceilings]
+  (mapv (fn [{:keys [label ceiling]}]
+          {:label label
+           :limit (when-some [n (get ceilings ceiling)]
+                    (when (pos? n) (format-bytes n)))})
+    groups))
 
 (defn extension-of
   "Post: the lower-case extension of `filename` including the dot, or nil when

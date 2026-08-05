@@ -4175,23 +4175,19 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 
 /* §5.4 — wider than the shared .page-container's 960px: four cards plus their
    gaps need the room, and .page-container is shared with every other page. */
+/* Anchored near the top, deliberately NOT vertically centred. Centring left a
+   band of empty space between the nav and the title on a tall viewport, which
+   reads on first paint as content that failed to load, and it left the whole
+   block floating with nothing to align to. The page now starts 80px below the nav
+   and ends where its content ends. */
 .import-page {
     max-width: 1200px;
     width: 100%;
     margin: 0 auto;
-    padding: var(--sp-6);
+    padding: 80px var(--sp-6) var(--sp-6);
     display: flex;
     flex-direction: column;
-    min-height: 100%;
     gap: var(--sp-5);
-}
-
-/* §5.5 — vertical centring by auto margins, NOT justify-content: center. A
-   centred flex container clips its overflow at the top when the content is
-   taller than the box; auto margins collapse instead, so a short viewport
-   scrolls normally. */
-@media (min-height: 901px) {
-    .import-page-body { margin-block: auto; }
 }
 
 .import-page-body {
@@ -4263,16 +4259,16 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     color: var(--color-text-label);
 }
 
-.import-chip-more {
-    background: transparent;
-    border-style: dashed;
+/* The ceiling rides its own chip, next to the type it governs. */
+.import-chip-limit {
+    font-weight: 400;
     color: var(--color-text-hint);
 }
 
-/* §6.6.1 — every ceiling, on one line. */
-.import-limits {
-    font-size: 12px;
-    color: var(--color-text-hint);
+/* The explicit click affordance. A dashed rectangle does not say "clickable",
+   and clicking is how most people will start an import. */
+.import-browse {
+    margin-top: 2px;
 }
 
 /* §6.8 / §6.9 — refusal and skipped-file messages. */
@@ -4286,24 +4282,26 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 }
 
 /* ── Card grids (§7.3) ────────────────────────────────────────── */
+/* Three columns for both groups: 3 primary cards and 6 secondary ones both
+   divide by three, so no row is short. Four columns would leave the primary row
+   one short and the secondary rows two short. */
 .import-grid {
     display: grid;
     gap: var(--sp-3);
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-/* Six secondary cards leave a row of two in four columns, so the secondary grid
-   runs three. The consequence is deliberate: secondary cards are wider. */
-.import-grid-secondary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-
 @media (max-width: 899px) {
-    .import-grid,
-    .import-grid-secondary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .import-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    /* Three primary cards in two columns leave a row of one. Three is prime, so
+       one column is the only count that fills every row at this width. Declared
+       after .import-grid: both are single-class selectors, so source order is
+       what makes this win on the element that carries both. */
+    .import-grid-primary { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 599px) {
-    .import-grid,
-    .import-grid-secondary { grid-template-columns: minmax(0, 1fr); }
+    .import-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ── Source card (§7.4, §7.6) ─────────────────────────────────── */
