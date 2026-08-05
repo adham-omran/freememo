@@ -28,6 +28,50 @@
     (= path "/audio/transcriptions") :transcription
     :else                            :other))
 
+(def ^:private error-body-max
+  "Characters of a non-JSON error body kept in the message. A proxy or CDN
+   failure answers with a whole HTML page, and that page in a log line buries
+   every other signal in the file."
+  500)
+
+(defn- provider-message
+  "The provider's own error text from a non-2xx `body`, or nil.
+
+   The decode is the point. clj-http parses JSON only for unexceptional statuses
+   (`:coerce` defaults to `:unexceptional`), so an error body arrives here as a
+   String — and `(get-in \"…\" [:error :message])` is nil, not a message. Every
+   4xx therefore reported its status code and nothing else, which is how an
+   invalid model slug reached production as a bare `OpenRouter HTTP 400`.
+   Pre:  `body` is clj-http's coerced body — a parsed map or a String.
+   Post: a non-blank string, or nil when the body carries neither a message nor
+         any text; a non-JSON body yields its own text, truncated."
+  [body]
+  (let [parsed (if (string? body)
+                 (try (json/parse-string body true) (catch Exception _ nil))
+                 body)
+        message (when (map? parsed) (get-in parsed [:error :message]))
+        text (when (string? body) (str/trim body))]
+    (cond
+      (not (str/blank? (str message))) (str message)
+      (str/blank? text) nil
+      (> (count text) error-body-max) (str (subs text 0 error-body-max) "…")
+      :else text)))
+
+(defn api-error
+  "The exception for a non-200 OpenRouter `resp`, carrying the provider's own
+   message. Single owner of that mapping — `ok-body` and the OCR lane both raise
+   through it, so a status-only message cannot come back at one call site and
+   not the other.
+   Pre:  `resp` is a clj-http response whose :status is not 200.
+   Post: an ExceptionInfo whose message is the provider's text when it sent any,
+         else \"OpenRouter HTTP <status>\"; ex-data {:type ::api-error :status}.
+         :status is the field to dispatch on — the message is prose and changes
+         with the provider."
+  [resp]
+  (ex-info (or (provider-message (:body resp))
+             (str "OpenRouter HTTP " (:status resp)))
+    {:type ::api-error :status (:status resp)}))
+
 (defn post!
   "POST `body` (a map, JSON-encoded) to `path` under the OpenRouter base URL with
    bearer `api-key`. Returns clj-http's {:status :body}, :body parsed as JSON with
@@ -35,8 +79,11 @@
    Optional `ctx` {:feature kw :user-id id} enriches the observability signal.
    Pre:  api-key non-blank; path begins with '/'.
    Post: {:status int :body any}. Side effect: one `log/external!` signal per call
-         (::call), carrying feature + latency + outcome; a network throw is logged
-         :error then re-thrown (contract for HTTP status unchanged)."
+         (::call), carrying feature + latency + outcome, plus the provider's error
+         text on a failing status — the operator reads that line first, and a
+         caller that maps the response itself must not be the only way to see the
+         cause; a network throw is logged :error then re-thrown (contract for HTTP
+         status unchanged)."
   ([api-key path body] (post! api-key path body nil))
   ([api-key path body ctx]
    (let [t-start (System/nanoTime)
@@ -46,11 +93,13 @@
        (let [resp (http/post (str base-url path)
                     {:headers {"Authorization" (str "Bearer " api-key)}
                      :content-type :json :as :json :throw-exceptions false
-                     :body (json/generate-string body)})]
-         (log/external! {:id ::call :feature feature :user-id (:user-id ctx)
-                         :status (:status resp)
-                         :outcome (if (< (int (:status resp)) 400) :ok :error)
-                         :duration-ms (ms)})
+                     :body (json/generate-string body)})
+             failed? (>= (int (:status resp)) 400)]
+         (log/external! (cond-> {:id ::call :feature feature :user-id (:user-id ctx)
+                                 :status (:status resp)
+                                 :outcome (if failed? :error :ok)
+                                 :duration-ms (ms)}
+                          failed? (assoc :error (provider-message (:body resp)))))
          resp)
        (catch Throwable e
          (log/external! {:id ::call :feature feature :user-id (:user-id ctx)
@@ -58,15 +107,12 @@
          (throw e))))))
 
 (defn- ok-body
-  "Parsed body of a 200 `resp`, else throw ::api-error with the provider message.
+  "Parsed body of a 200 `resp`, else throw `api-error` with the provider message.
    Post violation (non-200 from the API) surfaces here, not to the HTTP layer."
   [resp]
-  (let [body (:body resp)]
-    (if (= 200 (:status resp))
-      body
-      (throw (ex-info (or (get-in body [:error :message])
-                          (str "OpenRouter HTTP " (:status resp)))
-               {:type ::api-error :status (:status resp)})))))
+  (if (= 200 (:status resp))
+    (:body resp)
+    (throw (api-error resp))))
 
 (defn chat-completion!
   "POST /chat/completions with request map `body` (:model, :messages, …).

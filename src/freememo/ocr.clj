@@ -178,8 +178,7 @@
                   :plugins [{:id "file-parser" :pdf {:engine "mistral-ocr"}}]}))
         body (:body resp)]
     (when-not (= 200 (:status resp))
-      (throw (ex-info (or (get-in body [:error :message]) (str "OpenRouter HTTP " (:status resp)))
-               {:status (:status resp)})))
+      (throw (openrouter/api-error resp)))
     (let [raw (case (:shape entry)
                 :chat   (some-> (-> body :choices first :message :content) strip-code-fences)
                 :plugin (some-> (mistral-ocr-text body) text/markdown->html))]
@@ -230,15 +229,20 @@
           "OCR refused: out of credits")
         (tel/error! {:id ::extract-text} e))
       {:success false
-       :error (let [msg (.getMessage e)]
+       ;; Status first, message second: openrouter/api-error now reports the
+       ;; provider's own text, and "No auth credentials found" carries no 401 to
+       ;; match. The regexes stay as the fallback for exceptions raised outside
+       ;; the transport, which carry no :status.
+       :error (let [msg (str (.getMessage e))
+                    status (:status (ex-data e))]
                 (cond
-                  (re-find #"(?i)API key not configured" (str msg))
+                  (re-find #"(?i)API key not configured" msg)
                   "OCR is not configured. Set the OpenRouter key in Settings."
-                  (re-find #"(?i)401|unauthorized" (str msg))
+                  (or (= 401 status) (re-find #"(?i)401|unauthorized" msg))
                   "Invalid OpenRouter API key."
-                  (re-find #"(?i)429|rate.?limit" (str msg))
+                  (or (= 429 status) (re-find #"(?i)429|rate.?limit" msg))
                   "Rate limit reached. Wait a moment and try again."
-                  :else (str msg)))
+                  :else msg))
        :error-type (when (= ::insufficient-credits (:type (ex-data e)))
                      :insufficient-credits)})))
 
