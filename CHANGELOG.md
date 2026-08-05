@@ -9,21 +9,224 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
-## Unreleased
+## v20260805-aa496f6
+
+### For users
+
+- **Your whole account now leaves this instance in one file.** Settings → Account
+  has an **Export your data** card. It names what the archive will carry, and it
+  downloads a `.zip`.
+  - **The archive holds the account, not a summary.** Documents and their files,
+    cards and their review schedule, the knowledge graph, your review history and
+    your settings all travel.
+  - **To load it, open another FreeMemo instance and drop the `.zip` on the
+    Import page's Upload card.** The contents of an archive pick the flow now,
+    not the file name, so one card takes an account export, a SuperMemo
+    collection or a code repository.
+  - **An import adds to what is already there.** It replaces nothing. Every
+    identifier is renumbered for the target instance, so the links between your
+    documents, cards and images survive the move.
+  - **A failure before the metadata lands keeps nothing** and gives back the
+    storage the attempt reserved. The uploaded archive stays, so a retry needs no
+    second upload. A failure while the files copy keeps what already landed, and
+    the next attempt continues from there.
+  - **The same export cannot import twice by accident.** A second attempt is
+    refused and names the date of the first one.
+- **freememo.net now shows ads, and anyone who has bought credits sees none.** A
+  self-hosted build shows no ad and contacts no ad service, whatever it is
+  configured with. If you have paid and an ad still reaches you, contact me and I
+  will clear it by hand.
+- **Review priority takes decimals now, to three places.** `12.345` is a legal
+  value. The column held whole numbers before, so a collection above a hundred
+  topics could not state a stable order — topics shared a priority and the queue
+  broke the tie by a daily hash. The steppers, the history modal and the
+  SuperMemo import all carry the extra precision.
+- **Right-to-left text reads correctly in the Quiz tab.** Questions, reference
+  answers, your typed answer, grader feedback and the session history each pick a
+  direction from the text itself. A card that opens with an English heading and
+  continues in Arabic now gives every paragraph its own direction, instead of
+  forcing one direction on the whole card.
+- **The Quiz answer boxes match the rest of the app.** They named a class that no
+  stylesheet defined, so the browser drew them in its own monospace default.
+- Bug fix: **dark mode had four unreadable spots.** Inline `code` in either editor
+  was near-white text on a near-white pill. A link took one color in one editor
+  and the browser's own dark-scheme color in the other, and neither reached 4.5:1.
+  Text colored from the format menu kept a color chosen against a white page, and
+  seven of the nine presets fell under the contrast floor — dark mode now drops
+  the hue and keeps the theme text color, while light mode keeps every authored
+  color. The keyboard skip link drew blue on white.
+- Bug fix: **knowledge-graph labels were invisible in dark mode.** The graph draws
+  its labels on a canvas, which page styles never reach, so they stayed black on
+  the dark background. They follow the theme now, including a change of the
+  operating system preference while the graph is open.
+- **DeepSeek · V4 Flash costs about a third less** — 0.09 in and 0.18 out per
+  million tokens, against 0.14 and 0.28 before.
+- **The Zotero plugin reads its updates from the current repository address.**
+
+### Known issues
+
+- **An account import always lands at the top of your tree.** A picker for the
+  destination parent is not built. Move the imported root yourself afterwards.
+- **An import tells you almost nothing about what it did.** The report is
+  recorded and it is not shown. Rows the importer had to drop, files it could not
+  store, and a storage limit reached while copying files all land in that unseen
+  report. If an import looks short, contact me.
+- **A repeat import of the same export is refused, with no way to ask for a
+  second copy.** The server takes that instruction and the modal does not offer
+  it.
+- **A resumed import does not say that it resumed.**
+- **A move between two instances is not verified yet.** Every round trip so far
+  ran inside one database against a fresh user. Two instances would also exercise
+  a difference in schema between two builds, which the importer is built for and
+  nothing has run.
+- **An export download shows no progress.** The size is not known until the
+  archive is written, so the browser can show neither a percentage nor a total. A
+  large account takes a while to start.
+- **A push to Anki after an import is not verified.** Anki note identifiers
+  travel, and nobody has pushed imported cards to a real Anki collection yet.
+- **An archive carries a format version, and there is no path between versions.**
+  Version 1 is what this build writes and the only version it reads. An added
+  column needs no change of that number, because an import drops a column the
+  target has no place for and names it in the report.
+- **Four lines in the Quiz keep left-to-right order.** "Your answer: ",
+  "Reference: " and two others share one paragraph with the text they label, so
+  the English label decides the direction. The two history tables also keep
+  left-to-right columns, because about eleven screens share that table layout.
+- **The dark-mode text-color fix covers the editors only.** The same stored
+  colors also appear in card tables, quiz fields and the assistant transcript,
+  which share no common container to hang the rule on.
 
 ### Technical
 
-- **A deployment can now place its own content in one named spot in the app.**
-  `freememo.deployment-slot` renders an empty container and asks the deployment to
-  fill it. The first spot is the empty band under the Home page's quick links.
-  Nothing renders unless the deployment supplies a filler, so a self-hosted build
-  shows no container and contacts nobody, and dev never reaches the seam at all.
-  - Electric owns the container. A container appended by plain JavaScript into a
-    parent whose children change makes Electric remove the wrong node and leave
-    orphaned subtrees behind, with nothing in the console. Injecting into an
+<!-- Deliberately not recorded anywhere in this file: the ad config key names, the
+     vendor, the script URL and the reader that validates the configured values.
+     CHANGELOG.md is public, and the committed file names no ad vendor anywhere.
+     That detail lives in CLAUDE.md and in plans/, both excluded. -->
+
+- **`freememo.account-export`, `freememo.account-import` and
+  `freememo.account-transfer-format`** — the archive is one `.zip`:
+  `manifest.edn` first, then one newline-delimited JSON file per table under
+  `entities/`, then the blobs. PostgreSQL owns the encoding at both ends. Export
+  selects `to_jsonb(t)`, and import feeds the row back through
+  `jsonb_populate_record(null::<table>, ?::jsonb)`, so the target's own column
+  types read every value and no JVM type map sits between them.
+- **The column list comes from `information_schema` on the target, never from the
+  archive.** An archive key naming no real column is dropped and reported. That
+  is both how an archive from a wider build imports at all, and why a hostile key
+  cannot reach SQL.
+- **Import runs in three phases, not two.** Media rows and bytes land first,
+  outside the transaction, because the media id map must exist before phase 1
+  rewrites any HTML. Every other metadata table commits in one transaction.
+  `topic_files` and `topic_videos` follow, one commit each, because both blob
+  columns are `NOT NULL` and a row cannot exist before its bytes. Phase 1 is
+  atomic, so a resume repeats phase 2 only.
+- **Every id in the archive is a source id, and it hides in five places.**
+  Foreign keys, id columns with no foreign key, ids inside JSONB,
+  `/api/media/<id>` URLs inside stored HTML, and topic ids embedded in `settings`
+  KEYS. Only the first is visible to a schema walk. `CLAUDE.md` now records which
+  four kinds of schema change need a decision in the transfer format, and which
+  three of them nothing catches.
+- **`account_imports` and `account_import_ids`** — one row per import run, and
+  the source-id to new-id map for that run. That map is what makes the
+  already-imported refusal, the resume and the blob-gap check one mechanism. Both
+  are target-instance state and never leave in an export.
+- **`content-type/classify-archive` gained a third flow.** It tests for an account
+  export, then a SuperMemo collection, then falls back to a code repository,
+  because that fallback claims every remaining `.zip`. An account export must
+  hold both `manifest.edn` and an `entities/*.ndjson` sibling to match, so a
+  repository carrying a file called `manifest.edn` cannot be hijacked.
+- **`/api/account/export` sends no `Content-Length` and declares
+  `application/zip`.** The size is unknown until the archive is written, so the
+  response is chunked. The mime type is load-bearing rather than cosmetic —
+  Jetty's gzip handler decides by type, and a generic type would put the archive
+  through the compressor.
+- **`archive_zip64_test` proves the reader survives a 4 GiB entry** before
+  anything was built on it. A ZIP64 entry declares `0xFFFFFFFF` in its local
+  header and puts the real sizes in a data descriptor after the compressed data.
+  The test writes a sentinel entry AFTER the oversized one: a reader that loses
+  its stream position never reaches the sentinel, which reading the big entry
+  back would not have shown.
+- **`topics.priority` and `topic_repetitions.priority_before` are `DOUBLE
+  PRECISION`.** `NUMERIC` was the exact type, but a PostgreSQL `NUMERIC` crosses
+  the Transit wire as a tagged `BigDecimal` rather than a JS number, so every
+  read site would have needed a cast. The widening is guarded on
+  `information_schema` — `ALTER COLUMN … TYPE` rewrites the whole table, and an
+  unguarded statement would rewrite it on every boot.
+- **`freememo.priority` is the write boundary**, and it closes two defects the
+  widening would otherwise have opened. The no-op guard compared the column value
+  against the incoming one with no coercion, so `(not= 50.0 50)` made every save
+  of an unchanged whole number log a `priority-change` row and run a pointless
+  `UPDATE`. Nothing clamped the value either, and PostgreSQL accepts `NaN` in a
+  `float8` column and sorts it last, so one bad write would have buried a topic at
+  the foot of the learning queue forever.
+  `topics_priority_range_check` backs the boundary up for `create-topic!` and
+  `insert-topic-rows!`, which never call it. Confirmed on PostgreSQL 16.13:
+  `NaN` and `Infinity` both fail `<= 100`, so the check needs no `NaN` clause.
+  All 7602 topics on the production-sized database already validate.
+- **`round-to` is generic and shared by both peers.** `freememo.number-stepper`
+  calls it for all three steppers, including the two integer ones, so the
+  client's optimistic mirror cannot round differently from the server. The
+  integer controls keep `parseInt`: `parseFloat` would turn a typed `1.5` into 2
+  and `1e3` into 1000, a silent change this feature never asked for.
+- **`sm_rank` stays.** Three decimals give 100001 distinct priorities, enough for
+  any realistic collection, but rows imported before this change keep integer
+  priorities and still need it to break ties.
+- **`freememo.deployment-hook`** — a seam for behavior a particular deployment
+  adds and the app itself does not need. Two entry points: one may annotate the
+  session of a newly created account, and one may contribute markup to a single
+  shell response. Both are no-ops here. The implementation namespace is optional
+  and resolves dynamically, so a build without it emits an empty head, arms no
+  session and renders no container. That is the default, and it is what a
+  self-hosted instance runs.
+- **No third-party markup ships in the HTML shells.** `index.prod.html` holds one
+  `$:freememo/deployment-head$` placeholder and no vendor id of any kind.
+  `index.dev.html` and `index.metadata.html` hold neither, so local dev reaches no
+  third party. Before this, a hardcoded verification tag put one publisher id on
+  every self-hosted page with no way to turn it off.
+- **`freememo.deployment-slot` renders an empty container and asks the deployment
+  to fill it.** The first spot is the band under the Home page's quick links. The
+  gate is the existence of the activation function, not a server flag: the head
+  contribution that defines that function is the same thing a flag would derive
+  from, so the two cannot disagree.
+  - Electric must own the container. A container appended by plain JavaScript
+    into a parent whose children change makes Electric remove the wrong node and
+    strand orphaned subtrees, with nothing in the console. Injecting into an
     Electric-created leaf is safe. A browser check confirmed both cases.
   - `CLAUDE.md` records the narrow rule, which replaces a broader claim that said
     no injection inside an Electric element was safe.
+- **Each ad contribution is gated by its own configuration key**, and none of
+  them gates another: proof that a deployment owns the account, the loader that
+  starts serving, and the map of named units are three separate decisions. A test
+  walks all sixteen combinations, because a shared gate is invisible when two keys
+  are always set together.
+- **The per-viewer exemption is one statement, and it fails closed.** It asks
+  whether the user ever completed a paid order or carries an operator flag, as one
+  `UNION ALL` with a `LIMIT` above it, so PostgreSQL stops at the first hit. It
+  reads per request and is never cached — a purchase lands in a different request
+  and cannot reach a session cookie. An unreadable answer withholds the ad,
+  because a paying user seeing an ad breaks a promise while a missed impression
+  does not. Only a signed-in viewer costs a query, and only when serving is
+  configured. The exemption reaches every ad-serving part and nothing else, and a
+  test pins both halves of that.
+- **`freememo.shell`** — `wrap-prod-index-page`, `template` and the manifest
+  reader moved here out of `prod.cljc` and `prod_jetty9.cljc`, which carried
+  byte-identical copies. Both entrypoints now mount one handler. Verified by
+  booting both and diffing the served head region.
+- **`config/env-or-config` is public.** Deployment values resolve env-first and
+  fall back to `config.edn`. Callers outside `freememo.config` reuse that
+  precedence instead of reimplementing it.
+- **Consent Mode v2 is not implemented.** The EEA and the UK require a consent
+  signal, and this deployment sends none.
+- **Two verification items stay open for the priority change** — the `:prod`
+  release build and a manual browser pass. `CLAUDE.md` records that "Method code
+  too large" is a `:prod`-only failure, and this change grows the `NumberStepper`
+  body that two namespaces expand. The build needs port 9009, which a running dev
+  server holds.
+- **New tests.** `priority_test`, `account_transfer_format_test` and
+  `archive_zip64_test` run 25 tests and 158 assertions green together.
+  `account_import_test` and the deployment-hook suite cover the rest.
+  `every-table-has-a-disposition` is the one that will catch a new table with no
+  export decision — and `:test` is still not in CI, so run it by hand.
 
 ## v20260803-dad3fce
 
@@ -80,46 +283,6 @@ Format contract (see freememo.changelog):
 
 ### Technical
 
-<!-- These entries landed after this release was cut. Move them into the next
-     `## <version>` block when you cut it. They sit here rather than in an
-     `## Unreleased` block because `changelog/latest-release` takes the first
-     `## ` block, so an Unreleased block would make `broadcast-latest!` silently
-     send nothing. `### Technical` is never broadcast, so their placement here
-     reaches no subscriber. -->
-
-- **`freememo.deployment-hook`** — a seam for behavior a particular deployment
-  adds and the app itself does not need. Two entry points: one may annotate the
-  session of a newly created account, and one may contribute markup to a single
-  shell response. Both are no-ops here: the implementation namespace is optional
-  and resolves dynamically, so a build without it emits an empty head and arms no
-  session. That is the default, and it is what a self-hosted instance runs.
-- **freememo.net now shows ads. A self-hosted build never does.** The ad script is
-  a third contribution to the deployment hook, so it is gated the same way the
-  rest of that markup is: a build without the optional implementation namespace
-  fetches nothing and shows nothing. Nothing in the client renders an ad unit.
-  <!-- This change IS user-visible. Write the `### For users` line when the next
-       release is cut, or drop it deliberately. It is here rather than there
-       because `### Technical` never broadcasts, and this entry landed after
-       v20260803 was cut. Keep the wording free of key names and publisher ids —
-       CHANGELOG.md is NOT in tools/publish-clean/EXCLUDED. -->
-
-<!-- Deliberately not recorded here: the config key names, the vendor, the script
-     URL and the reader that validates the configured values. CHANGELOG.md is
-     public, and the committed file names no ad vendor anywhere. That detail
-     lives in CLAUDE.md and in plans/, both excluded. -->
-
-- **No third-party markup ships in the HTML shells.** `index.prod.html` holds one
-  `$:freememo/deployment-head$` placeholder and no vendor id of any kind.
-  `index.dev.html` and `index.metadata.html` hold neither, so local dev reaches no
-  third party. Before this, a hardcoded verification tag put one publisher id on
-  every self-hosted page with no way to turn it off.
-- **`freememo.shell`** — `wrap-prod-index-page`, `template` and the manifest
-  reader moved here out of `prod.cljc` and `prod_jetty9.cljc`, which carried
-  byte-identical copies. Both entrypoints now mount one handler. Verified by
-  booting both and diffing the served head region.
-- **`config/env-or-config` is public.** Deployment values resolve env-first and
-  fall back to `config.edn`. Callers outside `freememo.config` now reuse that
-  precedence instead of reimplementing it.
 - **`upload_sessions`** — was `video_upload_sessions`, renamed in place at boot when
   the old table is present. One flow-discriminated table backs both flows, so the
   orphan-object sweep still names exactly one table. New `archive_path` column caches
