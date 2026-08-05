@@ -239,7 +239,11 @@
         ;; waveform gets the full width beneath them.
         (dom/props {:style {:display "flex" :flex-direction "column" :gap "6px"
                             :padding "6px 10px" :border-bottom "1px solid var(--color-border)"
-                            :background "var(--color-bg-surface)"
+                            ;; --color-bg-surface was never defined in any CSS file, so
+                            ;; this declaration was invalid and the strip painted
+                            ;; transparent. --color-bg-toolbar is the token for a
+                            ;; toolbar strip, which is what this is.
+                            :background "var(--color-bg-toolbar)"
                             :position "relative" :z-index "1" :flex-shrink "0"}})
         (if-not has-audio?
           (dom/span

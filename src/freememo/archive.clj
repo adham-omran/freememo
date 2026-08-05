@@ -30,6 +30,22 @@
            [org.apache.commons.compress.archivers.sevenz SevenZArchiveEntry SevenZFile]
            [org.apache.commons.compress.utils SeekableInMemoryByteChannel]))
 
+(def max-archive-bytes
+  "Hard ceiling on one declared archive upload, independent of the user's quota.
+
+   Default 16 GB. A bound on how much a single bad request can reserve, not a
+   product limit — the quota is what gates normal use. Sized above
+   `web-import/supermemo-extract-limits`'s total, because an archive that cannot
+   possibly extract should be refused at `init` rather than after the user waits
+   for the upload.
+
+   Lives here rather than in `archive-http`, for the reason `video/upload-limits`
+   records: the import UI needs this number, and a UI namespace requiring an
+   HTTP-handler namespace is backwards — it also breaks Electric's JVM reload,
+   which loads the UI namespace before the handler one."
+  (or (some-> (System/getenv "ARCHIVE_MAX_BYTES") parse-long)
+    (* 16 1024 1024 1024)))
+
 (def default-limits
   "Caps that make a hostile archive fail fast instead of filling the disk.
    :max-total-bytes is the one worth overriding — a code repo is small, a

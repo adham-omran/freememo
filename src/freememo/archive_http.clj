@@ -23,6 +23,7 @@
    multi-minute job behind a proxy timeout."
   (:require
    [clojure.string :as str]
+   [freememo.archive :refer [max-archive-bytes]]
    [freememo.content-type :as ct]
    [freememo.db :as db]
    [freememo.quota :as quota]
@@ -30,16 +31,9 @@
    [freememo.video-format :refer [format-bytes]]
    [taoensso.telemere :as tel]))
 
-(def max-archive-bytes
-  "Hard ceiling on one declared archive upload, independent of the user's quota.
-
-   Default 16 GB. A bound on how much a single bad request can reserve, not a
-   product limit — the quota is what gates normal use. Sized above
-   `web-import/supermemo-extract-limits`'s total, because an archive that cannot
-   possibly extract should be refused at `init` rather than after the user waits
-   for the upload."
-  (or (some-> (System/getenv "ARCHIVE_MAX_BYTES") parse-long)
-    (* 16 1024 1024 1024)))
+;; `max-archive-bytes` moved to `freememo.archive` so the import UI can state the
+;; ceiling without requiring this handler namespace — same ownership rule as
+;; `video/upload-limits`. This route is still the authority that enforces it.
 
 (def ^:private chunk-bytes
   "Chunk size handed to the client. Bounded by `quota/request-max-bytes`,

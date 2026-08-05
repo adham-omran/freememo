@@ -188,6 +188,10 @@
     [:path {:d "M7 12h10"}]
     [:path {:d "M7 16h6"}]]
 
+   :code
+   [[:path {:d "m16 18 6-6-6-6"}]
+    [:path {:d "m8 6-6 6 6 6"}]]
+
    :chevron-down
    [[:path {:d "m6 9 6 6 6-6"}]]
 

@@ -181,7 +181,11 @@
         ;; toolbar tooltips/dropdowns above (toolbars sit at z 2-3).
         (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-2)"
                             :padding "6px 10px" :border-bottom "1px solid var(--color-border)"
-                            :background "var(--color-bg-surface)"
+                            ;; --color-bg-surface was never defined in any CSS file, so
+                            ;; this declaration was invalid and the strip painted
+                            ;; transparent. --color-bg-toolbar is the token for a
+                            ;; toolbar strip, which is what this is.
+                            :background "var(--color-bg-toolbar)"
                             :position "relative" :z-index "1"}})
         (dom/button
           (dom/props {:class "btn btn-sm btn-secondary" :title "Play / pause"})

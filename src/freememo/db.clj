@@ -5857,7 +5857,7 @@
    (100 MB by default) that chunking exists to get past. Applying it here
    rejected every video over 100 MB before a byte was sent. The per-upload
    bound is the caller's: `video-http/max-video-bytes` for video,
-   `archive-http/max-archive-bytes` for an archive.
+   `archive/max-archive-bytes` for an archive.
 
    `flow` decides what finalize does with the completed object, and nothing
    else. Video keeps it as the stored artifact; an archive extracts it and

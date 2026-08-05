@@ -825,6 +825,22 @@
           user-id !uploaded-parent
           (fn [parent-id] (start! parent-id (boolean transcribe?))))))))
 
+#?(:cljs
+   (defn- take-initial-files!
+     "Hand the files `!initial-files` holds to `choose-files!`, once.
+
+      Pre : `!initial-files` is nil, or an atom holding a seqable of Files or nil.
+      Post: the atom holds nil, and `choose-files!` ran at most once. Clearing
+            first makes a remount a no-op rather than a second staging.
+      A plain fn, not a `do` in the reactive body — `do` is concurrent in
+      Electric, so the reset! and the call would race."
+     [!initial-files choose-files!]
+     (when-some [fs (some-> !initial-files deref)]
+       (reset! !initial-files nil)
+       (when (seq fs) (choose-files! (to-array fs)))))
+   :clj
+   (defn- take-initial-files! [_!initial-files _choose-files!] nil))
+
 (e/defn VideoImportModal
   "Pick video files, choose where they land, and upload them.
 
@@ -832,8 +848,11 @@
    one, else to the first uploaded video. On failure the modal STAYS open with
    the message — the session has already been compensated server-side, so
    retrying is safe, and a file that finished before the failure is a complete
-   topic rather than partial state."
-  [!show user-id navigate!]
+   topic rather than partial state.
+
+   `!initial-files` is nil at the card call site and an atom at the intake-area
+   call site. Positional, never a map key — Electric cannot serialize an atom."
+  [!show user-id navigate! !initial-files]
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
           limits (e/server (upload-limits* refresh user-id))
@@ -887,6 +906,12 @@
                             (probe-durations! !durations (:accepted outcome))
                             (reset! !error (selection-message outcome))))
           remove-file! (fn [idx] (swap! !files remove-from-selection idx))]
+
+      ;; Files the intake area already collected (spec §6.7.1). A video cannot
+      ;; upload straight from a drop: the target, the transcribe flag and the
+      ;; probed durations are all decided before the first chunk, so a drop opens
+      ;; this modal already staged instead of starting a transfer.
+      (e/snapshot (take-initial-files! !initial-files choose-files!))
 
       (when (and done (seq done))
         (NavigateWhenDone done uploaded-parent navigate! close!))

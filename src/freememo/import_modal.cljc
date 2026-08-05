@@ -16,16 +16,15 @@
    [freememo.modal-shell :as modal]
    [freememo.navigation :as nav]
    [freememo.client-errors :as ce]
+   [freememo.import-types :as itypes]
    #?(:cljs [freememo.archive-upload :as archive-upload])
-   #?(:clj [freememo.db :as db])
-   #?(:clj [freememo.quota :as quota])
    #?(:clj [freememo.web-import :as web-import])))
 
 ;; ── Server helpers ─────────────────────────────────────────────────
-
-(defn upload-cap-bytes* [user-id]
-  #?(:clj (long (quota/get-user-upload-max db/ds user-id))
-     :cljs 0))
+;; The four upload ceilings come from `import-types/ceilings*`, which reads all
+;; of them in one round trip. This modal used to read the document cap alone
+;; (`quota/get-user-upload-max`), which is why a 40 MB mp3 uploaded in full
+;; before the server refused it at Whisper's 25 MB — see `handle-file`.
 
 ;; ── CLJS helpers ───────────────────────────────────────────────────
 
@@ -239,6 +238,30 @@
      (reset! !quota-error? false)
      (reset! !stage :error)))
 
+#?(:cljs
+   (defn- apply-url-result!
+     "Apply one `web-import/import-url!*` result: navigate, stage, or fail.
+
+      Two callers reach the same server fn and owe the user the same four
+      outcomes — the URL form, and a web address the intake area pasted. The
+      branching lives here so neither caller carries a copy of it.
+
+      Pre : `r` is an `import-url!*` result. `navigate!` takes a topic id.
+      Post: exactly one transition ran, and the return value is the branch taken.
+            Synchronous throughout, so an Electric `case` on this call sequences a
+            token spend after it.
+      Invariant: an unknown `:flow` fails loudly rather than silently doing
+            nothing — a new flow in `web-import` must be handled here."
+     [r {:keys [!stage !staged !flow !error !quota-error?]} navigate!]
+     (if (:ok r)
+       (case (:flow r)
+         (:imported :already-exists) (do (navigate! (:topic-id r)) :navigated)
+         :staged (do (url-set-staged! !staged !flow !stage r) :staged)
+         (do (url-set-error! !error !quota-error? !stage
+               (str "Unexpected flow: " (:flow r)))
+             :error))
+       (do (url-set-error! !error !quota-error? !stage (:error r)) :error))))
+
 ;; ── Result handlers ────────────────────────────────────────────────
 ;; A response from any upload-* endpoint has one of three shapes:
 ;;   {:success true :doc_id N :flow "web|html|markdown"}     — committed
@@ -335,14 +358,31 @@
             (case (reset-error! !error !quota-error?)
               (let [r (e/server (e/Offload #(web-import/import-url!* user-id url)))]
                 (case r
-                  (if (:ok r)
-                    (case (:flow r)
-                      :imported       (case (navigate-to-viewer! (:topic-id r)) (token))
-                      :already-exists (case (navigate-to-viewer! (:topic-id r)) (token))
-                      :staged         (case (url-set-staged! !staged !flow !stage r) (token))
-                      (case (url-set-error! !error !quota-error? !stage
-                              (str "Unexpected flow: " (:flow r))) (token)))
-                    (case (url-set-error! !error !quota-error? !stage (:error r)) (token))))))))))))
+                  ;; `case` on the shared handler: it resolves before the branch
+                  ;; picks, so the token spends after the transition ran.
+                  (case (apply-url-result! r
+                          {:!stage !stage :!staged !staged :!flow !flow
+                           :!error !error :!quota-error? !quota-error?}
+                          navigate-to-viewer!)
+                    (token)))))))))))
+
+;; Pre:  `url` is a non-blank web address the intake area pasted (spec §6.10.1).
+;; Post: the import ran once and its outcome was applied through the same handler
+;;       the URL form uses. No token: nothing here is user-triggered inside this
+;;       frame — the paste already happened, and there is no form to re-enable.
+;; Invariant: `e/snapshot` freezes the url at mount, so a re-evaluation cannot
+;;       start a second import of the same address.
+(e/defn AutoUrlImport [user-id url navigate-to-viewer!
+                       !stage !staged !flow !error !quota-error?]
+  (e/client
+    (let [frozen (e/snapshot url)
+          r (e/server (e/Offload #(web-import/import-url!* user-id frozen)))]
+      (case r
+        (case (apply-url-result! r
+                {:!stage !stage :!staged !staged :!flow !flow
+                 :!error !error :!quota-error? !quota-error?}
+                navigate-to-viewer!)
+          nil)))))
 
 (e/defn FilePicker [!file !file-input on-file accept blurb]
   (e/client
@@ -836,7 +876,44 @@
 
 ;; ── Top-level ImportModal ──────────────────────────────────────────
 
-(e/defn ImportModal [!show user-id source-preset navigate!]
+;; ── Intake handoff ─────────────────────────────────────────────────
+
+#?(:cljs
+   (defn- take-intake!
+     "Hand whatever the intake area collected to `consume!`, once.
+
+      Pre : `!intake` is nil, or an atom holding nil or exactly ONE of
+            {:file F} / {:paste {:format S :content S :title S?}} / {:url S}.
+      Post: the atom holds nil, and `consume!` ran at most once. Clearing before
+            the call is what makes a remount a no-op rather than a second import.
+      One plain fn rather than a `do` in the reactive body — `do` is concurrent in
+      Electric, so the reset! and the call would race."
+     [!intake consume!]
+     (when-some [intake (some-> !intake deref)]
+       (reset! !intake nil)
+       (consume! intake)))
+   :clj
+   (defn- take-intake! [_!intake _consume!] nil))
+
+#?(:cljs
+   (defn- seed-paste!
+     "Fill the paste editor from clipboard content the intake area classified.
+
+      Pre : `paste` is {:format \"html\"|\"markdown\" :content S :title S?}.
+      Post: the editor's format, title and the matching content atom hold it, and
+            the stage is unchanged — the user still names and submits the topic,
+            because a pasted body has no filename to take a title from."
+     [{:keys [format content title]} !format !title !html-text !md-text]
+     (reset! !format format)
+     (reset! !title (or title ""))
+     (if (= format "html")
+       (reset! !html-text content)
+       (reset! !md-text content))))
+
+;; `!intake` is nil at every card call site and an atom at the intake-area call
+;; site. It is a positional parameter, never a key in a map argument — Electric
+;; serializes map arguments as data and an atom cannot be serialized.
+(e/defn ImportModal [!show user-id source-preset navigate! !intake]
   (e/client
     (let [!source (atom (or source-preset :url))
           !stage (atom :collecting)
@@ -865,9 +942,12 @@
           ;; two flows whose offload can't swap to StatusStage without being
           ;; unmounted). HTTP paths use the :fetching/:importing StatusStage.
           !busy-msg (atom nil)
+          ;; nil, or a web address the intake area pasted. Set once by
+          ;; `consume-intake!`; `AutoUrlImport` freezes it at mount.
+          !auto-url (atom nil)
           source (e/watch !source)
           stage (e/watch !stage)
-          cap-bytes (e/server (e/Offload #(upload-cap-bytes* user-id)))
+          ceilings (e/server (e/Offload #(itypes/ceilings* nil user-id)))
           navigate-to-viewer! (fn [doc-id]
                                 (reset! !show false)
                                 (navigate! :viewer (nav/nav-topic doc-id nil)))
@@ -891,11 +971,13 @@
                         (cond
                           ;; Archives take the chunked route, whatever their
                           ;; size — no threshold, so one code path serves a
-                          ;; 30 MB collection and a 7.5 GB one. `cap-bytes` is
-                          ;; deliberately NOT applied: it is the single-request
-                          ;; ceiling, which chunking exists to get past. Same
-                          ;; reasoning as `quota/reserve-bytes!` over
-                          ;; `check-and-bump!` on the server.
+                          ;; 30 MB collection and a 7.5 GB one. The document
+                          ;; ceiling is deliberately NOT applied: it is the
+                          ;; single-request ceiling, which chunking exists to get
+                          ;; past. `/api/archive/init` enforces the 16 GB archive
+                          ;; ceiling before a byte moves. Same reasoning as
+                          ;; `quota/reserve-bytes!` over `check-and-bump!` on the
+                          ;; server.
                           (archive-file? f)
                           (do (reset! !stage :fetching)
                               (upload-archive! f
@@ -915,9 +997,17 @@
                                    (reset! !busy-msg nil)
                                    (handle-fetch-err msg))}))
 
-                          (and (pos? cap-bytes) (> (.-size f) cap-bytes))
+                          ;; One ceiling check for every non-archive file, from
+                          ;; the ceiling its own type carries: 25 MB for audio
+                          ;; (Whisper), the user's upload_max_bytes for a
+                          ;; document. Checking only the document cap here is
+                          ;; what made an oversized mp3 upload in full and fail
+                          ;; server-side.
+                          (when-some [cap (itypes/ceiling-for ceilings (.-name f))]
+                            (> (.-size f) cap))
                           (do (reset! !error (str "File is " (format-mb (.-size f))
-                                               " — limit is " (format-mb cap-bytes) "."))
+                                               " — limit is " (format-mb (itypes/ceiling-for ceilings (.-name f)))
+                                               " for this file type."))
                               (reset! !quota-error? true)
                               (reset! !stage :error))
 
@@ -983,6 +1073,14 @@
           on-manage-library (fn []
                               (reset! !show false)
                               (navigate! :library))
+          ;; Exactly one of the three intake shapes, applied at mount. A file
+          ;; reuses handle-file, so the ceilings and the transport split stay in
+          ;; one place. A url arms `!auto-url`, which mounts `AutoUrlImport`.
+          consume-intake! (fn [{:keys [file paste url]}]
+                            (cond
+                              file (handle-file file)
+                              paste (seed-paste! paste !format !title !html-text !md-text)
+                              url (reset! !auto-url url)))
           ;; Universal drop handler — switches to file source on any drop.
           ;; Score has two typed dropzones of its own; hijacking those drops
           ;; into the single-file flow would discard the slot pairing.
@@ -995,11 +1093,19 @@
           title (case source
                   :url "Import from URL"
                   :file "Upload"
+                  :code "Import Code"
                   :audio "Upload Audio"
                   :score "Import Score"
                   :paste "Paste"
                   :new-topic "New Topic"
                   "Import")]
+      ;; What the intake area collected, consumed once at mount. The page never
+      ;; duplicates this modal's transport routing or its ceiling checks — it
+      ;; decides only WHICH modal opens (import-types/transport-for).
+      (e/snapshot (take-intake! !intake consume-intake!))
+      (when-some [u (e/watch !auto-url)]
+        (AutoUrlImport user-id u navigate-to-viewer!
+          !stage !staged !flow !error !quota-error?))
       (dom/div
         (dom/props {:class "modal-backdrop" :tabindex "-1" :autofocus true})
         (modal/ModalEscape (fn [] (reset! !show false)) "Import")
@@ -1038,22 +1144,29 @@
             (case source
               :url (UrlInput user-id navigate-to-viewer!
                              !stage !staged !flow !error !quota-error? !busy-msg)
-              :file (let [cap-label (when (pos? cap-bytes) (format-mb cap-bytes))]
+              ;; Documents only. The archive extensions moved to the Code card
+              ;; and to the intake area, so this dialog no longer offers a .zip
+              ;; whose three possible flows it could not name in one line.
+              :file (let [cap-label (when-some [n (:document ceilings)]
+                                      (when (pos? n) (format-mb n)))]
                       (FilePicker !file !file-input handle-file
-                                  ".pdf,.epub,.html,.htm,.md,.markdown,.zip,.7z"
-                                  ;; An archive's CONTENTS pick its flow, not its
-                                  ;; name: ct/classify-archive tests for a
-                                  ;; FreeMemo account export, then a SuperMemo
-                                  ;; collection, then falls back to a code repo.
-                                  ;; Saying "extension picks the flow" was already
-                                  ;; wrong for the two zip flows and is wrong for
-                                  ;; three now.
+                                  (itypes/accept-attr ["PDF" "EPUB" "HTML" "Markdown"])
                                   (if cap-label
-                                    (str "PDF, EPUB, HTML, Markdown, or a .zip / .7z holding a FreeMemo account export, a SuperMemo collection, or a code repo — an archive's contents pick the flow. Maximum " cap-label ".")
-                                    "PDF, EPUB, HTML, Markdown, or a .zip / .7z holding a FreeMemo account export, a SuperMemo collection, or a code repo — an archive's contents pick the flow.")))
+                                    (str "PDF, EPUB, HTML, or Markdown. Maximum " cap-label ".")
+                                    "PDF, EPUB, HTML, or Markdown.")))
+              ;; A code base arrives as a .zip. Its FLOW still comes from the
+              ;; archive's entry names at finalize (ct/classify-archive), so an
+              ;; account export dropped here imports as an account — the label
+              ;; restricts what the dialog offers, never what the server resolves.
+              :code (FilePicker !file !file-input handle-file
+                                ".zip"
+                                "A code base as a .zip. FreeMemo reads the file tree and imports the source files.")
+              ;; .mp4 and .webm are absent deliberately: both route to the video
+              ;; import, so offering them here would import the same file two
+              ;; different ways depending on which control the user reached.
               :audio (FilePicker !file !file-input handle-file
-                                 ".mp3,.m4a,.mp4,.wav,.webm,.ogg,.oga,.flac,.mpeg,.mpga"
-                                 "Audio file (mp3, m4a, wav, webm, ogg, flac). Maximum 25 MB.")
+                                 (itypes/accept-attr ["Audio"])
+                                 "Audio file (mp3, m4a, wav, ogg, flac). Maximum 25 MB.")
               :score (ScoreStage user-id navigate-to-viewer! !stage
                                  !score-pdf !score-audio
                                  !error !quota-error? !busy-msg)

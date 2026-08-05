@@ -33,6 +33,14 @@
 
     --color-border: light-dark(#e0e0e0, #374151);
     --color-border-light: light-dark(#ddd, #374151);
+    /* Launcher-card border (WCAG 1.4.11, non-text contrast ≥3:1). `--color-border`
+       measures 1.26:1 on the light card and 1.72:1 on the dark one, so a card
+       whose whole affordance IS its outline needs its own token. Browser-measured:
+       3.32:1 light (#868e96 on #fff), 3.52:1 dark (#737d8c on #1f2937); both also
+       clear 3:1 against the page background, so the token holds wherever a card
+       sits. Do NOT raise --color-border to reach this — every table, input and
+       toolbar in the app reads it. */
+    --color-border-card: light-dark(#868e96, #737d8c);
     --color-bg-page: light-dark(#f8fafc, #111827);
     --color-bg-card: light-dark(#fff, #1f2937);
     --color-bg-subtle: light-dark(#f9fafb, #1a2332);
@@ -4157,4 +4165,252 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
    hug the control instead of the default 2px halo the cell clips. */
 .tape-scroll td :focus-visible {
     outline-offset: 0;
+}
+
+/* ── Import page ───────────────────────────────────────────────────
+   plans/import-page-redesign.md. Every rule that positions or colours a source
+   card lives here rather than in a per-card inline :style map — Electric applies
+   each style property as its own reactive prop, and one :class string is one
+   prop (same reasoning as the virtual-scroll tables). */
+
+/* §5.4 — wider than the shared .page-container's 960px: four cards plus their
+   gaps need the room, and .page-container is shared with every other page. */
+.import-page {
+    max-width: 1200px;
+    width: 100%;
+    margin: 0 auto;
+    padding: var(--sp-6);
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+    gap: var(--sp-5);
+}
+
+/* §5.5 — vertical centring by auto margins, NOT justify-content: center. A
+   centred flex container clips its overflow at the top when the content is
+   taller than the box; auto margins collapse instead, so a short viewport
+   scrolls normally. */
+@media (min-height: 901px) {
+    .import-page-body { margin-block: auto; }
+}
+
+.import-page-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-5);
+}
+
+.import-title {
+    font-size: 1.75rem;
+    font-weight: 700;
+    margin: 0;
+}
+
+.import-intro {
+    font-size: 14px;
+    color: var(--color-text-secondary);
+    margin: 4px 0 0 0;
+}
+
+/* ── Intake area (§6) ─────────────────────────────────────────── */
+.import-intake {
+    min-height: 160px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-2);
+    padding: var(--sp-5);
+    text-align: center;
+    cursor: pointer;
+    border: 2px dashed var(--color-border-card);
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-card);
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.import-intake:hover { border-color: var(--color-primary); }
+
+/* §6.5 — the drag state. Border, background and text all change, so the state
+   does not depend on colour alone (§7.6). */
+.import-intake.is-dragging {
+    border-color: var(--color-primary);
+    border-style: solid;
+    background: var(--color-primary-tint);
+}
+
+.import-intake-prompt {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.import-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: center;
+}
+
+.import-chip {
+    padding: 2px 8px;
+    border-radius: var(--radius-pill);
+    background: var(--color-bg-subtle);
+    border: 1px solid var(--color-border);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-label);
+}
+
+.import-chip-more {
+    background: transparent;
+    border-style: dashed;
+    color: var(--color-text-hint);
+}
+
+/* §6.6.1 — every ceiling, on one line. */
+.import-limits {
+    font-size: 12px;
+    color: var(--color-text-hint);
+}
+
+/* §6.8 / §6.9 — refusal and skipped-file messages. */
+.import-message {
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    background: var(--color-danger-bg);
+    color: var(--color-danger-dark);
+    font-size: 13px;
+    text-align: center;
+}
+
+/* ── Card grids (§7.3) ────────────────────────────────────────── */
+.import-grid {
+    display: grid;
+    gap: var(--sp-3);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* Six secondary cards leave a row of two in four columns, so the secondary grid
+   runs three. The consequence is deliberate: secondary cards are wider. */
+.import-grid-secondary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+@media (max-width: 899px) {
+    .import-grid,
+    .import-grid-secondary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 599px) {
+    .import-grid,
+    .import-grid-secondary { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ── Source card (§7.4, §7.6) ─────────────────────────────────── */
+.import-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 180px;
+    padding: var(--sp-4);
+    cursor: pointer;
+    text-align: left;
+    border: 1px solid var(--color-border-card);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-card);
+    color: var(--color-text-primary);
+    font: inherit;
+    transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+
+.import-card:hover {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 1px var(--color-primary);
+    transform: translateY(-2px);
+}
+
+.import-card:active {
+    transform: none;
+    background: var(--color-bg-hover);
+}
+
+.import-card[aria-disabled="true"] {
+    cursor: not-allowed;
+    opacity: 0.55;
+    border-style: dashed;
+    transform: none;
+    box-shadow: none;
+}
+
+.import-card-icon {
+    margin-bottom: 12px;
+    color: var(--color-text-secondary);
+    line-height: 0;
+}
+
+.import-card-title {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.import-card-desc {
+    font-size: 12px;
+    color: var(--color-text-secondary);
+}
+
+/* §11.3 — the key number, hidden until the user presses a key. */
+.import-card-key {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--color-text-hint);
+}
+
+/* ── Disclosure (§7.2) ────────────────────────────────────────── */
+.import-disclosure > summary {
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    padding: 4px 0;
+    margin-bottom: var(--sp-3);
+    width: fit-content;
+}
+
+.import-disclosure > summary:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+}
+
+/* ── Recent items (§10) and the migration link (§9.3) ─────────── */
+.import-section-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    margin: 0 0 var(--sp-2) 0;
+}
+
+.import-recent-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--color-bg-subtle);
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.import-recent-row:hover { background: var(--color-bg-hover); }
+.import-recent-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.import-recent-date { color: var(--color-text-hint); font-size: 12px; }
+
+.import-migration-link {
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    text-decoration: underline;
+    cursor: pointer;
+    align-self: flex-start;
 }
