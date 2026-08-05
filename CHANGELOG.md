@@ -59,8 +59,6 @@ Format contract (see freememo.changelog):
   its labels on a canvas, which page styles never reach, so they stayed black on
   the dark background. They follow the theme now, including a change of the
   operating system preference while the graph is open.
-- **DeepSeek · V4 Flash costs about a third less** — 0.09 in and 0.18 out per
-  million tokens, against 0.14 and 0.28 before.
 - **The Zotero plugin reads its updates from the current repository address.**
 
 ### Known issues
@@ -75,15 +73,9 @@ Format contract (see freememo.changelog):
   second copy.** The server takes that instruction and the modal does not offer
   it.
 - **A resumed import does not say that it resumed.**
-- **A move between two instances is not verified yet.** Every round trip so far
-  ran inside one database against a fresh user. Two instances would also exercise
-  a difference in schema between two builds, which the importer is built for and
-  nothing has run.
 - **An export download shows no progress.** The size is not known until the
   archive is written, so the browser can show neither a percentage nor a total. A
   large account takes a while to start.
-- **A push to Anki after an import is not verified.** Anki note identifiers
-  travel, and nobody has pushed imported cards to a real Anki collection yet.
 - **An archive carries a format version, and there is no path between versions.**
   Version 1 is what this build writes and the only version it reads. An added
   column needs no change of that number, because an import drops a column the
