@@ -39,35 +39,77 @@
    re-authorizes."
   "google_drive_refresh_token")
 
-(defn- callback-uri
-  "Pre : none.
-   Post: the absolute Drive callback URL. Derived from the sign-in redirect URI
-         so the two cannot drift — both must be registered in Cloud Console."
-  []
-  (or (System/getenv "GOOGLE_DRIVE_REDIRECT_URI")
-    (str/replace (oauth/redirect-uri) "/auth/google/callback" "/auth/google/drive/callback")))
-
 (defn- url-encode [s] (java.net.URLEncoder/encode (str s) "UTF-8"))
+
+;; ── The shared callback and its state ──────────────────────────────
+;;
+;; Drive authorization returns to the SAME redirect URI as sign-in, so a
+;; deployment registers one URI in Cloud Console and never registers another.
+;; The earlier shape derived a second URI by string-replacing the tail of the
+;; sign-in one, which needed a second Console entry per environment AND failed
+;; silently when the sign-in URI did not match the pattern it replaced: the
+;; replace became a no-op, and Google then handed a Drive code to the sign-in
+;; handler, which read it as an id_token and failed somewhere unrelated.
+;;
+;; `state` is the only channel Google round-trips verbatim, so the flow marker
+;; lives there. This namespace builds the state and reads it back, because a
+;; format split across two namespaces is one that drifts.
+
+(def ^:private state-marker
+  "Prefix marking a `state` as belonging to a Drive authorization. A sign-in
+   state is a bare nonce and never carries it."
+  "drive:")
+
+(def ^:private state-separator
+  "Separates the nonce from the return path. A `|` cannot appear in either — the
+   nonce is a UUID and the path is URL-encoded in the query."
+  "|")
+
+(defn authorization-state
+  "Build the opaque `state` for a Drive authorization.
+
+   Pre : `nonce` is a CSRF nonce. `return-to` is an app-relative path.
+   Post: a string carrying both, marked as a Drive flow. The caller MUST put the
+         same string in the session and compare it on the way back."
+  [nonce return-to]
+  (str state-marker nonce state-separator return-to))
+
+(defn authorization-state?
+  "Pre : `state` is a callback's `state` param, possibly nil.
+   Post: true iff it belongs to a Drive authorization rather than a sign-in."
+  [state]
+  (str/starts-with? (or state "") state-marker))
+
+(defn parse-state
+  "Pre : `authorization-state?` is true for `state`.
+   Post: {:nonce s :return-to s}. `:return-to` is whatever was passed in and is
+         NOT validated here — the caller decides what paths it will honor."
+  [state]
+  (let [[nonce return-to] (-> state
+                            (subs (count state-marker))
+                            (str/split (re-pattern (java.util.regex.Pattern/quote state-separator)) 2))]
+    {:nonce nonce :return-to return-to}))
 
 (defn authorize-url
   "The consent URL that yields a Drive refresh token.
 
-   Pre : `state` is a CSRF nonce the caller also puts in the session.
-         `return-to` is the path to send the browser back to afterwards.
-   Post: a Google consent URL requesting only `scope`, with `access_type=offline`
-         and `prompt=consent` so a refresh token is issued. Without both, Google
+   Pre : `state` is `authorization-state` output, also stored in the session.
+   Post: a Google consent URL requesting only `scope`, returning to the SAME
+         redirect URI as sign-in, with `access_type=offline` and
+         `prompt=consent` so a refresh token is issued. Without both, Google
          returns an access token only and every later sync would need the user
-         present."
-  [state return-to]
+         present. `include_granted_scopes` keeps the sign-in scopes the user
+         already granted."
+  [state]
   (str "https://accounts.google.com/o/oauth2/v2/auth"
     "?client_id=" (url-encode (oauth/client-id))
-    "&redirect_uri=" (url-encode (callback-uri))
+    "&redirect_uri=" (url-encode (oauth/redirect-uri))
     "&response_type=code"
     "&scope=" (url-encode scope)
     "&access_type=offline"
     "&prompt=consent"
     "&include_granted_scopes=true"
-    "&state=" (url-encode (str state "|" return-to))))
+    "&state=" (url-encode state)))
 
 (defn- user-enc-key
   "Pre : `user-id` names a Google-authenticated user.
@@ -86,11 +128,13 @@
          exception — the caller redirects with a message.
    Inv : the plaintext token never reaches the database."
   [user-id code]
+  ;; `redirect_uri` MUST equal the one the authorization used, or Google rejects
+  ;; the exchange. Both read `oauth/redirect-uri`, so they cannot disagree.
   (let [resp (http/post "https://oauth2.googleapis.com/token"
                {:form-params {:code code
                               :client_id (oauth/client-id)
                               :client_secret (oauth/client-secret)
-                              :redirect_uri (callback-uri)
+                              :redirect_uri (oauth/redirect-uri)
                               :grant_type "authorization_code"}
                 :as :json
                 :throw-exceptions true})

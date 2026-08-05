@@ -79,8 +79,13 @@
           chapters [{:title "C" :html html}]
           text (anchor/chapter-text html)]
       (is (= "Headalphabetagammadeltaepsilon" text))
-      (is (= ["betagamma"] (tinted-text (get (marked chapters [(hl "C" "betagamma")]) 0)))
-        "the marked characters are the ones chapter-text reported"))))
+      ;; Two spans, not one: the quote crosses `<i>beta</i>` and the text after
+      ;; it, so each text node gets its own tint. Concatenating them is what must
+      ;; equal what `chapter-text` reported.
+      (let [spans (tinted-text (get (marked chapters [(hl "C" "betagamma")]) 0))]
+        (is (= ["beta" "gamma"] spans))
+        (is (= "betagamma" (apply str spans))
+          "the marked characters are the ones chapter-text reported")))))
 
 ;; ── 4.4 — a quote that spans element boundaries ────────────────────
 

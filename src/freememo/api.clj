@@ -715,7 +715,12 @@
        :headers {"Location" (google-oauth/auth-url state)}
        :session {:oauth-state state}})))
 
-(defn google-callback-handler [request]
+(defn- google-sign-in-callback
+  "The sign-in branch of `google-callback-handler`.
+   Pre:  the callback's `state` is NOT a Drive authorization state.
+   Post: unchanged from before Drive shared this callback — 302 to `/` carrying
+         either a signed-in session or an :auth-error."
+  [request]
   (let [code (get-in request [:params "code"])
         state (get-in request [:params "state"])
         expected-state (get-in request [:session :oauth-state])]
@@ -756,46 +761,28 @@
            :headers {"Location" "/"}
            :session {:auth-error "Google sign-in failed — please try again"}})))))
 
-;; ── NeoReader sync (plans/boox-neoreader-google-drive-sync.md) ─────────────
-;;
-;; These live on HTTP rather than in an Electric server block on purpose.
-;; `freememo.neoreader-sync` and `freememo.google-drive` are `.clj` namespaces,
-;; and `(e/server (neoreader/sync-document! …))` compiles the symbol on the CLJS
-;; peer too, where a CLJ-only var does not exist. `epub.clj`, reached from this
-;; file, is the precedent.
-
-(defn drive-authorize-handler
-  "GET /auth/google/drive — start the Drive consent flow.
-   Pre:  authenticated; Google OAuth is configured.
-   Post: 302 to Google, with a CSRF nonce in the session. `return_to` is echoed
-         through Google's `state` so the callback can send the user back to the
-         document they clicked from."
+(defn- google-drive-callback
+  "The Drive branch of `google-callback-handler`.
+   Pre:  `authorization-state?` is true for this request's `state`, and the
+         session holds the identical string this flow stored.
+   Post: 302 to the `return_to` the state carries, and a stored refresh token on
+         success. Any failure adds :drive-error and changes nothing else — the
+         user stays signed in either way.
+   Inv:  only an app-relative path is honored as a redirect target. An absolute
+         URL in the state would otherwise make this an open redirect."
   [request]
-  (if-not (require-auth request)
-    (json-response 401 {:success false :error "Not authenticated"})
-    (if-not (google-oauth/configured?)
-      (json-response 503 {:success false :error "Google is not configured"})
-      (let [state (str (random-uuid))
-            return-to (or (get-in request [:params "return_to"]) "/library/documents")]
-        {:status 302
-         :headers {"Location" (drive/authorize-url state return-to)}
-         :session (assoc (:session request) :drive-oauth-state state)}))))
-
-(defn drive-callback-handler
-  "GET /auth/google/drive/callback — store the refresh token.
-   Pre:  the session holds the nonce this request's `state` carries.
-   Post: 302 back to `return_to`. The session gains :drive-error on any failure,
-         and nothing else changes — the user stays signed in either way."
-  [request]
-  (let [raw-state (or (get-in request [:params "state"]) "")
-        [state return-to] (str/split raw-state #"\|" 2)
-        expected (get-in request [:session :drive-oauth-state])
+  (let [state (get-in request [:params "state"])
         code (get-in request [:params "code"])
+        expected (get-in request [:session :drive-oauth-state])
         user-id (require-auth request)
-        landing (or (when (str/starts-with? (or return-to "") "/") return-to)
+        {:keys [return-to]} (drive/parse-state state)
+        landing (if (and return-to
+                      (str/starts-with? return-to "/")
+                      (not (str/starts-with? return-to "//")))
+                  return-to
                   "/library/documents")
-        back (fn [session] {:status 302 :headers {"Location" landing} :session session})
-        session (dissoc (:session request) :drive-oauth-state)]
+        session (dissoc (:session request) :drive-oauth-state)
+        back (fn [s] {:status 302 :headers {"Location" landing} :session s})]
     (cond
       (nil? user-id) (back (assoc session :drive-error "Sign in before connecting Drive"))
       (not= state expected) (back (assoc session :drive-error "Drive authorization state mismatch"))
@@ -807,8 +794,50 @@
           (back (assoc session :drive-error
                   "Google granted no offline access — try again and accept the prompt")))
         (catch Exception e
-          (tel/error! {:id ::drive-callback-handler} e)
+          (tel/error! {:id ::google-drive-callback} e)
           (back (assoc session :drive-error "Connecting Google Drive failed")))))))
+
+(defn google-callback-handler
+  "GET /auth/google/callback — the ONE registered Google redirect URI.
+   Pre:  Google sent a `state` this app built, either a sign-in nonce or a Drive
+         authorization state.
+   Post: dispatches to the branch that state belongs to. Drive shares this URI so
+         a deployment registers exactly one redirect URI in Cloud Console, now
+         and for every environment it ever adds."
+  [request]
+  (if (drive/authorization-state? (get-in request [:params "state"]))
+    (google-drive-callback request)
+    (google-sign-in-callback request)))
+
+;; ── NeoReader sync (plans/boox-neoreader-google-drive-sync.md) ─────────────
+;;
+;; These live on HTTP rather than in an Electric server block on purpose.
+;; `freememo.neoreader-sync` and `freememo.google-drive` are `.clj` namespaces,
+;; and `(e/server (neoreader/sync-document! …))` compiles the symbol on the CLJS
+;; peer too, where a CLJ-only var does not exist. `epub.clj`, reached from this
+;; file, is the precedent.
+
+(defn drive-authorize-handler
+  "GET /auth/google/drive — start the Drive consent flow.
+   Pre:  authenticated; Google OAuth is configured.
+   Post: 302 to Google, with the flow's state in the session. The state carries
+         `return_to`, so the shared callback can send the user back to the
+         document they clicked from.
+   Note: only this route is Drive-specific. The RETURN trip lands on
+         `/auth/google/callback`, the one URI Cloud Console knows."
+  [request]
+  (if-not (require-auth request)
+    (json-response 401 {:success false :error "Not authenticated"})
+    (if-not (google-oauth/configured?)
+      (json-response 503 {:success false :error "Google is not configured"})
+      ;; The state is built once and used twice — as the URL's `state` and as the
+      ;; session copy the callback compares. Two literals that agree today would
+      ;; be two that can drift.
+      (let [return-to (or (get-in request [:params "return_to"]) "/library/documents")
+            state (drive/authorization-state (str (random-uuid)) return-to)]
+        {:status 302
+         :headers {"Location" (drive/authorize-url state)}
+         :session (assoc (:session request) :drive-oauth-state state)}))))
 
 (defn drive-picker-token-handler
   "GET /api/neoreader/picker-token — vend the token the Google Picker needs.
@@ -1128,10 +1157,11 @@
    {:method :get  :path "/ads.txt"              :handler #'ads-txt-handler}
    {:method :get  :path "/auth/google"          :handler #'google-auth-handler}
    {:method :get  :path "/auth/google/callback" :handler #'google-callback-handler}
-   ;; NeoReader sync. All four carry metadata only — the export body is
-   ;; downloaded server-side and never passes through a request.
+   ;; NeoReader sync. All carry metadata only — the export body is downloaded
+   ;; server-side and never passes through a request. There is no Drive callback
+   ;; route: `/auth/google/callback` above serves both flows, so Cloud Console
+   ;; needs one redirect URI per deployment rather than two.
    {:method :get  :path "/auth/google/drive"          :handler #'drive-authorize-handler}
-   {:method :get  :path "/auth/google/drive/callback" :handler #'drive-callback-handler}
    {:method :get  :path "/api/neoreader/picker-token" :handler #'drive-picker-token-handler}
    {:method :post :path "/api/neoreader/bind"         :handler #'neoreader-bind-handler   :body :small}
    {:method :post :path "/api/neoreader/sync"         :handler #'neoreader-sync-handler   :body :small}])
