@@ -1,11 +1,18 @@
 (ns freememo.deployment-hook
   "Optional per-deployment behavior, absent by default.
 
-   Two seams where a deployment may add something the app itself does not need:
-   `on-signup` may annotate the session a new account is created with, and
-   `shell-head` may contribute markup to one shell response and spend whatever
-   `on-signup` left there. This namespace owns the contract and the no-op
-   fallbacks. `freememo.shell` and `freememo.api` call through here.
+   Four seams where a deployment may add something the app itself does not need:
+
+   - `on-signup` may annotate the session a new account is created with.
+   - `shell-head` may contribute markup to one shell response, and spend whatever
+     `on-signup` left there.
+   - `well-known-text` may supply the body of a well-known text file, keyed by its
+     path, so one entry point serves `/ads.txt` and any later `security.txt`.
+   - `site-verification-html` may supply markup that proves site ownership, for
+     the crawler document, which carries no other contribution.
+
+   This namespace owns the contract and the no-op fallbacks. `freememo.shell`,
+   `freememo.api` and `freememo.crawler-page` call through here.
 
    The implementation namespace is optional. When it is absent both functions
    return their fallbacks: an unchanged session and an empty head. That is the
@@ -31,8 +38,10 @@
 (defonce ^:private impl
   (delay
     (try
-      (let [fns {:on-signup  (requiring-resolve 'freememo.deployment-hook-impl/on-signup)
-                 :shell-head (requiring-resolve 'freememo.deployment-hook-impl/shell-head)}]
+      (let [fns {:on-signup       (requiring-resolve 'freememo.deployment-hook-impl/on-signup)
+                 :shell-head      (requiring-resolve 'freememo.deployment-hook-impl/shell-head)
+                 :well-known-text (requiring-resolve 'freememo.deployment-hook-impl/well-known-text)
+                 :site-verification-html (requiring-resolve 'freememo.deployment-hook-impl/site-verification-html)}]
         (when-some [missing (seq (keep (fn [[k v]] (when (nil? v) k)) fns))]
           (throw (ex-info "deployment hook implementation loaded but incomplete"
                    {:missing (vec missing)})))
@@ -72,3 +81,29 @@
   (if-some [f (:shell-head @impl)]
     (f request)
     {:html "" :session nil}))
+
+(defn well-known-text
+  "The body this deployment publishes at well-known text `path`, or nil.
+
+   Pre: `path` is a request URI such as \"/ads.txt\".
+   Post: nil, or a string with no HTML in it. nil means the caller MUST answer
+   404 — an absent file and an empty file say different things to the crawler
+   that reads it, and only 404 says absent.
+   nil for every path when no implementation is present, which is the ordinary
+   case."
+  [path]
+  (when-some [f (:well-known-text @impl)]
+    (f path)))
+
+(defn site-verification-html
+  "Markup that proves this deployment owns the accounts it names.
+
+   Post: a string, never nil, so the caller can substitute it unconditionally.
+   \"\" when no implementation is present, so a self-hosted build's crawler
+   document names nobody.
+   This is deliberately narrower than `shell-head`: the crawler document carries
+   no script, so it must not take a contribution that includes one."
+  []
+  (if-some [f (:site-verification-html @impl)]
+    (f)
+    ""))

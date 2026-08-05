@@ -781,6 +781,31 @@
   (let [params (:params request)]
     (authenticate->session-response (get params "user") (get params "password"))))
 
+(defn ads-txt-handler
+  "GET /ads.txt — the authorized-sellers file, when this deployment publishes one.
+
+   Pre: none. This file is public by definition and takes no session.
+   Post: 200 `text/plain` with the configured body, or 404 when
+   `hook/well-known-text` supplies none. A deployment that publishes no such file
+   MUST get the 404: an empty 200 tells a crawler the file exists and authorizes
+   nobody, which is a different and worse claim than absence.
+   This route exists because `wrap-prod-index-page` is the catch-all for every
+   unmatched path, so without it `/ads.txt` answered `200 text/html` with the app
+   shell — which reads as a missing file to the crawler that fetches it.
+   `wrap-api-routes` sits outside both `wrap-resource` and that catch-all, so this
+   handler wins outright."
+  [_request]
+  (if-some [body (hook/well-known-text "/ads.txt")]
+    {:status 200
+     :headers {"Content-Type" "text/plain; charset=utf-8"
+               ;; Google re-fetches this file periodically rather than per page
+               ;; load, so a day of caching costs nothing and saves the origin.
+               "Cache-Control" "public, max-age=86400"}
+     :body body}
+    {:status 404
+     :headers {"Content-Type" "text/plain; charset=utf-8"}
+     :body "Not found"}))
+
 (defn login-post-handler
   "POST /login — production username/password login. Reads the urlencoded form
    body (user, password), parsed into :params by wrap-params (no credentials in
@@ -948,6 +973,9 @@
    ;; path above the pattern makes the precedence explicit rather than incidental.
    {:method :get  :pattern #"/api/video/\d+"    :handler #'video-http/get-video-handler}
    {:method :get  :pattern #"/api/media/\d+"    :handler #'get-media-handler}
+   ;; Well-known public text files. These MUST be routed rather than left to the
+   ;; shell catch-all, which answers every unmatched path with HTML.
+   {:method :get  :path "/ads.txt"              :handler #'ads-txt-handler}
    {:method :get  :path "/auth/google"          :handler #'google-auth-handler}
    {:method :get  :path "/auth/google/callback" :handler #'google-callback-handler}])
 

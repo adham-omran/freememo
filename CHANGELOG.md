@@ -9,6 +9,36 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
+## Unreleased
+
+### Technical
+
+- **Crawlers now receive a static document, because they cannot run the app.**
+  Google's renderer supports no WebSocket connection, and this app sends every
+  word over one, so a crawler read zero words at every address. Measured on the
+  deployed page: an empty body, and 46 readable words in total, all of them in one
+  meta tag. `freememo.shell` now recognizes a crawler and serves a plain document
+  built from the landing page's own copy.
+  - **The words moved into `freememo.landing-copy`, a data namespace both
+    renderers read.** One home per sentence. A crawler that reads different words
+    than a visitor sees is what search engines call cloaking.
+  - That namespace holds no requires on purpose. The document renderer is plain
+    Clojure on the boot path, and a require of the Electric page would pull the
+    Electric compiler into the server's boot.
+  - The document carries no script, no stylesheet and no font. A crawler runs no
+    JavaScript here, so those would cost it four round-trips for nothing.
+  - Only the root address gets the document. Every other address answers 404 to a
+    crawler, so identical text never appears on many addresses. A future public
+    page needs an entry in the renderer, or crawlers will not see it.
+  - Link previews keep working. The document carries the full Open Graph set,
+    which is all a chat or social preview reads.
+- **`/robots.txt` is a real file, `/ads.txt` is a real route, and three
+  machine-read paths now answer 404.** All of them used to return the app page as
+  markup, because the page handler answers every address that matched nothing
+  else. A machine that asks for a text file and receives markup treats the file as
+  missing. `/ads.txt` answers 404 unless the deployment configures a body, which
+  is the honest answer for a deployment that authorizes no seller.
+
 ## v20260805-aa496f6
 
 ### For users

@@ -1,0 +1,18 @@
+# FreeMemo — https://freememo.net/
+#
+# This file exists mainly so the path stops returning HTML. Without it, the
+# request fell through to freememo.shell's catch-all, which answers every
+# unmatched path with the app shell, so /robots.txt served a page of markup.
+#
+# One URL is public. Everything else needs a session, and a crawler asking for
+# any other path gets 404 (freememo.shell/crawler-response). Crawling is allowed
+# everywhere because there is nothing here to keep out of an index.
+#
+# No Sitemap line on purpose: /sitemap.xml is a deliberate 404
+# (freememo.shell/text-only-paths), and pointing a crawler at a file that does
+# not exist wastes its fetch and ours.
+#
+# The deployment's proxy may prepend its own managed block ahead of this one.
+
+User-agent: *
+Allow: /
