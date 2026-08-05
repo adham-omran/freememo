@@ -14,31 +14,26 @@
             [freememo.quote-anchor :as anchor])
   (:import [org.jsoup Jsoup]))
 
-(defn- place
-  "Index `chapters`, anchor `highlights`, return [indexed placements]."
-  [chapters highlights]
-  (let [indexed (anchor/index-chapters chapters)]
-    [indexed (anchor/anchor-highlights indexed highlights)]))
-
 (defn- hl
   ([chapter quote] (hl chapter quote 0))
   ([chapter quote index] {:chapter chapter :quote quote :notes [] :index index}))
 
-(defn- marked-html
-  "Anchor every placement for chapter 0, tint it, and return the HTML."
+(defn- outcomes [chapters highlights]
+  (mapv :outcome (anchor/place-highlights chapters highlights)))
+
+(defn- marked
+  "Place, mark, and return the map of chapter position to rewritten HTML."
   [chapters highlights]
-  (let [[indexed placements] (place chapters highlights)
-        ranges (keep (fn [p] (when (= 0 (:chapter-pos p)) [(:start p) (:end p)]))
-                 placements)]
-    (anchor/mark-anchors! (first indexed) ranges)
-    (anchor/chapter-html (first indexed))))
+  (anchor/mark-chapters chapters (anchor/place-highlights chapters highlights)))
+
+(def ^:private tint-selector
+  (str "span[style*=" (subs anchor/highlight-color 1) "]"))
 
 (defn- tinted-text
   "The text inside every tint span of `html`, in document order."
   [html]
-  (->> (.select (Jsoup/parseBodyFragment html)
-         (str "span[style*=" (subs anchor/highlight-color 1) "]"))
-    (mapv #(.text ^org.jsoup.nodes.Element %))))
+  (mapv #(.text ^org.jsoup.nodes.Element %)
+    (.select (Jsoup/parseBodyFragment (or html "")) tint-selector)))
 
 ;; ── 4.3 — the export's own damage must match ───────────────────────
 
@@ -46,25 +41,23 @@
   (testing "4.3 — `curse of knowledgeis` matches a source that has the space"
     ;; The source italicizes the term, so NeoReader joined two inline elements
     ;; with no separator and lost the space before `is`.
-    (let [chapters [{:title "5. Avoid Illusions of Knowing"
-                     :html (str "<p>The <i>curse of knowledge</i> is our tendency to "
-                             "underestimate how long it will take another person.</p>")}]
-          [_ ps] (place chapters
-                   [(hl "5. Avoid Illusions of Knowing"
-                      "curse of knowledgeis our tendency to underestimate")])]
-      (is (= :placed (:outcome (first ps))))))
+    (is (= [:placed]
+          (outcomes [{:title "5. Avoid Illusions of Knowing"
+                      :html (str "<p>The <i>curse of knowledge</i> is our tendency to "
+                              "underestimate how long it will take another person.</p>")}]
+            [(hl "5. Avoid Illusions of Knowing"
+               "curse of knowledgeis our tendency to underestimate")]))))
 
   (testing "4.3 — `hindsight bias,or` matches the same way"
-    (let [chapters [{:title "C" :html "<p>the <i>hindsight bias,</i> or what is often called</p>"}]
-          [_ ps] (place chapters [(hl "C" "hindsight bias,or what is often called")])]
-      (is (= :placed (:outcome (first ps))))))
+    (is (= [:placed]
+          (outcomes [{:title "C" :html "<p>the <i>hindsight bias,</i> or what is often called</p>"}]
+            [(hl "C" "hindsight bias,or what is often called")]))))
 
   (testing "4.3 — curly quotation marks fold to their ASCII form"
-    (let [chapters [{:title "C" :html "<p>and it says \"practice like you play\" out loud</p>"}]
-          [_ ps] (place chapters
-                   [(hl "C" (str "and it says " \u201c "practice like you play" \u201d
-                              " out loud"))])]
-      (is (= :placed (:outcome (first ps))))))
+    (is (= [:placed]
+          (outcomes [{:title "C" :html "<p>and it says \"practice like you play\" out loud</p>"}]
+            [(hl "C" (str "and it says " \u201c "practice like you play" \u201d
+                       " out loud"))]))))
 
   (testing "4.3 — normalize drops whitespace and leaves nothing curly"
     (let [n (anchor/normalize (str "a b\t c\n" \u2018 "d" \u2019))]
@@ -74,6 +67,21 @@
   (testing "4.3 — normalize of nil is the empty string, not a crash"
     (is (= "" (anchor/normalize nil)))))
 
+;; ── The two chapter readers must not drift ─────────────────────────
+
+(deftest chapter-text-agrees-with-the-position-index
+  (testing "phase 1 matches against the same characters phase 2 tints"
+    ;; A drift here would tint text the placement never chose. Both derive from
+    ;; the same traversal, and this asserts it end to end: a placement found in
+    ;; `chapter-text` must land on exactly that text after marking.
+    (let [html (str "<h2>Head</h2><p>alpha <i>beta</i>gamma</p>"
+                 "<ul><li>delta</li><li>epsilon</li></ul>")
+          chapters [{:title "C" :html html}]
+          text (anchor/chapter-text html)]
+      (is (= "Headalphabetagammadeltaepsilon" text))
+      (is (= ["betagamma"] (tinted-text (get (marked chapters [(hl "C" "betagamma")]) 0)))
+        "the marked characters are the ones chapter-text reported"))))
+
 ;; ── 4.4 — a quote that spans element boundaries ────────────────────
 
 (deftest matches-a-quote-that-crosses-elements
@@ -81,23 +89,32 @@
                    :html (str "<h2>Generation</h2>"
                            "<p>In 2013, John McPhee published a piece in the New Yorker "
                            "about writer's block.</p>")}]
-        quote-text "Generation In 2013, John McPhee published a piece in the New Yorker"
-        highlights [(hl "8. Make It Stick" quote-text)]]
+        highlights [(hl "8. Make It Stick"
+                      "Generation In 2013, John McPhee published a piece in the New Yorker")]]
 
     (testing "4.4 — the highlight places even though it crosses a heading"
-      (let [[_ ps] (place chapters highlights)]
-        (is (= :placed (:outcome (first ps))))))
+      (is (= [:placed] (outcomes chapters highlights))))
 
     (testing "4.4 — the mark covers both elements"
-      (let [html (marked-html chapters highlights)
-            doc (Jsoup/parseBodyFragment html)
-            sel (str "span[style*=" (subs anchor/highlight-color 1) "]")]
-        (is (some? (.selectFirst doc (str "h2 " sel)))
+      (let [doc (Jsoup/parseBodyFragment (get (marked chapters highlights) 0))]
+        (is (some? (.selectFirst doc (str "h2 " tint-selector)))
           "the heading carries a tint span")
-        (is (some? (.selectFirst doc (str "p " sel)))
+        (is (some? (.selectFirst doc (str "p " tint-selector)))
           "the paragraph carries one too")
         (is (str/includes? (.text (.body doc)) "about writer's block.")
-          "text outside the quote survives untinted")))))
+          "text outside the quote survives"))))
+
+  (testing "4.4 — a quote spanning three text nodes marks all three"
+    (let [chapters [{:title "C" :html "<p>one <i>two</i> <b>three</b> four</p>"}]
+          html (get (marked chapters [(hl "C" "one two three")]) 0)]
+      (is (= ["one" "two" "three"] (tinted-text html))
+        "a fully covered middle node is wrapped whole")))
+
+  (testing "4.4 — a quote covering a whole middle element wraps it entirely"
+    (let [chapters [{:title "C" :html "<p>a<i>MIDDLE</i>z tail</p>"}]
+          html (get (marked chapters [(hl "C" "aMIDDLEz")]) 0)]
+      (is (= ["a" "MIDDLE" "z"] (tinted-text html)))
+      (is (str/includes? (.text (Jsoup/parseBodyFragment html)) "tail")))))
 
 ;; ── 4.5 — the reading-order cursor resolves ambiguity ──────────────
 
@@ -107,34 +124,27 @@
                      :html (str "<p>A first mention of reflection here.</p>"
                              "<p>Then a marker sentence.</p>"
                              "<p>And daily reflection, as a form of practice.</p>")}]
-          [_ ps] (place chapters
-                   [(hl "C" "Then a marker sentence" 0)
-                    (hl "C" "reflection" 1)])
-          second-start (:start (second ps))
-          first-end (:end (first ps))]
+          ps (anchor/place-highlights chapters
+               [(hl "C" "Then a marker sentence" 0) (hl "C" "reflection" 1)])]
       (is (= [:placed :placed] (mapv :outcome ps)))
-      (is (>= second-start first-end)
+      (is (>= (:start (second ps)) (:end (first ps)))
         "the second placement starts at or after the end of the first")))
 
-  (testing "4.5 — tinting picks the later occurrence, so the text proves the choice"
+  (testing "4.5 — the marked HTML proves the later occurrence was chosen"
     (let [chapters [{:title "C"
-                     :html (str "<p>first reflection</p><p>marker</p><p>second reflection</p>")}]
-          html (marked-html chapters
-                 [(hl "C" "marker" 0) (hl "C" "reflection" 1)])
-          doc (Jsoup/parseBodyFragment html)
-          ps (.select doc "p")]
+                     :html "<p>first reflection</p><p>marker</p><p>second reflection</p>"}]
+          html (get (marked chapters [(hl "C" "marker" 0) (hl "C" "reflection" 1)]) 0)
+          ps (.select (Jsoup/parseBodyFragment html) "p")]
       (is (not (str/includes? (.html (.get ps 0)) "background-color"))
         "the first paragraph's `reflection` stays untinted")
       (is (str/includes? (.html (.get ps 2)) "background-color")
         "the third paragraph's `reflection` carries the mark")))
 
   (testing "4.5 — the cursor does not move when a highlight fails to place"
-    (let [chapters [{:title "C" :html "<p>alpha beta gamma</p>"}]
-          [_ ps] (place chapters
-                   [(hl "C" "absent from the chapter" 0)
-                    (hl "C" "alpha" 1)])]
-      (is (= [:unmatched :placed] (mapv :outcome ps))
-        "a miss must not consume the cursor and block the next quote"))))
+    (is (= [:unmatched :placed]
+          (outcomes [{:title "C" :html "<p>alpha beta gamma</p>"}]
+            [(hl "C" "absent from the chapter" 0) (hl "C" "alpha" 1)]))
+      "a miss must not consume the cursor and block the next quote")))
 
 ;; ── 4.1 and 4.6 — chapter resolution and the forward search ────────
 
@@ -143,82 +153,128 @@
                   {:title "2. To Learn, Retrieve" :html "<p>beta two</p>"}]]
 
     (testing "4.1 — a heading matching a chapter title places in that chapter"
-      (let [[_ ps] (place chapters [(hl "2. To Learn, Retrieve" "beta two")])]
-        (is (= :placed (:outcome (first ps))))
+      (let [ps (anchor/place-highlights chapters [(hl "2. To Learn, Retrieve" "beta two")])]
+        (is (= [:placed] (mapv :outcome ps)))
         (is (= 1 (:chapter-pos (first ps))))))
 
     (testing "4.1 — the title match ignores case and whitespace"
-      (let [[_ ps] (place chapters [(hl "2.  to learn,   retrieve" "beta two")])]
-        (is (= :placed (:outcome (first ps))))
+      (let [ps (anchor/place-highlights chapters [(hl "2.  to learn,   retrieve" "beta two")])]
+        (is (= [:placed] (mapv :outcome ps)))
         (is (= 1 (:chapter-pos (first ps))))))
 
-    (testing "4.6 — a heading matching nothing searches the rest of the book"
-      (let [[_ ps] (place chapters [(hl "Chapter The Publisher Renamed" "beta two")])]
-        (is (= :fallback (:outcome (first ps))))
+    (testing "4.6 — a heading matching nothing searches the whole book"
+      (let [ps (anchor/place-highlights chapters [(hl "Chapter The Publisher Renamed" "beta two")])]
+        (is (= [:fallback] (mapv :outcome ps)))
         (is (= 1 (:chapter-pos (first ps))))))
 
     (testing "4.6 — a resolved chapter is the only place its highlights may land"
-      (let [[_ ps] (place chapters [(hl "1. Learning Is Misunderstood" "beta two")])]
-        (is (= :unmatched (:outcome (first ps)))
-          "the quote lives in chapter 2, but the export named chapter 1")))
+      (is (= [:unmatched]
+            (outcomes chapters [(hl "1. Learning Is Misunderstood" "beta two")]))
+        "the quote lives in chapter 2, but the export named chapter 1"))))
 
-    (testing "4.6 — the forward search respects the cursor's chapter"
-      (let [[_ ps] (place chapters
-                     [(hl "2. To Learn, Retrieve" "beta" 0)
-                      (hl "Renamed" "alpha one" 1)])]
-        (is (= :placed (:outcome (first ps))))
-        (is (= :unmatched (:outcome (second ps)))
-          "chapter 1 lies behind the cursor, so its text is out of reach")))))
+(deftest duplicate-chapter-titles-do-not-strand-later-highlights
+  ;; Regression: resolving a title to its FIRST chapter only, under a book-wide
+  ;; cursor, made every highlight of a duplicate-titled later chapter
+  ;; :unmatched — the resolved chapter lay behind the cursor and there was no
+  ;; forward search. `epub.clj`'s extract-chapter-title takes the first h1/h2/h3
+  ;; of a spine item, so consecutive items can share a title.
+  (let [chapters [{:title "Notes" :html "<p>early note text</p>"}
+                  {:title "Chapter One" :html "<p>body of chapter one</p>"}
+                  {:title "Notes" :html "<p>late note text</p>"}]]
+
+    (testing "a highlight belonging to the second chapter of that title places"
+      (let [ps (anchor/place-highlights chapters
+                 [(hl "Chapter One" "body of chapter one" 0)
+                  (hl "Notes" "late note text" 1)])]
+        (is (= [:placed :placed] (mapv :outcome ps)))
+        (is (= [1 2] (mapv :chapter-pos ps)))))
+
+    (testing "a highlight belonging to the first chapter of that title still places"
+      (let [ps (anchor/place-highlights chapters [(hl "Notes" "early note text")])]
+        (is (= [:placed] (mapv :outcome ps)))
+        (is (= 0 (:chapter-pos (first ps))))))
+
+    (testing "the cursor resets per chapter, so an earlier chapter is reachable"
+      (let [ps (anchor/place-highlights chapters
+                 [(hl "Notes" "late note text" 0)
+                  (hl "Chapter One" "body of chapter one" 1)])]
+        (is (= [:placed :placed] (mapv :outcome ps))
+          "chapter 1 is not blocked by a placement recorded for chapter 2")))))
 
 ;; ── Tinting mechanics ──────────────────────────────────────────────
 
 (deftest tinting-is-exact-and-repeatable
   (testing "the tint covers the quote and nothing else"
-    (let [html (marked-html [{:title "C" :html "<p>keep MARKME drop</p>"}]
-                 [(hl "C" "MARKME")])]
-      (is (= ["MARKME"] (tinted-text html)))))
+    (is (= ["MARKME"]
+          (tinted-text (get (marked [{:title "C" :html "<p>keep MARKME drop</p>"}]
+                              [(hl "C" "MARKME")]) 0)))))
 
   (testing "two marks in one text node both land"
-    (let [html (marked-html [{:title "C" :html "<p>one AAA two BBB three</p>"}]
-                 [(hl "C" "AAA" 0) (hl "C" "BBB" 1)])]
-      (is (= ["AAA" "BBB"] (tinted-text html)))))
+    (is (= ["AAA" "BBB"]
+          (tinted-text (get (marked [{:title "C" :html "<p>one AAA two BBB three</p>"}]
+                              [(hl "C" "AAA" 0) (hl "C" "BBB" 1)]) 0)))))
 
   (testing "a mark at the very start of a text node needs no leading split"
-    (let [html (marked-html [{:title "C" :html "<p>START then rest</p>"}]
-                 [(hl "C" "START")])]
-      (is (= ["START"] (tinted-text html)))))
+    (is (= ["START"]
+          (tinted-text (get (marked [{:title "C" :html "<p>START then rest</p>"}]
+                              [(hl "C" "START")]) 0)))))
 
   (testing "a mark covering a whole text node needs no split at all"
-    (let [html (marked-html [{:title "C" :html "<p>whole</p>"}] [(hl "C" "whole")])]
-      (is (= ["whole"] (tinted-text html)))))
+    (is (= ["whole"]
+          (tinted-text (get (marked [{:title "C" :html "<p>whole</p>"}]
+                              [(hl "C" "whole")]) 0)))))
 
   (testing "the colour written is the Quill popover's Orange"
     (is (= "#faebdd" anchor/highlight-color))
     (is (not= "#44C2FF" anchor/highlight-color)
       "sharing the extract highlight's colour would make the two indistinguishable")))
 
+;; ── mark-chapters returns only what changed ────────────────────────
+
+(deftest marks-only-the-chapters-that-received-a-placement
+  (let [chapters [{:title "A" :html "<p>alpha</p>"}
+                  {:title "B" :html "<p>beta</p>"}
+                  {:title "C" :html "<p>gamma</p>"}]]
+
+    (testing "an untouched chapter is absent from the result"
+      (let [out (marked chapters [(hl "B" "beta")])]
+        (is (= [1] (vec (keys out))))
+        (is (nil? (get out 0)) "chapter A is not re-serialized")
+        (is (nil? (get out 2)) "chapter C is not re-serialized")))
+
+    (testing "no placements means no chapter is rewritten"
+      (is (= {} (marked chapters [(hl "B" "not present anywhere")]))))
+
+    (testing "two chapters each holding a placement both come back"
+      (let [out (marked chapters [(hl "A" "alpha" 0) (hl "C" "gamma" 1)])]
+        (is (= #{0 2} (set (keys out))))
+        (is (= ["alpha"] (tinted-text (get out 0))))
+        (is (= ["gamma"] (tinted-text (get out 2))))))))
+
 ;; ── Degenerate input ───────────────────────────────────────────────
 
 (deftest handles-degenerate-input
   (testing "an empty chapter list leaves every highlight unmatched"
-    (let [[_ ps] (place [] [(hl "C" "anything")])]
-      (is (= [:unmatched] (mapv :outcome ps)))))
+    (is (= [:unmatched] (outcomes [] [(hl "C" "anything")]))))
 
   (testing "a blank quote places nothing, since it would match everywhere"
-    (let [[_ ps] (place [{:title "C" :html "<p>text</p>"}] [(hl "C" "   ")])]
-      (is (= [:unmatched] (mapv :outcome ps)))))
+    (is (= [:unmatched] (outcomes [{:title "C" :html "<p>text</p>"}] [(hl "C" "   ")]))))
 
-  (testing "a chapter with no HTML indexes to empty and matches nothing"
-    (let [[indexed ps] (place [{:title "C" :html nil}] [(hl "C" "text")])]
-      (is (= "" (get-in (first indexed) [:index :text])))
-      (is (= [:unmatched] (mapv :outcome ps)))))
+  (testing "a chapter with no HTML reads as empty and matches nothing"
+    (is (= "" (anchor/chapter-text nil)))
+    (is (= [:unmatched] (outcomes [{:title "C" :html nil}] [(hl "C" "text")]))))
 
-  (testing "no highlights yields no placements"
-    (let [[_ ps] (place [{:title "C" :html "<p>x</p>"}] [])]
-      (is (= [] ps))))
+  (testing "no highlights yields no placements and no rewritten chapters"
+    (is (= [] (anchor/place-highlights [{:title "C" :html "<p>x</p>"}] [])))
+    (is (= {} (marked [{:title "C" :html "<p>x</p>"}] []))))
 
-  (testing "the position index maps one entry per normalized character"
-    (let [indexed (anchor/index-chapters [{:title "C" :html "<p>a b</p><p>c</p>"}])
-          idx (:index (first indexed))]
-      (is (= "abc" (:text idx)))
-      (is (= 3 (count (:positions idx)))))))
+  (testing "a nil chapter heading takes the forward search"
+    (let [ps (anchor/place-highlights [{:title "C" :html "<p>findme</p>"}]
+               [(hl nil "findme")])]
+      (is (= [:fallback] (mapv :outcome ps)))))
+
+  (testing "placements echo the highlight's own :index"
+    (let [ps (anchor/place-highlights [{:title "C" :html "<p>x</p>"}]
+               [(hl "C" "x" 41) (hl "C" "absent" 42)])]
+      (is (= [41 42] (mapv :index ps))
+        "including the unmatched one, so a caller can join back by index"))))

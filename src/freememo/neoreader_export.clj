@@ -133,8 +133,12 @@
          that sorts by `:timestamp` breaks `quote-anchor`'s reading-order
          cursor — see the namespace docstring.
    Inv : a note reaching the vector always belongs to the highlight it follows
-         in the file. A note appearing before any highlight is dropped, having
-         nothing to attach to."
+         in the file, EVEN when a chapter heading sits between the two. The note
+         belongs to its highlight, not to the heading it happens to follow, so
+         its entry lands in the chapter the highlight did. Hypothetical — in the
+         reference export a note always follows its highlight immediately.
+   Inv : a note appearing before any highlight is dropped, having nothing to
+         attach to."
   [html]
   (if (str/blank? html)
     []
@@ -145,27 +149,28 @@
              acc []]
         (if-not remaining
           acc
-          (let [^Element el (first remaining)
-                note (note-text el)
-                stamp (timestamp-of el)]
+          (let [^Element el (first remaining)]
             (cond
+              ;; Tag and `<hr>` checks come first: both are cheap, and they
+              ;; skip the two Jsoup selects below for every block they match.
               (book-header-tags (.tagName el))
               (recur (next remaining) chapter acc)
 
               (footer? el)
               (recur (next remaining) chapter acc)
 
-              note
-              (let [i (dec (count acc))]
+              (note-text el)
+              (let [note (note-text el)
+                    i (dec (count acc))]
                 (recur (next remaining) chapter
                   (if (neg? i)
                     acc
                     (update-in acc [i :notes] conj note))))
 
-              stamp
+              (timestamp-of el)
               (recur (next remaining) chapter
                 (conj acc {:chapter chapter
-                           :timestamp stamp
+                           :timestamp (timestamp-of el)
                            :quote (quote-text el)
                            :notes []
                            :index (count acc)}))
