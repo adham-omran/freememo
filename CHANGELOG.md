@@ -83,9 +83,6 @@ Format contract (see freememo.changelog):
 
 ### Known issues
 
-- **The Settings export card still tells you to drop the archive on the Upload
-  card, and that card no longer exists.** The archive imports either way — the
-  Import page takes it. The sentence is wrong, not the behavior.
 - **One unreadable file refuses a whole drop, and so does a mixed one.** A
   selection holding a format the page does not take imports nothing, and a
   selection mixing kinds asks you to drop them separately. Importing the readable
