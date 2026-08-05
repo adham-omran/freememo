@@ -840,17 +840,24 @@
          :session (assoc (:session request) :drive-oauth-state state)}))))
 
 (defn drive-picker-token-handler
-  "GET /api/neoreader/picker-token — vend the token the Google Picker needs.
+  "GET /api/neoreader/picker-token — vend what the Google Picker needs.
    Pre:  authenticated.
-   Post: {:success true :token s} when Drive is connected, else
+   Post: {:success true :token s :app_id s} when Drive is connected, else
          {:success false :reauthorize true} — the browser then sends the user
          through /auth/google/drive. The same credential serves the Picker and
-         the server-side download, so there is one grant and one consent."
+         the server-side download, so there is one grant and one consent.
+   Post: a client id with no derivable project number reports :success false with
+         an error instead of vending a token. The Picker REQUIRES the app id under
+         `drive.file`, and a pick without it grants nothing — the user would sync
+         and get a 404 naming the file, with no hint at the real cause."
   [request]
   (if-let [user-id (require-auth request)]
-    (if-let [token (drive/access-token user-id)]
-      (json-response 200 {:success true :token token :client_id (google-oauth/client-id)})
-      (json-response 200 {:success false :reauthorize true}))
+    (if-let [app-id (drive/app-id)]
+      (if-let [token (drive/access-token user-id)]
+        (json-response 200 {:success true :token token :app_id app-id})
+        (json-response 200 {:success false :reauthorize true}))
+      (json-response 200 {:success false
+                          :error "Google client id carries no project number — the Picker cannot run"}))
     (json-response 401 {:success false :error "Not authenticated"})))
 
 (defn- param-long

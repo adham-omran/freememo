@@ -95,11 +95,17 @@
 (defn- open-picker!
   "Show the Picker and resolve with the chosen file id, or nil if cancelled.
 
-   Pre : the Picker API is loaded and `token` is a live `drive.file` token.
-   Post: a promise of a file-id string, or nil when the user cancelled.
+   Pre : the Picker API is loaded, `token` is a live `drive.file` token, and
+         `app-id` is the Cloud PROJECT NUMBER.
+   Post: a promise of a file-id string, or nil when the user cancelled. The
+         picked file is granted to this app, which is what makes the later
+         server-side read possible.
+   Inv : `setAppId` is REQUIRED under `drive.file`. Without it the pick succeeds,
+         the file id looks fine, and every server read of it answers 404 — the
+         error names the file and never the missing app id. Do not remove it.
    Note: no `setSelectFolderEnabled` — a folder pick grants nothing about its
          contents, so offering it would hand the user a choice that cannot work."
-  [token]
+  [token app-id]
   (js/Promise.
     (fn [resolve _reject]
       (let [picker-ns (.-picker js/google)
@@ -112,6 +118,7 @@
             Action (.-Action picker-ns)
             builder (doto (new Builder)
                       (.setTitle "Choose your NeoReader export (onyx / DEVICE / Read)")
+                      (.setAppId app-id)
                       (.setOAuthToken token)
                       (.addView view)
                       (.setCallback
@@ -132,13 +139,13 @@
 (defn- pick-then-sync!
   "Open the Picker, bind what the user chose, and sync.
 
-   Pre : `token` is a live `drive.file` token.
+   Pre : `token` is a live `drive.file` token and `app-id` is the project number.
    Post: a promise of the sync response map, or nil when the user cancelled or
          the bind failed. A cancelled Picker binds nothing and syncs nothing."
-  [topic-id token on-status]
+  [topic-id token app-id on-status]
   (on-status {:phase :picking})
   (-> (load-picker-api!)
-    (.then (fn [_] (open-picker! token)))
+    (.then (fn [_] (open-picker! token app-id)))
     (.then (fn [file-id]
              (if (nil? file-id)
                (do (on-status {:phase :cancelled}) nil)
@@ -182,15 +189,22 @@
 
                needs_pick
                (-> (picker-token)
-                 (.then (fn [{:keys [success token reauthorize]}]
+                 (.then (fn [{:keys [success token app_id reauthorize error]}]
                           (cond
                             reauthorize (do (on-status {:phase :authorizing})
                                             (start-drive-authorization! return-to)
                                             nil)
                             (not success) (do (on-status {:phase :error
-                                                          :message "Could not reach Google Drive"})
+                                                          :message (or error "Could not reach Google Drive")})
                                               nil)
-                            :else (pick-then-sync! topic-id token on-status)))))
+                            ;; Refuse rather than open a Picker whose picks grant
+                            ;; nothing. The alternative failure is a 404 at sync
+                            ;; time that names the file, not the missing app id.
+                            (str/blank? app_id)
+                            (do (on-status {:phase :error
+                                            :message "Google Picker is misconfigured — no app id"})
+                                nil)
+                            :else (pick-then-sync! topic-id token app_id on-status)))))
 
                :else (do (on-status {:phase :error :message (or error "Sync failed")})
                          result))))

@@ -41,6 +41,22 @@
 
 (defn- url-encode [s] (java.net.URLEncoder/encode (str s) "UTF-8"))
 
+(defn app-id
+  "The Cloud project number the Google Picker must be given under `drive.file`.
+
+   Pre : the OAuth client id is configured.
+   Post: the client id's leading digit run, or nil when it does not have that
+         shape. A caller that gets nil MUST refuse to open the Picker.
+   Note: `setAppId` is REQUIRED for `drive.file` (Google's Picker reference). It
+         takes the project NUMBER, not the client id. Without it a pick creates
+         no per-file grant, and every later `files.get` answers 404 — naming the
+         file, never the missing app id, so nothing points back here. That defect
+         shipped once and cost a production debugging round.
+   Note: a web client id is `<project-number>-<random>.apps.googleusercontent.com`,
+         so the number is derivable and needs no second configuration key."
+  []
+  (second (re-find #"^(\d+)-" (or (oauth/client-id) ""))))
+
 ;; ── The shared callback and its state ──────────────────────────────
 ;;
 ;; Drive authorization returns to the SAME redirect URI as sign-in, so a
