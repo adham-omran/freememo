@@ -42,9 +42,15 @@
    {:id "claude-sonnet-5"
     :label "Anthropic · Claude Sonnet 5"
     :openrouter-model "anthropic/claude-sonnet-5"}
+   ;; A dated snapshot, not an alias. OpenRouter publishes no `-latest` slug for
+   ;; this model, and the one written here earlier was rejected with
+   ;; "deepseek/deepseek-v4-flash-latest is not a valid model ID" — an HTTP 400
+   ;; on every call in every lane that selected it. Verify a slug against
+   ;; https://openrouter.ai/api/v1/models before shipping it; this one retires
+   ;; when DeepSeek withdraws the snapshot.
    {:id "deepseek-v4-flash"
     :label "DeepSeek · V4 Flash"
-    :openrouter-model "deepseek/deepseek-v4-flash-latest"}])
+    :openrouter-model "deepseek/deepseek-v4-flash-0731"}])
 
 (def default-id
   "System-wide default card model when a user has no saved selection and no prod
