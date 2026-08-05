@@ -194,6 +194,11 @@ Format contract (see freememo.changelog):
     Electric-created leaf is safe. A browser check confirmed both cases.
   - `CLAUDE.md` records the narrow rule, which replaces a broader claim that said
     no injection inside an Electric element was safe.
+  - Bug fix: **the app shell lost its viewport height and collapsed.** A filler
+    that sizes itself rewrote the inline height of every element above it,
+    including the shell, and nothing put it back. One navigation later the whole
+    app measured 185 pixels in a 609-pixel window. Fillers now take a fixed size,
+    so they measure nothing and rewrite nothing.
 - **Each ad contribution is gated by its own configuration key**, and none of
   them gates another: proof that a deployment owns the account, the loader that
   starts serving, and the map of named units are three separate decisions. A test
