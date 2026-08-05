@@ -91,16 +91,23 @@
         (merge-js data {:highlighted true :zIndex 2})
         :else data))))
 
-(defn- edge-reducer [^js g !ui]
+(defn- edge-reducer
+  "Visibility, plus the theme's edge colour — which has to be applied HERE and
+   cannot be a tracked setting. sigma bakes :defaultEdgeColor into each edge's
+   display data during INDEXATION (`ds` in sigma.min.js, when the edge carries
+   no own color attribute), and handleSettingsUpdate re-indexes nothing — so a
+   setSetting on a theme change would repaint the old colour. Reducers run on
+   every refresh, so this one tracks."
+  [^js g !ui]
   (fn [edge data]
-    (let [{:keys [hover selected vedges]} @!ui
+    (let [{:keys [hover selected vedges colours]} @!ui
           focus (or selected hover)]
       (cond
         (and vedges (not (.has vedges edge)))
         (merge-js data {:hidden true})
         (and focus (not (.hasExtremity g edge focus)))
         (merge-js data {:hidden true})
-        :else data))))
+        :else (merge-js data {:color (:edge colours)})))))
 
 (defn- inherited-text-colour
   "The container's computed CSS `color`. index.css sets `color` from
@@ -140,9 +147,13 @@
       (str "rgb(" (str/join ", " (map #(js/Math.round (+ %2 (* t (- %1 %2)))) f b)) ")"))))
 
 ;; Mix ratios against the page background. Nodes outside the focus recede at
-;; dim-mix; the hover pill's 1px outline needs more, as thin strokes read
-;; weaker than fills at equal contrast.
+;; dim-mix; edges and the hover pill's 1px outline need more, as thin strokes
+;; read weaker than fills at equal contrast. Browser-measured against
+;; --color-bg-page, both themes: edges land at 2.82:1 dark / 2.27:1 light,
+;; under the nodes' 5.49:1 / 3.09:1 — present as structure, never competing
+;; with the nodes they connect.
 (def ^:private dim-mix 0.3)
+(def ^:private edge-mix 0.35)
 (def ^:private hover-stroke-mix 0.4)
 
 (def ^:private fallback-colours
@@ -150,10 +161,10 @@
    precondition is violated, so degrade to sigma's own light-theme constants
    rather than to a colour derived from a wrong surface. Caller's bug: whoever
    dropped the container background."
-  {:dim "#c8ccd4" :hover-fill "#FFF" :hover-stroke "rgba(0, 0, 0, 0.25)"})
+  {:dim "#c8ccd4" :edge "#dbe0e8" :hover-fill "#FFF" :hover-stroke "rgba(0, 0, 0, 0.25)"})
 
 (defn- theme-colours
-  "The four canvas colours the active theme implies, all derived from the
+  "Every canvas colour the active theme implies, all derived from the
    container's own computed `color` and `background-color` so this file holds no
    second palette. Post: every value is a colour string, never nil."
   [^js container]
@@ -162,6 +173,7 @@
     (merge {:label text}
       (if-let [dim (blend-colour text surface dim-mix)]
         {:dim dim
+         :edge (blend-colour text surface edge-mix)
          :hover-fill surface
          :hover-stroke (blend-colour text surface hover-stroke-mix)}
         fallback-colours))))
@@ -176,9 +188,9 @@
    here, but filled with the page background and outlined instead of shadowed,
    so the label keeps body text's own contrast in both themes.
 
-   Pre: (:colours @!ui) is seeded — track-theme-colours! does that before the
-   first refresh. Label drawing is delegated to sigma's own drawer, which reads
-   the labelColor that same fn keeps in step."
+   Pre: (:colours @!ui) is seeded — init! does that when it builds the atom,
+   and track-theme-colours! keeps it current. Label drawing is delegated to
+   sigma's own drawer, which reads the labelColor that same fn keeps in step."
   [!ui]
   (fn [^js ctx ^js data ^js settings]
     (let [{:keys [hover-fill hover-stroke]} (:colours @!ui)
@@ -254,17 +266,25 @@
         Graph (graphology-ctor)]
     (when (and container Sigma Graph (seq (:nodes payload)))
       (let [^js g (build-graphology Graph payload)
+            ;; Read once, and BEFORE the renderer: the Sigma constructor
+            ;; indexes and refreshes, so both reducers read this atom before
+            ;; track-theme-colours! has run. A nil :dim or :edge would reach
+            ;; sigma's colour parser.
+            colours (theme-colours container)
             !ui (atom {:hover nil :selected nil
                        :source :all :pred-set nil :min-degree 1
                        :vnodes nil :vedges nil
-                       :colours (theme-colours container)})
+                       :colours colours})
             ^js renderer (new Sigma g container
                            #js {:renderEdgeLabels false
                                 :labelDensity 0.6
                                 :labelRenderedSizeThreshold 12
                                 :defaultNodeColor "#5b8def"
-                                :defaultEdgeColor "#dbe0e8"
-                                :labelColor #js {:color (inherited-text-colour container)}
+                                ;; Matches what edge-reducer paints, so
+                                ;; indexation and the first frame agree; the
+                                ;; reducer owns it from then on.
+                                :defaultEdgeColor (:edge colours)
+                                :labelColor #js {:color (:label colours)}
                                 :defaultDrawNodeHover (draw-node-hover !ui)
                                 :nodeReducer (node-reducer g !ui)
                                 :edgeReducer (edge-reducer g !ui)})
