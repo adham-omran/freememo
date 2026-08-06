@@ -7,18 +7,19 @@
    placement in `freememo.quote-anchor`; both are pure and neither knows about
    Drive or the database.
 
-   Marks only. The `USER NOTES` section is not written here — how a re-sync finds
-   an existing section in order to replace it is an open decision
-   (plans/boox-neoreader-google-drive-sync.md item 6.4), and writing a section
-   with no way to find it again would append a second copy on the next sync.
-   Notes ARE decoded and counted, so nothing is lost by waiting.
+   One sync writes in four places, and `quote-anchor` owns the shape of all four:
+   a tint on each placed passage, a `[n]` marker on each noted passage, a
+   `USER NOTES` section at the end of each chapter that has notes, and an
+   `UNPLACED HIGHLIGHTS` section on the document ROOT naming what nothing could
+   place. It also records one row per highlight, which is what an account export
+   carries and what a later view would read.
 
-   Marks are regenerated, never merged. Each sync strips every existing tint of
-   `quote-anchor/highlight-color` from a chapter before applying the current
-   export, so a highlight deleted on the device loses its mark — the export is
-   the truth, per the sync's decisions. A tint the user applied by hand with the
-   Quill popover's Orange is indistinguishable from a synced one and is stripped
-   too; that is the cost of carrying no identity in the content."
+   Everything is regenerated, never merged. Each sync strips every previous mark,
+   marker and notes section from a chapter before applying the current export, so
+   a highlight deleted on the device loses its mark — the export is the truth, per
+   the sync's decisions. A tint the user applied by hand with the Quill popover's
+   Orange is indistinguishable from a synced one and is stripped too; that is the
+   cost of carrying no identity in the content."
   (:require
     [clojure.string :as str]
     [taoensso.telemere :as tel]
@@ -26,9 +27,7 @@
     [freememo.db :as db]
     [freememo.google-drive :as drive]
     [freememo.neoreader-export :as export]
-    [freememo.quote-anchor :as anchor])
-  (:import [org.jsoup Jsoup]
-           [org.jsoup.nodes Element]))
+    [freememo.quote-anchor :as anchor]))
 
 (def file-id-setting-prefix
   "Settings-key prefix binding an EPUB document to a Drive file.
@@ -72,32 +71,69 @@
                   :html (:topics/content c)}))
     (db/get-children topic-id)))
 
-(defn- strip-marks
-  "Remove every synced tint span from `html`, keeping its text.
-
-   Pre : `html` is a chapter's stored content, or nil.
-   Post: the same content with each `background-color: <highlight-color>` span
-         unwrapped. Returns nil unchanged, so an empty chapter stays empty.
-   Inv : only spans carrying exactly that colour are touched. An extract
-         highlight (`#44C2FF`) and every other inline colour survive."
-  [html]
-  (when (some? html)
-    (if (str/blank? html)
-      html
-      (let [doc (Jsoup/parseBodyFragment html)
-            body (.body doc)]
-        (doseq [^Element el (.select body (str "span[style*=" (subs anchor/highlight-color 1) "]"))]
-          (.unwrap el))
-        (.html body)))))
-
 ;; ── One sync ───────────────────────────────────────────────────────
 
 (defn- outcome-counts
   "Pre : `placements` is `quote-anchor/place-highlights` output.
-   Post: {:placed n :fallback n :unmatched n}, every key present."
+   Post: a count for every one of the five outcomes, each key present."
   [placements]
-  (merge {:placed 0 :fallback 0 :unmatched 0}
+  (merge {:placed 0 :fallback 0 :out-of-order 0 :partial 0 :unmatched 0}
     (frequencies (map :outcome placements))))
+
+(def ^:private max-unplaced-quote-chars
+  "How much of an unplaced quote the root's section shows. The line exists so a
+   reader can find the passage in their own Boox export, and a few sentences
+   identify it. A whole page of them would bury the root topic's own content."
+  300)
+
+(defn- unplaced-lines
+  "Pre : `highlights` is `parse-highlights` output, and `placements` is
+         `place-highlights` output for it, positionally matched.
+   Post: one line per :unmatched highlight, in the export's order, naming its
+         chapter, its device timestamp and its quote. Empty when every highlight
+         placed, which removes the section rather than leaving an empty heading."
+  [highlights placements]
+  (into []
+    (keep (fn [[h p]]
+            (when (= :unmatched (:outcome p))
+              (let [q (str (:quote h))]
+                (str (or (:chapter h) "?") " - " (:timestamp h) " - "
+                  (if (> (count q) max-unplaced-quote-chars)
+                    (str (subs q 0 max-unplaced-quote-chars) "...")
+                    q))))))
+    (map vector highlights placements)))
+
+(defn- highlight-rows
+  "Pre : `chapters` is `epub-chapters` output, `highlights` is
+         `parse-highlights` output, and `placements` matches it positionally.
+   Post: one row per highlight for `db/replace-neoreader-highlights!`.
+         `chapter_topic_id` and `ordinal` are nil for an :unmatched highlight,
+         which has no chapter to sit in.
+   Inv : `ordinal` counts placements within a chapter from 1 in READING order —
+         the order the marks appear, which is the order the `[n]` markers use. It
+         is NOT the export's own order, because the export lists by device
+         timestamp and a reader meets the passages in the text's order.
+   Note: no resolved offset is stored. That settles spec item 5.2: a stored offset
+         goes stale the moment the reader edits the chapter, and every sync
+         re-matches anyway because it strips its own marks first — so the column
+         would hold a value nothing may trust and nothing reads."
+  [chapters highlights placements]
+  (let [ordinals (into {}
+                   (mapcat (fn [[_ ps]]
+                             (map-indexed (fn [i p] [(:index p) (inc i)])
+                               (sort-by :start ps))))
+                   (group-by :chapter-pos
+                     (filter #(some? (:chapter-pos %)) placements)))]
+    (mapv (fn [[h p]]
+            {:chapter_topic_id (when-let [pos (:chapter-pos p)] (:id (nth chapters pos)))
+             :chapter_label (:chapter h)
+             :highlighted_at (:timestamp h)
+             :quote (:quote h)
+             :note (let [joined (str/join " " (remove str/blank? (:notes h)))]
+                     (when-not (str/blank? joined) joined))
+             :ordinal (get ordinals (:index p))
+             :outcome (name (:outcome p))})
+      (map vector highlights placements))))
 
 (defn sync-document!
   "Sync one EPUB document against its bound NeoReader export.
@@ -107,14 +143,16 @@
          authorization is live.
    Post: {:ok true :counts {…} :chapters-written n :notes n} on success, or
          {:ok false :error msg :reauthorize? bool}. On success every chapter that
-         holds a placement has been rewritten with its marks, and no other
-         chapter was touched.
+         holds a placement has been rewritten with its marks, its `[n]` markers
+         and its `USER NOTES` section, and no other chapter was touched. The root
+         carries an `UNPLACED HIGHLIGHTS` section when anything went unplaced, and
+         carries none when nothing did.
    Post: `:reauthorize?` is true only when the stored Drive credential is gone or
          Google rejected it. The caller shows a re-authorize action for that case
          and a plain error for every other.
-   Inv : idempotent. Two runs against the same export leave identical content,
-         because every chapter is stripped of synced tints before the current
-         export is applied.
+   Inv : idempotent. Two runs against the same export leave identical content and
+         identical rows, because every chapter is stripped of everything a sync
+         wrote before the current export is applied.
    Inv : the invalidation bump goes through `freememo.commands`, the single bump
          authority. Nothing here swap!s a channel atom."
   [user-id topic-id]
@@ -129,11 +167,11 @@
               (let [chapters (epub-chapters topic-id)]
                 (if (empty? chapters)
                   {:ok false :error "This document has no chapters to sync into"}
-                  ;; Strip first, then place against the stripped text. Placing
-                  ;; against marked HTML would work — a tint span adds no text —
-                  ;; but the offsets would then index text the write no longer
-                  ;; holds, and every chapter has to be stripped anyway.
-                  (let [clean (mapv #(update % :html strip-marks) chapters)
+                  ;; Strip first, then place against the stripped text. A tint
+                  ;; span adds no text, but a `[n]` marker and a notes section
+                  ;; both do — leaving them in would let a quote match its own
+                  ;; note instead of its passage.
+                  (let [clean (mapv #(update % :html anchor/strip-sync-content) chapters)
                         placements (anchor/place-highlights clean highlights)
                         marked (anchor/mark-chapters clean placements)
                         ;; A chapter that lost marks and gained none still needs
@@ -147,9 +185,21 @@
                                                          (not= before after))
                                                    [pos after]))))
                                        (map-indexed vector clean))
-                        writes (merge cleaned-only marked)]
+                        writes (merge cleaned-only marked)
+                        ;; The root is not a chapter, so it is a separate write.
+                        ;; `replace-section` removes a stale section on its own,
+                        ;; which is what makes an empty list the right way to say
+                        ;; "everything placed this time".
+                        root (db/get-topic topic-id)
+                        root-html (anchor/replace-section (:topics/content root)
+                                    anchor/unplaced-heading
+                                    (unplaced-lines highlights placements))]
                     (doseq [[pos html'] writes]
                       (db/update-topic-content! (:id (nth chapters pos)) html'))
+                    (when (not= root-html (:topics/content root))
+                      (db/update-topic-content! topic-id root-html))
+                    (db/replace-neoreader-highlights! user-id topic-id
+                      (highlight-rows chapters highlights placements))
                     (commands/bump! user-id :neoreader-sync)
                     (let [counts (outcome-counts placements)]
                       (tel/log! {:level :info :id ::synced
@@ -171,14 +221,21 @@
   "One line describing a finished sync, for a toast.
 
    Pre : `result` is a `sync-document!` map with `:ok` true.
-   Post: a sentence naming what was placed, what was searched for, what was not
-         found, and how many notes were read but not yet shown — notes are
-         decoded and counted while item 6.4 is open, and saying so keeps a user
-         from thinking they were lost."
+   Post: a sentence naming how many highlights were marked, how many needed a
+         weaker pass, and how many nothing could place.
+   Note: `:fallback` and `:out-of-order` are folded into one \"found by search\"
+         figure. The distinction is why a pass was needed, which the reader cannot
+         act on. `:partial` stays separate, because it is the one outcome where
+         the mark covers LESS than the reader highlighted.
+   Note: the unmatched count names the root's section, because a count with no
+         place to look is not actionable (spec 7.2)."
   [{:keys [counts chapters-written notes]}]
-  (let [{:keys [placed fallback unmatched]} counts]
-    (str "Synced " (+ placed fallback) " highlights"
-      (when (pos? fallback) (str ", " fallback " found by search"))
-      " across " chapters-written (if (= 1 chapters-written) " chapter" " chapters")
-      (when (pos? unmatched) (str ". " unmatched " could not be located"))
-      (when (pos? notes) (str ". " notes " notes read, not shown yet")))))
+  (let [{:keys [placed fallback out-of-order partial unmatched]} counts
+        searched (+ fallback out-of-order)]
+    (str "Marked " (+ placed searched partial) " highlights across "
+      chapters-written (if (= 1 chapters-written) " chapter" " chapters")
+      (when (pos? searched) (str ". " searched " found by search"))
+      (when (pos? partial) (str ". " partial " matched in part only"))
+      (when (pos? notes) (str ". " notes " notes written"))
+      (when (pos? unmatched)
+        (str ". " unmatched " unplaced — see UNPLACED HIGHLIGHTS on the document")))))

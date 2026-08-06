@@ -40,7 +40,24 @@
    reading-order cursor resolves them WITHIN a chapter — each quote must be
    found at or after the end of the previous placement in that same chapter.
    The cursor resets at every chapter boundary, which is deliberate: see
-   `place-highlights`."
+   `place-highlights`.
+
+   A chapter gets THREE passes, each weaker than the last, and the first that
+   finds a quote takes it. The cursor pass is the one above. The rescan pass
+   searches the whole chapter for whatever lies before the cursor, because the
+   cursor sits at the previous placement's END — so a highlight nested inside an
+   earlier one, or an export not listed in reading order, would otherwise place
+   nothing. The prefix pass retries the longest prefix of the quote. Every pass
+   is EXACT matching in the normalized space — there is no similarity threshold
+   anywhere, so no pass can ever mark text the quote does not literally contain.
+
+   This namespace also owns the two sections a sync writes, `USER NOTES` on a
+   chapter and `UNPLACED HIGHLIGHTS` on the document root. Both are found again
+   by their heading TEXT, because nothing else survives a Quill edit round trip.
+   `strip-sync-content` erases everything a previous sync wrote, and it lives
+   here rather than beside the caller for one reason: the writer and the eraser
+   must agree on the tint colour, the marker shape and the heading text, and one
+   namespace is the only place they cannot drift."
   (:require [clojure.string :as str])
   (:import [org.jsoup Jsoup]
            [org.jsoup.nodes Document Element Node TextNode]))
@@ -63,6 +80,33 @@
    manual extract highlight. The same colour would make a synced mark
    indistinguishable from an extract."
   "#faebdd")
+
+(defn- tint-span-html
+  "Pre : `inner` is HTML-safe text, possibly empty.
+   Post: a span carrying `highlight-color` around it."
+  [inner]
+  (str "<span style=\"background-color: " highlight-color ";\">" inner "</span>"))
+
+(def ^:private tint-selector
+  "Jsoup selector for a span this namespace tinted. Keyed on the colour with no
+   leading `#`, because that is how the value appears inside a `style` attribute
+   however the serializer spaces it."
+  (str "span[style*=" (subs highlight-color 1) "]"))
+
+(defn- marker-html
+  "Pre : `n` is a per-chapter note number, counted from 1.
+   Post: the `[n]` footnote marker, as its own tinted span.
+   Inv : the marker MUST be its own element and MUST carry `highlight-color`.
+         Both make it identifiable on the next sync, which has to remove it
+         before re-numbering. A bare text `[n]` would be indistinguishable from
+         a citation the book itself carries, and stripping every bracketed
+         number out of a chapter would destroy real content."
+  [n]
+  (tint-span-html (str "[" n "]")))
+
+(def ^:private marker-pattern
+  "Whole text of a tinted span that is a `[n]` marker rather than a quote."
+  #"\s*\[\d+\]\s*")
 
 ;; ── Normalization ──────────────────────────────────────────────────
 
@@ -121,13 +165,19 @@
 
    Pre : `root` is a parsed node.
    Post: a vector of TextNode. Order is the order a reader meets the text.
-         A plain recursive walk, not a Jsoup NodeVisitor: the visitor needs a
-         `reify` whose method arities must track Jsoup's interface, and this
-         needs no such coupling. Recursion depth is HTML nesting depth."
+   Note: an explicit stack, not a Jsoup NodeVisitor and not recursion. The
+         visitor needs a `reify` whose method arities must track Jsoup's
+         interface. Recursion would be bounded by HTML nesting depth, which an
+         imported EPUB chooses and this code does not — a chapter of deeply
+         nested `div`s would overflow the JVM stack."
   [^Node root]
-  (if (instance? TextNode root)
-    [root]
-    (into [] (mapcat text-nodes) (.childNodes root))))
+  (loop [stack (list root) out []]
+    (if (seq stack)
+      (let [^Node n (first stack)]
+        (if (instance? TextNode n)
+          (recur (rest stack) (conj out n))
+          (recur (concat (.childNodes n) (rest stack)) out)))
+      out)))
 
 (defn- fold-text-nodes
   "Fold every text node under `root`, calling `f` with each surviving character.
@@ -189,6 +239,59 @@
       (when (>= i 0)
         [i (+ i (count needle))]))))
 
+(def ^:private min-prefix-chars
+  "Shortest normalized prefix a partial placement may mark.
+
+   Roughly one line of prose. A shorter prefix is not distinctive enough to be
+   the passage the reader meant, so a placement on it would be a guess."
+  40)
+
+(defn- find-prefix
+  "Longest prefix of `needle` that occurs in `haystack` at or after `from`.
+
+   Pre : both strings are normalized. `from` is a non-negative index.
+   Post: [start end] covering the longest prefix that both occurs and is at
+         least `min-prefix-chars` long AND at least half of `needle`, or nil.
+         The second bound is what keeps a long quote from placing on a small
+         fragment of itself.
+   Note: this settles spec item 4.7. It is EXACT matching on a shorter needle,
+         NOT fuzzy matching, so it can never mark text the quote does not
+         literally contain. A similarity threshold could, and a mark on the
+         wrong sentence is worse than no mark — the reader has no way to tell
+         the two apart once it is in the content.
+   Inv : \"a prefix of length L occurs\" is monotonically decreasing in L, since
+         a prefix of a prefix is a prefix. That is what makes the binary search
+         valid and turns a 500-character quote into about 9 searches."
+  [^String haystack ^String needle ^long from]
+  (let [n (count needle)
+        floor (max min-prefix-chars (quot n 2))]
+    (when (>= n floor)
+      (loop [lo floor hi n best nil]
+        (if (> lo hi)
+          best
+          (let [mid (quot (+ lo hi) 2)]
+            (if-let [hit (find-from haystack (subs needle 0 mid) from)]
+              (recur (inc mid) hi hit)
+              (recur lo (dec mid) best))))))))
+
+(defn- merge-ranges
+  "Pre : `ranges` is a seq of [start end] normalized index pairs, any order.
+   Post: the same coverage as an ascending vector of DISJOINT [start end] pairs.
+   Note: overlapping device highlights are real — a reader marks a phrase, then
+         later marks the sentence holding it. Two nested spans of the SAME colour
+         are invisible, and they break the rule `mark-anchors!` depends on:
+         wrapping the inner range first shortens the text node the outer range's
+         offsets were measured against, and the outer split then throws. Merging
+         keeps every placement reported and every offset valid."
+  [ranges]
+  (reduce (fn [out [s e]]
+            (let [[ps pe] (peek out)]
+              (if (and ps (<= (long s) (long pe)))
+                (conj (pop out) [ps (max (long pe) (long e))])
+                (conj out [s e]))))
+    []
+    (sort ranges)))
+
 ;; ── Phase 1: placement ─────────────────────────────────────────────
 
 (defn- chapter-key
@@ -239,6 +342,49 @@
                       :outcome (if at :placed :fallback)})))
     highlights))
 
+(defn- place-in-chapter
+  "Place every eligible pending highlight in one chapter.
+
+   Pre : `text` is that chapter's normalized text. `pending` is `eligibility`
+         output not yet placed, in document order. `pos` is the chapter's
+         position.
+   Post: [still found] — `still` is the entries this chapter did not take, in
+         document order, and `found` maps a slot to its placement.
+   Inv : three passes, each weaker than the last. A highlight is taken by the
+         first that finds it, so the strongest evidence always wins.
+   Inv : a pass only records an outcome. Two placements MAY share or overlap a
+         range — `merge-ranges` is what makes that safe to tint."
+  [pos text pending]
+  (let [eligible? (fn [e] (or (= :any (:at e)) (contains? (:at e) pos)))
+        pass (fn [acc outcome search]
+               (reduce (fn [a e]
+                         (if-let [[s end] (and (eligible? e) (search a e))]
+                           (cond-> (assoc-in a [:found (:slot e)]
+                                     {:index (:index (:quoted e))
+                                      :notes (:notes (:quoted e))
+                                      :chapter-pos pos :start s :end end
+                                      :outcome (or outcome (:outcome e))})
+                             ;; Only the cursor pass advances the cursor. The
+                             ;; later passes exist BECAUSE it advanced too far.
+                             (nil? outcome) (assoc :cursor end))
+                           (update a :missed conj e)))
+                 (assoc acc :missed [])
+                 (:missed acc)))
+        seed {:found {} :cursor 0 :missed (vec pending)}
+        ;; Pass 1 — the reading-order cursor (spec 4.5). It advances to each
+        ;; placement's END, which is what sends the standalone `reflection`
+        ;; highlight to the occurrence after its predecessor.
+        cursor-pass (pass seed nil (fn [a e] (find-from text (:needle e) (:cursor a))))
+        ;; Pass 2 — the whole chapter, for whatever lies BEFORE the cursor. Two
+        ;; causes, one fact: a highlight nested inside an earlier one, or an
+        ;; export that does not list a chapter in reading order.
+        rescan-pass (pass cursor-pass :out-of-order
+                      (fn [_ e] (find-from text (:needle e) 0)))
+        ;; Pass 3 — the longest prefix (spec 4.7).
+        prefix-pass (pass rescan-pass :partial
+                      (fn [_ e] (find-prefix text (:needle e) 0)))]
+    [(:missed prefix-pass) (:found prefix-pass)]))
+
 (defn place-highlights
   "Decide where every highlight goes, walking the book once.
 
@@ -248,11 +394,18 @@
          `highlights` is `neoreader-export/parse-highlights` output, in
          document order.
    Post: a vector positionally matching `highlights`, each entry
-         {:index :chapter-pos :start :end :outcome}. `:index` echoes the
-         highlight's own `:index`. `:outcome` is :placed when the quote was
-         found in a chapter its heading names, :fallback when the heading named
-         no chapter and a forward search found it, and :unmatched otherwise.
-         `:chapter-pos`, `:start` and `:end` are nil for :unmatched.
+         {:index :notes :chapter-pos :start :end :outcome}. `:index` and
+         `:notes` echo the highlight's own. `:chapter-pos`, `:start` and `:end`
+         are nil for :unmatched.
+   Post: `:outcome` is one of five, strongest first —
+           :placed      the quote was found in a chapter its heading names
+           :fallback    the heading named no chapter, and a search found it
+           :out-of-order it lies BEFORE where the reading-order cursor had
+                        reached — a highlight nested inside an earlier one, or
+                        an export not listed in reading order
+           :partial     only its longest prefix was found, and that is what is
+                        marked
+           :unmatched   no pass found it, and nothing is marked
    Inv : one chapter's normalized text is live at a time, so peak memory tracks
          the LARGEST chapter and not the book. This is why the walk is over
          chapters and not over highlights.
@@ -265,10 +418,8 @@
          book-wide cursor was tried and rejected: it made every highlight of a
          duplicate-titled later chapter :unmatched, because the title resolved
          to the earlier chapter which lay behind the cursor.
-   Note: a quote absent from every chapter its heading allows is :unmatched and
-         is never placed approximately. Whether a similarity threshold should
-         sit behind this is spec item 4.7 and is not decided, so this function
-         does not guess."
+   Note: a quote no pass finds is :unmatched and nothing is marked for it. No
+         pass matches approximately — `find-prefix` records why."
   [chapters highlights]
   (let [chapters (vec chapters)
         prepared (eligibility highlights (positions-by-title chapters))]
@@ -278,24 +429,15 @@
       (if (or (>= pos (count chapters)) (empty? pending))
         (mapv (fn [{:keys [slot quoted]}]
                 (or (get placed slot)
-                  {:index (:index quoted) :chapter-pos nil
-                   :start nil :end nil :outcome :unmatched}))
+                  {:index (:index quoted) :notes (:notes quoted)
+                   :chapter-pos nil :start nil :end nil :outcome :unmatched}))
           prepared)
-        (let [text (chapter-text (:html (nth chapters pos)))
-              step (fn [[still found cursor] entry]
-                     (if-let [[s e] (when (or (= :any (:at entry))
-                                          (contains? (:at entry) pos))
-                                      (find-from text (:needle entry) cursor))]
-                       [still
-                        (assoc found (:slot entry)
-                          {:index (:index (:quoted entry)) :chapter-pos pos
-                           :start s :end e :outcome (:outcome entry)})
-                        e]
-                       [(conj still entry) found cursor]))
-              [still found _] (reduce step [[] placed 0] pending)]
-          (recur (inc pos) still found))))))
+        (let [[still found] (place-in-chapter pos
+                              (chapter-text (:html (nth chapters pos)))
+                              pending)]
+          (recur (inc pos) still (merge placed found)))))))
 
-;; ── Phase 2: tinting ───────────────────────────────────────────────
+;; ── Tinting primitives ─────────────────────────────────────────────
 
 (defn- node-runs
   "Split a normalized range into per-text-node raw offsets.
@@ -304,14 +446,22 @@
          end <= (count positions).
    Post: a vector of [TextNode from to] in document order, where `from` and
          `to` are offsets into that node's whole text and `to` is exclusive.
-         Consecutive characters of one node collapse into one run."
+         One run per text node the range touches, covering it from its first
+         character to its last.
+   Inv : a run spans the GAPS between the characters it holds, so the whitespace
+         normalization dropped is tinted with the words around it. Collapsing
+         only ADJACENT characters instead gives one span per word, which paints
+         as striped text rather than a highlighted passage.
+   Inv : bridging a gap can never reach outside the range, because a text node
+         appears once in document order — so the range's characters inside one
+         node are one contiguous span of that node."
   [positions ^long start ^long end]
   (reduce (fn [runs i]
             (let [[node off] (nth positions i)
-                  [prev-node prev-from prev-to] (peek runs)]
-              (if (and (identical? node prev-node) (= prev-to off))
-                (conj (pop runs) [node prev-from (inc off)])
-                (conj runs [node off (inc off)]))))
+                  [prev-node prev-from] (peek runs)]
+              (if (identical? node prev-node)
+                (conj (pop runs) [node prev-from (inc (long off))])
+                (conj runs [node off (inc (long off))]))))
     []
     (range start end)))
 
@@ -321,41 +471,231 @@
    Pre : `node` is attached to a document. 0 <= from < to <= length of the
          node's whole text.
    Post: the characters in [from, to) sit inside a span carrying
-         `highlight-color`. The node object keeps holding the text BEFORE
-         `from`, which is why a caller working in descending order keeps every
-         earlier offset valid."
-  [^TextNode node ^long from ^long to]
+         `highlight-color`, and that span is returned. The node object keeps
+         holding the text BEFORE `from`, which is why a caller working in
+         descending order keeps every earlier offset valid."
+  ^Element [^TextNode node ^long from ^long to]
   (let [target (if (pos? from) (.splitText node (int from)) node)]
     (when (< (- to from) (count (.getWholeText target)))
       (.splitText target (int (- to from))))
-    (.wrap target (str "<span style=\"background-color: " highlight-color ";\"></span>"))))
+    (.wrap target (tint-span-html ""))
+    (.parent target)))
 
 (defn- mark-anchors!
   "Tint every range in one indexed chapter. Mutates its DOM.
 
    Pre : `index` is `position-index` output. `ranges` is a non-empty seq of
-         [start end] normalized indices, each non-empty and within bounds.
+         [start end label] normalized indices, each range non-empty and within
+         bounds. `label` is marker HTML or nil.
          Private because that precondition is not defensible against a caller
          holding raw placements: an :unmatched placement is [nil nil], which is
          not nil and would reach `node-runs`.
-   Post: every range sits inside a `highlight-color` span. Returns `:root`.
+   Post: every range sits inside a `highlight-color` span, and a range with a
+         label carries it immediately after that span's LAST run — which is
+         where a footnote marker belongs. Returns `:root`.
    Inv : ranges are applied in DESCENDING start order, and runs within a range
          in descending offset order. Splitting a text node invalidates offsets
          for text AFTER the split point only, so descending order keeps every
          not-yet-applied offset correct. The caller does not pre-sort.
+   Inv : inserting the label disturbs no offset. It becomes a SIBLING of the
+         span, and `:positions` names text nodes by identity, never by their
+         place among their siblings.
    Inv : `index` is STALE once this returns."
   [index ranges]
   (let [positions (:positions index)]
-    (doseq [[s e] (sort-by (comp - first) ranges)
-            [node from to] (reverse (node-runs positions s e))]
-      (wrap-run! node from to))
+    (doseq [[s e label] (sort-by (comp - first) ranges)]
+      ;; Reversed, so the first span built is the range's LAST run. That is the
+      ;; one the label goes after.
+      (let [spans (mapv (fn [[node from to]] (wrap-run! node from to))
+                    (reverse (node-runs positions s e)))]
+        (when (and label (seq spans))
+          (.after ^Element (first spans) ^String label))))
     (:root index)))
 
+;; ── Sections ───────────────────────────────────────────────────────
+;;
+;; A sync writes two sections, and finds them again by their heading TEXT. That
+;; settles spec item 6.4. The alternative was a sentinel attribute, and it
+;; cannot work here: Quill's clipboard drops every unknown class and `data-*`
+;; attribute, so one user edit of the chapter would erase the sentinel and the
+;; next sync would append a second section beside the one it could no longer
+;; see. Heading text survives that round trip, because Quill's stock registry
+;; models headings.
+;;
+;; The accepted cost is a rename. A user who retitles the heading gets a second
+;; section on the next sync. That is visible immediately and one delete fixes
+;; it, which is the mildest failure available under this design.
+
+(def notes-heading
+  "Heading opening a chapter's synced notes section (spec 6.2)."
+  "USER NOTES")
+
+(def unplaced-heading
+  "Heading opening the document root's list of highlights nothing could place.
+
+   This settles spec item 7.2. The toast reports HOW MANY went unplaced, and a
+   count alone is not actionable — the reader cannot tell which passage to look
+   for. The other candidates were a server log, which no reader sees, and a
+   report view, which the decision record rules out. A section on the root topic
+   needs no new view, is one click from the document, and is rebuilt on every
+   sync by the same code that rebuilds the notes."
+  "UNPLACED HIGHLIGHTS")
+
+(def ^:private heading-tags #{"h1" "h2" "h3" "h4" "h5" "h6"})
+
+(defn- escape-text
+  "Pre : `s` is plain text from the export.
+   Post: the same text with `&`, `<` and `>` escaped, so a quote holding a
+         literal `<` becomes text rather than markup."
+  [s]
+  (-> (str s)
+    (str/replace "&" "&amp;")
+    (str/replace "<" "&lt;")
+    (str/replace ">" "&gt;")))
+
+(defn- section-html
+  "Pre : `heading` is one of this namespace's two headings. `lines` is a
+         non-empty seq of plain-text lines.
+   Post: an `<h3>` plus one `<p>` per line. `<h3>` because Quill's stock
+         registry models it, which is what keeps the heading findable after a
+         user edits the chapter."
+  [heading lines]
+  (apply str "<h3>" (escape-text heading) "</h3>"
+    (map #(str "<p>" (escape-text %) "</p>") lines)))
+
+(defn- section-start
+  "Pre : `body` is a parsed body Element. `heading` is a section heading.
+   Post: the index among `body`'s direct child elements of the first heading
+         whose text is `heading`, or nil.
+   Note: direct children only. A sync appends the section at that level, so a
+         user who re-nests it gets a second section next time — the same
+         accepted cost as renaming it."
+  [^Element body heading]
+  (let [want (chapter-key heading)]
+    (first (keep-indexed (fn [i ^Element el]
+                           (when (and (heading-tags (.tagName el))
+                                   (= want (chapter-key (.text el))))
+                             i))
+             (vec (.children body))))))
+
+(defn- remove-section!
+  "Pre : `body` is a parsed body Element. `heading` is a section heading.
+   Post: that heading and every element after it are gone, when the heading was
+         a direct child. Mutates `body`.
+   Inv : taking everything after the heading is complete, because a sync always
+         appends its sections LAST."
+  [^Element body heading]
+  (when-let [at (section-start body heading)]
+    (doseq [^Element el (drop at (vec (.children body)))]
+      (.remove el))))
+
+(defn replace-section
+  "Rebuild one synced section of a topic's content.
+
+   Pre : `html` is a topic's stored content, or nil. `heading` is one of this
+         namespace's two headings. `lines` is a seq of plain-text lines,
+         possibly empty.
+   Post: the content with any existing section under that heading removed, and a
+         fresh one appended when `lines` is non-empty. An empty `lines` leaves no
+         heading behind, so a document that no longer needs the section does not
+         keep an empty one.
+   Post: rebuilt in full every time (spec 6.3) — a user's edits inside the
+         section do not survive, because the export is the truth."
+  [html heading lines]
+  (let [body (parse-body html)]
+    (remove-section! body heading)
+    (when (seq lines)
+      (.append body (section-html heading lines)))
+    (.html body)))
+
+(defn strip-sync-content
+  "Remove everything a previous sync wrote into a chapter.
+
+   Pre : `html` is a chapter's stored content, or nil.
+   Post: every `highlight-color` span unwrapped, every `[n]` marker span
+         removed, and the `USER NOTES` section dropped. nil and blank pass
+         through unchanged.
+   Inv : only spans carrying exactly `highlight-color` are touched. An extract
+         highlight (`#44C2FF`) and every other inline colour survive. A tint the
+         user applied by hand with the Quill popover's Orange does NOT — that is
+         the cost of carrying no identity in the content.
+   Note: this MUST run BEFORE placement. The notes section repeats the quotes'
+         own words, so leaving it in would give a quote a second place to match
+         and could tint the section instead of the passage."
+  [html]
+  (if (or (nil? html) (str/blank? html))
+    html
+    (let [body (parse-body html)]
+      (doseq [^Element el (vec (.select body tint-selector))]
+        (if (re-matches marker-pattern (.text el))
+          (.remove el)
+          (.unwrap el)))
+      (remove-section! body notes-heading)
+      (.html body))))
+
+;; ── Phase 2: the chapter rewrite ───────────────────────────────────
+
+(defn- note-line
+  "Pre : `notes` is a placement's `:notes` vector, possibly empty.
+   Post: its notes as one line, or nil when it holds none."
+  [notes]
+  (let [joined (->> notes (map str/trim) (remove str/blank?) (str/join " "))]
+    (when-not (str/blank? joined) joined)))
+
+(defn- chapter-notes
+  "Number the notes of one chapter's placements.
+
+   Pre : `placements` all share one `:chapter-pos`, in any order.
+   Post: {:labels {index → marker-html} :lines [\"[1] …\" …]}, numbered from 1 in
+         READING order — the order the marks appear in the chapter, not the order
+         the export lists them.
+   Inv : one function yields both the markers and the section lines, so a marker
+         can never name a line the section does not hold."
+  [placements]
+  (->> placements
+    (filter #(some? (note-line (:notes %))))
+    (sort-by :start)
+    (map-indexed (fn [i p] [(inc i) p]))
+    (reduce (fn [acc [n p]]
+              (-> acc
+                (assoc-in [:labels (:index p)] (marker-html n))
+                (update :lines conj (str "[" n "] " (note-line (:notes p))))))
+      {:labels {} :lines []})))
+
+(defn- labeled-ranges
+  "The tint ranges of one chapter, each carrying the markers that end inside it.
+
+   Pre : `placements` all share one `:chapter-pos`. `labels` maps a highlight
+         index to marker HTML.
+   Post: a vector of [start end label] over MERGED ranges. `label` concatenates
+         every marker whose placement ends inside that range, in reading order,
+         or is nil.
+   Note: a marker for a placement swallowed by an overlap lands at the merged
+         range's end rather than at its own. Precision inside an overlap is not
+         worth a nested span, and the markers still read in order."
+  [placements labels]
+  (let [merged (merge-ranges (map (juxt :start :end) placements))
+        containing (fn [^long end]
+                     (first (keep-indexed (fn [i [s e]]
+                                            (when (and (<= (long s) end) (<= end (long e))) i))
+                              merged)))
+        by-range (reduce (fn [m p]
+                           (if-let [label (get labels (:index p))]
+                             (update m (containing (:end p)) (fnil conj []) [(:start p) label])
+                             m))
+                   {} placements)]
+    (into []
+      (map-indexed (fn [i [s e]]
+                     [s e (when-let [ls (get by-range i)]
+                            (apply str (map second (sort-by first ls))))]))
+      merged)))
+
 (defn mark-chapters
-  "Tint the placed highlights, returning HTML for the chapters that changed.
+  "Rewrite the chapters a sync touched: tints, note markers, notes section.
 
    Pre : `chapters` is the same seq, in the same order, that `place-highlights`
-         was given. `placements` is its output.
+         was given, and each `:html` has already been through
+         `strip-sync-content`. `placements` is `place-highlights` output.
    Post: a map from chapter position to that chapter's rewritten HTML,
          holding an entry ONLY for a chapter with at least one placement. A
          chapter with none is absent, so the caller writes nothing for it —
@@ -363,21 +703,25 @@
          because a Jsoup parse and serialize can alter attribute quoting and
          entity escaping, and that write would bump the refresh channel and
          re-initialize Quill for no change.
+   Post: a chapter whose placements carry notes ends with a `USER NOTES` section
+         (spec 6.2), and each noted passage carries the matching `[n]`.
    Inv : one chapter's position index is live at a time, and it is discarded
          before the next chapter is parsed.
    Inv : an :unmatched placement contributes nothing, so no [nil nil] range can
-         reach `mark-anchors!`."
+         reach `mark-anchors!`. A highlight nothing placed has no chapter to hold
+         its note either, which is why the root's `UNPLACED HIGHLIGHTS` section
+         exists."
   [chapters placements]
   (let [chapters (vec chapters)
-        by-chapter (reduce (fn [m {:keys [chapter-pos start end]}]
-                             (if (some? chapter-pos)
-                               (update m chapter-pos (fnil conj []) [start end])
-                               m))
-                     {}
-                     placements)]
-    (reduce-kv (fn [out pos ranges]
-                 (let [index (position-index (:html (nth chapters pos)))]
-                   (mark-anchors! index ranges)
-                   (assoc out pos (.html ^Element (:root index)))))
+        by-chapter (group-by :chapter-pos (filter #(some? (:chapter-pos %)) placements))]
+    (reduce-kv
+      (fn [out pos ps]
+        (let [{:keys [labels lines]} (chapter-notes ps)
+              index (position-index (:html (nth chapters pos)))
+              ^Element root (:root index)]
+          (mark-anchors! index (labeled-ranges ps labels))
+          (when (seq lines)
+            (.append root (section-html notes-heading lines)))
+          (assoc out pos (.html root))))
       {}
       by-chapter)))

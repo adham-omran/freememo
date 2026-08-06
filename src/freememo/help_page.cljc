@@ -40,6 +40,14 @@
             ["Extract the text ({scan})" "Scan Page runs OCR on the current page into clean, editable HTML. Copy-text pulls the PDF's own text layer when it has one."]
             ["Edit & split ({extract})" "Fix the text in the editor. Select a passage and Extract turns it into a child topic linked back to the page."]
             ["Mark done ({done})" "Mark a page Done to drop it from your review queue while keeping the content."]]}
+   {:title "Boox NeoReader highlights"
+    :intro "Bring the highlights and notes you made on a Boox e-reader into the EPUB you read them in. Google Drive carries the file; nothing is written back to it or to the device."
+    :steps [["Export on the device" "In NeoReader, export the book's annotations as HTML. The file lands in onyx / your device name / Read in your Google Drive."]
+            ["Start the sync" "Library → Documents → the EPUB's ⋯ menu → Sync with NeoReader. The first run asks Google for read access to one file, then opens Google's own file picker."]
+            ["Pick the export" "Go to onyx → your device → Read and pick the book's HTML file. FreeMemo remembers it, so every later sync is one click with no picker."]
+            ["Read the result" "Each highlighted passage is tinted orange in its chapter. A passage you annotated also carries a [1] marker, and that chapter ends with a numbered USER NOTES list."]
+            ["Check what did not place" "A highlight FreeMemo cannot find in the text is listed under UNPLACED HIGHLIGHTS on the document itself. Editing a sentence after you highlighted it is the usual cause."]
+            ["Sync again any time" "Every sync rebuilds from the export. A highlight you deleted on the device loses its mark, and your own edits inside a USER NOTES list do not survive."]]}
    {:title "Asking the AI assistant"
     :intro "Work a page through with an assistant that either answers you or questions you — your choice."
     :steps [["Open it" "Right side panel → AI Assistant tab. New Chat starts a conversation scoped to the current document; your chats and transcripts are saved."]

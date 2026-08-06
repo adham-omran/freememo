@@ -53,9 +53,9 @@
 
 ;; ── Entity order (§5.2.1) ──────────────────────────────────────────
 
-(deftest entity-tables-is-a-set-of-23-in-a-fixed-order
-  (is (= 23 (count fmt/entity-tables)))
-  (is (= 23 (count (set fmt/entity-tables))) "no table may appear twice"))
+(deftest entity-tables-is-a-set-of-24-in-a-fixed-order
+  (is (= 24 (count fmt/entity-tables)))
+  (is (= 24 (count (set fmt/entity-tables))) "no table may appear twice"))
 
 (defn- before?
   "Whether `a` precedes `b` in `entity-tables`. Pre: both are members."
@@ -67,6 +67,7 @@
   (testing "a referenced table precedes its referrer"
     (doseq [[referrer referenced]
             [[:topics :sources]
+             [:neoreader_highlights :topics]
              [:topic_files :topics]
              [:topic_videos :topics]
              [:video_transcripts :topics]

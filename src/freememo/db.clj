@@ -1187,6 +1187,46 @@
   (jdbc/execute! ds ["UPDATE users SET last_metered_at = now() WHERE last_metered_at IS NULL"])
 )
 
+(defn- setup-schema-neoreader!
+  "Boox NeoReader highlights — one row per highlight of one document's export
+   (plans/boox-neoreader-google-drive-sync.md §5). Must run after
+   setup-schema-topics! — two columns FK topics.
+
+   `highlighted_at` keeps the DEVICE's own `yyyy-MM-dd HH:mm:ss` string and is
+   not a TIMESTAMP. The export names no time zone, so parsing it would invent
+   one, and the string is part of the row's identity — a later change of format
+   would orphan every row written before it.
+
+   `quote_hash` is GENERATED, not written by the app. It exists because identity
+   needs the quote and a B-tree index row cannot hold a long TEXT column (see
+   the flashcard unique indexes above). Generating it in Postgres puts the digest
+   beside the constraint that uses it, where the two cannot drift.
+
+   Identity is (document, device timestamp, quote digest). Position in the export
+   cannot serve: deleting one highlight on the device shifts every later one, and
+   a re-sync would then rewrite every row after the deletion."
+  []
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS neoreader_highlights (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      root_topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      chapter_topic_id INTEGER REFERENCES topics(id) ON DELETE SET NULL,
+      chapter_label TEXT,
+      highlighted_at TEXT NOT NULL,
+      quote TEXT NOT NULL,
+      quote_hash TEXT GENERATED ALWAYS AS (md5(quote)) STORED,
+      note TEXT,
+      ordinal INTEGER,
+      outcome TEXT NOT NULL,
+      synced_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )"])
+  ;; Unguarded, unlike the flashcard indexes: this table is new, so no legacy
+  ;; duplicate can exist. It must also succeed — `replace-neoreader-highlights!`
+  ;; names it in an ON CONFLICT clause, which has no meaning without it.
+  (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS uq_neoreader_highlights
+                      ON neoreader_highlights(root_topic_id, highlighted_at, quote_hash)"]))
+
 (defn- setup-schema-account-transfer!
   "Import bookkeeping for account transfer (plans/user-data-export-import.md
    §5.5). Must run after setup-schema-topics! — `parent_topic_id` FKs topics.
@@ -1261,6 +1301,7 @@
   (setup-schema-kg!)
   (setup-schema-card-quiz!)
   (setup-schema-video!)
+  (setup-schema-neoreader!)
   (setup-schema-account-transfer!)
 
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
@@ -8013,3 +8054,46 @@
                   WHERE a.session_id = ? ORDER BY a.position"
                  session-id]
                 {:builder-fn rs/as-unqualified-maps})}))
+
+;; ── NeoReader highlights ───────────────────────────────────────────
+
+(defn replace-neoreader-highlights!
+  "Record one export's highlights for one document, replacing the previous set.
+
+   Pre : `user-id` owns `root-topic-id`. `rows` is a seq of maps carrying
+         :chapter_topic_id :chapter_label :highlighted_at :quote :note :ordinal
+         :outcome. A caller MUST NOT pass :quote_hash — the column is generated.
+   Post: the table holds exactly these highlights for `root-topic-id`, and
+         nothing for any other document changes.
+   Post: a highlight already recorded keeps its row id. A re-sync of an unchanged
+         export therefore changes no row identity, and a highlight deleted on the
+         device removes exactly one row.
+   Inv : one transaction. A failure between the upsert and the delete would leave
+         rows the export no longer holds, which the next sync would report as
+         highlights the reader does not have.
+   Inv : rows sharing an identity collapse to the last one. Postgres refuses to
+         let one statement update the same row twice, so a duplicate pair in the
+         export would fail the whole insert — the dedupe belongs here, next to the
+         constraint that needs it."
+  [user-id root-topic-id rows]
+  (let [stamp (java.sql.Timestamp. (System/currentTimeMillis))
+        deduped (->> rows
+                  (reduce (fn [m r] (assoc m [(:highlighted_at r) (:quote r)] r)) {})
+                  vals
+                  (mapv #(assoc % :user_id user-id
+                            :root_topic_id root-topic-id
+                            :synced_at stamp)))]
+    (jdbc/with-transaction [tx ds]
+      (doseq [batch (param-bounded-batches deduped)]
+        (jdbc/execute! tx
+          (sql/format {:insert-into :neoreader_highlights
+                       :values (vec batch)
+                       :on-conflict [:root_topic_id :highlighted_at :quote_hash]
+                       :do-update-set [:chapter_topic_id :chapter_label :note
+                                       :ordinal :outcome :synced_at]})))
+      ;; Whatever this sync did not touch is a highlight the device no longer
+      ;; has. The stamp is the marker: it is one value for the whole run.
+      (jdbc/execute! tx
+        (sql/format {:delete-from :neoreader_highlights
+                     :where [:and [:= :root_topic_id root-topic-id]
+                             [:<> :synced_at stamp]]})))))

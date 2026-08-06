@@ -283,3 +283,134 @@
                [(hl "C" "x" 41) (hl "C" "absent" 42)])]
       (is (= [41 42] (mapv :index ps))
         "including the unmatched one, so a caller can join back by index"))))
+
+;; ── The rescan pass — a quote behind the cursor ────────────────────
+
+(def ^:private overlap-chapter
+  {:title "Overlap"
+   :html "<p>The quick brown fox jumps over the lazy dog near the riverbank.</p>"})
+
+(deftest two-overlapping-highlights-both-place
+  ;; A reader marks a sentence, then later marks a phrase inside it. The
+  ;; reading-order cursor sits at the sentence's END, so the phrase lies behind
+  ;; it and the cursor pass cannot find it. Without the rescan pass the phrase
+  ;; reported :unmatched — a highlight the reader made and the app lost.
+  (let [hs [(hl "Overlap" "The quick brown fox jumps over the lazy dog" 0)
+            (hl "Overlap" "brown fox" 1)]
+        ps (anchor/place-highlights [overlap-chapter] hs)]
+    (is (= [:placed :out-of-order] (mapv :outcome ps)))
+
+    (testing "the two tints merge into one span rather than nesting"
+      ;; Nesting is invisible at one colour, and wrapping the inner range first
+      ;; shortens the text node the outer range's offsets were measured against,
+      ;; so the outer split then throws.
+      (let [out (get (anchor/mark-chapters [overlap-chapter] ps) 0)]
+        (is (= ["The quick brown fox jumps over the lazy dog"] (tinted-text out)))))))
+
+(deftest a-tinted-passage-keeps-its-internal-spaces
+  ;; Normalization drops whitespace, so a range's characters are not adjacent in
+  ;; the raw text. Collapsing only ADJACENT characters gave one span per word,
+  ;; which paints as striped text rather than a highlighted passage.
+  (let [out (get (marked [overlap-chapter] [(hl "Overlap" "quick brown fox")]) 0)]
+    (is (= 1 (count (tinted-text out))) "one span, not three")
+    (is (= ["quick brown fox"] (tinted-text out)))))
+
+;; ── 4.7 — the prefix retry ─────────────────────────────────────────
+
+(def ^:private edited-chapter
+  {:title "Edited"
+   :html (str "<p>Retrieval practice beats rereading by a wide margin, and the "
+           "effect holds across every subject the researchers tried.</p>")})
+
+(deftest a-quote-whose-tail-was-edited-places-on-its-longest-prefix
+  ;; The reader fixed the passage after highlighting it, so the export's tail no
+  ;; longer matches. Exact matching alone reports :unmatched and marks nothing,
+  ;; which loses a highlight most of which is still there.
+  (let [ps (anchor/place-highlights [edited-chapter]
+             [(hl "Edited" (str "Retrieval practice beats rereading by a wide margin, and the "
+                             "effect holds across WORDS THAT ARE NOT THERE AT ALL"))])]
+    (is (= [:partial] (mapv :outcome ps)))
+    (testing "only the prefix that literally matches is tinted"
+      (let [out (get (anchor/mark-chapters [edited-chapter] ps) 0)]
+        (is (= ["Retrieval practice beats rereading by a wide margin, and the effect holds across"]
+              (tinted-text out)))))))
+
+(deftest a-prefix-too-short-to-be-distinctive-does-not-place
+  (testing "a prefix under half the quote is not distinctive enough to mark"
+    (is (= [:unmatched]
+          (outcomes [edited-chapter]
+            [(hl "Edited" (str "Retrieval practice and then a completely different sentence "
+                            "that shares no words with this chapter whatsoever."))]))))
+  (testing "a quote shorter than the floor never reaches the prefix pass"
+    (is (= [:unmatched] (outcomes [edited-chapter] [(hl "Edited" "Retrieval XYZ")])))))
+
+;; ── 6.2 / 6.3 — the USER NOTES section ─────────────────────────────
+
+(defn- noted [chapter quote notes index]
+  {:chapter chapter :quote quote :notes notes :index index})
+
+(deftest notes-become-a-numbered-section-and-numbered-markers
+  (let [ch {:title "N" :html "<p>alpha beta gamma delta epsilon zeta.</p>"}
+        ;; Listed gamma-first on purpose: numbering must follow the TEXT.
+        hs [(noted "N" "gamma" ["second thought"] 0)
+            (noted "N" "alpha" ["first thought"] 1)
+            (hl "N" "epsilon" 2)]
+        out (get (marked [ch] hs) 0)]
+    (testing "numbering follows reading order, not the export's order"
+      (is (str/includes? out "<h3>USER NOTES</h3>"))
+      (is (str/includes? out "<p>[1] first thought</p>"))
+      (is (str/includes? out "<p>[2] second thought</p>")))
+
+    (testing "each noted passage carries its own marker, and an unnoted one none"
+      (is (= ["alpha" "[1]" "gamma" "[2]" "epsilon"] (tinted-text out))))
+
+    (testing "the marker is its own tinted span, so the next sync can find it"
+      (is (str/includes? out (str "<span style=\"background-color: "
+                               anchor/highlight-color ";\">[1]</span>"))))
+
+    (testing "a chapter with no notes gets no section"
+      (is (not (str/includes? (get (marked [ch] [(hl "N" "delta")]) 0) "USER NOTES"))))))
+
+(deftest a-sync-erases-everything-the-previous-one-wrote
+  (let [ch {:title "N" :html "<p>alpha beta gamma delta.</p>"}
+        once (get (marked [ch] [(noted "N" "beta" ["a note"] 0)]) 0)]
+    (testing "the strip restores the chapter exactly"
+      (is (= (:html ch) (anchor/strip-sync-content once))))
+
+    (testing "a second sync of the same export writes the same content"
+      (let [again (get (marked [(assoc ch :html (anchor/strip-sync-content once))]
+                         [(noted "N" "beta" ["a note"] 0)]) 0)]
+        (is (= once again))))
+
+    (testing "a hand-typed line inside the section does not survive (6.3)"
+      (let [tampered (str/replace once "</h3>" "</h3><p>mine</p>")]
+        (is (not (str/includes? (anchor/strip-sync-content tampered) "mine")))))
+
+    (testing "an extract highlight keeps its own colour through the strip"
+      (is (str/includes?
+            (anchor/strip-sync-content
+              "<p><span style=\"background-color: #44C2FF;\">alpha</span> beta.</p>")
+            "#44C2FF")))
+
+    (testing "a bracketed number the BOOK carries is untouched"
+      (is (str/includes? (anchor/strip-sync-content "<p>see note [3] there</p>") "[3]")))))
+
+;; ── 6.4 / 7.2 — finding a section again ────────────────────────────
+
+(deftest a-section-is-found-by-its-heading-and-rebuilt-in-full
+  (let [once (anchor/replace-section "<p>root</p>" anchor/unplaced-heading ["first"])]
+    (testing "a second call replaces rather than appends"
+      (let [twice (anchor/replace-section once anchor/unplaced-heading ["second"])]
+        (is (str/includes? twice "<p>second</p>"))
+        (is (not (str/includes? twice "<p>first</p>")))
+        (is (= 1 (count (re-seq #"UNPLACED HIGHLIGHTS" twice))))))
+
+    (testing "an empty list removes the section, leaving no empty heading"
+      (is (= "<p>root</p>" (anchor/replace-section once anchor/unplaced-heading []))))
+
+    (testing "the topic's own content is kept"
+      (is (str/includes? once "<p>root</p>")))
+
+    (testing "a quote holding markup arrives as text"
+      (is (str/includes? (anchor/replace-section nil anchor/unplaced-heading ["a <b>x</b> & y"])
+            "a &lt;b&gt;x&lt;/b&gt; &amp; y")))))

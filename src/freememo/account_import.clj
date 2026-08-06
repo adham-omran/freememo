@@ -66,6 +66,7 @@
    rows directly and knows its own topic id."
   {:topics {:parent_id :topics :source_id :sources}
    :topic_pins {:topic_id :topics :media_id :media}
+   :neoreader_highlights {:root_topic_id :topics :chapter_topic_id :topics}
    :occlusion_groups {:image_media_id :media}
    :score_groups {:clip_media_id :media}
    :flashcards {:topic_id :topics :root_topic_id :topics
@@ -98,14 +99,23 @@
    :assistant_messages #{:chat_id}
    :video_transcripts #{:topic_id}
    :video_segments #{:topic_id}
+   :neoreader_highlights #{:root_topic_id}
    :kg_facts #{:subject_entity_id :predicate_id :graph_topic_id}
    :kg_question_facts #{:question_id :fact_id}})
 
 (def ^:private dropped-columns
   "Columns removed before insert. `id` everywhere — the target's sequence issues
    it. `staged_delete_id` because `undo_log` is not imported (§5.2.2), so any
-   value would dangle and would also hide the topic on arrival."
-  {:topics #{:id :staged_delete_id}})
+   value would dangle and would also hide the topic on arrival.
+
+   An entry REPLACES the `#{:id}` default, so every entry must name `:id` too.
+
+   `neoreader_highlights.quote_hash` is a GENERATED column. Postgres refuses an
+   INSERT that names one, and the column filter cannot see the difference — it
+   exists in `information_schema` like any other. A generated column in any
+   future table needs its own entry here for the same reason."
+  {:topics #{:id :staged_delete_id}
+   :neoreader_highlights #{:id :quote_hash}})
 
 (def ^:private html-columns
   "Plain-HTML columns holding `/api/media/<id>` URLs (§5.4.7).

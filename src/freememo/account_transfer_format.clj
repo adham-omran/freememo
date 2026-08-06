@@ -76,7 +76,7 @@
 ;; ── Entity tables ──────────────────────────────────────────────────
 
 (def entity-tables
-  "§5.2.1 — the 23 exported tables, in the order an import must insert them.
+  "§5.2.1 — the 24 exported tables, in the order an import must insert them.
 
    Invariant: the order is forced by foreign keys. A table may not appear
    before every table it references. Three constraints are easy to lose:
@@ -92,6 +92,7 @@
    :video_transcripts
    :video_segments
    :topic_pins
+   :neoreader_highlights
    :occlusion_groups
    :score_groups
    :flashcards
