@@ -133,6 +133,28 @@
     (is (and (string? reason) (seq reason))
       (str (name table) " must say why it is excluded"))))
 
+;; ── Export scope coverage ──────────────────────────────────────────
+
+(deftest every-exported-table-has-a-scope
+  (let [tables (set fmt/entity-tables)
+        scoped (set (keys fmt/entity-scopes))]
+    (is (empty? (set/difference tables scoped))
+      (str "an exported table has no scope: " (pr-str (set/difference tables scoped))
+        " — account-export/scope-of throws on it, which crashes the WebSocket on"
+        " every Settings page load and fails every account export"))
+    (is (empty? (set/difference scoped tables))
+      (str "a scope names a table that is not exported: "
+        (pr-str (set/difference scoped tables))))))
+
+(deftest every-scope-declares-its-placeholder-count
+  (doseq [[table {:keys [where params order]}] fmt/entity-scopes]
+    (testing (name table)
+      (is (= params (count (re-seq #"\?" where)))
+        ":params must equal the number of ? placeholders — count-query binds the
+         user id that many times, and a mismatch fails at request time")
+      (is (and (string? order) (seq order))
+        ":order must be non-empty — two exports of unchanged data must agree"))))
+
 ;; ── Entity paths (§5.1.4) ──────────────────────────────────────────
 
 (deftest entity-path-round-trips-every-table

@@ -38,125 +38,23 @@
            [java.util.zip Deflater ZipEntry ZipOutputStream]))
 
 ;; ── Scope ──────────────────────────────────────────────────────────
-
-(def ^:private owned-topics
-  "Subquery for the topics an export covers: the user's own, minus anything
-   staged for deletion.
-
-   A staged topic is hidden pending the 12-hour undo window, and `undo_log` is
-   excluded from the archive (§5.2.2), so exporting one would resurrect deleted
-   content on the target with no way to finish deleting it.
-   `db/stage-topic-for-deletion!` marks the whole subtree, not only its root
-   (db.clj:5141-5156), so this flat test needs no recursive walk."
-  "SELECT id FROM topics WHERE user_id = ? AND staged_delete_id IS NULL")
-
-(def ^:private owned-flashcards
-  "Subquery for the flashcards an export covers.
-   `topic_id` is the owning topic and `root_topic_id` the document. The COALESCE
-   covers rows the unified-topics migration left with a null `topic_id`
-   (db.clj:1394-1397)."
-  (str "SELECT id FROM flashcards WHERE COALESCE(topic_id, root_topic_id) IN ("
-    owned-topics ")"))
-
-(def ^:private owned-kg-facts
-  "Subquery for the kg_facts an export covers. Scoped through `graph_topic_id`
-   as well as `user_id`, so a fact distilled from a staged-deleted document stays
-   behind with it."
-  (str "SELECT id FROM kg_facts WHERE user_id = ? AND graph_topic_id IN ("
-    owned-topics ")"))
-
-(def ^:private entity-scopes
-  "Per-table scope, used to build both the `count(*)` and the row query.
-
-   Each entry is {:where SQL :order SQL :params N :drop-keys [column …]}.
-   `:params` is how many times the user id appears in `:where`, because every
-   placeholder in every clause binds that one value. `:drop-keys` names columns
-   removed from the row JSON — the blob columns, whose bytes travel as their own
-   archive entries.
-
-   Invariant: no clause may admit a row another user owns, and no clause may
-   admit a row referencing an entity this same map excludes. The second half is
-   the easier one to break: `kg_question_facts` is scoped through BOTH exported
-   questions and exported facts, because scoping it through questions alone would
-   emit a link to a fact that `owned-kg-facts` left behind."
-  {:sources {:where "t.user_id = ?" :params 1 :order "t.id"}
-
-   :media {:where "t.user_id = ?" :params 1 :order "t.id" :drop-keys ["bytes"]}
-
-   :topics {:where "t.user_id = ? AND t.staged_delete_id IS NULL"
-            :params 1 :order "t.id"}
-
-   :topic_files {:where (str "t.topic_id IN (" owned-topics ")")
-                 :params 1 :order "t.id" :drop-keys ["file_data"]}
-
-   :topic_videos {:where (str "t.topic_id IN (" owned-topics ")")
-                  :params 1 :order "t.topic_id"}
-
-   :video_transcripts {:where (str "t.topic_id IN (" owned-topics ")")
-                       :params 1 :order "t.id"}
-
-   :video_segments {:where (str "t.topic_id IN (" owned-topics ")")
-                    :params 1 :order "t.id"}
-
-   :topic_pins {:where (str "t.topic_id IN (" owned-topics ")")
-                :params 1 :order "t.id"}
-
-   ;; Reached through the cards that use them, so a group orphaned by
-   ;; reconcile-occlusion-group! is not exported and cannot dangle.
-   :occlusion_groups {:where (str "t.id IN (SELECT occlusion_group_id FROM flashcards"
-                               " WHERE occlusion_group_id IS NOT NULL AND id IN ("
-                               owned-flashcards "))")
-                      :params 1 :order "t.id"}
-
-   :score_groups {:where (str "t.id IN (SELECT score_group_id FROM flashcards"
-                           " WHERE score_group_id IS NOT NULL AND id IN ("
-                           owned-flashcards "))")
-                  :params 1 :order "t.id"}
-
-   :flashcards {:where (str "t.id IN (" owned-flashcards ")") :params 1 :order "t.id"}
-
-   :card_schedules {:where (str "t.flashcard_id IN (" owned-flashcards ")")
-                    :params 1 :order "t.flashcard_id, t.ord"}
-
-   :card_versions {:where (str "t.root_topic_id IN (" owned-topics ")")
-                   :params 1 :order "t.id"}
-
-   :topic_repetitions {:where (str "t.user_id = ? AND t.topic_id IN (" owned-topics ")")
-                       :params 2 :order "t.id"}
-
-   :assistant_chats {:where (str "t.user_id = ? AND t.root_topic_id IN (" owned-topics ")")
-                     :params 2 :order "t.id"}
-
-   :assistant_messages {:where (str "t.chat_id IN (SELECT id FROM assistant_chats"
-                                 " WHERE user_id = ? AND root_topic_id IN ("
-                                 owned-topics "))")
-                        :params 2 :order "t.id"}
-
-   :kg_entities {:where "t.user_id = ?" :params 1 :order "t.id"}
-
-   :kg_predicates {:where "t.user_id = ?" :params 1 :order "t.id"}
-
-   :kg_facts {:where (str "t.id IN (" owned-kg-facts ")") :params 2 :order "t.id"}
-
-   :kg_questions {:where "t.user_id = ?" :params 1 :order "t.id"}
-
-   :kg_question_facts {:where (str "t.question_id IN"
-                               " (SELECT id FROM kg_questions WHERE user_id = ?)"
-                               " AND t.fact_id IN (" owned-kg-facts ")")
-                       :params 3 :order "t.question_id, t.fact_id"}
-
-   :kg_reviews {:where "t.user_id = ?" :params 1 :order "t.id"}
-
-   :settings {:where "t.user_id = ?" :params 1 :order "t.key"}})
+;;
+;; `fmt/owned-topics` and `fmt/entity-scopes` live in
+;; `freememo.account-transfer-format`, not here: this namespace requires
+;; `freememo.db`, whose pool is built at namespace load, so a scope-coverage
+;; test that loaded this file could not run without PostgreSQL. This namespace
+;; owns everything that touches the database.
 
 (defn- scope-of
   "The scope entry for `table`.
    Pre : `table` is a member of `fmt/entity-tables`.
    Post: the entry map.
    Throws when the precondition fails, so a table added to `entity-tables`
-   without a scope cannot silently export zero rows."
+   without a scope cannot silently export zero rows. This is the runtime
+   backstop; `account-transfer-format-test/every-exported-table-has-a-scope`
+   is what fails first."
   [table]
-  (or (get entity-scopes table)
+  (or (get fmt/entity-scopes table)
     (throw (ex-info (str "No export scope for " (pr-str table))
              {:type ::missing-entity-scope :table table}))))
 
@@ -207,7 +105,7 @@
   [ds user-id]
   (jdbc/execute! ds
     [(str "SELECT t.id, t.topic_id, t.role, t.file_size FROM topic_files t"
-       " WHERE t.topic_id IN (" owned-topics ") ORDER BY t.id") user-id]
+       " WHERE t.topic_id IN (" fmt/owned-topics ") ORDER BY t.id") user-id]
     {:builder-fn rs/as-unqualified-maps}))
 
 (defn- media-blobs
@@ -222,7 +120,7 @@
   [ds user-id]
   (jdbc/execute! ds
     [(str "SELECT t.topic_id, t.lo_oid, t.byte_size FROM topic_videos t"
-       " WHERE t.topic_id IN (" owned-topics ") ORDER BY t.topic_id") user-id]
+       " WHERE t.topic_id IN (" fmt/owned-topics ") ORDER BY t.topic_id") user-id]
     {:builder-fn rs/as-unqualified-maps}))
 
 ;; ── Writing ────────────────────────────────────────────────────────

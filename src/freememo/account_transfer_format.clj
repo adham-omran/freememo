@@ -8,6 +8,12 @@
    It performs no I/O and touches no database, so both peers and the tests read
    the same constants.
 
+   It also owns `entity-scopes`, which only the export half reads. That is a
+   deliberate departure from \"both halves\": the scope map is a set of SQL
+   strings keyed by `entity-tables`, and the two are one fact split in two. They
+   sit together so a test can assert that coverage with the database down. See
+   the Export scope section for why that matters.
+
    Named after `freememo.supermemo-format`, which plays the same role for a
    SuperMemo collection.
 
@@ -126,6 +132,147 @@
    :kg_answers "quiz session transcript — kg_reviews holds the durable record"
    :account_imports "import bookkeeping — target-instance state (§5.5.7)"
    :account_import_ids "import bookkeeping — target-instance state (§5.5.7)"})
+
+;; ── Export scope ───────────────────────────────────────────────────
+;;
+;; These are SQL strings, not queries — nothing here executes anything, and
+;; only `freememo.account-export` reads them. They live here rather than beside
+;; the writer because `account_export.clj` requires `freememo.db`, whose pool
+;; is built at namespace load (db.clj:63), so a test that loaded the writer
+;; could not run without PostgreSQL. `every-exported-table-has-a-scope` is that
+;; test, and keeping the scope map next to `entity-tables` is what lets it run
+;; with the database down. Moving it back beside the writer silently disarms
+;; that guard.
+
+(def owned-topics
+  "Subquery for the topics an export covers: the user's own, minus anything
+   staged for deletion.
+
+   A staged topic is hidden pending the 12-hour undo window, and `undo_log` is
+   excluded from the archive (§5.2.2), so exporting one would resurrect deleted
+   content on the target with no way to finish deleting it.
+   `freememo.db/stage-topic-for-deletion!` marks the whole subtree, not only its
+   root (db.clj:5141-5156), so this flat test needs no recursive walk.
+
+   Public because the blob queries in `freememo.account-export` scope through it
+   too, and those stay beside the writer — they read bytes, which is I/O this
+   namespace does not do."
+  "SELECT id FROM topics WHERE user_id = ? AND staged_delete_id IS NULL")
+
+(def ^:private owned-flashcards
+  "Subquery for the flashcards an export covers.
+   `topic_id` is the owning topic and `root_topic_id` the document. The COALESCE
+   covers rows the unified-topics migration left with a null `topic_id`
+   (db.clj:1394-1397)."
+  (str "SELECT id FROM flashcards WHERE COALESCE(topic_id, root_topic_id) IN ("
+    owned-topics ")"))
+
+(def ^:private owned-kg-facts
+  "Subquery for the kg_facts an export covers. Scoped through `graph_topic_id`
+   as well as `user_id`, so a fact distilled from a staged-deleted document stays
+   behind with it."
+  (str "SELECT id FROM kg_facts WHERE user_id = ? AND graph_topic_id IN ("
+    owned-topics ")"))
+
+(def entity-scopes
+  "Per-table scope, used to build both the `count(*)` and the row query.
+
+   Each entry is {:where SQL :order SQL :params N :drop-keys [column …]}.
+   `:params` is how many times the user id appears in `:where`, because every
+   placeholder in every clause binds that one value. `:drop-keys` names columns
+   removed from the row JSON — the blob columns, whose bytes travel as their own
+   archive entries.
+
+   Invariant: every member of `entity-tables` has an entry here, and this map
+   has no key that is not a member. `account-export/scope-of` throws on a miss,
+   which surfaces as a crashed WebSocket on the Settings page rather than a
+   zero-row export — `every-exported-table-has-a-scope` is what catches it
+   first.
+
+   Invariant: no clause may admit a row another user owns, and no clause may
+   admit a row referencing an entity this same map excludes. The second half is
+   the easier one to break: `kg_question_facts` is scoped through BOTH exported
+   questions and exported facts, because scoping it through questions alone would
+   emit a link to a fact that `owned-kg-facts` left behind."
+  {:sources {:where "t.user_id = ?" :params 1 :order "t.id"}
+
+   :media {:where "t.user_id = ?" :params 1 :order "t.id" :drop-keys ["bytes"]}
+
+   :topics {:where "t.user_id = ? AND t.staged_delete_id IS NULL"
+            :params 1 :order "t.id"}
+
+   :topic_files {:where (str "t.topic_id IN (" owned-topics ")")
+                 :params 1 :order "t.id" :drop-keys ["file_data"]}
+
+   :topic_videos {:where (str "t.topic_id IN (" owned-topics ")")
+                  :params 1 :order "t.topic_id"}
+
+   :video_transcripts {:where (str "t.topic_id IN (" owned-topics ")")
+                       :params 1 :order "t.id"}
+
+   :video_segments {:where (str "t.topic_id IN (" owned-topics ")")
+                    :params 1 :order "t.id"}
+
+   :topic_pins {:where (str "t.topic_id IN (" owned-topics ")")
+                :params 1 :order "t.id"}
+
+   ;; Scoped through the document as well as the user, so a highlight whose
+   ;; book is staged for deletion stays behind with it. `chapter_topic_id` is
+   ;; deliberately NOT scoped: it is nullable with ON DELETE SET NULL, and
+   ;; import omits it from `required-fk-columns`, so an untranslatable value
+   ;; arrives as null — the same outcome the source schema produces. Gating on
+   ;; it would drop a whole highlight to protect a nullable pointer.
+   :neoreader_highlights {:where (str "t.user_id = ? AND t.root_topic_id IN ("
+                                   owned-topics ")")
+                          :params 2 :order "t.id"}
+
+   ;; Reached through the cards that use them, so a group orphaned by
+   ;; reconcile-occlusion-group! is not exported and cannot dangle.
+   :occlusion_groups {:where (str "t.id IN (SELECT occlusion_group_id FROM flashcards"
+                               " WHERE occlusion_group_id IS NOT NULL AND id IN ("
+                               owned-flashcards "))")
+                      :params 1 :order "t.id"}
+
+   :score_groups {:where (str "t.id IN (SELECT score_group_id FROM flashcards"
+                           " WHERE score_group_id IS NOT NULL AND id IN ("
+                           owned-flashcards "))")
+                  :params 1 :order "t.id"}
+
+   :flashcards {:where (str "t.id IN (" owned-flashcards ")") :params 1 :order "t.id"}
+
+   :card_schedules {:where (str "t.flashcard_id IN (" owned-flashcards ")")
+                    :params 1 :order "t.flashcard_id, t.ord"}
+
+   :card_versions {:where (str "t.root_topic_id IN (" owned-topics ")")
+                   :params 1 :order "t.id"}
+
+   :topic_repetitions {:where (str "t.user_id = ? AND t.topic_id IN (" owned-topics ")")
+                       :params 2 :order "t.id"}
+
+   :assistant_chats {:where (str "t.user_id = ? AND t.root_topic_id IN (" owned-topics ")")
+                     :params 2 :order "t.id"}
+
+   :assistant_messages {:where (str "t.chat_id IN (SELECT id FROM assistant_chats"
+                                 " WHERE user_id = ? AND root_topic_id IN ("
+                                 owned-topics "))")
+                        :params 2 :order "t.id"}
+
+   :kg_entities {:where "t.user_id = ?" :params 1 :order "t.id"}
+
+   :kg_predicates {:where "t.user_id = ?" :params 1 :order "t.id"}
+
+   :kg_facts {:where (str "t.id IN (" owned-kg-facts ")") :params 2 :order "t.id"}
+
+   :kg_questions {:where "t.user_id = ?" :params 1 :order "t.id"}
+
+   :kg_question_facts {:where (str "t.question_id IN"
+                               " (SELECT id FROM kg_questions WHERE user_id = ?)"
+                               " AND t.fact_id IN (" owned-kg-facts ")")
+                       :params 3 :order "t.question_id, t.fact_id"}
+
+   :kg_reviews {:where "t.user_id = ?" :params 1 :order "t.id"}
+
+   :settings {:where "t.user_id = ?" :params 1 :order "t.key"}})
 
 (def ^:private entity-table-set (set entity-tables))
 
