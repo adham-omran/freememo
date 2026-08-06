@@ -531,15 +531,26 @@
   "USER NOTES")
 
 (def unplaced-heading
-  "Heading opening the document root's list of highlights nothing could place.
+  "Heading opening the list of highlights nothing could place.
 
    This settles spec item 7.2. The toast reports HOW MANY went unplaced, and a
    count alone is not actionable — the reader cannot tell which passage to look
    for. The other candidates were a server log, which no reader sees, and a
-   report view, which the decision record rules out. A section on the root topic
-   needs no new view, is one click from the document, and is rebuilt on every
-   sync by the same code that rebuilds the notes."
+   report view, which the decision record rules out. A section needs no new view
+   and is rebuilt on every sync by the same code that rebuilds the notes.
+
+   WHICH topic carries it is the caller's decision, not this namespace's: the
+   root for an EPUB, the first section for a PDF, because a PDF root's own
+   content is never rendered (spec 10.4.1)."
   "UNPLACED HIGHLIGHTS")
+
+(def ^:private sync-headings
+  "Every heading a sync writes, as `chapter-key` comparison keys.
+
+   ONE set, because `strip-sync-content` must erase all of them and a heading
+   missing from here would survive into the next sync's match text. A second
+   heading added to this namespace belongs here in the same commit."
+  #{(chapter-key notes-heading) (chapter-key unplaced-heading)})
 
 (def ^:private heading-tags #{"h1" "h2" "h3" "h4" "h5" "h6"})
 
@@ -563,65 +574,80 @@
   (apply str "<h3>" (escape-text heading) "</h3>"
     (map #(str "<p>" (escape-text %) "</p>") lines)))
 
-(defn- section-start
-  "Pre : `body` is a parsed body Element. `heading` is a section heading.
-   Post: the index among `body`'s direct child elements of the first heading
-         whose text is `heading`, or nil.
-   Note: direct children only. A sync appends the section at that level, so a
-         user who re-nests it gets a second section next time — the same
-         accepted cost as renaming it."
-  [^Element body heading]
-  (let [want (chapter-key heading)]
-    (first (keep-indexed (fn [i ^Element el]
-                           (when (and (heading-tags (.tagName el))
-                                   (= want (chapter-key (.text el))))
-                             i))
-             (vec (.children body))))))
+(defn- sync-section-start
+  "Where a topic's synced sections begin.
 
-(defn- remove-section!
-  "Pre : `body` is a parsed body Element. `heading` is a section heading.
-   Post: that heading and every element after it are gone, when the heading was
-         a direct child. Mutates `body`.
-   Inv : taking everything after the heading is complete, because a sync always
-         appends its sections LAST."
-  [^Element body heading]
-  (when-let [at (section-start body heading)]
+   Pre : `body` is a parsed body Element.
+   Post: the index among `body`'s direct child elements of the EARLIEST heading
+         in `sync-headings`, or nil when it holds none.
+   Inv : earliest, not first-matching-one-heading. A topic can carry both
+         sections, and removing the earlier one has to take the later one with
+         it — see `remove-sync-sections!`.
+   Note: direct children only. A sync appends its sections at that level, so a
+         user who re-nests one gets a second section next time — the same
+         accepted cost as renaming it."
+  [^Element body]
+  (first (keep-indexed (fn [i ^Element el]
+                         (when (and (heading-tags (.tagName el))
+                                 (sync-headings (chapter-key (.text el))))
+                           i))
+           (vec (.children body)))))
+
+(defn- remove-sync-sections!
+  "Pre : `body` is a parsed body Element.
+   Post: every synced section is gone, along with anything between or after
+         them. Mutates `body`.
+   Inv : taking everything after the earliest sync heading is complete, because
+         a sync always appends its sections LAST and never anything else.
+   Inv : this is the ONLY removal in the sync's write path. `append-section`
+         removes nothing, so a section appended after this ran cannot be taken
+         back out by a later append — which is the defect that split the two
+         (spec 10.2.3)."
+  [^Element body]
+  (when-let [at (sync-section-start body)]
     (doseq [^Element el (drop at (vec (.children body)))]
       (.remove el))))
 
-(defn replace-section
-  "Rebuild one synced section of a topic's content.
+(defn append-section
+  "Append one synced section to a topic's content.
 
-   Pre : `html` is a topic's stored content, or nil. `heading` is one of this
-         namespace's two headings. `lines` is a seq of plain-text lines,
-         possibly empty.
-   Post: the content with any existing section under that heading removed, and a
-         fresh one appended when `lines` is non-empty. An empty `lines` leaves no
-         heading behind, so a document that no longer needs the section does not
-         keep an empty one.
-   Post: rebuilt in full every time (spec 6.3) — a user's edits inside the
-         section do not survive, because the export is the truth."
+   Pre : `html` went through `strip-sync-content` THIS sync, so it carries no
+         synced section. A caller that skips that owes a duplicate section.
+   Pre : `heading` is one of this namespace's headings. `lines` is a seq of
+         plain-text lines, possibly empty.
+   Post: `html` with the section appended when `lines` is non-empty, and `html`
+         returned UNCHANGED — not re-parsed — when it is empty. An empty `lines`
+         therefore leaves no heading and no spurious diff, so a document that no
+         longer needs the section does not keep an empty one and is not rewritten
+         for nothing.
+   Post: rebuilt in full every sync (spec 6.3), because the strip already took
+         the previous one. A user's edits inside a section do not survive."
   [html heading lines]
-  (let [body (parse-body html)]
-    (remove-section! body heading)
-    (when (seq lines)
-      (.append body (section-html heading lines)))
-    (.html body)))
+  (if-not (seq lines)
+    html
+    (let [body (parse-body html)]
+      (.append body (section-html heading lines))
+      (.html body))))
 
 (defn strip-sync-content
-  "Remove everything a previous sync wrote into a chapter.
+  "Remove everything a previous sync wrote into a topic.
 
-   Pre : `html` is a chapter's stored content, or nil.
+   Pre : `html` is a topic's stored content, or nil.
    Post: every `highlight-color` span unwrapped, every `[n]` marker span
-         removed, and the `USER NOTES` section dropped. nil and blank pass
-         through unchanged.
+         removed, and every synced section dropped. nil and blank pass through
+         unchanged.
    Inv : only spans carrying exactly `highlight-color` are touched. An extract
          highlight (`#44C2FF`) and every other inline colour survive. A tint the
          user applied by hand with the Quill popover's Orange does NOT — that is
          the cost of carrying no identity in the content.
-   Note: this MUST run BEFORE placement. The notes section repeats the quotes'
-         own words, so leaving it in would give a quote a second place to match
-         and could tint the section instead of the passage."
+   Note: this MUST run BEFORE placement, on every topic the sync will write.
+         Both sections repeat the quotes' own words, so leaving one in gives a
+         quote a second place to match. The `UNPLACED HIGHLIGHTS` list is the
+         dangerous one: it lives on a topic the matcher READS when that topic is
+         a PDF's first page, and its lines are quotes truncated at 300
+         characters — exactly the shape `find-prefix` matches. An unplaced
+         highlight would then place on its own copy and report success (spec
+         10.2.5)."
   [html]
   (if (or (nil? html) (str/blank? html))
     html
@@ -630,8 +656,27 @@
         (if (re-matches marker-pattern (.text el))
           (.remove el)
           (.unwrap el)))
-      (remove-section! body notes-heading)
+      (remove-sync-sections! body)
       (.html body))))
+
+(defn resolved-title-count
+  "How many highlights name a section by its title.
+
+   Pre : `sections` is a seq of {:title :html}. `highlights` is
+         `neoreader-export/parse-highlights` output.
+   Post: the number of highlights whose chapter label resolves to at least one
+         section — the same test `eligibility` applies, so the two cannot
+         disagree.
+   Note: 0 means chapter scoping did nothing for this document, which is the
+         permanent state of every PDF: `insert-page-stubs!` titles pages
+         `Page N` and Boox emits the PDF outline's label. A caller reports
+         differently in that case (spec 10.5.2).
+   Note: this cannot be derived from the `:placed` count. A highlight whose title
+         DID resolve but which the rescan or prefix pass took reports
+         `:out-of-order` or `:partial`, not `:placed`."
+  [sections highlights]
+  (let [by-title (positions-by-title sections)]
+    (count (filter #(contains? by-title (chapter-key (:chapter %))) highlights))))
 
 ;; ── Phase 2: the chapter rewrite ───────────────────────────────────
 

@@ -10,6 +10,7 @@
    [freememo.google-oauth :as google-oauth]
    [freememo.google-drive :as drive]
    [freememo.neoreader-sync :as neoreader]
+   [freememo.neoreader-kinds :as nrkinds]
    [freememo.toasts :as toasts]
    [freememo.deployment-hook :as hook]
    [freememo.extractor :as extractor]
@@ -869,14 +870,17 @@
     (when-not (str/blank? v)
       (try (Long/parseLong (str/trim v)) (catch Exception _ nil)))))
 
-(defn- epub-topic-for
+(defn- syncable-topic-for
   "Pre : `user-id` is authenticated.
-   Post: the topic row when it exists, belongs to this user, and is kind
-         `epub`; otherwise nil. One check for both handlers, so neither can
-         sync a document the user does not own."
+   Post: the topic row when it exists, belongs to this user, and is a kind
+         `neoreader-kinds/syncable-kind?` accepts; otherwise nil. One check for
+         both handlers, so neither can sync a document the user does not own.
+   Inv : the kind set lives in `freememo.neoreader-kinds`, which the Library row
+         action reads too. A literal here would let the button and this route
+         disagree — the button would appear and the route would 404."
   [user-id topic-id]
   (let [t (db/get-topic-for-user user-id topic-id)]
-    (when (= "epub" (:topics/kind t)) t)))
+    (when (nrkinds/syncable-kind? (:topics/kind t)) t)))
 
 (defn neoreader-bind-handler
   "POST /api/neoreader/bind — remember which Drive file a document syncs from.
@@ -891,8 +895,8 @@
       (cond
         (nil? topic-id) (json-response 400 {:success false :error "Missing topic_id"})
         (str/blank? file-id) (json-response 400 {:success false :error "Missing file_id"})
-        (nil? (epub-topic-for user-id topic-id))
-        (json-response 404 {:success false :error "No EPUB document with that id"})
+        (nil? (syncable-topic-for user-id topic-id))
+        (json-response 404 {:success false :error "No syncable document with that id"})
         :else
         (do (neoreader/bind-file! user-id topic-id file-id)
             (json-response 200 {:success true
@@ -902,7 +906,7 @@
 
 (defn neoreader-sync-handler
   "POST /api/neoreader/sync — run one sync.
-   Pre:  authenticated; param topic_id names an EPUB document this user owns.
+   Pre:  authenticated; param topic_id names an EPUB or PDF document this user owns.
    Post: {:success true …}, or {:success false :error msg} with :reauthorize or
          :needs_pick set when the browser can act on it. The status is 200 for a
          reported failure — the browser reads :success, and a 5xx here would look
@@ -914,7 +918,7 @@
   [request]
   (if-let [user-id (require-auth request)]
     (let [topic-id (param-long request "topic_id")]
-      (if (or (nil? topic-id) (nil? (epub-topic-for user-id topic-id)))
+      (if (or (nil? topic-id) (nil? (syncable-topic-for user-id topic-id)))
         (json-response 400 {:success false :error "Missing or unknown topic_id"})
         (try
           (let [r (neoreader/sync-document! user-id topic-id)]
@@ -923,7 +927,7 @@
               (do (toasts/push! user-id {:level :success :message (neoreader/summary r)})
                   (json-response 200 {:success true
                                       :counts (:counts r)
-                                      :chapters (:chapters-written r)
+                                      :sections (:sections-written r)
                                       :notes (:notes r)}))
 
               (:needs-pick? r)

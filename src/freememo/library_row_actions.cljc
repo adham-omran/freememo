@@ -17,9 +17,10 @@
    [freememo.icons :as icons]
    [freememo.document-options :refer [DocumentOptionsButton]]
    [freememo.tooltip :as tooltip]
+   [freememo.neoreader-kinds :as nrkinds]
    #?(:cljs [freememo.neoreader-picker :as neoreader])))
 
-;; NeoReader sync — EPUB rows only. Kept a plain defn, not inline in the
+;; NeoReader sync — syncable document roots only. Kept a plain defn, not inline in the
 ;; reactive body: it loads the Google Picker and stores a shared promise in a
 ;; defonce atom, and Electric re-evaluates a dom body unpredictably (CLAUDE.md
 ;; 'JS Library Init Side Effects in e/defn'). The reader conditional lives here,
@@ -144,10 +145,13 @@
                       (reset! !open false))
                     nil)))
 
-              ;; Sync with NeoReader — EPUB roots only. A Boox export exists per
-              ;; book, so a chapter row has nothing to sync. The first click
-              ;; opens the Google Picker to bind a file; later clicks reuse it.
-              (when (and is-root (= kind "epub"))
+              ;; Sync with NeoReader — document roots of a syncable kind. A Boox
+              ;; export exists per book, so a chapter or page row has nothing to
+              ;; sync. The first click opens the Google Picker to bind a file;
+              ;; later clicks reuse it. The kind set is NOT a literal here: the
+              ;; server route gates on the same var, and a literal would let a
+              ;; button appear over a route that 404s.
+              (when (and is-root (nrkinds/syncable-kind? kind))
                 (dom/button
                   (dom/props {:class "toolbar-dropdown-item" :role "menuitem"})
                   (icons/Icon :cloud-download :size 16)

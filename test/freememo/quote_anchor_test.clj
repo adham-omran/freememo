@@ -395,22 +395,94 @@
     (testing "a bracketed number the BOOK carries is untouched"
       (is (str/includes? (anchor/strip-sync-content "<p>see note [3] there</p>") "[3]")))))
 
-;; ── 6.4 / 7.2 — finding a section again ────────────────────────────
+;; ── 6.4 / 7.2 / 10.2 — the eraser and the appender ─────────────────
 
-(deftest a-section-is-found-by-its-heading-and-rebuilt-in-full
-  (let [once (anchor/replace-section "<p>root</p>" anchor/unplaced-heading ["first"])]
-    (testing "a second call replaces rather than appends"
-      (let [twice (anchor/replace-section once anchor/unplaced-heading ["second"])]
+(deftest a-section-is-appended-and-erased-by-its-heading
+  (let [once (anchor/append-section "<p>root</p>" anchor/unplaced-heading ["first"])]
+    (testing "the topic's own content is kept"
+      (is (str/includes? once "<p>root</p>"))
+      (is (str/includes? once "<p>first</p>")))
+
+    (testing "an empty list appends nothing and does not even re-parse (10.2.3)"
+      (is (identical? "<p>root</p>" (anchor/append-section "<p>root</p>" anchor/unplaced-heading []))
+        "the input string itself comes back, so no spurious diff can trigger a write"))
+
+    (testing "the strip is what makes a re-append a replacement, not a duplicate"
+      (let [twice (anchor/append-section (anchor/strip-sync-content once)
+                    anchor/unplaced-heading ["second"])]
         (is (str/includes? twice "<p>second</p>"))
         (is (not (str/includes? twice "<p>first</p>")))
         (is (= 1 (count (re-seq #"UNPLACED HIGHLIGHTS" twice))))))
 
-    (testing "an empty list removes the section, leaving no empty heading"
-      (is (= "<p>root</p>" (anchor/replace-section once anchor/unplaced-heading []))))
-
-    (testing "the topic's own content is kept"
-      (is (str/includes? once "<p>root</p>")))
-
     (testing "a quote holding markup arrives as text"
-      (is (str/includes? (anchor/replace-section nil anchor/unplaced-heading ["a <b>x</b> & y"])
+      (is (str/includes? (anchor/append-section nil anchor/unplaced-heading ["a <b>x</b> & y"])
             "a &lt;b&gt;x&lt;/b&gt; &amp; y")))))
+
+(deftest the-strip-takes-both-sections-and-what-sits-between-them
+  ;; 10.2.1. A topic can carry both sections — a PDF's page 1 does whenever it
+  ;; also holds a noted highlight. Removing only the earlier one's own heading
+  ;; would leave the later section behind, and removing to the end of the body
+  ;; from the LATER heading would leave the earlier one behind.
+  (let [both (str "<p>page text</p>"
+               "<h3>USER NOTES</h3><p>[1] a note</p>"
+               "<p>something the reader typed between them</p>"
+               "<h3>UNPLACED HIGHLIGHTS</h3><p>Ch - stamp - quote</p>")]
+    (is (= "<p>page text</p>" (anchor/strip-sync-content both)))
+
+    (testing "either section alone strips clean too (10.2.2)"
+      (is (= "<p>x</p>" (anchor/strip-sync-content
+                          "<p>x</p><h3>USER NOTES</h3><p>[1] n</p>")))
+      (is (= "<p>x</p>" (anchor/strip-sync-content
+                          "<p>x</p><h3>UNPLACED HIGHLIGHTS</h3><p>l</p>"))))
+
+    (testing "a heading the app did not write is left alone"
+      ;; Not byte equality — Jsoup newline-separates block siblings on
+      ;; re-serialize. What matters is that neither element is removed.
+      (let [out (anchor/strip-sync-content "<h3>Chapter Summary</h3><p>body</p>")]
+        (is (str/includes? out "<h3>Chapter Summary</h3>"))
+        (is (str/includes? out "<p>body</p>"))))))
+
+(deftest an-unplaced-highlight-cannot-place-on-its-own-listing
+  ;; 10.2.5, the sharpest rule in the PDF design. The unplaced list lives on a
+  ;; topic the matcher READS (a PDF's page 1), and its lines are quotes. Without
+  ;; the strip covering that section, the prefix pass would match the listing and
+  ;; report the highlight placed — a silent, self-reinforcing false positive.
+  (let [quote-text (str "a long passage that this document does not hold anywhere "
+                     "in its own text, long enough to clear the prefix floor")
+        page-1 {:title "Page 1"
+                :html (anchor/append-section "<p>cover</p>" anchor/unplaced-heading
+                        [(str "Nowhere - 2026-01-01 00:00:00 - " quote-text)])}
+        highlights [{:chapter "Nowhere" :quote quote-text :notes [] :index 0}]]
+    (testing "the listing is visible in the raw HTML"
+      (is (str/includes? (:html page-1) quote-text)))
+
+    (let [clean [(update page-1 :html anchor/strip-sync-content)]]
+      (testing "the strip removed it before any matching ran"
+        (is (not (str/includes? (:html (first clean)) quote-text))))
+      (is (= [:unmatched] (outcomes clean highlights))
+        "still unplaced on the second sync, not :partial against its own listing")
+      (is (empty? (marked clean highlights))
+        "and nothing on page 1 is tinted"))))
+
+;; ── 10.5.1 — the title-resolution count ────────────────────────────
+
+(deftest resolved-title-count-reports-whether-chapter-scoping-did-anything
+  (let [epub [{:title "Learning Is Misunderstood" :html "<p>alpha</p>"}
+              {:title "To Learn, Retrieve" :html "<p>beta</p>"}]
+        pdf [{:title "Page 1" :html "<p>alpha</p>"}
+             {:title "Page 2" :html "<p>beta</p>"}]
+        hs [(hl "To Learn, Retrieve" "beta" 0) (hl "Nowhere" "alpha" 1)]]
+    (testing "an EPUB export resolves the labels that name a chapter"
+      (is (= 1 (anchor/resolved-title-count epub hs))))
+
+    (testing "a PDF resolves none, permanently — every page is titled Page N"
+      (is (= 0 (anchor/resolved-title-count pdf hs))))
+
+    (testing "it cannot be derived from the :placed count"
+      ;; This highlight's title DOES resolve, yet the rescan pass takes it, so it
+      ;; reports :out-of-order rather than :placed.
+      (let [ch [{:title "C" :html "<p>alpha beta gamma</p>"}]
+            two [(hl "C" "beta gamma" 0) (hl "C" "alpha" 1)]]
+        (is (= [:placed :out-of-order] (outcomes ch two)))
+        (is (= 2 (anchor/resolved-title-count ch two))
+          "both titles resolved, and only one placement says :placed")))))

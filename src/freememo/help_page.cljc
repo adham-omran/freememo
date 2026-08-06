@@ -41,12 +41,13 @@
             ["Edit & split ({extract})" "Fix the text in the editor. Select a passage and Extract turns it into a child topic linked back to the page."]
             ["Mark done ({done})" "Mark a page Done to drop it from your review queue while keeping the content."]]}
    {:title "Boox NeoReader highlights"
-    :intro "Bring the highlights and notes you made on a Boox e-reader into the EPUB you read them in. Google Drive carries the file; nothing is written back to it or to the device."
+    :intro "Bring the highlights and notes you made on a Boox e-reader into the EPUB or PDF you read them in. Google Drive carries the file; nothing is written back to it or to the device."
     :steps [["Export on the device" "In NeoReader, export the book's annotations as HTML. The file lands in onyx / your device name / Read in your Google Drive."]
-            ["Start the sync" "Library → Documents → the EPUB's ⋯ menu → Sync with NeoReader. The first run asks Google for read access to one file, then opens Google's own file picker."]
+            ["Extract the text first (PDF only)" "A PDF's pages hold no text until you Scan Page or Copy text on them, and a page with no text can hold no highlight. Copy text matches your Boox export most closely, because both read the PDF's own text layer."]
+            ["Start the sync" "Library → Documents → the document's ⋯ menu → Sync with NeoReader. The first run asks Google for read access to one file, then opens Google's own file picker."]
             ["Pick the export" "Go to onyx → your device → Read and pick the book's HTML file. FreeMemo remembers it, so every later sync is one click with no picker."]
-            ["Read the result" "Each highlighted passage is tinted orange in its chapter. A passage you annotated also carries a [1] marker, and that chapter ends with a numbered USER NOTES list."]
-            ["Check what did not place" "A highlight FreeMemo cannot find in the text is listed under UNPLACED HIGHLIGHTS on the document itself. Editing a sentence after you highlighted it is the usual cause."]
+            ["Read the result" "Each highlighted passage is tinted orange in its chapter or page. A passage you annotated also carries a [1] marker, and that chapter or page ends with a numbered USER NOTES list."]
+            ["Check what did not place" "A highlight FreeMemo cannot find in the text is listed under UNPLACED HIGHLIGHTS — on the document itself for an EPUB, on page 1 for a PDF. An unscanned page is the usual cause on a PDF; editing a sentence after you highlighted it is the usual cause on either."]
             ["Sync again any time" "Every sync rebuilds from the export. A highlight you deleted on the device loses its mark, and your own edits inside a USER NOTES list do not survive."]]}
    {:title "Asking the AI assistant"
     :intro "Work a page through with an assistant that either answers you or questions you — your choice."
