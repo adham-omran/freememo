@@ -53,11 +53,19 @@
   "Paths where an HTML response is a lie, so this handler answers 404 instead.
 
    Every one of these is fetched by a machine that expects `text/plain` or XML and
-   treats markup as a malformed file. `/ads.txt` and `/robots.txt` are absent on
-   purpose: a route in `freememo.api` owns the first and a static resource owns the
-   second, and both are matched before this handler runs. Listing them here too
-   would give one path two owners."
-  #{"/security.txt" "/sitemap.xml"})
+   treats markup as a malformed file.
+
+   `/ads.txt` is a member again. A route in `freememo.api` owned it while this
+   deployment published an authorized-sellers body; that route went with the ad
+   path on 2026-08-06, and without an owner the path would fall to the shell and
+   answer `200 text/html` — the exact defect
+   plans/crawler-rendering-and-well-known-files.md fixed. A deployment that
+   publishes such a file again must route it, and drop it from this set in the
+   same commit.
+
+   `/robots.txt` is absent on purpose: a static resource owns it and is matched
+   before this handler runs, so listing it here would give one path two owners."
+  #{"/ads.txt" "/security.txt" "/sitemap.xml"})
 
 (defn- text-only-path?
   "Whether `uri` must never receive HTML.

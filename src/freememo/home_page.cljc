@@ -2,7 +2,6 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [freememo.deployment-slot :as slot]
    [freememo.navigation :as nav]
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.user-state :as us])
@@ -137,18 +136,4 @@
                           :style {:font-size "13px" :color "var(--color-warning-dark)" :font-weight "600" :cursor "pointer"
                                   :text-decoration "underline"}})
               (dom/text "Configure in Settings")
-              (dom/On "click" (fn [e] (.preventDefault e) (navigate! :settings)) nil))))
-
-        ;; Section 5: Deployment slot — the empty band below the quick links.
-        ;; LAST child deliberately: the API-key notice above must stay directly
-        ;; under the primary button, which is the order the page already has.
-        ;; Renders nothing unless this deployment's shell defined the activation
-        ;; function, so dev and every self-hosted build show no container and
-        ;; contact nobody (freememo.deployment-slot).
-        ;; Electric must own this element — a container appended by plain JS into
-        ;; a churning parent makes Electric remove the wrong node. e/snapshot
-        ;; fires the activation once per mount rather than per re-evaluation.
-        (when (slot/slot-available?)
-          (dom/div
-            (dom/props {:class "deployment-slot"})
-            (e/snapshot (slot/activate-slot! dom/node slot/home-bottom))))))))
+              (dom/On "click" (fn [e] (.preventDefault e) (navigate! :settings)) nil))))))))

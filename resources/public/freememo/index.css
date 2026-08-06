@@ -218,25 +218,6 @@ html, body {
     padding: var(--sp-6);
 }
 
-/* ── Deployment slot ──────────────────────────────────────────────
-   A container this deployment may fill with its own content — see
-   freememo.deployment-slot. This class owns the BOX only: the width, the gap
-   above it, and centring whatever lands inside.
-
-   Deliberately NO height, min-height, background or border. When nothing fills
-   the container it must measure zero and leave no trace, which is what makes an
-   empty slot invisible instead of a hole in the page. A flex container with no
-   children measures zero, so centring costs nothing here. max-width keeps
-   content from overflowing horizontally where the page container goes
-   edge-to-edge (viewports under ~960px). */
-.deployment-slot {
-    width: 100%;
-    max-width: 100%;
-    margin-top: 40px;
-    display: flex;
-    justify-content: center;
-}
-
 .section-title {
     font-size: 15px;
     font-weight: 600;

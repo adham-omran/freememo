@@ -2022,28 +2022,6 @@
            ["SELECT 1 FROM user_events WHERE user_id = ? AND event_type = ? LIMIT 1"
             user-id event-type])))
 
-(defn user-has-purchase-or-event?
-  "Whether `user-id` ever completed a paid order, or carries an `event-type` row.
-
-   \"Purchase\" means a `credit_orders` row with status 'complete' — the only
-   writer of a 'purchase' ledger row sets that status in the same transaction
-   (`complete-credit-order!`), so the two agree. `credit_orders` is the cheaper
-   source: `credit_transactions` holds one row per LLM debit and its index does
-   not cover `kind`, so an EXISTS for an old purchase can walk most of a heavy
-   user's rows. Callers on a per-request path need that difference.
-   Pre:  `user-id` is an int, `event-type` a string. An unknown id is legal and
-         yields false.
-   Post: boolean, never nil. One statement, one round trip — both branches are
-         covered by an index on (user_id, …), and LIMIT 1 applies to the union,
-         so Postgres stops at the first hit."
-  [user-id event-type]
-  (some? (jdbc/execute-one! ds
-           ["SELECT 1 FROM credit_orders WHERE user_id = ? AND status = 'complete'
-             UNION ALL
-             SELECT 1 FROM user_events WHERE user_id = ? AND event_type = ?
-             LIMIT 1"
-            user-id user-id event-type])))
-
 (defn insert-user-event!
   "Record a user event. The 3-arity stores `metadata` as jsonb.
    Post: exactly one user_events row inserted."

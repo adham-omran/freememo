@@ -2,10 +2,10 @@
   "Browser half of the NeoReader sync: pick a Drive file, then ask the server to
    sync against it.
 
-   Google's Picker is the THIRD third-party script this app loads, and the only
+   Google's Picker is the SECOND third-party script this app loads, and the only
    one outside `deployment-hook-impl`. It cannot be vendored: the Picker is a
-   Google-hosted widget that talks to Google, exactly like `gtag.js` and
-   `adsbygoogle.js`. Two things keep it inside the spirit of the no-CDN rule —
+   Google-hosted widget that talks to Google, exactly like `gtag.js`. Two things
+   keep it inside the spirit of the no-CDN rule —
    it carries NO `<script>` tag in either HTML shell, and it loads only when a
    user clicks Sync. A page nobody syncs from makes no request to Google, and a
    self-hosted deployment that never uses this feature never contacts Google at

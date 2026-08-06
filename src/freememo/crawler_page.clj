@@ -39,7 +39,6 @@
    See plans/crawler-rendering-and-well-known-files.md."
   (:require
    [clojure.string :as str]
-   [freememo.deployment-hook :as hook]
    [freememo.landing-copy :as lc]))
 
 ;; ── Who gets this document ──
@@ -47,14 +46,20 @@
 (def crawler-user-agents
   "User-agent substrings that receive the static document, lower-cased.
 
-   `mediapartners-google` fetches the HTML and `googlebot` is the agent Google's
-   Web Rendering Service uses for the render itself, so BOTH are required —
-   either one alone leaves the render half-blind. The unfurlers read only Open
-   Graph tags, which `head-html` emits, so one document covers them too.
+   `googlebot` is the agent Google's Web Rendering Service uses, and
+   `adsbot-google` scores the landing page of a Google Ads campaign — both read a
+   page this app cannot render for them. The unfurlers read only Open Graph tags,
+   which `head-html` emits, so one document covers them too.
+
+   `mediapartners-google` was a member until 2026-08-06. It is the ad-network
+   crawler, so it stopped arriving when the ad path was removed, and a member that
+   can never match is a claim about traffic that no longer exists.
+   `adsbot-google` is NOT the same thing: it belongs to the advertiser side, which
+   this deployment still uses. See plans/ad-path-removal.md.
 
    A fixed allowlist, never an inverted browser list: inverting it would hand the
    static document to any browser this list failed to recognize."
-  ["mediapartners-google" "googlebot" "adsbot-google"
+  ["googlebot" "adsbot-google"
    "bingbot" "duckduckbot" "yandexbot" "applebot"
    "slackbot" "twitterbot" "facebookexternalhit" "linkedinbot" "discordbot"
    "telegrambot" "whatsapp"])
@@ -124,13 +129,14 @@
 (defn- head-html
   "The document head.
 
-   Pre: `verification-html` is markup a deployment contributes to prove site
-   ownership, or \"\" — `freememo.deployment-hook` guarantees a string.
    Post: carries the title, the description, a canonical link and the full Open
    Graph set. The Open Graph tags are load-bearing beyond search: the unfurlers in
    `crawler-user-agents` read nothing else, so dropping them would regress every
-   shared FreeMemo link to a bare title."
-  [verification-html]
+   shared FreeMemo link to a bare title.
+   It carried one deployment contribution — a site-verification meta — until the
+   ad path was removed on 2026-08-06. A later ownership proof would come back
+   through a `freememo.deployment-hook` seam, not from this namespace."
+  []
   (str "<head>"
        "<meta charset=\"utf-8\">"
        "<title>" (esc page-title) "</title>"
@@ -147,7 +153,6 @@
        (meta-tag "property" "og:image:height" "2400")
        (meta-tag "property" "og:image:alt" og-image-alt)
        (meta-tag "name" "twitter:card" "summary_large_image")
-       verification-html
        "</head>"))
 
 ;; ── Body sections ──
@@ -228,14 +233,12 @@
   "The whole static document for a crawler, as a string.
 
    Post: a complete HTML document holding the landing page's words and NO
-   `<script>`, no stylesheet link and no font link. The site-verification markup
-   comes from `freememo.deployment-hook`, which returns \"\" when no deployment
-   contributes any — so a self-hosted build emits none.
-   Pure: reads only `freememo.landing-copy` and the hook's cached configuration."
+   `<script>`, no stylesheet link and no font link.
+   Pure: reads only `freememo.landing-copy`."
   []
   (str "<!DOCTYPE html>"
        "<html lang=\"en\">"
-       (head-html (hook/site-verification-html))
+       (head-html)
        "<body>"
        (tag "main"
          (str (hero-html) (loops-html) (objection-html)

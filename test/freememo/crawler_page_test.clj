@@ -130,10 +130,17 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest crawler-user-agent-matches-crawlers-and-no-browser
-  (testing "the two agents AdSense uses — the fetch and the render — both match"
-    (is (crawler-page/crawler-user-agent? "Mediapartners-Google"))
+  (testing "the two Google agents that read this page — the render and the ad
+            landing-page check — both match"
     (is (crawler-page/crawler-user-agent?
-          "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")))
+          "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"))
+    (is (crawler-page/crawler-user-agent?
+          "AdsBot-Google (+http://www.google.com/adsbot.html)")))
+
+  (testing "the ad-network crawler no longer matches"
+    ;; `mediapartners-google` left the allowlist with the ad path on 2026-08-06.
+    ;; It gets the app shell now, like any unrecognized client.
+    (is (not (crawler-page/crawler-user-agent? "Mediapartners-Google"))))
 
   (testing "unfurlers match, because they read the Open Graph tags"
     (doseq [ua ["Slackbot-LinkExpanding 1.0" "Twitterbot/1.0"
@@ -200,18 +207,20 @@
 
 (deftest machine-read-paths-never-receive-markup
   (testing "404 text/plain, whoever asks"
-    (doseq [uri ["/security.txt" "/sitemap.xml" "/.well-known/anything"]
+    (doseq [uri ["/ads.txt" "/security.txt" "/sitemap.xml" "/.well-known/anything"]
             ua [bot browser nil]]
       (let [r (get-as uri ua)]
         (is (= 404 (:status r)) (str uri " " ua))
         (is (str/includes? (get-in r [:headers "Content-Type"]) "text/plain") uri)
         (is (not (str/includes? (str (:body r)) "<!DOCTYPE")) uri))))
 
-  (testing "ads.txt and robots.txt are NOT in this list"
-    ;; A route owns the first and a static resource owns the second, and both are
-    ;; matched before this handler. Listing them here would give one path two
-    ;; owners, which is the defect this work removes.
-    (is (not (contains? shell/text-only-paths "/ads.txt")))
+  (testing "ads.txt is in this list, and robots.txt is NOT"
+    ;; A route in `freememo.api` owned `/ads.txt` while a seller body was
+    ;; configured, and that route went with the ad path on 2026-08-06 — so this
+    ;; handler owns the path now, or the shell would answer it with markup. A
+    ;; static resource still owns robots.txt and is matched before this handler,
+    ;; and listing it here too would give one path two owners.
+    (is (contains? shell/text-only-paths "/ads.txt"))
     (is (not (contains? shell/text-only-paths "/robots.txt")))))
 
 (deftest robots-txt-is-a-real-file-and-names-no-sitemap
