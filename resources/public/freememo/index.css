@@ -1477,8 +1477,21 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
    measured `.tab-bar` (flex-nowrap, clipped) inside `.tab-bar-container`;
    install-overflow-detector! writes `.collapse-N` on the container to find the
    smallest tier where the tabs fit, hiding the lowest-priority tabs (right to
-   left, nav-collapse-1 first) into the ⋮ dropdown. Brand, the Import CTA, and
-   the right-cluster utilities sit outside `.tab-bar` and never collapse. */
+   left, nav-collapse-1 first) into the ⋮ dropdown. Brand, the Import CTA, the
+   ⋮ trigger and the right-cluster utilities sit outside `.tab-bar` and never
+   collapse.
+
+   WIDTH BUDGET — the supported floor is a 320px viewport, and the pinned
+   chrome is what decides whether the nav reaches it. Only `.tab-bar` shrinks;
+   everything else keeps its intrinsic width, so the floor is
+   `pinned chrome + ⋮ + the widest tab that never collapses (Home)`.
+   Measured in Open Sans with the ≤600px rules applied: brand mark 44 +
+   Import 48 + Home 71 + ⋮ 46 + utils 88 = 297. The ladder runs out at 292px,
+   so a 320px viewport carries about 28px of headroom.
+   Before those rules the same sum was 417 — the wordmark cost 118 and Actions
+   46 — and the ⋮ was clipped out of a 26px strip while its box stayed live on
+   top of Settings. ADDING ANYTHING PINNED SPENDS THAT HEADROOM. Re-measure at
+   320px before you do; the font matters, so measure with Open Sans loaded. */
 .tab-bar-container {
     position: relative;
     display: flex;
@@ -1510,6 +1523,24 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
     overflow-y: visible;
 }
 .tab-bar > * { flex-shrink: 0; }
+
+/* ── Brand (pinned left, doubles as Home) ────────────────────────
+   Both forms are in the DOM; the ≤600px block swaps which one shows. The <a>
+   carries the accessible name, so the mark needs no alt text of its own. */
+.nav-brand {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    padding: 6px 16px;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--color-text-primary);
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.nav-brand-mark { display: none; width: 24px; height: 24px; }
+
 .nav-tab {
     display: inline-flex;
     align-items: center;
@@ -1580,7 +1611,16 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
 
 /* ── Nav overflow trigger + dropdown ─────────────────────────────
    Panel is an invisible wrapper by default (proxies flow inline, hidden);
-   `.overflow-open` on the container turns it into a dropdown card. */
+   `.overflow-open` on the container turns it into a dropdown card.
+
+   BOTH ARE SIBLINGS OF `.tab-bar`, NOT CHILDREN OF IT — do not move them back
+   in. As children they inherited the strip's `overflow-x: clip`, and once the
+   strip shrank below the trigger's own width the trigger laid out past the
+   strip's right edge: unpainted, still in the tab order, and holding a live
+   box over the Settings button that took every click aimed at it. Out here the
+   trigger is pinned, so no width can clip it. The panel is `position: absolute`
+   against `.tab-bar-container` either way; keeping it beside the trigger just
+   stops that from depending on which ancestor happens to clip. */
 .nav-overflow-trigger { display: none; align-items: center; flex-shrink: 0; padding-left: 4px; }
 .nav-overflow-panel { display: contents; }
 .nav-overflow-item {
@@ -1625,8 +1665,10 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
 
 /* Tier classes — content-aware. `.collapse-N` on .tab-bar-container is written
    imperatively by install-overflow-detector!. Trigger shows from tier 1 (the
-   menu is non-empty as soon as one tab collapses); its width is counted at each
-   trialled tier, so there is no boundary oscillation. */
+   menu is non-empty as soon as one tab collapses). The trigger sits outside the
+   measured strip, so its width leaves the container before `.tab-bar` takes its
+   flex share — the tier loop never has to account for it, and there is no
+   boundary oscillation. */
 .tab-bar-container:is(.collapse-1,.collapse-2,.collapse-3,.collapse-4,.collapse-5,.collapse-6,.collapse-7) .nav-overflow-trigger {
     display: flex;
 }
@@ -1649,6 +1691,16 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
 .tab-bar-container:is(.collapse-5,.collapse-6,.collapse-7).overflow-open .nav-overflow-5 { display: flex; }
 .tab-bar-container:is(.collapse-6,.collapse-7).overflow-open .nav-overflow-6 { display: flex; }
 .tab-bar-container.collapse-7.overflow-open .nav-overflow-7 { display: flex; }
+
+/* Exhaustion — no tier fits, i.e. the viewport is below the supported floor.
+   install-overflow-detector! adds `.collapse-exhausted` alongside the highest
+   tier instead of running off the end of its loop. Clear the strip completely:
+   a tab left in a strip narrower than itself is the clipped-but-focusable
+   ghost this whole section exists to prevent. Home stays reachable through the
+   brand link, and every other destination through the ⋮, which is pinned. */
+.tab-bar-container.collapse-exhausted .tab-bar > * { display: none; }
+.tab-bar-container.collapse-exhausted .nav-overflow-trigger { display: flex; }
+.tab-bar-container.collapse-exhausted.overflow-open .nav-overflow-item:not(.nav-overflow-action) { display: flex; }
 
 /* Toolbar action control (e.g. Actions / undo-history). NOT a nav
    destination — it toggles a modal — so it reads as a pill button, set
@@ -1682,12 +1734,35 @@ table.card-table tr:hover td { background: light-dark(#f3f4f6, #2a3548); }
 
 /* ── Phone-only tweaks (≤600px) ─────────────────────────────────
    Nav destinations stay text (they carry no icons); the ⋮ menu absorbs
-   overflow. Import drops to icon-only to reclaim width for the pinned chrome
-   (brand + Import + utilities never collapse). Nav tap targets stay 44px
-   (base rule); only non-nav controls get the 36px floor. */
+   overflow. The pinned chrome is what has to give here, because it is the term
+   in the width budget above that `.tab-bar` cannot shrink: Import drops its
+   label, the brand drops to its mark, and Actions moves into the ⋮ menu. The
+   last two reclaim 74 + 46 = 120px, which is what puts the 320px floor in
+   reach: the bar needed 417px before them and needs 297px after.
+   Nav tap targets keep the 38px `.nav-tab` min-height; only non-nav controls
+   get the 36px floor. */
 @media (max-width: 600px) {
     .nav-import-label { display: none; }
     .nav-import-cta { margin: 0 4px; padding: 6px 10px; }
+
+    /* Brand → mark. 24px art + 2×10px padding = 44px, against 112px of
+       wordmark. Budgeted at ≤47px; anything wider eats the 320px slack. */
+    .nav-brand { padding: 6px 10px; }
+    .nav-brand-mark { display: block; }
+    .nav-brand-wordmark { display: none; }
+
+    /* Actions → ⋮ menu. These two rules are a PAIR and must stay one: the
+       button leaving the bar is what makes the menu item the only affordance,
+       and the menu item is what keeps the action reachable. Changing one
+       without the other either duplicates Actions or loses it. */
+    .nav-utils .nav-action-btn { display: none; }
+    .tab-bar-container.overflow-open .nav-overflow-action { display: flex; }
+
+    /* The ⋮ now carries Actions, so it can no longer wait for tier 1 — at a
+       width where every tab still fits inline the menu would be unreachable
+       and Actions with it. */
+    .nav-overflow-trigger { display: flex; }
+
     .btn { min-height: 36px; padding: 8px 14px; }
     .input { min-height: 36px; }
     /* Library row buttons (`.btn-sm`) already get bumped via the
@@ -1866,8 +1941,12 @@ textarea:hover {
 @media (max-width: 1024px) {
     /* Card add/edit modal inner panel — wider on non-desktop */
     .card-modal-inner { width: 80vw; }
-    /* Nav no longer needs a tablet scroll override — the content-aware
-       `.collapse-N` overflow (base `.tab-bar` rules) handles every width. */
+    /* Nav needs no tablet scroll override — the content-aware `.collapse-N`
+       overflow (base `.tab-bar` rules) covers every width down to the 320px
+       floor, and `.collapse-exhausted` covers everything below it. The ladder
+       alone does NOT "handle every width", as this said until the 320px
+       defect: it only ever hid tabs, and the pinned chrome it cannot touch is
+       what sets the floor. See the width budget in the nav section. */
     .page-container { padding: var(--sp-4); }
 
     /* Quill toolbar: wrap to multiple rows on narrow screens.

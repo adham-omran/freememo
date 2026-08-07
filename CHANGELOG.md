@@ -78,6 +78,13 @@ Format contract (see freememo.changelog):
   told you to drop the archive on the Upload card. It now says to drop the `.zip`
   anywhere on the Import page, which is what the page has taken since the last
   release.
+- Bug fix: **the nav works on a phone.** At a 320px window the ⋮ menu could not
+  be opened, and seven of the twelve tabs were behind it. The bar needed 417px
+  and had 320, so the ⋮ was pushed out of sight while its click target stayed on
+  top of the Settings button. Below 600px the wordmark is now the `FM` mark and
+  Actions moves into the ⋮ menu, which frees 120px, and the ⋮ itself no longer
+  sits in the part of the bar that gets cut off. The bar now needs 297px.
+  Nothing changes above 600px.
 
 ### Known issues
 
@@ -114,10 +121,6 @@ Format contract (see freememo.changelog):
   is verified end to end. If a PDF sync misplaces your highlights, contact me.
 - **Pre-prompt strictness governs the question wording and the card count only.**
   It makes no statement about where the answer comes from.
-- **At a 320px window width the overflow menu cannot be opened.** Its trigger
-  overlaps the Settings button, and seven tabs are reachable only through that
-  menu. The page does not scroll sideways, so nothing moves the two apart. The
-  new test suite found this and the repair is not in this release.
 
 ### Technical
 
@@ -188,8 +191,9 @@ Format contract (see freememo.changelog):
   The suite now takes one test per row of `docs/post-deploy-checklist.md`, and
   `playwright/manifest.json` accounts for all 106 rows. A row is implemented or
   excluded with a reason, and the manifest test fails when a row falls out of
-  both. Twelve rows are written: nine pass, two skip for stated reasons, and row
-  0.7 fails on the 320px defect above.
+  both. Twelve rows are written: ten pass and two skip for stated reasons. Row
+  0.7 found the 320px nav defect fixed above, and now also asserts that no tab
+  overhangs the strip that clips it and that the ⋮ takes its own clicks.
   - **Every browser test hashes `/freememo/index.css` against the file on disk**
     to prove the server serves the worktree under test. The commit sha cannot be
     that witness, because a dev build reports the literal `dev`. The guard exists

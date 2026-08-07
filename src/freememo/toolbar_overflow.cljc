@@ -5,7 +5,9 @@
    horizontal overflow and writes that class onto the container.
 
    The per-tier CSS (which elements hide at which tier) lives in index.css and
-   is owned by each toolbar's own markup; this fn only measures and tags.")
+   is owned by each toolbar's own markup; this fn only measures and tags. When
+   no tier fits it tags `collapse-exhausted` as well; styling that is each
+   caller's choice, and only the nav does so today.")
 
 ;; Pre:  `container` is a mounted DOM element with class "toolbar-container";
 ;;       `toolbar` is its child with class "toolbar". `!tier` and `!overflow-open`
@@ -14,6 +16,12 @@
 ;;       change, the tier loop (0..7) writes `.toolbar-container collapse-N`
 ;;       imperatively and emits the smallest fitting tier into `!tier`. Returns
 ;;       a 0-arg cleanup fn that disconnects the observer.
+;; Post: When NO tier fits — the viewport is below what this toolbar can serve —
+;;       the container carries `collapse-exhausted` alongside the highest tier,
+;;       and `!tier` keeps its previous value. Callers that must not leave a
+;;       clipped-but-focusable control behind style that class; the nav does.
+;;       The loop used to fall off its end here, leaving the highest tier
+;;       applied and no way for anyone to know it had not worked.
 ;; Invariant: kept as a plain (defn) outside any e/defn so its body is opaque
 ;;            to Electric's analyzer — slot counts on the e/defn caller stay
 ;;            identical between JVM and CLJS compile (the divergence-causing
@@ -35,14 +43,21 @@
            ;; trigger is `display:flex; visibility:hidden` so its width is in
            ;; `scrollWidth` even before it's visible: the algorithm naturally
            ;; escalates to tier 2 when content + trigger slot can't fit.
+           ;; The exhausted class is dropped first so every pass measures the
+           ;; toolbar as it would render WITHOUT it — otherwise a caller whose
+           ;; exhaustion styling hides content would measure that hidden state
+           ;; and immediately un-exhaust. Neither observer watches the
+           ;; container's attributes, so this add/remove cannot feed itself.
            recompute
            (fn []
+             (.remove classlist "collapse-exhausted")
              (loop [t 0]
-               (when (<= t 7)
-                 (apply-tier! t)
-                 (if (<= (.-scrollWidth toolbar) (+ (.-clientWidth toolbar) 1))
-                   (reset! !tier t)
-                   (recur (inc t))))))
+               (if (<= t 7)
+                 (do (apply-tier! t)
+                     (if (<= (.-scrollWidth toolbar) (+ (.-clientWidth toolbar) 1))
+                       (reset! !tier t)
+                       (recur (inc t))))
+                 (.add classlist "collapse-exhausted"))))
            resize-obs (js/ResizeObserver. recompute)
            ;; ResizeObserver fires only on the observed element's own box
            ;; changes (parent resize). Internal content growth (e.g. an
