@@ -59,6 +59,29 @@
   [tex]
   (str "\\(" tex "\\)"))
 
+(def ^:private display-region-re
+  "One `\\[…\\]` display-math region. Group 1 is the TeX body."
+  #"\\\[([\s\S]*?)\\\]")
+
+(defn display->inline
+  "Rewrite every `\\[…\\]` display region as an inline `\\(…\\)` region.
+
+   This app stores inline math only. `tex-region-re` is the sole region form the
+   rest of the pipeline knows, so a `\\[…\\]` that reaches storage renders on
+   card and read-only views (`render-math!` configures both delimiters) while
+   sitting as literal text in Quill — one document reading two ways.
+
+   No `\\displaystyle` is injected, so a display equation renders at inline size:
+   `\\int` and `\\sum` carry their limits beside the operator rather than above
+   it. That is the accepted cost of the inline-only decision, not an oversight.
+
+   pre : `html` is a string or nil.
+   post: the result contains no `\\[…\\]` region; each became a `\\(…\\)` region
+         with its TeX body unchanged."
+  [html]
+  (str/replace (or html "") display-region-re
+    (fn [[_ tex]] (wrap-tex tex))))
+
 (defn unwrap-tex
   "The TeX body of `s`, with every `\\(` and `\\)` removed.
 

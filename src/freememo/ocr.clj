@@ -8,7 +8,8 @@
    [freememo.config :as config]
    [freememo.ocr-models :as models]
    [freememo.html-cleaner :as cleaner]
-   [freememo.text :as text]
+   [freememo.markdown :as markdown]
+   [freememo.math :as math]
    [freememo.openrouter :as openrouter]
    [clojure.string :as str]
    [taoensso.telemere :as tel])
@@ -179,13 +180,20 @@
         body (:body resp)]
     (when-not (= 200 (:status resp))
       (throw (openrouter/api-error resp)))
+    ;; Math normalisation belongs here, not in the prompt: the :plugin lane never
+    ;; receives the prompt (it sends "ok" plus the PDF), and :chat compliance is
+    ;; unmeasured. Normalising at the one point both shapes pass through is what
+    ;; makes the stored form `\(TeX\)` regardless of which model ran.
     (let [raw (case (:shape entry)
-                :chat   (some-> (-> body :choices first :message :content) strip-code-fences)
-                :plugin (some-> (mistral-ocr-text body) text/markdown->html))]
+                :chat   (some-> (-> body :choices first :message :content)
+                          strip-code-fences
+                          markdown/dollar-math->tex)
+                :plugin (some-> (mistral-ocr-text body) markdown/markdown-with-math->html))]
       (when (str/blank? raw)
         (throw (ex-info "Empty OCR response" {:shape (:shape entry)})))
       ;; Model output is untrusted — sanitize before persistence.
-      {:text (cleaner/clean-html raw) :cost-usd (get-in body [:usage :cost]) :usage (:usage body)})))
+      {:text (-> raw math/display->inline cleaner/clean-html)
+       :cost-usd (get-in body [:usage :cost]) :usage (:usage body)})))
 
 (defn extract-text-with-model
   "OCR a PDF page with an explicit registry `model-id` (no model resolution).

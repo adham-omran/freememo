@@ -125,6 +125,35 @@
   (doseq [k ["basic" "occlusion" "score" nil]]
     (is (false? (math/cloze-bearing-kind? k)) (str k))))
 
+;; ── display->inline ─────────────────────────────────────────────────────────
+;; OCR is the only producer of \[…\] today. Quill renders \(…\) alone, so a
+;; display region reaching storage would show as math on a card and as literal
+;; text in the editor — the same document reading two ways.
+
+(deftest t25-display-becomes-inline
+  (is (= "\\(x^2\\)" (math/display->inline "\\[x^2\\]"))))
+
+(deftest t26-display-body-is-untouched
+  (testing "no \\displaystyle is injected and no byte of the TeX changes"
+    (doseq [tex ["\\int_0^1 f(x)\\,dx"
+                 "\\begin{matrix} a & b \\\\ c & d \\end{matrix}"
+                 "\\left\\{ x \\mid x > 0 \\right\\}"
+                 "30\\%"]]
+      (is (= (str "\\(" tex "\\)") (math/display->inline (str "\\[" tex "\\]"))) tex))))
+
+(deftest t27-display-multiple-regions-and-nil
+  (is (= "a\\(x\\)b\\(y\\)c" (math/display->inline "a\\[x\\]b\\[y\\]c")))
+  (is (= "" (math/display->inline nil))))
+
+(deftest t28-display-leaves-inline-and-unpaired-alone
+  (testing "already-inline math and an unclosed \\[ must survive untouched"
+    (is (= "a \\(x\\) b" (math/display->inline "a \\(x\\) b")))
+    (is (= "a \\[x" (math/display->inline "a \\[x")))))
+
+(deftest t29-display-is-idempotent
+  (let [once (math/display->inline "a\\[x\\]b")]
+    (is (= once (math/display->inline once)))))
+
 ;; ── Escaping: the highest-risk path (spec §2.2) ──────────────────────────────
 
 (def ^:private escape-fixtures

@@ -107,6 +107,101 @@
           html (str/replace html #"<img[^>]*/?>" "")]
       (cleaner/clean-html html))))
 
+;; A math region is any of four delimiter pairs OCR output can carry. Display
+;; forms precede inline forms so an outer `$$` is never scanned as two `$`.
+(def ^:private tex-display-re #"(?s)\\\[(.+?)\\\]")
+(def ^:private tex-inline-re #"(?s)\\\((.+?)\\\)")
+
+(def ^:private math-region-res
+  [[:display display-math-re]
+   [:display tex-display-re]
+   [:inline  inline-math-re]
+   [:inline  tex-inline-re]])
+
+(defn- sentinel-prefix
+  "A token `md` does not already contain.
+
+   Without this the invariant breaks on a source carrying both real math and the
+   literal sentinel: `restore-math` replaces every occurrence, so the source's
+   own text would become a second math region. Lengthening terminates because
+   each step adds a character and `md` is finite."
+  [md]
+  (loop [p "QQMATHQQ"]
+    (if (str/includes? md p) (recur (str p "Q")) p)))
+
+(defn- math-placeholder
+  "An opaque token standing in for math region `i`. Letters and digits only, so
+   flexmark carries it through a paragraph, a list item and a table cell alike
+   with no escaping and no emphasis parsing."
+  [prefix i]
+  (str prefix i "QQ"))
+
+(defn- extract-math
+  "Lift every math region out of Markdown `md`, leaving placeholders behind.
+   Returns `[md' regions]`, `regions` a vector of `[kind tex]` in placeholder
+   index order."
+  [md prefix]
+  (let [!regions (volatile! [])]
+    [(reduce (fn [s [kind re]]
+               (str/replace s re
+                 (fn [[_ tex]]
+                   (let [i (count @!regions)]
+                     (vswap! !regions conj [kind tex])
+                     (math-placeholder prefix i)))))
+       md math-region-res)
+     @!regions]))
+
+(defn- escape-html-text
+  "Escape the three characters that are markup in an HTML text node. `&` goes
+   first, so the escapes introduced after it are not escaped again."
+  [s]
+  (-> s
+    (str/replace "&" "&amp;")
+    (str/replace "<" "&lt;")
+    (str/replace ">" "&gt;")))
+
+(defn- restore-math
+  "Put each lifted region back, delimited and HTML-escaped."
+  [html regions prefix]
+  (reduce-kv
+    (fn [s i [kind tex]]
+      (let [body (escape-html-text tex)]
+        (str/replace s (math-placeholder prefix i)
+          (if (= :display kind) (str "\\[" body "\\]") (str "\\(" body "\\)")))))
+    html regions))
+
+(defn markdown-with-math->html
+  "Render Markdown to HTML, carrying every math region through verbatim.
+
+   flexmark implements CommonMark backslash escapes, so it destroys `\\` followed
+   by any ASCII punctuation — all 32 of them, including `\\,` `\\;` `\\\\` `\\{`
+   `\\}` `\\|` `\\%` and the `\\(` / `\\[` delimiters themselves. A matrix loses
+   the `\\\\` that separates its rows, `\\left\\{` becomes an unparseable
+   `\\left{`, and `30\\%` turns the rest of the formula into a KaTeX comment.
+   Named commands (`\\frac`, `\\sqrt`, `\\geq`) survive untouched, which is what
+   makes the damage easy to miss.
+
+   Math is therefore lifted out before the parser sees it and put back after.
+   The TeX is HTML-escaped on the way back in, because it bypassed flexmark's own
+   escaping and an unescaped `x < y` would corrupt the document at the next Jsoup
+   parse. Plain numbers wrapped in `$…$` are unwrapped first: `$6,245$` is a
+   writer's habit, not math, and renders with broken spacing if treated as math.
+
+   Display regions come back as `\\[…\\]`. `math/display->inline` owns the
+   decision to downgrade them, so this fn preserves what the source said.
+
+   pre : `md` is a Markdown string, or nil.
+   post: nil/blank in → nil out; otherwise sanitized HTML in which every math
+         region's TeX body is byte-identical to its source, modulo the escaping
+         of `&`, `<`, `>`.
+   inv : one math region out per math region in."
+  [md]
+  (when (seq md)
+    (let [unwrapped (unwrap-non-math-dollars md)
+          prefix (sentinel-prefix unwrapped)
+          [protected regions] (extract-math unwrapped prefix)]
+      (some-> (parse-markdown protected) (restore-math regions prefix)))))
+
 (defn extract-frontmatter-title
   "Extract title from YAML frontmatter block if present. Returns string or nil."
   [markdown-string]
