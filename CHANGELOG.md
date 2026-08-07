@@ -9,6 +9,208 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
+## v20260806-5467b1f
+
+### For users
+
+- **Boox NeoReader highlights now sync into the book you read them in.** A Boox
+  e-reader writes its reading notes to Google Drive as one HTML file per book.
+  FreeMemo reads that file and paints the highlights into the matching EPUB or
+  PDF document.
+  - **Start it from Library → Documents → the document's ⋯ menu → Sync with
+    NeoReader.** The row action appears on EPUB and PDF documents only, and on
+    the document itself rather than on a chapter or a page.
+  - **The first run asks Google for read access to one file, then opens Google's
+    own file picker.** Go to `onyx` → your device → `Read` and pick the book's
+    HTML file. FreeMemo remembers it, so every later sync is one click with no
+    picker. FreeMemo reads that one file and nothing else. It writes nothing back
+    to Drive and nothing back to the device.
+  - **Each highlighted passage is tinted orange in its chapter or page.** A
+    passage you annotated also carries a `[1]` marker, and that chapter or page
+    ends with a numbered `USER NOTES` list.
+  - **A toast reports the counts after every sync** — how many highlights were
+    marked, how many needed a text search to place, how many matched in part
+    only, and how many did not place at all.
+  - **A highlight FreeMemo cannot find in the text is listed under `UNPLACED
+    HIGHLIGHTS`.** For an EPUB that list sits on the document. For a PDF it sits
+    on page 1. Editing a sentence after you highlighted it is the usual cause on
+    either kind.
+  - **A PDF needs its text first.** A page holds no text until you run Scan Page
+    or Copy text on it, and a page with no text can hold no highlight. Copy text
+    matches your export most closely, because both read the PDF's own text layer.
+  - **Every sync rebuilds from the export.** A highlight you deleted on the
+    device loses its mark, and your own edits inside a `USER NOTES` list do not
+    survive.
+  - Help → **Boox NeoReader highlights** holds the same seven steps.
+- **Card generation can now take your prompt literally.** Generate with Prompt
+  sent your text to the model under "Use the following pattern for your
+  questions", so the model read it as a pattern rather than as a question. The
+  creative reading you saw was an explicit instruction, and no setting could ask
+  for the literal reading instead.
+  - **Three positions: Guide, Clarify and Verbatim.** Guide is the previous
+    behavior and stays the default. Clarify makes your prompt the question,
+    rephrased only for clarity. Verbatim makes your prompt the question, word for
+    word.
+  - **The default lives in Settings → AI features → Pre-prompt Strictness.** The
+    Generate with Prompt dialog carries the same control, and its choice governs
+    that one generation without changing your default.
+  - **Clarify and Verbatim generate a single card**, and the dialog says so
+    before you submit. Your saved card count still governs plain Generate. Cloze
+    carries no question field, so both strict modes bound it to the prompt's
+    topic instead.
+  - Bug fix: the Generate with Prompt dialog titled itself "Generate Cloze Cards"
+    for overlapping cards.
+- Bug fix: **every call that selected DeepSeek V4 Flash failed.** The model id
+  sent to the provider named an alias that does not exist, and the provider
+  rejected it with HTTP 400. One model registry serves card generation, all six
+  knowledge-graph steps, the assistant, the card-compare modal and answer
+  grading, so the failure reached all of them. The id now names a dated snapshot.
+  Your saved model selection keeps resolving, and the price is unchanged.
+- Bug fix: **an AI failure now tells you what the provider said.** Every failing
+  call reported its status code and nothing else, so the invalid model id above
+  reached you as a bare "OpenRouter HTTP 400".
+- **The ads are gone.** They ran for about 35 hours. The ad network closed the
+  publisher account, so the whole path came out of the code — the loader, the
+  unit on Home, the seller file, and the per-request check that decided whether
+  to withhold an ad from a paying customer. No page requests anything from an ad
+  vendor now.
+- Bug fix: **the Settings export card named a card that no longer exists.** It
+  told you to drop the archive on the Upload card. It now says to drop the `.zip`
+  anywhere on the Import page, which is what the page has taken since the last
+  release.
+
+### Known issues
+
+- **A NeoReader sync rewrites the content of every chapter or page it touches.**
+  The editor in view re-initializes, and the synced quotes enter global search.
+- **Your own typing inside a `USER NOTES` list is discarded.** The next sync
+  rebuilds that section in full.
+- **One export file binds to one document.** A second device's highlights on the
+  same book stay absent.
+- **Placement follows a reading-order cursor, and that cursor is a chain.** One
+  wrong placement can push every later highlight off.
+- **A book with 200 highlights has no overview.** Nothing lists the marks and
+  nothing is clickable, so the only way to reach a note is to read past it.
+- **A sync strips an orange tint you applied by hand**, because a mark carries no
+  identity of its own. It also deletes a highlight whose whole text is a
+  bracketed number such as `[3]`, because that is how it finds its own markers. A
+  `[3]` the book carries in plain text is untouched.
+- **A cancelled picker and a blocked Google request reach the browser console
+  only.** Both look like nothing happening.
+- **On a PDF, a page whose text came from Scan Page may not match your export.**
+  Scan Page re-transcribes the page image. Copy text reads the PDF's own text
+  layer, which is the source the device reads.
+- **On a PDF, a highlight that crosses a page break marks only its leading
+  part**, and the toast counts it as matched in part.
+- **The `UNPLACED HIGHLIGHTS` list sits on page 1 of a PDF, and a PDF opens on
+  the page you left it at.** After your first visit the list is one navigation
+  away. A later scan of page 1 overwrites the list, and the next sync writes it
+  again, so the state repairs itself. Cards you generate from page 1 in between
+  would carry the list's text.
+- **An account export carries the Drive file binding, and it is useless on the
+  target instance.** That instance holds no grant for the file, so the first sync
+  there asks you to pick it again.
+- **The PDF sync is not verified against a real Boox PDF export.** The EPUB path
+  is verified end to end. If a PDF sync misplaces your highlights, contact me.
+- **Pre-prompt strictness governs the question wording and the card count only.**
+  It makes no statement about where the answer comes from.
+- **At a 320px window width the overflow menu cannot be opened.** Its trigger
+  overlaps the Settings button, and seven tabs are reachable only through that
+  menu. The page does not scroll sideways, so nothing moves the two apart. The
+  new test suite found this and the repair is not in this release.
+
+### Technical
+
+- **Six namespaces carry the NeoReader sync.** `freememo.neoreader-export`
+  decodes the Boox HTML. `freememo.quote-anchor` places each quote and writes the
+  marks. `freememo.neoreader-sync` runs one sync. `freememo.google-drive` holds
+  the Drive authorization and the download. `freememo.neoreader-picker` is the
+  browser half. `freememo.neoreader-kinds` holds the accepted kind set, which the
+  Library row action and both HTTP routes read, so a button cannot appear over a
+  route that 404s.
+  - **The export carries no anchor** — no CFI, no spine index, no character
+    offset, only a chapter heading and the quoted text. The text is also damaged:
+    lost spaces at emphasis boundaries, spliced paragraphs, curly quotes. Every
+    quote is found again by search against a normalized form, and a reading-order
+    cursor breaks ties.
+  - **`document-sections` is filtered to children carrying a `page_number`.** An
+    extract made from a root's editor was in the match set before that, so a copy
+    of a passage was a second place a highlight could land. A kind filter cannot
+    separate the two — an EPUB chapter and an extract are both kind `basic`.
+  - **`strip-sync-content` erases everything an earlier sync wrote, and that
+    erasure is load-bearing.** The unplaced list holds quotes truncated at 300
+    characters, which is exactly the shape the matcher looks for. Without the
+    strip, a highlight that failed to place would find its own listing on the next
+    sync and report itself placed.
+  - **`neoreader_highlights` is table 24**, with `quote_hash` as a generated
+    `md5` column. The unique index reads the digest, never the text, for the
+    B-tree row-size reason the flashcard indexes record.
+  - **Drive authorization is a second OAuth round trip on the same redirect URI
+    as sign-in.** The flow marker travels in `state`, the only channel Google
+    returns verbatim. Sign-in still asks for `openid email profile` alone, so no
+    user grants Drive access at signup. The scope is `drive.file`, which is
+    non-sensitive and needs no verification review.
+  - **`setAppId` is required under `drive.file`, and it takes the Cloud project
+    number rather than the client id.** Without it a pick creates no per-file
+    grant, and every later `files.get` answers 404 naming the file. That defect
+    shipped once and cost a production debugging round.
+  - The Picker is the second third-party script this app loads. It carries no
+    `<script>` tag in either shell and loads only when a user clicks Sync.
+  - New command registry entry `:neoreader-sync`, invalidating `:refresh` and
+    `:settings-refresh`.
+- **`entity-scopes` moved from `freememo.account-export` into
+  `freememo.account-transfer-format`.** The new table reached `entity-tables`
+  with no scope, and a missing scope makes `scope-of` throw inside the reactive
+  transfer that renders the Settings export card. Every Settings page load then
+  closed the WebSocket with code 1011, and `/api/account/export` returned 500.
+  The map now sits in a namespace that needs no database, so two new guards run
+  with PostgreSQL down: every exported table has a scope, and each scope's
+  declared placeholder count matches the `?` count in its `WHERE`.
+- **`openrouter/api-error` is the single owner of the error mapping.** clj-http
+  parses a JSON body only for unexceptional statuses, so an error body arrived as
+  a String and `(get-in "…" [:error :message])` returned nil. The OCR lane held a
+  byte-identical copy of that expression. `api-error` decodes the body, falls
+  back to the raw text of a non-JSON page truncated at 500 characters, and
+  carries `:status` in ex-data. `post!` logs the provider text on a failing
+  status, and the OCR error copy dispatches on `:status` instead of matching the
+  message text.
+- **The four pre-prompt wrappers moved into `resources/prompts/`.** The guide
+  wrapper holds the lines `build-prompt` inlined before, so its output stays
+  byte-identical. A missing wrapper file fails the generation rather than
+  degrading to no wrapper at all. `freememo.pre-prompt-mode` owns the enum,
+  `normalize` and `single-card?`. The server forces the card count from that one
+  predicate and the dialog discloses "Generates 1 card" from the same one, so the
+  promise and the count cannot drift. `freememo.segmented` holds the segmented
+  control the Settings field and the dialog share.
+- **The twenty Playwright probe scripts are replaced by a checklist suite.** None
+  of the probes could run. Each signed in as a user that does not exist, opened
+  two topics that are absent, and launched a system Chrome that is not installed.
+  The suite now takes one test per row of `docs/post-deploy-checklist.md`, and
+  `playwright/manifest.json` accounts for all 106 rows. A row is implemented or
+  excluded with a reason, and the manifest test fails when a row falls out of
+  both. Twelve rows are written: nine pass, two skip for stated reasons, and row
+  0.7 fails on the 320px defect above.
+  - **Every browser test hashes `/freememo/index.css` against the file on disk**
+    to prove the server serves the worktree under test. The commit sha cannot be
+    that witness, because a dev build reports the literal `dev`. The guard exists
+    because a dev server was found serving a deleted worktree.
+  - **Fixtures are generated, never committed**, and two runs produce identical
+    bytes. `big.mp4` became `big.webm`, because the duration probe reads a browser
+    `<video>` element and Playwright's chromium carries no H.264 decoder.
+  - `coverage-counts.spec.mjs` asserts the checklist's count table against
+    `src/`. Running the rows corrected four claims in the checklist.
+  - The suite is not in CI, and this release does not wire it up.
+- **The ad path removal deleted `freememo.deployment-slot`,
+  `db/user-has-purchase-or-event?`, the seller-file route and two of the four
+  entry points on the deployment seam.** The seller path moved into
+  `shell/text-only-paths`, so it answers 404 `text/plain` rather than falling
+  through to the shell catch-all as markup. The ad-network crawler left the
+  crawler allowlist and the campaign crawler stays. The signup conversion tag,
+  the placeholder it uses and the "only the seam names the implementation" guard
+  are all unchanged. The gating test walked the powerset of four config keys and
+  now covers one. A second contribution should restore that walk rather than add
+  a row to a list.
+
 ## v20260805-eb9cb3c
 
 ### For users
