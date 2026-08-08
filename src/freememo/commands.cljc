@@ -51,7 +51,8 @@
 (def invalidation-channels
   #{:refresh :credits-refresh :meta-refresh :settings-refresh
     :card-mutations :sync-mutations :tree-mutations
-    :queue-mutations :pin-mutations :assistant-mutations :undo-mutations :kg-mutations})
+    :queue-mutations :pin-mutations :assistant-mutations :undo-mutations :kg-mutations
+    :schedule-mutations})
 
 ;; ── Channel groups ─────────────────────────────────────────────────────────
 ;; Named unions used by entries below and by dynamic bumpers (freememo.undo

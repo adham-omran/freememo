@@ -82,7 +82,7 @@
 ;; ── Entity tables ──────────────────────────────────────────────────
 
 (def entity-tables
-  "§5.2.1 — the 24 exported tables, in the order an import must insert them.
+  "§5.2.1 — the 25 exported tables, in the order an import must insert them.
 
    Invariant: the order is forced by foreign keys. A table may not appear
    before every table it references. Three constraints are easy to lose:
@@ -105,6 +105,7 @@
    :card_schedules
    :card_versions
    :topic_repetitions
+   :study_schedules
    :assistant_chats
    :assistant_messages
    :kg_entities
@@ -128,6 +129,12 @@
    :undo_log "a 12-hour operational window, capped at 100 rows per user"
    :upload_sessions "in-flight transport state"
    :kg_graph_layout "a render cache that a version compare invalidates"
+   :anki_card_states "a cache of FSRS state replayed out of Anki, and Anki is
+                      the source of truth for it (study-scheduler-spec §3.5).
+                      Its keys are one collection's Anki card ids, which the
+                      target instance re-derives on the next Schedule refresh"
+   :anki_deck_configs "the deck config the cache above was derived under —
+                       re-read from Anki on the next Schedule refresh"
    :kg_sessions "quiz session transcript — kg_reviews holds the durable record"
    :kg_answers "quiz session transcript — kg_reviews holds the durable record"
    :account_imports "import bookkeeping — target-instance state (§5.5.7)"
@@ -248,6 +255,15 @@
 
    :topic_repetitions {:where (str "t.user_id = ? AND t.topic_id IN (" owned-topics ")")
                        :params 2 :order "t.id"}
+
+   ;; Scoped through the document as well as the user: a schedule over a
+   ;; staged-deleted document has nothing to forecast on the target, and its
+   ;; `root_topic_id` is `required-fk-columns`, so it would be dropped there
+   ;; anyway — dropping it here costs the import a reported row it cannot use.
+   ;; `excluded_pages` holds page NUMBERS, not topic ids, so it needs no
+   ;; translation and appears in no `fk-columns` entry.
+   :study_schedules {:where (str "t.user_id = ? AND t.root_topic_id IN (" owned-topics ")")
+                     :params 2 :order "t.id"}
 
    :assistant_chats {:where (str "t.user_id = ? AND t.root_topic_id IN (" owned-topics ")")
                      :params 2 :order "t.id"}

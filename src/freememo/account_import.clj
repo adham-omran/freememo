@@ -55,8 +55,8 @@
 (def ^:private user-scoped-tables
   "Tables carrying a `user_id` that must point at the importing user.
    An archive's own user id is provenance only and is never trusted."
-  #{:sources :media :topics :topic_repetitions :assistant_chats :kg_entities
-    :kg_predicates :kg_facts :kg_questions :kg_reviews :settings})
+  #{:sources :media :topics :topic_repetitions :study_schedules :assistant_chats
+    :kg_entities :kg_predicates :kg_facts :kg_questions :kg_reviews :settings})
 
 (def ^:private fk-columns
   "column → id space, per table. The id space is the table whose ledger map
@@ -76,6 +76,11 @@
                    :occlusion_image_media_id :media
                    :score_clip_media_id :media}
    :topic_repetitions {:topic_id :topics}
+   ;; `excluded_pages` is deliberately absent: it holds page NUMBERS, not topic
+   ;; ids. An id inside an array is the case this map cannot translate — it
+   ;; rewrites scalars — so the column type is what keeps the schedule honest
+   ;; on the target rather than an entry here.
+   :study_schedules {:root_topic_id :topics}
    :assistant_chats {:root_topic_id :topics}
    :assistant_messages {:chat_id :assistant_chats}
    :video_transcripts {:topic_id :topics}
@@ -95,6 +100,7 @@
    :card_schedules #{:flashcard_id}
    :card_versions #{:root_topic_id}
    :topic_repetitions #{:topic_id}
+   :study_schedules #{:root_topic_id}
    :assistant_chats #{:root_topic_id}
    :assistant_messages #{:chat_id}
    :video_transcripts #{:topic_id}

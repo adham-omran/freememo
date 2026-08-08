@@ -26,6 +26,7 @@
           :assistant-mutations (atom 0)
           :undo-mutations   (atom 0)
           :kg-mutations     (atom 0)
+          :schedule-mutations (atom 0)
           :card-gen-status  (atom {})
           :scanning-pages   (atom #{})
           :transcribing-topics (atom #{})

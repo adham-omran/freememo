@@ -1286,6 +1286,115 @@
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_account_import_ids_import
                       ON account_import_ids(import_id)"]))
 
+(defn- setup-schema-study-scheduler!
+  "The Study Scheduler (plans/study-scheduler-spec.md §3). Must run after
+   setup-schema-topics! — both tables FK topics or flashcards.
+
+   Two tables, and the split is the point.
+
+   `study_schedules` is the user's INTENT: this document, this page range, by
+   this date. It is durable, exported, and nothing else derives it.
+
+   `anki_card_states` is DERIVED (§3.5): FSRS memory state replayed out of
+   Anki's revlog. Anki is the source of truth and this is a cache in front of
+   it, so it is excluded from account export the way `kg_graph_layout` is.
+   Dropping the whole table degrades the Schedule tab to 'Anki unreachable'
+   and breaks nothing else, which is §3.1's own done-condition.
+
+   The scheduler writes NO column of `card_schedules` (§1.4). That table is the
+   Learn queue's per-deletion FSRS state and this feature builds no queue.
+
+   `config_fingerprint` and `high_water_revlog_id` are what make a refresh
+   incremental (§3.3, §2.4). The fingerprint covers Anki's weights, retention
+   target and revlog cutoff; a mismatch discards the row and replays in full.
+   The high-water mark is the newest revlog id already folded in, so the next
+   pull asks Anki for what came after it.
+
+   Page numbers, never topic ids, in `first_page`, `last_page` and
+   `excluded_pages`. An id inside an array is the account-transfer failure
+   §3.4 has no guard for — `fk-columns` translates scalars, so an array of
+   topic ids would arrive on the target pointing at another user's rows.
+   A page number needs no translation."
+  []
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS study_schedules (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      root_topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      target_date DATE NOT NULL,
+      first_page INTEGER,
+      last_page INTEGER,
+      daily_capacity INTEGER NOT NULL DEFAULT 60,
+      theta REAL,
+      excluded_pages INTEGER[] NOT NULL DEFAULT '{}',
+      start_known INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      archived_at TIMESTAMPTZ
+    )"])
+  ;; §1.3 sums the daily load across every ACTIVE schedule, so that is the
+  ;; query shape the index serves.
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_study_schedules_active
+                      ON study_schedules(user_id, target_date)
+                      WHERE archived_at IS NULL"])
+  ;; θ is a probability. I4 (§6.6.3) lets a schedule lower it; nothing lets a
+  ;; schedule leave the range where retrievability has a meaning.
+  (jdbc/execute! ds ["ALTER TABLE study_schedules DROP CONSTRAINT IF EXISTS study_schedules_theta_range"])
+  (jdbc/execute! ds ["ALTER TABLE study_schedules ADD CONSTRAINT study_schedules_theta_range
+                      CHECK (theta IS NULL OR (theta > 0 AND theta < 1))"])
+  (jdbc/execute! ds ["ALTER TABLE study_schedules DROP CONSTRAINT IF EXISTS study_schedules_capacity_positive"])
+  (jdbc/execute! ds ["ALTER TABLE study_schedules ADD CONSTRAINT study_schedules_capacity_positive
+                      CHECK (daily_capacity > 0)"])
+
+  ;; Keyed on (user, Anki card id): an Anki card id is unique inside ONE
+  ;; collection, and two users on this instance sync two different ones.
+  ;; `flashcard_id` is nullable because a note can yield more Anki cards than
+  ;; FreeMemo knows about — a cloze note is one FreeMemo card and N Anki cards,
+  ;; and every one of them carries memory state the page mean of §5.1 reads.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS anki_card_states (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      anki_card_id BIGINT NOT NULL,
+      anki_note_id BIGINT,
+      flashcard_id INTEGER REFERENCES flashcards(id) ON DELETE CASCADE,
+      deck TEXT,
+      state SMALLINT NOT NULL DEFAULT 1,
+      step SMALLINT,
+      stability REAL,
+      difficulty REAL,
+      interval_days REAL,
+      last_review_at TIMESTAMPTZ,
+      due_at TIMESTAMPTZ,
+      reps INTEGER NOT NULL DEFAULT 0,
+      config_fingerprint TEXT NOT NULL,
+      high_water_revlog_id BIGINT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (user_id, anki_card_id)
+    )"])
+  ;; The page model reads every state of one document at once, through the
+  ;; note ids its flashcards carry.
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_anki_card_states_note
+                      ON anki_card_states(user_id, anki_note_id)"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_anki_card_states_flashcard
+                      ON anki_card_states(flashcard_id) WHERE flashcard_id IS NOT NULL"])
+
+  ;; The deck config, cached beside the state it governs. §8.2 requires a
+  ;; forecast to still render when Anki is unreachable, and a forecast needs
+  ;; the WEIGHTS: `anki_card_states` stores a fingerprint OVER the config, not
+  ;; the config, and reconstructing parameters out of a fingerprint would make
+  ;; an identity string load-bearing as a data format.
+  ;;
+  ;; One row per (user, deck). A cache like its sibling, so it is excluded from
+  ;; account export for the same reason.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS anki_deck_configs (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      deck TEXT NOT NULL,
+      config JSONB NOT NULL,
+      fingerprint TEXT NOT NULL,
+      fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (user_id, deck)
+    )"]))
+
 (defn setup-schema []
   (tel/log! :info "Setting up database schema")
 
@@ -1303,6 +1412,7 @@
   (setup-schema-video!)
   (setup-schema-neoreader!)
   (setup-schema-account-transfer!)
+  (setup-schema-study-scheduler!)
 
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
   (run-grandfather-migration!)
@@ -8097,3 +8207,374 @@
         (sql/format {:delete-from :neoreader_highlights
                      :where [:and [:= :root_topic_id root-topic-id]
                              [:<> :synced_at stamp]]})))))
+
+;; ── Study Scheduler (plans/study-scheduler-spec.md §3) ─────────────
+;;
+;; Two concerns, kept apart. `study_schedules` is the user's intent and is
+;; durable. `anki_card_states` is a cache of FSRS state replayed out of Anki
+;; and is derivable at any time (§3.5). NOTHING here writes `card_schedules`
+;; or `topics.next_review_at` — §1.4 forbids this feature from touching the
+;; Learn queue, and that is the boundary those two columns mark.
+
+(defn- schedule-row->map
+  "One `study_schedules` row as plain data. `excluded_pages` arrives as a raw
+   java.sql.Array, which no caller past this namespace should have to know."
+  [r]
+  (-> r
+    (update :study_schedules/excluded_pages #(vec (or (sql-int-array->vec %) [])))
+    (assoc :study_schedules/target_date (some-> (:study_schedules/target_date r) str))))
+
+(defn- schedules-where
+  "Schedules the user owns, filtered by `archived-clause`, soonest target first.
+
+   Shared by the two public readers so their only difference is the one
+   predicate that names them. Both restrict to documents that still exist and
+   are not staged for deletion — a schedule over a deleted document has nothing
+   to forecast either way."
+  [user-id archived-clause]
+  (mapv schedule-row->map
+    (jdbc/execute! ds
+      (sql/format {:select [:s/* [:t/title :doc_title] [:t/kind :doc_kind]]
+                   :from [[:study_schedules :s]]
+                   :join [[:topics :t] [:= :s/root_topic_id :t/id]]
+                   :where [:and [:= :s/user_id user-id]
+                           archived-clause
+                           [:is :t/staged_delete_id nil]]
+                   :order-by [[:s/target_date :asc] [:s/id :asc]]}))))
+
+(defn list-study-schedules
+  "Every ACTIVE schedule the user owns, soonest target first.
+
+   Post: archived rows are absent. §1.3 sums the daily load across exactly this
+         set, so a retired schedule must not add load the user will not do."
+  [user-id]
+  (schedules-where user-id [:is :s/archived_at nil]))
+
+(defn list-archived-study-schedules
+  "Every ARCHIVED schedule the user owns.
+
+   The counterpart `archive-study-schedule!` always implied and nothing
+   provided. Without it `archived_at` was a one-way door: the row survived, the
+   daily load stopped counting it, and no query anywhere could read it back —
+   so 'archive' meant 'delete, but leave the row behind'."
+  [user-id]
+  (schedules-where user-id [:not= :s/archived_at nil]))
+
+(defn get-study-schedule
+  "One schedule, or nil when it is absent or another user's.
+
+   Pre : ownership is checked HERE, not by the caller. Every read of a schedule
+         crosses a reactive boundary where the id came from a URL."
+  [user-id schedule-id]
+  (some-> (jdbc/execute-one! ds
+            (sql/format {:select [:*] :from [:study_schedules]
+                         :where [:and [:= :id schedule-id] [:= :user_id user-id]]}))
+    schedule-row->map))
+
+(defn create-study-schedule!
+  "Insert a schedule and return its row.
+
+   Pre : `user-id` owns `root-topic-id`. `target-date` is an ISO date string.
+         `theta` is nil (meaning Anki's own `desiredRetention`, θ1) or a
+         probability strictly inside (0,1) — the CHECK enforces the range and a
+         violation is the caller's bug.
+   Post: exactly one new active schedule. `start_known` freezes the known-page
+         count at creation, because §6.2's straight line runs from where the
+         user WAS, not from zero."
+  [user-id {:keys [root-topic-id target-date first-page last-page daily-capacity
+                   theta excluded-pages start-known]}]
+  (some-> (jdbc/execute-one! ds
+            (sql/format {:insert-into :study_schedules
+                         :values [{:user_id user-id
+                                   :root_topic_id root-topic-id
+                                   :target_date [:cast target-date :date]
+                                   :first_page first-page
+                                   :last_page last-page
+                                   :daily_capacity (or daily-capacity 60)
+                                   :theta theta
+                                   :excluded_pages (int-array-value excluded-pages)
+                                   :start_known (or start-known 0)}]
+                         :returning [:*]})
+            {:return-keys true})
+    schedule-row->map))
+
+(defn update-study-schedule!
+  "Apply the levers of §6.6 to one schedule the user owns.
+
+   Pre : `fields` holds only lever columns — target_date (I1), daily_capacity
+         (I2), theta (I4), excluded_pages (I5) — plus the page range. Any other
+         key is ignored rather than written, so a caller cannot reach
+         `user_id`, `root_topic_id` or `start_known` through this path.
+   Post: the updated row, or nil when the id is not the user's."
+  [user-id schedule-id fields]
+  (let [allowed (select-keys fields [:target_date :first_page :last_page
+                                     :daily_capacity :theta :excluded_pages])
+        set-map (cond-> allowed
+                  (contains? allowed :target_date)
+                  (update :target_date #(when % [:cast % :date]))
+                  (contains? allowed :excluded_pages)
+                  (update :excluded_pages int-array-value))]
+    (when (seq set-map)
+      (some-> (jdbc/execute-one! ds
+                (sql/format {:update :study_schedules
+                             :set set-map
+                             :where [:and [:= :id schedule-id] [:= :user_id user-id]]
+                             :returning [:*]})
+                {:return-keys true})
+        schedule-row->map))))
+
+(defn set-schedule-start-known!
+  "Freeze a schedule's baseline known-page count (§6.2).
+
+   Separate from `update-study-schedule!` on purpose: that fn is the LEVER
+   path and must not reach this column, because moving the baseline would let
+   a lever rewrite history and make the pace figure meaningless. This is
+   called once, right after creation, by the only caller that knows the
+   measurement.
+
+   Post: rows changed, 0 when the id is not the user's."
+  [user-id schedule-id start-known]
+  (::jdbc/update-count
+    (jdbc/execute-one! ds
+      (sql/format {:update :study_schedules
+                   :set {:start_known start-known}
+                   :where [:and [:= :id schedule-id] [:= :user_id user-id]]}))
+    0))
+
+(defn restore-study-schedule!
+  "Return an archived schedule to the active set. Returns rows changed.
+
+   The inverse of `archive-study-schedule!`, and the reason that fn archives
+   rather than deletes. `start_known` is untouched, so §6.2's pace line still
+   runs from where the user was when they made the plan — a restore resumes a
+   schedule, it does not start a new one."
+  [user-id schedule-id]
+  (::jdbc/update-count
+    (jdbc/execute-one! ds
+      (sql/format {:update :study_schedules
+                   :set {:archived_at nil}
+                   :where [:and [:= :id schedule-id] [:= :user_id user-id]
+                           [:not= :archived_at nil]]}))
+    0))
+
+(defn archive-study-schedule!
+  "Retire a schedule without deleting it. Returns the number of rows changed.
+   Archiving rather than deleting: §1.3's combined daily load must stop
+   counting it, and the user may still want to see that the schedule existed."
+  [user-id schedule-id]
+  (::jdbc/update-count
+    (jdbc/execute-one! ds
+      (sql/format {:update :study_schedules
+                   :set {:archived_at [:raw "now()"]}
+                   :where [:and [:= :id schedule-id] [:= :user_id user-id]
+                           [:is :archived_at nil]]}))
+    0))
+
+;; --- The page and card set a schedule forecasts ----------------------------
+
+(def ^:private schedulable-kinds
+  "Root topic kinds a schedule can be built over.
+
+   `pdf` alone. The whole feature counts PAGES — the range, the progress
+   denominator, the daily plan — and a page is a `kind = 'page'` child topic.
+   Measured against a real collection: PDFs carry every page row in the
+   database, and `epub`, `web`, `markdown`, `basic`, `audio`, `supermemo` and
+   `video-playlist` roots carry none. Offering them would list a thousand
+   documents that can never produce a plan.
+
+   A kind that grows page children later belongs here, and nowhere else."
+  #{"pdf"})
+
+(defn list-schedulable-documents
+  "Root documents a schedule can be built over, newest first.
+
+   Pre : `user-id` is a user id.
+   Post: {:id :title :kind :pages} per document, `:pages` > 0 always. A
+         document with no pages is absent rather than listed with a zero — it
+         cannot produce a range, so offering it is offering a dead end.
+   Post: one query, not a page count per document. The N+1 shape it replaces
+         issued one `list-pages` per root, which on a library of a thousand
+         markdown notes was a thousand queries to build a list of eight."
+  [user-id]
+  (mapv (fn [r] {:id (:topics/id r)
+                 :title (or (:topics/title r) "Untitled")
+                 :kind (:topics/kind r)
+                 :pages (:pages r)})
+    (jdbc/execute! ds
+      (sql/format {:select [:t/id :t/title :t/kind [[:count :p/id] :pages]]
+                   :from [[:topics :t]]
+                   :join [[:topics :p] [:and [:= :p/parent_id :t/id]
+                                        [:= :p/kind "page"]
+                                        [:is :p/staged_delete_id nil]]]
+                   :where [:and [:= :t/user_id user-id]
+                           [:is :t/parent_id nil]
+                           [:is :t/staged_delete_id nil]
+                           [:in :t/kind (vec schedulable-kinds)]]
+                   :group-by [:t/id :t/title :t/kind]
+                   :order-by [[:t/created_at :desc]]}))))
+
+(defn get-schedule-pages
+  "The pages of one document inside a page range, in page order.
+
+   Pre : `user-id` owns `root-topic-id`. `first-page` and `last-page` are page
+         NUMBERS, either may be nil for an open end.
+   Post: {:page-id :page-number :done?} per page. Every page of the range is
+         present, including pages with no cards and pages never opened — §5.5
+         requires an untouched book to read 0 of N rather than 0 of 0, and that
+         only holds if the denominator comes from here."
+  [user-id root-topic-id first-page last-page]
+  (mapv (fn [r] {:page-id (:topics/id r)
+                 :page-number (:topics/page_number r)
+                 :done? (= "done" (:topics/status r))})
+    (jdbc/execute! ds
+      (sql/format {:select [:t/id :t/page_number :t/status]
+                   :from [[:topics :t]]
+                   :where (cond-> [:and
+                                   [:= :t/parent_id root-topic-id]
+                                   [:= :t/kind "page"]
+                                   [:= :t/user_id user-id]
+                                   [:is :t/staged_delete_id nil]]
+                            first-page (conj [:>= :t/page_number first-page])
+                            last-page (conj [:<= :t/page_number last-page]))
+                   :order-by [[:t/page_number :asc]]}))))
+
+(defn get-schedule-cards
+  "Every pushed flashcard of one document's pages, with the page it belongs to.
+
+   Pre : `user-id` owns `root-topic-id`.
+   Post: {:flashcard-id :page-id :anki-note-id} per card, for cards with an
+         `anki_note_id` only. A card never pushed to Anki has no revlog and no
+         memory state, so it cannot contribute to a page's mean R (§5.1) — it
+         is absent here rather than present with a zero that would drag the
+         mean down.
+   Post: cards are scoped through their PAGE's parent, not through
+         `root_topic_id`. The two agree for a PDF, and scoping through the page
+         is what keeps an extract's cards attached to the page they came from."
+  [user-id root-topic-id]
+  (mapv (fn [r] {:flashcard-id (:flashcards/id r)
+                 :page-id (:flashcards/topic_id r)
+                 :anki-note-id (:flashcards/anki_note_id r)})
+    (jdbc/execute! ds
+      (sql/format {:select [:f/id :f/topic_id :f/anki_note_id]
+                   :from [[:flashcards :f]]
+                   :join [[:topics :p] [:= :f/topic_id :p/id]]
+                   :where [:and
+                           [:= :p/parent_id root-topic-id]
+                           [:= :p/user_id user-id]
+                           [:is :p/staged_delete_id nil]
+                           [:not= :f/anki_note_id nil]]
+                   :order-by [[:p/page_number :asc] [:f/id :asc]]}))))
+
+;; --- The derived-state cache (§3.1 – §3.3) ---------------------------------
+
+(defn get-anki-card-states
+  "Cached FSRS state for a user's Anki cards, keyed by Anki card id.
+
+   Pre : `note-ids` is a seq of Anki note ids, possibly empty.
+   Post: {} for an empty `note-ids` — never a query with an empty IN list.
+   Post: rows whose `config_fingerprint` differs from `fingerprint` are ABSENT.
+         §3.3 requires a config change to discard cached state and replay in
+         full, and filtering here is what makes the caller replay it: a row it
+         cannot see is a card it must refetch."
+  [user-id note-ids fingerprint]
+  (if (empty? note-ids)
+    {}
+    (into {}
+      (map (fn [r] [(:anki_card_states/anki_card_id r) r]))
+      (jdbc/execute! ds
+        (sql/format {:select [:*] :from [:anki_card_states]
+                     :where [:and [:= :user_id user-id]
+                             [:in :anki_note_id (vec note-ids)]
+                             [:= :config_fingerprint fingerprint]]})))))
+
+(defn upsert-anki-card-states!
+  "Write derived FSRS state for a batch of Anki cards.
+
+   Pre : each row carries :anki_card_id and :config_fingerprint. `user_id` is
+         set here, never trusted from the row.
+   Post: one row per (user, Anki card id). A re-refresh overwrites in place, so
+         the table's size is bounded by the user's pushed card count and never
+         grows with refresh count.
+   Inv : `param-bounded-batches` splits the list, so a 5 000-card document
+         inserts without a 65 535-parameter error (§3.2). The write is atomic
+         only to the extent one transaction covers it, which is why this opens
+         one."
+  [user-id rows]
+  (when (seq rows)
+    (let [stamped (mapv #(assoc % :user_id user-id
+                           :updated_at [:raw "now()"]) rows)]
+      (jdbc/with-transaction [tx ds]
+        (doseq [batch (param-bounded-batches stamped)]
+          (jdbc/execute! tx
+            (sql/format {:insert-into :anki_card_states
+                         :values (vec batch)
+                         :on-conflict [:user_id :anki_card_id]
+                         :do-update-set [:anki_note_id :flashcard_id :deck :state :step
+                                         :stability :difficulty :interval_days
+                                         :last_review_at :due_at :reps
+                                         :config_fingerprint :high_water_revlog_id
+                                         :updated_at]}))))
+      (count stamped))))
+
+(defn anki-state-high-water
+  "The newest revlog id already folded into this user's cached state, or 0.
+
+   §2.4 — the first refresh reads the whole revlog for the document's cards,
+   and every later one asks `cardReviews` for what came after this mark.
+   Scoped to one fingerprint: a config change resets the mark to 0 along with
+   the state it belongs to, so the replay that follows is a full one."
+  [user-id fingerprint]
+  (or (:high_water
+        (jdbc/execute-one! ds
+          (sql/format {:select [[[:max :high_water_revlog_id] :high_water]]
+                       :from [:anki_card_states]
+                       :where [:and [:= :user_id user-id]
+                               [:= :config_fingerprint fingerprint]]})))
+    0))
+
+(defn upsert-anki-deck-config!
+  "Cache one deck's Anki config. Returns the row count written.
+
+   Pre : `config` is the parsed `getDeckConfig` result and `fingerprint` is
+         `schedule-fsrs/config-fingerprint` over it. The two travel together —
+         a config stored under a fingerprint that does not describe it would
+         make every cached state read as current while the weights disagree."
+  [user-id deck config fingerprint]
+  (::jdbc/update-count
+    (jdbc/execute-one! ds
+      (sql/format {:insert-into :anki_deck_configs
+                   :values [{:user_id user-id
+                             :deck deck
+                             :config (->jsonb config)
+                             :fingerprint fingerprint
+                             :fetched_at [:raw "now()"]}]
+                   :on-conflict [:user_id :deck]
+                   :do-update-set [:config :fingerprint :fetched_at]}))
+    0))
+
+(defn get-anki-deck-config
+  "The user's most recently fetched deck config, or nil.
+
+   One row is what the reader wants: FreeMemo pushes to one deck, and the
+   scheduler picks that deck as the mode over its own cards' decks. Ordering by
+   `fetched_at` rather than taking a named deck keeps the read correct for a
+   user who moved their cards between decks."
+  [user-id]
+  (some-> (jdbc/execute-one! ds
+            (sql/format {:select [:*] :from [:anki_deck_configs]
+                         :where [:= :user_id user-id]
+                         :order-by [[:fetched_at :desc]]
+                         :limit 1}))
+    (update :anki_deck_configs/config pgobject->clj)))
+
+(defn anki-state-cached-at
+  "When this user's cached state was last written, or nil.
+   §8.2 renders it beside the staleness marker when Anki is unreachable — a
+   stale forecast with no timestamp is a forecast the user cannot judge."
+  [user-id]
+  (:cached_at
+    (jdbc/execute-one! ds
+      (sql/format {:select [[[:max :updated_at] :cached_at]]
+                   :from [:anki_card_states]
+                   :where [:= :user_id user-id]}))))
+

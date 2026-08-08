@@ -4472,3 +4472,155 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     cursor: pointer;
     align-self: flex-start;
 }
+
+
+/* ── Schedule tab (plans/study-scheduler-spec.md §7) ───────────────
+   Master/detail: a list of schedules beside one schedule's forecast.
+
+   Per-row styling lives here rather than in an inline `:style` map. Electric
+   applies each style property as its own reactive prop, so a merged map costs
+   about six prop nodes per cell; one `:class` string is one prop. Across a
+   windowed table that is the single largest mount/unmount cost (CLAUDE.md,
+   Virtual Scroll Table Conventions). Per-verdict colours are MODIFIER classes
+   for the same reason — a `case` returning a background would put them back
+   inline. */
+
+.sched-layout {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    gap: var(--sp-4);
+}
+
+.sched-sidebar {
+    width: 260px;
+    flex-shrink: 0;
+    overflow-y: auto;
+    padding-right: 12px;
+    border-right: 1px solid var(--color-border);
+}
+
+.sched-pane { flex: 1; min-width: 0; overflow-y: auto; }
+
+/* Back to the list. Hidden wherever the list is still on screen — a back
+   button pointing at something already visible is noise. */
+.sched-back { display: none; }
+
+/* ── Tables ───────────────────────────────────────────────────────
+   `--grid-cols` is declared HERE, never inline on the element. An inline
+   custom property beats every stylesheet rule short of `!important`, so a
+   table that set it inline could not be narrowed by a media query — which is
+   how the phone layout ended up with columns wider than the viewport. */
+.sched-table table { grid-template-columns: var(--grid-cols); }
+.sched-plan-table  { --grid-cols: 58px 1fr 90px 110px 110px; }
+.sched-pages-table { --grid-cols: 80px 1fr 110px 110px 90px; }
+
+.sched-cell {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--color-bg-subtle);
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sched-num { justify-content: flex-end; font-variant-numeric: tabular-nums; }
+.sched-dim { color: var(--color-text-secondary); }
+
+.sched-th {
+    padding: 8px 10px;
+    border-bottom: 2px solid var(--color-border);
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--color-text-primary);
+    text-align: left;
+}
+.sched-th.sched-num { text-align: right; }
+
+/* Today's row in the study plan. AFTER the hover rule deliberately — equal
+   specificity, so source order decides, and today must stay marked while the
+   pointer rests on another row. The left accent carries the meaning where a
+   background alone would read as a second hover state. */
+.tape-scroll table tr.sched-today td { background: light-dark(#dbeafe, #1e3a5f); }
+.tape-scroll table tr.sched-today td:first-child {
+    box-shadow: inset 2px 0 0 var(--color-primary);
+}
+
+/* The five page verdicts. `immature` and `below-theta` are visually distinct
+   because they call for different action: more reviews over time, against
+   more reviews now. */
+.sched-badge-mature        { background: light-dark(#dcfce7, #14532d); color: light-dark(#166534, #bbf7d0); }
+.sched-badge-uncarded-done { background: light-dark(#e0e7ff, #312e81); color: light-dark(#3730a3, #c7d2fe); }
+.sched-badge-immature      { background: light-dark(#fef3c7, #713f12); color: light-dark(#92400e, #fde68a); }
+.sched-badge-below-theta   { background: light-dark(#fee2e2, #7f1d1d); color: light-dark(#991b1b, #fecaca); }
+.sched-badge-untouched     { background: var(--color-bg-subtle); color: var(--color-text-secondary); }
+
+.sched-card { transition: border-color 0.12s, background 0.12s; }
+.sched-card:hover { background: var(--color-bg-hover); }
+.sched-card.is-selected {
+    border-color: var(--color-primary);
+    box-shadow: inset 2px 0 0 var(--color-primary);
+}
+
+/* Stat tiles. `min-width` on a flex item is a FLOOR, not a hint: below it the
+   item overflows its container rather than shrinking, which is what pushed the
+   tiles off the right edge of a phone. The floor drops with the viewport and
+   `flex-basis` does the sizing. */
+.sched-tiles { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.sched-tile { flex: 1 1 140px; min-width: 140px; padding: 12px 14px; }
+.sched-tile-value { font-size: 22px; font-weight: 700; color: var(--color-text-primary); }
+.sched-tile-sub { font-size: 12px; color: var(--color-text-secondary); }
+
+@media (max-width: 900px) {
+    .sched-sidebar { width: 200px; }
+    .sched-tile { flex: 1 1 120px; min-width: 120px; }
+    .sched-tile-value { font-size: 19px; }
+    .sched-plan-table  { --grid-cols: 52px 1fr 64px 74px 84px; }
+    .sched-pages-table { --grid-cols: 64px 1fr 78px 82px 62px; }
+}
+
+/* Phone: ONE column. A 260px list beside a 130px pane is two unusable columns
+   instead of one usable one, which is exactly what the wide layout collapsed
+   to here. `is-detail` marks that a pane is open, so the page shows the list
+   or the pane — never both — and `.sched-back` is the way out. */
+@media (max-width: 600px) {
+    .sched-layout { display: block; overflow-y: auto; }
+    .sched-sidebar {
+        width: auto;
+        border-right: none;
+        border-bottom: 1px solid var(--color-border);
+        padding-right: 0;
+        padding-bottom: var(--sp-3);
+        overflow-y: visible;
+    }
+    .sched-pane { overflow-y: visible; }
+
+    .sched-layout.is-detail .sched-sidebar { display: none; }
+    .sched-layout.is-detail .sched-back {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 12px;
+        padding: 4px 8px;
+    }
+    /* The chevron points down by default; rotate it to point back. */
+    .sched-back svg { transform: rotate(90deg); }
+
+    /* Two tiles per row at 320px, three at 420px. `flex-basis` in percent
+       rather than pixels, so the pair always fits whatever the width is. */
+    .sched-tile { flex: 1 1 calc(50% - 5px); min-width: 0; padding: 10px 12px; }
+    .sched-tile-value { font-size: 18px; }
+
+    /* Columns the phone cannot afford are removed, not squeezed. `Total` is a
+       running sum the user can read off `Pages`, and `Cards` explains a verdict
+       the badge already states — each is the least load-bearing column of its
+       table. Header and body are separate tables sharing one template, so both
+       must drop the same child. */
+    .sched-plan-table  { --grid-cols: 46px 1fr 52px 68px; }
+    .sched-pages-table { --grid-cols: 46px 1fr 58px 66px; }
+    .sched-plan-table  th:nth-child(4), .sched-plan-table  td:nth-child(4) { display: none; }
+    .sched-pages-table th:nth-child(5), .sched-pages-table td:nth-child(5) { display: none; }
+
+    .sched-cell, .sched-th { padding: 6px 6px; font-size: 12px; }
+}
