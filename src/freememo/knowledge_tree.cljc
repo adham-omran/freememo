@@ -575,23 +575,26 @@
 
               ;; Scrollable body
               (dom/div
+                ;; max-height caps the table at 10 rows, and the window follows it:
+                ;; 10 × overquery 1.5 = 15 mounted rows, fixed, whatever the viewport
+                ;; height. Uncapped it grew with the viewport and every filter change
+                ;; re-mounted the lot. Cap the CONTAINER, never the window — a window
+                ;; cap mounts fewer rows than the container shows and paints a blank
+                ;; band under the last row. max-height, not height: a viewport shorter
+                ;; than 10 rows still shrinks the table normally, which is what the
+                ;; phone layout (80 px rows) relies on.
+                ;; See plans/library-scroll-window-cap.md.
                 (dom/props {:role "rowgroup"
-                            :style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
+                            :style {:flex "1" :overflow-y "auto" :min-height "0"
+                                    :max-height (str (* 10 row-height) "px")
+                                    :scrollbar-gutter "stable"}})
                 (reset! !scroll-node dom/node)
                 (let [[offset limit] (Scroll-window row-height row-count dom/node
-                                       {:overquery-factor 2
+                                       {:overquery-factor 1.5
                                         ;; Reset to top on filter/sort change only.
                                         ;; Excludes expansion + tree mutations so
                                         ;; expand/collapse/delete hold scroll position.
-                                        :reset-key [filter-text kind-filter status-filter sort-col sort-dir]
-                                        ;; 7 × 2 = 14 mounted rows, fixed. Uncapped, the
-                                        ;; window grew with viewport height and every
-                                        ;; filter change re-mounted the lot. The trade is
-                                        ;; coverage: 11 rows sit at or below the fold once
-                                        ;; scrolled (396 px at 36 px rows), so a taller
-                                        ;; scroll body shows a blank band under the last
-                                        ;; row. See plans/library-scroll-window-cap.md.
-                                        :max-visible-rows 7})]
+                                        :reset-key [filter-text kind-filter status-filter sort-col sort-dir]})]
                   (dom/props {:class "tape-scroll"
                               ;; C1c per-row transform positioning (see .tape-scroll in index.css):
                               ;; --count → table height (scroll range), --grid-cols → the row grid.

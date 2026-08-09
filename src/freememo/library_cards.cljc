@@ -1479,17 +1479,21 @@ bytecode cap in the :prod build, which dev compilation never emits.
                         user-id anki-overlay]
   (e/client
     (dom/div
-      (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"
-                          :scrollbar-gutter "stable" :position "relative"}})
-      ;; :max-visible-rows 7 × :overquery-factor 2 = 14 mounted rows, fixed.
-      ;; Uncapped, the window grew with viewport height (~44 rows on a full-height
-      ;; desktop window), and LibraryCardRow costs ~50 ms to mount or unmount —
-      ;; the dominant cost of every filter change. The trade is coverage: 11 rows
-      ;; sit at or below the fold once scrolled (451 px at 41 px rows), so a taller
-      ;; scroll body shows a blank band under the last row.
+      ;; max-height caps the table at 10 rows, and the window follows it: 10 ×
+      ;; overquery 1.5 = 15 mounted rows, fixed, whatever the viewport height.
+      ;; Uncapped it grew with the viewport (~44 rows on a full-height desktop
+      ;; window), and LibraryCardRow costs ~50 ms to mount or unmount — the
+      ;; dominant cost of every filter change.
+      ;; Cap the CONTAINER, never the window. A window cap mounts fewer rows than
+      ;; the container shows, which paints a blank band under the last row.
+      ;; max-height, not height: a viewport shorter than 10 rows still shrinks the
+      ;; table normally, and the window shrinks with it.
       ;; See plans/library-scroll-window-cap.md.
+      (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"
+                          :max-height (str (* 10 row-height) "px")
+                          :scrollbar-gutter "stable" :position "relative"}})
       (let [[offset limit] (Scroll-window row-height row-count dom/node
-                             {:overquery-factor 2 :reset-key scroll-reset-key :max-visible-rows 7})]
+                             {:overquery-factor 1.5 :reset-key scroll-reset-key})]
         (dom/props {:class "tape-scroll table-frame-body"
                     ;; C1c per-row transform positioning (see .tape-scroll in index.css):
                     ;; --count → table height (scroll range), --grid-cols → the row grid.
