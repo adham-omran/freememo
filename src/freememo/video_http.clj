@@ -64,10 +64,11 @@
                                               (* 8 1024 1024))}))))
       (catch clojure.lang.ExceptionInfo e
         (let [data (ex-data e)]
-          (if (quota/quota-error? data)
-            (uh/quota-error->response "video" data)
-            (do (tel/error! {:id ::video-init} e)
-                (json-response 500 {:success false :error "Upload could not be started"})))))
+          (cond
+            (quota/quota-error? data) (uh/quota-error->response "video" data)
+            (quota/user-not-found? data) (uh/stale-session-response)
+            :else (do (tel/error! {:id ::video-init} e)
+                      (json-response 500 {:success false :error "Upload could not be started"})))))
       (catch Exception e
         (tel/error! {:id ::video-init} e)
         (json-response 500 {:success false :error "Upload could not be started"})))

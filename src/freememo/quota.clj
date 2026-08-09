@@ -113,6 +113,18 @@
   [data]
   (= ::quota-error (:type data)))
 
+(defn user-not-found?
+  "Predicate for catching ::user-not-found ex-data.
+
+   Both gates below raise it when the id they were handed names no users row,
+   which in practice means a browser is replaying a session cookie for a deleted
+   account. That is a caller problem with a specific answer — sign in again —
+   and an HTTP handler that lumps it in with server faults reports a 500 saying
+   nothing. Kept distinct from `quota-error?` because the two need different
+   status codes."
+  [data]
+  (= ::user-not-found (:type data)))
+
 (defn check-and-bump!
   "Atomic quota gate. Must be called inside an active `with-transaction`.
    Locks the users row, validates the per-user upload and total caps, then
@@ -123,6 +135,8 @@
    Post: on return, usage_bytes is incremented by incoming-bytes.
    Throws: `quota-error :file-too-large` or `quota-error :over-quota`
            on cap violation — caller's tx must abort to undo the lock.
+           `::user-not-found` when `user-id` names no users row; test for it
+           with `user-not-found?` rather than letting it read as a server fault.
 
    Invariant: between SELECT FOR UPDATE and UPDATE, no other tx can read
    or write this user's usage_bytes."
@@ -174,6 +188,8 @@
    Post: usage_bytes incremented by incoming-bytes.
    Throws: `quota-error :over-quota` — the caller's tx must abort to release the
            lock and undo the reservation.
+           `::user-not-found` when `user-id` names no users row; test for it
+           with `user-not-found?` rather than letting it read as a server fault.
    Invariant: between SELECT FOR UPDATE and UPDATE no other tx reads or writes
    this user's usage_bytes."
   [tx user-id incoming-bytes]

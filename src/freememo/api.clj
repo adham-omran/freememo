@@ -371,10 +371,11 @@
             (json-response 404 {:success false :error "Upload not found or expired"}))))
       (catch clojure.lang.ExceptionInfo e
         (let [data (ex-data e)]
-          (if (quota/quota-error? data)
-            (quota-info->response data)
-            (do (tel/error! {:id ::upload-staged-handler} e)
-                (json-response 500 {:success false :error "Import failed. Please try again."})))))
+          (cond
+            (quota/quota-error? data) (quota-info->response data)
+            (quota/user-not-found? data) (upload-http/stale-session-response)
+            :else (do (tel/error! {:id ::upload-staged-handler} e)
+                      (json-response 500 {:success false :error "Import failed. Please try again."})))))
       (catch Exception e
         (tel/error! {:id ::upload-staged-handler} e)
         (json-response 500 {:success false :error "Import failed. Please try again."})))
@@ -434,10 +435,11 @@
           (json-response 400 {:success false :error "Missing file"}))
         (catch clojure.lang.ExceptionInfo e
           (let [data (ex-data e)]
-            (if (quota/quota-error? data)
-              (quota-info->response data)
-              (do (tel/error! {:id ::zotero-stage} e)
-                  (json-response 500 {:success false :error "Stage failed"})))))
+            (cond
+              (quota/quota-error? data) (quota-info->response data)
+              (quota/user-not-found? data) (upload-http/stale-session-response)
+              :else (do (tel/error! {:id ::zotero-stage} e)
+                        (json-response 500 {:success false :error "Stage failed"})))))
         (catch Exception e
           (tel/error! {:id ::zotero-stage} e)
           (json-response 500 {:success false :error "Stage failed"}))))

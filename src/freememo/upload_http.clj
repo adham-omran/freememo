@@ -27,6 +27,38 @@
 (defn require-auth [request]
   (get-in request [:session :user-id]))
 
+(def stale-session-error
+  "What a user whose account no longer exists is told. Names the one action that
+   resolves it, because nothing they do to the file will."
+  "Your session has expired. Sign in again and retry the upload.")
+
+(defn stale-session-response
+  "The HTTP answer when the session names a user who no longer exists.
+
+   Lives beside `quota-error->response` for the same reason: the status code and
+   the `code` string are a client contract, and every upload route must give the
+   same one.
+
+   401, not 500 — the request is well-formed and the server is healthy; the
+   credential is the thing that is wrong. A 500 saying \"Upload could not be
+   started\" sends the user to inspect their file, which is the one place the
+   fault is not.
+
+   `:session nil` DELETES the cookie. Ring rewrites the session whenever a
+   response map contains that key, and nil clears it (the rule
+   `freememo.shell` documents from the other direction). Clearing is the point:
+   a cookie naming a deleted account authenticates nothing, and leaving it in
+   place means every later request fails the same way while the app renders
+   empty rather than showing the sign-in page.
+
+   Pre:  the caller has caught `quota/user-not-found?` ex-data.
+   Post: a 401 whose body carries `code` \"stale-session\", and no session."
+  []
+  (assoc (json-response 401 {:success false
+                             :error stale-session-error
+                             :code "stale-session"})
+    :session nil))
+
 (defn quota-error->response
   "Translate `quota/quota-error` ex-data into the HTTP answer for it.
 
