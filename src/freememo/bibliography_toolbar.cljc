@@ -11,6 +11,7 @@
    [freememo.icons :as icons]
    [freememo.commands :as commands]
    [freememo.schedule :as sched]
+   [freememo.schedule-forecast :as fc]
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.user-state :as us])))
@@ -45,20 +46,6 @@
     :ahead "Ahead"
     nil))
 
-(defn deadline-token
-  "The deadline half of the pace badge face.
-
-   Pre : `days` is `schedule/signed-days-to-target`'s SIGNED count, not
-         `days-until`'s. That floor reports 0 for both today and last month,
-         and this is the one readout that has to tell them apart.
-   Post: \"12d\" before the target, \"today\" on it, \"overdue\" after it."
-  [days]
-  (let [d (long (or days 0))]
-    (cond
-      (pos? d) (str d "d")
-      (zero? d) "today"
-      :else "overdue")))
-
 ;; Pre:  user-id + bib-topic-id from doc-context; bib-topic-id is the document
 ;;       ROOT, which is what `study_schedules.root_topic_id` names.
 ;; Post: one badge when an active schedule covers the document, nothing at all
@@ -86,7 +73,7 @@
         (dom/span
           (dom/props {:class "toolbar-badge tooltip-right"})
           (tooltip/Tooltip! (e/server (:tooltip pace)))
-          (dom/text word " · " (deadline-token (e/server (:days-to-target pace)))))))))
+          (dom/text word " · " (fc/deadline-token (e/server (:days-to-target pace)))))))))
 
 ;; Pre:  user-id non-nil; bib-topic-id = the citation's item (document root for
 ;;       PDF pages); citation is a string-or-nil; page-info is

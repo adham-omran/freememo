@@ -369,6 +369,23 @@
   (let [k (long n)]
     (str k " page" (when (not= 1 k) "s"))))
 
+(defn deadline-token
+  "A signed day count as the deadline half of a readout.
+
+   Pre : `days` is `schedule/signed-days-to-target`'s SIGNED count, NOT
+         `days-until`'s. That one floors at 0, which reports the same value for
+         today and for last month, and telling those apart is this fn's whole
+         job.
+   Post: \"12d\" before the target, \"today\" on it, \"overdue\" after it.
+   Post: nil reads as \"today\" rather than throwing — a caller with no date has
+         no deadline to miss."
+  [days]
+  (let [d (long (or days 0))]
+    (cond
+      (pos? d) (str d "d")
+      (zero? d) "today"
+      :else "overdue")))
+
 (defn pace-phrase
   "`pace-state`'s verdict and `pace`'s `:delta` as a phrase, for a hover
    readout. Sits here rather than beside `pace-state` because it reads
