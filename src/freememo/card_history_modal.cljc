@@ -94,7 +94,7 @@
     "overlapping" [["List" (cc/overlapping-row-html overlapping)]]
     "occlusion" [[(str "Masks · " (if (= occlusion_mode "hide-one") "Hide One" "Hide All"))
                   (occlusion-rendition-html occlusion_image_media_id geometry)]]
-    "score" [["Segment" (cc/score-row-html score_direction score_start_ms score_end_ms)]]
+    "score" [["Segment" (cc/score-direction-html score_direction score_start_ms score_end_ms)]]
     [["Rendition" (str "<span style=\"color:var(--color-text-secondary)\">"
                     "No preview for kind " kind "</span>")]]))
 

@@ -58,14 +58,14 @@
       or the deleted document itself. nil for non-card/doc actions (no source)."
      [e]
      (case (:entity_type e)
-       "flashcard" (vec (distinct (keep :root_topic_id (:snapshot e))))
+       "flashcard" (vec (distinct (keep :root_topic_id (db/snapshot-cards (:snapshot e)))))
        "document"  (vec (:entity_refs e))
        nil)))
 
 #?(:clj
    (defn- entry-card-count [e]
      (case (:entity_type e)
-       "flashcard" (count (:snapshot e))
+       "flashcard" (count (db/snapshot-cards (:snapshot e)))
        "document"  (count (:cards (:snapshot e)))
        nil)))
 
@@ -88,7 +88,7 @@
       topic moves, kg rejects)."
      [e]
      (let [cards (case (:entity_type e)
-                   "flashcard" (:snapshot e)
+                   "flashcard" (db/snapshot-cards (:snapshot e))
                    "document"  (:cards (:snapshot e))
                    nil)]
        (when-let [c (first cards)]

@@ -26,11 +26,17 @@
      (init! {:container el :image-url s :rects [{:x :y :w :h :ordinal}]
              :tool :draw|:select
              :on-change (fn [rects]) :on-ready (fn [{:keys [width height]}])
-             :on-tool-change (fn [tool])})
+             :on-tool-change (fn [tool]) :on-selection-change (fn [n])})
        -> handle (atom), or nil when window.Konva is absent
      (read-rects handle)      -> current rects vector (save-time authoritative read)
      (set-tool! handle tool)  (group-selection! handle)  (ungroup-selection! handle)
+     (delete-selection! handle)
      (destroy! handle)
+
+   on-selection-change reports how many nodes are selected, where a mask group
+   counts as ONE. It fires from select-nodes!, the single funnel every
+   selection write goes through, so a toolbar can follow rubber-band, click,
+   select-all, tool switch and delete alike.
 
    Rects carry :ordinal when their mask group existed before this session, and
    :gid when this session grouped them into a new mask group; a rect drawn here
@@ -104,8 +110,14 @@
 (defn- selected-nodes [handle]
   (vec (.nodes ^js (:tr @handle))))
 
-(defn- select-nodes! [handle nodes]
-  (.nodes ^js (:tr @handle) (into-array nodes)))
+(defn- select-nodes!
+  "The one place the selection is written. Every caller — click, shift-click,
+   rubber band, select-all, tool switch, group, ungroup, delete — comes through
+   here, which is why on-selection-change only needs hooking once."
+  [handle nodes]
+  (.nodes ^js (:tr @handle) (into-array nodes))
+  (when-let [f (:on-selection-change @handle)]
+    (f (count nodes))))
 
 (defn- toggle-selected! [handle ^js node]
   (let [current (selected-nodes handle)]
@@ -113,6 +125,21 @@
       (if (some #(= % node) current)
         (remove #(= % node) current)
         (conj current node)))))
+
+(defn delete-selection!
+  "Destroy the selected nodes and re-emit.
+   Pre:  handle is live; an empty selection is a no-op.
+   Post: a selected mask GROUP takes its members with it — the group node is
+   the selection unit, so deleting it deletes the whole card. Nothing reaches
+   the database until the modal saves; reconcile then removes the matching
+   flashcard rows and their Anki notes."
+  [handle]
+  (when handle
+    (let [selection (selected-nodes handle)]
+      (when (seq selection)
+        (select-nodes! handle [])
+        (doseq [^js node selection] (.destroy node))
+        (emit! handle)))))
 
 (defn- member-rects
   "The Rect nodes `node` stands for — itself, or a group's children."
@@ -424,18 +451,11 @@
    registered there. Modified keys are left to the app."
   [handle]
   (let [{:keys [container]} @handle
-        delete-selection!
-        (fn []
-          (let [selection (selected-nodes handle)]
-            (when (seq selection)
-              (select-nodes! handle [])
-              (doseq [^js node selection] (.destroy node))
-              (emit! handle))))
         key-handler
         (fn [e]
           (when-not (or (.-metaKey e) (.-ctrlKey e) (.-altKey e))
             (case (.toLowerCase (.-key e))
-              ("delete" "backspace") (do (.preventDefault e) (delete-selection!))
+              ("delete" "backspace") (do (.preventDefault e) (delete-selection! handle))
               "s" (do (.preventDefault e) (set-tool! handle :select))
               "r" (do (.preventDefault e) (set-tool! handle :draw))
               "g" (do (.preventDefault e) (group-selection! handle))
@@ -494,14 +514,16 @@
 (defn init!
   "Create the editor inside `container`. Returns a handle atom, or nil when
    Konva is not loaded. The stage is built async once the image loads."
-  [{:keys [container image-url rects tool on-change on-ready on-tool-change]}]
+  [{:keys [container image-url rects tool on-change on-ready on-tool-change
+           on-selection-change]}]
   (when (and container (.-Konva js/window))
     (let [handle (atom {:container container
                         :rects (vec rects)
                         :tool (or tool :draw)
                         :on-change on-change
                         :on-ready on-ready
-                        :on-tool-change on-tool-change})
+                        :on-tool-change on-tool-change
+                        :on-selection-change on-selection-change})
           img (js/Image.)]
       (set! (.-onload img)
         (fn []

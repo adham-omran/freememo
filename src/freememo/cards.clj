@@ -649,72 +649,98 @@
     (db/remove-score-card-cleanup!
       (:flashcards/score_group_id deleted-row))))
 
-(defn delete-card
-  "Delete a single flashcard, snapshotting it for undo and pushing an
-   Undo toast. Returns {:success true :anki-note-id N :undo-id L}; :undo-id
-   is the undo_log entry id (nil if the card did not exist)."
-  [user-id card-id]
+(defn- delete-cards-with-undo!
+  "The one delete path: remove `card-ids`, run the per-kind cleanups, and log
+   ONE undo entry covering the cards plus any group the delete destroyed.
+   pre:  card-ids is the complete set the caller intends to remove — for a
+         group that means EVERY member, which is what the card tables hand over
+         (a display row deletes as a whole, freememo.card-rows).
+   post: {:deleted [row ...] :note-ids [...] :undo-id id-or-nil}. Nothing is
+         deleted and no entry is written when card-ids is empty.
+   Group rows are read BEFORE the delete: remove-occlusion-mask! and
+   remove-score-card-cleanup! drop a group once its last member is gone, so
+   afterwards there is nothing left to snapshot. A partially deleted group is
+   absent from that read, so it keeps today's behaviour — the cleanup retires
+   the rect and the group stands.
+   Blame: a caller passing a strict subset of a group's ids gets a card-only
+   snapshot, whose restore would dangle against retired geometry. No caller
+   does that; the editor's reconcile path removes masks without coming here."
+  [user-id card-ids action-type]
+  (if (empty? card-ids)
+    {:deleted [] :note-ids [] :undo-id nil}
+    (let [groups (db/fully-deleted-group-rows user-id card-ids)
+          deleted (db/delete-user-flashcards! user-id card-ids)
+          note-ids (into [] (keep :flashcards/anki_note_id) deleted)]
+      (doseq [row deleted]
+        (cleanup-occlusion-mask! row)
+        (cleanup-score-group! row))
+      {:deleted deleted
+       :note-ids note-ids
+       :undo-id (when (seq deleted)
+                  (db/insert-card-delete-undo! user-id action-type
+                    (mapv :flashcards/id deleted)
+                    (assoc groups :cards (vec deleted))))})))
+
+(defn- deleted-summary
+  "\"5 cards\", or \"5 cards (1 occlusion)\" when the delete took whole groups.
+   The parenthetical counts GROUPS, not their members: the leading number names
+   the Anki notes that died, the parenthetical names the rows the user acted
+   on. Same dual idiom the card tables use."
+  [rows]
+  (let [n (count rows)
+        groups (into []
+                 (keep (fn [[k label]]
+                         (let [c (count (into #{} (keep k) rows))]
+                           (when (pos? c) (str c " " label)))))
+                 [[:flashcards/occlusion_group_id "occlusion"]
+                  [:flashcards/score_group_id "score"]])]
+    (str n " card" (when (not= 1 n) "s")
+      (when (seq groups) (str " (" (str/join ", " groups) ")")))))
+
+(defn delete-card-row!
+  "Delete one card-table row — every flashcard it stands for.
+   pre:  card-ids are one display row's :member-ids (freememo.card-rows); a
+         plain card passes one id, an occlusion group passes one per mask group.
+   post: {:success true :anki-note-ids [...] :undo-id L}. :undo-id is nil when
+   nothing was deleted. Does NOT bump — the caller owns the :delete-card bump,
+   as it did before groups collapsed."
+  [user-id card-ids]
   (try
-    (let [deleted (db/delete-flashcard! user-id card-id)
-          _ (when deleted
-              (cleanup-occlusion-mask! deleted)
-              (cleanup-score-group! deleted))
-          note-id (:flashcards/anki_note_id deleted)
-          occlusion? (= "occlusion" (:flashcards/kind deleted))
-          ;; No undo for occlusion masks (rect retired from the group geometry
-          ;; on delete) or score cards (the group row may be dropped with the
-          ;; last direction) — restoring the row alone would dangle.
-          score? (= "score" (:flashcards/kind deleted))
-          undo-id (when (and deleted (not occlusion?) (not score?))
-                    (db/insert-undo-entry! user-id "delete-card" "flashcard"
-                      [card-id] [deleted]))]
-      (cond
-        undo-id
-        (toasts/push! user-id {:level :success
-                               :message "Card deleted"
-                               :dedup? false
-                               :actions [{:label "Undo" :undo-id undo-id}]})
-        (and deleted occlusion?)
-        (toasts/push! user-id {:level :success
-                               :message "Occlusion mask deleted"
-                               :dedup? false}))
-      (when deleted
-        (log/audit! {:id ::delete-card :user-id user-id :action :delete
-                     :entity :card :entity-id card-id}))
-      {:success true :anki-note-id note-id :undo-id undo-id})
+    (let [{:keys [deleted note-ids undo-id]}
+          (delete-cards-with-undo! user-id card-ids "delete-card")]
+      (when (seq deleted)
+        (log/audit! {:id ::delete-card-row! :user-id user-id :action :delete
+                     :entity :card :n (count deleted)})
+        (toasts/push! user-id
+          (cond-> {:level :success
+                   :message (str "Deleted " (deleted-summary deleted))
+                   :dedup? false}
+            undo-id (assoc :actions [{:label "Undo" :undo-id undo-id}]))))
+      {:success true :anki-note-ids note-ids :undo-id undo-id})
     (catch Exception e
-      (tel/error! {:id ::delete-card} e)
+      (tel/error! {:id ::delete-card-row!} e)
       {:success false :error (.getMessage e)})))
 
 (defn delete-cards!
   "Bulk delete of user-id's cards (Library cards view selection).
-   pre:  card-ids from the user's selection; ownership re-checked in SQL.
+   pre:  card-ids is the selection's rows flattened to member ids; ownership
+   re-checked in SQL.
    post: {:success true :deleted n :anki-note-ids [...]} — note ids of
    deleted cards that were pushed, for the client's fire-and-forget Anki
    note deletion. Bumps :card-mutations once iff anything was deleted."
   [user-id card-ids]
   (try
-    (let [deleted (db/delete-user-flashcards! user-id card-ids)
-          note-ids (into [] (keep :flashcards/anki_note_id) deleted)]
-      (doseq [row deleted]
-        (cleanup-occlusion-mask! row))
+    (let [{:keys [deleted note-ids undo-id]}
+          (delete-cards-with-undo! user-id card-ids "bulk-delete-cards")]
       (when (seq deleted)
         (commands/bump! user-id :bulk-delete-cards)
         (log/audit! {:id ::delete-cards! :user-id user-id :action :delete
                      :entity :card :n (count deleted)})
-        ;; Occlusion rows are excluded from the undo snapshot — their rects
-        ;; are retired from the group geometry above, so a row-only restore
-        ;; would be inconsistent (and the group itself may be gone).
-        (let [n (count deleted)
-              undoable (into [] (remove #(= "occlusion" (:flashcards/kind %))) deleted)
-              undo-id (when (seq undoable)
-                        (db/insert-undo-entry! user-id "bulk-delete-cards" "flashcard"
-                          (mapv :flashcards/id undoable) undoable))]
-          (toasts/push! user-id
-            (cond-> {:level :success
-                     :message (str "Deleted " n " card" (when (not= 1 n) "s"))
-                     :dedup? false}
-              undo-id (assoc :actions [{:label "Undo" :undo-id undo-id}])))))
+        (toasts/push! user-id
+          (cond-> {:level :success
+                   :message (str "Deleted " (deleted-summary deleted))
+                   :dedup? false}
+            undo-id (assoc :actions [{:label "Undo" :undo-id undo-id}]))))
       {:success true :deleted (count deleted) :anki-note-ids note-ids})
     (catch Exception e
       (tel/error! {:id ::delete-cards!} e)

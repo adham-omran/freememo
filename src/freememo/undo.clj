@@ -1,6 +1,6 @@
 (ns freememo.undo
   "Reverse side of the Undo feature: replay a logged delete from its snapshot.
-   Forward logging lives at each delete site (see cards/delete-card,
+   Forward logging lives at each delete site (see cards/delete-card-row!,
    pin-side-panel/remove-pin!*, settings/reset-*-prompt); this ns only undoes.
 
    Contract: undo-entry! is the single dispatch point. It restores the
@@ -21,7 +21,7 @@
    For documents the cards live under the snapshot's :cards key."
   [entry]
   (case (:entity_type entry)
-    "flashcard" (boolean (some :anki_note_id (:snapshot entry)))
+    "flashcard" (boolean (some :anki_note_id (db/snapshot-cards (:snapshot entry))))
     "document"  (boolean (some :anki_note_id (:cards (:snapshot entry))))
     false))
 
@@ -30,7 +30,12 @@
    (carries :over-quota?), nil otherwise."
   [user-id entry]
   (case (:action_type entry)
-    ("delete-card" "bulk-delete-cards") (do (db/restore-flashcards! (:snapshot entry)) nil)
+    ;; Map snapshot = cards plus any group the delete destroyed, restored group
+    ;; row first (FK order). Vector = the pre-collapse shape, cards only.
+    ("delete-card" "bulk-delete-cards")
+    (let [s (:snapshot entry)]
+      (if (map? s) (db/restore-card-rows! s) (db/restore-flashcards! s))
+      nil)
     "remove-pin"      (do (db/restore-pin! (first (:snapshot entry))) nil)
     "reset-prompt"    (let [{:keys [key value]} (first (:snapshot entry))]
                         (db/set-setting user-id key value) nil)

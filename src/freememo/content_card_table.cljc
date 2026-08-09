@@ -8,6 +8,7 @@
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
    [freememo.card-components :refer [CardRow PendingCardRow rtl-text?]]
+   [freememo.card-rows :as rows]
    [freememo.card-modals :refer [EditCardModal]]
    [freememo.occlusion-modal :refer [OcclusionModal]]
    [freememo.score-toolbar :refer [ScoreEditLoader]]
@@ -28,7 +29,9 @@
                     cards (if is-root?
                             (db/get-all-flashcards topic-id)
                             (db/get-flashcards topic-id))]
-                {:success true :cards cards}))
+                ;; One row per authoring group, matching /library/cards — an
+                ;; occlusion group is ONE row here too (freememo.card-rows).
+                {:success true :cards (rows/collapse-groups cards)}))
             (catch Exception e
               (tel/error! {:id ::get-cards-for-topic :data {:topic-id topic-id}} e)
               {:success false :error (.getMessage e)}))
@@ -55,12 +58,15 @@
 
       (if (:success cards-result)
         (let [cards-vec (e/server (vec (:cards cards-result)))
-              card-count (e/server (count cards-vec))
+              row-count (e/server (count cards-vec))
+              card-count (e/server (rows/card-count cards-vec))
+              ;; Counted over MEMBERS, not rows: this is an Anki-note count and
+              ;; a group row holds one note per member.
               unsynced-count (e/server (count (filter #(or (nil? (:flashcards/anki_synced_at %))
                                                          (and (:flashcards/updated_at %)
                                                            (pos? (compare (str (:flashcards/updated_at %))
                                                                    (str (:flashcards/anki_synced_at %))))))
-                                                (:cards cards-result))))
+                                                (mapcat :members (:cards cards-result)))))
               font-sz (or card-font-size 13)
               ;; Fixed row height: 12px padding + 28px content line + 1px border.
               ;; font-sz drives the text line within this budget, not the row height
@@ -70,7 +76,11 @@
               ;; per-session client state). present-ids crosses from the server
               ;; card query; the overlay merge is client-side.
               pending-map (e/watch (cs/get-atom :pending-cards))
-              present-ids (e/server (set (map :flashcards/id cards-vec)))
+              ;; Union of MEMBER ids, not row ids: an occlusion add's entry
+              ;; holds one real-id per mask group, and landed-pending-tempids
+              ;; only forgets it once every one of them is present. Row ids
+              ;; alone would leave the pending row up forever.
+              present-ids (e/server (set (mapcat :member-ids cards-vec)))
               overlay-entries (opt/visible-pending-cards pending-map topic-id present-ids)
               landed-tempids (opt/landed-pending-tempids pending-map topic-id present-ids)]
           ;; Auto-forget confirmed overlay entries once their cards have landed
@@ -84,19 +94,23 @@
                 (t))))
           (dom/div
             (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0" :scrollbar-gutter "stable"}})
-            (when (pos? card-count)
+            (when (pos? row-count)
               (dom/div
                 (dom/props {:style {:padding "4px 12px" :font-size "12px" :color "var(--color-text-hint)"}})
-                (dom/text (str card-count " card" (when (not= card-count 1) "s")
+                ;; Rows and cards, stated separately whenever a group makes
+                ;; them differ — the same dual idiom /library/cards uses.
+                (dom/text (str row-count " row" (when (not= row-count 1) "s")
+                            (when (not= row-count card-count)
+                              (str " · " card-count " cards"))
                             (when (pos? unsynced-count) (str " (" unsynced-count " unsynced)"))))))
-            (let [[offset limit] (Scroll-window row-height card-count dom/node {:overquery-factor 2})
+            (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 2})
                   first-card (e/server (first cards-vec))
                   rtl? (e/server (rtl-text? (or (:flashcards/question first-card)
                                               (:flashcards/cloze first-card))))]
               (dom/props {:class "tape-scroll"
                           ;; C1c per-row transform positioning (see .tape-scroll in index.css):
                           ;; --count → table height (scroll range), --grid-cols → the row grid.
-                          :style {:--count card-count :--row-height (str row-height "px")
+                          :style {:--count row-count :--row-height (str row-height "px")
                                   :--grid-cols "24px 1fr 1fr 40px"}})
               (dom/table
                 (dom/props {:dir (if rtl? "rtl" "ltr")
@@ -111,7 +125,7 @@
                 ;; Optimistic pending/error rows above the real cards.
                 (e/for [entry (e/diff-by :tempid overlay-entries)]
                   (PendingCardRow entry user-id))
-                (if (pos? card-count)
+                (if (pos? row-count)
                   (e/for [i (Tape offset limit)]
                     (let [card (e/server (nth cards-vec i nil))]
                       (when card

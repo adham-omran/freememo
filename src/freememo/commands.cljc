@@ -214,10 +214,14 @@
      ;; Palette-hidden for the same reason; :views #{} because it writes nothing.
      :card-history    {:label "Card edit history" :class :query :exec :client
                        :palette-hidden true :views #{}}
+     ;; Both delete whole card-table ROWS, so an occlusion or score group goes
+     ;; with its last member and is snapshotted for undo (cards/delete-cards-with-undo!).
      :delete-card     {:label "Delete card" :class :mutation :palette-hidden true
-                       :table #{:flashcards :undo_log} :views #{:card-mutations}}
+                       :table #{:flashcards :occlusion_groups :score_groups :undo_log}
+                       :views #{:card-mutations}}
      :bulk-delete-cards {:label "Delete cards" :class :mutation :palette-hidden true
-                         :table #{:flashcards :undo_log} :views #{:card-mutations}}
+                         :table #{:flashcards :occlusion_groups :score_groups :undo_log}
+                         :views #{:card-mutations}}
      :rename-topic    {:label "Rename topic" :class :mutation :palette-hidden true
                        :table #{:topics} :views #{:refresh :tree-mutations}}
      :move-topic      {:label "Move topic" :class :mutation :palette-hidden true

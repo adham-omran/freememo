@@ -63,12 +63,15 @@
      :clj nil))
 
 ;; Delete button — bumps per-user :card-mutations on success
-(e/defn DeleteCardButton [id user-id]
+;; Takes a display row's :member-ids, so pressing it on an occlusion or score
+;; row deletes every card that row stands for (freememo.card-rows). A plain
+;; card passes a one-element vector.
+(e/defn DeleteCardButton [member-ids user-id]
   (e/client
     (dom/button
       (dom/props {:class "btn-delete-x"})
       (dom/text "\u00D7")
-      (let [click-event (dom/On "click" (fn [e] (.stopPropagation e) id) nil)
+      (let [click-event (dom/On "click" (fn [e] (.stopPropagation e) member-ids) nil)
             [t ?error] (e/Token click-event)]
         (dom/props {:disabled (some? t)
                     :class "btn-delete-x"
@@ -79,12 +82,11 @@
             (dom/props {:style {:color "var(--color-danger-text)" :font-size "11px"}})
             (dom/text ?error)))
         (when t
-          (let [result (e/server (e/Offload #(cards/delete-card user-id click-event)))]
+          (let [result (e/server (e/Offload #(cards/delete-card-row! user-id click-event)))]
             (when (some? result)
               (if (:success result)
                 (case (e/server (commands/bump! user-id :delete-card))
-                  (case (e/client (when-some [note-id (:anki-note-id result)]
-                                    (try-delete-anki-notes! [note-id])))
+                  (case (e/client (try-delete-anki-notes! (:anki-note-ids result)))
                     (t)))
                 (t (:error result))))))))))
 
@@ -98,21 +100,24 @@
     :else :synced))
 
 (defn occlusion-row-html
-  "Compact front-cell HTML for an occlusion row: image thumbnail + mask
-   ordinal + mode + (stripped) header.
-   Pre:  mask-count is how many rects share this row's ordinal (db's
-         :occlusion_mask_count); nil or ≤1 means a lone mask.
-   Post: a lone mask reads \"mask N\", a mask group reads \"group N · k masks\"."
-  [image-media-id mask-ordinal mask-count mode header-html]
+  "Compact front-cell HTML for an occlusion GROUP row: image thumbnail + the
+   group's mask and card counts + mode + (stripped) header.
+   Pre:  mask-count is every rect in the group (db's :occlusion_mask_count);
+         card-count is how many flashcard rows it fans out to, i.e. how many
+         mask groups it holds.
+   Post: reads \"Occlusion · N masks → M cards\" — the same idiom the authoring
+         modal's footer and the optimistic pending row use, so one occlusion
+         reads the same before and after it lands."
+  [image-media-id mask-count card-count mode header-html]
   (let [header-text (some-> header-html (str/replace #"<[^>]+>" "") str/trim not-empty)
-        k (or mask-count 1)]
+        n (or mask-count 0)
+        m (or card-count 1)]
     (str "<img src=\"/api/media/" image-media-id "\""
       " style=\"height:28px;max-width:60px;object-fit:cover;border-radius:3px;"
       "vertical-align:middle;margin-right:6px\" />"
       "<span>Occlusion · "
-      (if (< 1 k)
-        (str "group " mask-ordinal " · " k " masks")
-        (str "mask " mask-ordinal))
+      n " mask" (when (not= 1 n) "s")
+      " → " m " card" (when (not= 1 m) "s")
       " · "
       (if (= mode "hide-one") "Hide One" "Hide All")
       (when header-text (str " · " (truncate-html-for-row header-text 80)))
@@ -123,13 +128,32 @@
         m (int (/ s 60))]
     (str m ":" (let [r (rem s 60)] (if (< r 10) (str "0" r) r)))))
 
-(defn score-row-html
-  "Compact front-cell HTML for a score row: direction + audio segment."
+(defn score-direction-html
+  "Compact HTML for ONE score card: its direction + the audio segment. Used
+   where a score card stands alone rather than as a group — the card-history
+   modal, whose renditions are single cards."
   [direction start-ms end-ms]
   (str "<span>Score · "
     (if (= direction "audio-front") "Audio → Sheet" "Sheet → Audio")
     " · " (format-ms-brief start-ms) "–" (format-ms-brief end-ms)
     "</span>"))
+
+(defn score-row-html
+  "Compact front-cell HTML for a score GROUP row: its directions + the audio
+   segment they share.
+   Pre:  members are the group's flashcard rows (freememo.card-rows), one per
+         direction, in id order.
+   Post: one direction names itself; two read \"2 directions\", because the
+         pair is one authored card that fanned out."
+  [members]
+  (let [m (first members)
+        n (count members)]
+    (if (= 1 n)
+      (score-direction-html (:flashcards/score_direction m)
+        (:score_start_ms m) (:score_end_ms m))
+      (str "<span>Score · " n " directions"
+        " · " (format-ms-brief (:score_start_ms m)) "–" (format-ms-brief (:score_end_ms m))
+        "</span>"))))
 
 (defn overlapping-row-html
   "Compact front-cell HTML for an overlapping row: title (or first item) plus
@@ -143,26 +167,47 @@
     (str "<span>Overlapping · " (truncate-html-for-row label 80)
       " · " n " item" (when (not= 1 n) "s") "</span>")))
 
+(defn row-front-html
+  "Front-cell HTML for a display row, one branch per kind. Built from the row's
+   members, so the occlusion and score branches describe the whole group.
+   Mirrors library-cards/card-front-html — the two tables must render one
+   occlusion the same way."
+  [c]
+  (case (:flashcards/kind c)
+    "occlusion"   (occlusion-row-html (:occlusion_image_media_id c)
+                    (:occlusion_mask_count c) (count (:member-ids c))
+                    (:occlusion_mode c)
+                    (get-in c [:flashcards/io_fields :header]))
+    "score"       (score-row-html (:members c))
+    "overlapping" (overlapping-row-html (:flashcards/overlapping c))
+    "cloze"       (card-row-html (:flashcards/cloze c))
+    (card-row-html (:flashcards/question c))))
+
+(defn row-sync-state
+  "The row's sync dot: the shared member state, or :mixed when they disagree.
+   A one-member row returns exactly what sync-state gave before groups
+   collapsed."
+  [c]
+  (let [states (into #{} (map #(sync-state (:flashcards/anki_synced_at %)
+                                 (:flashcards/updated_at %)))
+                 (:members c))]
+    (if (= 1 (count states)) (first states) :mixed)))
+
 (e/defn CardRow [card !editing-card user-id order]
   (e/client
     (let [id (e/server (:flashcards/id card))
+          member-ids (e/server (:member-ids card))
           kind (e/server (:flashcards/kind card))
           question (e/server (:flashcards/question card))
           answer (e/server (:flashcards/answer card))
           cloze (e/server (:flashcards/cloze card))
           ol (e/server (:flashcards/overlapping card))
           group-id (e/server (:flashcards/occlusion_group_id card))
-          mask-ordinal (e/server (:flashcards/mask_ordinal card))
-          occ-image-id (e/server (:occlusion_image_media_id card))
-          occ-mask-count (e/server (:occlusion_mask_count card))
-          occ-mode (e/server (:occlusion_mode card))
           score-group-id (e/server (:flashcards/score_group_id card))
-          score-direction (e/server (:flashcards/score_direction card))
-          score-start-ms (e/server (:score_start_ms card))
-          score-end-ms (e/server (:score_end_ms card))
-          io-header (e/server (get-in card [:flashcards/io_fields :header]))
-          sync-st (e/server (sync-state (:flashcards/anki_synced_at card)
-                              (:flashcards/updated_at card)))]
+          ;; Built server-side from the members: a group row's front cell
+          ;; describes the whole group, and its dot folds every member's state.
+          front-html (e/server (row-front-html card))
+          sync-st (e/server (row-sync-state card))]
       (let [occ? (= kind "occlusion")
             score? (= kind "score")
             cloze? (= kind "cloze")
@@ -197,33 +242,30 @@
                         :title (case sync-st
                                  :unsynced "Not synced to Anki"
                                  :synced (str "Synced to Anki")
-                                 :modified "Modified since last sync")})
+                                 :modified "Modified since last sync"
+                                 :mixed "This row's cards are in different sync states")})
             (dom/text (case sync-st
                         :unsynced "\u25CB"
                         :synced "\u25CF"
-                        :modified "\u25CF"))
+                        :modified "\u25CF"
+                        :mixed "\u25D0"))
             (dom/props {:style {:color (case sync-st
                                          :unsynced "var(--color-warning)"
                                          :synced "var(--color-success)"
-                                         :modified "var(--color-warning)")}}))
+                                         :modified "var(--color-warning)"
+                                         :mixed "var(--color-warning)")}}))
           ;; Front column — cloze, occlusion, and score span both content columns
-          (let [front-html (cond
-                             occ? (occlusion-row-html occ-image-id mask-ordinal occ-mask-count
-                                    occ-mode io-header)
-                             score? (score-row-html score-direction score-start-ms score-end-ms)
-                             overlapping? (overlapping-row-html ol)
-                             :else (card-row-html (if cloze? cloze question)))]
-            (dom/td
-              (dom/props {:dir "auto"
-                          :class "card-row-cell"
-                          :style (merge {:padding-block "6px" :padding-inline "8px"
-                                         :border-bottom "1px solid var(--color-border)"}
-                                   (when span2? {:grid-column "span 2"}))})
-              (a11y/KeyActivate {:label "Edit card"} edit-card!)
-              (e/for-by identity [_k [(str "f-" id)]]
-                (dom/div
-                  (dom/props {:class "card-row-html"})
-                  (set-inner-html! dom/node front-html)))))
+          (dom/td
+            (dom/props {:dir "auto"
+                        :class "card-row-cell"
+                        :style (merge {:padding-block "6px" :padding-inline "8px"
+                                       :border-bottom "1px solid var(--color-border)"}
+                                 (when span2? {:grid-column "span 2"}))})
+            (a11y/KeyActivate {:label "Edit card"} edit-card!)
+            (e/for-by identity [_k [(str "f-" id)]]
+              (dom/div
+                (dom/props {:class "card-row-html"})
+                (set-inner-html! dom/node front-html))))
           ;; Back column — hidden when the front cell spans both
           (let [back-text (if span2? "" (or answer ""))
                 back-html (card-row-html back-text)]
@@ -241,7 +283,7 @@
           (dom/td
             (dom/props {:style {:padding "6px 4px" :text-align "center"
                                 :border-bottom "1px solid var(--color-border)"}})
-            (DeleteCardButton id user-id))))))))
+            (DeleteCardButton member-ids user-id))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Optimistic add-card rows (freememo.optimistic :pending-cards overlay).

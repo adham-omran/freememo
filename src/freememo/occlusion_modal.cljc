@@ -21,6 +21,7 @@
    [freememo.card-history-modal :refer [CardHistoryModal]]
    [freememo.card-components :refer [try-delete-anki-notes!]]
    [freememo.occlusion-ordinals :as ord]
+   [freememo.tooltip :as tooltip]
    #?(:cljs [freememo.occlusion-editor :as occ-editor])
    #?(:cljs [freememo.vendor-libs :as vendor])
    #?(:clj [freememo.occlusion :as occ])
@@ -54,7 +55,8 @@
          init time, so a re-init resumes the user's current tool.
    Post: the editor writes tool switches back through on-tool-change, making
          !tool the single source of truth."
-  [!handle container image-media-id rects !tool on-change on-tool-change]
+  [!handle container image-media-id rects !tool on-change on-tool-change
+   on-selection-change]
   ;; setTimeout 0 lets Electric finish mounting the container; vendor/with!
   ;; then waits for Konva, which carries no <script> tag of its own.
   #?(:cljs (do (js/setTimeout
@@ -67,7 +69,8 @@
                                             :rects rects
                                             :tool @!tool
                                             :on-change on-change
-                                            :on-tool-change on-tool-change})))))
+                                            :on-tool-change on-tool-change
+                                            :on-selection-change on-selection-change})))))
                  0)
              nil)
      :clj nil))
@@ -85,6 +88,10 @@
 
 (defn ungroup-editor-selection! [!handle]
   #?(:cljs (do (occ-editor/ungroup-selection! @!handle) nil)
+     :clj nil))
+
+(defn delete-editor-selection! [!handle]
+  #?(:cljs (do (occ-editor/delete-selection! @!handle) nil)
      :clj nil))
 
 (defn destroy-occlusion-editor! [!handle]
@@ -153,13 +160,36 @@
       (dom/text label)
       (dom/On "click" (fn [_] (on-click)) nil))))
 
+(e/defn OcclusionDeleteButton
+  "Delete the selected masks. Disabled with nothing selected — the editor's own
+   Delete key no-ops there, and a live button that does nothing would be a lie.
+   Its own e/defn because it is the one button in this bar that reads a second
+   signal."
+  [!handle !selection]
+  (e/client
+    (let [n (e/watch !selection)
+          none? (zero? (or n 0))]
+      (dom/button
+        (dom/props {:class "btn btn-sm" :type "button"
+                    :disabled none?
+                    :style {:background "transparent"
+                            :border "1px solid var(--color-border)"
+                            :color (if none? "var(--color-text-hint)" "var(--color-danger-text)")}})
+        (tooltip/Tooltip! (if none?
+                            "Select a mask first"
+                            (str "Delete " n " selected mask" (when (not= 1 n) "s")
+                              " — takes effect on Save")))
+        (dom/text "Delete (⌫)")
+        (dom/On "click" (fn [_] (when-not none? (delete-editor-selection! !handle))) nil)))))
+
 (e/defn OcclusionMaskToolbar
   "Tool switch plus mask-group actions, mirroring the editor's own shortcuts.
-   Watches !tool HERE, not in the parent: the parent's body hosts the Konva init
-   side effect, and a signal there would put that call in a body Electric may
-   re-evaluate (CLAUDE.md, JS library init). !tool is the single source of truth
-   for the tool — the editor writes it back on a keyboard switch."
-  [!handle !tool]
+   Watches !tool and !selection HERE, not in the parent: the parent's body hosts
+   the Konva init side effect, and a signal there would put that call in a body
+   Electric may re-evaluate (CLAUDE.md, JS library init). !tool is the single
+   source of truth for the tool — the editor writes it back on a keyboard
+   switch — and !selection is written the same way, from select-nodes!."
+  [!handle !tool !selection]
   (e/client
     (let [tool (e/watch !tool)]
       (dom/div
@@ -173,7 +203,9 @@
         (OcclusionToolButton "Group (G)" false
           (fn [] (group-editor-selection! !handle)))
         (OcclusionToolButton "Ungroup (U)" false
-          (fn [] (ungroup-editor-selection! !handle)))))))
+          (fn [] (ungroup-editor-selection! !handle)))
+        (dom/span (dom/props {:style {:color "var(--color-border)"}}) (dom/text "|"))
+        (OcclusionDeleteButton !handle !selection)))))
 
 (e/defn OcclusionMaskSummary
   "\"N masks → M cards\". Own component so the !rects watch lives outside the
@@ -191,15 +223,15 @@
    Invariant: this body depends on NO signal, so the init-occlusion-editor! call
    below cannot be re-evaluated — every reactive value lives in a child
    component. Adding an (e/watch …) here would risk a second Konva stage."
-  [!handle image-media-id initial-rects !rects !tool]
+  [!handle image-media-id initial-rects !rects !tool !selection]
   (e/client
     (dom/div
       (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-      (OcclusionMaskToolbar !handle !tool)
+      (OcclusionMaskToolbar !handle !tool !selection)
       (dom/div
         (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
                             :margin-bottom "var(--sp-2)"}})
-        (dom/text "Draw (R): drag on the image to add a mask. Select (S): click a mask, Shift-click or drag a box to add more; drag to move, handles to resize, Delete to remove. Group (G) makes the selected masks one card; Ungroup (U) splits them."))
+        (dom/text "Draw (R): drag on the image to add a mask. Select (S): click a mask, Shift-click or drag a box to add more; drag to move, handles to resize. Delete (⌫ or the button) removes the selected masks. Group (G) makes the selected masks one card; Ungroup (U) splits them."))
       (dom/div
         (dom/props {:class "occlusion-editor-host"
                     :style {:min-height "200px" :max-height "58vh"
@@ -208,11 +240,12 @@
                             :border-radius "var(--radius-sm)"}})
         (let [host dom/node
               on-change (fn [rects] (reset! !rects rects))
-              on-tool-change (fn [tool] (reset! !tool tool))]
+              on-tool-change (fn [tool] (reset! !tool tool))
+              on-selection-change (fn [n] (reset! !selection n))]
           ;; The editor reads its starting tool from !tool, so a re-init (or a
           ;; remount) resumes the user's tool instead of resetting it.
           (init-occlusion-editor! !handle host image-media-id initial-rects
-            !tool on-change on-tool-change)
+            !tool on-change on-tool-change on-selection-change)
           (e/on-unmount (fn [] (destroy-occlusion-editor! !handle)))))
       (OcclusionMaskSummary !rects))))
 
@@ -349,6 +382,9 @@
           ;; act when editing is selecting (Anki's MaskEditor.svelte). Sole
           ;; source of truth for the tool from here on.
           !tool (atom (if edit? :select :draw))
+          ;; Selected node count, written from the editor's select-nodes!. A
+          ;; mask group counts as one, matching what Delete removes.
+          !selection (atom 0)
           !tab (atom :masks)
           tab (e/watch !tab)
           !primary-btn (atom nil)
@@ -407,7 +443,7 @@
           ;; the Konva stage and Quill instances survive switches.
           (dom/div
             (dom/props {:style {:display (if (= tab :masks) "block" "none")}})
-            (OcclusionMasksTab !handle image-media-id initial-rects !rects !tool))
+            (OcclusionMasksTab !handle image-media-id initial-rects !rects !tool !selection))
           (dom/div
             (dom/props {:style {:display (if (= tab :fields) "block" "none")}})
             (OcclusionFieldsTab initial-fields !fields field-key modal-font))

@@ -3233,13 +3233,13 @@
 ;; ---------------------------------------------------------------------------
 
 (def ^:private occlusion-mask-count-expr
-  "Rects sharing this row's mask_ordinal — the size of the row's mask group,
-   which the card tables render as \"group N · k masks\". Correlated on
-   f.mask_ordinal, so it is 0 for non-occlusion rows (a NULL ordinal matches
-   nothing) and for a group whose geometry somehow lacks :rects (coalesce)."
-  [:raw (str "(select count(*) from"
-          " jsonb_array_elements(coalesce(og.geometry->'rects', '[]'::jsonb)) as r(el)"
-          " where (r.el->>'ordinal')::int = f.mask_ordinal)")])
+  "Rects in the whole group — the masks the card tables render as
+   \"Occlusion · N masks → M cards\", where M is the group's row count and this
+   is N. Group-wide rather than per-ordinal because the tables collapse a group
+   to ONE row (freememo.card-rows), so no row stands for a single ordinal any
+   more. 0 for non-occlusion rows: og.geometry is NULL there, so the coalesce
+   yields an empty array."
+  [:raw "jsonb_array_length(coalesce(og.geometry->'rects', '[]'::jsonb))"])
 
 (def ^:private card-group-selects
   "Occlusion/score group columns, projected by every query that returns whole
@@ -3550,6 +3550,52 @@
                      :where [:and
                              [:= :root.user_id user-id]
                              [:in :f.id (vec card-ids)]]})))))
+
+(defn- fully-deleted-groups-of
+  "Rows of `group-table` that deleting `card-ids` would leave with no member.
+   fk-col is the flashcards column referencing that table (unqualified keyword).
+   Pre: card-ids non-empty."
+  [user-id card-ids group-table fk-col]
+  (let [ids (vec card-ids)
+        f-fk (keyword "f" (name fk-col))
+        f2-fk (keyword "f2" (name fk-col))]
+    (jdbc/execute! ds
+      (sql/format {:select [:g.*]
+                   :from [[group-table :g]]
+                   :where [:and
+                           ;; at least one member is going away, and it is ours
+                           [:exists {:select [1]
+                                     :from [[:flashcards :f]]
+                                     :join [[:topics :root] [:= :f.root_topic_id :root.id]]
+                                     :where [:and
+                                             [:= :root.user_id user-id]
+                                             [:= f-fk :g.id]
+                                             [:in :f.id ids]]}]
+                           ;; and none survives
+                           [:not [:exists {:select [1]
+                                           :from [[:flashcards :f2]]
+                                           :where [:and
+                                                   [:= f2-fk :g.id]
+                                                   [:not-in :f2.id ids]]}]]]}))))
+
+(defn fully-deleted-group-rows
+  "Occlusion and score group rows that deleting `card-ids` would destroy — the
+   groups every one of whose flashcard rows is in the set.
+   Pre:  called BEFORE the delete. remove-occlusion-mask! and
+         remove-score-card-cleanup! drop a group row once its last member is
+         gone, so afterwards there is nothing left to snapshot.
+   Post: {:occlusion-groups [row ...] :score-groups [row ...]}, with qualified
+         keys and PGobject geometry exactly as jdbc returns them —
+         insert-card-delete-undo! owns the unqualifying and JSONB parsing.
+         A group with a surviving member is ABSENT: a partial delete leaves its
+         group standing, which remove-occlusion-mask! then reconciles.
+   Ownership is scoped through the root topic, matching delete-user-flashcards!,
+   so an id the caller does not own contributes nothing."
+  [user-id card-ids]
+  (if (empty? card-ids)
+    {:occlusion-groups [] :score-groups []}
+    {:occlusion-groups (fully-deleted-groups-of user-id card-ids :occlusion_groups :occlusion_group_id)
+     :score-groups (fully-deleted-groups-of user-id card-ids :score_groups :score_group_id)}))
 
 (defn delete-user-flashcards!
   "Bulk delete of user-id's flashcards. Ownership enforced via the root
@@ -5157,6 +5203,31 @@
     (prune-undo-log! ds user-id)
     id))
 
+(defn snapshot-cards
+  "The card rows inside an undo snapshot, whichever shape it has.
+   A card delete writes a MAP (insert-card-delete-undo!) so it can carry the
+   group rows the delete destroyed; entries written before groups collapsed
+   hold a bare vector of card rows, and those stay readable for the 12h the log
+   keeps them. Every reader of a 'flashcard' snapshot goes through here."
+  [snapshot]
+  (if (map? snapshot) (:cards snapshot) snapshot))
+
+(defn insert-card-delete-undo!
+  "Undo entry for a card delete that may have destroyed whole groups.
+   Pre:  snapshot = {:cards [row ...] :occlusion-groups [row ...]
+         :score-groups [row ...]}, rows exactly as jdbc returned them.
+   Post: keys unqualified and JSONB values parsed for every row in every
+         vector — the nesting puts them out of reach of insert-undo-entry!'s
+         flat mapv, and cheshire cannot encode a PGobject.
+   Returns the entry id. Reversed by restore-card-rows!, which the undo
+   dispatch selects on the snapshot being a MAP; the flat-vector shape written
+   before this existed still restores through restore-flashcards!."
+  [user-id action-type card-ids snapshot]
+  (let [id (insert-undo-entry-raw! ds user-id action-type "flashcard" card-ids
+             (update-vals snapshot #(mapv unqualify-row %)))]
+    (prune-undo-log! ds user-id)
+    id))
+
 (defn- parse-undo-row
   "Decode a raw undo_log row: keywordized unqualified keys with :entity_refs
    and :snapshot parsed back from JSONB."
@@ -5224,6 +5295,44 @@
   "Re-insert deleted flashcards from a snapshot (non-transactional)."
   [snapshot-rows]
   (restore-flashcards-tx! ds snapshot-rows))
+
+(def ^:private group-ts-cols
+  "Timestamp columns shared by occlusion_groups and score_groups."
+  [:created_at :updated_at])
+
+(defn- restore-group-rows-tx!
+  "Re-insert deleted occlusion/score group rows on the given connectable,
+   preserving original ids. ON CONFLICT (id) DO NOTHING — a group the delete
+   never destroyed is left untouched. geometry came back from JSONB as a plain
+   map and must be re-wrapped; timestamps came back as ISO strings and must be
+   CAST. Restoring the row verbatim brings back anki_key and next_ordinal, so
+   regenerated mask filenames stay consistent with surviving card_versions."
+  [conn table snapshot-rows]
+  (when (seq snapshot-rows)
+    (jdbc/execute! conn
+      (sql/format {:insert-into table
+                   :values (mapv #(-> %
+                                    (cast-timestamps group-ts-cols)
+                                    (update :geometry ->jsonb))
+                               snapshot-rows)
+                   :on-conflict [:id]
+                   :do-nothing true}))))
+
+(defn restore-card-rows!
+  "Reverse a card delete from its map-shaped snapshot.
+   Pre:  snapshot = {:cards [...] :occlusion-groups [...] :score-groups [...]},
+         as written by insert-card-delete-undo!.
+   Post: every row is back under its original id. Group rows go in FIRST —
+         flashcards.occlusion_group_id and .score_group_id are foreign keys, so
+         a card inserted before its group is rejected. One transaction, so a
+         failure restores nothing rather than a group with no cards.
+         Cards come back UNSYNCED (restore-flashcards-tx!), so the next push
+         re-creates their Anki notes and regenerates the group's mask media."
+  [snapshot]
+  (jdbc/with-transaction [tx ds]
+    (restore-group-rows-tx! tx :occlusion_groups (:occlusion-groups snapshot))
+    (restore-group-rows-tx! tx :score_groups (:score-groups snapshot))
+    (restore-flashcards-tx! tx (:cards snapshot))))
 
 (defn restore-pin!
   "Re-insert a removed pin from its snapshot, preserving the original id.
