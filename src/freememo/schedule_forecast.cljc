@@ -100,6 +100,12 @@
            :immature       — mean R >= θ but the interval gate fails
            :below-theta    — mean R < θ
            :untouched      — neither done nor carded (§5.5)
+   Post: `:done?` is the page's own mark, carried through untouched. It is NOT
+         a verdict — a done page WITH cards is judged on the cards alone, so
+         the mark reaches `:reason` only through `:uncarded-done`. It is
+         reported anyway because `document-progress` counts it, and because a
+         reader who marked a page done and read `not known` has no other way to
+         see that the mark registered.
    Invariant: a page is never known on R alone. `:immature` exists to name the
          case the maturity gate rejects, so the tab can say which gate failed
          rather than reporting a bare no."
@@ -116,6 +122,7 @@
     {:page-id (:page-id page)
      :page-number (:page-number page)
      :known? (contains? #{:uncarded-done :mature} reason)
+     :done? (boolean (:done? page))
      :reason reason
      :retrievability (if (pos? n) r 0.0)
      :interval-days (if (pos? n) ivl 0.0)
@@ -151,19 +158,30 @@
     (mapv #(page-verdict % (get by-page (:page-id %) []) theta) pages)))
 
 (defn document-progress
-  "Known and untested counts over a set of verdicts (§5.4, §5.6).
+  "Known, covered and untested counts over a set of verdicts (§5.4, §5.6).
 
-   Post: {:total :known :untested :unknown :fraction}. `:untested` is the
-         known-because-uncarded count, reported SEPARATELY rather than folded
-         into `:known` — §5.4 requires the exposure to stay visible, and §6.6.4.1
-         requires lever I5 to move it. `:fraction` is known over total, and 0.0
-         for an empty range rather than a division by zero."
+   Post: {:total :known :covered :untested :unknown :fraction}. `:untested` is
+         the known-because-uncarded count, reported SEPARATELY rather than
+         folded into `:known` — §5.4 requires the exposure to stay visible, and
+         §6.6.4.1 requires lever I5 to move it. `:fraction` is known over total,
+         and 0.0 for an empty range rather than a division by zero.
+   Post: `:covered` is the pages the reader has MARKED DONE, which is a
+         different question from `:known` and answerable with no Anki at all.
+         Without it a page marked done whose cards are young lands in no figure
+         on the tab: it is not `:known` (the maturity gate rejects it) and not
+         `:untested` (that counts done-and-uncarded only), so the reading work
+         reads as zero everywhere.
+   Inv : `:untested` <= `:covered` <= `:total`. Done-and-uncarded is a strict
+         subset of done, and every verdict comes from one page of the range.
+         A violation is a bug in `page-verdict`, not here."
   [verdicts]
   (let [total (count verdicts)
         known (count (filter :known? verdicts))
+        covered (count (filter :done? verdicts))
         untested (count (filter #(= :uncarded-done (:reason %)) verdicts))]
     {:total total
      :known known
+     :covered covered
      :untested untested
      :unknown (- total known)
      :fraction (if (pos? total) (/ (double known) total) 0.0)}))

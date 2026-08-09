@@ -252,6 +252,44 @@
       (is (= 59 (:untested prog)))
       (is (close? 1.0 (:fraction prog) 1e-9)))))
 
+(deftest covered-counts-done-pages-whether-or-not-their-cards-are-known
+  (testing "a done page with young cards is NOT known, and IS covered"
+    (let [pages (mapv (fn [i] {:page-id i :done? true}) (range 1 24))
+          ;; R clears θ, interval does not — every page reads :immature.
+          cards (mapv #(carded % 0.99 3.0) (range 1 13))
+          prog (fc/document-progress (fc/page-verdicts pages cards 0.9))]
+      (is (= 23 (:total prog)))
+      (is (= 11 (:known prog)) "pages 13-23 are done with no cards")
+      (is (= 23 (:covered prog)) "every page is marked done")
+      (is (= 11 (:untested prog)) "only the uncarded ones are untested")))
+  (testing "an untouched range is covered 0"
+    (let [pages (mapv (fn [i] {:page-id i :done? false}) (range 1 24))]
+      (is (zero? (:covered (fc/document-progress (fc/page-verdicts pages [] 0.9))))))))
+
+(deftest untested-never-exceeds-covered-and-covered-never-exceeds-total
+  (testing "the subset chain the Covered tile's sub-line asserts"
+    (doseq [done-count (range 0 11)
+            carded-count (range 0 11)
+            theta [0.5 0.9]
+            ivl [3.0 30.0]]
+      (let [pages (mapv (fn [i] {:page-id i :done? (< i done-count)}) (range 0 10))
+            cards (mapv #(carded % 0.95 ivl) (range 0 carded-count))
+            prog (fc/document-progress (fc/page-verdicts pages cards theta))]
+        (is (<= (:untested prog) (:covered prog) (:total prog))
+          (str "done=" done-count " carded=" carded-count
+            " θ=" theta " ivl=" ivl " → " (select-keys prog [:untested :covered :total])))))))
+
+(deftest a-page-verdict-carries-its-own-done-mark
+  (testing "the mark reaches the aggregate even when the reason hides it"
+    (is (true? (:done? (fc/page-verdict {:page-id 1 :done? true} [] 0.9))))
+    (is (false? (:done? (fc/page-verdict {:page-id 1 :done? false} [] 0.9))))
+    ;; :immature — the reason says nothing about the mark, so :done? is the
+    ;; only place it survives.
+    (let [v (fc/page-verdict {:page-id 1 :done? true} [(carded 1 0.99 3.0)] 0.9)]
+      (is (= :immature (:reason v)))
+      (is (false? (:known? v)))
+      (is (true? (:done? v))))))
+
 (deftest narrowing-the-range-changes-the-denominator
   (testing "§5.6 done-when"
     (let [all (mapv (fn [i] {:page-id i :done? false}) (range 1 101))

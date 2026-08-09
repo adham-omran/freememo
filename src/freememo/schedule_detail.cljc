@@ -94,6 +94,14 @@
         (StatTile "Known now"
           (str (e/server (:known prog)) " / " (e/server (:total prog)))
           (pct (e/server (:fraction prog))))
+        ;; Covered sits BETWEEN known and untested on purpose, and its sub-line
+        ;; is load-bearing. Untested is a strict subset of covered, so two
+        ;; adjacent tiles with the relation unstated invite a reader to add
+        ;; them. "marked done" and "done, never carded" share the word and the
+        ;; second qualifies it, which states the subset without a sentence.
+        (StatTile "Covered"
+          (str (e/server (:covered prog)) " / " (e/server (:total prog)))
+          "marked done")
         ;; §5.4 — the exposure figure is its own tile. Folding it into "known"
         ;; is what would hide the cost of lever I5.
         (StatTile "Untested"
