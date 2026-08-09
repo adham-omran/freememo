@@ -17,6 +17,7 @@
    [hyperfiddle.router5 :as r]
    [freememo.schedule :as sched]
    [freememo.schedule-anki :as sa]
+   [freememo.schedule-forecast :as fc]
    [freememo.schedule-detail :refer [ScheduleForecast]]
    [freememo.icons :as icons]
    [freememo.tooltip :as tooltip]
@@ -92,21 +93,15 @@
           (zero? (count note-ids)) :no-cards
           :else (:status acq))))))
 
-(e/defn AnkiChip [status]
-  (e/client
-    (let [{:keys [chip fault?]} (get sa/acquisition-states status)]
-      (dom/span
-        (dom/props {:style {:display "inline-flex" :align-items "center" :gap "6px"
-                            :font-size "12px" :color "var(--color-text-secondary)"}})
-        ;; Three icons, not two. A state is not a fault — an account before its
-        ;; first Anki push is in one, and a warning triangle there reads as
-        ;; something the user broke. `:fault?` is declared beside the state, so
-        ;; this site never enumerates which is which.
-        (icons/Icon (cond (= :ok status) :check
-                          fault? :triangle-alert
-                          :else :clock)
-          :size 14)
-        (dom/text (or chip sa/reading-chip))))))
+;; The header chip that used to live here is gone. It rendered on all three
+;; sub-views, so `/schedule` and the new-schedule form both showed
+;; "FSRS unavailable" beside no forecast at all. The acquisition status now
+;; renders only where a forecast depends on it: `StaleBanner` in the detail
+;; pane, and a per-schedule status line on each dashboard card.
+;;
+;; `schedule-anki/acquisition-states` therefore has ONE render site left. The
+;; test over that map asserts its SHAPE, not its render sites, so nothing there
+;; guards the remaining one.
 
 ;; ---------------------------------------------------------------------------
 ;; New-schedule form (§7.4)
@@ -243,6 +238,87 @@
               (token (e/server (:error res))))))))))
 
 ;; ---------------------------------------------------------------------------
+;; Edit form — the levers of §6.6 that have a control
+;; ---------------------------------------------------------------------------
+
+;; Pre:  `user-id` owns `schedule-id`; the four seed values come from the
+;;       schedule's own row.
+;; Post: a successful save writes through `sched/update-schedule!` and closes
+;;       the form, STAYING on the schedule. Create navigates because the user
+;;       has nowhere to be yet; an edit is already where it belongs.
+;; Inv:  a SIBLING of NewScheduleForm, not that component in an edit mode. The
+;;       two differ in four places — the document is fixed here because
+;;       `db/update-study-schedule!` deliberately cannot reach `root_topic_id`,
+;;       the fields are seeded rather than blank, the parsed command carries no
+;;       root id, and the success path does not navigate. A mode flag would
+;;       hide four differences behind one boolean.
+;; Inv:  θ and excluded pages are NOT here. `FeasibilityPanel` marks those two
+;;       levers "(not editable yet)" so the advice stays honest about it.
+(e/defn EditScheduleForm [user-id schedule-id seed !open?]
+  (e/client
+    (let [commits (forms/Form!
+                    seed
+                    (e/fn Fields [{:keys [target-date first-page last-page capacity]}]
+                      (e/amb
+                        (FieldLabel "Target date")
+                        (forms/Input! :target-date (or target-date "") :type "date"
+                          :class "input input-full"
+                          :style {:margin-bottom "var(--sp-3)"})
+
+                        (FieldLabel "First page")
+                        (forms/Input! :first-page (or first-page "1") :type "number"
+                          :class "input input-full"
+                          :style {:margin-bottom "var(--sp-3)"})
+
+                        (FieldLabel "Last page (blank = to the end)")
+                        (forms/Input! :last-page (or last-page "") :type "number"
+                          :class "input input-full"
+                          :style {:margin-bottom "var(--sp-3)"})
+
+                        (FieldLabel "Daily review capacity")
+                        (forms/Input! :capacity (or capacity "60") :type "number"
+                          :class "input input-full"
+                          :style {:margin-bottom "var(--sp-3)"})
+
+                        (dom/div
+                          (dom/props {:style {:display "flex" :gap "var(--sp-2)"
+                                              :justify-content "flex-end"}})
+                          (e/amb
+                            (forms/SubmitButton! :label "Save changes"
+                              :class "btn btn-primary" :style {:order "1"})
+                            (dom/button
+                              (dom/props {:class "btn" :type "button"})
+                              (dom/text "Cancel")
+                              (dom/On "click" (fn [_] (reset! !open? false)) nil)
+                              (e/amb))))))
+                    ;; Validation HERE, not in the commit handler — Forms5 reads
+                    ;; `ex-message` and, for `:type :command`, an `ex-info`
+                    ;; disables the submit button instead of letting the user
+                    ;; spend a token and be told no afterwards.
+                    :Parse (e/fn [fields _tempid]
+                             (let [target (str (:target-date fields))]
+                               (if (str/blank? target)
+                                 (ex-info "Pick a target date." {})
+                                 [`UpdateSchedule
+                                  {:target_date target
+                                   :first_page (parse-int-or-nil (:first-page fields))
+                                   :last_page (parse-int-or-nil (:last-page fields))
+                                   :daily_capacity (or (parse-int-or-nil (:capacity fields))
+                                                     sched/default-daily-capacity)}])))
+                    :type :command
+                    :show-buttons false)]
+      (e/for [[token cmd] commits]
+        (let [fields (nth cmd 1)
+              res (e/server (e/Offload #(sched/update-schedule! user-id schedule-id fields)))]
+          (when (some? res)
+            (if (e/server (:ok res))
+              ;; Close from inside the SUCCESS branch, so a failure keeps the
+              ;; form open with its message (CLAUDE.md, Token Lifecycle).
+              (do (e/on-unmount #(reset! !open? false))
+                (token))
+              (token (e/server (:error res))))))))))
+
+;; ---------------------------------------------------------------------------
 ;; Schedule list
 ;; ---------------------------------------------------------------------------
 
@@ -321,7 +397,7 @@
 ;; Detail pane
 ;; ---------------------------------------------------------------------------
 
-(e/defn ScheduleHeader [user-id schedule-id navigate! archived?]
+(e/defn ScheduleHeader [user-id schedule-id navigate! archived? !edit-open?]
   (e/client
     (dom/div
       (dom/props {:style {:display "flex" :align-items "center" :gap "10px"
@@ -337,6 +413,14 @@
       (dom/h2
         (dom/props {:style {:margin "0" :font-size "16px" :flex "1"}})
         (dom/text (if archived? "Forecast · archived" "Forecast")))
+      ;; Edit sits beside Archive because both act on the schedule as a whole.
+      ;; Hidden while archived: a retired schedule has no plan to revise, and
+      ;; Restore is the one action that makes sense there.
+      (when-not archived?
+        (dom/button
+          (dom/props {:class "btn" :style {:font-size "12px"}})
+          (dom/text "Edit")
+          (dom/On "click" (fn [_] (swap! !edit-open? not)) nil)))
       ;; One button, two directions. Archiving is reversible, so the pane that
       ;; archives must be the pane that restores — an archive reachable only
       ;; through a list you cannot act on is a museum.
@@ -375,8 +459,22 @@
           ;; scalars and the scrolled window are read (CLAUDE.md, 'e/defn
           ;; Returns Materialize at the Call Site').
           forecast (e/server (e/Offload #(sched/forecast refresh user-id schedule-id)))
-          archived? (e/server (some? (get-in forecast [:schedule :study_schedules/archived_at])))]
-      (ScheduleHeader user-id schedule-id navigate! archived?)
+          archived? (e/server (some? (get-in forecast [:schedule :study_schedules/archived_at])))
+          ;; Local to this pane, and keyed on the schedule id below, so opening
+          ;; a different schedule never inherits the previous one's open form.
+          !edit-open? (atom false)
+          edit-open? (e/watch !edit-open?)]
+      (ScheduleHeader user-id schedule-id navigate! archived? !edit-open?)
+      (when edit-open?
+        ;; The seed is read field by field rather than shipped as one row: the
+        ;; row carries an array column and a page-range that mean nothing here.
+        (e/for-by identity [_k [schedule-id]]
+          (EditScheduleForm user-id schedule-id
+            {:target-date (e/server (str (get-in forecast [:schedule :study_schedules/target_date])))
+             :first-page (e/server (str (or (get-in forecast [:schedule :study_schedules/first_page]) 1)))
+             :last-page (e/server (str (or (get-in forecast [:schedule :study_schedules/last_page]) "")))
+             :capacity (e/server (str (get-in forecast [:schedule :study_schedules/daily_capacity])))}
+            !edit-open?)))
       ;; `:not-found` is its own branch, never a loading message. Electric holds
       ;; this frame pending until the Offload resolves, so a resolved value is
       ;; never "still working" — rendering the absent case as a spinner left a
@@ -390,7 +488,67 @@
             (dom/props {:class "btn" :style {:margin-left "10px" :font-size "12px"}})
             (dom/text "Back to schedules")
             (dom/On "click" (fn [_] (navigate! :schedule)) nil)))
-        (ScheduleForecast forecast anki-status)))))
+        (ScheduleForecast user-id schedule-id forecast anki-status)))))
+
+;; ---------------------------------------------------------------------------
+;; Home dashboard
+;; ---------------------------------------------------------------------------
+
+;; Pre:  `s` is one row of `sched/schedule-summaries`.
+;; Post: a card showing what the user does about this schedule TODAY, plus the
+;;       schedule's own status. The status is per-SCHEDULE, which is why the
+;;       tab header carries no Anki chip: with FSRS off nothing ingests, so
+;;       every row reports "Anki not read yet" on its own rather than one
+;;       global banner speaking for figures it cannot vouch for.
+(e/defn DashboardCard [s navigate!]
+  (e/client
+    (dom/div
+      (dom/props {:class "dash-card" :style {:cursor "pointer" :padding "12px 14px"
+                                             :margin-bottom "10px"}})
+      (dom/On "click" (fn [_] (navigate! :schedule {:type :schedule-detail :id (:id s)})) nil)
+      (dom/div
+        (dom/props {:style {:display "flex" :align-items "baseline" :gap "8px"}})
+        (dom/div
+          (dom/props {:style {:font-weight "600" :font-size "14px" :flex "1"
+                              :overflow "hidden" :text-overflow "ellipsis"
+                              :white-space "nowrap"}})
+          (tooltip/Tooltip! (:title s))
+          (dom/text (:title s)))
+        (dom/span
+          (dom/props {:class "toolbar-badge"})
+          (dom/text (fc/deadline-token (:days-to-target s)))))
+      (dom/div
+        (dom/props {:style {:margin-top "6px" :font-size "12px"
+                            :color "var(--color-text-secondary)"}})
+        (dom/text (str (:pace-phrase s)
+                    " · " (:covered s) " / " (:total s) " covered"
+                    " · " (fc/pages-label (:pages-today s)) " today")))
+      ;; :ok needs no line — a working forecast is the ordinary case, and
+      ;; labelling it would make the exceptions harder to spot.
+      (when (not= :ok (:status s))
+        (dom/div
+          (dom/props {:style {:margin-top "4px" :font-size "12px"
+                              :color "var(--color-text-hint)"}})
+          (dom/text (:status-label s)))))))
+
+(e/defn ScheduleDashboard [user-id navigate!]
+  (e/client
+    (let [refresh (e/server (e/watch (us/get-atom user-id :schedule-mutations)))
+          ;; ONE reader for every row. Mapping a per-schedule reader over the
+          ;; list would put a round trip inside the loop; this is a single
+          ;; query plus one h=0 projection per schedule, about 5 ms each.
+          summaries (e/server (e/Offload #(sched/schedule-summaries refresh user-id)))
+          n (e/server (count summaries))]
+      (dom/div
+        (dom/props {:style {:padding "4px"}})
+        (if (zero? n)
+          (dom/div
+            (dom/props {:style {:padding "32px" :text-align "center"
+                                :color "var(--color-text-secondary)"
+                                :font-size "14px"}})
+            (dom/text "No schedules yet. Pick a document and a date."))
+          (e/for [i (e/diff-by identity (range n))]
+            (DashboardCard (e/server (nth summaries i)) navigate!)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Tab entry point (§7.1)
@@ -414,9 +572,14 @@
         (dom/div
           (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
                               :margin-bottom "12px"}})
+          ;; No Anki chip here. It rendered on all three sub-views, so the home
+          ;; view and the new-schedule form both showed "FSRS unavailable" with
+          ;; no forecast to qualify it. The acquisition status belongs where a
+          ;; forecast depends on it: `StaleBanner` in the detail pane, and a
+          ;; per-schedule status line on each dashboard card. `AnkiSync` above
+          ;; stays mounted at the tab — one acquisition serves every schedule.
           (dom/h1 (dom/props {:style {:margin "0" :font-size "18px" :flex "1"}})
-            (dom/text "Schedule"))
-          (AnkiChip anki-status))
+            (dom/text "Schedule")))
 
         ;; Layout lives in CSS, not in an inline style map, because it has to
         ;; change with the viewport. `is-detail` tells the stylesheet that a
@@ -432,9 +595,4 @@
             (cond
               new-open? (NewScheduleForm user-id navigate! !new-open?)
               selected-id (ScheduleDetailPane user-id selected-id navigate! anki-status)
-              :else
-              (dom/div
-                (dom/props {:style {:padding "32px" :text-align "center"
-                                    :color "var(--color-text-secondary)"
-                                    :font-size "14px"}})
-                (dom/text "Choose a schedule, or create one.")))))))))
+              :else (ScheduleDashboard user-id navigate!))))))))

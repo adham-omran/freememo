@@ -102,6 +102,22 @@
     (long (Math/floor (/ (double (- (inst-ms inst) origin-ms)) sf/ms-per-day)))))
 
 #?(:clj
+   (defn- day->iso-date
+     "A day index counted from today, as an ISO date string.
+
+      The date lever used to name its index raw — 'Move the target out to day
+      13' — while the Plan table beside it showed real dates. A reader had no
+      way to tell day 13 of the month from 13 days out, and converting it was
+      arithmetic the surface should have done.
+
+      Pre : `day` is a day index from `earliest-feasible-day`, or nil.
+      Post: the ISO date `day` days after today, or nil for nil — a caller with
+            no day has no advice to render."
+     [day]
+     (when day
+       (str (.plusDays (java.time.LocalDate/now) (long day))))))
+
+#?(:clj
    (defn- schedule-span
      "Days from a schedule's creation to its target, floored at 1.
 
@@ -348,6 +364,51 @@
          (second (known-at scheduler pcards pages theta 0 {}))
          (fc/page-verdicts pages [] theta)))))
 
+#?(:clj
+   (defn- pace-of
+     "§6.2's lag or lead for one schedule, from its inputs and today's progress.
+
+      THREE readers need this figure — the forecast, the toolbar badge, and the
+      dashboard summary — and each assembling its own `fc/pace` call is how the
+      arguments drift. `start_known` was once frozen from the DONE page count
+      while the line was measured against the KNOWN count, and a fresh schedule
+      read '5 pages behind' on the day it was created.
+
+      Pre : `progress` is `current-progress` over `inputs`, both derived from
+            `row`. Mixing a progress map from one schedule with another's row
+            is a caller bug and produces a plausible wrong number.
+      Post: `schedule-forecast/pace`'s {:required :actual :delta}."
+     [row inputs progress]
+     (let [horizon (:horizon inputs)
+           span (schedule-span row (:origin-ms inputs))]
+       (fc/pace {:known-now (:known progress)
+                 :total-pages (:total progress)
+                 :start-known (:study_schedules/start_known row)
+                 :elapsed-days (- span horizon)
+                 :total-days span}))))
+
+(def forecast-status-labels
+  "One label per status `forecast` and `schedule-inputs` can report.
+
+   Here rather than in the view, for the reason `schedule-forecast/reason-labels`
+   states about its own: this namespace decides which key to emit, so it owns
+   what each one means. A status added without a label would render blank.
+
+   This is NOT `schedule-anki/acquisition-states`. That map describes the Anki
+   CONNECTION — offline, too old, FSRS off — and this one describes what a
+   schedule has to forecast WITH. They overlap on `:no-cards` alone, and
+   reading one where the other belongs is how the dashboard would report a
+   connection fault as a document problem.
+
+   A plain `def`, no reader conditional: a CLJ-only `def` read from client
+   scope compiles with zero warnings, emits nothing on the CLJS peer, and kills
+   the WebSocket at mount when the two disagree on frame shape (CLAUDE.md,
+   `transcribe_language.cljc`)."
+  {:ok "forecast ready"
+   :no-config "Anki not read yet"
+   :no-cards "no cards pushed"
+   :not-found "schedule is gone"})
+
 (defn forecast
   "The whole forecast for one schedule (§1.1, §1.2, §5, §6).
 
@@ -394,8 +455,7 @@
              :progress progress
              :plan (study-plan (- (:total progress) (:known progress)) horizon {}))
 
-           (let [known-now (:known progress)
-                 [known-end verdicts-end projected]
+           (let [[known-end verdicts-end projected]
                  (known-at scheduler pcards pages theta horizon {})
                  load (fc/daily-review-load projected)
                  peak (fc/peak-daily-load load)
@@ -422,16 +482,19 @@
                  reachable (count (remove #(= :untouched (:reason %)) verdicts-end))
                  feas (if (:feasible? base-feas)
                         base-feas
-                        (assoc base-feas
-                          :reachable reachable
-                          :unreachable (- total reachable)
-                          :earliest-day
-                          (when (pos? reachable)
-                            (fc/earliest-feasible-day
-                              (fn [d] (first (known-at scheduler pcards pages theta d
-                                               {:epsilon suggestion-epsilon})))
-                              reachable max-horizon-days))))
-                 span (schedule-span row origin-ms)]
+                        ;; `:earliest-date` is DERIVED from `:earliest-day`
+                        ;; here, in one place, so the two cannot name
+                        ;; different days.
+                        (let [earliest (when (pos? reachable)
+                                         (fc/earliest-feasible-day
+                                           (fn [d] (first (known-at scheduler pcards pages theta d
+                                                            {:epsilon suggestion-epsilon})))
+                                           reachable max-horizon-days))]
+                          (assoc base-feas
+                            :reachable reachable
+                            :unreachable (- total reachable)
+                            :earliest-day earliest
+                            :earliest-date (day->iso-date earliest))))]
              (assoc base
                :status :ok
                :theta theta
@@ -440,11 +503,7 @@
                :progress progress
                :projected projected-progress
                :verdicts verdicts-end
-               :pace (fc/pace {:known-now known-now
-                               :total-pages total
-                               :start-known (:study_schedules/start_known row)
-                               :elapsed-days (- span horizon)
-                               :total-days span})
+               :pace (pace-of row inputs progress)
                :daily-load load
                :peak-load peak
                ;; §1.2 — the plan the user actually follows. Pages come
@@ -576,19 +635,56 @@
        (when-let [row (db/active-study-schedule-for-root user-id root-topic-id)]
          (let [inputs (schedule-inputs user-id row)
                progress (current-progress inputs)
-               horizon (:horizon inputs)
-               span (schedule-span row (:origin-ms inputs))
-               p (fc/pace {:known-now (:known progress)
-                           :total-pages (:total progress)
-                           :start-known (:study_schedules/start_known row)
-                           :elapsed-days (- span horizon)
-                           :total-days span})
+               p (pace-of row inputs progress)
                state (fc/pace-state (:delta p))]
            {:state state
             :days-to-target (signed-days-to-target (:study_schedules/target_date row))
             :tooltip (str (fc/pace-phrase state (:delta p))
                        " · target " (:study_schedules/target_date row))})))
      :cljs nil))
+
+(defn schedule-summaries
+  "One row per ACTIVE schedule, at TODAY's horizon only — the tab's home view.
+
+   Every figure comes from `current-progress` at h=0 and the row itself, so a
+   summary costs about 5 ms. Calling `forecast` per schedule instead would cost
+   339 ms at a 90-day horizon and 1.2 s at a year, for a review column the home
+   view does not show.
+
+   Pre : nothing. A user with no schedules gets an empty vector, which is what
+         the view renders its empty state from.
+   Post: a vector of plain display maps, ordered as `db/list-study-schedules`
+         orders them — soonest target first, ties by lowest id — so the home
+         view and the sidebar agree on order.
+   Post: `:status` is `schedule-inputs`' verdict, labelled through
+         `forecast-status-labels`. It is per-SCHEDULE, which is why the tab
+         header needs no global Anki chip: with FSRS off nothing ingests, so no
+         deck config is cached and every row reports `:no-config` on its own.
+   Inv : ONE query for the list, then one `schedule-inputs` per row. The view
+         MUST NOT map a per-schedule reader over the list — that would put the
+         round trip inside the loop."
+  [_refresh user-id]
+  #?(:clj
+     (mapv
+       (fn [row]
+         (let [inputs (schedule-inputs user-id row)
+               progress (current-progress inputs)
+               p (pace-of row inputs progress)
+               remaining (- (:total progress) (:known progress))]
+           {:id (:study_schedules/id row)
+            :title (or (:topics/doc_title row) "Untitled")
+            :target-date (:study_schedules/target_date row)
+            :days-to-target (signed-days-to-target (:study_schedules/target_date row))
+            :status (:status inputs)
+            :status-label (get forecast-status-labels (:status inputs))
+            :pace-state (fc/pace-state (:delta p))
+            :pace-phrase (fc/pace-phrase (fc/pace-state (:delta p)) (:delta p))
+            :covered (:covered progress)
+            :known (:known progress)
+            :total (:total progress)
+            :pages-today (first (fc/daily-page-plan remaining (:horizon inputs)))}))
+       (db/list-study-schedules user-id))
+     :cljs []))
 
 (defn documents-for-picker
   "Root documents a schedule can be built over, newest first.

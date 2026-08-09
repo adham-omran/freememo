@@ -361,6 +361,13 @@
             (reduce + 0.0 (mapcat #(vals (get-in % [:projected :daily-reviews])) cards))
             1e-9)))))
 
+(deftest the-deadline-token-tells-today-from-overdue
+  (testing "the signed count, NOT days-until's floored one — that reports 0 for
+            today and for last month alike"
+    (is (= ["12d" "1d" "today" "overdue" "overdue"]
+          (mapv fc/deadline-token [12 1 0 -1 -30])))
+    (is (= "today" (fc/deadline-token nil)) "no date is no deadline to miss")))
+
 (deftest an-infeasible-target-names-all-four-levers
   (testing "§6.6 — the warning names four levers whichever reason fired"
     (let [f (fc/feasibility {:projected-known 10 :required-pages 300

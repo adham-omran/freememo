@@ -19,6 +19,7 @@
    [freememo.tooltip :as tooltip]
    [freememo.schedule-forecast :as fc]
    [freememo.schedule-anki :as sa]
+   [freememo.schedule :as sched]
    [freememo.icons :as icons]))
 
 ;; ---------------------------------------------------------------------------
@@ -48,27 +49,46 @@
       (pos? d) (str (fc/pages-label d) " ahead")
       :else (str (fc/pages-label (- d)) " behind"))))
 
-(defn lever-labels
+(defn levers
   "§6.6 — the four levers, in the order the warning names them. I3 does not
    exist and 6.6.5 records why lowering `card_count` was rejected.
 
-   The date lever names the day every CARDED page reaches known, and says so.
+   The date lever names the DATE every carded page reaches known, not a day
+   index. It used to read 'Move the target out to day 13' while the Plan table
+   below it listed real dates, so a reader could not tell day 13 of the month
+   from 13 days out, and converting it was arithmetic the surface owed them.
+
    Pages with no cards are outside what moving a date can deliver — they need
-   the user to read and card them, which is the pages-per-day figure, not the
-   date. Stating the number keeps the promise honest."
-  [earliest-day reachable unreachable]
-  [(cond
-     (and earliest-day (pos? (long (or unreachable 0))))
-     (str "Move the target out to day " earliest-day " — that covers the "
-       reachable " carded pages. The other " unreachable
-       " still need reading and carding.")
-     earliest-day
-     (str "Move the target out to day " earliest-day)
-     :else
-     "Move the target out — even two years does not reach it")
-   "Raise the daily review capacity"
-   "Lower the retention target for this schedule"
-   "Exclude pages from carding — they then count as known and untested"])
+   reading and carding, which is the pages-per-day figure, not the date.
+   Stating that number keeps the promise honest.
+
+   Pre : `earliest-date` is `forecast`'s `:earliest-date`, an ISO string or nil.
+   Post: four maps of {:label :apply-date :editable?}, always four and always
+         in §6.6's order.
+   Inv : `:apply-date` is non-nil ONLY on a lever this panel can apply, and
+         `:editable? false` marks a lever no UI can reach yet. A lever that
+         claims neither is reachable somewhere else — capacity, through Edit."
+  [earliest-date reachable unreachable]
+  [{:label (cond
+             (and earliest-date (pos? (long (or unreachable 0))))
+             (str "Move the target to " earliest-date " — that covers the "
+               reachable " carded pages. The other " unreachable
+               " still need reading and carding.")
+             earliest-date
+             (str "Move the target to " earliest-date)
+             :else
+             "Move the target out — even two years does not reach it")
+    :apply-date earliest-date
+    :editable? true}
+   {:label "Raise the daily review capacity — use Edit"
+    :apply-date nil
+    :editable? true}
+   {:label "Lower the retention target for this schedule"
+    :apply-date nil
+    :editable? false}
+   {:label "Exclude pages from carding — they then count as known and untested"
+    :apply-date nil
+    :editable? false}])
 
 ;; ---------------------------------------------------------------------------
 ;; Small panels
@@ -116,12 +136,53 @@
           (fc/pages-label (e/server (:pages-today today)))
           (str (approx (e/server (:reviews-today today))) " reviews"))))))
 
-(e/defn FeasibilityPanel [forecast]
+;; Pre:  `lever` is one map from `levers`; `user-id` owns `schedule-id`.
+;; Post: a list item. When `:apply-date` is set it carries an Apply control
+;;       that writes that date through `sched/update-schedule!` — the SAME fn
+;;       the Edit form uses, so the advice and the form cannot format a date
+;;       differently. When `:editable?` is false it carries a marker instead.
+;; Inv:  its own e/defn, so the token and its error live in the frame that
+;;       mounts per lever rather than in FeasibilityPanel's.
+(e/defn LeverRow [user-id schedule-id lever]
+  (e/client
+    (dom/li
+      (dom/text (:label lever))
+      (when-let [d (:apply-date lever)]
+        (dom/button
+          (dom/props {:class "btn" :style {:margin-left "8px" :font-size "11px"
+                                           :padding "1px 8px"}})
+          (dom/text "Apply")
+          (let [[t ?error] (e/Token (dom/On "click" identity nil))]
+            (when t
+              ;; BOTH outcomes spend the token, for the reason ScheduleHeader
+              ;; records: spending on success alone leaves a failure with the
+              ;; button dead and nothing saying why.
+              (let [res (e/server (e/Offload #(sched/update-schedule!
+                                                user-id schedule-id
+                                                {:target_date d})))]
+                (if (e/server (:ok res))
+                  (t)
+                  (t (e/server (:error res))))))
+            (when ?error
+              (dom/span
+                (dom/props {:style {:color "var(--color-danger, #b91c1c)"
+                                    :font-size "11px"}})
+                (dom/text (str " " ?error)))))))
+      ;; §8 — the panel names four levers and the UI reaches two. Marking the
+      ;; other two is what keeps the advice complete without pretending it is
+      ;; actionable; dropping them would hide two real ways out.
+      (when-not (:editable? lever)
+        (dom/span
+          (dom/props {:style {:margin-left "6px" :font-size "11px"
+                              :color "var(--color-text-hint)"}})
+          (dom/text "(not editable yet)"))))))
+
+(e/defn FeasibilityPanel [user-id schedule-id forecast]
   (e/client
     (let [feas (e/server (:feasibility forecast))
           ok? (e/server (:feasible? feas))
           reasons (e/server (vec (:reasons feas)))
-          earliest (e/server (:earliest-day feas))
+          earliest (e/server (:earliest-date feas))
           reachable (e/server (:reachable feas))
           unreachable (e/server (:unreachable feas))
           peak (e/server (:peak-load feas))
@@ -154,8 +215,8 @@
             (dom/text "What can move:"))
           (dom/ul
             (dom/props {:style {:margin "0" :padding-left "20px"}})
-            (e/for [l (e/diff-by identity (lever-labels earliest reachable unreachable))]
-              (dom/li (dom/text l)))))))))
+            (e/for [l (e/diff-by :label (levers earliest reachable unreachable))]
+              (LeverRow user-id schedule-id l))))))))
 
 (e/defn StaleBanner [forecast anki-status]
   (e/client
@@ -450,13 +511,13 @@
 ;; Entry point
 ;; ---------------------------------------------------------------------------
 
-(e/defn ScheduleForecast [forecast anki-status]
+(e/defn ScheduleForecast [user-id schedule-id forecast anki-status]
   (e/client
     (let [status (e/server (:status forecast))]
       (StaleBanner forecast anki-status)
       (case status
         :ok (e/amb
-              (FeasibilityPanel forecast)
+              (FeasibilityPanel user-id schedule-id forecast)
               (ProgressRow forecast)
               ;; The plan comes FIRST among the tables. It is what the user
               ;; opened the tab for; the page verdicts explain it.
