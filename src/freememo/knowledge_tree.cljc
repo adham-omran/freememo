@@ -518,9 +518,18 @@
             ;; ONE ARIA table spans header + virtual-scrolled body (see the
             ;; identical mapping on the Learn table for the rationale).
             (dom/div
+              ;; `flex: 0 1 auto`, NOT `flex: 1`. .table-frame draws the border
+              ;; around header + body, so a growing frame paints a box running to
+              ;; the bottom of the page while the body inside it stops at its
+              ;; 10-row max-height. Content-sized here, the border ends where the
+              ;; rows end — the shape Cards gets for free, having no wrapper (its
+              ;; border lives on .table-frame-head / .table-frame-body).
+              ;; flex-shrink stays 1 so a viewport shorter than the table still
+              ;; compresses the frame, and min-height 0 lets the body inside it
+              ;; shrink with it.
               (dom/props {:class "table-frame"
                           :role "table" :aria-label "Library documents"
-                          :style {:display "flex" :flex-direction "column" :min-height "0" :flex "1"}})
+                          :style {:display "flex" :flex-direction "column" :min-height "0" :flex "0 1 auto"}})
 
               ;; Fixed header — sort headers are keyboard-operable (KeyActivate)
               ;; and expose aria-sort for the active column.
@@ -584,8 +593,13 @@
                 ;; than 10 rows still shrinks the table normally, which is what the
                 ;; phone layout (80 px rows) relies on.
                 ;; See plans/library-scroll-window-cap.md.
+                ;; `flex: 1 1 auto`, NOT `flex: 1`. `flex: 1` carries
+                ;; `flex-basis: 0%`, which needs free space to grow into — and the
+                ;; frame above is content-sized now, so there is none and the body
+                ;; would collapse to zero height. `auto` bases it on content, which
+                ;; max-height then caps at 10 rows.
                 (dom/props {:role "rowgroup"
-                            :style {:flex "1" :overflow-y "auto" :min-height "0"
+                            :style {:flex "1 1 auto" :overflow-y "auto" :min-height "0"
                                     :max-height (str (* 10 row-height) "px")
                                     :scrollbar-gutter "stable"}})
                 (reset! !scroll-node dom/node)
