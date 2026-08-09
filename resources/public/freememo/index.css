@@ -464,6 +464,23 @@ html, body {
     z-index: 99;
 }
 
+/* Toolbar readout capsule — the page-progress X/Y badge and the schedule pace
+   badge beside it. Shared as a class rather than repeated as an inline :style
+   map, so the two cannot drift apart: they sit adjacent, and a difference in
+   radius or font reads as one of them being a different KIND of thing. */
+.toolbar-badge {
+    color: var(--color-text-primary);
+    font-size: 11px;
+    font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    padding: 3px 8px;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+}
+
 /* Tier classes — content-aware. The `.collapse-N` class on .toolbar-container
    is set imperatively by a ResizeObserver in content_toolbar.cljc that finds
    the smallest tier where inline content fits without overflow.
@@ -486,7 +503,12 @@ html, body {
     display: none;
 }
 
-/* Citation hides at tier ≥1 — first thing to collapse (variable width) */
+/* Citation hides at tier ≥1 — first thing to collapse (variable width).
+   The schedule pace badge deliberately does NOT share this tier. Tier 1 is the
+   ORDINARY desktop state, not a narrow one — a 1200px window already sits at
+   collapse-1 — so a badge hidden here would almost never be seen. It rides the
+   doc-meta group's tier 2 instead, hiding with the page-progress badge it sits
+   beside. */
 .toolbar-container:is(.collapse-1, .collapse-2, .collapse-3, .collapse-4, .collapse-5, .collapse-6, .collapse-7) .toolbar-collapse-citation {
     display: none !important;
 }

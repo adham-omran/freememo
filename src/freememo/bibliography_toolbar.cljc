@@ -1,16 +1,19 @@
 (ns freememo.bibliography-toolbar
   "DocumentMetaGroup — the former bibliography bar, folded into the toolbar.
-   Holds document-level readouts + Mark-PDF-Done: the citation and the
-   page-progress X/Y badge. Edit/Refetch/Push bibliography moved to Document
-   Options (item-scoped). Replaces the full-width strip below the toolbar."
+   Holds document-level readouts + Mark-PDF-Done: the citation, the
+   page-progress X/Y badge, and the schedule pace badge beside it.
+   Edit/Refetch/Push bibliography moved to Document Options (item-scoped).
+   Replaces the full-width strip below the toolbar."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.icons :as icons]
    [freememo.commands :as commands]
+   [freememo.schedule :as sched]
    [freememo.tooltip :as tooltip]
-   #?(:clj [freememo.db :as db])))
+   #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.user-state :as us])))
 
 (defn toggle-pdf-done!*
   "Flip a PDF root's completion status (DB write only — the :meta-refresh bump
@@ -26,6 +29,64 @@
                 (db/done-topic! user-id pdf-root-id))
               :ok)
      :cljs nil))
+
+(defn pace-word
+  "The state word the pace badge shows.
+
+   Pre : `state` is `schedule-forecast/pace-state`'s verdict, or nil when no
+         schedule covers the document.
+   Post: \"Behind\", \"On plan\", \"Ahead\", or nil.
+   Inv : nil in, nil out — the caller renders NOTHING for nil rather than an
+         empty capsule, so an unscheduled document grows no badge."
+  [state]
+  (case state
+    :behind "Behind"
+    :on-plan "On plan"
+    :ahead "Ahead"
+    nil))
+
+(defn deadline-token
+  "The deadline half of the pace badge face.
+
+   Pre : `days` is `schedule/signed-days-to-target`'s SIGNED count, not
+         `days-until`'s. That floor reports 0 for both today and last month,
+         and this is the one readout that has to tell them apart.
+   Post: \"12d\" before the target, \"today\" on it, \"overdue\" after it."
+  [days]
+  (let [d (long (or days 0))]
+    (cond
+      (pos? d) (str d "d")
+      (zero? d) "today"
+      :else "overdue")))
+
+;; Pre:  user-id + bib-topic-id from doc-context; bib-topic-id is the document
+;;       ROOT, which is what `study_schedules.root_topic_id` names.
+;; Post: one badge when an active schedule covers the document, nothing at all
+;;       when none does.
+;; Inv : its own e/defn, not a branch inside DocumentMetaGroup. Each e/defn
+;;       compiles to its own JVM method, and DocumentMetaGroup is already a
+;;       large one in a namespace the prod build has to fit under 64KB.
+(e/defn SchedulePaceBadge
+  []
+  (e/client
+    (let [user-id dctx/user-id
+          root-topic-id dctx/bib-topic-id
+          ;; A server-FORM binding, not an e/defn call: the map stays on the
+          ;; server and each read below pulls one field. e/Offload because
+          ;; `root-schedule-pace` projects every card in the document at h=0,
+          ;; and a bare e/server would stall this session's reactive graph.
+          pace (e/server
+                 (let [refresh (e/watch (us/get-atom user-id :schedule-mutations))]
+                   (e/Offload #(sched/root-schedule-pace refresh user-id root-topic-id))))]
+      ;; No collapse class of its own: it sits inside the doc-meta group, so it
+      ;; hides at tier 2 with the progress badge beside it. A tier-1 class was
+      ;; tried and reverted — a 1200px window already reports collapse-1, so
+      ;; the badge was `display: none` on an ordinary desktop.
+      (when-some [word (pace-word (e/server (:state pace)))]
+        (dom/span
+          (dom/props {:class "toolbar-badge tooltip-right"})
+          (tooltip/Tooltip! (e/server (:tooltip pace)))
+          (dom/text word " · " (deadline-token (e/server (:days-to-target pace)))))))))
 
 ;; Pre:  user-id non-nil; bib-topic-id = the citation's item (document root for
 ;;       PDF pages); citation is a string-or-nil; page-info is
@@ -77,15 +138,17 @@
           (tooltip/Tooltip! citation)
           (dom/text citation)))
 
-      ;; Page-progress X/Y — inline only, PDF only.
+      ;; Page-progress X/Y — inline only, PDF only. The capsule styling moved
+      ;; to `.toolbar-badge` in index.css so the pace badge beside it cannot
+      ;; drift to a different radius or font.
       (when (and inline? page-info (pos? (:total page-info)))
         (dom/span
-          (dom/props {:class "tooltip-right"
-                      :style {:color "var(--color-text-primary)" :font-size "11px"
-                              :font-family "ui-monospace, 'SF Mono', Menlo, Consolas, monospace"
-                              :font-variant-numeric "tabular-nums" :letter-spacing "0.04em"
-                              :white-space "nowrap" :padding "3px 8px"
-                              :background "var(--color-bg-card)"
-                              :border "1px solid var(--color-border)" :border-radius "10px"}})
+          (dom/props {:class "toolbar-badge tooltip-right"})
           (tooltip/Tooltip! (:remaining-tooltip page-info))
-          (dom/text (:done page-info) "/" (:total page-info)))))))
+          (dom/text (:done page-info) "/" (:total page-info))))
+
+      ;; Schedule pace — inline only, and only when an active schedule covers
+      ;; this document. Gated on `inline?` alone, NOT on page-info: a schedule
+      ;; exists for the document, not for the page being read.
+      (when inline?
+        (SchedulePaceBadge)))))

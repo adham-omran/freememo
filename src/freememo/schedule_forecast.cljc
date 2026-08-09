@@ -229,6 +229,32 @@
      :actual (double known-now)
      :delta (- (double known-now) required)}))
 
+(def ^:const pace-dead-zone-pages
+  "How far off the line still reads as on plan, in pages.
+
+   A dead zone is FORCED, not a preference. `pace`'s `:actual` is an integer
+   page count while its `:required` is fractional, so the delta is almost never
+   exactly 0. A zero-width threshold would therefore make `:on-plan`
+   unreachable, and the state would flip between `:behind` and `:ahead`
+   forever. It would also contradict `daily-page-plan`'s own invariant, which
+   promises that a user who works the dated table never reports a lag."
+  1.0)
+
+(defn pace-state
+  "`pace`'s `:delta` as one of three states.
+
+   Pre : `delta` is `pace`'s `:delta` — pages ahead of the line (positive) or
+         behind it (negative).
+   Post: `:behind`, `:on-plan` or `:ahead`, never nil.
+   Inv : the zone is symmetric and CLOSED, so a delta of exactly
+         `pace-dead-zone-pages` either way still reads `:on-plan`."
+  [delta]
+  (let [d (double delta)]
+    (cond
+      (< d (- pace-dead-zone-pages)) :behind
+      (> d pace-dead-zone-pages) :ahead
+      :else :on-plan)))
+
 ;; ---------------------------------------------------------------------------
 ;; Feasibility (§6.6, §6.7)
 ;; ---------------------------------------------------------------------------
@@ -324,6 +350,23 @@
   [n]
   (let [k (long n)]
     (str k " page" (when (not= 1 k) "s"))))
+
+(defn pace-phrase
+  "`pace-state`'s verdict and `pace`'s `:delta` as a phrase, for a hover
+   readout. Sits here rather than beside `pace-state` because it reads
+   `pages-label`, which the section above defines.
+
+   Pre : `state` is `pace-state`'s verdict over this same `delta`. A state from
+         one delta and a magnitude from another is a caller bug.
+   Post: \"5 pages behind\", \"3 pages ahead\", or a bare \"on plan\".
+   Inv : the dead-zone case names NO magnitude. Rounding 0.6 up to \"1 page
+         behind\" beside a badge reading `On plan` would assert a lag the badge
+         denies, and the reader would have no way to tell which to believe."
+  [state delta]
+  (if (= :on-plan state)
+    "on plan"
+    (str (pages-label (Math/round (Math/abs (double delta))))
+      (if (= :behind state) " behind" " ahead"))))
 
 (defn today-plan
   "What the user does today: pages to work, cards to review (§1.2).

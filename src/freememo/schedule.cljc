@@ -54,6 +54,28 @@
             (catch Exception _ 0))
      :cljs 0))
 
+(defn signed-days-to-target
+  "Whole days from today to `iso-date`, NEGATIVE once the date is past.
+
+   `days-until` floors at 0, and rightly: it feeds a projection horizon, and a
+   horizon cannot run backwards. But that floor makes 0 mean both 'today' and
+   'three weeks ago', and telling those two apart is the whole job of a
+   deadline readout. This is the same arithmetic without the floor.
+
+   Post: >0 future, 0 today, <0 past.
+   Post: 0 for an unparseable date, which conflates it with today. Every caller
+         reads `study_schedules.target_date`, a NOT NULL DATE that
+         `schedule-row->map` has already turned into an ISO string, so an
+         unparseable value means the column changed type."
+  [iso-date]
+  #?(:clj (try
+            (let [target (java.time.LocalDate/parse (str iso-date))
+                  today (java.time.LocalDate/now)]
+              (.toDays (java.time.Duration/between
+                         (.atStartOfDay today) (.atStartOfDay target))))
+            (catch Exception _ 0))
+     :cljs 0))
+
 #?(:clj
    (defn- start-of-today-ms
      "Midnight this morning, in the server's zone.
@@ -252,6 +274,80 @@
            verdicts (fc/page-verdicts pages projected theta)]
        [(count (filter :known? verdicts)) verdicts projected])))
 
+#?(:clj
+   (defn- schedule-inputs
+     "Everything derived from one schedule row that a reader needs before it can
+      project anything: the page rows, θ, the scheduler, and the projection
+      input.
+
+      Pre : `row` came from `db/get-study-schedule` or
+            `db/active-study-schedule-for-root`, so ownership is already
+            checked.
+      Post: {:origin-ms :capacity :horizon :pages :cfg-row :theta :scheduler
+             :pcards :status}. `:status` is
+              :ok         — Anki state exists for this document's cards
+              :no-config  — Anki has never been read for this user (§8.1)
+              :no-cards   — it has, but this document has none (§8.3)
+      Inv : `:scheduler` and `:pcards` are non-nil EXACTLY when `:status` is
+            `:ok`. Every other status has no memory state to project, which is
+            what `current-progress` branches on."
+     [user-id row]
+     (let [origin-ms (start-of-today-ms)
+           root (:study_schedules/root_topic_id row)
+           excluded (set (:study_schedules/excluded_pages row))
+           capacity (long (:study_schedules/daily_capacity row))
+           horizon (min max-horizon-days
+                     (days-until (:study_schedules/target_date row)))
+           all-pages (db/get-schedule-pages user-id root
+                       (:study_schedules/first_page row)
+                       (:study_schedules/last_page row))
+           pages (mapv #(assoc % :excluded? (contains? excluded (:page-number %)))
+                   all-pages)
+           cfg-row (db/get-anki-deck-config user-id)
+           deck-config (:anki_deck_configs/config cfg-row)
+           base {:origin-ms origin-ms :capacity capacity :horizon horizon
+                 :pages pages :cfg-row cfg-row}]
+       (if (nil? deck-config)
+         (assoc base :status :no-config :theta 0.9)
+         (let [theta (double (or (:study_schedules/theta row)
+                               (:desiredRetention deck-config) 0.9))
+               ;; Lever I5: an excluded page's cards are withheld, so the page
+               ;; falls to done-with-no-cards and its cost lands in the exposure
+               ;; figure rather than out of sight (§6.6.4.1).
+               excluded-page-ids (set (map :page-id (filter :excluded? pages)))
+               cards (remove #(contains? excluded-page-ids (:page-id %))
+                       (db/get-schedule-cards user-id root))
+               states (db/get-anki-card-states user-id
+                        (distinct (map :anki-note-id cards))
+                        (:anki_deck_configs/fingerprint cfg-row))]
+           (if (empty? states)
+             (assoc base :status :no-cards :theta theta)
+             (assoc base :status :ok :theta theta
+               :scheduler (sf/scheduler-from-deck-config deck-config theta)
+               :pcards (projection-cards states cards origin-ms capacity))))))))
+
+#?(:clj
+   (defn- current-progress
+     "Document progress TODAY, from a `schedule-inputs` map.
+
+      ONE definition, read by `forecast`'s `:progress` and by
+      `root-schedule-pace`. Two paths over the same page count is exactly the
+      shape of the defect this feature already shipped once: `start_known` was
+      frozen from the DONE page count while §6.2's line was measured against
+      the KNOWN count, so a schedule read '5 pages behind' on the day it was
+      created. A second reader computing its own known-now would reopen it.
+
+      Post: `schedule-forecast/document-progress` of the h=0 verdicts, so
+            `:total` is the page count and `:known` is `known-at`'s own figure.
+      Inv : a status other than `:ok` projects an EMPTY card list, so a page is
+            known there only because it is marked done. That is the half of
+            §1.2 the user can act on with no Anki connection at all."
+     [{:keys [scheduler pcards pages theta status]}]
+     (fc/document-progress
+       (if (= :ok status)
+         (second (known-at scheduler pcards pages theta 0 {}))
+         (fc/page-verdicts pages [] theta)))))
+
 (defn forecast
   "The whole forecast for one schedule (§1.1, §1.2, §5, §6).
 
@@ -280,114 +376,84 @@
   [_refresh user-id schedule-id]
   #?(:clj
      (if-let [row (db/get-study-schedule user-id schedule-id)]
-       (let [origin-ms (start-of-today-ms)
-             root (:study_schedules/root_topic_id row)
-             excluded (set (:study_schedules/excluded_pages row))
-             capacity (long (:study_schedules/daily_capacity row))
-             horizon (min max-horizon-days
-                       (days-until (:study_schedules/target_date row)))
-             all-pages (db/get-schedule-pages user-id root
-                         (:study_schedules/first_page row)
-                         (:study_schedules/last_page row))
-             pages (mapv #(assoc % :excluded? (contains? excluded (:page-number %)))
-                     all-pages)
-             cfg-row (db/get-anki-deck-config user-id)
-             deck-config (:anki_deck_configs/config cfg-row)
+       (let [inputs (schedule-inputs user-id row)
+             {:keys [origin-ms capacity horizon pages cfg-row theta
+                     scheduler pcards status]} inputs
+             progress (current-progress inputs)
              base {:schedule row
                    :horizon-days horizon
                    :cached-at (db/anki-state-cached-at user-id)
                    :pages pages}]
-         (cond
-           (nil? deck-config)
-           ;; Anki has never been read, so there is no R and no review load.
-           ;; The PAGE plan needs neither, and it is the half of §1.2 the user
-           ;; can act on today — so it renders here rather than waiting on a
-           ;; connection they may not have.
-           (let [prog (fc/document-progress (fc/page-verdicts pages [] 0.9))]
-             (assoc base :status :no-config
-               :progress prog
-               :plan (study-plan (- (:total prog) (:known prog)) horizon {})))
+         (if (not= :ok status)
+           ;; Anki has never been read, or this document has no pushed cards.
+           ;; Either way there is no R and no review load. The PAGE plan needs
+           ;; neither, and it is the half of §1.2 the user can act on today —
+           ;; so it renders here rather than waiting on a connection they may
+           ;; not have.
+           (assoc base :status status :theta theta
+             :progress progress
+             :plan (study-plan (- (:total progress) (:known progress)) horizon {}))
 
-           :else
-           (let [theta (double (or (:study_schedules/theta row)
-                                 (:desiredRetention deck-config) 0.9))
-                 scheduler (sf/scheduler-from-deck-config deck-config theta)
-                 ;; Lever I5: an excluded page's cards are withheld, so the
-                 ;; page falls to done-with-no-cards and its cost lands in the
-                 ;; exposure figure rather than out of sight (§6.6.4.1).
-                 excluded-page-ids (set (map :page-id (filter :excluded? pages)))
-                 cards (remove #(contains? excluded-page-ids (:page-id %))
-                         (db/get-schedule-cards user-id root))
-                 states (db/get-anki-card-states user-id
-                          (distinct (map :anki-note-id cards))
-                          (:anki_deck_configs/fingerprint cfg-row))]
-             (if (empty? states)
-               (let [prog (fc/document-progress (fc/page-verdicts pages [] theta))]
-                 (assoc base :status :no-cards :theta theta
-                   :progress prog
-                   :plan (study-plan (- (:total prog) (:known prog)) horizon {})))
-               (let [pcards (projection-cards states cards origin-ms capacity)
-                     [known-now verdicts-now _] (known-at scheduler pcards pages theta 0 {})
-                     [known-end verdicts-end projected]
-                     (known-at scheduler pcards pages theta horizon {})
-                     load (fc/daily-review-load projected)
-                     peak (fc/peak-daily-load load)
-                     total (count pages)
-                     progress (fc/document-progress verdicts-now)
-                     projected-progress (fc/document-progress verdicts-end)
-                     base-feas (fc/feasibility
-                                 {:projected-known known-end
-                                  :required-pages total
-                                  :peak-load peak
-                                  :observed-capacity capacity})
-                     ;; §6.6.1 — the date lever names a date, and only when the
-                     ;; plan needs one. The search is nine more projections of
-                     ;; the whole document, so a feasible plan never pays it.
-                     ;;
-                     ;; It searches against the REACHABLE count, not the whole
-                     ;; range. A page with no cards and no done mark cannot
-                     ;; become known by reviewing — the projection models
-                     ;; reviews, not future carding — so searching for the full
-                     ;; range returns nil for every partially-read document, and
-                     ;; the lever would say "never" in the one case it exists
-                     ;; for. The reachable set is what moving the date can in
-                     ;; fact deliver, and `:reachable` is reported beside it so
-                     ;; the surface never presents that date as "finished".
-                     reachable (count (remove #(= :untouched (:reason %)) verdicts-end))
-                     feas (if (:feasible? base-feas)
-                            base-feas
-                            (assoc base-feas
-                              :reachable reachable
-                              :unreachable (- total reachable)
-                              :earliest-day
-                              (when (pos? reachable)
-                                (fc/earliest-feasible-day
-                                  (fn [d] (first (known-at scheduler pcards pages theta d
-                                                   {:epsilon suggestion-epsilon})))
-                                  reachable max-horizon-days))))
-                     span (schedule-span row origin-ms)]
-                 (assoc base
-                   :status :ok
-                   :theta theta
-                   :deck (:anki_deck_configs/deck cfg-row)
-                   :capped? (boolean (some #(get-in % [:projected :capped?]) projected))
-                   :progress progress
-                   :projected projected-progress
-                   :verdicts verdicts-end
-                   :pace (fc/pace {:known-now known-now
-                                   :total-pages total
-                                   :start-known (:study_schedules/start_known row)
-                                   :elapsed-days (- span horizon)
-                                   :total-days span})
-                   :daily-load load
-                   :peak-load peak
-                   ;; §1.2 — the plan the user actually follows. Pages come
-                   ;; from the straight line, reviews from the projection.
-                   :plan (study-plan (- total (:known progress)) horizon load)
-                   :today (fc/today-plan {:pages-remaining (- total (:known progress))
-                                          :days-remaining horizon
-                                          :daily-load load})
-                   :feasibility feas))))))
+           (let [known-now (:known progress)
+                 [known-end verdicts-end projected]
+                 (known-at scheduler pcards pages theta horizon {})
+                 load (fc/daily-review-load projected)
+                 peak (fc/peak-daily-load load)
+                 total (:total progress)
+                 projected-progress (fc/document-progress verdicts-end)
+                 base-feas (fc/feasibility
+                             {:projected-known known-end
+                              :required-pages total
+                              :peak-load peak
+                              :observed-capacity capacity})
+                 ;; §6.6.1 — the date lever names a date, and only when the
+                 ;; plan needs one. The search is nine more projections of
+                 ;; the whole document, so a feasible plan never pays it.
+                 ;;
+                 ;; It searches against the REACHABLE count, not the whole
+                 ;; range. A page with no cards and no done mark cannot
+                 ;; become known by reviewing — the projection models
+                 ;; reviews, not future carding — so searching for the full
+                 ;; range returns nil for every partially-read document, and
+                 ;; the lever would say "never" in the one case it exists
+                 ;; for. The reachable set is what moving the date can in
+                 ;; fact deliver, and `:reachable` is reported beside it so
+                 ;; the surface never presents that date as "finished".
+                 reachable (count (remove #(= :untouched (:reason %)) verdicts-end))
+                 feas (if (:feasible? base-feas)
+                        base-feas
+                        (assoc base-feas
+                          :reachable reachable
+                          :unreachable (- total reachable)
+                          :earliest-day
+                          (when (pos? reachable)
+                            (fc/earliest-feasible-day
+                              (fn [d] (first (known-at scheduler pcards pages theta d
+                                               {:epsilon suggestion-epsilon})))
+                              reachable max-horizon-days))))
+                 span (schedule-span row origin-ms)]
+             (assoc base
+               :status :ok
+               :theta theta
+               :deck (:anki_deck_configs/deck cfg-row)
+               :capped? (boolean (some #(get-in % [:projected :capped?]) projected))
+               :progress progress
+               :projected projected-progress
+               :verdicts verdicts-end
+               :pace (fc/pace {:known-now known-now
+                               :total-pages total
+                               :start-known (:study_schedules/start_known row)
+                               :elapsed-days (- span horizon)
+                               :total-days span})
+               :daily-load load
+               :peak-load peak
+               ;; §1.2 — the plan the user actually follows. Pages come
+               ;; from the straight line, reviews from the projection.
+               :plan (study-plan (- total (:known progress)) horizon load)
+               :today (fc/today-plan {:pages-remaining (- total (:known progress))
+                                      :days-remaining horizon
+                                      :daily-load load})
+               :feasibility feas))))
        ;; No such schedule, or it belongs to somebody else. A distinct status,
        ;; not nil: the surface must say "this is gone" rather than "still
        ;; working", and the two are indistinguishable once both are nil.
@@ -476,6 +542,53 @@
   [_refresh user-id]
   #?(:clj (display-rows (db/list-study-schedules user-id))
      :cljs []))
+
+(defn root-schedule-pace
+  "Pace and deadline for the active schedule over `root-topic-id`, or nil.
+
+   What the reading view's badge shows, and nothing more. It deliberately does
+   NOT call `forecast`: that projects the whole document at the full horizon
+   (339 ms at 90 days, 1.2 s at 365, measured) and searches up to seventeen
+   more horizons for the date lever, while a pace figure needs only h=0 (about
+   6 ms). Every figure here comes from `current-progress` and the row.
+
+   Pre : nothing — a nil or unscheduled `root-topic-id` is the ordinary case,
+         not a caller bug. Ownership is checked in
+         `db/active-study-schedule-for-root`.
+   Post: nil when no ACTIVE schedule covers the root, so the caller renders
+         nothing rather than an empty badge.
+   Post: otherwise {:state :days-to-target :tooltip}, all plain data. `:state`
+         is `schedule-forecast/pace-state`'s three-way verdict, which the badge
+         names, and `:tooltip` is the finished hover string.
+   Post: the tooltip is built HERE, not on the client, for the reason
+         `topic-state/get-page-info*` states about its own: the client only
+         ever displays the string, so shipping the raw figures and formatting
+         them there is wire waste and a second place for the wording to live.
+   Post: `:days-to-target` is SIGNED — negative once the target is past. The
+         badge has to tell 'today' from 'overdue', and `days-until`'s floor
+         reports 0 for both.
+   Inv : `:state` is derived from the same `pace` call `forecast` makes, over
+         the same `current-progress`, so the badge and the Schedule tab cannot
+         report different pace for one schedule."
+  [_refresh user-id root-topic-id]
+  #?(:clj
+     (when root-topic-id
+       (when-let [row (db/active-study-schedule-for-root user-id root-topic-id)]
+         (let [inputs (schedule-inputs user-id row)
+               progress (current-progress inputs)
+               horizon (:horizon inputs)
+               span (schedule-span row (:origin-ms inputs))
+               p (fc/pace {:known-now (:known progress)
+                           :total-pages (:total progress)
+                           :start-known (:study_schedules/start_known row)
+                           :elapsed-days (- span horizon)
+                           :total-days span})
+               state (fc/pace-state (:delta p))]
+           {:state state
+            :days-to-target (signed-days-to-target (:study_schedules/target_date row))
+            :tooltip (str (fc/pace-phrase state (:delta p))
+                       " · target " (:study_schedules/target_date row))})))
+     :cljs nil))
 
 (defn documents-for-picker
   "Root documents a schedule can be built over, newest first.
