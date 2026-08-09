@@ -1,7 +1,7 @@
 (ns freememo.scroll
   "App-local virtual-scroll primitive, vendored from hyperfiddle.electric-scroll0.
 
-   Stateless Tape windowing with three deltas from upstream:
+   Stateless Tape windowing with four deltas from upstream:
 
    1. `:reset-key` — scrollTop resets to 0 only when the caller's key changes
       (search / sort / navigate), NOT on every `record-count` change. Absent
@@ -12,6 +12,11 @@
 
    3. Offset is a pure per-frame function of scrollTop (no cross-frame state), so
       it survives Electric frame re-mounts (WS reconnect / hot reload).
+
+   4. `:max-visible-rows` — caps the page-size, so mounted rows stop growing with
+      viewport height. Mount/unmount of a row is the dominant cost in the Library
+      tables (measured ~50 ms per row), and it scales linearly with the window.
+      Absent the key, matches upstream (window = viewport).
 
    Flicker-free rendering depends on CSS companions in index.css. Always:
    `overflow-anchor: none` on `.tape-scroll` (browser scroll-anchoring otherwise
@@ -93,16 +98,28 @@
 #?(:cljs
    (defn compute-scroll-window
      "Stateless window for one axis: floor(scrollTop / row-height) → offset, plus the
-      overquery buffer. Pure per-frame function of scrollTop (no cross-frame state)."
-     [row-height record-count clientHeight scrollTop overquery-factor]
-     (let [limit  (int (math/ceil (/ clientHeight (max row-height 1)))) ; visible row count (page-size)
-           offset (int (/ (clamp scrollTop 0 (* record-count row-height)) ; clamp — no overscroll past the end
-                         (max row-height 1)))]
+      overquery buffer. Pure per-frame function of scrollTop (no cross-frame state).
+
+      `max-visible-rows` (nil = uncapped) caps the page-size BEFORE the overquery
+      call, so `compute-overquery` still derives `occluded`, the buffer shift and
+      the end-of-list clamp from ONE consistent `limit`. Capping its returned
+      q-limit instead would size the buffer shift and that clamp for a window
+      wider than the one rendered, and the last rows of the list would come up
+      blank at maximum scrollTop.
+
+      Post: q-limit ≤ max-visible-rows × overquery-factor."
+     [row-height record-count clientHeight scrollTop overquery-factor max-visible-rows]
+     (let [visible (int (math/ceil (/ clientHeight (max row-height 1)))) ; page-size the viewport asks for
+           limit   (if max-visible-rows (min visible max-visible-rows) visible)
+           offset  (int (/ (clamp scrollTop 0 (* record-count row-height)) ; clamp — no overscroll past the end
+                          (max row-height 1)))]
        (compute-overquery overquery-factor record-count offset limit))))
 
 (e/defn Scroll-window ; returns [offsetV, limitV, offsetH, limitH]
   [row-height record-count node
-   #_& {:keys [column-width column-record-count overquery-factor reset-key]
+   ;; `:max-visible-rows` caps the PRE-overquery page-size, so the caller gets
+   ;; `max-visible-rows × overquery-factor` mounted rows — not `max-visible-rows`.
+   #_& {:keys [column-width column-record-count overquery-factor reset-key max-visible-rows]
         :or {column-width row-height
              overquery-factor 1}}]
   (e/client
@@ -112,7 +129,9 @@
     ((fn [_] (set! (.-scrollTop dom/node) 0)) (if (some? reset-key) reset-key record-count))
     (let [[scrollTop _ clientHeight scrollLeft _ clientWidth] (e/input (scroll-state node))]
       (concat
-        (compute-scroll-window row-height record-count clientHeight scrollTop overquery-factor)
+        (compute-scroll-window row-height record-count clientHeight scrollTop overquery-factor max-visible-rows)
         ;; Horizontal axis may window a different item set (transposed tables);
         ;; column-record-count lets the caller specify it independently.
-        (compute-scroll-window column-width (or column-record-count record-count) clientWidth scrollLeft (max 1 overquery-factor))))))
+        ;; nil, never max-visible-rows: that key caps ROWS, and this axis windows
+        ;; columns — the same number would silently mean something else here.
+        (compute-scroll-window column-width (or column-record-count record-count) clientWidth scrollLeft (max 1 overquery-factor) nil)))))

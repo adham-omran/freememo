@@ -583,7 +583,15 @@
                                         ;; Reset to top on filter/sort change only.
                                         ;; Excludes expansion + tree mutations so
                                         ;; expand/collapse/delete hold scroll position.
-                                        :reset-key [filter-text kind-filter status-filter sort-col sort-dir]})]
+                                        :reset-key [filter-text kind-filter status-filter sort-col sort-dir]
+                                        ;; 7 × 2 = 14 mounted rows, fixed. Uncapped, the
+                                        ;; window grew with viewport height and every
+                                        ;; filter change re-mounted the lot. The trade is
+                                        ;; coverage: 11 rows sit at or below the fold once
+                                        ;; scrolled (396 px at 36 px rows), so a taller
+                                        ;; scroll body shows a blank band under the last
+                                        ;; row. See plans/library-scroll-window-cap.md.
+                                        :max-visible-rows 7})]
                   (dom/props {:class "tape-scroll"
                               ;; C1c per-row transform positioning (see .tape-scroll in index.css):
                               ;; --count → table height (scroll range), --grid-cols → the row grid.

@@ -1481,7 +1481,15 @@ bytecode cap in the :prod build, which dev compilation never emits.
     (dom/div
       (dom/props {:style {:flex "1" :overflow-y "auto" :min-height "0"
                           :scrollbar-gutter "stable" :position "relative"}})
-      (let [[offset limit] (Scroll-window row-height row-count dom/node {:overquery-factor 2 :reset-key scroll-reset-key})]
+      ;; :max-visible-rows 7 × :overquery-factor 2 = 14 mounted rows, fixed.
+      ;; Uncapped, the window grew with viewport height (~44 rows on a full-height
+      ;; desktop window), and LibraryCardRow costs ~50 ms to mount or unmount —
+      ;; the dominant cost of every filter change. The trade is coverage: 11 rows
+      ;; sit at or below the fold once scrolled (451 px at 41 px rows), so a taller
+      ;; scroll body shows a blank band under the last row.
+      ;; See plans/library-scroll-window-cap.md.
+      (let [[offset limit] (Scroll-window row-height row-count dom/node
+                             {:overquery-factor 2 :reset-key scroll-reset-key :max-visible-rows 7})]
         (dom/props {:class "tape-scroll table-frame-body"
                     ;; C1c per-row transform positioning (see .tape-scroll in index.css):
                     ;; --count → table height (scroll range), --grid-cols → the row grid.
