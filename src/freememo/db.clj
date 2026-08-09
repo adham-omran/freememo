@@ -1329,11 +1329,15 @@
    The scheduler writes NO column of `card_schedules` (§1.4). That table is the
    Learn queue's per-deletion FSRS state and this feature builds no queue.
 
-   `config_fingerprint` and `high_water_revlog_id` are what make a refresh
-   incremental (§3.3, §2.4). The fingerprint covers Anki's weights, retention
-   target and revlog cutoff; a mismatch discards the row and replays in full.
-   The high-water mark is the newest revlog id already folded in, so the next
-   pull asks Anki for what came after it.
+   `config_fingerprint` covers Anki's weights, retention target and revlog
+   cutoff (§3.3). Readers filter on it, so a config change discards the rows it
+   no longer describes.
+
+   `high_water_revlog_id` is the newest revlog id folded into the row. It once
+   selected an incremental `cardReviews` pull; that pull is gone, because
+   AnkiConnect scopes the action by a card's CURRENT deck and returned nothing
+   for cards gathered into a filtered deck. The column is still written as the
+   per-card anchor of the replay, and read by nobody.
 
    Page numbers, never topic ids, in `first_page`, `last_page` and
    `excluded_pages`. An id inside an array is the account-transfer failure
@@ -8811,21 +8815,12 @@
                                          :updated_at]}))))
       (count stamped))))
 
-(defn anki-state-high-water
-  "The newest revlog id already folded into this user's cached state, or 0.
-
-   §2.4 — the first refresh reads the whole revlog for the document's cards,
-   and every later one asks `cardReviews` for what came after this mark.
-   Scoped to one fingerprint: a config change resets the mark to 0 along with
-   the state it belongs to, so the replay that follows is a full one."
-  [user-id fingerprint]
-  (or (:high_water
-        (jdbc/execute-one! ds
-          (sql/format {:select [[[:max :high_water_revlog_id] :high_water]]
-                       :from [:anki_card_states]
-                       :where [:and [:= :user_id user-id]
-                               [:= :config_fingerprint fingerprint]]})))
-    0))
+;; `anki-state-high-water` lived here. It fed the deck-scoped `cardReviews`
+;; incremental pull, which AnkiConnect scopes by a card's CURRENT deck and
+;; which therefore returned nothing for cards gathered into a filtered deck.
+;; The revlog is read whole and by card id now, so no mark selects a pull.
+;; `anki_card_states.high_water_revlog_id` is still WRITTEN, as the per-card
+;; anchor `card-rows` derives from the replay, and is read by nobody.
 
 (defn upsert-anki-deck-config!
   "Cache one deck's Anki config. Returns the row count written.

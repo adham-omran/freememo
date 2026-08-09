@@ -55,7 +55,7 @@
           sync-refresh (e/server (e/watch (us/get-atom user-id :sync-mutations)))
           inputs (e/server (sched/refresh-inputs (+ refresh sync-refresh) user-id))
           note-ids (e/server (:note-ids inputs))
-          high-water (e/server (:high-water inputs))
+          push-deck (e/server (:push-deck inputs))
           !acq (atom nil)
           acq (e/watch !acq)]
 
@@ -65,7 +65,7 @@
       ;; user or of card set an honest unmount and mount instead.
       (e/for-by identity [_k [user-id (count note-ids)]]
         (when (pos? (count note-ids))
-          (e/snapshot (sa/start-acquire! note-ids high-water !acq))))
+          (e/snapshot (sa/start-acquire! note-ids push-deck !acq))))
 
       ;; §7.3 — the ingest is sequenced, never a `(token)` sibling of the
       ;; server call. `do` is concurrent in Electric, so a sibling token would

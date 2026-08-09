@@ -23,6 +23,7 @@
             [freememo.schedule-forecast :as fc]
             [freememo.logging :as log]
             #?(:clj [freememo.db :as db])
+            #?(:clj [freememo.settings :as settings])
             #?(:clj [freememo.commands :as cmd])))
 
 ;; ---------------------------------------------------------------------------
@@ -189,9 +190,11 @@
            {:ok false :error msg}                            the replay threw
    Post: NO revlog row is persisted anywhere (§9.4.3) — the raw rows live only
          in this call's stack.
-   Post: a mismatch between the acquisition's fingerprint and the cache's
-         discards the cached state, because `db/get-anki-card-states` filters
-         on the fingerprint and returns nothing to continue from (§3.3).
+   Post: every card's state is replayed from its WHOLE history, so the stored
+         row never depends on what was stored before it. This used to continue
+         from the cached state under `:incremental?`, which made the write
+         order-dependent; the acquisition now always carries the full revlog.
+         `fingerprint` is still written, because readers filter on it (§3.3).
    Inv : the replay runs here, on the JVM. Doing it in the browser would put
          `schedule-fsrs/replay` on the only thread the UI has (§9.4.2)."
   [user-id acquisition]
@@ -204,17 +207,11 @@
        ;; and the branch mounted forever.
        {:ok true :skipped (:status acquisition)}
        (try
-         (let [{:keys [deck deck-config fingerprint infos revlog incremental?]} acquisition
+         (let [{:keys [deck deck-config fingerprint infos revlog]} acquisition
                sched (sf/scheduler-from-deck-config deck-config)
                cutoff (sa/ignore-before-ms (:ignoreRevlogsBeforeDate deck-config))
-               cached (when incremental?
-                        (db/get-anki-card-states user-id
-                          (distinct (keep :note infos)) fingerprint))
                rows (sa/card-rows sched infos revlog
-                      {:cutoff-ms cutoff
-                       :fingerprint fingerprint
-                       :cached (or cached {})
-                       :incremental? (boolean (and incremental? (seq cached)))})
+                      {:cutoff-ms cutoff :fingerprint fingerprint})
                ;; The wire carries epoch millis; the columns are timestamps.
                db-rows (mapv (fn [r]
                                (-> r
@@ -227,8 +224,7 @@
            (db/upsert-anki-card-states! user-id db-rows)
            (cmd/bump-channels! user-id #{:schedule-mutations})
            (log/log-info (str "[schedule] ingested deck=" deck
-                           " cards=" (count db-rows)
-                           " incremental=" (boolean incremental?)))
+                           " cards=" (count db-rows)))
            {:ok true :stored (count db-rows) :deck deck :fingerprint fingerprint
             :theta (:desired-retention sched)})
          (catch Throwable e
@@ -529,23 +525,28 @@
 (defn refresh-inputs
   "What the browser needs to acquire from Anki (§2.4).
 
-   Post: {:note-ids [long …] :high-water long}. The note ids span EVERY active
-         schedule's document, so one acquisition serves the whole tab rather
-         than one per schedule.
-   Post: `:high-water` is 0 whenever no config is cached — a config change
-         invalidates the mark along with the state (§3.3), and 0 is what makes
-         the next pull a full one."
+   Post: {:note-ids [long …] :push-deck string-or-nil}. The note ids span EVERY
+         active schedule's document, so one acquisition serves the whole tab
+         rather than one per schedule.
+   Post: `:push-deck` is the deck this user's Anki sync writes to. It is the
+         LAST resort for finding a preset, used only when every deck the cards
+         are actually in turns out to be a filtered deck (`acquire!`). Read
+         from the global preference rather than a per-document preset, because
+         the note ids here span every schedule and no single document owns
+         them.
+   Post: `:high-water` is gone. It fed the deck-scoped incremental pull, which
+         lost reviews for any card in a filtered deck; the revlog is read whole
+         and by card id now (`schedule-anki`)."
   [_refresh user-id]
   #?(:clj
      (let [roots (distinct (map :study_schedules/root_topic_id
                              (db/list-study-schedules user-id)))
            note-ids (distinct (mapcat #(map :anki-note-id
                                          (db/get-schedule-cards user-id %))
-                                roots))
-           fp (:anki_deck_configs/fingerprint (db/get-anki-deck-config user-id))]
+                                roots))]
        {:note-ids (vec note-ids)
-        :high-water (if fp (db/anki-state-high-water user-id fp) 0)})
-     :cljs {:note-ids [] :high-water 0}))
+        :push-deck (settings/get-anki-deck user-id)})
+     :cljs {:note-ids [] :push-deck nil}))
 
 #?(:clj
    (defn- display-rows

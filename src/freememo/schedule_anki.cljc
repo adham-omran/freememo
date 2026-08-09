@@ -8,27 +8,27 @@
    rows to the server, which replays them (§9.4.2). Nothing here persists
    anything: raw revlog is never stored (§9.4.3).
 
-   READ-ONLY (§1.5). Six actions, and no others: `apiReflect`, `notesInfo`,
-   `cardsInfo`, `getDeckConfig`, `getReviewsOfCards`, `cardReviews`. Nothing in
-   this namespace writes to a collection.
+   READ-ONLY (§1.5). Five actions, and no others: `apiReflect`, `notesInfo`,
+   `cardsInfo`, `getDeckConfig`, `getReviewsOfCards`. Nothing in this namespace
+   writes to a collection.
 
-   The shapes returned by AnkiConnect differ between the two revlog actions,
-   and the difference is load-bearing:
-
-     `getReviewsOfCards(cards)`  → {card-id [{:id :usn :ease :ivl :lastIvl
-                                              :factor :time :type} …]}
-     `cardReviews(deck, startID)` → [[id cid usn ease ivl lastIvl factor time
-                                      type] …]   ← positional ARRAYS, not maps
-
-   `normalize-card-reviews` is what makes the second look like the first.
-   Verified against the AnkiConnect source, `plugin/__init__.py`
-   `cardReviews` and `getReviewsOfCards`."
+   THE REVLOG IS READ BY CARD, NEVER BY DECK. `cardReviews(deck, startID)` was
+   the incremental path, and AnkiConnect scopes it by the card's CURRENT deck.
+   Measured against a live collection: `cardReviews(\"All\", 0)` returned 73 670
+   rows and NONE of the 126 cards the user had gathered into a filtered deck to
+   study. Two silent losses followed. A card being studied through a filtered
+   deck contributed no reviews at all, and a document spanning two decks lost
+   every card outside the modal one — 11 of 137 on the collection that surfaced
+   this. `getReviewsOfCards(cards)` names the cards it wants, so neither can
+   happen, and it costs less: 137 cards in 30 ms / 12 KB against 365 ms for one
+   deck-wide sweep."
   (:require [freememo.schedule-fsrs :as sf]
             [freememo.logging :as log]
             ;; `anki-call!` is cljs-only, so a plain `:refer` fails to resolve
             ;; on the JVM peer and this whole namespace stops loading. The pure
-            ;; half — `normalize-card-reviews`, `ignore-before-ms`, `card-rows`
-            ;; — runs on the SERVER (§9.4.2), so that failure is not academic.
+            ;; half — `preset?`, `config-deck-candidates`, `ignore-before-ms`,
+            ;; `card-rows` — runs on the SERVER (§9.4.2) or in tests, so that
+            ;; failure is not academic.
             #?@(:cljs [[freememo.anki-sync-helpers :refer [anki-call!]]
                        [missionary.core :as m]])))
 
@@ -64,9 +64,20 @@
    :unsupported {:chip "AnkiConnect too old" :fault? true
                  :banner "This AnkiConnect is too old — it has no getReviewsOfCards."}
 
+   ;; This banner used to read \"FSRS is off in Anki, or its deck preset carries
+   ;; no 21-parameter fsrsParams6\". Nothing here reads a global FSRS flag, and
+   ;; no action in §1.5's set exposes one, so the first half blamed a cause the
+   ;; code never checked. It said so on a collection where FSRS was on and the
+   ;; preset carried all 21 parameters.
    :no-fsrs {:chip "FSRS unavailable" :fault? true
-             :banner (str "FSRS is off in Anki, or its deck preset carries no "
-                       "21-parameter fsrsParams6.")}
+             :banner (str "This deck's Anki preset carries no 21-parameter "
+                       "fsrsParams6. Optimize its FSRS parameters in Anki.")}
+
+   :filtered-deck {:chip "cards in a filtered deck" :fault? true
+                   :banner (str "Every card of this document is in a filtered "
+                             "deck, which has no preset and therefore no FSRS "
+                             "parameters. Empty the filtered deck, or set this "
+                             "document's Anki deck in the sync form.")}
 
    :no-deck {:chip "cards in no deck" :fault? true
              :banner "None of this document's cards is in an Anki deck."}
@@ -88,9 +99,11 @@
    `getReviewsOfCards` is the one that matters: it is absent from API v5, and
    an AnkiConnect without it cannot serve this feature at all. Probing rather
    than calling-and-catching is what makes an old AnkiConnect render the
-   refusal of §8.1 instead of an error with no cause in it."
-  ["apiReflect" "notesInfo" "cardsInfo" "getDeckConfig"
-   "getReviewsOfCards" "cardReviews"])
+   refusal of §8.1 instead of an error with no cause in it.
+
+   `cardReviews` was a sixth entry. Nothing calls it now, and requiring it
+   would refuse an AnkiConnect that can serve every read this feature makes."
+  ["apiReflect" "notesInfo" "cardsInfo" "getDeckConfig" "getReviewsOfCards"])
 
 (def ^:const notes-info-batch
   "§2.2 — note ids per `notesInfo` call. 999 is sqlite's variable cap, which
@@ -100,32 +113,51 @@
   999)
 
 ;; ---------------------------------------------------------------------------
-;; Shape normalization
+;; Which deck's config governs the forecast (§2.3)
 ;; ---------------------------------------------------------------------------
+;; Pure, so the rule is testable on the JVM. `acquire!` below is cljs-only and
+;; does I/O, and a selection rule buried inside it could only be checked by
+;; hand against a live collection — which is how it shipped wrong.
 
-(defn normalize-card-reviews
-  "`cardReviews` rows as `getReviewsOfCards` maps, grouped by card id.
+(defn preset?
+  "Whether a `getDeckConfig` result is a deck PRESET rather than a filtered deck.
 
-   Pre : `rows` is the raw `cardReviews` result — a seq of 9-element positional
-         vectors in the column order the action's SQL selects:
-         id, cid, usn, ease, ivl, lastIvl, factor, time, type.
-   Post: {card-id [{:id :ease :ivl :type} …]}, holding only the fields the
-         replay reads. A row of the wrong width is dropped rather than
-         mis-indexed — a column order that changed upstream must lose rows
-         loudly rather than shift `ease` into `ivl` silently.
-   Post: rows for cards outside `keep-card-ids` are dropped. `cardReviews` is
-         DECK-scoped, so an incremental pull returns every review in the deck,
-         and a deck like `All` holds 38 000 cards this schedule does not track."
-  [rows keep-card-ids]
-  (let [keep? (set keep-card-ids)]
-    (reduce (fn [acc row]
-              (if-not (and (sequential? row) (= 9 (count row)))
-                acc
-                (let [[id cid _usn ease ivl _last _factor _time type] row]
-                  (if-not (keep? cid)
-                    acc
-                    (update acc cid (fnil conj []) {:id id :ease ease :ivl ivl :type type})))))
-      {} rows)))
+   `getDeckConfig` answers with the config group for a normal deck, and with
+   the FILTERED DECK'S OWN object for a filtered one. Both are maps, so `map?`
+   cannot separate them — only `dyn` can. A filtered deck belongs to no preset
+   and therefore carries no FSRS parameters, so one gathered for study made the
+   whole forecast report `:no-fsrs` while the collection's real preset held all
+   21 (measured: `Compilers book`, `dyn` 1, against `AnKing`, `dyn` false).
+
+   Pre : `cfg` is a parsed `getDeckConfig` result, or nil.
+   Post: true only for a map whose `dyn` is absent, false, or 0. A preset
+         reports false and a filtered deck reports 1, both observed live. 0 is
+         admitted because it is JSON's other spelling of false, and CLJS reads
+         0 as TRUTHY — a bare `(:dyn cfg)` test would call such a deck filtered."
+  [cfg]
+  (and (map? cfg)
+    (let [d (:dyn cfg)]
+      (not (and (number? d) (pos? d))))))
+
+(defn config-deck-candidates
+  "The decks to try `getDeckConfig` on, best first.
+
+   The forecast needs ONE preset, and a document's cards may sit in several
+   decks at once. Frequency ranks them because FreeMemo pushes a document to a
+   single deck, so the deck holding most of its cards is the one whose settings
+   govern them.
+
+   Pre : `infos` is the `cardsInfo` result.
+   Post: distinct `:deckName`s, most cards first, ties broken by name so the
+         order is TOTAL — two decks holding equal counts must not pick a
+         different preset from one refresh to the next. A card carrying no deck
+         name is dropped."
+  [infos]
+  (->> infos
+    (keep :deckName)
+    frequencies
+    (sort-by (fn [[deck n]] [(- n) deck]))
+    (mapv first)))
 
 (defn- anki-interval->days
   "Anki's `card.ivl` in days. A NEGATIVE value is seconds, a scheduler-v1
@@ -159,34 +191,21 @@
                  (if (js/isNaN t) 0 (long t))))
       (catch #?(:clj Exception :cljs :default) _ 0))))
 
-(defn- cached->state
-  "One cached `anki_card_states` row as a `schedule-fsrs/replay` start state,
-   or nil when the row carries no memory state to continue from."
-  [row]
-  (when (and row (some? (:anki_card_states/stability row)))
-    {:state (long (:anki_card_states/state row))
-     :step (some-> (:anki_card_states/step row) long)
-     :stability (double (:anki_card_states/stability row))
-     :difficulty (some-> (:anki_card_states/difficulty row) double)
-     :last-review-ms (some-> (:anki_card_states/last_review_at row) inst-ms)
-     :interval-days (double (or (:anki_card_states/interval_days row) 0.0))
-     :reps (long (or (:anki_card_states/reps row) 0))}))
-
 (defn card-rows
   "Merge `cardsInfo` and the replayed revlog into the rows the cache stores.
 
    Pre : `infos` is the `cardsInfo` result and `revlog-by-card` is keyed by
-         Anki card id. `scheduler` is configured from the deck config. `cached`
-         is {anki-card-id row} from `db/get-anki-card-states`, already filtered
-         to the current fingerprint, and `incremental?` says whether
-         `revlog-by-card` is the whole history or only what followed the mark.
+         Anki card id, holding each card's WHOLE history. `scheduler` is
+         configured from the deck config.
    Post: one row per card in `infos`, carrying derived FSRS state plus the
          anchors the projection needs. A card whose whole revlog is manual
          entries has nil stability and reads as never-reviewed (§5.8.5), never
          as an error.
-   Inv : an INCREMENTAL replay continues from the cached state; a full one
-         starts fresh. Getting this backwards is silent — every card would
-         report the stability of its last few reviews alone.
+   Inv : every replay starts fresh. There used to be a second mode that
+         continued from a cached state, for the incremental pull the namespace
+         docstring describes; getting the flag backwards was silent, and each
+         card would have reported the stability of its last few reviews alone.
+         The mode is gone with the pull that needed it.
 
    The interval comes from ANKI, not from the replay. Anki's `ivl` is the
    interval actually in force — fuzzed, load-balanced, possibly hand-set — and
@@ -200,20 +219,15 @@
    is an absolute epoch timestamp and needs no anchor, which is what §2.5's
    cross-check asserts."
   [scheduler infos revlog-by-card
-   {:keys [cutoff-ms fingerprint cached incremental?]
-    :or {cutoff-ms 0 cached {}}}]
+   {:keys [cutoff-ms fingerprint] :or {cutoff-ms 0}}]
   (mapv
     (fn [info]
       (let [cid (:cardId info)
-            prior (when incremental? (cached->state (get cached cid)))
             log (sf/filtered-revlog (get revlog-by-card cid []) cutoff-ms)
-            state (sf/replay scheduler log prior)
+            state (sf/replay scheduler log)
             anki-ivl (anki-interval->days (:interval info))
             last-ms (:last-review-ms state)
-            hw (max (long (or (some-> (get cached cid)
-                                :anki_card_states/high_water_revlog_id long)
-                            0))
-                 (if (seq log) (long (:id (peek log))) 0))]
+            hw (if (seq log) (long (:id (peek log))) 0)]
         {:anki_card_id cid
          :anki_note_id (:note info)
          :deck (:deckName info)
@@ -304,42 +318,73 @@
            acc)))))
 
 #?(:cljs
-   (defn deck-config!
-     "§2.3 — the deck config, or nil when Anki does not know the deck.
-      `getDeckConfig` returns literal `false` for an unknown deck name, so a
-      non-map result is a missing deck rather than a missing key."
-     [deck]
+   (defn resolve-deck-config!
+     "§2.3 — walk `deck-names` and stop at the first that governs the cards.
+
+      A name qualifies when `getDeckConfig` answers with a `preset?` carrying 21
+      FSRS-6 parameters. `getDeckConfig` returns literal `false` for a name Anki
+      does not know, and the filtered deck's own object for a filtered one, so
+      both a missing deck and a preset-less one are skipped rather than accepted.
+
+      Pre : `deck-names` is ordered best-first (`config-deck-candidates`, then
+            the user's configured push deck).
+      Post: a task of {:deck :config} for the first qualifying name, or
+            {:filtered-only? bool :param-counts {…}} when none qualifies.
+      Post: `:filtered-only?` is true only when NO preset was read at all. It
+            separates two failures that need different words: every deck the
+            cards are in is filtered and has no preset, against a real preset
+            that carries no FSRS-6 parameters. The first is fixed by emptying
+            the filtered deck, the second by optimizing parameters in Anki.
+      Post: `:param-counts` describes the FIRST preset that fell short, so the
+            log can tell an FSRS-4.5 or FSRS-5 collection from an unoptimized
+            one. Nil when no preset was read."
+     [deck-names]
      (m/sp
-       (let [cfg (m/? (anki-call! "getDeckConfig" {:deck deck}))]
-         (when (map? cfg) cfg)))))
+       (loop [names (seq deck-names)
+              saw-preset? false
+              counts nil]
+         (if-not names
+           {:filtered-only? (not saw-preset?) :param-counts counts}
+           (let [deck (first names)
+                 cfg (m/? (anki-call! "getDeckConfig" {:deck deck}))]
+             (cond
+               (not (preset? cfg)) (recur (next names) saw-preset? counts)
+               (sf/fsrs6-parameters cfg) {:deck deck :config cfg}
+               :else (recur (next names) true
+                       (or counts
+                         {:fsrsWeights (count (:fsrsWeights cfg))
+                          :fsrsParams5 (count (:fsrsParams5 cfg))
+                          :fsrsParams6 (count (:fsrsParams6 cfg))})))))))))
 
 #?(:cljs
    (defn revlog!
-     "§2.4 — the revlog for `card-ids`, grouped by card id.
+     "§2.4 — the WHOLE revlog for `card-ids`, grouped by card id.
 
-      Two paths, and `high-water` picks between them. At 0 the first refresh
-      reads the whole history through `getReviewsOfCards`. Above 0 the
-      incremental refresh asks `cardReviews` for what came after the mark, and
-      `normalize-card-reviews` reshapes its positional rows and drops the rest
-      of the deck.
+      One path, and it names its cards. The namespace docstring records what
+      the deck-scoped incremental path lost.
 
-      Post: a task of {card-id [{:id :ease :ivl :type} …]}. Under the
-            incremental path the map holds ONLY new reviews, so the caller must
-            merge it onto the cached state rather than replace with it — a
-            replay of new reviews alone would restart every card from fresh."
-     [deck card-ids high-water]
+      Batched at `notes-info-batch` for the reason `cards-info!` batches: the
+      response carries one object per review, and a whole account's history in
+      a single response is megabytes (measured: 1624 cards, 6575 rows, 798 KB).
+
+      Post: a task of {card-id [{:id :ease :ivl :type} …]}, complete for every
+            card named. A card Anki holds with no reviews is absent from the
+            map, which `card-rows` reads as never-reviewed."
+     [card-ids]
      (m/sp
-       (if (pos? (long high-water))
-         (normalize-card-reviews
-           (m/? (anki-call! "cardReviews" {:deck deck :startID high-water}))
-           card-ids)
-         (let [res (m/? (anki-call! "getReviewsOfCards" {:cards (vec card-ids)}))]
-           ;; getReviewsOfCards keys its result by card id, which JSON renders
-           ;; as an object KEY — a string, which `anki-call!`'s keywordizing
-           ;; turns into a keyword. The rest of this feature keys on the
-           ;; numeric id, so the key is read back out of the keyword's name.
-           (reduce-kv (fn [m k v] (assoc m (js/parseInt (name k) 10) (vec v)))
-             {} res))))))
+       (loop [batches (partition-all notes-info-batch (vec card-ids))
+              acc {}]
+         (if-let [b (first batches)]
+           (let [res (m/? (anki-call! "getReviewsOfCards" {:cards (vec b)}))]
+             (recur (rest batches)
+               ;; getReviewsOfCards keys its result by card id, which JSON
+               ;; renders as an object KEY — a string, which `anki-call!`'s
+               ;; keywordizing turns into a keyword. The rest of this feature
+               ;; keys on the numeric id, so the key is read back out of the
+               ;; keyword's name.
+               (reduce-kv (fn [m k v] (assoc m (js/parseInt (name k) 10) (vec v)))
+                 acc res)))
+           acc)))))
 
 #?(:cljs
    (defn acquire!
@@ -352,24 +397,26 @@
       and calls `card-rows` nowhere.
 
       Pre : `note-ids` are `flashcards.anki_note_id` values for the document's
-            pushed cards. `high-water` is the stored mark, or 0 when the cache
-            is empty or its fingerprint no longer matches (§3.3).
+            pushed cards. `push-deck` is the deck FreeMemo pushes this user's
+            cards to, or nil.
       Post: a task of one of
               {:status :ok :deck :deck-config :fingerprint :infos :revlog
-               :incremental? :card-count :note-card-ids}
-              {:status :unsupported :missing [action …]}   ; §8.1, cause 1
-              {:status :no-deck}                           ; the cards are in no deck
-              {:status :no-fsrs :deck :param-counts {…}}   ; §8.1, causes 2 and 3
-              {:status :no-cards}                          ; §8.3
-      Post: `:incremental?` tells the server whether `:revlog` is the whole
-            history or only what followed the mark. Replaying an incremental
-            pull as if it were whole would restart every card from fresh, which
-            is the one way this cache can report confident nonsense.
+               :card-count :note-card-ids}
+              {:status :unsupported :missing [action …]}      ; §8.1, cause 1
+              {:status :no-deck}                              ; cards in no deck
+              {:status :filtered-deck :deck}                  ; no preset reachable
+              {:status :no-fsrs :deck :param-counts {…}}      ; §8.1, causes 2 and 3
+              {:status :no-cards}                             ; §8.3
+      Post: `:revlog` is always the WHOLE history of every card named, so the
+            server replays from fresh and no flag can be read backwards.
 
-      The deck is the MODE over the cards' own decks, not a user choice.
-      FreeMemo pushes to one deck, and asking the user to name it again would
-      let the forecast read a config that governs none of their cards."
-     [note-ids high-water]
+      The deck is inferred, ranked by how many of the document's cards each
+      holds. `push-deck` is a LAST resort, tried only when no deck the cards
+      are actually in yields a preset — which happens when the user gathers the
+      whole document into a filtered deck to study it. Trying it first would
+      let a stale setting name a deck governing none of these cards, which is
+      why §2 rejected asking the user in the first place."
+     [note-ids push-deck]
      (m/sp
        (let [probe (m/? (probe!))]
          (if-not (:ok? probe)
@@ -379,32 +426,42 @@
              (if (empty? card-ids)
                {:status :no-cards}
                (let [infos (m/? (cards-info! card-ids))
-                     deck (->> infos (keep :deckName) frequencies
-                            (sort-by (comp - val)) ffirst)]
-                 (if-not deck
+                     candidates (config-deck-candidates infos)]
+                 (if (empty? candidates)
                    {:status :no-deck}
-                   (let [cfg (m/? (deck-config! deck))]
-                     (if-not (sf/fsrs6-parameters cfg)
-                       {:status :no-fsrs
-                        :deck deck
-                        :param-counts {:fsrsWeights (count (:fsrsWeights cfg))
-                                       :fsrsParams5 (count (:fsrsParams5 cfg))
-                                       :fsrsParams6 (count (:fsrsParams6 cfg))}}
-                       (let [incremental? (pos? (long high-water))
-                             log (m/? (revlog! deck card-ids high-water))]
+                   (let [tries (if (and push-deck (not (some #{push-deck} candidates)))
+                                 (conj candidates push-deck)
+                                 candidates)
+                         found (m/? (resolve-deck-config! tries))]
+                     (if-not (:deck found)
+                       (do
+                         ;; The counts are logged rather than dropped. They were
+                         ;; assembled and read nowhere, so the one fact that
+                         ;; separates an FSRS-5 collection from an unoptimized
+                         ;; preset never reached anybody.
+                         (log/log-debug
+                           (str "[schedule-anki] no usable deck config"
+                             " tried=" (pr-str tries)
+                             " filtered-only=" (:filtered-only? found)
+                             " param-counts=" (pr-str (:param-counts found))))
+                         {:status (if (:filtered-only? found) :filtered-deck :no-fsrs)
+                          :deck (first candidates)
+                          :param-counts (:param-counts found)})
+                       (let [deck (:deck found)
+                             cfg (:config found)
+                             log (m/? (revlog! card-ids))]
                          (log/log-debug
                            (str "[schedule-anki] deck=" deck
                              " notes=" (count note-ids)
                              " cards=" (count card-ids)
-                             " revlog-cards=" (count log)
-                             " high-water=" high-water))
+                             " decks-seen=" (count candidates)
+                             " revlog-cards=" (count log)))
                          {:status :ok
                           :deck deck
                           :deck-config cfg
                           :fingerprint (sf/config-fingerprint cfg)
                           :infos (vec infos)
                           :revlog log
-                          :incremental? incremental?
                           :card-count (count card-ids)
                           :note-card-ids n->c}))))))))))))
 
@@ -424,8 +481,8 @@
       An unreachable Anki is not an error state here. §8.2 requires the tab to
       serve cached state with a staleness marker, so the failure callback
       writes `{:status :unreachable}` and the caller decides what to render."
-     [note-ids high-water !result]
-     ((acquire! note-ids high-water)
+     [note-ids push-deck !result]
+     ((acquire! note-ids push-deck)
       (fn [res] (reset! !result res))
       (fn [err]
         (log/log-debug (str "[schedule-anki] unreachable: " (.-message err)))
@@ -443,6 +500,6 @@
    Callers MUST wrap this in `e/snapshot` inside a keyed frame. It writes to
    an atom and starts a fetch, and Electric re-evaluates reactive bodies
    unpredictably — the same rule the JS-library-init section states."
-  [note-ids high-water !result]
-  #?(:cljs (run-acquire! note-ids high-water !result)
+  [note-ids push-deck !result]
+  #?(:cljs (run-acquire! note-ids push-deck !result)
      :clj nil))

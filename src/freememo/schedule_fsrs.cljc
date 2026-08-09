@@ -235,11 +235,12 @@
 (defn replay
   "FSRS memory state after `revlog`, or nil when no review survives the filter.
 
-   The 3-arity CONTINUES from `initial`, which is what makes the incremental
-   refresh of §2.4 correct. An incremental pull carries only the reviews after
-   the stored high-water mark; replaying those from `fresh-state` would restart
-   every card as if its whole history never happened, and would report a
-   confident stability an order of magnitude too low.
+   The 3-arity CONTINUES from `initial`. No caller uses it today: the
+   acquisition of §2.4 carries every card's whole history, so `card-rows`
+   always replays from fresh. It is kept because it states the algorithm's
+   continuation property, and because a partial revlog replayed from
+   `fresh-state` reports a confident stability an order of magnitude too low —
+   the failure that a deck-scoped incremental pull could cause silently.
 
    Pre : `revlog` is the output of `filtered-revlog` — sorted ascending, and
          holding answer buttons only. `scheduler` is a

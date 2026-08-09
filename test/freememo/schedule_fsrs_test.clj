@@ -398,21 +398,35 @@
 
 ;; ── §2 — Anki acquisition, the pure half ───────────────────────────
 
-(deftest card-reviews-rows-are-positional-and-get-reshaped
-  (testing "§2.4 — cardReviews returns ARRAYS, getReviewsOfCards returns maps"
-    (let [rows [[1700000000000 55 -1 3 10 4 2500 1200 1]
-                [1700000100000 55 -1 1 1 10 2300 900 1]
-                [1700000200000 99 -1 3 5 2 2500 800 0]]]
-      (is (= {55 [{:id 1700000000000 :ease 3 :ivl 10 :type 1}
-                  {:id 1700000100000 :ease 1 :ivl 1 :type 1}]}
-            (sa/normalize-card-reviews rows #{55}))
-        "rows for cards outside the set are dropped — cardReviews is deck-scoped")
-      (is (= #{55 99} (set (keys (sa/normalize-card-reviews rows #{55 99}))))))))
+;; The `normalize-card-reviews` tests went with the function. It reshaped
+;; `cardReviews`' positional rows, and nothing calls that action now — the
+;; namespace docstring records why.
 
-(deftest a-row-of-the-wrong-width-is-dropped-not-misindexed
-  (testing "an upstream column change must lose rows loudly, never shift ease into ivl"
-    (is (= {} (sa/normalize-card-reviews [[1 2 3]] #{2})))
-    (is (= {} (sa/normalize-card-reviews [nil "junk"] #{2})))))
+(deftest a-filtered-deck-is-not-a-preset
+  (testing "§2.3 — getDeckConfig answers with the FILTERED DECK'S own object,
+            which is a map, so map? cannot separate the two and dyn must"
+    ;; Both shapes as AnkiConnect returned them on a live collection.
+    (is (true? (boolean (sa/preset? {:name "AnKing" :dyn false :fsrsParams6 (vec (repeat 21 0.5))})))
+      "a real preset reports dyn false")
+    (is (false? (boolean (sa/preset? {:name "Compilers book" :dyn 1
+                                      :terms [["Links:*Compilers*" 999 6]]})))
+      "a filtered deck reports dyn 1 and carries no parameters at all"))
+  (testing "0 is JSON's other spelling of false, and CLJS reads it as TRUTHY"
+    (is (true? (boolean (sa/preset? {:dyn 0})))))
+  (testing "an unknown deck name yields literal false, which is no preset"
+    (is (false? (boolean (sa/preset? false))))
+    (is (false? (boolean (sa/preset? nil))))))
+
+(deftest the-config-deck-is-ranked-by-how-many-cards-each-holds
+  (testing "§2.3 — most cards first, because FreeMemo pushes a document to one deck"
+    (is (= ["A" "B"] (sa/config-deck-candidates
+                       [{:deckName "B"} {:deckName "A"} {:deckName "A"}]))))
+  (testing "ties break by name, so a rerun cannot pick a different preset"
+    (is (= ["A" "B"] (sa/config-deck-candidates [{:deckName "B"} {:deckName "A"}])))
+    (is (= ["A" "B"] (sa/config-deck-candidates [{:deckName "A"} {:deckName "B"}]))))
+  (testing "a card with no deck name is dropped, and an empty result is :no-deck"
+    (is (= ["A"] (sa/config-deck-candidates [{:deckName "A"} {:cardId 1}])))
+    (is (= [] (sa/config-deck-candidates [])))))
 
 (deftest the-ignore-date-parses-or-yields-no-cutoff
   (testing "§4.2 — a malformed date MUST NOT discard history"
@@ -454,43 +468,32 @@
     (is (zero? (:reps row)))
     (is (zero? (:high_water_revlog_id row)))))
 
-(deftest an-incremental-replay-continues-from-the-cached-state
-  (testing "§2.4 — replaying new reviews from fresh would restart every card"
+(deftest a-replay-depends-only-on-the-revlog-it-is-given
+  (testing "§2.4 — the acquisition always carries the WHOLE history, so a row
+            never depends on what was stored before it"
     (let [full-log [{:id (* 1 day-ms) :ease 3} {:id (* 3 day-ms) :ease 3}
                     {:id (* 10 day-ms) :ease 3} {:id (* 40 day-ms) :ease 3}]
-          full (sf/replay sched full-log)
-          prefix (sf/replay sched (take 3 full-log))
-          cached {55 {:anki_card_states/state (:state prefix)
-                      :anki_card_states/step (:step prefix)
-                      :anki_card_states/stability (:stability prefix)
-                      :anki_card_states/difficulty (:difficulty prefix)
-                      :anki_card_states/interval_days (:interval-days prefix)
-                      :anki_card_states/last_review_at (java.util.Date. (long (* 10 day-ms)))
-                      :anki_card_states/reps 3
-                      :anki_card_states/high_water_revlog_id (* 10 day-ms)}}
           infos [{:cardId 55 :note 7 :interval 40 :type 2}]
-          [continued] (sa/card-rows sched infos {55 [(last full-log)]}
-                        {:fingerprint "fp" :cached cached :incremental? true})
-          [restarted] (sa/card-rows sched infos {55 [(last full-log)]}
-                        {:fingerprint "fp" :cached cached :incremental? false})]
-      (is (close? (:stability full) (:stability continued) 1e-6)
-        "continuing reproduces the full replay exactly")
-      (is (= 4 (:reps continued)))
-      (is (< (:stability restarted) (:stability continued))
-        "restarting from fresh reports a stability far below the truth")
-      (is (= 1 (:reps restarted))))))
+          [row] (sa/card-rows sched infos {55 full-log} {:fingerprint "fp"})
+          [again] (sa/card-rows sched infos {55 full-log} {:fingerprint "fp"})]
+      (is (close? (:stability (sf/replay sched full-log)) (:stability row) 1e-9)
+        "the row IS the full replay")
+      (is (= 4 (:reps row)))
+      (is (= (* 40 day-ms) (:high_water_revlog_id row))
+        "the mark is max(revlog.id) over the history given")
+      (is (= row again) "and a second ingest of the same history writes the same row"))))
 
-(deftest the-high-water-mark-never-moves-backwards
-  (testing "an incremental pull with no new reviews keeps the stored mark"
-    (let [cached {55 {:anki_card_states/stability 6.0
-                      :anki_card_states/state 2
-                      :anki_card_states/reps 3
-                      :anki_card_states/last_review_at (java.util.Date. day-ms)
-                      :anki_card_states/high_water_revlog_id 9999}}
-          [row] (sa/card-rows sched [{:cardId 55 :note 7 :interval 6 :type 2}] {}
-                  {:fingerprint "fp" :cached cached :incremental? true})]
-      (is (= 9999 (:high_water_revlog_id row)))
-      (is (close? 6.0 (:stability row) 1e-9) "and the state survives untouched"))))
+(deftest a-partial-revlog-would-understate-the-state
+  (testing "the loss the deck-scoped incremental pull could cause: a card whose
+            reviews went missing reads far weaker than it is, with no error"
+    (let [full-log [{:id (* 1 day-ms) :ease 3} {:id (* 3 day-ms) :ease 3}
+                    {:id (* 10 day-ms) :ease 3} {:id (* 40 day-ms) :ease 3}]
+          infos [{:cardId 55 :note 7 :interval 40 :type 2}]
+          [whole] (sa/card-rows sched infos {55 full-log} {:fingerprint "fp"})
+          [partial] (sa/card-rows sched infos {55 [(last full-log)]} {:fingerprint "fp"})]
+      (is (< (:stability partial) (:stability whole)))
+      (is (= 1 (:reps partial)))
+      (is (= 4 (:reps whole))))))
 
 ;; ── Vocabularies that two namespaces must agree on ─────────────────
 
@@ -509,9 +512,22 @@
     (is (string? sa/reading-chip))))
 
 (deftest every-status-acquire-can-return-has-a-state-entry
-  (testing "the five browser outcomes plus the server replay failure"
-    (is (= #{:ok :no-cards :unreachable :unsupported :no-fsrs :no-deck :ingest-failed}
+  (testing "the six browser outcomes plus the server replay failure"
+    (is (= #{:ok :no-cards :unreachable :unsupported :no-fsrs :filtered-deck
+             :no-deck :ingest-failed}
           (set (keys sa/acquisition-states))))))
+
+(deftest a-filtered-deck-and-a-stale-preset-do-not-share-one-message
+  (testing "§8.1 — the two failures need different words: one is fixed by
+            emptying the filtered deck, the other by optimizing in Anki"
+    (let [filtered (:banner (:filtered-deck sa/acquisition-states))
+          stale (:banner (:no-fsrs sa/acquisition-states))]
+      (is (not= filtered stale))
+      (is (re-find #"filtered" filtered))
+      (is (re-find #"fsrsParams6" stale))))
+  (testing "the :no-fsrs banner MUST NOT blame a global FSRS switch — nothing
+            reads one, and no action in §1.5's set exposes one"
+    (is (nil? (re-find #"(?i)fsrs is off" (:banner (:no-fsrs sa/acquisition-states)))))))
 
 (defn- projected [r ivl]
   {:page-id 1 :projected {:retrievability r :interval-days ivl :daily-reviews {}}})
@@ -535,8 +551,11 @@
 (deftest the-probe-list-holds-only-read-only-actions
   (testing "§1.5 — the feature MUST NOT write to a collection"
     (is (= #{"apiReflect" "notesInfo" "cardsInfo" "getDeckConfig"
-             "getReviewsOfCards" "cardReviews"}
-          (set sa/required-actions)))))
+             "getReviewsOfCards"}
+          (set sa/required-actions))))
+  (testing "cardReviews is NOT probed — nothing calls it, and requiring it
+            would refuse an AnkiConnect that serves every read this feature makes"
+    (is (not (contains? (set sa/required-actions) "cardReviews")))))
 
 ;; ── §1.2 — the dated study plan ────────────────────────────────────
 
