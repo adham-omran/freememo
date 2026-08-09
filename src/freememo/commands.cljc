@@ -288,6 +288,7 @@
     ;; freememo.command-bus.
     {:go-home       {:label "Go to Home"     :class :nav :nav-tab :home}
      :go-learn      {:label "Go to Learn"    :class :nav :nav-tab :learn}
+     :go-schedule   {:label "Go to Schedule" :class :nav :nav-tab :schedule}
      :go-viewer     {:label "Go to Viewer"   :class :nav :nav-tab :viewer}
      :go-library    {:label "Go to Library"  :class :nav :nav-tab :library}
      :go-knowledge  {:label "Go to Knowledge" :class :nav :nav-tab :knowledge}
