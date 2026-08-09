@@ -115,7 +115,11 @@
                     file-size (alength bytes)
                     {:keys [topic-id]} (db/create-epub-topic!
                                          user-id display-name bytes file-size chapters)]
-                (attach-biblio-best-effort! user-id topic-id web-biblio)
+                ;; `:biblio` rides along from the parse that just ran, so this
+                ;; costs no second read of the blob we just wrote. A supplied
+                ;; web-biblio still wins — it is curated, ours is derived.
+                (attach-biblio-best-effort! user-id topic-id
+                  (or web-biblio (:biblio result)))
                 (commands/bump! user-id :import-document)
                 {:ok true :topic-id topic-id})))
 
@@ -166,6 +170,46 @@
   (if (= ::archive/archive-too-large (:type (ex-data e)))
     "Collection archive is too large to import"
     (or (.getMessage ^Exception e) fallback)))
+
+(defn confirm-epub-session!*
+  "Turn a completed chunked EPUB session into an `epub` topic and its chapters.
+
+   The session-based sibling of `confirm-staged-upload!*`'s `:epub` branch. That
+   one reads bytes out of `import-staging`, which holds them in JVM heap and so
+   cannot carry a book past a few hundred megabytes. This one parses from the
+   session's materialized file, so the book never enters heap as an array.
+
+   Pre  : user-id owns session-id; the session is complete and has flow 'epub';
+          `finalize` has already validated its magic. image-mode is :reduce or
+          :strip.
+   Post : {:ok true :topic-id N} on success, {:ok false :error S} otherwise. On
+          SUCCESS the session row is deleted by `finalize-epub-session!` and its
+          large object becomes the topic's — the bytes are NOT copied and NOT
+          refunded, because the book is what the user now stores.
+   Invariant: on failure the session SURVIVES, so the user can retry without
+          re-uploading. The reap sweep collects it if they do not.
+   Invariant: `:biblio` from the parse is handed straight to the biblio step, so
+          the book is read once and never re-read from storage."
+  [user-id session-id image-mode]
+  (try
+    (let [m (db/materialize-upload-session! user-id session-id "epub")]
+      (if-not (:ok m)
+        m
+        (let [result (epub/process-epub (:file m) (or image-mode :reduce))]
+          (if (:error result)
+            {:ok false :error (:error result)}
+            (let [{:keys [title chapters biblio]} result
+                  display-name (or title (:filename m) "Untitled EPUB")
+                  r (db/finalize-epub-session! user-id session-id display-name chapters)]
+              (if-not (:ok r)
+                r
+                (do
+                  (attach-biblio-best-effort! user-id (:topic-id r) biblio)
+                  (commands/bump! user-id :import-document)
+                  {:ok true :topic-id (:topic-id r)})))))))
+    (catch Exception e
+      (log/log-error (str "confirm-epub-session!* failed: " (.getMessage e)))
+      {:ok false :error (.getMessage e)})))
 
 (defn confirm-supermemo-session!*
   "Import a SuperMemo collection from a completed chunked upload session.

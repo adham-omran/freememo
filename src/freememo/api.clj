@@ -31,6 +31,7 @@
    [freememo.config :as config]
    [freememo.account-export :as account-export]
    [freememo.archive-http :as archive-http]
+   [freememo.epub-http :as epub-http]
    [freememo.upload-http :as upload-http]
    [freememo.video-http :as video-http]
    [taoensso.telemere :as tel]
@@ -355,25 +356,12 @@
                             (:used result) (assoc :used (:used result))
                             (:limit result) (assoc :limit (:limit result)))))))
 
-                :epub
-                (let [result (epub/process-epub bytes image-mode)]
-                  (if (:error result)
-                    (do (log-upload-failure! ::upload-staged-epub-process-error request
-                          {:user-id user-id :filename filename
-                           :reason (:error result)})
-                        (json-response 400 {:success false :error (:error result)}))
-                    (let [{:keys [title chapters]} result
-                          display-name (or title filename "Untitled EPUB")
-                          file-size (alength bytes)
-                          {:keys [topic-id]} (db/create-epub-topic!
-                                               user-id display-name bytes file-size chapters)]
-                      (commands/bump! user-id :import-document)
-                      (try (biblio-import/prepare-biblio! user-id topic-id)
-                           (catch Exception e
-                             (tel/log! {:level :warn :id ::upload-staged-epub-biblio}
-                               (.getMessage e))))
-                      (json-response 200 {:success true :doc_id topic-id}))))
-
+                ;; No :epub branch. This route's only caller is the Zotero
+                ;; picker, and `zotero-stage-handler` stages `:pdf` and nothing
+                ;; else, so an EPUB never reaches here. The EPUB commit path is
+                ;; `web-import/confirm-staged-upload!*`, which the import modal
+                ;; calls. A duplicate here predated that service and drifted from
+                ;; it — see plans/large-epub-import.md §4.3.
                 (json-response 400 {:success false :error (str "Unknown flow: " flow)})))
             (json-response 404 {:success false :error "Upload not found or expired"}))))
       (catch clojure.lang.ExceptionInfo e
@@ -1122,6 +1110,10 @@
    {:method :post :path "/api/archive/chunk"    :handler #'upload-http/chunk-handler     :body :upload}
    {:method :post :path "/api/archive/finalize" :handler #'archive-http/finalize-handler :body :small}
    {:method :post :path "/api/archive/abort"    :handler #'upload-http/abort-handler     :body :small}
+   {:method :post :path "/api/epub/init"        :handler #'epub-http/init-handler        :body :small}
+   {:method :post :path "/api/epub/chunk"       :handler #'upload-http/chunk-handler     :body :upload}
+   {:method :post :path "/api/epub/finalize"    :handler #'epub-http/finalize-handler    :body :small}
+   {:method :post :path "/api/epub/abort"       :handler #'upload-http/abort-handler     :body :small}
    {:method :post :path "/api/save-page-text"   :handler #'save-page-text-handler   :body :small}
    {:method :post :path "/api/credits/checkout" :handler #'credits-checkout-handler :body :small}
    {:method :post :path "/api/wayl/webhook"     :handler #'wayl-webhook-handler     :body :small}
@@ -1133,6 +1125,7 @@
    {:method :get  :pattern #"/api/audio/\d+"    :handler #'get-audio-handler}
    {:method :get  :path    "/api/video/status"  :handler #'upload-http/status-handler}
    {:method :get  :path    "/api/archive/status" :handler #'upload-http/status-handler}
+   {:method :get  :path    "/api/epub/status"    :handler #'upload-http/status-handler}
    ;; Must follow /api/video/status — match-route takes the FIRST match, and
    ;; #"/api/video/\d+" would not match "status" anyway, but keeping the literal
    ;; path above the pattern makes the precedence explicit rather than incidental.

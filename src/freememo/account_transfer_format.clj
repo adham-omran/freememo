@@ -95,6 +95,7 @@
    :topics
    :topic_files
    :topic_videos
+   :topic_epubs
    :video_transcripts
    :video_segments
    :topic_pins
@@ -213,6 +214,9 @@
 
    :topic_videos {:where (str "t.topic_id IN (" owned-topics ")")
                   :params 1 :order "t.topic_id"}
+
+   :topic_epubs {:where (str "t.topic_id IN (" owned-topics ")")
+                 :params 1 :order "t.topic_id"}
 
    :video_transcripts {:where (str "t.topic_id IN (" owned-topics ")")
                        :params 1 :order "t.id"}
@@ -341,9 +345,11 @@
   "§5.1.5 — the three blob mechanisms, named after the table that owns each.
    `:topic_files` is `bytea` keyed on (topic_id, role) and is the only kind
    carrying a role. `:media` is `bytea` deduped on (user_id, sha256).
-   `:topic_videos` is a PostgreSQL large object, because `bytea` caps at 1 GB
-   and cannot be range-read (db.clj:1018)."
-  #{:topic_files :media :topic_videos})
+   `:topic_videos` and `:topic_epubs` are PostgreSQL large objects, because
+   `bytea` caps at 1 GB and cannot be range-read (db.clj:1018). They are two
+   kinds rather than one because each is keyed on its own table's topic_id and
+   restored by its own writer."
+  #{:topic_files :media :topic_videos :topic_epubs})
 
 (def ^:private role-pattern
   "A role that survives a path round trip. `topic_files.role` is free TEXT with

@@ -601,7 +601,7 @@
 (def ^:private phase-1-tables
   "Tables phase 1 inserts. `media` landed in phase 0, and the two blob tables
    cannot exist before their bytes (see the namespace docstring)."
-  (into [] (remove #{:media :topic_files :topic_videos}) fmt/entity-tables))
+  (into [] (remove #{:media :topic_files :topic_videos :topic_epubs}) fmt/entity-tables))
 
 (defn- import-table!
   "Insert one table's rows inside the metadata transaction.
@@ -680,6 +680,18 @@
                 ::blob (io/file dir (fmt/blob-path :topic_videos (:topic_id row) nil))))))
     (entity-rows dir :topic_videos)))
 
+(defn- epub-gaps
+  "Archive `topic_epubs` entries with no row on the target.
+   `topic_epubs` is keyed on `topic_id`, so the same left-join rule applies."
+  [ds ^File dir topic-map]
+  (keep (fn [row]
+          (when-let [new-topic (get topic-map (:topic_id row))]
+            (when-not (jdbc/execute-one! ds
+                        ["SELECT 1 FROM topic_epubs WHERE topic_id = ?" new-topic])
+              (assoc row ::new-topic-id new-topic
+                ::blob (io/file dir (fmt/blob-path :topic_epubs (:topic_id row) nil))))))
+    (entity-rows dir :topic_epubs)))
+
 (defn- import-topic-file!
   "Insert one `topic_files` row with its bytes, in one transaction.
    Pre : `::blob` exists. Post: the row and its bytes are committed and
@@ -717,9 +729,26 @@
            (or (:mime_type gap) "video/mp4") (:duration_ms gap)
            (or (:last_pos_ms gap) 0)])))))
 
+(defn- import-epub!
+  "Create one large object from a ZIP entry and insert its `topic_epubs` row.
+   Pre : `::blob` exists. Post: both committed together, so a `lo_oid` never
+         names an object no row owns and `usage_bytes` includes `byte_size`.
+   Invariant: the bytes stream from the file — never through heap, which is the
+         whole reason an EPUB is stored this way."
+  [ds user-id gap]
+  (let [^File blob (::blob gap)
+        size (.length blob)]
+    (jdbc/with-transaction [tx ds]
+      (quota/reserve-bytes! tx user-id size)
+      (let [oid (lo/create! tx)]
+        (lo/write-file! tx oid blob)
+        (jdbc/execute-one! tx
+          ["INSERT INTO topic_epubs (topic_id, lo_oid, byte_size) VALUES (?, ?, ?)"
+           (::new-topic-id gap) oid size])))))
+
 (defn- run-phase-2!
   "Write every missing blob. Returns what it wrote and what it could not.
-   Post: {:topic_files N :topic_videos N :failed v :orphaned v}. `:orphaned`
+   Post: {:topic_files N :topic_videos N :topic_epubs N :failed v :orphaned v}. `:orphaned`
          names archive blobs whose topic did not import, `:failed` those whose
          write threw — a quota refusal is the expected member.
    Invariant: one blob per transaction, so an interruption leaves every blob
@@ -727,6 +756,7 @@
   [ds user-id ^File dir topic-map]
   (let [files (topic-file-gaps ds dir topic-map)
         videos (video-gaps ds dir topic-map)
+        epubs (epub-gaps ds dir topic-map)
         write! (fn [acc kind gap import!]
                  (cond
                    (not (.exists ^File (::blob gap)))
@@ -737,9 +767,10 @@
                      (catch Exception e
                        (update acc :failed conj
                          {kind (:topic_id gap) :reason (.getMessage e)})))))]
-    (as-> {:topic_files 0 :topic_videos 0 :failed [] :orphaned []} acc
+    (as-> {:topic_files 0 :topic_videos 0 :topic_epubs 0 :failed [] :orphaned []} acc
       (reduce #(write! %1 :topic_files %2 import-topic-file!) acc files)
-      (reduce #(write! %1 :topic_videos %2 import-video!) acc videos))))
+      (reduce #(write! %1 :topic_videos %2 import-video!) acc videos)
+      (reduce #(write! %1 :topic_epubs %2 import-epub!) acc epubs))))
 
 ;; ── Orchestration ──────────────────────────────────────────────────
 

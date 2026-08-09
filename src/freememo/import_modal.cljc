@@ -18,6 +18,7 @@
    [freememo.client-errors :as ce]
    [freememo.import-types :as itypes]
    #?(:cljs [freememo.archive-upload :as archive-upload])
+   #?(:cljs [freememo.chunked-upload :as cu])
    #?(:clj [freememo.web-import :as web-import])))
 
 ;; ── Server helpers ─────────────────────────────────────────────────
@@ -204,6 +205,35 @@
                             :filename filename
                             :size (.-size f)
                             :flow flow})))
+       (.catch (fn [e]
+                 (on-error (or (some-> e .-message) "Upload failed — please try again.")))))))
+
+#?(:cljs
+   (defn- upload-epub!
+     "Chunk-upload `f` against /api/epub, then hand the session to `:on-staged`.
+
+      Pre : `f` is an `.epub` File.
+      Post: `:on-staged` receives {:session-id :flow \"epub\" :filename :size} —
+            the same shape `upload-archive!` produces, so `ConfirmingStage`
+            needs no new branch to recognise a session.
+      Post: `:on-error` receives a message; `cu/upload!` has already POSTed
+            `abort`, so no reservation and no large object survive a failure.
+
+      The flow is known before the upload starts, unlike an archive's, whose
+      finalize resolves it from the entry names. Finalize still runs: it is what
+      validates the EPUB magic against the landed bytes."
+     [^js f {:keys [on-progress on-staged on-error]}]
+     (-> (cu/upload! {:file f
+                      :base "/api/epub"
+                      :error-id :epub/upload
+                      :init-params {:filename (.-name f)}
+                      :finalize-params {}
+                      :on-progress on-progress})
+       (.then (fn [^js d]
+                (on-staged {:session-id (.-session_id d)
+                            :filename (.-filename d)
+                            :size (.-size f)
+                            :flow "epub"})))
        (.catch (fn [e]
                  (on-error (or (some-> e .-message) "Upload failed — please try again.")))))))
 
@@ -704,6 +734,11 @@
                                ;; plans/user-data-export-import.md §9.
                                (and session-id (= flow "account"))
                                [`Confirm-account-session session-id nil]
+                               ;; A chunk-uploaded book. Carries image-mode like
+                               ;; the staged EPUB path, because the parse that
+                               ;; consumes it is the same one.
+                               (and session-id (= flow "epub"))
+                               [`Confirm-epub-session session-id (keyword image-mode)]
                                (= flow "account") [`Confirm-account-upload upload-id nil]
                                (= flow "repo") [`Confirm-repo-upload upload-id extract-facts?]
                                (= flow "supermemo") [`Confirm-supermemo-upload upload-id nil]
@@ -740,6 +775,8 @@
                                               (web-import/confirm-supermemo-session!* user-id u-id)
                                               (= head `Confirm-account-session)
                                               (web-import/confirm-account-session!* user-id u-id arg false)
+                                              (= head `Confirm-epub-session)
+                                              (web-import/confirm-epub-session!* user-id u-id arg)
                                               (= head `Confirm-account-upload)
                                               (web-import/confirm-account-upload!* user-id u-id arg false)
                                               (= head `Confirm-repo-upload)
@@ -1000,9 +1037,9 @@
                           ;; One ceiling check for every non-archive file, from
                           ;; the ceiling its own type carries: 25 MB for audio
                           ;; (Whisper), the user's upload_max_bytes for a
-                          ;; document. Checking only the document cap here is
-                          ;; what made an oversized mp3 upload in full and fail
-                          ;; server-side.
+                          ;; document, 4 GB for an EPUB. Checking only the
+                          ;; document cap here is what made an oversized mp3
+                          ;; upload in full and fail server-side.
                           (when-some [cap (itypes/ceiling-for ceilings (.-name f))]
                             (> (.-size f) cap))
                           (do (reset! !error (str "File is " (format-mb (.-size f))
@@ -1010,6 +1047,31 @@
                                                " for this file type."))
                               (reset! !quota-error? true)
                               (reset! !stage :error))
+
+                          ;; EPUB takes the chunked route for the same reason an
+                          ;; archive does, and with no threshold: one code path
+                          ;; serves a 2 MB book and a 600 MB one. Its ceiling was
+                          ;; already checked above, because unlike an archive's
+                          ;; it is a real per-upload bound the client can state
+                          ;; before a byte moves.
+                          (= :epub-session (itypes/transport-for (.-name f)))
+                          (do (reset! !stage :fetching)
+                              (upload-epub! f
+                                {:on-progress
+                                 (fn [sent total]
+                                   (reset! !busy-msg
+                                     (str "Uploading… " (upload-percent sent total)
+                                          " of " (format-mb total))))
+                                 :on-staged
+                                 (fn [staged]
+                                   (reset! !busy-msg nil)
+                                   (reset! !staged staged)
+                                   (reset! !flow (:flow staged))
+                                   (reset! !stage :confirming))
+                                 :on-error
+                                 (fn [msg]
+                                   (reset! !busy-msg nil)
+                                   (handle-fetch-err msg))}))
 
                           :else
                           (do (reset! !stage :fetching)
@@ -1147,12 +1209,24 @@
               ;; Documents only. The archive extensions moved to the Code card
               ;; and to the intake area, so this dialog no longer offers a .zip
               ;; whose three possible flows it could not name in one line.
-              :file (let [cap-label (when-some [n (:document ceilings)]
-                                      (when (pos? n) (format-mb n)))]
+              ;; Two ceilings, not one: EPUB is chunk-uploaded and bounded by
+              ;; `epub/max-epub-bytes`, while the other three are multipart and
+              ;; bounded by the single-request cap. One number for four types
+              ;; would understate EPUB by an order of magnitude, which is the
+              ;; drift `ceilings*` exists to prevent — so the line names both.
+              :file (let [doc-cap (when-some [n (:document ceilings)]
+                                    (when (pos? n) (format-mb n)))
+                          epub-cap (when-some [n (:epub ceilings)]
+                                     (when (pos? n) (format-mb n)))]
                       (FilePicker !file !file-input handle-file
                                   (itypes/accept-attr ["PDF" "EPUB" "HTML" "Markdown"])
-                                  (if cap-label
-                                    (str "PDF, EPUB, HTML, or Markdown. Maximum " cap-label ".")
+                                  (cond
+                                    (and doc-cap epub-cap)
+                                    (str "PDF, HTML or Markdown up to " doc-cap
+                                         ". EPUB up to " epub-cap ".")
+                                    doc-cap
+                                    (str "PDF, EPUB, HTML, or Markdown. Maximum " doc-cap ".")
+                                    :else
                                     "PDF, EPUB, HTML, or Markdown.")))
               ;; A code base arrives as a .zip. Its FLOW still comes from the
               ;; archive's entry names at finalize (ct/classify-archive), so an

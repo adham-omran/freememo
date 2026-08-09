@@ -123,6 +123,16 @@
        " WHERE t.topic_id IN (" fmt/owned-topics ") ORDER BY t.topic_id") user-id]
     {:builder-fn rs/as-unqualified-maps}))
 
+(defn- epub-blobs
+  "Exported topic_epubs blobs as [{:topic_id :lo_oid :byte_size} …], ordered.
+   Same shape as `video-blobs` and written by the same streaming writer — a
+   large object does not care what the book inside it is."
+  [ds user-id]
+  (jdbc/execute! ds
+    [(str "SELECT t.topic_id, t.lo_oid, t.byte_size FROM topic_epubs t"
+       " WHERE t.topic_id IN (" fmt/owned-topics ") ORDER BY t.topic_id") user-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
 ;; ── Writing ────────────────────────────────────────────────────────
 
 (def ^:private copy-buffer-bytes
@@ -238,8 +248,13 @@
                          (write-video-blob! zos ds (fmt/blob-path :topic_videos topic_id nil)
                            lo_oid (long byte_size))
                          (inc n))
-                 0 (video-blobs ds user-id))]
-    {:topic_files files :media media :topic_videos videos}))
+                 0 (video-blobs ds user-id))
+        epubs (reduce (fn [n {:keys [topic_id lo_oid byte_size]}]
+                        (write-video-blob! zos ds (fmt/blob-path :topic_epubs topic_id nil)
+                          lo_oid (long byte_size))
+                        (inc n))
+                0 (epub-blobs ds user-id))]
+    {:topic_files files :media media :topic_videos videos :topic_epubs epubs}))
 
 (defn- manifest-for
   "The manifest map for this export.

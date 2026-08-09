@@ -9,11 +9,12 @@
    adding an extension is one edit.
 
    `:transport` is the protocol that carries the bytes, NOT the server's import
-   flow. Three exist, and they are genuinely different protocols:
+   flow. Four exist, and they are genuinely different protocols:
 
      :multipart        one POST to /api/upload-file, capped by one HTTP request
      :video-session    init → chunk* → finalize against /api/video/*
      :archive-session  the same shape against /api/archive/*
+     :epub-session     the same shape against /api/epub/*
 
    The server resolves the flow itself — an archive's flow comes from its entry
    names (`content-type/classify-archive`), not from its extension — so nothing
@@ -29,6 +30,7 @@
    [clojure.string :as str]
    [freememo.video-format :refer [format-bytes]]
    #?(:clj [freememo.archive :as archive])
+   #?(:clj [freememo.epub :as epub])
    #?(:clj [freememo.audio :as audio])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.quota :as quota])
@@ -40,12 +42,17 @@
   "Every accepted extension, grouped by what the user calls it.
 
    Order is display order: the intake area shows one chip per group, all of them.
-   `:ceiling` names which of the four ceilings `ceilings*` returns applies to the
+   `:ceiling` names which of the five ceilings `ceilings*` returns applies to the
    group — the numbers themselves are per-user or env-configured, so they are read
    at runtime, never inlined here."
   [{:label "PDF"      :transport :multipart       :ceiling :document
     :extensions [".pdf"]}
-   {:label "EPUB"     :transport :multipart       :ceiling :document
+   ;; Chunked, like video and archive: `/api/upload-file` reads its whole body
+   ;; into a byte[] and one request is capped at `request-max-bytes`, and a large
+   ;; book clears neither. Its own `:ceiling` rather than `:document`, because
+   ;; PDF still goes through multipart and would be understated by a shared
+   ;; number. See plans/large-epub-import.md §7.6.
+   {:label "EPUB"     :transport :epub-session    :ceiling :epub
     :extensions [".epub"]}
    {:label "HTML"     :transport :multipart       :ceiling :document
     :extensions [".html" ".htm"]}
@@ -73,7 +80,7 @@
          arrived yet, so a chip never shows a wrong number while loading.
 
    The limit rides the chip rather than a sentence below the row, so each number
-   sits beside the type it governs. A single list of four ceilings reads as a
+   sits beside the type it governs. A single list of five ceilings reads as a
    comparison, and 25 MB next to 8 GB invites the wrong conclusion."
   [ceilings]
   (mapv (fn [{:keys [label ceiling]}]
@@ -103,7 +110,8 @@
     (first (filter #(some #{ext} (:extensions %)) groups))))
 
 (defn transport-for
-  "Post: :multipart | :video-session | :archive-session | nil (not accepted)."
+  "Post: :multipart | :video-session | :archive-session | :epub-session |
+   nil (not accepted)."
   [filename]
   (:transport (group-for filename)))
 
@@ -136,23 +144,47 @@
 
 ;; ── Ceilings ───────────────────────────────────────────────────────
 
-(defn ceilings*
-  "The four upload ceilings that apply to this user, in bytes.
+(defn tighter-cap
+  "The tighter of two ceilings, where 0 means unlimited on either side.
 
-   One server round-trip for all four rather than one per group: the intake
+   Pre : both are non-negative byte counts. Post: 0 only when BOTH are 0.
+   Exists because a ceiling with two sources drifts. `upload_max_bytes` and
+   `STORAGE_REQUEST_MAX_BYTES` are both real bounds on a multipart upload, and
+   reporting either one alone is how production came to advertise no limit while
+   rejecting at 100 MB — see plans/large-epub-import.md §2.1."
+  [a b]
+  (cond
+    (zero? a) b
+    (zero? b) a
+    :else (min a b)))
+
+(defn ceilings*
+  "The five upload ceilings that apply to this user, in bytes.
+
+   One server round-trip for all five rather than one per group: the intake
    area's resting line names every ceiling (§6.6.1) and the drop router checks
    one of them per file, so both callers need the whole map.
 
    Pre : `user-id` owns the session. Post: {:document N :audio N :video N
-         :archive N}, every value positive. 0 from `upload_max_bytes` means
-         unlimited and is returned as-is — `refusal-for` treats a non-positive
-         ceiling as no ceiling.
+         :archive N :epub N}. 0 means unlimited and is returned as-is — `ceiling-for`
+         treats a non-positive ceiling as no ceiling.
+   Invariant: every value is a ceiling some layer WILL enforce. A reported number
+         no layer enforces is the defect this fn exists to prevent.
+
+   `:document` and `:audio` take the tighter of their own cap and the
+   single-request transport cap, because a multipart upload is one HTTP request
+   and `wrap-route-body-size` rejects past that bound. `:video` and `:archive`
+   deliberately do NOT: their transport is many requests, so the single-request
+   cap does not bound them — the reasoning `video/max-video-bytes` records.
    Named in a reactive body through `e/server`, so the var must exist on CLJS."
   [_refresh user-id]
-  #?(:clj {:document (long (quota/get-user-upload-max db/ds user-id))
-           :audio    (long audio/max-bytes)
-           :video    (long video/max-video-bytes)
-           :archive  (long archive/max-archive-bytes)}
+  #?(:clj (let [request-max (long quota/request-max-bytes)]
+            {:document (tighter-cap (long (quota/get-user-upload-max db/ds user-id))
+                         request-max)
+             :audio    (tighter-cap (long audio/max-bytes) request-max)
+             :video    (long video/max-video-bytes)
+             :archive  (long archive/max-archive-bytes)
+             :epub     (long epub/max-epub-bytes)})
      :cljs nil))
 
 (defn ceiling-for

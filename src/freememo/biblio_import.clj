@@ -64,18 +64,32 @@
    <map>} or {:local {} :identifiers {}}.
 
    For pdf/epub topics with a non-empty `web-biblio` supplied by the
-   importer (e.g. Zotero CSL-JSON), the supplied biblio wins and the
-   on-disk harvesters are skipped — preserves curated metadata."
-  [topic file-bytes web-biblio]
+   importer (e.g. Zotero CSL-JSON, or an EPUB import's own `:biblio`), the
+   supplied biblio wins and the on-disk harvesters are skipped — preserves
+   curated metadata.
+
+   Pre : `!pdf-bytes` is a delay over the stored PDF blob, NOT the blob. It is
+         forced only on the branch that harvests, so a supplied biblio costs no
+         read at all. Passing the bytes eagerly is what made an EPUB import
+         re-read the file it had just written — see
+         plans/large-epub-import.md §4.
+   Pre : `topic-id` identifies the same topic as `topic`.
+
+   EPUB does not take a delay because its bytes are not always a `byte[]`: a
+   chunk-uploaded book lives in a large object, and reading one into an array is
+   the thing the large object exists to avoid. `db/with-epub-source` hands over a
+   File whichever way the book was stored, and it is lazy for the same reason the
+   delay is."
+  [topic topic-id !pdf-bytes web-biblio]
   (let [kind (:topics/kind topic)]
     (or
       (case kind
         "pdf"  (if (non-empty-biblio? web-biblio)
                  web-biblio
-                 (when file-bytes (bp/harvest-pdf file-bytes)))
+                 (when-let [b @!pdf-bytes] (bp/harvest-pdf b)))
         "epub" (if (non-empty-biblio? web-biblio)
                  web-biblio
-                 (when file-bytes (epub/extract-biblio file-bytes)))
+                 (db/with-epub-source topic-id epub/extract-biblio))
         ("web" "wikipedia") web-biblio
         nil)
       {:local {} :identifiers {}})))
@@ -137,9 +151,10 @@
        (when-not topic
          (throw (ex-info "Topic not found" {:topic-id topic-id :user-id user-id})))
        (let [kind         (:topics/kind topic)
-             file-bytes   (when (#{"pdf" "epub"} kind)
-                            (some-> (db/get-topic-file topic-id) :topic_files/file_data))
-             harvest      (harvest-for-kind topic file-bytes web-biblio)
+             !pdf-bytes   (delay
+                            (when (= "pdf" kind)
+                              (some-> (db/get-topic-file topic-id) :topic_files/file_data)))
+             harvest      (harvest-for-kind topic topic-id !pdf-bytes web-biblio)
              ids          (non-blank-ids (:identifiers harvest))
              resolved     (when (seq ids)
                             (try
@@ -217,7 +232,9 @@
           (let [kind         (:topics/kind topic)
                 source-row   (db/get-source current-sid)
                 existing-csl (or (:sources/csl source-row) {})
-                file-bytes   (when (#{"pdf" "epub"} kind)
+                ;; PDF only. An EPUB's bytes may be a large object, so its
+                ;; branch below reads through `db/with-epub-source` instead.
+                file-bytes   (when (= "pdf" kind)
                                (some-> (db/get-topic-file topic-id)
                                  :topic_files/file_data))
                 url-for-fetch (or (:sources/url source-row)
@@ -225,7 +242,7 @@
                                   (:topics/source_url topic))
                 harvest      (or (case kind
                                    "pdf"  (when file-bytes (bp/harvest-pdf file-bytes))
-                                   "epub" (when file-bytes (epub/extract-biblio file-bytes))
+                                   "epub" (db/with-epub-source topic-id epub/extract-biblio)
                                    ("web" "wikipedia")
                                    (if url-for-fetch
                                      (try

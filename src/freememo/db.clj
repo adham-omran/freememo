@@ -1075,6 +1075,27 @@
       )"])
     (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_videos_oid ON topic_videos(lo_oid)"])
 
+    ;; One row per chunk-uploaded kind='epub' topic, for the same reason
+    ;; topic_videos exists: `topic_files.file_data` is BYTEA, which caps at 1 GB
+    ;; and materializes whole in heap on every read, so a large book could not be
+    ;; stored there at all. A separate table rather than a nullable `lo_oid` on
+    ;; topic_files, because that column would make `file_data` nullable under
+    ;; eleven existing readers that do not branch on it — a silent nil rather
+    ;; than a compile error. See plans/large-epub-import.md §7.4.
+    ;;
+    ;; EPUB topics created before this table, and any still arriving through
+    ;; multipart, keep their bytes in topic_files. Both shapes are live: read
+    ;; through `with-epub-source`, which is the only thing that knows the
+    ;; difference.
+    (jdbc/execute! ds ["
+      CREATE TABLE IF NOT EXISTS topic_epubs (
+        topic_id INTEGER PRIMARY KEY REFERENCES topics(id) ON DELETE CASCADE,
+        lo_oid OID NOT NULL,
+        byte_size BIGINT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )"])
+    (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topic_epubs_oid ON topic_epubs(lo_oid)"])
+
     ;; §12.4 3.1 — TRUE while the stored bytes are still the ones the browser
     ;; uploaded and the pipeline may yet replace them with a remuxed MP4. The
     ;; playback handler reads it to decide whether the response may be cached:
@@ -1097,6 +1118,10 @@
           + COALESCE(
             (SELECT SUM(tv.byte_size)
              FROM topic_videos tv JOIN topics t ON tv.topic_id = t.id
+             WHERE t.user_id = users.id), 0)
+          + COALESCE(
+            (SELECT SUM(te.byte_size)
+             FROM topic_epubs te JOIN topics t ON te.topic_id = t.id
              WHERE t.user_id = users.id), 0)"])))
 
   ;; Reference transcript — one row per Whisper segment (§4.1 1.2 / decision B1).
@@ -2428,14 +2453,21 @@
                              JOIN subtree s ON tf.topic_id = s.id), 0)
                 + COALESCE((SELECT SUM(tv.byte_size) FROM topic_videos tv
                              JOIN subtree s ON tv.topic_id = s.id), 0)
+                + COALESCE((SELECT SUM(te.byte_size) FROM topic_epubs te
+                             JOIN subtree s ON te.topic_id = s.id), 0)
                   AS bigint) AS sum"
                id]))
     0))
 
-(defn- subtree-video-oids
+(defn- subtree-large-object-oids
   "Large-object OIDs owned by the topic subtree rooted at id (including id).
    The list a hard-delete path must `lo_unlink` — Postgres will not do it when
-   the topic_videos row cascades away."
+   the owning row cascades away.
+
+   Named for large objects rather than for video: two tables hold them now, and
+   a name that says `video` is how the epub half would be forgotten. Every table
+   with an `lo_oid` MUST have a branch here, or its bytes survive the topic
+   forever with nothing pointing at them."
   [connectable id]
   (mapv :lo_oid
     (jdbc/execute! connectable
@@ -2444,7 +2476,9 @@
           UNION ALL
           SELECT c.id FROM topics c JOIN subtree s ON c.parent_id = s.id
         )
-        SELECT tv.lo_oid FROM topic_videos tv JOIN subtree s ON tv.topic_id = s.id"
+        SELECT tv.lo_oid FROM topic_videos tv JOIN subtree s ON tv.topic_id = s.id
+        UNION ALL
+        SELECT te.lo_oid FROM topic_epubs te JOIN subtree s ON te.topic_id = s.id"
        id]
       {:builder-fn rs/as-unqualified-maps})))
 
@@ -2459,7 +2493,7 @@
   [user-id id]
   (jdbc/with-transaction [tx ds]
     (let [freed (subtree-file-bytes tx id)
-          oids (subtree-video-oids tx id)
+          oids (subtree-large-object-oids tx id)
           result (jdbc/execute! tx
                    (sql/format {:delete-from :topics
                                 :where [:and [:= :id id] [:= :user_id user-id]]}))]
@@ -3067,68 +3101,92 @@
     (audit-doc-created! user-id (:topics/id topic))
     (:topics/id topic)))
 
-(defn create-epub-topic!
-  "Create an EPUB root topic with file, chapter children, and a `sources` row.
-   chapters is a vec of {:html :title} maps.
-   Atomically checks quota and increments users.usage_bytes by file-size.
-   Throws `quota/quota-error` on cap violation — caller's tx aborts.
-   Returns {:topic-id N :chapter-ids [...]}"
-  [user-id title file-bytes file-size chapters]
-  (let [clean-title (input/prettify-title (input/sanitize-filename title))]
-    (input/check-length! :title clean-title input/title-max)
-    (jdbc/with-transaction [tx ds]
-      (quota/check-and-bump! tx user-id file-size)
-      (let [csl {:type "book" :title clean-title
-                 :accessed {:date-parts (now-date-parts)}}
-            source (jdbc/execute-one! tx
-                     (sql/format {:insert-into :sources
-                                  :values [{:user_id user-id
-                                            :csl_type "book"
-                                            :csl (->jsonb csl)
-                                            :title clean-title}]
-                                  :returning [:id]}))
-            source-id (:sources/id source)
-            topic (jdbc/execute-one! tx
-                    (sql/format {:insert-into :topics
-                                 :values [{:user_id user-id
-                                           :kind "epub"
-                                           :title clean-title
-                                           :source_id source-id}]
-                                 :returning [:id]}))
-            topic-id (:topics/id topic)]
-        (jdbc/execute! tx
-          ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
-            VALUES (?, ?, ?, ?)"
-           topic-id file-bytes file-size "application/epub+zip"])
+(defn insert-epub-topic!
+  "Create the EPUB topic, its `sources` row and its chapter children, and NOTHING
+   about where the bytes live.
+
+   Pre : `tx` is an open transaction. `chapters` is a vec of {:html :title}.
+         Quota is the CALLER's to settle — the two callers settle it differently
+         and neither may be assumed here.
+   Post: {:topic-id N :chapter-ids [...]}, chapter ids in spine order.
+   Blame: caller bug to invoke this outside a transaction — a half-built book
+         with no blob row is not something this fn can clean up.
+
+   Extracted so `create-epub-topic!` (BYTEA, multipart) and
+   `finalize-epub-session!` (large object, chunked) share one definition of what
+   an EPUB topic IS. Only the blob row differs between them."
+  [tx user-id title parent-id chapters]
+  (let [clean-title (input/prettify-title (input/sanitize-filename title))
+        _ (input/check-length! :title clean-title input/title-max)
+        csl {:type "book" :title clean-title
+             :accessed {:date-parts (now-date-parts)}}
+        source (jdbc/execute-one! tx
+                 (sql/format {:insert-into :sources
+                              :values [{:user_id user-id
+                                        :csl_type "book"
+                                        :csl (->jsonb csl)
+                                        :title clean-title}]
+                              :returning [:id]}))
+        topic (jdbc/execute-one! tx
+                (sql/format {:insert-into :topics
+                             :values [{:user_id user-id
+                                       :parent_id parent-id
+                                       :kind "epub"
+                                       :title clean-title
+                                       :source_id (:sources/id source)}]
+                             :returning [:id]}))
+        topic-id (:topics/id topic)
         ;; Create chapter children — one multi-row INSERT instead of one per
         ;; chapter. Each row already carries a stable, unique-within-this-batch
         ;; ordinal (:page_number = 1-based chapter index); RETURNING it back
         ;; alongside id and re-associating by that value keeps chapter-ids
         ;; correctly ordered without trusting Postgres' VALUES/RETURNING row
         ;; order, which SQL does not guarantee.
-        (let [chapter-rows (map-indexed
-                             (fn [i ch]
-                               (let [sanitized (sanitize-utf8 (:html ch))]
-                                 {:user_id user-id
-                                  :parent_id topic-id
-                                  :kind "basic"
-                                  :title (input/prettify-title
-                                           (or (:title ch) (str "Chapter " (inc i))))
-                                  :content sanitized
-                                  :content_text (text/strip-html sanitized)
-                                  :page_number (inc i)
-                                  :status "active"
-                                  :priority priority/priority-default}))
-                             chapters)
-              chapter-ids (when (seq chapter-rows)
-                            (let [returned (jdbc/execute! tx
-                                             (sql/format {:insert-into :topics
-                                                          :values (vec chapter-rows)
-                                                          :returning [:id :page_number]}))
-                                  id-by-page (into {} (map (juxt :topics/page_number :topics/id)) returned)]
-                              (mapv (comp id-by-page :page_number) chapter-rows)))]
-          (audit-doc-created! user-id topic-id)
-          {:topic-id topic-id :chapter-ids (vec (remove nil? chapter-ids))})))))
+        chapter-rows (map-indexed
+                       (fn [i ch]
+                         (let [sanitized (sanitize-utf8 (:html ch))]
+                           {:user_id user-id
+                            :parent_id topic-id
+                            :kind "basic"
+                            :title (input/prettify-title
+                                     (or (:title ch) (str "Chapter " (inc i))))
+                            :content sanitized
+                            :content_text (text/strip-html sanitized)
+                            :page_number (inc i)
+                            :status "active"
+                            :priority priority/priority-default}))
+                       chapters)
+        chapter-ids (when (seq chapter-rows)
+                      (let [returned (jdbc/execute! tx
+                                       (sql/format {:insert-into :topics
+                                                    :values (vec chapter-rows)
+                                                    :returning [:id :page_number]}))
+                            id-by-page (into {} (map (juxt :topics/page_number :topics/id)) returned)]
+                        (mapv (comp id-by-page :page_number) chapter-rows)))]
+    {:topic-id topic-id :chapter-ids (vec (remove nil? chapter-ids))}))
+
+(defn create-epub-topic!
+  "Create an EPUB root topic with file, chapter children, and a `sources` row.
+   chapters is a vec of {:html :title} maps.
+   Atomically checks quota and increments users.usage_bytes by file-size.
+   Throws `quota/quota-error` on cap violation — caller's tx aborts.
+   Returns {:topic-id N :chapter-ids [...]}
+
+   The multipart path, which stores bytes in `topic_files.file_data` (BYTEA).
+   A chunk-uploaded book goes through `finalize-epub-session!` instead and
+   stores a large object — see plans/large-epub-import.md §7.4."
+  [user-id title file-bytes file-size chapters]
+  (let [clean-title (input/prettify-title (input/sanitize-filename title))]
+    (input/check-length! :title clean-title input/title-max)
+    (jdbc/with-transaction [tx ds]
+      (quota/check-and-bump! tx user-id file-size)
+      (let [{:keys [topic-id] :as r} (insert-epub-topic! tx user-id title nil chapters)]
+        (jdbc/execute! tx
+          ["INSERT INTO topic_files (topic_id, file_data, file_size, mime_type)
+            VALUES (?, ?, ?, ?)"
+           topic-id file-bytes file-size "application/epub+zip"])
+        (audit-doc-created! user-id topic-id)
+        r))))
 
 (defn create-standalone-topic!
   "Create a standalone empty topic. Returns {:topic-id N}."
@@ -5676,6 +5734,13 @@
                      WHERE t.staged_delete_id IN
                        (SELECT id FROM undo_log
                         WHERE action_type = 'delete-document'
+                          AND occurred_at < now() - interval '12 hours')
+                     UNION ALL
+                     SELECT te.lo_oid FROM topic_epubs te
+                     JOIN topics t ON te.topic_id = t.id
+                     WHERE t.staged_delete_id IN
+                       (SELECT id FROM undo_log
+                        WHERE action_type = 'delete-document'
                           AND occurred_at < now() - interval '12 hours')"]
                    {:builder-fn rs/as-unqualified-maps}))
           deleted (jdbc/execute! tx
@@ -5710,12 +5775,13 @@
                       ["SELECT m.oid FROM pg_largeobject_metadata m
                         WHERE m.lomowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
                           AND NOT EXISTS (SELECT 1 FROM topic_videos tv WHERE tv.lo_oid = m.oid)
+                          AND NOT EXISTS (SELECT 1 FROM topic_epubs te WHERE te.lo_oid = m.oid)
                           AND NOT EXISTS (SELECT 1 FROM upload_sessions s WHERE s.lo_oid = m.oid)"]
                       {:builder-fn rs/as-unqualified-maps}))]
       (doseq [oid orphans] (lo/unlink! tx oid))
       (when (pos? (count orphans))
         (tel/log! {:level :warn :id ::orphan-large-objects :data {:count (count orphans)}}
-          "Unlinked orphaned video large objects"))
+          "Unlinked orphaned large objects"))
       (count orphans))))
 
 (defn reclaim-unowned-videos!
@@ -5734,11 +5800,17 @@
                  (jdbc/execute! tx
                    ["SELECT tv.lo_oid FROM topic_videos tv
                      JOIN topics t ON tv.topic_id = t.id
+                     WHERE t.user_id IS NULL
+                     UNION ALL
+                     SELECT te.lo_oid FROM topic_epubs te
+                     JOIN topics t ON te.topic_id = t.id
                      WHERE t.user_id IS NULL"]
                    {:builder-fn rs/as-unqualified-maps}))]
       (when (seq oids)
         (jdbc/execute! tx
-          ["DELETE FROM topics WHERE user_id IS NULL AND id IN (SELECT topic_id FROM topic_videos)"])
+          ["DELETE FROM topics WHERE user_id IS NULL
+            AND (id IN (SELECT topic_id FROM topic_videos)
+                 OR id IN (SELECT topic_id FROM topic_epubs))"])
         (doseq [oid oids] (lo/unlink! tx oid))
         (tel/log! {:level :warn :id ::unowned-videos :data {:count (count oids)}}
           "Reclaimed videos belonging to deleted users"))
@@ -5756,7 +5828,11 @@
     (let [oids (mapv :lo_oid
                  (jdbc/execute! tx
                    ["SELECT tv.lo_oid FROM topic_videos tv
-                     JOIN topics t ON tv.topic_id = t.id WHERE t.user_id = ?" user-id]
+                     JOIN topics t ON tv.topic_id = t.id WHERE t.user_id = ?
+                     UNION ALL
+                     SELECT te.lo_oid FROM topic_epubs te
+                     JOIN topics t ON te.topic_id = t.id WHERE t.user_id = ?"
+                    user-id user-id]
                    {:builder-fn rs/as-unqualified-maps}))
           deleted (jdbc/execute! tx ["DELETE FROM topics WHERE user_id = ?" user-id])]
       (doseq [oid oids] (lo/unlink! tx oid))
@@ -6198,8 +6274,8 @@
       (bump-user-usage! tx user-id (- (:total_bytes row)))
       {:ok true :refunded (:total_bytes row)})))
 
-(defn materialize-upload-archive!
-  "Put a completed archive session's bytes on local disk and return the File.
+(defn materialize-upload-session!
+  "Put a completed session's bytes on local disk and return the File.
 
    The large object is authoritative; `archive_path` is a cache. A cached path
    that still exists and matches `received_bytes` is returned as is, so the
@@ -6208,16 +6284,20 @@
    does not exist — that re-materializes rather than failing, which is the whole
    reason the object stays authoritative.
 
-   Pre:  session exists, belongs to user-id, and has flow 'archive'.
+   Pre:  session exists, belongs to user-id, and its flow is `expected-flow`.
    Post: {:ok true :file F :filename S} where F holds exactly `received_bytes`
-         bytes, or {:ok false :error S} when the session is missing or the
-         upload is short of its declared total.
+         bytes, or {:ok false :error S} when the session is missing, has the
+         wrong flow, or the upload is short of its declared total.
    Invariant: heap high-water is one `largeobj/io-buffer-bytes` buffer — the
          copy streams, so a 7.5 GB archive never exists in heap.
    Invariant: the returned File is owned by the SESSION, not the caller. Only
          `release-upload-session!` and the reap sweep delete it, so a retried
-         import reuses it."
-  [user-id session-id]
+         import reuses it.
+
+   `expected-flow` is a parameter rather than a hardcoded 'archive' because the
+   epub flow needs exactly this, down to the `archive_path` cache — the column
+   name predates the second caller and renaming it would be churn."
+  [user-id session-id expected-flow]
   (jdbc/with-transaction [tx ds]
     (let [row (jdbc/execute-one! tx
                 ["SELECT lo_oid, total_bytes, received_bytes, filename, flow, archive_path
@@ -6228,8 +6308,9 @@
         (nil? row)
         {:ok false :error "Upload not found or expired"}
 
-        (not= "archive" (:flow row))
-        {:ok false :error (str "Not an archive upload: " (:flow row))}
+        (not= expected-flow (:flow row))
+        {:ok false :error (str "Not a" (when (= "archive" expected-flow) "n") " "
+                            expected-flow " upload: " (:flow row))}
 
         (not= (:received_bytes row) (:total_bytes row))
         {:ok false :error (str "Upload incomplete: " (:received_bytes row)
@@ -6247,6 +6328,97 @@
                 ["UPDATE upload_sessions SET archive_path = ?, updated_at = now()
                   WHERE id = ?" (.getAbsolutePath f) session-id])
               {:ok true :file f :filename (:filename row)})))))))
+
+(defn materialize-upload-archive!
+  "`materialize-upload-session!` for the archive flow. The three archive import
+   paths call this rather than naming their own flow string."
+  [user-id session-id]
+  (materialize-upload-session! user-id session-id "archive"))
+
+(defn finalize-epub-session!
+  "Turn a completed epub session into an `epub` topic, chapters and all.
+
+   Transfers ownership of the large object from the session row to a new
+   `topic_epubs` row; the session row is deleted, NOT compensated, because the
+   bytes it reserved are now the topic's. A short upload refunds the difference —
+   the object's real size is what the topic owns.
+
+   Pre:  `chapters` is the parse result for THIS session's bytes, and the caller
+         has already read them (through `materialize-upload-session!`). The
+         session's received_bytes equals its total_bytes.
+   Post: {:ok true :topic-id N}, or {:ok false :error S}.
+   Invariant: exactly one row references the OID at every point — the session
+         row before this commits, the topic_epubs row after.
+   Invariant: quota is NOT bumped here. `init-upload-session!` already reserved
+         every byte through `reserve-bytes!`, and bumping again would bill the
+         user twice for one book."
+  [user-id session-id title chapters]
+  (jdbc/with-transaction [tx ds]
+    (let [row (jdbc/execute-one! tx
+                ["SELECT lo_oid, total_bytes, received_bytes, filename, parent_id
+                  FROM upload_sessions WHERE id = ? AND user_id = ? AND flow = 'epub'
+                  FOR UPDATE"
+                 session-id user-id]
+                {:builder-fn rs/as-unqualified-maps})]
+      (cond
+        (nil? row)
+        {:ok false :error "Upload not found or expired"}
+
+        (not= (:received_bytes row) (:total_bytes row))
+        {:ok false :error (str "Upload incomplete: " (:received_bytes row)
+                            " of " (:total_bytes row) " bytes")}
+
+        :else
+        (let [{:keys [topic-id]} (insert-epub-topic! tx user-id
+                                   (or title (:filename row))
+                                   (:parent_id row) chapters)]
+          (jdbc/execute! tx
+            [(str "INSERT INTO topic_epubs (topic_id, lo_oid, byte_size)
+                   VALUES (?, " oid-param ", ?)")
+             topic-id (:lo_oid row) (:received_bytes row)])
+          ;; Init reserved total_bytes. Only the shortfall is given back.
+          (when (< (:received_bytes row) (:total_bytes row))
+            (bump-user-usage! tx user-id (- (:received_bytes row) (:total_bytes row))))
+          (jdbc/execute! tx ["DELETE FROM upload_sessions WHERE id = ?" session-id])
+          (audit-doc-created! user-id topic-id)
+          {:ok true :topic-id topic-id})))))
+
+(defn with-epub-source
+  "Call `f` with a File holding the topic's stored EPUB, or return nil when it
+   has none.
+
+   The ONLY thing that knows an EPUB's bytes live in two places: `topic_epubs`
+   (a large object, chunk-uploaded) or `topic_files.file_data` (BYTEA, multipart
+   and every book imported before the large-object path existed). Callers ask for
+   a File and get one either way.
+
+   Pre:  `topic-id` names a topic the caller has already authorized.
+   Post: `f`'s value, or nil when the topic stores no EPUB. The temp file is
+         deleted before returning, on every path including a throw.
+   Invariant: heap high-water is one `largeobj/io-buffer-bytes` buffer for the
+         large-object path. The BYTEA path is bounded by the column, which is why
+         nothing new writes there."
+  [topic-id f]
+  (let [lo-row (jdbc/execute-one! ds
+                 ["SELECT lo_oid FROM topic_epubs WHERE topic_id = ?" topic-id]
+                 {:builder-fn rs/as-unqualified-maps})]
+    (if lo-row
+      (let [tmp (.toFile (java.nio.file.Files/createTempFile
+                           "epub-source" ".epub"
+                           (make-array java.nio.file.attribute.FileAttribute 0)))]
+        (try
+          (jdbc/with-transaction [tx ds]
+            (lo/copy-to-file! tx (:lo_oid lo-row) tmp))
+          (f tmp)
+          (finally (.delete tmp))))
+      (when-let [^bytes b (some-> (get-topic-file topic-id) :topic_files/file_data)]
+        (let [tmp (.toFile (java.nio.file.Files/createTempFile
+                             "epub-source" ".epub"
+                             (make-array java.nio.file.attribute.FileAttribute 0)))]
+          (try
+            (with-open [o (java.io.FileOutputStream. tmp)] (.write o b))
+            (f tmp)
+            (finally (.delete tmp))))))))
 
 (defn finalize-video-upload!
   "§4.3 3.1 — turn a completed session into a `video` topic.
