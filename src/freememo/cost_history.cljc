@@ -163,7 +163,7 @@
           !q-debounced (atom "")        q-debounced (e/watch !q-debounced)
           !q-timer (atom nil)
           refresh (e/server (e/watch (us/get-atom user-id :credits-refresh)))
-          facets (e/server (facets* refresh user-id))
+          facets (e/server (e/Offload #(facets* refresh user-id)))
           endpoints (:endpoints facets)
           models (:models facets)
           filters {:kind kind :endpoint endpoint :model model :q q-debounced

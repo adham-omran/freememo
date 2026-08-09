@@ -193,6 +193,46 @@
       (tel/error! {:id ::get-cards-for-sync} e)
       {:success false :error (.getMessage e)})))
 
+(def ^:private pull-card-keys
+  "The only card fields the client-side pull diff reads (see
+   anki-sync-helpers/do-anki-pull!). :io_fields carries the occlusion text
+   fields and MUST stay — the occlusion branch of the diff reads it."
+  [:flashcards/id :flashcards/anki_note_id :flashcards/kind
+   :flashcards/question :flashcards/answer :flashcards/cloze
+   :flashcards/io_fields])
+
+(defn get-cards-for-pull
+  "Cards a pull can act on: the pushed cards under root-topic-id, projected to
+   the fields the diff reads.
+
+   Pre : user-id is non-nil. root-topic-id is nil or owned by user-id.
+   Post: {:success true :cards [...]}, where every card carries a non-nil
+         :flashcards/anki_note_id — or {:success false :error msg}.
+
+   Separate from get-cards-for-sync on purpose, and push still uses that one.
+   A pull sent every card of the document across the wire, with bibliography
+   HTML, occlusion masks and score geometry attached, and then discarded the
+   unpushed rows in the browser one line later."
+  [{:keys [user-id root-topic-id]}]
+  (try
+    (if-not (and user-id
+              (or (nil? root-topic-id) (db/owns-topic? user-id root-topic-id)))
+      {:success false :error "Not authorized for this topic"}
+      (let [cards (into []
+                    (comp (filter #(some? (:flashcards/anki_note_id %)))
+                      (map #(select-keys % pull-card-keys)))
+                    (db/get-all-flashcards root-topic-id))]
+        (tel/log! {:level :info
+                   :id ::get-cards-for-pull
+                   :data {:user-id user-id
+                          :root-topic-id root-topic-id
+                          :card-count (count cards)}}
+          "get-cards-for-pull resolved")
+        {:success true :cards cards}))
+    (catch Exception e
+      (tel/error! {:id ::get-cards-for-pull} e)
+      {:success false :error (.getMessage e)})))
+
 (defn log-client-sync-error!
   "Record a client-side Anki sync exception in the server log. Push/pull run
    entirely in the browser, so a CLJS throw never reaches server logs on its

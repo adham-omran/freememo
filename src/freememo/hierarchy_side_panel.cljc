@@ -314,8 +314,8 @@
           expanded-set (e/watch !expanded-set)
           ;; Server-form binding (sited-by-use): the subtree rows stay
           ;; server-side; only row-count and the window rows cross.
-          rows (e/server (build-hierarchy-rows* tree-rev user-id
-                           page-topic-id expanded-set))]
+          rows (e/server (e/Offload #(build-hierarchy-rows* tree-rev user-id
+                                       page-topic-id expanded-set)))]
       (when (e/server (some? rows))
         (let [row-count (e/server (count rows))
               row-height 36
@@ -324,7 +324,13 @@
               ;; hierarchy tab has no root target by design).
               !drag-src (atom nil)
               drag-src (e/watch !drag-src)
-              forbidden (e/server (if drag-src (set (db/get-subtree-ids drag-src)) #{}))
+              ;; The nil test lives INSIDE the thunk on purpose. e/Offload latches
+              ;; the previous value while it recomputes, so `forbidden` holds the
+              ;; old set (#{} before the first drag) instead of going empty and
+              ;; blanking every row for the length of the query. A stale set only
+              ;; costs a drop the user cannot make: db/reparent-topic! rejects a
+              ;; cycle on the server.
+              forbidden (e/server (e/Offload #(if drag-src (set (db/get-subtree-ids drag-src)) #{})))
               !drop-cmd (atom nil)
               drop-cmd (e/watch !drop-cmd)]
 
@@ -370,7 +376,7 @@
     (e/for-by identity [_k [root-topic-id]]
       (let [phone?          (e/watch viewport/!phone?)
             compact?        (e/watch viewport/!compact?)
-            persisted-open? (e/server (settings/get-hierarchy-open user-id root-topic-id))
+            persisted-open? (e/server (e/Offload #(settings/get-hierarchy-open user-id root-topic-id)))
             ;; Phone and portrait-tablet (compact) default to collapsed regardless
             ;; of the persisted desktop pref — the toggle still opens it manually.
             initial-open?   (and (not phone?) (not compact?) persisted-open?)
@@ -379,7 +385,7 @@
             !save           (atom nil)
             save-val        (e/watch !save)
             [?save-token _] (e/Token save-val)
-            persisted-width (e/server (settings/get-hierarchy-width user-id root-topic-id))
+            persisted-width (e/server (e/Offload #(settings/get-hierarchy-width user-id root-topic-id)))
             !width-px       (atom persisted-width)
             width-px        (e/watch !width-px)
             !width-save     (atom nil)

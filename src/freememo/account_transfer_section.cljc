@@ -38,7 +38,7 @@
 (e/defn AccountTransferSection [user-id]
   (e/client
     (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
-          summary (e/server (export-summary* refresh user-id))]
+          summary (e/server (e/Offload #(export-summary* refresh user-id)))]
       (dom/div
         (dom/props {:class "card"})
         (dom/h3 (dom/props {:class "section-title"}) (dom/text "Export your data"))

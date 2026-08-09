@@ -4594,8 +4594,15 @@
    order into 0-100 collapses ~15 topics per band, and without this term the
    daily hash would discard the order the import went to the trouble of
    preserving. NULLS LAST keeps natively created topics on the hash.
-   Selects `t.content` for the overview's preview titles; the session reads it
-   per-row via nth, so it stays server-side until a row is accessed.
+   Selects a BOUNDED PREFIX of `t.content` as `content_preview`, for the
+   overview's preview titles. learn-page/prepare-queue-rows takes 80 characters
+   of stripped text from it, so 4000 characters of HTML leaves ~50x of headroom
+   for markup — raise this number, never lower it below what that builder asks
+   for. It is an expression column, so pgjdbc leaves the key unqualified
+   (`:content_preview`, not `:topics/content_preview`).
+   The full column is deliberately absent: the learn session reads only :id and
+   :kind off these rows, and shipping whole document bodies down the queue cost
+   one body per review step.
    Joins `sources` to surface bibliography fields (source_url, source_title,
    source_csl_type, source_container); NULL when the topic has no source_id."
   [user-id]
@@ -4603,7 +4610,7 @@
     (jdbc/execute! ds
       ["SELECT t.id, t.parent_id, t.kind, t.title, t.priority,
               t.next_review_at, t.interval_days, t.a_factor,
-              t.status, t.content,
+              t.status, left(t.content, 4000) AS content_preview,
               s.url, s.title, s.csl_type, s.container_title
        FROM topics t
        LEFT JOIN sources s ON s.id = t.source_id

@@ -148,7 +148,7 @@
   [user-id result-sid !result-sid]
   (e/client
     (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
-          {:keys [session answers]} (e/server (session-detail* kg-bump user-id result-sid))
+          {:keys [session answers]} (e/server (e/Offload #(session-detail* kg-bump user-id result-sid)))
           {:keys [kind total started]} session
           tally (frequencies (keep :verdict answers))
           score (session-score (get tally "correct" 0) (get tally "partial" 0) total)]
@@ -219,7 +219,7 @@
   [user-id review-id !review-id navigate-source!]
   (e/client
     (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
-          detail (e/server (review-detail* kg-bump user-id review-id))
+          detail (e/server (e/Offload #(review-detail* kg-bump user-id review-id)))
           {:keys [review missed-facts]} detail
           {:keys [verdict rating user_answer explanation question_text live_question
                   reference_answer reviewed_at flagged suspended question_id
@@ -284,7 +284,7 @@
   [user-id !review-id]
   (e/client
     (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
-          rows (e/server (review-log* kg-bump user-id))
+          rows (e/server (e/Offload #(review-log* kg-bump user-id)))
           row-count (e/server (count rows))]
       (if (zero? row-count)
         (dom/p (dom/props {:style {:padding "24px 16px" :text-align "center"
@@ -343,7 +343,7 @@
   "Finished quiz/exam sittings, newest first. Capped at the query's 100 rows."
   [user-id !result-sid]
   (e/client
-    (let [sessions (e/server (history-sessions* user-id))
+    (let [sessions (e/server (e/Offload #(history-sessions* user-id)))
           row-count (e/server (count sessions))]
       (if (zero? row-count)
         (dom/p (dom/props {:style {:padding "24px 16px" :text-align "center"
@@ -412,7 +412,7 @@
         (some? result-sid) (SessionResult user-id result-sid !result-sid)
         :else
         (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
-              stats (e/server (dashboard-stats* kg-bump user-id))
+              stats (e/server (e/Offload #(dashboard-stats* kg-bump user-id)))
               due (e/server (:due stats 0))]
           (dom/div
             (dom/props {:style (assoc panel-style :display "flex"

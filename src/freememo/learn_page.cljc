@@ -50,7 +50,10 @@
                    (let [kind (:topics/kind row)
                          parent-id (:topics/parent_id row)
                          title (or (:topics/title row) "")
-                         content (or (:topics/content row) "")
+                         ;; A bounded prefix, not the body — see
+                         ;; db/get-learning-queue. extract-preview takes 80
+                         ;; characters of stripped text out of it below.
+                         content (or (:content_preview row) "")
                          is-root (nil? parent-id)
                          display-title (if is-root
                                          title
@@ -292,10 +295,10 @@
 
       (let [refresh (e/server (+ (e/watch (us/get-atom user-id :refresh))
                                 (e/watch (us/get-atom user-id :queue-mutations))))
-            summary (e/server (get-queue-summary* refresh user-id))
-            items-vec (e/server (prepare-queue-rows refresh user-id))
+            summary (e/server (e/Offload #(get-queue-summary* refresh user-id)))
+            items-vec (e/server (e/Offload #(prepare-queue-rows refresh user-id)))
             item-count (e/server (count items-vec))
-            dash (e/server (dashboard-data* refresh user-id))
+            dash (e/server (e/Offload #(dashboard-data* refresh user-id)))
             due-today (:due-today summary)]
 
         ;; Header: full-width Start Learning (only when something is due;

@@ -78,7 +78,7 @@
                   :style {:display "flex" :flex-direction "column" :height "100%"}})
 
       (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
-            all-rows (e/server (get-document-status* refresh user-id))
+            all-rows (e/server (e/Offload #(get-document-status* refresh user-id)))
             !kind-filter (atom "all")
             kind-filter (e/watch !kind-filter)
             !status-filter (atom "all")

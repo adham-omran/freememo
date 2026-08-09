@@ -152,10 +152,14 @@
           card-mutations (e/server (e/watch (us/get-atom user-id :card-mutations)))
           card-refresh (+ refresh sync-mutations card-mutations)
 
-          card-font-size (e/server (settings/get-card-font-size user-id))
-          scan-dpi (e/server (settings/get-scan-dpi user-id))
+          ;; Every read below is a blocking JDBC call. A bare e/server runs it on
+          ;; the session's reactive thread, so the whole graph stalls for its
+          ;; duration; e/Offload moves it to the thread pool. They also run
+          ;; concurrently there instead of one after another.
+          card-font-size (e/server (e/Offload #(settings/get-card-font-size user-id)))
+          scan-dpi (e/server (e/Offload #(settings/get-scan-dpi user-id)))
 
-          overview (e/server (get-topic-overview* refresh topic-id))
+          overview (e/server (e/Offload #(get-topic-overview* refresh topic-id)))
           kind (:kind overview)
           pdf-root-id (:pdf-root-id overview)
           is-pdf? (some? pdf-root-id)
@@ -171,7 +175,8 @@
           ;; freememo.loading), so a downstream reader can compare the fetched-for
           ;; id against the live topic-id to detect that the shown body is stale.
           static-content+id (e/server (when (or (not is-pdf?) is-score?)
-                                        [topic-id (get-topic-content* refresh topic-id)]))
+                                        (e/Offload
+                                          (fn [] [topic-id (get-topic-content* refresh topic-id)]))))
           static-content (when static-content+id (nth static-content+id 1))
           static-content-topic-id (when static-content+id (nth static-content+id 0))
           ;; initial-page precedence: URL page anchor > persisted last-page > 1
@@ -181,22 +186,22 @@
                          (cond
                            (= kind "page") (:page-number overview)
                            (= kind "pdf") (or url-page
-                                              (e/server (settings/get-last-page user-id pdf-root-id))
+                                              (e/server (e/Offload #(settings/get-last-page user-id pdf-root-id)))
                                               1)
                            :else 1))
           initial-layout (e/server
                            (when is-pdf?
-                             (or (settings/get-pdf-layout user-id pdf-root-id) "left-right")))
-          initial-top-pct (e/server (settings/get-card-split user-id))
+                             (e/Offload #(or (settings/get-pdf-layout user-id pdf-root-id) "left-right"))))
+          initial-top-pct (e/server (e/Offload #(settings/get-card-split user-id)))
 
           ;; Bibliography target: PDF pages own no bibliography (resolve to the
           ;; document root); every other kind (extract/root/web/epub) is its own
           ;; owner. get-topic-citation* resolves the effective source from here.
           bib-topic-id (if (= kind "page") (or pdf-root-id root-topic-id) topic-id)
           pdf-root? (and is-pdf? (= kind "pdf"))
-          citation (e/server (bibform/get-topic-citation* refresh user-id bib-topic-id))
+          citation (e/server (e/Offload #(bibform/get-topic-citation* refresh user-id bib-topic-id)))
           pdf-status (e/server (when pdf-root?
-                                 (get-topic-status* meta-refresh pdf-root-id)))
+                                 (e/Offload #(get-topic-status* meta-refresh pdf-root-id))))
           scanning-pages (e/server (e/watch (us/get-atom user-id :scanning-pages)))
           ocr-errors (e/server (e/watch (us/get-atom user-id :ocr-errors)))]
       {;; caller passthrough
@@ -315,7 +320,7 @@
           ;; have no page children: skip the fetch, keep the topic's own id.
           page-info (e/server
                       (when (and is-pdf? (not is-score?))
-                        (get-page-info* refresh meta-refresh pdf-root-id current-page)))
+                        (e/Offload #(get-page-info* refresh meta-refresh pdf-root-id current-page))))
           page-topic-id (if (and is-pdf? (not is-score?))
                           (or (:topic-id page-info) topic-id)
                           topic-id)

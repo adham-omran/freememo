@@ -57,11 +57,13 @@
             (reset! !pull-updates nil))
           nil))
 
-      ;; Phase :pulling — fetch synced cards for the entire doc, then run pull task.
+      ;; Phase :pulling — fetch the doc's PUSHED cards, then run the pull task.
+      ;; get-cards-for-pull filters and projects server-side; the previous
+      ;; get-cards-for-sync call shipped every card with its bibliography and
+      ;; group geometry, and do-anki-pull! dropped the unpushed ones on arrival.
       (when (= pull-phase :pulling)
-        (let [cards-result (e/server (e/Offload #(sync/get-cards-for-sync
+        (let [cards-result (e/server (e/Offload #(sync/get-cards-for-pull
                                                     {:user-id user-id
-                                                     :topic-id nil
                                                      :root-topic-id root-topic-id})))]
           (if-not (:success cards-result)
             (do (reset! !pull-error {:message (:error cards-result) :source :server})

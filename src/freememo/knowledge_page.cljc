@@ -236,6 +236,11 @@
    header height (~one row) and absorbed by the overquery buffer.
    Pre:  Row is an e/fn of [i] rendering one dom/tr (nil-safe past the end);
          the caller's container bounds the height (flex column, min-height 0).
+         Row is called from CLIENT scope, because it renders DOM — so Row owns
+         the siting of its own data access. A Row that closes over a server-side
+         collection MUST read it as `(e/server (nth coll i nil))`; a bare
+         `(nth coll i nil)` pulls the whole collection to the client on mount and
+         the window then buys nothing.
    Post: only the visible window (± overquery buffer) is mounted; total
          scroll height equals item-count rows; header column boundaries equal the
          body's at every viewport width."
@@ -407,10 +412,12 @@
           !redistill (atom nil)]              ; doc-id pending a re-distill confirm, or nil
       ;; Spinner covers the first offloaded fetch (blank otherwise); the search
       ;; input lives inside Loaded and revalidates in place via the Offload latch.
-      (loading/WithLatestLoading
+      (loading/WithLatestServerLoading
         (e/fn [] (e/server (e/Offload #(get-knowledge-docs* kg-bump user-id query))))
         (e/fn [docs]
-          (let [item-count (count docs)]
+          ;; docs stays server-sited — see WithLatestServerLoading. Every read of
+          ;; it below is wrapped, so only the count and the window rows cross.
+          (let [item-count (e/server (count docs))]
             (dom/div
               (dom/props {:style {:display "flex" :flex-direction "column"
                                   :height "calc(100vh - 160px)" :padding-top "8px"}})
@@ -433,7 +440,7 @@
                 (TapeTable ["Document" "Facts" ""]
                   "minmax(240px,1fr) 70px minmax(340px,max-content)" item-count
                   (e/fn [i]
-                    (when-let [doc (nth docs i nil)]
+                    (when-let [doc (e/server (nth docs i nil))]
                       (DocumentRow user-id doc i navigate! distilling generating !redistill)))))
               ;; Single re-distill confirm for the whole view (virtualization-safe;
               ;; per-row modals would ride the Tape's reused DOM nodes). !redistill holds
@@ -560,10 +567,15 @@
     (let [!query (atom "") query (e/watch !query)
           !query-timer (atom nil)             ; debounces !query against the server search below
           facts (e/server (e/Offload #(get-doc-facts* kg-bump user-id doc-id query)))
-          item-count (count facts)
+          ;; facts stays server-sited: both reads below and the row read are
+          ;; wrapped, so the count, the id vector and the window rows cross —
+          ;; not the fact bodies.
+          item-count (e/server (count facts))
           ;; Ids of what is currently VISIBLE — the filtered select-all's target.
-          ;; No extra query: FactsView already holds every filtered row client-side.
-          filtered-ids (mapv :id facts)
+          ;; No extra query: the ids are projected off the rows already fetched.
+          ;; Ids only (ints), and they must land client-side: the click handler
+          ;; is a plain fn and cannot reach across to the server.
+          filtered-ids (e/server (mapv :id facts))
           ;; Ids of the whole document — the other select-all's target. Fetched only
           ;; while a search is active, since that is the only time it differs from
           ;; filtered-ids; the untaken branch never mounts, so there is no query.
@@ -645,7 +657,7 @@
             (dom/text (if (str/blank? query) "No facts yet — distill first." "No matches.")))
           (TapeTable ["" "Subject" "Predicate" "Object" "Page" ""] grid-cols item-count
             (e/fn [i]
-              (when-let [fact (nth facts i nil)]
+              (when-let [fact (e/server (nth facts i nil))]
                 (FactRow user-id fact i !editing editing !selected selected)))))
         ;; One op, one undo entry — see db/reject-kg-facts! for why this is not a
         ;; loop over the single-fact reject.
@@ -774,11 +786,12 @@
           !editing (atom nil)]              ; the question map being edited, or nil
       ;; Spinner covers the first offloaded fetch chain (docs → source-id → questions);
       ;; filter changes revalidate in place via the Offload latch, no spinner reflash.
-      (loading/WithLatestLoading
+      (loading/WithLatestServerLoading
         (e/fn [] (e/server (e/Offload #(get-questions* kg-bump user-id query source-id
                                          entity-id flagged? suspended?))))
         (e/fn [questions]
-          (let [item-count (count questions)]
+          ;; questions stays server-sited — see WithLatestServerLoading.
+          (let [item-count (e/server (count questions))]
             (dom/div
               (dom/props {:style {:padding "0 16px" :display "flex" :flex-direction "column"
                                   :height "calc(100vh - 160px)"}})
@@ -822,7 +835,7 @@
                               :else "No matches.")))
                 (TapeTable ["Question" "Answer" "Kind" "Facts" "State" ""] grid-cols item-count
                   (e/fn [i]
-                    (when-let [q (nth questions i nil)]
+                    (when-let [q (e/server (nth questions i nil))]
                       (QuestionRow user-id q i !editing)))))
               (curate/QuestionEditorModal user-id !editing)
               (ReflectScopeInUrl navigate! :knowledge-questions route-doc-id source-id))))))))
@@ -945,10 +958,11 @@
           docs (e/server (e/Offload #(list-source-docs* kg-bump user-id)))]
       ;; Spinner covers the first offloaded fetch chain (docs → source-id → entities);
       ;; filter changes revalidate in place via the Offload latch, no spinner reflash.
-      (loading/WithLatestLoading
+      (loading/WithLatestServerLoading
         (e/fn [] (e/server (e/Offload #(list-entities* kg-bump user-id query source-id))))
         (e/fn [entities]
-          (let [item-count (count entities)]
+          ;; entities stays server-sited — see WithLatestServerLoading.
+          (let [item-count (e/server (count entities))]
             (dom/div
               (dom/props {:style {:padding "0 16px" :display "flex" :flex-direction "column"
                                   :height "calc(100vh - 160px)"}})
@@ -981,7 +995,7 @@
                 (TapeTable ["Entity" "Aliases" "Facts" ""]
                   "minmax(200px,1fr) minmax(160px,1fr) 60px minmax(220px,max-content)" item-count
                   (e/fn [i]
-                    (when-let [entity (nth entities i nil)]
+                    (when-let [entity (e/server (nth entities i nil))]
                       (EntityRow user-id entity i !renaming renaming !merge-source merge-source !merge-confirm)))))
               ;; Guard the irreversible entity merge behind a confirm (merge undo is out
               ;; of scope, plan 6.5). One modal for the view; !merge-confirm carries the

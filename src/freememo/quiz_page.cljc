@@ -136,7 +136,7 @@
 (e/defn QuizSetup [user-id !session initial-mode !view]
   (e/client
     (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
-          docs (e/server (quiz-docs* kg-bump user-id))
+          docs (e/server (e/Offload #(quiz-docs* kg-bump user-id)))
           !scope (atom #{}) scope (e/watch !scope)
           !mode (atom (or initial-mode "quiz")) mode (e/watch !mode)
           !count-str (atom (if (= initial-mode "exam") "20" "10"))
@@ -274,7 +274,7 @@
           finish! (fn [] (reset! !finish-req {:id (str (random-uuid))}))
           kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
           qid (nth qids (min idx (dec total)) nil)
-          qdata (e/server (quiz-question* kg-bump user-id qid))
+          qdata (e/server (e/Offload #(quiz-question* kg-bump user-id qid)))
           ;; Skipping the final question ends the sitting — there is nothing to
           ;; advance to, and the skip is not an answer, so the tally is unaffected.
           advance! (fn []
@@ -420,7 +420,7 @@
           grading (e/server (e/watch (us/get-atom user-id :exam-grading)))
           kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
           qid (nth qids (min idx (dec total)) nil)
-          qdata (e/server (quiz-question* kg-bump user-id qid))
+          qdata (e/server (e/Offload #(quiz-question* kg-bump user-id qid)))
           ;; Skipping the last question submits the paper — the sitting is over
           ;; either way, and the skip contributes no answer.
           advance! (fn []
@@ -556,7 +556,7 @@
    !entity-card entity-card !editing navigate-source! advance!]
   (e/client
     (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
-          qdata (e/server (quiz-question* kg-bump user-id qid))
+          qdata (e/server (e/Offload #(quiz-question* kg-bump user-id qid)))
           ;; Unanswered: no tally, no return.
           skip! (fn [] (advance! false false))
           ;; Answered, then suspended: the grade counted, but a suspended question
@@ -629,7 +629,7 @@
   [user-id !view !editing navigate-source!]
   (e/client
     (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
-          initial (e/server (review-queue* kg-bump user-id))
+          initial (e/server (e/Offload #(review-queue* kg-bump user-id)))
           !queue (atom ::unset) queue (e/watch !queue)
           !feedback (atom nil) feedback (e/watch !feedback)
           !draft (atom "") draft (e/watch !draft)
@@ -725,7 +725,7 @@
 (e/defn QuizPage [user-id navigate!]
   (e/client
     (let [preset (consume-pending-preset!)
-          resume (e/server (active-session* user-id))
+          resume (e/server (e/Offload #(active-session* user-id)))
           !session (atom ::unset) session (e/watch !session)
           !summary (atom nil) summary (e/watch !summary)
           !result-sid (atom nil) result-sid (e/watch !result-sid)

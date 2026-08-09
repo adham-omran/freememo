@@ -41,7 +41,7 @@
   (e/client
     (let [topic-id dctx/page-topic-id card-font-size dctx/card-font-size user-id dctx/user-id
           refresh dctx/card-refresh
-          cards-result (e/server (get-cards-for-topic* refresh topic-id))
+          cards-result (e/server (e/Offload #(get-cards-for-topic* refresh topic-id)))
           !editing-card (atom nil)
           editing-card (e/watch !editing-card)]
 
@@ -56,7 +56,11 @@
                     (ScoreEditLoader user-id !editing-card))
           (EditCardModal !editing-card user-id)))
 
-      (if (:success cards-result)
+      ;; Both branch reads are server-sited. `cards-result` holds the whole card
+      ;; vector; reading :success (or :error) from client scope would pull that
+      ;; vector across before any windowing below it runs. Same shape as
+      ;; library_cards/CardsResultRegion.
+      (if (e/server (:success cards-result))
         (let [cards-vec (e/server (vec (:cards cards-result)))
               row-count (e/server (count cards-vec))
               card-count (e/server (rows/card-count cards-vec))
@@ -140,4 +144,4 @@
                         (dom/text "No cards yet. Use the Generate button above to create flashcards from this content.")))))))))
         (dom/div
           (dom/props {:style {:color "var(--color-danger-text)" :font-size "13px" :padding "8px 12px"}})
-          (dom/text "Error loading cards: " (:error cards-result)))))))
+          (dom/text "Error loading cards: " (e/server (:error cards-result))))))))

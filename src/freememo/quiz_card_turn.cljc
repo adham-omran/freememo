@@ -280,7 +280,7 @@
   (e/client
     (let [[_ card-id ord] item-ref
           settings-bump (e/server (e/watch (us/get-atom user-id :settings-refresh)))
-          item (e/server (card-turn* settings-bump user-id card-id ord))]
+          item (e/server (e/Offload #(card-turn* settings-bump user-id card-id ord)))]
       (if (nil? item)
         (dom/div
           (dom/p (dom/props {:style {:font-size "14px" :margin "14px 0"}})

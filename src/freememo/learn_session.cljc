@@ -132,10 +132,14 @@
                   (case (t) (navigate! :learn))))))
 
           ;; Active topic
+          ;; All three reads of `item` are server-sited. The row carries the
+          ;; topic's content prefix, so a client-scope read of any one of them
+          ;; pulled that text across on every review step — and only the kind
+          ;; and the id are ever used here.
           (let [item (e/server (nth queue-vec idx nil))
-                item-present? (some? item)
-                kind (:topics/kind item)
-                topic-id (:topics/id item)
+                item-present? (e/server (some? item))
+                kind (e/server (:topics/kind item))
+                topic-id (e/server (:topics/id item))
                 is-pdf? (= kind "pdf")
                 ;; :origin :learn marks every learn topic so mobile reading-mode
                 ;; (TopicPage) can strip chrome on a phone — PDFs included, since

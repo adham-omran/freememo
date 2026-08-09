@@ -573,15 +573,23 @@
                                                               "Question can't be empty"))]
                     (if validation-error
                       (t validation-error)
-                      (let [clean-q (e/server (sanitize-card-field question))
-                            clean-a (e/server (sanitize-card-field answer))
-                            clean-c (e/server (sanitize-card-field cloze))
-                            fields (if (= kind "basic")
-                                     {:question clean-q :answer clean-a}
-                                     (cond-> {:cloze clean-c}
-                                       (and clean-a (not (str/blank? clean-a)))
-                                       (assoc :answer clean-a)))
-                            result (e/server (e/Offload #(cards/update-card user-id card-id fields)))]
+                      ;; Sanitize inside the call that persists. Three separate
+                      ;; (e/server (sanitize-card-field …)) bindings sent each
+                      ;; field to the server, returned the cleaned HTML to the
+                      ;; client, and then sent the assembled map back — four
+                      ;; round trips carrying the same text. The fields map is
+                      ;; assembled server-side now, so the text crosses once.
+                      (let [result (e/server
+                                     (e/Offload
+                                       #(let [clean-q (sanitize-card-field question)
+                                              clean-a (sanitize-card-field answer)
+                                              clean-c (sanitize-card-field cloze)
+                                              fields (if (= kind "basic")
+                                                       {:question clean-q :answer clean-a}
+                                                       (cond-> {:cloze clean-c}
+                                                         (and clean-a (not (str/blank? clean-a)))
+                                                         (assoc :answer clean-a)))]
+                                           (cards/update-card user-id card-id fields))))]
                         (if (:success result)
                           (do (e/on-unmount #(reset! !editing-card nil))
                               (case (e/server (commands/bump! user-id :edit-card))
@@ -626,6 +634,18 @@
 #?(:clj
    (defmethod opt/run-command! :add-card [user-id {:keys [payload]}]
      (let [{:keys [topic-id root-topic-id kind card-data]} payload
+           ;; Sanitize here, at the call that persists. The modal enqueues the
+           ;; typed HTML so the optimistic row paints with no round trip.
+           ;; Overlapping cards stay verbatim, matching prior behavior.
+           card-data (if (= kind "overlapping")
+                       card-data
+                       (mapv (fn [m]
+                               (reduce (fn [acc k]
+                                         (if (contains? acc k)
+                                           (update acc k sanitize-card-field)
+                                           acc))
+                                 m [:q :a :c]))
+                         card-data))
            ;; bake? false — the Add-Card modal already inlined pinned images
            ;; into card-data via pins-prefill-html; baking would duplicate them.
            result (cards/save-cards user-id topic-id root-topic-id kind card-data false)]
@@ -817,14 +837,18 @@
             ;; close on ack.
             (e/for [[t cmd] (e/diff-by first (e/as-vec commits))]
               (let [{:keys [kind topic-id root-topic-id primary answer ol]} (nth (e/snapshot cmd) 1)
+                    ;; Typed text only. Sanitation happens inside the :add-card
+                    ;; effect, which is where the save runs — a per-field
+                    ;; (e/server (sanitize-card-field …)) here sent each field to
+                    ;; the server and back before the payload made the same trip.
+                    ;; The overlay row therefore shows what the user typed, and
+                    ;; the sanitized form arrives with the server row.
                     card-data (case kind
-                                "basic" [{:q (e/server (sanitize-card-field primary))
-                                          :a (e/server (sanitize-card-field answer))}]
+                                "basic" [{:q primary :a answer}]
                                 "overlapping" [ol]
-                                [(let [clean-a (e/server (sanitize-card-field answer))]
-                                   (cond-> {:c (e/server (sanitize-card-field primary))}
-                                     (and clean-a (not (str/blank? clean-a)))
-                                     (assoc :a clean-a)))])]
+                                [(cond-> {:c primary}
+                                   (and answer (not (str/blank? answer)))
+                                   (assoc :a answer))])]
                 (case (opt/enqueue-add-card! add-id
                         {:topic-id topic-id :root-topic-id root-topic-id
                          :kind kind :card-data card-data})
