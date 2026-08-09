@@ -65,6 +65,7 @@
        "repo" "Code Repository"
        "supermemo" "SuperMemo Collection"
        "account" "FreeMemo Account Export"
+       "sphinx" "Documentation Site"
        "Item")))
 
 ;; ── Paste-source detection ─────────────────────────────────────────
@@ -702,6 +703,19 @@
                                     (set! (.-checked dom/node) (= image-mode "strip"))
                                     (dom/On "change" (fn [_] (reset! !image-mode "strip")) nil))
                                   (dom/text "Strip images — text only"))))))
+                        ;; A documentation build lands a whole tree rather than
+                        ;; one document, and the archive's byte count says
+                        ;; nothing about how much of it is kept — the theme's
+                        ;; scripts and search index are dropped, the images are
+                        ;; stored. Say what will happen; the report says what
+                        ;; did.
+                        (when (= flow "sphinx")
+                          (dom/p
+                            (dom/props {:style {:margin "0 0 var(--sp-3) 0" :font-size "12px"
+                                                :color "var(--color-text-secondary)"}})
+                            (dom/text (str "Every page becomes a topic, nested the way the site's "
+                                        "folders are. Images are stored and links between pages "
+                                        "are rewritten to open the imported topic."))))
                         (when (= flow "repo")
                           (dom/div
                             (dom/props {:style {:margin-bottom "var(--sp-3)"}})
@@ -729,6 +743,8 @@
                                [`Confirm-repo-session session-id extract-facts?]
                                (and session-id (= flow "supermemo"))
                                [`Confirm-supermemo-session session-id nil]
+                               (and session-id (= flow "sphinx"))
+                               [`Confirm-sphinx-session session-id nil]
                                ;; nil is the destination parent: the tree root.
                                ;; A picker is not built yet — see
                                ;; plans/user-data-export-import.md §9.
@@ -742,6 +758,7 @@
                                (= flow "account") [`Confirm-account-upload upload-id nil]
                                (= flow "repo") [`Confirm-repo-upload upload-id extract-facts?]
                                (= flow "supermemo") [`Confirm-supermemo-upload upload-id nil]
+                               (= flow "sphinx") [`Confirm-sphinx-upload upload-id nil]
                                :else [`Confirm-staged-upload upload-id (keyword image-mode)])))]
       ;; Cancel button — local-only reset, not part of the form's commit stream.
       (dom/div
@@ -773,6 +790,10 @@
                                               (web-import/confirm-repo-session!* user-id u-id arg)
                                               (= head `Confirm-supermemo-session)
                                               (web-import/confirm-supermemo-session!* user-id u-id)
+                                              (= head `Confirm-sphinx-session)
+                                              (web-import/confirm-sphinx-session!* user-id u-id)
+                                              (= head `Confirm-sphinx-upload)
+                                              (web-import/confirm-sphinx-upload!* user-id u-id)
                                               (= head `Confirm-account-session)
                                               (web-import/confirm-account-session!* user-id u-id arg false)
                                               (= head `Confirm-epub-session)

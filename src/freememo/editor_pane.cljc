@@ -133,6 +133,22 @@
                     (t)))))))
 
         ;; -----------------------------------------------------------------------
+        ;; In-document topic link
+        ;; -----------------------------------------------------------------------
+        ;; An imported documentation tree rewrites its cross-references to
+        ;; /viewer/topic/<id>, and a click on one arrives here through the same
+        ;; navigation bridge the wiki import uses. The href cannot do this on its
+        ;; own — Chrome does not follow anchor clicks inside a contenteditable —
+        ;; so the editor's click listener publishes the id and this routes it.
+        (let [nav-data (e/watch editor/!navigate-topic)
+              [t _] (e/Token nav-data)]
+          (when t
+            (e/on-unmount #(reset! editor/!navigate-topic nil))
+            (if (and (:topic-id nav-data) on-imported-navigate!)
+              (case (on-imported-navigate! (:topic-id nav-data)) (t))
+              (t))))
+
+        ;; -----------------------------------------------------------------------
         ;; Audio player (audio topics) — sits on top of the editor; the
         ;; Transcribe action lives in the ContentToolbar below.
         ;; -----------------------------------------------------------------------

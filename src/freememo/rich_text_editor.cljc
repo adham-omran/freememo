@@ -31,6 +31,13 @@
 ;; :idle | :importing | :done | :already-exists | :error
 (defonce !import-status (atom :idle))
 
+;; Set by a click on an in-document link to another topic — picked up by an
+;; e/Token in editor_pane, which routes it through the same navigation bridge
+;; the wiki import uses. An imported documentation tree's cross-references are
+;; the reason this exists; see setup-internal-link-navigation!.
+;; Shape: {:topic-id N :ts <timestamp>} or nil.
+(defonce !navigate-topic (atom nil))
+
 ;; Set to the current HTML on every user edit (immediate, no debounce — other
 ;; consumers need the live value: bottom_panel.cljc's ToolbarBar derives
 ;; card-gen context from it, rich_text_editor_component.cljc gates its
@@ -74,7 +81,7 @@
      :cljs
      (do
        (swap! !init-gen inc)
-       (when-let [{:keys [editor container toolbar import-popover-teardown format-menu-teardown code-lang-teardown formula-teardown a11y-observer]} @!editor-state]
+       (when-let [{:keys [editor container toolbar import-popover-teardown internal-link-teardown format-menu-teardown code-lang-teardown formula-teardown a11y-observer]} @!editor-state]
          (let [^js ed editor
                ^js ct container
                ^js tb toolbar]
@@ -83,6 +90,8 @@
            ;; Tear down the wiki-link import popover (element + document/window
            ;; listeners + status watch). Must run before innerHTML clear below.
            (when import-popover-teardown (import-popover-teardown))
+           ;; Remove the in-document topic-link click/auxclick listeners.
+           (when internal-link-teardown (internal-link-teardown))
            ;; Remove the custom format-menu (card element + its listeners).
            (when format-menu-teardown (format-menu-teardown))
            ;; Remove the custom code-language picker (observer + popup + triggers).
@@ -213,6 +222,56 @@
          (.removeEventListener js/document "scroll" on-scroll true)
          (.removeEventListener js/window "resize" on-scroll)
          (when (.-parentNode pop) (.remove pop))))
+     :clj nil))
+
+(def ^:private topic-href-re
+  "An in-document link to another topic. Deliberately narrow: anything wider
+   would hijack the external links an imported page keeps verbatim."
+  #"^/viewer/topic/(\d+)")
+
+(defn- setup-internal-link-navigation!
+  "Route clicks on `/viewer/topic/<id>` links to in-app navigation.
+
+   A listener is REQUIRED here — the href alone does nothing, for two
+   independent reasons. Chrome does not follow an anchor click inside a
+   `contenteditable`; the click event still fires, with `defaultPrevented`
+   false, and no navigation happens. And `hyperfiddle.router5` attaches its
+   click handler per node inside `router/Link`, never at the document level, so
+   an anchor this app did not render is invisible to the router.
+
+   Modified and middle clicks open a new tab explicitly, for the same reason:
+   `contenteditable` suppresses the browser's own handling, so without this
+   they would do nothing at all.
+
+   Pre : `editor` is a live Quill instance.
+   Post: a teardown fn removing both listeners. The atom is the only channel out
+         — navigation itself belongs to Electric, not to this listener."
+  [editor]
+  #?(:cljs
+     (let [^js ed editor
+           ^js root (.-root ed)
+           topic-id (fn [^js target]
+                      (let [^js a (when (and target (.-closest target)) (.closest target "a"))]
+                        (when a
+                          (some-> (re-find topic-href-re (str (.getAttribute a "href")))
+                            second js/parseInt))))
+           on-click (fn [e]
+                      (when-let [id (topic-id (.-target e))]
+                        (.preventDefault e)
+                        (if (or (.-metaKey e) (.-ctrlKey e))
+                          (js/window.open (str "/viewer/topic/" id) "_blank")
+                          (reset! !navigate-topic {:topic-id id :ts (js/Date.now)}))))
+           ;; Middle click fires `auxclick`, not `click`.
+           on-aux (fn [e]
+                    (when (= 1 (.-button e))
+                      (when-let [id (topic-id (.-target e))]
+                        (.preventDefault e)
+                        (js/window.open (str "/viewer/topic/" id) "_blank"))))]
+       (.addEventListener root "click" on-click)
+       (.addEventListener root "auxclick" on-aux)
+       (fn teardown []
+         (.removeEventListener root "click" on-click)
+         (.removeEventListener root "auxclick" on-aux)))
      :clj nil))
 
 ;; The bubble editor's formatting UI is a custom floating card
@@ -395,6 +454,7 @@
                               :math? (boolean math?)
                               :a11y-observer (install-content-a11y! editor)
                               :import-popover-teardown (setup-link-import-popover! editor)
+                              :internal-link-teardown (setup-internal-link-navigation! editor)
                               :format-menu-teardown (format-menu/install! editor {:card-gen? true})
                               :code-lang-teardown (code-lang-picker/install! editor)
                               ;; Formula popover + typed-source conversion. Only

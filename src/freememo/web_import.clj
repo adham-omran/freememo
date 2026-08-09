@@ -24,6 +24,7 @@
             [freememo.quota :as quota]
             [freememo.commands :as commands]
             [freememo.kg-code :as kg-code]
+            [freememo.sphinx-import :as sphinx-import]
             [freememo.supermemo-import :as sm-import]
             [clojure.string :as str]
             [freememo.wikipedia :as wiki]))
@@ -299,6 +300,93 @@
               (archive/delete-dir! dir))))))
     (catch Exception e
       (log/log-error (str "confirm-account-session!* failed: " (.getMessage e)))
+      {:ok false :error (archive-too-large-message e "Import failed")})))
+
+(def sphinx-extract-limits
+  "Extraction caps for a Sphinx HTML documentation build.
+
+   Two of the three differ from `archive/default-limits`, which are sized for a
+   code repo:
+
+   - `:max-total-bytes` was 300 MB. The reference corpus (the Blender manual)
+     carries 254 MB of images alone before a byte of HTML, and it is one manual.
+   - `:max-entries` was 50 000. A build writes one file per page plus one per
+     image; the reference corpus is 2361 pages and 3138 images, and a larger
+     project's API reference multiplies the page count.
+   - `:max-entry-bytes` stays at the default. No single page or figure in a
+     documentation build approaches 20 MB, and a file that does is not one this
+     import can use.
+
+   `:keep?` is what makes those numbers hold: `sphinx-import/extract-keep?`
+   drops the theme's JavaScript and the search index, which is 1.7 MB of the
+   reference corpus and unreachable from any topic."
+  {:prefix "sphinx-import"
+   :keep? sphinx-import/extract-keep?
+   :max-total-bytes (env-bytes "SPHINX_MAX_EXTRACT_BYTES" (* 4 1024 1024 1024))
+   :max-entries (env-bytes "SPHINX_MAX_EXTRACT_ENTRIES" 200000)
+   :max-entry-bytes (env-bytes "SPHINX_MAX_EXTRACT_ENTRY_BYTES" (* 20 1024 1024))})
+
+(defn confirm-sphinx-session!*
+  "Import a Sphinx HTML documentation build from a completed chunked upload.
+
+   Pre  : user-id owns session-id; the session is complete and has flow
+          'archive'; the archive holds a Sphinx build.
+   Post : {:ok true :topic-id N :report {...}} on success, {:ok false :error S}
+          otherwise. On SUCCESS the session is released — large object unlinked,
+          materialized archive deleted, and every reserved byte refunded,
+          because the archive was transport and only the media the import stored
+          should stay counted.
+   Invariant: on failure the session SURVIVES, so the user can retry without
+          re-uploading. The reap sweep collects it if they do not.
+   Invariant: the extracted temp dir has exactly one owner — this fn, which
+          deletes it on every path."
+  [user-id session-id]
+  (try
+    (let [m (db/materialize-upload-archive! user-id session-id)]
+      (if-not (:ok m)
+        m
+        (let [dir (archive/extract-to-temp-dir! (:file m) sphinx-extract-limits)]
+          (try
+            (let [r (sphinx-import/import-tree! user-id dir)]
+              (when (:ok r)
+                (commands/bump! user-id :import-document)
+                (db/release-upload-session! user-id session-id))
+              r)
+            (finally
+              (archive/delete-dir! dir))))))
+    (catch Exception e
+      (log/log-error (str "confirm-sphinx-session!* failed: " (.getMessage e)))
+      {:ok false :error (archive-too-large-message e "Import failed")})))
+
+(defn confirm-sphinx-upload!*
+  "Finalize a staged Sphinx documentation build (.zip) into a topic tree.
+
+   The staging sibling of `confirm-sphinx-session!*`. Staging holds bytes in JVM
+   heap, so this path serves only a build small enough to have gone through
+   multipart — the reference corpus is far past that and arrives as a session.
+
+   Pre  : user-id owns the staged upload; upload-id is unclaimed; the entry's
+          flow is :sphinx.
+   Post : {:ok true :topic-id N :report {...}} on success, {:ok false :error S}
+          otherwise.
+   Invariant: claim is one-shot — replays return {:ok false}. The extracted temp
+          dir has exactly one owner: this fn, which deletes it on every path."
+  [user-id upload-id]
+  (try
+    (if-let [entry (staging/claim! user-id upload-id)]
+      (let [{:keys [^bytes bytes flow]} entry]
+        (if (not= :sphinx flow)
+          {:ok false :error (str "Not a documentation build: " flow)}
+          (let [dir (archive/extract-to-temp-dir! bytes sphinx-extract-limits)]
+            (try
+              (let [r (sphinx-import/import-tree! user-id dir)]
+                (when (:ok r) (commands/bump! user-id :import-document))
+                r)
+              (finally
+                (archive/delete-dir! dir))))))
+      {:ok false :error "Upload not found or expired"})
+    (catch Exception e
+      (log/log-error (str "confirm-sphinx-upload!* failed: " (.getMessage e)))
       {:ok false :error (archive-too-large-message e "Import failed")})))
 
 (defn confirm-repo-session!*

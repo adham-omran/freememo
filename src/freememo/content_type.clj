@@ -151,6 +151,29 @@
   [src]
   (archive/every-entry-name? src account-required-entries))
 
+(def ^:private sphinx-required-entries
+  "The three files Sphinx's HTML builder always writes beside a build.
+
+   All three are required for the reason `account-required-entries` records:
+   `:repo` claims every unrecognised `.zip`, so a single-name test would hijack
+   a repository that happens to carry a file by that name. `.buildinfo` alone is
+   the most tempting test and the weakest — its name says nothing outside
+   Sphinx. Together the three are specific to a built HTML documentation tree.
+
+   Names only, no contents: `classify-archive` decompresses nothing, and a
+   7.5 GB archive must not be read to classify it."
+  [#(str/ends-with? % ".buildinfo")
+   #(str/ends-with? % "objects.inv")
+   #(str/ends-with? % "searchindex.js")])
+
+(defn sphinx-archive?
+  "True when an archive holds a built Sphinx HTML documentation tree.
+   Pre : `src` is a byte[] or a File holding a ZIP or 7z archive.
+   Post: true iff it holds `.buildinfo`, `objects.inv` and `searchindex.js`.
+         Reads entry names only. Never throws."
+  [src]
+  (archive/every-entry-name? src sphinx-required-entries))
+
 (defn classify-archive
   "Resolve an archive to its import flow, from the filename plus the container.
 
@@ -160,11 +183,14 @@
    `:supermemo` in one and `:repo` in the other imports as the wrong thing.
 
    Pre : `src` is a byte[] or a File; `filename` is a string or nil.
-   Post: [:account nil] | [:supermemo nil] | [:repo nil] | [:reject <msg>].
-         `:repo` claims every remaining `.zip`, so both specific flows must be
+   Post: [:account nil] | [:supermemo nil] | [:sphinx nil] | [:repo nil] |
+         [:reject <msg>].
+         `:repo` claims every remaining `.zip`, so every specific flow must be
          tested before it — an account export left to fall through would import
-         as a code repository. A `.7z` has no flow other than SuperMemo, and
-         saying so beats staging it for an importer that will reject it.
+         as a code repository, and a documentation build would import as one
+         with no children at all, because `unzip-repo!` keeps only Clojure
+         sources. A `.7z` has no flow other than SuperMemo, and saying so beats
+         staging it for an importer that will reject it.
    Invariant: reads entry names only; decompresses nothing."
   [filename src]
   (let [lower (some-> filename str/lower-case)
@@ -182,6 +208,7 @@
 
       (account-archive? src) [:account nil]
       (supermemo-archive? src) [:supermemo nil]
+      (sphinx-archive? src) [:sphinx nil]
       :else [:repo nil])))
 
 (defn classify-multipart

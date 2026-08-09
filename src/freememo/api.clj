@@ -221,6 +221,11 @@
                   (json-response 200 {:success true :upload_id upload-id :flow "supermemo"
                                       :filename filename :size size}))
 
+                :sphinx
+                (let [upload-id (staging/stage! user-id bytes filename :sphinx)]
+                  (json-response 200 {:success true :upload_id upload-id :flow "sphinx"
+                                      :filename filename :size size}))
+
                 :repo
                 (let [upload-id (staging/stage! user-id bytes filename :repo)]
                   (json-response 200 {:success true :upload_id upload-id :flow "repo"

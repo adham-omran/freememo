@@ -3426,6 +3426,30 @@
 ;; and their prettification, defaulting and per-row audit logging. They take
 ;; an explicit `tx` so a whole collection commits or rolls back as one unit.
 
+(defn reserve-topic-ids!
+  "Draw `n` ids from the topics id sequence without inserting anything.
+
+   Exists so an importer can resolve references BETWEEN rows before writing any
+   of them. A documentation build's pages link to each other, so rewriting one
+   page's links needs the topic ids of pages not yet inserted; the alternative
+   is inserting every row and then UPDATEing its content, which doubles the
+   write for a 2000-page build.
+
+   Pre : `n` >= 0.
+   Post: a vector of `n` ids, in ascending order, none of them in use. Ids are
+         consumed whether or not the caller inserts — a failed import burns
+         them, which is what a sequence is for and why this needs no cleanup.
+   Invariant: reads through `pg_get_serial_sequence`, so the sequence's name is
+         not duplicated here. Runs outside any transaction on purpose: a
+         sequence does not roll back, so holding one open would buy nothing."
+  [n]
+  (if (pos? (long n))
+    (mapv (comp val first)
+      (jdbc/execute! ds
+        ["SELECT nextval(pg_get_serial_sequence('topics','id')) AS id
+          FROM generate_series(1, ?)" n]))
+    []))
+
 (defn insert-topic-rows!
   "Batch-insert fully-formed topic rows; return their ids in insertion order.
    Pre : `tx` is an open transaction. Every row carries :user_id, :kind,
