@@ -1,6 +1,9 @@
   services:
     postgres:
-      image: postgres:16-alpine
+      # Pinned to the exact minor, not floating `16-alpine`. deploy.sh runs
+      # `up -d postgres` every deploy; an unchanged tag pulls nothing and
+      # recreates nothing, so the minor only moves when this line moves.
+      image: postgres:16.14-alpine
       environment:
         POSTGRES_DB: cardmaker
         POSTGRES_USER: cardmaker
