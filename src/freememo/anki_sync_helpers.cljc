@@ -613,28 +613,45 @@
     (str/replace "'" "&#39;")))
 
 (defn build-links-field
-  "FM-owned 'Links' field for a FreeMemo Basic/Cloze/Score note: the resolved
-   citation (linked iff the CSL carried a URL) stacked over an 'Open in FreeMemo'
-   deep-link to <app-base-url>/viewer/topic/<topic-id>. FreeMemo owns this field
+  "FM-owned 'Links' field for a FreeMemo Basic/Cloze/Score note: the citation
+   line stacked over an 'Open in FreeMemo' deep-link to
+   <app-base-url>/viewer/topic/<topic-id>. FreeMemo owns this field
    unconditionally and overwrites it on every push. Returns {\"Links\" html}.
+
+   The citation line is the resolved citation (linked iff the CSL carried a URL)
+   followed by the PDF page locator: `<citation> — p. 5`. The locator goes
+   OUTSIDE the citation's anchor, so a URL-bearing CSL keeps the link on the
+   title alone. `p. N` is the physical PDF page index, not a printed page label
+   — a book with front matter will disagree with its own numbering.
+
    pre:  citation pre-resolved in :fm/bibliography-html (card) or
          :bibliography-html (settings); already HTML-escaped by
-         format-bibliography-html, so it is NOT re-escaped here. :app-base-url
-         in settings, else default-app-base-url.
+         format-bibliography-html, so it is NOT re-escaped here. Page locator in
+         :fm/pdf-page (integer or nil, from anki-sync-server/attach-card-pdf-page)
+         — an INTEGER column, so it needs no escaping. :app-base-url in settings,
+         else default-app-base-url.
    post: the FreeMemo link renders whenever :flashcards/topic_id is present
-         (independent of topic title); value is \"\" only when topic_id is nil
-         AND citation is blank."
+         (independent of topic title). The locator renders whenever :fm/pdf-page
+         is present, with the em-dash separator only when a citation precedes it.
+         Value is \"\" only when topic_id is nil AND citation is blank AND
+         :fm/pdf-page is nil."
   [card settings]
   (let [citation (or (:fm/bibliography-html card) (:bibliography-html settings))
+        locator (when-let [page (:fm/pdf-page card)] (str "p. " page))
+        cite-line (cond
+                    (and (not (str/blank? citation)) locator) (str citation " — " locator)
+                    (not (str/blank? citation)) citation
+                    locator locator
+                    :else nil)
         topic-id (:flashcards/topic_id card)
         base (or (:app-base-url settings) default-app-base-url)
         fm-link (when topic-id
                   (str "<a href=\"" (html-escape (str base "/viewer/topic/" topic-id))
                     "\">Open in FreeMemo</a>"))
         body (cond
-               (and (not (str/blank? citation)) fm-link) (str citation "<br>" fm-link)
+               (and cite-line fm-link) (str cite-line "<br>" fm-link)
                fm-link fm-link
-               (not (str/blank? citation)) citation
+               cite-line cite-line
                :else nil)]
     {"Links" (if body (str "<p class=\"fm-links\">" body "</p>") "")}))
 

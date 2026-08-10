@@ -2711,6 +2711,56 @@
          topic-id]
         {:builder-fn rs/as-unqualified-maps}))))
 
+(defn resolve-pdf-page-numbers
+  "PDF page number for each id in `topic-ids`: the page_number of the nearest
+   kind='page' ancestor-or-self whose OWN parent is kind='pdf'.
+
+   The parent-kind test is the discriminator, not page_number alone. EPUB
+   chapters store a 1-based chapter index in the same topics.page_number column
+   (create-epub-topic!'s chapter rows), so a nil-check would report chapter 3 as
+   page 3. It also excludes a score topic's pages: a score topic drives the PDF
+   viewer as its own root but is kind='score'. Page stubs only ever land under
+   the topic owning the PDF (insert-page-stubs!), so parent kind IS the test.
+
+   Ancestor depth is unbounded — an extract nested under an extract under a page
+   resolves to that page. The walk does NOT stop at an intermediate topic that
+   carries its own source_id: every extract gets a cloned source at creation
+   (content-toolbar-helpers/create-extract-topic-safe!), so that test would
+   block the nested case it exists to serve.
+
+   The seed list binds as ONE int4[] parameter through `= ANY(?)`, not one
+   placeholder per id. `topics.id` is SERIAL (int4), so every real id fits. An
+   IN-list would have put the whole card set under the 65 535 bound-parameter
+   ceiling this file documents for bulk inserts.
+
+   Pre:  topic-ids is a collection of topic ids. nils and duplicates are dropped.
+         Every remaining id fits in an int4 — a wider value is a caller bug and
+         throws here rather than silently missing.
+   Post: {topic-id page-number}, holding ONLY the ids that resolve — an id with
+         no PDF page ancestor is absent, never mapped to nil. Exactly one
+         statement with exactly one parameter, whatever the collection size."
+  [topic-ids]
+  (let [ids (into [] (comp (remove nil?) (distinct) (map int)) topic-ids)]
+    (if (empty? ids)
+      {}
+      (into {}
+        (map (juxt :seed :page_number))
+        (jdbc/execute! ds
+          ["WITH RECURSIVE anc(seed, id, parent_id, kind, page_number, depth) AS (
+              SELECT t.id, t.id, t.parent_id, t.kind, t.page_number, 0
+                FROM topics t WHERE t.id = ANY(?)
+              UNION ALL
+              SELECT a.seed, t.id, t.parent_id, t.kind, t.page_number, a.depth + 1
+                FROM topics t JOIN anc a ON t.id = a.parent_id)
+            SELECT DISTINCT ON (a.seed) a.seed, a.page_number
+              FROM anc a JOIN topics p ON a.parent_id = p.id
+             WHERE a.kind = 'page'
+               AND a.page_number IS NOT NULL
+               AND p.kind = 'pdf'
+             ORDER BY a.seed, a.depth"
+           (int-array ids)]
+          {:builder-fn rs/as-unqualified-maps})))))
+
 (defn clone-source!
   "Duplicate sources row `source-id` into a NEW row owned by user-id, so later
    edits to either row stay independent. Copies csl/csl_type/url/title.
@@ -3639,8 +3689,10 @@
 
 (defn get-flashcards-by-ids
   "Flashcards owned by user-id (via root topic) with ids in card-ids.
-   Full rows plus :page_number — the inputs for bulk push (build-update-fields
-   reads page_number for the source anchor) and bulk pull. Empty ids → []."
+   Full rows plus :page_number — the inputs for bulk push and bulk pull. Empty
+   ids → []. The Anki push resolves its own page locator through
+   resolve-pdf-page-numbers, which walks the whole ancestor chain; this
+   one-level coalesce has no reader left in that path."
   [user-id card-ids]
   (if (empty? card-ids)
     []

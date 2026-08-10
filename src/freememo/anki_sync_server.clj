@@ -72,6 +72,13 @@
       (tel/error! {:id ::resolve-modal-prefs} e)
       {:mode "global" :preset? false})))
 
+(defn- card-topic-id
+  "The topic a card cites and links to: its own, else its root. One definition,
+   because the bibliography and the page locator MUST key off the same walk —
+   a card whose citation came from topic X must not take its page from topic Y."
+  [card]
+  (or (:flashcards/topic_id card) (:flashcards/root_topic_id card)))
+
 (defn- attach-card-bibliography
   "Assoc :fm/bibliography-html onto each card, resolved from the card's OWN
    topic via the effective-source walk (own source_id, else nearest ancestor).
@@ -80,8 +87,7 @@
    Pre:  cards carry :flashcards/topic_id and/or :flashcards/root_topic_id.
    Post: every card gains :fm/bibliography-html (string or nil)."
   [cards]
-  (let [topic-of      (fn [c] (or (:flashcards/topic_id c) (:flashcards/root_topic_id c)))
-        html-by-topic (reduce (fn [m tid]
+  (let [html-by-topic (reduce (fn [m tid]
                                 (if (contains? m tid)
                                   m
                                   (assoc m tid
@@ -90,8 +96,20 @@
                                       :sources/csl
                                       helpers/format-bibliography-html))))
                         {}
-                        (keep topic-of cards))]
-    (mapv #(assoc % :fm/bibliography-html (get html-by-topic (topic-of %))) cards)))
+                        (keep card-topic-id cards))]
+    (mapv #(assoc % :fm/bibliography-html (get html-by-topic (card-topic-id %))) cards)))
+
+(defn- attach-card-pdf-page
+  "Assoc :fm/pdf-page onto each card — the PDF page number the card's own topic
+   sits on, resolved through the whole ancestor chain, or nil. One query for the
+   whole card set, so a document push costs one statement here.
+   Pre:  cards carry :flashcards/topic_id and/or :flashcards/root_topic_id.
+   Post: every card gains :fm/pdf-page (integer or nil). nil for every non-PDF
+         document, for an EPUB chapter, and for a score card — see
+         db/resolve-pdf-page-numbers for why the gate lives there and not here."
+  [cards]
+  (let [page-by-topic (db/resolve-pdf-page-numbers (keep card-topic-id cards))]
+    (mapv #(assoc % :fm/pdf-page (get page-by-topic (card-topic-id %))) cards)))
 
 (defn attach-occlusion-groups
   "Attach plain-data group info (:occlusion-group {:anki-key :mode :geometry
@@ -161,14 +179,15 @@
       {:success false :error "Not authorized for this topic"}
       (let [cards (attach-score-groups
                   (attach-occlusion-groups
-                    (attach-card-bibliography
-                      (case scope
-                        "self"     (db/get-flashcards topic-id)
-                        "subtree"  (db/get-flashcards-for-subtree topic-id)
-                        "document" (db/get-all-flashcards root-topic-id)
-                        (if topic-id
-                          (db/get-flashcards topic-id)
-                          (db/get-all-flashcards root-topic-id))))))
+                    (attach-card-pdf-page
+                      (attach-card-bibliography
+                        (case scope
+                          "self"     (db/get-flashcards topic-id)
+                          "subtree"  (db/get-flashcards-for-subtree topic-id)
+                          "document" (db/get-all-flashcards root-topic-id)
+                          (if topic-id
+                            (db/get-flashcards topic-id)
+                            (db/get-all-flashcards root-topic-id)))))))
           root-topic (when (and user-id root-topic-id)
                        (db/get-topic-for-user user-id root-topic-id))
           source-id (:topics/source_id root-topic)
@@ -409,7 +428,9 @@
     (let [global (:prefs (load-anki-preferences user-id))
           rows (attach-score-groups
                  (attach-occlusion-groups (db/get-flashcards-by-ids user-id card-ids)))
-          pushed (filterv :flashcards/anki_note_id rows)
+          ;; Page locator resolved ONCE for the whole selection, before the
+          ;; group-by — one statement however many roots the selection spans.
+          pushed (attach-card-pdf-page (filterv :flashcards/anki_note_id rows))
           by-root (group-by :flashcards/root_topic_id pushed)
           bundles
           (mapv
