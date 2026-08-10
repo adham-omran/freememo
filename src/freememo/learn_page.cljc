@@ -43,32 +43,42 @@
                  (<= days 30) (str "in " days "d")
                  :else (.format due (java.time.format.DateTimeFormatter/ofPattern "MMM d")))))))
 
-(defn prepare-queue-rows [_refresh user-id]
+(defn prepare-queue-rows
+  "Queue rows shaped for the overview table.
+
+   Pre : `user-id` identifies an existing user.
+   Post: `{:rows [row …] :error nil}`, or `{:rows [] :error message}`, carrying
+         db/get-learning-queue's failure through untouched. The caller MUST
+         render `:error` — an empty `:rows` alone does not mean an empty queue."
+  [_refresh user-id]
   #?(:clj
-     (let [raw (db/get-learning-queue user-id)]
-       (vec (map (fn [row]
-                   (let [kind (:topics/kind row)
-                         parent-id (:topics/parent_id row)
-                         title (or (:topics/title row) "")
-                         ;; A bounded prefix, not the body — see
-                         ;; db/get-learning-queue. extract-preview takes 80
-                         ;; characters of stripped text out of it below.
-                         content (or (:content_preview row) "")
-                         is-root (nil? parent-id)
-                         display-title (if is-root
-                                         title
-                                         (let [preview (util/extract-preview content 80)]
-                                           (if (seq preview) preview title)))]
-                     {:id (:topics/id row)
-                      :kind kind
-                      :display-title display-title
-                      :due-label (format-due (:topics/next_review_at row) (or (:topics/status row) "active"))
-                      :due-date (format-due-date (:topics/next_review_at row))
-                      :status (or (:topics/status row) "active")
-                      :source-container (:sources/container_title row)
-                      :source-title (:sources/title row)}))
-              raw)))
-     :cljs nil))
+     (let [{:keys [rows error]} (db/get-learning-queue user-id)]
+       {:error error
+        :rows (vec (map (fn [row]
+                          (let [kind (:topics/kind row)
+                                parent-id (:topics/parent_id row)
+                                title (or (:topics/title row) "")
+                                ;; 400 characters of ALREADY-STRIPPED text from
+                                ;; the content_preview generated column, so
+                                ;; extract-preview only truncates here.
+                                ;; Qualified key: it is a real column now, not
+                                ;; the expression it replaced.
+                                content (or (:topics/content_preview row) "")
+                                is-root (nil? parent-id)
+                                display-title (if is-root
+                                                title
+                                                (let [preview (util/extract-preview content 80)]
+                                                  (if (seq preview) preview title)))]
+                            {:id (:topics/id row)
+                             :kind kind
+                             :display-title display-title
+                             :due-label (format-due (:topics/next_review_at row) (or (:topics/status row) "active"))
+                             :due-date (format-due-date (:topics/next_review_at row))
+                             :status (or (:topics/status row) "active")
+                             :source-container (:sources/container_title row)
+                             :source-title (:sources/title row)}))
+                     rows))})
+     :cljs {:rows [] :error nil}))
 
 (defn get-queue-summary* [_refresh user-id]
   #?(:clj (db/get-queue-summary user-id)
@@ -296,8 +306,12 @@
       (let [refresh (e/server (+ (e/watch (us/get-atom user-id :refresh))
                                 (e/watch (us/get-atom user-id :queue-mutations))))
             summary (e/server (e/Offload #(get-queue-summary* refresh user-id)))
-            items-vec (e/server (e/Offload #(prepare-queue-rows refresh user-id)))
-            item-count (e/server (count items-vec))
+            ;; Server-form binding: the whole result stays server-side and each
+            ;; use pulls only what it needs. :rows reads below are windowed.
+            queue (e/server (e/Offload #(prepare-queue-rows refresh user-id)))
+            items-vec (e/server (:rows queue))
+            item-count (e/server (count (:rows queue)))
+            queue-error (e/server (:error queue))
             dash (e/server (e/Offload #(dashboard-data* refresh user-id)))
             due-today (:due-today summary)]
 
@@ -399,14 +413,29 @@
                                             :style {:padding "4px 10px" :text-align "right" :font-size "12px"
                                                     :color "var(--color-text-secondary)"}})
                                 (dom/text (or due-date "—")))))))))
+                    ;; Empty OR failed. A failed query must never read as
+                    ;; "caught up" — that told three users they were done while
+                    ;; 2512 topics waited. The message carries the database
+                    ;; error verbatim, because the only way this fails is a
+                    ;; query defect and the text is what names it.
                     (dom/tr
                       (dom/props {:role "row" :style {:height "auto"}})
                       (dom/td
                         (dom/props {:role "cell"
                                     :style {:grid-column "1 / -1" :text-align "center" :padding "24px 12px"
-                                            :color "var(--color-text-secondary)" :font-size "13px"}})
-                        (dom/text (if (pos? (:total summary))
+                                            :color (if queue-error
+                                                     "var(--color-danger-text)"
+                                                     "var(--color-text-secondary)")
+                                            :font-size "13px" :white-space "pre-wrap"}})
+                        (dom/text (cond
+                                    queue-error
+                                    (str "The queue could not load, so this list is empty — "
+                                      "it does NOT mean you are caught up.\n" queue-error)
+
+                                    (pos? (:total summary))
                                     "Nothing due — you're all caught up."
+
+                                    :else
                                     "No topics yet. Import a document from the Import tab to start learning."))))))
                 ))))
 

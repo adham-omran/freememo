@@ -189,7 +189,8 @@
    `:params` is how many times the user id appears in `:where`, because every
    placeholder in every clause binds that one value. `:drop-keys` names columns
    removed from the row JSON — the blob columns, whose bytes travel as their own
-   archive entries.
+   archive entries, and DERIVED columns, which the target recomputes from a
+   column the archive does carry.
 
    Invariant: every member of `entity-tables` has an entry here, and this map
    has no key that is not a member. `account-export/scope-of` throws on a miss,
@@ -206,8 +207,11 @@
 
    :media {:where "t.user_id = ?" :params 1 :order "t.id" :drop-keys ["bytes"]}
 
+   ;; content_preview is GENERATED from content_text, which this archive does
+   ;; carry, so the target recomputes it on insert. Exporting it would add ~14 MB
+   ;; of bytes the importer must drop anyway (account-import/dropped-columns).
    :topics {:where "t.user_id = ? AND t.staged_delete_id IS NULL"
-            :params 1 :order "t.id"}
+            :params 1 :order "t.id" :drop-keys ["content_preview"]}
 
    :topic_files {:where (str "t.topic_id IN (" owned-topics ")")
                  :params 1 :order "t.id" :drop-keys ["file_data"]}

@@ -52,8 +52,11 @@
              :remaining remaining})
      :cljs nil))
 
+;; Session queue. Drops the query's :error — the session cannot render one, and
+;; LearnOverview is where a user meets a failed queue first (it is the screen
+;; "Start Learning" is on). See db/get-learning-queue's postcondition.
 (defn get-learning-queue* [_refresh user-id]
-  #?(:clj (vec (db/get-learning-queue user-id))
+  #?(:clj (vec (:rows (db/get-learning-queue user-id)))
      :cljs nil))
 
 (defn get-llm-enabled* [_refresh user-id]

@@ -116,11 +116,14 @@
 
    An entry REPLACES the `#{:id}` default, so every entry must name `:id` too.
 
-   `neoreader_highlights.quote_hash` is a GENERATED column. Postgres refuses an
-   INSERT that names one, and the column filter cannot see the difference — it
-   exists in `information_schema` like any other. A generated column in any
-   future table needs its own entry here for the same reason."
-  {:topics #{:id :staged_delete_id}
+   `neoreader_highlights.quote_hash` and `topics.content_preview` are GENERATED
+   columns. Postgres refuses an INSERT that names one, and the column filter
+   cannot see the difference — it exists in `information_schema` like any other.
+   A generated column in any future table needs its own entry here for the same
+   reason. `entity-scopes` also drops `content_preview` from the exported row
+   JSON, so a current archive does not carry it; this entry is what protects the
+   import if that `:drop-keys` is ever removed."
+  {:topics #{:id :staged_delete_id :content_preview}
    :neoreader_highlights #{:id :quote_hash}})
 
 (def ^:private html-columns

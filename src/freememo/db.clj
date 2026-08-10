@@ -278,6 +278,28 @@
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_content_text_trgm
                       ON topics USING GIN (content_text gin_trgm_ops)"])
 
+  ;; Learn-queue preview. GENERATED, not written by the app, for the reason
+  ;; `neoreader_highlights.quote_hash` is: the derivation belongs beside the
+  ;; column it reads, where the two cannot drift.
+  ;;
+  ;; `|| ''` is load-bearing. `left(col, n)` on a TOASTed value asks PostgreSQL
+  ;; for a byte slice, and that slice can end in the middle of a multi-byte
+  ;; character — which raises `invalid byte sequence for encoding "UTF8"` and
+  ;; aborts the WHOLE statement, not the one row. 133 production rows do that
+  ;; at n=400. Concatenation forces a full detoast, so no slice is taken.
+  ;; Measured on production: this expression runs over all 42379 content-bearing
+  ;; rows in 649 ms.
+  ;;
+  ;; Reads content_text (already stripped) rather than content: 400 characters
+  ;; of plain text cost 14 MB across the table, where 4000 characters of HTML
+  ;; would cost up to 193 MB, and the consumer takes 80 characters either way.
+  ;; See plans/learn-queue-toast-slice-defect.md.
+  ;;
+  ;; ADD COLUMN of a STORED generated column rewrites the table under an
+  ;; ACCESS EXCLUSIVE lock. `IF NOT EXISTS` makes that a one-time cost.
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS content_preview TEXT
+                      GENERATED ALWAYS AS (left(content_text || '', 400)) STORED"])
+
   ;; Topic files (binary storage, split from old documents.file_data)
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS topic_files (
@@ -4618,37 +4640,49 @@
    order into 0-100 collapses ~15 topics per band, and without this term the
    daily hash would discard the order the import went to the trouble of
    preserving. NULLS LAST keeps natively created topics on the hash.
-   Selects a BOUNDED PREFIX of `t.content` as `content_preview`, for the
-   overview's preview titles. learn-page/prepare-queue-rows takes 80 characters
-   of stripped text from it, so 4000 characters of HTML leaves ~50x of headroom
-   for markup — raise this number, never lower it below what that builder asks
-   for. It is an expression column, so pgjdbc leaves the key unqualified
-   (`:content_preview`, not `:topics/content_preview`).
-   The full column is deliberately absent: the learn session reads only :id and
-   :kind off these rows, and shipping whole document bodies down the queue cost
-   one body per review step.
+   Selects `t.content_preview`, the STORED generated column holding 400
+   characters of stripped text. learn-page/prepare-queue-rows takes 80
+   characters from it, so the bound leaves 5x of headroom. It is a real column,
+   so pgjdbc QUALIFIES the key (`:topics/content_preview`).
+   NEVER take the prefix here with `left(t.content, n)`. A prefix over a TOASTed
+   column asks PostgreSQL for a byte slice that can end mid-character, and the
+   resulting `invalid byte sequence for encoding \"UTF8\"` aborts the whole
+   statement — which this fn then reports as an empty queue. That is the defect
+   this column exists to remove (plans/learn-queue-toast-slice-defect.md).
+   The content column is deliberately absent: the learn session reads only :id
+   and :kind off these rows, and shipping whole document bodies down the queue
+   cost one body per review step.
    Joins `sources` to surface bibliography fields (source_url, source_title,
-   source_csl_type, source_container); NULL when the topic has no source_id."
+   source_csl_type, source_container); NULL when the topic has no source_id.
+
+   Pre : `user-id` identifies an existing user.
+   Post: `{:rows [row …] :error nil}`, or `{:rows [] :error message}` when the
+         query fails. NEVER throws — an exception here would cross an `e/server`
+         boundary and close the WebSocket. The caller MUST render `:error`
+         rather than treat an empty `:rows` as an empty queue: reporting a
+         failed query as \"nothing due\" told three users they were caught up
+         while 2512 topics waited."
   [user-id]
   (try
-    (jdbc/execute! ds
-      ["SELECT t.id, t.parent_id, t.kind, t.title, t.priority,
-              t.next_review_at, t.interval_days, t.a_factor,
-              t.status, left(t.content, 4000) AS content_preview,
-              s.url, s.title, s.csl_type, s.container_title
-       FROM topics t
-       LEFT JOIN sources s ON s.id = t.source_id
-       WHERE t.user_id = ?
-         AND t.kind != 'page'
-         AND t.staged_delete_id IS NULL
-         AND (t.next_review_at::date <= CURRENT_DATE OR t.next_review_at IS NULL)
-         AND (t.status = 'active' OR t.status IS NULL)
-         AND NOT t.dismissed
-       ORDER BY t.priority ASC, t.sm_rank ASC NULLS LAST,
-                md5(t.id::text || CURRENT_DATE::text) ASC, t.id ASC" user-id])
+    {:rows (jdbc/execute! ds
+             ["SELECT t.id, t.parent_id, t.kind, t.title, t.priority,
+                     t.next_review_at, t.interval_days, t.a_factor,
+                     t.status, t.content_preview,
+                     s.url, s.title, s.csl_type, s.container_title
+              FROM topics t
+              LEFT JOIN sources s ON s.id = t.source_id
+              WHERE t.user_id = ?
+                AND t.kind != 'page'
+                AND t.staged_delete_id IS NULL
+                AND (t.next_review_at::date <= CURRENT_DATE OR t.next_review_at IS NULL)
+                AND (t.status = 'active' OR t.status IS NULL)
+                AND NOT t.dismissed
+              ORDER BY t.priority ASC, t.sm_rank ASC NULLS LAST,
+                       md5(t.id::text || CURRENT_DATE::text) ASC, t.id ASC" user-id])
+     :error nil}
     (catch Exception e
       (tel/error! {:id ::get-learning-queue} e)
-      [])))
+      {:rows [] :error (ex-message e)})))
 
 (defn get-learning-queue-count
   "Count of due topics."
