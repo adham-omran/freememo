@@ -36,6 +36,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [freememo.db :as db]
+            [freememo.doc-html :as doc-html]
             [freememo.html-cleaner :as cleaner]
             [freememo.input-check :as input]
             [freememo.priority :as priority]
@@ -400,6 +401,15 @@
          here — nothing on disk is written."
   [user-id !media ^File root page-key id-by-key ^File f]
   (let [doc (Jsoup/parse f "UTF-8" "")
+        ;; Jsoup pretty-prints by default, so `(.html article)` below would
+        ;; re-indent the markup and `clean-html` — which disables pretty-print
+        ;; precisely so it never reformats — would then keep that indentation
+        ;; as text nodes. `.ql-editor` is `white-space: pre-wrap`, so those
+        ;; nodes are real blank space in any view that does not go through
+        ;; Quill: one page measured 30180px tall against 9292px collapsed.
+        ;; Serializing compactly stops them being created, which is cheaper and
+        ;; more reliable than deleting them afterwards.
+        _ (.prettyPrint (.outputSettings doc) false)
         article (article-element doc)]
     (when article
       (let [headerlinks (strip-headerlinks! article)
@@ -407,14 +417,26 @@
                     (page-title-fallback page-key))
             imgs (rewrite-images! user-id !media root page-key article)
             links (rewrite-links! user-id !media root page-key id-by-key article)
-            html (cleaner/clean-html (.html article))]
+            ;; Definition lists, keyboard keys, admonitions and figures have no
+            ;; blot in Quill's Delta, so a stored page renders flat and the
+            ;; first edit writes that flattening back. Rewrite them into forms
+            ;; Quill holds, BEFORE clean-html strips the classes that identify
+            ;; them — the same ordering `strip-headerlinks!` needs, and for the
+            ;; same reason. See freememo.doc-html.
+            rewrites (doc-html/rewrite-for-quill! article)
+            ;; drop-bare-spans runs AFTER the sanitizer: a Sphinx
+            ;; `span.std-ref` only becomes attribute-less once clean-html has
+            ;; taken its class away.
+            html (-> (.html article)
+                   cleaner/clean-html
+                   doc-html/drop-bare-spans)]
         {:title (clamp-title title)
          :html (not-empty (str/trim (str html)))
          :canonical-url (canonical-url doc)
-         :counts (assoc links
-                   :headerlinks headerlinks
-                   :images-stored (:stored imgs)
-                   :images-unresolved (:unresolved imgs))}))))
+         :counts (merge links rewrites
+                   {:headerlinks headerlinks
+                    :images-stored (:stored imgs)
+                    :images-unresolved (:unresolved imgs)})}))))
 
 (defn- merge-counts [a b] (merge-with + a b))
 
@@ -519,7 +541,14 @@
                      :links-to-assets (or (:asset c) 0)
                      :links-external-kept (or (:external c) 0)
                      :links-fragment-unwrapped (or (:fragment-only c) 0)
-                     :links-dead-unwrapped (or (:dead c) 0)})}})))
+                     :links-dead-unwrapped (or (:dead c) 0)
+                     ;; freememo.doc-html — what it rewrote so Quill can hold it.
+                     :terms-flattened (or (:terms-flattened c) 0)
+                     :definition-bodies-flattened (or (:definition-bodies-flattened c) 0)
+                     :keys-to-code (or (:keys-to-code c) 0)
+                     :admonitions-to-blockquotes (or (:admonitions-to-blockquotes c) 0)
+                     :figures-flattened (or (:figures-flattened c) 0)
+                     :whitespace-nodes-dropped (or (:whitespace-nodes-dropped c) 0)})}})))
           (catch Exception e
             (tel/error! {:id ::import-failed :data {:user-id user-id}} e)
             ;; Media is written before the transaction opens, so the rollback

@@ -26,6 +26,7 @@
   (:require [clojure.string :as str]
             [freememo.cloze :as cloze]
             [freememo.db :as db]
+            [freememo.doc-html :as doc-html]
             [freememo.html-cleaner :as cleaner]
             [freememo.input-check :as input]
             [freememo.priority :as priority]
@@ -92,15 +93,41 @@
          clean-html and re-saves through Quill unchanged.
    Invariant: no information is moved out of the document — colour, size,
          family and extract highlighting each land on a form the allow-list
-         keeps, so nothing depends on widening that list."
+         keeps, so nothing depends on widening that list.
+
+   `doc-html/rewrite-for-quill!` covers the documentation constructs a web
+   clipping carries — 968 SuperMemo topics hold a `dl`, which Quill's Delta
+   cannot represent and therefore drops. It runs here rather than after
+   `clean-html` for the reason its own docstring gives: the sanitizer strips
+   the classes that identify those constructs. SuperMemo's own bare layout
+   `div`s carry no `admonition` class, so that step passes over them.
+
+   **Its counts are DISCARDED here, and `import-tree!`'s `:report` therefore
+   does not account for that rewrite.** `import-tree!` states that every
+   element skipped, flattened, moved or truncated is counted, and this is the
+   one exception. This fn is called per element from inside the element loop and
+   returns a string, so reporting the counts means an accumulator threaded
+   through every caller — more change than the gap is worth while nothing reads
+   the report. `freememo.sphinx-import` DOES fold the same counts into its
+   report, because it already had a counts atom in scope."
   [html]
   (when-not (str/blank? html)
     (let [doc (Jsoup/parseBodyFragment html)]
+      ;; Jsoup pretty-prints by default, so `(.html (.body doc))` below would
+      ;; re-indent the markup and every later step would carry that indentation
+      ;; as text nodes — `clean-html` and `drop-bare-spans` both disable
+      ;; pretty-print, which stops them ADDING formatting but not from keeping
+      ;; formatting already present. `.ql-editor` is `white-space: pre-wrap`, so
+      ;; those nodes render as real blank space.
+      (.prettyPrint (.outputSettings doc) false)
       (doseq [^Element el (.select doc "span.extract, span.extract-highlight")]
         (.attr el "style" (str "background-color: " extract-highlight)))
       (doseq [^Element el (.select doc "font")]
         (rewrite-font-element! el))
-      (cleaner/clean-html (.html (.body doc))))))
+      (doc-html/rewrite-for-quill! (.body doc))
+      (-> (.html (.body doc))
+        cleaner/clean-html
+        doc-html/drop-bare-spans))))
 
 (defn- append-images
   "Append one <img> per media id to an element's HTML.

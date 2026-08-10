@@ -43,6 +43,66 @@
            "</svg>"))
        true)))
 
+;; Quill 2.0.3 registers no blot for `hr`, so `clipboard.convert` drops every
+;; horizontal rule a stored page holds — 1878 rows across the database carry
+;; one. This is the ONE construct `freememo.doc-html` cannot answer at the
+;; import seam: Quill discards the tag whatever the database stores, so the
+;; only fix is to give Delta a representation for it.
+;;
+;; A `tagName` of "HR" is sufficient on its own. Parchment's registry maps the
+;; tag back to this blot, so the default clipboard walker finds it and NO
+;; matcher is needed (measured: `<p>a</p><hr><p>b</p>` round-trips
+;; byte-identically, and all 6 rules on a real imported page survive both a
+;; reload and a user edit).
+;;
+;; It lives here, at namespace load, because this ns already owns the Quill
+;; globals both editors share — the icon override above is the precedent, and
+;; `install-clipboard-matchers!` below is called by rich_text_editor.cljc too.
+;; Quill arrives on an eager <script> tag, so `js/Quill` exists at load.
+;;
+;; There is deliberately no toolbar button and no key chord. Import is the only
+;; source of a divider, which is the same argument that leaves the formula blot
+;; without an insert affordance.
+;;
+;; `js/Reflect.construct` is required and not incidental. Quill's BlockEmbed is
+;; an ES6 class, ClojureScript emits ES5-style constructors, and an ES5
+;; constructor cannot call an ES6 one — `(.call BlockEmbed this …)` throws
+;; "Class constructor cannot be invoked without 'new'", the same failure
+;; CLAUDE.md records for `new` in a call position. Reflect.construct builds the
+;; instance through BlockEmbed while keeping Divider as the new.target, so the
+;; result gets Divider's prototype. The two setPrototypeOf calls give Divider
+;; BlockEmbed's instance methods and its statics, which is how Parchment finds
+;; `create`, `value` and `length`.
+;; `letfn` rather than `let`, so the constructor can name itself as new.target.
+;; `arguments.callee` would be the other way to reach it and is illegal in the
+;; strict-mode output Closure emits.
+;;
+;; **`aset` for the two statics, never `set!` on a dot-property.** Parchment
+;; reads `blotName` off the class by that literal name, and `blotName` appears
+;; in no Closure extern, so `(set! (.-blotName Divider) "divider")` is a write
+;; Closure believes nothing reads — under `:advanced` it DELETED the assignment
+;; outright. The emitted bundle carried
+;; `x.tagName="HR";Quill.register(x)` with no blotName, so `register` saw a
+;; class with neither `blotName` nor `attrName` and registered nothing: every
+;; `<hr>` dropped in production while dev worked. `tagName` survived only
+;; because it happens to be a DOM extern.
+;;
+;; String-keyed access cannot be renamed or elided, which is exactly why the
+;; icon override above writes `(aset icons "code-block" …)`. Verify a change
+;; here by grepping the `:advanced` bundle for `blotName` — a successful build
+;; proves nothing.
+#?(:cljs
+   (defonce ^:private divider-blot-registered?
+     (let [BlockEmbed (.import js/Quill "blots/block/embed")]
+       (letfn [(Divider [scroll node]
+                 (js/Reflect.construct BlockEmbed #js [scroll node] Divider))]
+         (js/Object.setPrototypeOf (.-prototype Divider) (.-prototype BlockEmbed))
+         (js/Object.setPrototypeOf Divider BlockEmbed)
+         (aset Divider "blotName" "divider")
+         (aset Divider "tagName" "HR")
+         (.register js/Quill Divider)
+         true))))
+
 (defn quill-config
   "Returns the Quill constructor options map (passed via clj->js).
    Bubble theme with the SAME modules as the main document editor
