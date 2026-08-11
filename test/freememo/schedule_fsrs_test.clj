@@ -749,6 +749,38 @@
               (:reason (fc/page-verdict {:page-id 1 :done? false}
                          [{:projected {:retrievability r :interval-days ivl}}] 0.9))))))))
 
+(deftest applying-the-date-lever-clears-the-warning-it-answers
+  (testing "§6.6.1's done-condition, against the shape that broke it: a
+            partially-carded document. 23 pages, 12 of them done or carded, so
+            the projection can never reach 23 — measuring the shortfall against
+            the range made `:short-of-target` permanent, and the lever kept
+            naming the date the user had just applied."
+    (let [base {:required-pages 23 :reachable-pages 12 :peak-load 1.0
+                :observed-capacity 60 :horizon 15 :maturation-lead 11}
+          before (fc/feasibility (assoc base :projected-known 4))
+          after (fc/feasibility (assoc base :projected-known 12))]
+      (testing "before the date moves, the date IS a blocker"
+        (is (some #{:short-of-target} (:reasons before))))
+      (testing "once the projection reaches the reachable pages, it is not"
+        (is (not-any? #{:short-of-target} (:reasons after))
+          "this is the assertion that fails against `required-pages`"))
+      (testing "and the uncarded pages are their own reason throughout"
+        (is (every? #(some #{:pages-not-started} (:reasons %)) [before after]))
+        (is (= 11 (:not-started after)))
+        (is (= 12 (:reachable after))))
+      (testing "a fully carded document reports no such reason"
+        (let [f (fc/feasibility (assoc base :reachable-pages 23 :projected-known 23))]
+          (is (:feasible? f))
+          (is (empty? (:reasons f)))))
+      (testing "and an entirely uncarded one still warns — §6.6's done-condition"
+        (let [f (fc/feasibility {:required-pages 300 :reachable-pages 0
+                                 :projected-known 0 :peak-load 1.0
+                                 :observed-capacity 60 :horizon 1
+                                 :maturation-lead 11})]
+          (is (false? (:feasible? f)))
+          (is (some #{:pages-not-started} (:reasons f)))
+          (is (= 300 (:not-started f))))))))
+
 (deftest an-impossible-maturation-window-names-itself
   (testing "§6.6 — the levers stay four whichever reason fires"
     (let [base {:projected-known 9 :required-pages 5 :peak-load 1.0

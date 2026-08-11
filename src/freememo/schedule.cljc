@@ -584,28 +584,26 @@
                  peak (fc/peak-daily-load load)
                  total (:total progress)
                  projected-progress (fc/document-progress verdicts-end)
+                 ;; What moving the date can in fact deliver. A page with no
+                 ;; cards and no done mark cannot become known by reviewing —
+                 ;; the projection models reviews, not future carding — so it
+                 ;; is outside every question the date lever can answer.
+                 reachable (count (remove #(= :untouched (:reason %)) verdicts-end))
                  base-feas (fc/feasibility
                              {:projected-known known-end
                               :required-pages total
+                              :reachable-pages reachable
                               :peak-load peak
                               :observed-capacity capacity
                               :horizon horizon
                               :maturation-lead lead})
-                 ;; §6.6.1 — the date lever names a date, and only when the
-                 ;; plan needs one. The search is nine more projections of
-                 ;; the whole document, so a feasible plan never pays it.
-                 ;;
-                 ;; It searches against the REACHABLE count, not the whole
-                 ;; range. A page with no cards and no done mark cannot
-                 ;; become known by reviewing — the projection models
-                 ;; reviews, not future carding — so searching for the full
-                 ;; range returns nil for every partially-read document, and
-                 ;; the lever would say "never" in the one case it exists
-                 ;; for. The reachable set is what moving the date can in
-                 ;; fact deliver, and `:reachable` is reported beside it so
-                 ;; the surface never presents that date as "finished".
-                 reachable (count (remove #(= :untouched (:reason %)) verdicts-end))
-                 feas (if (:feasible? base-feas)
+                 ;; §6.6.1 — the date lever names a date, and ONLY when the
+                 ;; date is what is blocking. The search costs nine more
+                 ;; projections of the whole document, so no other reason pays
+                 ;; for it, and — the reason this gate exists — a lever that
+                 ;; named a date for a blocker no date can move re-suggested
+                 ;; the date the user had just applied, forever.
+                 feas (if-not (some #{:short-of-target} (:reasons base-feas))
                         base-feas
                         ;; `:earliest-date` is DERIVED from `:earliest-day`
                         ;; here, in one place, so the two cannot name
@@ -616,8 +614,6 @@
                                                             {:epsilon suggestion-epsilon})))
                                            reachable max-horizon-days))]
                           (assoc base-feas
-                            :reachable reachable
-                            :unreachable (- total reachable)
                             :earliest-day earliest
                             :earliest-date (day->iso-date earliest))))]
              (assoc base

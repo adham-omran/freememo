@@ -62,23 +62,33 @@
    reading and carding, which is the pages-per-day figure, not the date.
    Stating that number keeps the promise honest.
 
-   Pre : `earliest-date` is `forecast`'s `:earliest-date`, an ISO string or nil.
+   **The date lever speaks only when the date is the blocker.** `short?` is
+   whether `:short-of-target` fired, and without that branch this lever named a
+   date for a document whose real blocker was uncarded pages — the user applied
+   it, and the identical suggestion came straight back, because no date moves a
+   page the projection cannot see.
+
+   Pre : `earliest-date` is `forecast`'s `:earliest-date`, an ISO string or nil,
+         and it is non-nil only when `short?`.
+   Pre : `not-started` is `:not-started` — pages neither done nor carded.
    Post: four maps of {:label :apply-date :editable?}, always four and always
          in §6.6's order.
    Inv : `:apply-date` is non-nil ONLY on a lever this panel can apply, and
          `:editable? false` marks a lever no UI can reach yet. A lever that
          claims neither is reachable somewhere else — capacity, through Edit."
-  [earliest-date reachable unreachable]
+  [earliest-date reachable not-started short?]
   [{:label (cond
-             (and earliest-date (pos? (long (or unreachable 0))))
+             (and short? earliest-date (pos? (long (or not-started 0))))
              (str "Move the target to " earliest-date " — that covers the "
-               reachable " carded pages. The other " unreachable
+               reachable " carded pages. The other " not-started
                " still need reading and carding.")
-             earliest-date
+             (and short? earliest-date)
              (str "Move the target to " earliest-date)
+             short?
+             "Move the target out — even two years does not reach it"
              :else
-             "Move the target out — even two years does not reach it")
-    :apply-date earliest-date
+             "The target date is not the blocker — leave it where it is")
+    :apply-date (when short? earliest-date)
     :editable? true}
    {:label "Raise the daily review capacity — use Edit"
     :apply-date nil
@@ -198,7 +208,8 @@
           reasons (e/server (vec (:reasons feas)))
           earliest (e/server (:earliest-date feas))
           reachable (e/server (:reachable feas))
-          unreachable (e/server (:unreachable feas))
+          not-started (e/server (:not-started feas))
+          short? (e/server (boolean (some #{:short-of-target} (:reasons feas))))
           peak (e/server (:peak-load feas))
           cap (e/server (:capacity feas))]
       (when-not ok?
@@ -218,9 +229,18 @@
               (dom/li
                 (dom/text
                   (case r
+                    ;; Against REACHABLE, not the whole range. The projection
+                    ;; cannot move a page with no cards, so stating the range
+                    ;; here would report a shortfall the date lever beside it
+                    ;; cannot close.
                     :short-of-target (str "The projection reaches "
                                        (e/server (:projected-known feas)) " of "
-                                       (e/server (:required feas)) " pages.")
+                                       (e/server (:reachable feas))
+                                       " carded pages by the target.")
+                    :pages-not-started (str (e/server (:not-started feas))
+                                         " pages have no cards yet, so no date "
+                                         "reaches them. The plan below schedules "
+                                         "the reading that does.")
                     :over-capacity (str "Peak day needs " (approx peak)
                                      " reviews against your sustained "
                                      (long (Math/round (double cap))) ".")
@@ -240,7 +260,7 @@
             (dom/text "What can move:"))
           (dom/ul
             (dom/props {:style {:margin "0" :padding-left "20px"}})
-            (e/for [l (e/diff-by :label (levers earliest reachable unreachable))]
+            (e/for [l (e/diff-by :label (levers earliest reachable not-started short?))]
               (LeverRow user-id schedule-id l))))))))
 
 (e/defn StaleBanner [forecast anki-status]

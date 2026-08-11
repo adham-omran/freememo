@@ -334,8 +334,11 @@
    Two independent ways a target fails, and the warning names both when both
    hold:
 
-     :short-of-target  — the projection does not reach the required pages by
-                         the target date.
+     :short-of-target  — the projection does not reach the REACHABLE pages by
+                         the target date. A date can fix this.
+     :pages-not-started — pages of the range are neither done nor carded, so
+                         the projection cannot move them at all. No date fixes
+                         this. The plan schedules the reading that does.
      :over-capacity    — some day's derived load exceeds the review rate the
                          user has actually sustained (§6.7).
      :no-maturation-window — the horizon is at or under the maturation lead, so
@@ -360,20 +363,45 @@
          an unreachable gate are indistinguishable here and both raise
          `:maturity-unreachable`. A caller that forgets the key gets a warning
          about the deck config, which is the loudest safe reading of it.
+   Pre : `:reachable-pages` is the pages the PROJECTION can move — the ones
+         that are done or carded. It is a separate input from `:required-pages`
+         and the two differ for every partially-read document. It DEFAULTS to
+         `:required-pages`, which reads as 'every page is reachable' — the
+         right answer for a caller holding no projection to consult, and the
+         one that keeps `:pages-not-started` silent rather than firing over a
+         set it cannot measure.
    Post: `:maturation-lead` is reported so the panel names the number of days
          rather than a bare warning. A user told 'no maturation window' with no
          figure cannot tell whether to move the date by a day or by a month.
    Invariant: a feasible plan reports no reasons, and an infeasible one reports
-         at least one. The two can never both be empty."
-  [{:keys [projected-known required-pages peak-load observed-capacity
-           earliest-day horizon] lead :maturation-lead}]
-  (let [short? (< (long projected-known) (long required-pages))
+         at least one. The two can never both be empty.
+
+   **`:short-of-target` is measured against the REACHABLE pages, not the whole
+   range, and that is what makes the date lever's promise keepable.** The
+   projection models cards that exist in Anki; a page with no cards is
+   `:untouched` at every horizon, so a test against the whole range is one the
+   projection can never pass. It fired permanently on every partially-carded
+   document, while `earliest-feasible-day` searched against the reachable count
+   — so the lever named a date, the user applied it, and the same warning came
+   back naming the same date. §6.6.1 promises that accepting the date clears
+   the warning, and against the whole range it could not.
+
+   The pages with no cards are a real blocker and they get their own reason.
+   `:pages-not-started` is not date-fixable and must not be answered with a
+   date: it is answered by the plan, which schedules the reading that creates
+   those cards."
+  [{:keys [projected-known required-pages reachable-pages peak-load
+           observed-capacity earliest-day horizon] lead :maturation-lead}]
+  (let [reachable (long (or reachable-pages required-pages))
+        short? (< (long projected-known) reachable)
+        not-started? (< reachable (long required-pages))
         over? (and (pos? (double observed-capacity))
                 (> (double peak-load) (double observed-capacity)))
         unreachable? (nil? lead)
         no-window? (and (some? lead) (<= (long horizon) (long lead)))
         reasons (cond-> []
                   short? (conj :short-of-target)
+                  not-started? (conj :pages-not-started)
                   over? (conj :over-capacity)
                   no-window? (conj :no-maturation-window)
                   unreachable? (conj :maturity-unreachable))]
@@ -383,6 +411,8 @@
      :capacity (double observed-capacity)
      :projected-known (long projected-known)
      :required (long required-pages)
+     :reachable reachable
+     :not-started (- (long required-pages) reachable)
      :horizon (long horizon)
      :maturation-lead lead
      :earliest-day earliest-day
