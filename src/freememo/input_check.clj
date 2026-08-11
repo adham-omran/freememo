@@ -5,6 +5,7 @@
 (def title-max 500)
 (def card-max 10000)
 (def prompt-max 5000)
+(def label-max 500)   ; one occlusion label's text, newlines included
 
 (defn check-length!
   "Throw ex-info ::length-exceeded when s exceeds max-chars.

@@ -1,6 +1,7 @@
 (ns freememo.occlusion-modal
-  "Image-occlusion authoring modal: Masks Editor tab (Konva, rects only) +
-   Fields tab (the six FreeMemo IO text fields). Create mode ends with two
+  "Image-occlusion authoring modal: Masks Editor tab (Konva — mask rects plus
+   the text labels a user places on an unlabelled image, so there is something
+   to occlude) + Fields tab (the six FreeMemo IO text fields). Create mode ends with two
    generate actions — Hide All, Guess One / Hide One, Guess One — each saving
    one card per mask through the optimistic command queue (:add-occlusion).
    Edit mode reopens a whole group and saves a full reconcile
@@ -15,7 +16,9 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [hyperfiddle.electric-forms5 :as forms]
    [freememo.modal-shell :as modal]
+   [freememo.occlusion-svg :as osvg]
    [freememo.quill-field :refer [QuillField]]
    [freememo.card-modals :refer [attach-modal-tab-nav!]]
    [freememo.card-history-modal :refer [CardHistoryModal]]
@@ -55,8 +58,8 @@
          init time, so a re-init resumes the user's current tool.
    Post: the editor writes tool switches back through on-tool-change, making
          !tool the single source of truth."
-  [!handle container image-media-id rects !tool on-change on-tool-change
-   on-selection-change]
+  [!handle container image-media-id rects elements !tool on-change
+   on-tool-change on-selection-change on-label-selected]
   ;; setTimeout 0 lets Electric finish mounting the container; vendor/with!
   ;; then waits for Konva, which carries no <script> tag of its own.
   #?(:cljs (do (js/setTimeout
@@ -67,10 +70,12 @@
                          (occ-editor/init! {:container container
                                             :image-url (str "/api/media/" image-media-id)
                                             :rects rects
+                                            :elements elements
                                             :tool @!tool
                                             :on-change on-change
                                             :on-tool-change on-tool-change
-                                            :on-selection-change on-selection-change})))))
+                                            :on-selection-change on-selection-change
+                                            :on-label-selected on-label-selected})))))
                  0)
              nil)
      :clj nil))
@@ -94,6 +99,10 @@
   #?(:cljs (do (occ-editor/delete-selection! @!handle) nil)
      :clj nil))
 
+(defn set-editor-label-size! [!handle size]
+  #?(:cljs (do (occ-editor/set-label-size! @!handle size) nil)
+     :clj nil))
+
 (defn destroy-occlusion-editor! [!handle]
   #?(:cljs (do (occ-editor/destroy! @!handle)
              (reset! !handle nil)
@@ -107,23 +116,38 @@
   #?(:cljs (or (occ-editor/read-rects @!handle) fallback)
      :clj fallback))
 
+(defn editor-elements
+  "Save-time authoritative label read; falls back to the mount-time elements
+   when the editor never came up."
+  [!handle fallback]
+  #?(:cljs (or (occ-editor/read-elements @!handle) fallback)
+     :clj fallback))
+
 (defn editor-geometry
-  "{:width :height :rects} in natural px, or the fallback (edit mode's loaded
-   geometry) when the editor has no image dimensions."
+  "{:width :height :rects :elements} in natural px, or the fallback (edit mode's
+   loaded geometry) when the editor has no image dimensions.
+   Post: :elements is always a vector. The server drops an empty one, so an
+         unlabelled group still stores exactly the map it stored before labels
+         existed — and reloads as [] here, matching an empty editor read."
   [!handle fallback-geometry]
   #?(:cljs (if-let [h @!handle]
              (let [{:keys [natural]} @h
                    rects (occ-editor/read-rects h)]
                (if (and natural rects)
-                 {:width (:width natural) :height (:height natural) :rects rects}
+                 {:width (:width natural) :height (:height natural)
+                  :rects rects
+                  :elements (vec (occ-editor/read-elements h))}
                  fallback-geometry))
              fallback-geometry)
      :clj fallback-geometry))
 
 (defn occlusion-dirty?
-  "True when rects or text fields differ from their loaded state."
-  [!handle initial-rects !fields initial-fields]
+  "True when masks, labels or text fields differ from their loaded state.
+   Labels are read here for the same reason masks are: without it, placing a
+   label and pressing Cancel discards it with no prompt."
+  [!handle initial-rects initial-elements !fields initial-fields]
   #?(:cljs (or (not= (editor-rects !handle initial-rects) initial-rects)
+             (not= (editor-elements !handle initial-elements) initial-elements)
              (not= @!fields initial-fields))
      :clj false))
 
@@ -133,6 +157,16 @@
 
 (def empty-io-fields
   {:header "" :footer "" :remarks "" :sources "" :extra1 "" :extra2 ""})
+
+(defn parse-label-size
+  "The font size a size input's text names, or nil when it names none.
+   Post: nil for blank or non-integral text, which set-label-size! then ignores —
+         so a half-typed value leaves the label alone rather than clamping it to
+         whatever the first digit happened to mean.
+   Plain defn with no reader conditional: parse-long exists on both peers, and
+   this is called from a reactive body."
+  [s]
+  (when (string? s) (parse-long s)))
 
 (defn mask-summary
   "\"5 masks → 3 cards\" — masks are rects, cards are mask groups, and grouping
@@ -161,10 +195,10 @@
       (dom/On "click" (fn [_] (on-click)) nil))))
 
 (e/defn OcclusionDeleteButton
-  "Delete the selected masks. Disabled with nothing selected — the editor's own
-   Delete key no-ops there, and a live button that does nothing would be a lie.
-   Its own e/defn because it is the one button in this bar that reads a second
-   signal."
+  "Delete the selection — masks, labels, or both. Disabled with nothing selected
+   — the editor's own Delete key no-ops there, and a live button that does
+   nothing would be a lie. Its own e/defn because it is the one button in this
+   bar that reads a second signal."
   [!handle !selection]
   (e/client
     (let [n (e/watch !selection)
@@ -176,11 +210,49 @@
                             :border "1px solid var(--color-border)"
                             :color (if none? "var(--color-text-hint)" "var(--color-danger-text)")}})
         (tooltip/Tooltip! (if none?
-                            "Select a mask first"
-                            (str "Delete " n " selected mask" (when (not= 1 n) "s")
-                              " — takes effect on Save")))
+                            "Select a mask or label first"
+                            (str "Delete " n " selected — takes effect on Save")))
         (dom/text "Delete (⌫)")
         (dom/On "click" (fn [_] (when-not none? (delete-editor-selection! !handle))) nil)))))
+
+(e/defn OcclusionLabelSizeInput
+  "Font size of the selected label, in natural image pixels. Disabled with no
+   label selected, because there is nothing to resize.
+
+   Forms5's MANAGED `Input` (no bang), which is the right primitive for a live
+   local control and gives three things a hand-rolled input has to reinvent:
+
+   - It reflects `size` as the authoritative value, so a drag-resize updates the
+     number without this component tracking anything.
+   - It guards that write with dom/Focused?, so it never overwrites what the user
+     is typing. That is what removes the e/for-by frame-isolation dance an
+     imperative (set! (.-value …)) needed.
+   - Its dom/On carries `size` in the authoritative lane, so an external change
+     RESETS the returned value. Without that the value latches and re-typing the
+     number the label last held is a silent no-op.
+
+   `Input!` (bang) is the wrong one here: it holds its token until a form
+   commits, and there is no form and no commit — this writes Konva state, with
+   nothing to acknowledge, retry or fail. Tracked fields belong in a Form!.
+
+   The bounds come from freememo.occlusion-svg, which the editor also clamps to.
+   That namespace has no reader conditional, so both peers see plain literals."
+  [!handle !label-size]
+  (e/client
+    (let [size (e/watch !label-size)]
+      (dom/label
+        (dom/props {:style {:display "flex" :align-items "center" :gap "4px"
+                            :font-size "12px" :color "var(--color-text-secondary)"}})
+        (dom/text "Size")
+        ;; Last form of the body, so the resize IS this component's return value
+        ;; and cannot be optimized away as an unused expression.
+        (set-editor-label-size! !handle
+          (parse-label-size
+            (forms/Input (or size "")
+              :type "number" :step 1
+              :min osvg/min-label-size :max osvg/max-label-size
+              :disabled (nil? size)
+              :style {:width "56px" :font-size "12px" :padding "2px 4px"})))))))
 
 (e/defn OcclusionMaskToolbar
   "Tool switch plus mask-group actions, mirroring the editor's own shortcuts.
@@ -188,8 +260,10 @@
    the Konva init side effect, and a signal there would put that call in a body
    Electric may re-evaluate (CLAUDE.md, JS library init). !tool is the single
    source of truth for the tool — the editor writes it back on a keyboard
-   switch — and !selection is written the same way, from select-nodes!."
-  [!handle !tool !selection]
+   switch — and !selection is written the same way, from select-nodes!.
+   !label-size is watched one level down, inside OcclusionLabelSizeInput, for the
+   same reason: every signal this bar reads must be read below the editor host."
+  [!handle !tool !selection !label-size]
   (e/client
     (let [tool (e/watch !tool)]
       (dom/div
@@ -199,13 +273,16 @@
           (fn [] (set-editor-tool! !handle :select)))
         (OcclusionToolButton "Draw (R)" (= tool :draw)
           (fn [] (set-editor-tool! !handle :draw)))
+        (OcclusionToolButton "Text (T)" (= tool :text)
+          (fn [] (set-editor-tool! !handle :text)))
         (dom/span (dom/props {:style {:color "var(--color-border)"}}) (dom/text "|"))
         (OcclusionToolButton "Group (G)" false
           (fn [] (group-editor-selection! !handle)))
         (OcclusionToolButton "Ungroup (U)" false
           (fn [] (ungroup-editor-selection! !handle)))
         (dom/span (dom/props {:style {:color "var(--color-border)"}}) (dom/text "|"))
-        (OcclusionDeleteButton !handle !selection)))))
+        (OcclusionDeleteButton !handle !selection)
+        (OcclusionLabelSizeInput !handle !label-size)))))
 
 (e/defn OcclusionMaskSummary
   "\"N masks → M cards\". Own component so the !rects watch lives outside the
@@ -223,15 +300,16 @@
    Invariant: this body depends on NO signal, so the init-occlusion-editor! call
    below cannot be re-evaluated — every reactive value lives in a child
    component. Adding an (e/watch …) here would risk a second Konva stage."
-  [!handle image-media-id initial-rects !rects !tool !selection]
+  [!handle image-media-id initial-rects initial-elements !rects !tool !selection
+   !label-size]
   (e/client
     (dom/div
       (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-      (OcclusionMaskToolbar !handle !tool !selection)
+      (OcclusionMaskToolbar !handle !tool !selection !label-size)
       (dom/div
         (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
                             :margin-bottom "var(--sp-2)"}})
-        (dom/text "Draw (R): drag on the image to add a mask. Select (S): click a mask, Shift-click or drag a box to add more; drag to move, handles to resize. Delete (⌫ or the button) removes the selected masks. Group (G) makes the selected masks one card; Ungroup (U) splits them."))
+        (dom/text "Text (T): click to place a label, then type; double-click a label to edit it. Draw (R): drag on the image to add a mask — occlude a label by drawing a mask over it in this tool. Select (S): click a mask or label, Shift-click or drag a box to add more; drag to move, handles to resize. Delete (⌫ or the button) removes the selection. Group (G) makes the selected masks one card; Ungroup (U) splits them."))
       (dom/div
         (dom/props {:class "occlusion-editor-host"
                     :style {:min-height "200px" :max-height "58vh"
@@ -241,11 +319,16 @@
         (let [host dom/node
               on-change (fn [rects] (reset! !rects rects))
               on-tool-change (fn [tool] (reset! !tool tool))
-              on-selection-change (fn [n] (reset! !selection n))]
+              on-selection-change (fn [n] (reset! !selection n))
+              ;; The editor reports this on selection AND on resize, so the atom
+              ;; is the live size of the selected label — the authoritative value
+              ;; the size input reflects.
+              on-label-selected (fn [size] (reset! !label-size size))]
           ;; The editor reads its starting tool from !tool, so a re-init (or a
           ;; remount) resumes the user's tool instead of resetting it.
           (init-occlusion-editor! !handle host image-media-id initial-rects
-            !tool on-change on-tool-change on-selection-change)
+            initial-elements !tool on-change on-tool-change on-selection-change
+            on-label-selected)
           (e/on-unmount (fn [] (destroy-occlusion-editor! !handle)))))
       (OcclusionMaskSummary !rects))))
 
@@ -373,6 +456,9 @@
           image-media-id (if edit? (:image-media-id group) (:image-media-id request))
           initial-geometry (when edit? (:geometry group))
           initial-rects (vec (:rects initial-geometry))
+          ;; vec, not the raw value: the server omits an empty :elements, and an
+          ;; empty editor reads back [], so both sides must be [] to compare.
+          initial-elements (vec (:elements initial-geometry))
           initial-fields (merge empty-io-fields (when edit? (:io-fields group)))
           field-key (if edit? [:io-edit (:group-id request)] [:io-new image-media-id])
           !handle (atom nil)
@@ -385,12 +471,15 @@
           ;; Selected node count, written from the editor's select-nodes!. A
           ;; mask group counts as one, matching what Delete removes.
           !selection (atom 0)
+          ;; Live font size of the selected label; nil when none is selected.
+          !label-size (atom nil)
           !tab (atom :masks)
           tab (e/watch !tab)
           !primary-btn (atom nil)
           !history-open? (atom false)
           close! (fn []
-                   (when (or (not (occlusion-dirty? !handle initial-rects !fields initial-fields))
+                   (when (or (not (occlusion-dirty? !handle initial-rects
+                                    initial-elements !fields initial-fields))
                            (confirm-discard!))
                      (reset! !request nil)))
           card-font-sz (e/server (get-card-font-size* user-id))
@@ -443,7 +532,8 @@
           ;; the Konva stage and Quill instances survive switches.
           (dom/div
             (dom/props {:style {:display (if (= tab :masks) "block" "none")}})
-            (OcclusionMasksTab !handle image-media-id initial-rects !rects !tool !selection))
+            (OcclusionMasksTab !handle image-media-id initial-rects initial-elements
+              !rects !tool !selection !label-size))
           (dom/div
             (dom/props {:style {:display (if (= tab :fields) "block" "none")}})
             (OcclusionFieldsTab initial-fields !fields field-key modal-font))

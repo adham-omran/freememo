@@ -532,11 +532,25 @@
     (vec (concat (mapcat io-mask-uploads io-cards) (vals per-group)))))
 
 #?(:cljs
+   (defn- utf8->base64
+     "Base64 of s encoded as UTF-8.
+      Pre:  s is any string.
+      Post: AnkiConnect-safe base64 for every codepoint, not only Latin-1.
+      Bare js/btoa throws above codepoint 255, so it cannot carry a mask svg
+      holding an Arabic label. encodeURIComponent already emits one %XX per
+      UTF-8 byte, so folding those back to single chars gives btoa exactly the
+      byte string it wants."
+     [s]
+     (js/btoa (str/replace (js/encodeURIComponent s) #"%([0-9A-F]{2})"
+                (fn [[_ hex]] (js/String.fromCharCode (js/parseInt hex 16)))))))
+
+#?(:cljs
    (defn store-io-mask!
      "Missionary task: upload one generated mask SVG to Anki's media folder.
-      Generated SVGs are pure ASCII, so btoa is safe."
+      A mask svg carries user-authored label text, so it is NOT pure ASCII and
+      needs the UTF-8 encoder above."
      [{:keys [filename svg]}]
-     (anki-call! "storeMediaFile" {:filename filename :data (js/btoa svg)})))
+     (anki-call! "storeMediaFile" {:filename filename :data (utf8->base64 svg)})))
 
 ;; ---------------------------------------------------------------------------
 ;; Media image handling for Anki push

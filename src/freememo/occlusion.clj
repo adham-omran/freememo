@@ -37,6 +37,30 @@
              [k (or (some-> v cleaner/clean-html) "")])))
     io-field-keys))
 
+(def ^:private element-keys
+  "The keys one label element carries. Everything else is dropped, so a client
+   cannot smuggle extra data into the geometry JSONB."
+  [:type :x :y :size :text])
+
+(defn- checked-element
+  "Validate and normalize one label element.
+   Pre (caller): {:type \"text\" :x :y :size :text} in natural-image pixels,
+   with :text a non-blank string inside input/label-max.
+   Post: exactly element-keys and nothing else.
+   Blame: every throw here is a caller bug. The editor never emits a blank
+   label — an empty commit destroys the node instead of keeping it."
+  [{:keys [type x y size text] :as element}]
+  (when-not (= "text" type)
+    (throw (ex-info "Unknown occlusion element type" {:element element})))
+  (when-not (and (number? x) (number? y) (not (neg? x)) (not (neg? y)))
+    (throw (ex-info "Malformed occlusion label position" {:element element})))
+  (when-not (and (number? size) (pos? size))
+    (throw (ex-info "Malformed occlusion label size" {:element element})))
+  (when-not (and (string? text) (not (str/blank? text)))
+    (throw (ex-info "Occlusion label text is empty" {:element element})))
+  (input/check-length! :label text input/label-max)
+  (select-keys element element-keys))
+
 (defn- checked-geometry
   "Throw on malformed geometry; otherwise return it with mask ordinals coerced
    to long — the one place incoming geometry is normalized, so no reader below
@@ -44,9 +68,12 @@
    Pre (caller): geometry = {:width :height :rects [{:x :y :w :h} ...]} in
    natural-image pixels, at least one rect, each rect carrying at most one
    membership key (:ordinal for an existing mask group, :gid for a new one —
-   see freememo.occlusion-ordinals).
-   Post: same shape; every present :ordinal is a positive long."
-  [{:keys [width height rects] :as geometry}]
+   see freememo.occlusion-ordinals). :elements is optional and holds the user's
+   labels, which freememo.occlusion-svg emits into every generated svg.
+   Post: same shape; every present :ordinal is a positive long; :elements is
+   present only when the caller sent at least one label, so a label-free group
+   still stores exactly the map it stored before labels existed."
+  [{:keys [width height rects elements] :as geometry}]
   (when-not (and (number? width) (pos? width) (number? height) (pos? height))
     (throw (ex-info "Occlusion geometry is missing image dimensions" {:geometry geometry})))
   (when (empty? rects)
@@ -62,12 +89,14 @@
       (throw (ex-info "Malformed occlusion mask ordinal" {:rect rect})))
     (when (and (some? gid) (or (not (string? gid)) (str/blank? gid)))
       (throw (ex-info "Malformed occlusion mask group tag" {:rect rect}))))
-  (update geometry :rects
-    (fn [rects]
-      (mapv (fn [rect]
-              (cond-> rect
-                (some? (:ordinal rect)) (update :ordinal long)))
-        rects))))
+  (cond-> (update geometry :rects
+            (fn [rects]
+              (mapv (fn [rect]
+                      (cond-> rect
+                        (some? (:ordinal rect)) (update :ordinal long)))
+                rects)))
+    (seq elements) (assoc :elements (mapv checked-element elements))
+    (empty? elements) (dissoc :elements)))
 
 (defn create-group!
   "Create a group + its per-mask cards.
