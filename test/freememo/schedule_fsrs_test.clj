@@ -764,22 +764,46 @@
       (testing "once the projection reaches the reachable pages, it is not"
         (is (not-any? #{:short-of-target} (:reasons after))
           "this is the assertion that fails against `required-pages`"))
-      (testing "and the uncarded pages are their own reason throughout"
-        (is (every? #(some #{:pages-not-started} (:reasons %)) [before after]))
+      (testing "the uncarded pages are REPORTED throughout, never counted"
         (is (= 11 (:not-started after)))
-        (is (= 12 (:reachable after))))
-      (testing "a fully carded document reports no such reason"
+        (is (= 12 (:reachable after)))
+        (is (not-any? #{:pages-not-started} (:reasons after))))
+      (testing "a fully carded document reports no reason at all"
         (let [f (fc/feasibility (assoc base :reachable-pages 23 :projected-known 23))]
           (is (:feasible? f))
-          (is (empty? (:reasons f)))))
-      (testing "and an entirely uncarded one still warns — §6.6's done-condition"
-        (let [f (fc/feasibility {:required-pages 300 :reachable-pages 0
-                                 :projected-known 0 :peak-load 1.0
-                                 :observed-capacity 60 :horizon 1
+          (is (empty? (:reasons f))))))))
+
+(deftest unstarted-pages-are-scheduled-work-not-an-infeasibility
+  (testing "the panel rendered `This target is out of reach` directly above
+            `the plan below schedules the reading that does`. Both cannot hold,
+            and the plan is the one telling the truth: the reading window ends a
+            full maturation lead before the target, so a page covered on its
+            last reading day still counts in time."
+    (let [f (fc/feasibility {:required-pages 23 :reachable-pages 12
+                             :projected-known 12 :peak-load 1.0
+                             :observed-capacity 120 :horizon 15
+                             :maturation-lead 11})]
+      (is (:feasible? f) "11 unstarted pages inside a real window are not a blocker")
+      (is (empty? (:reasons f)))
+      (is (= 11 (:not-started f)) "and the count still reaches the surface"))
+    (testing "raising review capacity cannot change it either way — capacity
+              bounds REVIEWS, and this fn has no reading-rate input at all"
+      (doseq [cap [60 120 200]]
+        (let [f (fc/feasibility {:required-pages 23 :reachable-pages 12
+                                 :projected-known 12 :peak-load 1.0
+                                 :observed-capacity cap :horizon 15
                                  :maturation-lead 11})]
-          (is (false? (:feasible? f)))
-          (is (some #{:pages-not-started} (:reasons f)))
-          (is (= 300 (:not-started f))))))))
+          (is (:feasible? f) (str "capacity " cap))))))
+  (testing "§6.6's done-condition still holds by a DIFFERENT reason: a target
+            one day away on an uncarded document warns, because one day is
+            inside any maturation lead"
+    (let [f (fc/feasibility {:required-pages 300 :reachable-pages 0
+                             :projected-known 0 :peak-load 1.0
+                             :observed-capacity 60 :horizon 1
+                             :maturation-lead 11})]
+      (is (false? (:feasible? f)))
+      (is (= [:no-maturation-window] (:reasons f)))
+      (is (= 300 (:not-started f))))))
 
 (deftest an-impossible-maturation-window-names-itself
   (testing "§6.6 — the levers stay four whichever reason fires"

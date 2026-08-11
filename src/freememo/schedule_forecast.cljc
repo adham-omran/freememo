@@ -336,9 +336,8 @@
 
      :short-of-target  — the projection does not reach the REACHABLE pages by
                          the target date. A date can fix this.
-     :pages-not-started — pages of the range are neither done nor carded, so
-                         the projection cannot move them at all. No date fixes
-                         this. The plan schedules the reading that does.
+   Pages that are neither done nor carded are NOT a reason. `:not-started`
+   reports them and `:feasible?` ignores them — see the note below.
      :over-capacity    — some day's derived load exceeds the review rate the
                          user has actually sustained (§6.7).
      :no-maturation-window — the horizon is at or under the maturation lead, so
@@ -386,22 +385,35 @@
    back naming the same date. §6.6.1 promises that accepting the date clears
    the warning, and against the whole range it could not.
 
-   The pages with no cards are a real blocker and they get their own reason.
-   `:pages-not-started` is not date-fixable and must not be answered with a
-   date: it is answered by the plan, which schedules the reading that creates
-   those cards."
+   **Pages with no cards are NOT an infeasibility, and counting them as one made
+   the panel contradict itself.** It rendered `This target is out of reach`
+   directly above `the plan below schedules the reading that does` — two claims
+   that cannot both hold. Three reasons the plan is the one telling the truth:
+
+     - `plan-days` has already ALLOCATED those pages. The reading window ends
+       `lead` days before the target, so a page covered on the last reading day
+       still gets its full maturation period. A reader who works the table
+       delivers the whole range on time, which is the plan's own invariant.
+     - This fn has no reading-rate input. `daily_capacity` bounds REVIEWS, and
+       nothing here can judge whether four pages a day is achievable — so
+       infeasible is a verdict it is not equipped to reach. Unstarted pages are
+       the absence of a projection, not a projection of failure.
+     - The case where they genuinely cannot make it is a horizon at or inside
+       the lead, and `:no-maturation-window` already says exactly that.
+
+   `:not-started` is therefore reported and never counted. §6.6's done-condition
+   still holds: a one-day target on an uncarded document warns, through
+   `:no-maturation-window`."
   [{:keys [projected-known required-pages reachable-pages peak-load
            observed-capacity earliest-day horizon] lead :maturation-lead}]
   (let [reachable (long (or reachable-pages required-pages))
         short? (< (long projected-known) reachable)
-        not-started? (< reachable (long required-pages))
         over? (and (pos? (double observed-capacity))
                 (> (double peak-load) (double observed-capacity)))
         unreachable? (nil? lead)
         no-window? (and (some? lead) (<= (long horizon) (long lead)))
         reasons (cond-> []
                   short? (conj :short-of-target)
-                  not-started? (conj :pages-not-started)
                   over? (conj :over-capacity)
                   no-window? (conj :no-maturation-window)
                   unreachable? (conj :maturity-unreachable))]

@@ -237,10 +237,10 @@
                                        (e/server (:projected-known feas)) " of "
                                        (e/server (:reachable feas))
                                        " carded pages by the target.")
-                    :pages-not-started (str (e/server (:not-started feas))
-                                         " pages have no cards yet, so no date "
-                                         "reaches them. The plan below schedules "
-                                         "the reading that does.")
+                    ;; `:pages-not-started` is deliberately NOT a case here.
+                    ;; Unstarted pages are no longer an infeasibility, so they
+                    ;; never reach this list — `NotStartedNote` states them
+                    ;; beside the plan that schedules them instead.
                     :over-capacity (str "Peak day needs " (approx peak)
                                      " reviews against your sustained "
                                      (long (Math/round (double cap))) ".")
@@ -262,6 +262,25 @@
             (dom/props {:style {:margin "0" :padding-left "20px"}})
             (e/for [l (e/diff-by :label (levers earliest reachable not-started short?))]
               (LeverRow user-id schedule-id l))))))))
+
+(e/defn NotStartedNote [forecast]
+  (e/client
+    ;; Pages the projection cannot see: neither done nor carded. It states the
+    ;; gap WITHOUT the warning box, because those pages are not a blocker — the
+    ;; plan under this line is what schedules them, and the reading window ends
+    ;; a full maturation lead before the target so they still count in time.
+    ;;
+    ;; It also explains a figure that otherwise reads as a defect: `Projected at
+    ;; target` can never exceed the reachable count, so a partially-read
+    ;; document shows a projection short of its own range on purpose.
+    (let [n (e/server (get-in forecast [:feasibility :not-started]))]
+      (when (pos? (or n 0))
+        (dom/div
+          (dom/props {:style {:margin "0 0 10px 0" :font-size "12px"
+                              :color "var(--color-text-secondary)"}})
+          (dom/text (str n " page" (when (not= 1 n) "s")
+                      " not started — no cards yet, so the forecast cannot "
+                      "project them. The plan below schedules the reading.")))))))
 
 (e/defn StaleBanner [forecast anki-status]
   (e/client
@@ -588,6 +607,10 @@
         :ok (e/amb
               (FeasibilityPanel user-id schedule-id forecast)
               (ProgressRow forecast)
+              ;; Between the tiles and the plan, because it explains the
+              ;; `Projected at target` tile above it and points at the table
+              ;; below it.
+              (NotStartedNote forecast)
               ;; The plan comes FIRST among the tables. It is what the user
               ;; opened the tab for; the page verdicts explain it.
               (PlanSection forecast)
