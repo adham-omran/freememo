@@ -1,5 +1,27 @@
 FROM clojure:temurin-17-tools-deps-1.12.0.1501 AS build
 WORKDIR /app
+
+# The build's heap, CHOSEN rather than inherited. Nothing set one before, so the
+# JVM took its default MaxRAMPercentage=25 — a quarter of whatever the host has.
+# On the 7.9 GB deploy box that is 1982 MB (measured with PrintFlagsFinal), and
+# the `:prod` ClojureScript compile has grown past it: three deploys died with
+# `OutOfMemoryError: Java heap space` inside `uberjar` at ~176 s, while the same
+# commits built fine on a 16 GB machine whose quarter is 3996 MB. A build that
+# fails or passes according to the builder's RAM.
+#
+# 3g sits above the measured need — 2560 MB produces a complete 64.6 MB jar,
+# 1982 MB does not — and inside the deploy box's headroom: 7.9 GB total, less
+# the live color's 3 GiB mem_limit and ~0.3 GB of postgres/ontop/caddy.
+# RAISING THIS WITHOUT RAISING THAT HEADROOM risks the kernel OOM killer
+# choosing the LIVE container, which is an outage rather than a failed build.
+#
+# Absolute, not MaxRAMPercentage. docker-compose.prod.yml uses a percentage for
+# the RUNTIME and is right to: that container has a `mem_limit` for the
+# percentage to be a percentage OF. This stage has no limit, so a percentage is
+# a share of the host — the accident being fixed. What the compile needs is a
+# property of the codebase, not of the machine that happens to build it.
+ENV JAVA_TOOL_OPTIONS="-Xmx3g"
+
 COPY deps.edn deps.edn
 ARG VERSION
 ENV VERSION=$VERSION
