@@ -599,6 +599,7 @@
             (:pages-today (fc/today-plan {:pages-remaining pages
                                           :reading-days days
                                           :horizon days
+                                          :covered-today 0
                                           :daily-load {}})))
         (str pages "p/" days "d")))))
 
@@ -610,7 +611,7 @@
 (deftest today-plan-takes-its-share-and-leaves-reviews-fractional
   (testing "§1.2 and §6.4"
     (let [p (fc/today-plan {:pages-remaining 10 :reading-days 3 :horizon 3
-                                :daily-load {0 33.7}})]
+                                :covered-today 0 :daily-load {0 33.7}})]
       ;; 10 over 3 days is [3 4 3], which sums to 10. Rounding each day UP
       ;; would ask for 4+4+4 = 12 pages out of a 10-page remainder — a plan the
       ;; user cannot complete because the work does not exist.
@@ -619,7 +620,7 @@
       (is (close? 33.7 (:reviews-today p) 1e-9)))
     (testing "a target reached today still asks for the whole remainder"
       (let [p (fc/today-plan {:pages-remaining 5 :reading-days 1 :horizon 0
-                                  :daily-load {}})]
+                                  :covered-today 0 :daily-load {}})]
         (is (= 5 (:pages-today p)))
         (is (zero? (:reviews-today p)))))))
 
@@ -657,7 +658,7 @@
   (testing "pages stop at the coverage deadline and the table runs to the target"
     (doseq [[total horizon lead] [[23 30 8] [12 15 8] [7 7 8] [0 30 8] [1035 365 11]]]
       (let [r (fc/coverage-window horizon lead)
-            days (fc/plan-days total r horizon)
+            days (fc/plan-days total r horizon 0)
             label (str total "p/" horizon "d lead " lead)]
         (is (= (max r (max 1 horizon)) (count days)) (str label " — one row per day to the target"))
         (is (= total (reduce + 0 (map :pages days))) (str label " — sums exactly"))
@@ -667,21 +668,129 @@
         (is (= :cover (:phase (first (filter :deadline? days))))
           (str label " — the deadline is the LAST reading day, not the first mature one"))))))
 
+;; ── The daily quota (plans/study-plan-daily-quota.md) ──────────────
+
+(deftest todays-cell-counts-down-to-done-and-past-it
+  (testing "the operator's own case: 23 pages, 12 covered, a 4-day window. The
+            old cell divided the remainder by the days left on every read, so
+            marking 3 pages moved it from 3 to 2 and `done` was unreachable."
+    (let [total 23 window 4 horizon 15
+          cell (fn [covered-now covered-today]
+                 (:pages (first (fc/plan-days (- total covered-now) window horizon
+                                  covered-today))))]
+      (is (= 3 (cell 12 0)) "nothing done today")
+      (is (= 2 (cell 13 1)))
+      (is (= 1 (cell 14 2)))
+      (is (= 0 (cell 15 3)) "THE case: three marked, the day is finished")
+      (is (= -1 (cell 16 4)) "past it, the surplus shows as credit")
+      (is (= -5 (cell 20 8)))))
+  (testing "the allocation is frozen at the start of the day, so it never moves
+            while the reader works"
+    (let [alloc (fn [covered-now covered-today]
+                  (+ (:pages (first (fc/plan-days (- 23 covered-now) 4 15 covered-today)))
+                     covered-today))]
+      (is (apply = (for [k (range 0 6)] (alloc (+ 12 k) k)))))))
+
+(deftest the-later-days-hold-the-remainder-while-today-counts-down
+  (testing "days 1..n take what is left after today's OWED pages, so the reader
+            who is ahead hands the whole remainder to the days that follow"
+    (let [rest-of (fn [covered-now covered-today]
+                    (->> (fc/plan-days (- 23 covered-now) 4 15 covered-today)
+                         (drop 1) (take 3) (mapv :pages)))]
+      (is (= [3 2 3] (rest-of 12 0)) "8 left over 3 days")
+      (is (= [3 2 3] (rest-of 15 3)) "still 8 left over 3 days — today shrank, not the rest")
+      (is (= [2 3 2] (rest-of 16 4)) "7 left over 3 days")))
+  (testing "the exact vectors of the operator's example, recorded so a change to
+            the line's rounding fails here rather than silently reshaping the plan"
+    (is (= [3 3 2 3] (mapv :pages (take 4 (fc/plan-days 11 4 15 0)))))
+    (is (= [0 3 2 3] (mapv :pages (take 4 (fc/plan-days 8 4 15 3)))))
+    (is (= [-1 2 3 2] (mapv :pages (take 4 (fc/plan-days 7 4 15 4)))))))
+
+(deftest the-cumulative-total-stays-exact-when-today-is-negative
+  (testing "a running total over max(0, pages) lands on the real remainder
+            whether the reader is behind, level or ahead"
+    (doseq [[covered-now covered-today] [[12 0] [15 3] [16 4] [20 8] [23 11]]]
+      (let [uncovered (- 23 covered-now)
+            days (fc/plan-days uncovered 4 15 covered-today)
+            total (reduce + 0 (map #(max 0 (:pages %)) days))]
+        (is (= uncovered total)
+          (str "covered " covered-now ", " covered-today " today"))))))
+
+(deftest summing-the-pages-column-is-not-the-remainder
+  (testing "the caption used to sum `:pages` across the plan and undercounted by
+            the surplus — measured reading `0 pages` with five still to cover.
+            `:coverage`'s `:pages-remaining` is the figure to render; this test
+            records WHY, so nobody reintroduces the sum."
+    (doseq [[unc today] [[11 0] [8 3] [7 4] [5 8]]]
+      (let [days (fc/plan-days unc 4 15 today)
+            naive (reduce + 0 (map :pages days))
+            clamped (reduce + 0 (map #(max 0 (:pages %)) days))]
+        (is (= unc clamped) (str "clamped sum is the remainder, unc=" unc))
+        (when (neg? (:pages (first days)))
+          (is (< naive unc)
+            (str "and the naive sum undercounts once the reader is ahead, unc=" unc)))))))
+
+(deftest the-quota-words-never-show-a-negative-number
+  (is (= "3" (fc/quota-cell 3)))
+  (is (= "done" (fc/quota-cell 0)))
+  (is (= "1 ahead" (fc/quota-cell -1)))
+  (is (= "5 ahead" (fc/quota-cell -5)))
+  (is (= "3 pages" (fc/quota-phrase 3)))
+  (is (= "1 page" (fc/quota-phrase 1)))
+  (is (= "done" (fc/quota-phrase 0)))
+  (is (= "2 ahead" (fc/quota-phrase -2)))
+  (testing "no rendering of a settled or owed quota contains a minus sign"
+    (doseq [n (range -9 10)]
+      (is (not (re-find #"-" (fc/quota-cell n))) (str "cell " n))
+      (is (not (re-find #"-" (fc/quota-phrase n))) (str "phrase " n))))
+  (testing "`quota-met?` is true exactly when the cell stops being a bare count"
+    (doseq [n (range -9 10)]
+      (is (= (fc/quota-met? n) (nil? (re-matches #"\d+" (fc/quota-cell n))))
+        (str n " — a bare number means pages are still owed"))))
+  (testing "and it covers zero as well as the surplus, which is what greens the
+            tile the moment the day is finished"
+    (is (fc/quota-met? 0))
+    (is (fc/quota-met? -1))
+    (is (not (fc/quota-met? 1)))))
+
+(deftest covered-today-is-a-subset-of-covered
+  (let [verdicts [{:known? true :done? true :done-today? true :reason :uncarded-done}
+                  {:known? false :done? true :done-today? false :reason :immature}
+                  {:known? false :done? false :done-today? false :reason :untouched}]
+        p (fc/document-progress verdicts)]
+    (is (= 3 (:total p)))
+    (is (= 2 (:covered p)))
+    (is (= 1 (:covered-today p)))
+    (is (<= (:covered-today p) (:covered p) (:total p))))
+  (testing "a page verdict carries the flag through untouched"
+    (is (true? (:done-today? (fc/page-verdict {:page-id 1 :done? true :done-today? true} [] 0.9))))
+    (is (false? (:done-today? (fc/page-verdict {:page-id 1 :done? true} [] 0.9))))))
+
 (deftest the-filter-keeps-the-deadline-even-with-no-pages
   (testing "a slow window rounds 0 pages onto the last reading day, and a bare
             pos?-pages filter would then hide the date the `Cover by` tile names"
-    (let [days (fc/plan-days 28 (fc/coverage-window 128 8) 128)
+    (let [days (fc/plan-days 28 (fc/coverage-window 128 8) 128 0)
           dl (first (filter :deadline? days))]
       (is (zero? (:pages dl)) "the case this exists for is reachable")
       (is (fc/covering-day? dl) "and the filter keeps it anyway")))
   (testing "every day that hands out pages is kept"
     (doseq [[total horizon lead] [[28 128 8] [20 30 8] [1 20 8] [5 40 11]]]
-      (let [days (fc/plan-days total (fc/coverage-window horizon lead) horizon)]
+      (let [days (fc/plan-days total (fc/coverage-window horizon lead) horizon 0)]
         (is (every? fc/covering-day? (filter #(pos? (:pages %)) days)))
-        (is (not-any? fc/covering-day? (remove #(or (pos? (:pages %)) (:deadline? %)) days))))))
+        (is (not-any? fc/covering-day?
+              (remove #(or (pos? (:pages %)) (:deadline? %) (zero? (:day %))) days))
+          "nothing else survives — today and the deadline are the two exceptions"))))
   (testing "and no maturation day is"
-    (let [days (fc/plan-days 20 (fc/coverage-window 30 8) 30)]
-      (is (not-any? fc/covering-day? (filter #(= :mature (:phase %)) days))))))
+    (let [days (fc/plan-days 20 (fc/coverage-window 30 8) 30 0)]
+      ;; A maturation day is never day 0, so none of them reads as today.
+      (is (not-any? fc/covering-day? (filter #(= :mature (:phase %)) days)))))
+  (testing "today survives the filter whatever it owes — hiding the row that
+            reads `done` would take away the thing the reader worked for"
+    (is (fc/covering-day? {:day 0 :pages 0}))
+    (is (fc/covering-day? {:day 0 :pages -3}))
+    (is (fc/covering-day? {:day 0 :pages 2}))
+    (is (not (fc/covering-day? {:day 5 :pages 0})))
+    (is (fc/covering-day? {:day 5 :pages 0 :deadline? true}))))
 
 (deftest the-coverage-map-and-the-plan-agree-on-the-window
   (testing "`forecast` reports `:mature-days` as max(0, horizon − reading-days)
@@ -690,7 +799,7 @@
             not have."
     (doseq [[horizon lead] [[30 8] [128 8] [0 8] [3 8] [20 11] [9 8] [8 8] [365 11] [1 0]]]
       (let [r (fc/coverage-window horizon lead)
-            days (fc/plan-days 20 r horizon)
+            days (fc/plan-days 20 r horizon 0)
             counted (count (filter #(= :mature (:phase %)) days))
             reported (max 0 (- horizon r))]
         (is (= counted reported)
@@ -700,7 +809,7 @@
 (deftest a-horizon-inside-the-lead-owes-every-page-today
   (testing "the reading is still owed even when it cannot mature in time —
             feasibility is what says so, not a plan that hides the work"
-    (let [days (fc/plan-days 12 (fc/coverage-window 3 8) 3)]
+    (let [days (fc/plan-days 12 (fc/coverage-window 3 8) 3 0)]
       (is (= 12 (:pages (first days))))
       (is (= 1 (count (filter #(= :cover (:phase %)) days))))
       (is (every? #(zero? (:pages %)) (rest days))))))
@@ -709,9 +818,10 @@
   (testing "one definition, so the tile and the table cannot disagree"
     (doseq [[total horizon lead] [[23 30 8] [12 15 8] [7 7 8] [0 30 8]]]
       (let [r (fc/coverage-window horizon lead)]
-        (is (= (:pages (first (fc/plan-days total r horizon)))
+        (is (= (:pages (first (fc/plan-days total r horizon 0)))
               (:pages-today (fc/today-plan {:pages-remaining total :reading-days r
-                                            :horizon horizon :daily-load {}})))
+                                            :horizon horizon :covered-today 0
+                                            :daily-load {}})))
           (str total "p/" horizon "d lead " lead))))))
 
 (deftest a-user-who-works-the-plan-reads-on-plan-every-day
@@ -721,7 +831,7 @@
             still read `Behind` for the whole first stretch"
     (doseq [[total horizon lead] [[23 30 8] [7 20 8] [60 90 11] [100 15 31] [12 15 8]]]
       (let [r (fc/coverage-window horizon lead)
-            days (fc/plan-days total r horizon)
+            days (fc/plan-days total r horizon 0)
             ;; covered[t] is what the user has done BEFORE day t's work
             covered (vec (reductions + 0 (map :pages days)))]
         (doseq [t (range (inc r))]

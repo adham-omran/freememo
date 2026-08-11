@@ -142,6 +142,9 @@
      :page-number (:page-number page)
      :known? (contains? #{:uncarded-done :mature} reason)
      :done? (boolean (:done? page))
+     ;; Carried through like `:done?`, for the same reason: `document-progress`
+     ;; counts it and nothing else can recover it from a verdict.
+     :done-today? (boolean (:done-today? page))
      :reason reason
      :retrievability (if (pos? n) r 0.0)
      :interval-days (if (pos? n) ivl 0.0)
@@ -190,17 +193,22 @@
          on the tab: it is not `:known` (the maturity gate rejects it) and not
          `:untested` (that counts done-and-uncarded only), so the reading work
          reads as zero everywhere.
-   Inv : `:untested` <= `:covered` <= `:total`. Done-and-uncarded is a strict
-         subset of done, and every verdict comes from one page of the range.
+   Post: `:covered-today` is the pages marked done TODAY, the one fact the
+         daily quota needs and the only one no query over `status` can recover.
+   Inv : `:untested` <= `:covered` <= `:total`, and `:covered-today` <=
+         `:covered`. Done-and-uncarded is a strict subset of done, today is a
+         subset of ever, and every verdict comes from one page of the range.
          A violation is a bug in `page-verdict`, not here."
   [verdicts]
   (let [total (count verdicts)
         known (count (filter :known? verdicts))
         covered (count (filter :done? verdicts))
+        covered-today (count (filter :done-today? verdicts))
         untested (count (filter #(= :uncarded-done (:reason %)) verdicts))]
     {:total total
      :known known
      :covered covered
+     :covered-today covered-today
      :untested untested
      :unknown (- total known)
      :fraction (if (pos? total) (/ (double known) total) 0.0)}))
@@ -537,21 +545,57 @@
 
    Pre : `pages-remaining` >= 0. `days` is `coverage-window`'s count, >= 1.
          `horizon` >= 0.
-   Post: a vector of {:pages :phase :deadline?} of length
+   **Day 0 is a QUOTA, the rest are a rate.** Day 0 reads what is still owed
+   today: the allocation set at the START of the day, minus what has been
+   covered since. It falls to 0 as the reader works and goes NEGATIVE past it,
+   which is the whole point — the old cell divided the remainder by the days
+   left on every read, so doing three pages moved it from 3 to 2 and `done for
+   today` was unreachable (plans/study-plan-daily-quota.md §1).
+
+   Days 1..n stay a rate: the remainder after today's owed pages, spread over
+   the days left. `covered-today` therefore shrinks day 0 one-for-one and
+   leaves the others alone.
+
+   Pre : `covered-today` counts pages of this range marked done TODAY, and is
+         already included in the coverage that produced `pages-remaining`.
+         Passing a count from another day inflates the allocation.
+   Post: a vector of {:day :pages :phase :deadline?} of length
          `max(days, max(1, horizon))`. `:phase` is `:cover` for the first
          `days` entries and `:mature` after.
+   Post: `:day` is carried so `covering-day?` reads the same answer here as it
+         does from a `schedule/study-plan` row. Without it the predicate
+         behaved differently for one logical day depending on which shape it
+         was handed.
+   Post: `:pages` on day 0 may be negative. Every other day is >= 0.
+   Inv : `max(0, day 0) + days 1..n` sums to EXACTLY `pages-remaining`, so a
+         running total over `max(0, pages)` still lands on the real remainder
+         whether the reader is behind, level or ahead.
    Post: `:deadline?` marks the LAST reading day — the day the covering has to
          be finished. It is data rather than a rendering rule because the plan
          table recycles its rows, so a view cannot find that boundary by
          looking at a row's neighbours.
-   Post: the `:pages` column sums to EXACTLY `pages-remaining`.
    Inv : a `:mature` entry always carries 0 pages. This is the whole point of
          the split, and the falsifier the plan is verified against."
-  [pages-remaining days horizon]
+  [pages-remaining days horizon covered-today]
   (let [r (max 1 (long days))
         n (max r (max 1 (long horizon)))
-        pages (daily-page-plan pages-remaining r)]
-    (mapv (fn [d] {:pages (nth pages d 0)
+        done-today (max 0 (long covered-today))
+        remaining (max 0 (long pages-remaining))
+        ;; The allocation comes from the START-OF-DAY remainder, which is what
+        ;; is left now plus what today already removed. Recomputing it from the
+        ;; current remainder is exactly the defect this replaces: the number
+        ;; would shrink as the reader works and never reach zero.
+        allocation (long (first (daily-page-plan (+ remaining done-today) r)))
+        owed (- allocation done-today)
+        ;; Days 1..n get what is left after today's OWED pages, never after the
+        ;; allocation. Once the reader is ahead, `owed` is negative and they owe
+        ;; nothing more today, so the whole remainder belongs to the later days.
+        rest (if (> r 1) (daily-page-plan (- remaining (max 0 owed)) (dec r)) [])]
+    (mapv (fn [d] {:day d
+                   :pages (cond
+                            (zero? d) owed
+                            (< d r) (nth rest (dec d) 0)
+                            :else 0)
                    :phase (if (< d r) :cover :mature)
                    :deadline? (= d (dec r))})
       (range n))))
@@ -563,15 +607,21 @@
    promise a number the table does not leave.
 
    Pre : `row` is a `plan-days` entry, or a `schedule/study-plan` row built from
-         one. Both carry `:pages`, and `:deadline?` on at most one of them.
-   Post: true when the row hands out pages, and on the deadline whatever it
-         hands out.
+         one. Both carry `:day`, `:pages` and `:deadline?`, so both give the
+         same answer for the same day.
+   Post: true when the row hands out pages, on the deadline whatever it hands
+         out, and ALWAYS on day 0.
    Post: **the deadline survives with 0 pages.** `daily-page-plan` rounds, so
          the last day of a slow window can carry nothing — 28 pages over 120
          days puts 0 on day 119, which IS the deadline — and dropping it would
-         take the one date the `Cover by` tile names out of the filtered table."
+         take the one date the `Cover by` tile names out of the filtered table.
+   Post: **today survives whatever it owes.** Day 0 is a quota, so it reads
+         `done` or `N ahead` exactly when it owes nothing — and filtering it out
+         at that moment would hide the one row the reader worked to earn."
   [row]
-  (or (pos? (long (:pages row 0))) (boolean (:deadline? row))))
+  (or (pos? (long (:pages row 0)))
+      (boolean (:deadline? row))
+      (= 0 (:day row))))
 
 (defn pages-label
   "`n` with the noun `page` agreeing with it.
@@ -579,6 +629,40 @@
   [n]
   (let [k (long n)]
     (str k " page" (when (not= 1 k) "s"))))
+
+(defn quota-met?
+  "Whether today's quota is settled — nothing owed, or already past it.
+
+   The one predicate three surfaces read, so the table cell, the Today tile and
+   the home-view row cannot disagree about when the day is finished."
+  [owed]
+  (<= (long owed) 0))
+
+(defn quota-cell
+  "Today's owed pages as the plan TABLE renders them.
+
+   Pre : `owed` is `plan-days`' day 0, which may be negative.
+   Post: a bare count while pages are owed, `done` at zero, and `N ahead` past
+         it. Never a negative integer: a `-1` in a column of page counts reads
+         as an error rather than as credit."
+  [owed]
+  (let [k (long owed)]
+    (cond
+      (pos? k) (str k)
+      (zero? k) "done"
+      :else (str (- k) " ahead"))))
+
+(defn quota-phrase
+  "Today's owed pages as the TILES render them, with the noun.
+
+   Same three states as `quota-cell`, and the same words past zero, so a reader
+   moving between the tile and the table sees one vocabulary."
+  [owed]
+  (let [k (long owed)]
+    (cond
+      (pos? k) (pages-label k)
+      (zero? k) "done"
+      :else (str (- k) " ahead"))))
 
 (defn deadline-token
   "A signed day count as the deadline half of a readout.
@@ -626,12 +710,21 @@
    Pre : `pages-remaining` counts pages NOT YET COVERED. Passing the unknown
          count instead is the defect this whole change exists to remove: it
          charges the user for pages they have already read.
+   Pre : `covered-today` is REQUIRED, and no default papers over its absence.
+         Every caller reads it from the same `document-progress` map that
+         produced `pages-remaining`, including the degenerate paths, so 0 is
+         never a stand-in for an unknown count — it means the reader has
+         covered nothing today. Defaulting a missing key to 0 would silently
+         restore the rate-shaped cell this fn exists to replace.
+   Post: `:pages-today` is what is still OWED today and may be negative. Render
+         it through `quota-phrase`, never as a bare number.
    Post: {:pages-today :reviews-today :pages-remaining}. There is no day count
          here. It used to carry `:days-remaining`, which returned the horizon
          while its name promised the days left to do the work — two different
          numbers once the plan stopped at the coverage deadline. Nothing read
          it. `:coverage`'s `:reading-days` is the figure it appeared to name."
-  [{:keys [pages-remaining reading-days horizon daily-load]}]
-  {:pages-today (:pages (first (plan-days pages-remaining reading-days horizon)))
+  [{:keys [pages-remaining reading-days horizon daily-load covered-today]}]
+  {:pages-today (:pages (first (plan-days pages-remaining reading-days horizon
+                                 covered-today)))
    :reviews-today (double (get daily-load 0 0.0))
    :pages-remaining (long pages-remaining)})

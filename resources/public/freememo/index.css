@@ -4569,6 +4569,15 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     box-shadow: inset 2px 0 0 var(--color-primary);
 }
 
+/* Today's quota, settled: nothing owed, or already past it. Green states the
+   one thing the number cannot — that the day is finished — and it rides on the
+   value alone so the surrounding row keeps its normal weight. */
+.sched-quota-met .sched-tile-value,
+.tape-scroll table tr td.sched-quota-met {
+    color: light-dark(#15803d, #4ade80);
+    font-weight: 600;
+}
+
 /* The maturation window: the days after the coverage deadline. They ask for no
    reading and still carry reviews, so they are dimmed rather than hidden — the
    review column is the work that makes the covered pages count. The first one

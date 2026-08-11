@@ -110,10 +110,17 @@
 ;; Small panels
 ;; ---------------------------------------------------------------------------
 
-(e/defn StatTile [label value sub]
+;; Pre:  `highlight?` is a predicate over the SAME number `value` renders. A
+;;       tile that highlights on one figure and prints another is worse than no
+;;       colour at all. Today's tile passes `schedule-forecast/quota-met?`;
+;;       every other tile reports an outcome nobody earns in a day and passes
+;;       false.
+;; Post: one component. A second, near-identical tile would be two methods
+;;       against the 64KB cap and two places to keep one layout in step.
+(e/defn StatTile [label value sub highlight?]
   (e/client
     (dom/div
-      (dom/props {:class "dash-card sched-tile"})
+      (dom/props {:class (str "dash-card sched-tile" (when highlight? " sched-quota-met"))})
       (dom/div (dom/props {:class "dash-cap"}) (dom/text label))
       (dom/div (dom/props {:class "sched-tile-value"}) (dom/text value))
       (when sub
@@ -130,7 +137,7 @@
         (dom/props {:class "sched-tiles"})
         (StatTile "Known now"
           (str (e/server (:known prog)) " / " (e/server (:total prog)))
-          (pct (e/server (:fraction prog))))
+          (pct (e/server (:fraction prog))) false)
         ;; Covered sits BETWEEN known and untested on purpose, and its sub-line
         ;; is load-bearing. Untested is a strict subset of covered, so two
         ;; adjacent tiles with the relation unstated invite a reader to add
@@ -138,27 +145,29 @@
         ;; second qualifies it, which states the subset without a sentence.
         (StatTile "Covered"
           (str (e/server (:covered prog)) " / " (e/server (:total prog)))
-          "marked done")
+          "marked done" false)
         ;; §5.4 — the exposure figure is its own tile. Folding it into "known"
         ;; is what would hide the cost of lever I5.
         (StatTile "Untested"
           (str (e/server (:untested prog)))
-          "done, never carded")
+          "done, never carded" false)
         (StatTile "Projected at target"
           (str (e/server (:known proj)) " / " (e/server (:total proj)))
-          (pct (e/server (:fraction proj))))
+          (pct (e/server (:fraction proj))) false)
         (StatTile "Pace" (pace-label (e/server (:delta pace)))
-          (str "needs " (long (Math/round (double (e/server (:required pace))))) " by now"))
-        (StatTile "Today"
-          (fc/pages-label (e/server (:pages-today today)))
-          (str (approx (e/server (:reviews-today today))) " reviews"))
+          (str "needs " (long (Math/round (double (e/server (:required pace))))) " by now") false)
+        (let [owed (e/server (:pages-today today))]
+          (StatTile "Today"
+            (fc/quota-phrase owed)
+            (str (approx (e/server (:reviews-today today))) " reviews")
+            (fc/quota-met? owed)))
         ;; Last, beside `Today`, because both are instructions. The five tiles
         ;; before them report retention, which is the outcome. It answers the
         ;; question the plan table could not: when must the reading be done.
         (StatTile "Cover by"
           (str (e/server (:cover-by coverage)))
           (let [d (e/server (:reading-days coverage))]
-            (str d " reading day" (when (not= 1 d) "s"))))))))
+            (str d " reading day" (when (not= 1 d) "s"))) false)))))
 
 ;; Pre:  `lever` is one map from `levers`; `user-id` owns `schedule-id`.
 ;; Post: a list item. When `:apply-date` is set it carries an Apply control
@@ -376,8 +385,18 @@
         (dom/text (str (:date r) " · " (:weekday r))))
       ;; An em dash, never 0. A maturation day asks for no reading, and a 0
       ;; reads as a day the user failed to fill.
-      (dom/td (dom/props {:class "sched-cell sched-num"})
-        (dom/text (if (= :mature (:phase r)) "—" (str (:pages r)))))
+      ;;
+      ;; Day 0 is a quota, so it reads `done` or `N ahead` rather than a bare
+      ;; number, and turns green once it is settled. Every later day is a plain
+      ;; count — `quota-cell` would render their 0 as `done`, which on a future
+      ;; day would promise something nobody has earned yet.
+      (dom/td (dom/props {:class (str "sched-cell sched-num"
+                                   (when (and (zero? (:day r)) (fc/quota-met? (:pages r)))
+                                     " sched-quota-met"))})
+        (dom/text (cond
+                    (= :mature (:phase r)) "—"
+                    (zero? (:day r)) (fc/quota-cell (:pages r))
+                    :else (str (:pages r)))))
       (dom/td (dom/props {:class "sched-cell sched-num sched-dim"})
         (dom/text (str (:cumulative r))))
       (dom/td (dom/props {:class "sched-cell sched-num"})
@@ -441,8 +460,8 @@
     ;; behind. Both counts come from the server: `:mature-days` because the
     ;; server has every input for it, and the filter count through
     ;; `fc/covering-day?` because the filter itself uses that predicate.
-    (let [total-pages (e/server (reduce + 0 (map :pages (:plan forecast))))
-          coverage (e/server (:coverage forecast))
+    (let [coverage (e/server (:coverage forecast))
+          total-pages (e/server (:pages-remaining coverage))
           cover-days (e/server (:reading-days coverage))
           mature-days (e/server (:mature-days coverage))
           covering-days (e/server (count (filter fc/covering-day? (:plan forecast))))
@@ -626,8 +645,8 @@
             (StatTile "Known now"
               (str (e/server (get-in forecast [:progress :known])) " / "
                 (e/server (get-in forecast [:progress :total])))
-              "from done pages alone")
+              "from done pages alone" false)
             (StatTile "Untested"
               (str (e/server (get-in forecast [:progress :untested])))
-              "done, never carded"))
+              "done, never carded" false))
           (PlanSection forecast))))))

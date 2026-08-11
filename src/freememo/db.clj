@@ -273,6 +273,18 @@
   ;; status: a topic may be both done and dismissed (4 positions). Reversible.
   (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS dismissed BOOLEAN NOT NULL DEFAULT false"])
 
+  ;; WHEN a topic was marked done. `status` alone cannot answer "how many pages
+  ;; did I cover today", which is what the Schedule tab's daily quota counts
+  ;; down (plans/study-plan-daily-quota.md §5.1).
+  ;;
+  ;; Deliberately NOT backfilled. NULL reads as "not today", which is the right
+  ;; answer for every page marked before this column existed.
+  ;;
+  ;; Every writer of `status` owns this too: set on the way into 'done', NULL on
+  ;; the way out. A row that is done with no timestamp, or timestamped and not
+  ;; done, is a writer that forgot.
+  (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS done_at TIMESTAMPTZ"])
+
   ;; Search: plain-text column derived from HTML content, trigram GIN index
   (jdbc/execute! ds ["ALTER TABLE topics ADD COLUMN IF NOT EXISTS content_text text"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_content_text_trgm
@@ -3389,10 +3401,20 @@
     (= "done" (:topics/status result))))
 
 (defn toggle-page-done!
-  "Toggle a page topic between 'active' and 'done' status."
+  "Toggle a page topic between 'active' and 'done' status.
+
+   Post: `done_at` moves with `status` in the SAME statement — stamped on the
+         way into 'done', NULL on the way out. Two statements could interleave
+         with a concurrent read and show a done page with no timestamp, which
+         the daily quota would count as covered on some earlier day.
+   Post: this is a TOGGLE, so re-marking a page takes two calls — one to clear
+         the stamp and one to set a fresh instant. Both land on the same day, so
+         the daily quota counts that page once however many times it is toggled."
   [parent-id page-number]
   (jdbc/execute-one! ds
-    ["UPDATE topics SET status = CASE WHEN status = 'done' THEN 'active' ELSE 'done' END
+    ["UPDATE topics
+        SET status  = CASE WHEN status = 'done' THEN 'active' ELSE 'done' END,
+            done_at = CASE WHEN status = 'done' THEN NULL ELSE now() END
       WHERE parent_id = ? AND page_number = ?"
      parent-id page-number]))
 
@@ -4649,7 +4671,7 @@
      (when-let [before (snapshot-topic-row tx id)]
       (insert-repetition! tx id "done" before)
       (jdbc/execute-one! tx
-        ["UPDATE topics SET status = 'done' WHERE id = ?" id])))))
+        ["UPDATE topics SET status = 'done', done_at = now() WHERE id = ?" id])))))
 
 (defn restore-topic!
   "Restore a done topic back to active queue. Owner-gated by `user-id`.
@@ -4660,7 +4682,8 @@
      (when-let [before (snapshot-topic-row tx id)]
       (insert-repetition! tx id "restore" before)
       (jdbc/execute-one! tx
-        ["UPDATE topics SET status = 'active', next_review_at = NULL WHERE id = ?" id])))))
+        ["UPDATE topics SET status = 'active', next_review_at = NULL, done_at = NULL
+          WHERE id = ?" id])))))
 
 (defn touch-topic!
   "Update last_review_at without advancing the interval (subset-review soft rep).
@@ -8900,16 +8923,21 @@
 
    Pre : `user-id` owns `root-topic-id`. `first-page` and `last-page` are page
          NUMBERS, either may be nil for an open end.
-   Post: {:page-id :page-number :done?} per page. Every page of the range is
-         present, including pages with no cards and pages never opened — §5.5
-         requires an untouched book to read 0 of N rather than 0 of 0, and that
-         only holds if the denominator comes from here."
+   Post: {:page-id :page-number :done? :done-at} per page. Every page of the
+         range is present, including pages with no cards and pages never opened
+         — §5.5 requires an untouched book to read 0 of N rather than 0 of 0,
+         and that only holds if the denominator comes from here.
+   Post: `:done-at` is the raw instant, NOT a same-day flag. Deciding which day
+         it falls on needs the day boundary, and `freememo.schedule` owns that
+         — one definition, already used by `start-of-today-ms` and `days-until`.
+         Comparing here would put a second one in SQL."
   [user-id root-topic-id first-page last-page]
   (mapv (fn [r] {:page-id (:topics/id r)
                  :page-number (:topics/page_number r)
-                 :done? (= "done" (:topics/status r))})
+                 :done? (= "done" (:topics/status r))
+                 :done-at (:topics/done_at r)})
     (jdbc/execute! ds
-      (sql/format {:select [:t/id :t/page_number :t/status]
+      (sql/format {:select [:t/id :t/page_number :t/status :t/done_at]
                    :from [[:topics :t]]
                    :where (cond-> [:and
                                    [:= :t/parent_id root-topic-id]

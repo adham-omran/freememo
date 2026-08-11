@@ -520,9 +520,18 @@
       (dom/div
         (dom/props {:style {:margin-top "6px" :font-size "12px"
                             :color "var(--color-text-secondary)"}})
+        ;; `quota-phrase`, the same fn the tab's Today tile reads, so the home
+        ;; view and the tab cannot disagree about whether the day is finished.
+        ;;
+        ;; The `today:` label is load-bearing here and absent in the tab, where
+        ;; the tile's own cap supplies it. Without it this segment reads
+        ;; `4 pages ahead · 44 / 60 covered · 2 ahead` — two different `ahead`
+        ;; numbers in one line, one measured against the pace line and one
+        ;; against today's allocation. A bare `done` reads as the whole
+        ;; schedule being finished.
         (dom/text (str (:pace-phrase s)
                     " · " (:covered s) " / " (:total s) " covered"
-                    " · " (fc/pages-label (:pages-today s)) " today")))
+                    " · today: " (fc/quota-phrase (:pages-today s)))))
       ;; :ok needs no line — a working forecast is the ordinary case, and
       ;; labelling it would make the exceptions harder to spot.
       (when (not= :ok (:status s))

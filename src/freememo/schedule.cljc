@@ -214,25 +214,31 @@
       Pre : `pages-remaining` counts pages NOT YET COVERED, >= 0. `reading-days`
             is `schedule-forecast/coverage-window`'s count, `horizon` >= 0, and
             `load` is the derived daily review histogram.
+      Pre : `covered-today` counts pages of the range marked done today, and is
+            already inside the coverage `pages-remaining` was derived from.
       Post: a vector of {:day :date :weekday :pages :phase :reviews :cumulative},
-            one per day, `:date` an ISO string in the server's zone. The
-            `:pages` column sums to `pages-remaining` exactly, and
-            `:cumulative` is its running total, so the last row always reads
-            the whole remainder.
+            one per day, `:date` an ISO string in the server's zone.
+      Post: `:pages` on day 0 is what is still OWED today and may be NEGATIVE.
+            `:cumulative` runs over `max(0, pages)` for that reason, and still
+            lands on the whole remainder — `plan-days` guarantees the sum.
       Post: rows run to the TARGET while pages stop at the coverage deadline.
             The tail rows carry `:phase :mature`, 0 pages and their own review
             load — that window is the artefact this table exists to show, and
             cutting the table at the deadline would hide it.
       Inv : `:pages` comes from `schedule-forecast/plan-days`, the same fn
             `today-plan` reads, so row 0 and the Today tile cannot drift."
-     [pages-remaining reading-days horizon load]
-     (let [days (fc/plan-days pages-remaining reading-days horizon)
+     [pages-remaining reading-days horizon load covered-today]
+     (let [days (fc/plan-days pages-remaining reading-days horizon covered-today)
            today (java.time.LocalDate/now)]
        (first
          (reduce (fn [[acc run] d]
                    (let [{:keys [pages phase deadline?]} (nth days d)
                          p (long pages)
-                         run' (+ run p)
+                         ;; `max 0`: a reader who is ahead owes a negative
+                         ;; number today, and crediting that against the
+                         ;; running total would report less work left than
+                         ;; there is.
+                         run' (+ run (max 0 p))
                          date (.plusDays today d)]
                      ;; `:deadline?` is present on ONE row and absent from the
                      ;; rest. These maps cross the wire per windowed row, and a
@@ -409,7 +415,12 @@
            all-pages (db/get-schedule-pages user-id root
                        (:study_schedules/first_page row)
                        (:study_schedules/last_page row))
-           pages (mapv #(assoc % :excluded? (contains? excluded (:page-number %)))
+           ;; `:done-today?` is decided HERE, against `origin-ms`, because that
+           ;; is the app's one definition of a day — the same midnight
+           ;; `days-until` and every day index already use. Comparing in SQL
+           ;; would put a second boundary in a second timezone.
+           pages (mapv #(assoc % :excluded? (contains? excluded (:page-number %))
+                                 :done-today? (= 0 (day-index origin-ms (:done-at %))))
                    all-pages)
            cfg-row (db/get-anki-deck-config user-id)
            deck-config (:anki_deck_configs/config cfg-row)
@@ -545,6 +556,11 @@
              ;; count charges them again for every page whose cards are still
              ;; young, and no amount of reading removes one of those.
              uncovered (- (:total progress) (:covered progress))
+             ;; Pages covered TODAY. Day 0 of the plan is a quota that counts
+             ;; down by this, so it must come from the same progress map as
+             ;; `uncovered` — a count taken separately could describe a
+             ;; different instant and make the allocation drift.
+             covered-today (:covered-today progress)
              reading-days (fc/coverage-window horizon lead)
              base {:schedule row
                    :horizon-days horizon
@@ -564,9 +580,17 @@
                    ;; at every input — `schedule_fsrs_test` asserts that, which
                    ;; is what lets the caption read this instead of counting
                    ;; the plan on the client.
+                   ;; `:pages-remaining` is the plan's own headline figure, and
+                   ;; it is reported rather than left to be summed off the
+                   ;; table. Day 0 is a quota and goes negative once the reader
+                   ;; is ahead, so `(reduce + (map :pages plan))` undercounts by
+                   ;; the surplus — measured reading `0 pages` with five still
+                   ;; to cover. `study-plan`'s cumulative already clamps; this
+                   ;; removes the second place that had to remember to.
                    :coverage {:lead lead
                               :reading-days reading-days
                               :mature-days (max 0 (- horizon reading-days))
+                              :pages-remaining uncovered
                               :cover-by (day->iso-date (dec reading-days))}}]
          (if (not= :ok status)
            ;; Anki has never been read, or this document has no pushed cards.
@@ -576,7 +600,7 @@
            ;; not have.
            (assoc base :status status :theta theta
              :progress progress
-             :plan (study-plan uncovered reading-days horizon {}))
+             :plan (study-plan uncovered reading-days horizon {} covered-today))
 
            (let [[known-end verdicts-end projected]
                  (known-at scheduler pcards pages theta horizon {})
@@ -629,10 +653,11 @@
                :peak-load peak
                ;; §1.2 — the plan the user actually follows. Pages come
                ;; from the straight line, reviews from the projection.
-               :plan (study-plan uncovered reading-days horizon load)
+               :plan (study-plan uncovered reading-days horizon load covered-today)
                :today (fc/today-plan {:pages-remaining uncovered
                                       :reading-days reading-days
                                       :horizon horizon
+                                      :covered-today covered-today
                                       :daily-load load})
                :feasibility feas))))
        ;; No such schedule, or it belongs to somebody else. A distinct status,
@@ -831,6 +856,7 @@
                             {:pages-remaining uncovered
                              :reading-days (fc/coverage-window (:horizon inputs) (:lead inputs))
                              :horizon (:horizon inputs)
+                             :covered-today (:covered-today progress)
                              :daily-load {}}))}))
        (db/list-study-schedules user-id))
      :cljs []))
