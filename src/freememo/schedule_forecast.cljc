@@ -88,6 +88,27 @@
 (defn- mean [xs]
   (if (seq xs) (/ (reduce + 0.0 xs) (count xs)) 0.0))
 
+(defn carded-verdict
+  "Which gate a CARDED page's means clear, as a `page-verdict` reason (§5.8.1).
+
+   The single statement of the known gate. `page-verdict` reads it for a page
+   and `maturation-lead` reads it for one probe card, so the two cannot drift
+   into different definitions of known — which they would, because the lead
+   exists only to answer 'how long until this gate opens'.
+
+   Pre : `r` and `ivl` are the MEANS over the page's cards, and `theta` is the
+         schedule's θ. A caller with no cards has no verdict here — zero cards
+         is `page-verdict`'s own case, and passing a mean over nothing would
+         read as `:below-theta` rather than as untouched.
+   Post: `:below-theta`, `:immature` or `:mature`, never nil.
+   Inv : θ is tested before the interval, so a page that fails both is named by
+         the gate the user can act on first."
+  [r ivl theta]
+  (cond
+    (< r theta) :below-theta
+    (< ivl sf/maturity-interval-days) :immature
+    :else :mature))
+
 (defn page-verdict
   "Whether one page is known, and why (§5.1 – §5.5, §5.8).
 
@@ -116,9 +137,7 @@
         reason (cond
                  (and (zero? n) (:done? page)) :uncarded-done
                  (zero? n) :untouched
-                 (< r theta) :below-theta
-                 (< ivl sf/maturity-interval-days) :immature
-                 :else :mature)]
+                 :else (carded-verdict r ivl theta))]
     {:page-id (:page-id page)
      :page-number (:page-number page)
      :known? (contains? #{:uncarded-done :mature} reason)
@@ -227,25 +246,36 @@
 ;; ---------------------------------------------------------------------------
 
 (defn pace
-  "Lag or lead, in pages (§6.2).
+  "Lag or lead, in COVERED pages (§6.2).
 
-   The figure is known-now minus required-now, where required-now walks a
-   straight line from the known count at the schedule's start to the whole
-   range at its target. Negative is behind, positive is ahead, and a document
-   exactly on plan reads 0.
+   The figure is covered-now minus required-now, where required-now walks a
+   straight line from the covered count at the schedule's coverage baseline to
+   the whole range at its COVERAGE DEADLINE. Negative is behind, positive is
+   ahead, and a document exactly on plan reads 0.
 
-   Pre : `elapsed-days` and `total-days` are day counts, `total-days` >= 0.
-   Post: {:required :actual :delta}. Before the start and after the target the
-         line is clamped to its endpoints, so a schedule opened after its target
-         reports the whole range as required rather than a figure past 100%."
-  [{:keys [known-now total-pages start-known elapsed-days total-days]}]
+   The unit is coverage, and both endpoints move with it. Measuring a lag in
+   known pages against a plan that asks for covered pages is what made a user
+   who worked the table read `Behind` for the whole first stretch: known trails
+   coverage by the maturation lead, by construction. `plans/schedule-pace-pill.md`
+   §6.2.2 names that as its own falsifier.
+
+   Pre : `elapsed-days` and `total-days` are day counts over the COVERAGE
+         window, not the schedule's whole span. `total-days` >= 0.
+   Pre : `covered-now` and `start-covered` are both done-mark counts. Mixing a
+         baseline in one unit with a reading in another is the defect `pace-of`
+         records against `start_known`.
+   Post: {:required :actual :delta}. Before the baseline and after the coverage
+         deadline the line is clamped to its endpoints, so a schedule opened
+         after its deadline reports the whole range as required rather than a
+         figure past 100%."
+  [{:keys [covered-now total-pages start-covered elapsed-days total-days]}]
   (let [frac (cond
                (<= (long total-days) 0) 1.0
                :else (min 1.0 (max 0.0 (/ (double elapsed-days) (double total-days)))))
-        required (+ (double start-known) (* frac (- (double total-pages) (double start-known))))]
+        required (+ (double start-covered) (* frac (- (double total-pages) (double start-covered))))]
     {:required required
-     :actual (double known-now)
-     :delta (- (double known-now) required)}))
+     :actual (double covered-now)
+     :delta (- (double covered-now) required)}))
 
 (def ^:const pace-dead-zone-pages
   "How far off the line still reads as on plan, in pages.
@@ -308,37 +338,117 @@
                          the target date.
      :over-capacity    — some day's derived load exceeds the review rate the
                          user has actually sustained (§6.7).
+     :no-maturation-window — the horizon is at or under the maturation lead, so
+                         a page covered today cannot clear the gate in time.
+                         Every page of the plan lands on day 0 and none of them
+                         can count.
+     :maturity-unreachable — `maturation-lead` found no day at all. The gate
+                         never opens under this deck config and θ, so no amount
+                         of reading produces a known page.
 
    Post: {:feasible? :reasons :peak-load :capacity :projected-known :required
-          :levers}. `:levers` is always the four of §6.6 — I1 date, I2 capacity,
-          I4 θ, I5 exclude pages — because the warning MUST name all four
-          whichever reason fired. I3 does not exist and 6.6.5 records why lower
-          `card_count` was rejected.
+          :horizon :maturation-lead :levers}. `:horizon` is echoed back beside
+          the lead because `:no-maturation-window` is a statement about the two
+          TOGETHER. A surface that took one from here and the other from the
+          forecast map would be reading one sentence out of two sources.
+          `:levers` is always the four of §6.6 —
+          I1 date, I2 capacity, I4 θ, I5 exclude pages — because the warning
+          MUST name all four whichever reason fired. I3 does not exist and
+          6.6.5 records why lower `card_count` was rejected.
+   Pre : `:maturation-lead` and `:horizon` are BOTH present. A nil lead is a
+         legitimate value meaning the gate is unreachable, so an absent key and
+         an unreachable gate are indistinguishable here and both raise
+         `:maturity-unreachable`. A caller that forgets the key gets a warning
+         about the deck config, which is the loudest safe reading of it.
+   Post: `:maturation-lead` is reported so the panel names the number of days
+         rather than a bare warning. A user told 'no maturation window' with no
+         figure cannot tell whether to move the date by a day or by a month.
    Invariant: a feasible plan reports no reasons, and an infeasible one reports
          at least one. The two can never both be empty."
   [{:keys [projected-known required-pages peak-load observed-capacity
-           earliest-day]}]
+           earliest-day horizon] lead :maturation-lead}]
   (let [short? (< (long projected-known) (long required-pages))
         over? (and (pos? (double observed-capacity))
                 (> (double peak-load) (double observed-capacity)))
+        unreachable? (nil? lead)
+        no-window? (and (some? lead) (<= (long horizon) (long lead)))
         reasons (cond-> []
                   short? (conj :short-of-target)
-                  over? (conj :over-capacity))]
+                  over? (conj :over-capacity)
+                  no-window? (conj :no-maturation-window)
+                  unreachable? (conj :maturity-unreachable))]
     {:feasible? (empty? reasons)
      :reasons reasons
      :peak-load (double peak-load)
      :capacity (double observed-capacity)
      :projected-known (long projected-known)
      :required (long required-pages)
+     :horizon (long horizon)
+     :maturation-lead lead
      :earliest-day earliest-day
      :levers [:push-target-date :raise-capacity :lower-theta :exclude-pages]}))
+
+;; ---------------------------------------------------------------------------
+;; The maturation lead
+;; ---------------------------------------------------------------------------
+;;
+;; How many days pass between covering a page and the day its cards can count.
+;; The plan stops the reading work this many days before the target, because a
+;; page covered later cannot clear the gate whatever the user does.
+
+(def probe-card
+  "A card introduced today: never reviewed, first review on day 0.
+
+   The unit `maturation-lead` measures. It is the best case a covered page can
+   produce — the user reads the page, cards it, pushes it and reviews it the
+   same day — so the lead it yields is a floor. `assign-first-review-days`
+   spreads a real push at `daily_capacity` per day, which can only move the
+   first review later."
+  {:state 1 :step 0 :stability nil :difficulty nil
+   :interval-days 0.0 :last-review-day nil :next-review-day 0})
+
+(defn maturation-lead
+  "Days from a card's first review to the day it clears the known gate.
+
+   Pre : `scheduler` is the SCHEDULE's own scheduler, built from its deck
+         config and its I4 θ override, and `theta` is that same θ. A lead
+         measured against defaults describes a different user.
+   Pre : `search-days` >= 0. The caller owns the bound, so this namespace names
+         no horizon constant.
+   Post: the first day in [0, search-days] on which `probe-card` reads
+         `:mature`, or nil when it reads `:mature` on no day in that range.
+   Post: nil means the gate is unreachable under this configuration, NOT that
+         the lead is zero. A caller that reads nil as zero would plan reading
+         work up to the target date and promise a target the cards cannot meet.
+
+   A LINEAR scan, and it must stay one. The gate is not monotonic in the
+   horizon: R decays between reviews, so a card that clears θ on one day can
+   fail it on a later one. Measured at θ 0.97 under the default weights, the
+   probe clears the gate on day 49 and fails it again on 65 later days inside
+   120. A binary search over a predicate that flips returns an arbitrary day.
+
+   The cost is `lead + 1` projections of ONE card. Measured at θ 0.95, the
+   worst normal case, that is 32 projections against the whole-document
+   projection the forecast already runs."
+  [scheduler theta search-days]
+  (let [limit (long search-days)]
+    (loop [d 0]
+      (when (<= d limit)
+        (let [p (sf/project-card scheduler probe-card {:horizon-days d})]
+          (if (= :mature (carded-verdict (:retrievability p) (:interval-days p) theta))
+            d
+            (recur (inc d))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Today's plan (§1.2)
 ;; ---------------------------------------------------------------------------
 
 (defn daily-page-plan
-  "Pages to work on each day from today to the target (§1.2).
+  "Pages to cover on each day of the READING window (§1.2).
+
+   The window ends at the coverage deadline, not at the target — `plan-days`
+   owns that split and this fn owns the split of pages across the days it is
+   given.
 
    The distribution follows the SAME straight line §6.2's pace figure compares
    against, so a user who works the table reads `on plan` every day. Deriving
@@ -350,7 +460,7 @@
    `pages-remaining`. A rate below one page per day therefore produces days of
    0 and days of 1 rather than a fraction nobody can act on.
 
-   Pre : `pages-remaining` >= 0. `days` >= 0 — a target today or in the past
+   Pre : `pages-remaining` >= 0. `days` >= 0 — a window that has already closed
          collapses to one day, because the work is still owed.
    Post: a vector of `max(1, days)` non-negative longs whose sum is exactly
          `pages-remaining`.
@@ -361,6 +471,65 @@
         total (max 0 (long pages-remaining))
         cum (fn [d] (long (Math/round (/ (* (double total) (inc (long d))) (double n)))))]
     (mapv (fn [d] (- (cum d) (if (zero? d) 0 (cum (dec d))))) (range n))))
+
+(defn coverage-window
+  "How many days the plan may put pages on, given a horizon and a lead.
+
+   Pre : `horizon` >= 0. `lead` is `maturation-lead`'s day count, or nil when
+         the gate is unreachable.
+   Post: >= 1 always. A horizon at or under the lead leaves no window, and the
+         remainder still lands on day 0 — the reading work is owed whether or
+         not it can mature in time, and `feasibility` is what says so.
+   Post: nil `lead` yields the whole horizon. A user whose configuration cannot
+         mature a card can still read, and the warning carries the bad news."
+  [horizon lead]
+  (max 1 (- (long horizon) (long (or lead 0)))))
+
+(defn plan-days
+  "Pages and phase for every day from today to the horizon (§1.2).
+
+   The plan runs to the TARGET while the pages stop at the coverage deadline.
+   Both halves are load-bearing. Stopping the table early would hide the review
+   work the maturation window carries, and running the pages to the target
+   would ask for reading that cannot count.
+
+   Pre : `pages-remaining` >= 0. `days` is `coverage-window`'s count, >= 1.
+         `horizon` >= 0.
+   Post: a vector of {:pages :phase :deadline?} of length
+         `max(days, max(1, horizon))`. `:phase` is `:cover` for the first
+         `days` entries and `:mature` after.
+   Post: `:deadline?` marks the LAST reading day — the day the covering has to
+         be finished. It is data rather than a rendering rule because the plan
+         table recycles its rows, so a view cannot find that boundary by
+         looking at a row's neighbours.
+   Post: the `:pages` column sums to EXACTLY `pages-remaining`.
+   Inv : a `:mature` entry always carries 0 pages. This is the whole point of
+         the split, and the falsifier the plan is verified against."
+  [pages-remaining days horizon]
+  (let [r (max 1 (long days))
+        n (max r (max 1 (long horizon)))
+        pages (daily-page-plan pages-remaining r)]
+    (mapv (fn [d] {:pages (nth pages d 0)
+                   :phase (if (< d r) :cover :mature)
+                   :deadline? (= d (dec r))})
+      (range n))))
+
+(defn covering-day?
+  "Whether a plan row belongs to the covering half of the plan (§1.2).
+
+   The filter's predicate AND the count rendered beside it, so the label cannot
+   promise a number the table does not leave.
+
+   Pre : `row` is a `plan-days` entry, or a `schedule/study-plan` row built from
+         one. Both carry `:pages`, and `:deadline?` on at most one of them.
+   Post: true when the row hands out pages, and on the deadline whatever it
+         hands out.
+   Post: **the deadline survives with 0 pages.** `daily-page-plan` rounds, so
+         the last day of a slow window can carry nothing — 28 pages over 120
+         days puts 0 on day 119, which IS the deadline — and dropping it would
+         take the one date the `Cover by` tile names out of the filtered table."
+  [row]
+  (or (pos? (long (:pages row 0))) (boolean (:deadline? row))))
 
 (defn pages-label
   "`n` with the noun `page` agreeing with it.
@@ -404,17 +573,23 @@
       (if (= :behind state) " behind" " ahead"))))
 
 (defn today-plan
-  "What the user does today: pages to work, cards to review (§1.2).
+  "What the user does today: pages to cover, cards to review (§1.2).
 
-   `:pages-today` is day 0 of `daily-page-plan`, never a separate calculation.
-   One definition, so the tile and the dated table cannot report different
-   numbers for the same day — and a user who sees two answers has no way to
-   pick between them. `:reviews-today` is day 0 of the derived load, which is
-   fractional by §6.4 and stays fractional here; the surface rounds it.
+   `:pages-today` is day 0 of `plan-days`, never a separate calculation. One
+   definition, so the tile and the dated table cannot report different numbers
+   for the same day — and a user who sees two answers has no way to pick
+   between them. `:reviews-today` is day 0 of the derived load, which is
+   fractional by §6.4 and stays fractional here. The surface rounds it.
 
-   Post: {:pages-today :reviews-today :pages-remaining :days-remaining}."
-  [{:keys [pages-remaining days-remaining daily-load]}]
-  {:pages-today (first (daily-page-plan pages-remaining days-remaining))
+   Pre : `pages-remaining` counts pages NOT YET COVERED. Passing the unknown
+         count instead is the defect this whole change exists to remove: it
+         charges the user for pages they have already read.
+   Post: {:pages-today :reviews-today :pages-remaining}. There is no day count
+         here. It used to carry `:days-remaining`, which returned the horizon
+         while its name promised the days left to do the work — two different
+         numbers once the plan stopped at the coverage deadline. Nothing read
+         it. `:coverage`'s `:reading-days` is the figure it appeared to name."
+  [{:keys [pages-remaining reading-days horizon daily-load]}]
+  {:pages-today (:pages (first (plan-days pages-remaining reading-days horizon)))
    :reviews-today (double (get daily-load 0 0.0))
-   :pages-remaining (long pages-remaining)
-   :days-remaining (long days-remaining)})
+   :pages-remaining (long pages-remaining)})

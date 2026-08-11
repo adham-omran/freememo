@@ -1379,6 +1379,8 @@
       theta REAL,
       excluded_pages INTEGER[] NOT NULL DEFAULT '{}',
       start_known INTEGER NOT NULL DEFAULT 0,
+      start_covered INTEGER NOT NULL DEFAULT 0,
+      covered_baseline_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       archived_at TIMESTAMPTZ
     )"])
@@ -1395,6 +1397,51 @@
   (jdbc/execute! ds ["ALTER TABLE study_schedules DROP CONSTRAINT IF EXISTS study_schedules_capacity_positive"])
   (jdbc/execute! ds ["ALTER TABLE study_schedules ADD CONSTRAINT study_schedules_capacity_positive
                       CHECK (daily_capacity > 0)"])
+
+  ;; The COVERAGE baseline. The pace figure measures covered pages against a
+  ;; straight line, and a line needs the count the user had when they made the
+  ;; plan. `start_known` cannot serve: known is at or below covered by the
+  ;; maturation gate, so reusing it understates the baseline and reports every
+  ;; schedule as further ahead than it is.
+  ;;
+  ;; `covered_baseline_at` is the line's ORIGIN, and it exists because coverage
+  ;; at creation time is unrecoverable. `topics.status` is a TEXT column
+  ;; toggled in place with no timestamp, and `undo_log.action_type` carries no
+  ;; done toggle, so nothing anywhere records when a page was marked done. A
+  ;; schedule that predates this column therefore takes TODAY's covered count
+  ;; against TODAY as its origin: exact going forward, and it forgives whatever
+  ;; lag the old line had measured. Reusing `created_at` with today's count
+  ;; would instead make a half-elapsed schedule jump several pages behind
+  ;; overnight, which is a worse lie than a forgiven lag.
+  (jdbc/execute! ds ["ALTER TABLE study_schedules ADD COLUMN IF NOT EXISTS start_covered
+                      INTEGER NOT NULL DEFAULT 0"])
+  (jdbc/execute! ds ["ALTER TABLE study_schedules ADD COLUMN IF NOT EXISTS covered_baseline_at
+                      TIMESTAMPTZ"])
+  ;; Guarded on the origin being absent, so this runs ONCE per row. Without the
+  ;; guard every boot would re-baseline every live schedule to `on plan`, and
+  ;; the pace figure would never report a lag again.
+  ;;
+  ;; The count is `document-progress`' own rule: pages of the root, inside the
+  ;; range, not staged for deletion, marked done. Excluded pages are NOT
+  ;; filtered — lever I5 removes a page's CARDS, never the page, and
+  ;; `schedule-inputs` keeps it in the denominator.
+  (let [n (::jdbc/update-count
+           (jdbc/execute-one! ds
+             ["UPDATE study_schedules s
+                  SET start_covered = (SELECT COUNT(*) FROM topics t
+                                        WHERE t.parent_id = s.root_topic_id
+                                          AND t.kind = 'page'
+                                          AND t.user_id = s.user_id
+                                          AND t.staged_delete_id IS NULL
+                                          AND t.status = 'done'
+                                          AND (s.first_page IS NULL OR t.page_number >= s.first_page)
+                                          AND (s.last_page IS NULL OR t.page_number <= s.last_page)),
+                      covered_baseline_at = now()
+                WHERE s.covered_baseline_at IS NULL"])
+           0)]
+    (when (pos? n)
+      (tel/log! {:level :info :id ::schedule-coverage-baseline :data {:rows n}}
+        "Backfilled the study-schedule coverage baseline")))
 
   ;; Keyed on (user, Anki card id): an Anki card id is unique inside ONE
   ;; collection, and two users on this instance sync two different ones.
@@ -8696,7 +8743,13 @@
          violation is the caller's bug.
    Post: exactly one new active schedule. `start_known` freezes the known-page
          count at creation, because §6.2's straight line runs from where the
-         user WAS, not from zero."
+         user WAS, not from zero.
+   Post: `covered_baseline_at` is this statement's `now()`, which is also
+         `created_at`'s default — the two are the same transaction timestamp.
+         A new schedule therefore has ONE origin, and only a row that predates
+         the column gets the migration's later one. Leaving it null here would
+         hand a fresh schedule to the boot backfill, which would re-baseline it
+         at the next restart."
   [user-id {:keys [root-topic-id target-date first-page last-page daily-capacity
                    theta excluded-pages start-known]}]
   (some-> (jdbc/execute-one! ds
@@ -8709,7 +8762,8 @@
                                    :daily_capacity (or daily-capacity 60)
                                    :theta theta
                                    :excluded_pages (int-array-value excluded-pages)
-                                   :start_known (or start-known 0)}]
+                                   :start_known (or start-known 0)
+                                   :covered_baseline_at [:now]}]
                          :returning [:*]})
             {:return-keys true})
     schedule-row->map))
@@ -8739,21 +8793,33 @@
                 {:return-keys true})
         schedule-row->map))))
 
-(defn set-schedule-start-known!
-  "Freeze a schedule's baseline known-page count (§6.2).
+(defn set-schedule-baselines!
+  "Freeze a schedule's baseline page counts (§6.2).
+
+   Both baselines in ONE write, because both are measured from the same
+   `forecast` call and a schedule with one of them set is a schedule whose
+   pace figure is wrong. Two setters would make that partial state reachable.
 
    Separate from `update-study-schedule!` on purpose: that fn is the LEVER
-   path and must not reach this column, because moving the baseline would let
+   path and must not reach these columns, because moving a baseline would let
    a lever rewrite history and make the pace figure meaningless. This is
    called once, right after creation, by the only caller that knows the
    measurement.
 
+   `covered_baseline_at` is NOT written here. `create-study-schedule!` stamps
+   it in the INSERT so it agrees with `created_at`, and a later write would
+   move the origin away from the moment the counts describe.
+
+   Pre : `start-known` and `start-covered` come from the same `current-progress`
+         map. Mixing two measurements is what makes a brand-new schedule open
+         several pages behind.
    Post: rows changed, 0 when the id is not the user's."
-  [user-id schedule-id start-known]
+  [user-id schedule-id start-known start-covered]
   (::jdbc/update-count
     (jdbc/execute-one! ds
       (sql/format {:update :study_schedules
-                   :set {:start_known start-known}
+                   :set {:start_known start-known
+                         :start_covered start-covered}
                    :where [:and [:= :id schedule-id] [:= :user_id user-id]]}))
     0))
 

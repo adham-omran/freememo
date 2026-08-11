@@ -118,50 +118,138 @@
      (when day
        (str (.plusDays (java.time.LocalDate/now) (long day))))))
 
-#?(:clj
-   (defn- schedule-span
-     "Days from a schedule's creation to its target, floored at 1.
+;; ---------------------------------------------------------------------------
+;; The maturation lead, memoized
+;; ---------------------------------------------------------------------------
 
-      This is §6.2's denominator: the straight line runs from where the user
-      WAS when they made the plan, not from zero and not from today. Floored at
-      1 so a same-day schedule divides by something."
-     [row origin-ms]
-     (let [created (day-index origin-ms (:study_schedules/created_at row))
-           horizon (days-until (:study_schedules/target_date row))]
-       (max 1 (- horizon (long (or created 0)))))))
+#?(:clj
+   (defonce ^:private !maturation-leads
+     (atom {})))
+
+#?(:clj
+   (def ^:private ^:const maturation-lead-cache-size
+     "Entries kept before the whole map is dropped. One entry per distinct
+      (deck config, θ) pair, which is one per user in the ordinary case and two
+      for a user who has set the I4 lever on one schedule. 64 is far above that
+      and bounds the map without a reaper."
+     64))
+
+#?(:clj
+   (defn- maturation-lead-for
+     "`schedule-forecast/maturation-lead`, memoized on what it depends on.
+
+      The scan is superlinear in the lead it finds, because `project-card`'s
+      branch tree grows with the horizon and the scan walks a fresh tree at
+      every horizon from 0 up. Measured on one card: 171 nodes at horizon 5
+      against 1911 at horizon 31, so the whole scan costs 2.9 ms at θ 0.90 and
+      68.7 ms at θ 0.95.
+
+      That is why this is cached rather than called. Two readers exist that
+      MUST stay cheap and both call it per schedule: `schedule-summaries` runs
+      once per row of the home view, and `root-schedule-pace` runs on every
+      reading view. Each states in its own docstring that it refuses `forecast`
+      to avoid a 339 ms projection, and an uncached 68 ms scan would spend a
+      fifth of that back.
+
+      Pre : `scheduler` and `theta` are `schedule-inputs`' own, so the key is
+            the pair the answer actually depends on.
+      Post: `schedule-forecast/maturation-lead`'s value, which may be nil.
+      Post: `find`, never `get` — nil is the UNREACHABLE-gate answer and it is
+            the most expensive one to compute, so reading it as a cache miss
+            would defeat the cache exactly where it is needed most.
+      Inv : the cache cannot go stale. The key is the scheduler map itself, and
+            a deck-config or θ change builds a different map, which is a
+            different key. Nothing needs to evict on a config change."
+     [scheduler theta]
+     (let [k [scheduler theta]]
+       (if-let [hit (find @!maturation-leads k)]
+         (val hit)
+         (let [v (fc/maturation-lead scheduler theta max-horizon-days)]
+           (swap! !maturation-leads
+             (fn [m] (assoc (if (> (count m) maturation-lead-cache-size) {} m) k v)))
+           v)))))
+
+#?(:clj
+   (defn- coverage-span
+     "The coverage line's two day counts: its whole width, and how much of it
+      has already run.
+
+      This is §6.2's denominator, moved onto the coverage axis. The line runs
+      from where the user WAS when they made the plan — not from zero and not
+      from today — to the COVERAGE DEADLINE, which is `lead` days before the
+      target. Running it to the target instead would ask for the last page on
+      the last day, which is the plan defect this change removes.
+
+      Pre : `lead` is `schedule-inputs`' `:lead`, or nil when the gate is
+            unreachable. `origin-ms` is midnight today.
+      Post: {:span :elapsed}, both >= 0, `:span` >= 1 so a same-day schedule
+            divides by something.
+      Post: the origin is `covered_baseline_at`, and `created_at` is the
+            fallback for a row written before that column existed AND missed by
+            the boot backfill. The backfill covers every such row, so the
+            fallback is a belt on a brace.
+      Post: a baseline in the FUTURE is clamped to today rather than trusted.
+            Both writers stamp `now()`, so this needs a clock that ran
+            backwards or a hand-edited row — but without the clamp the two
+            figures above are only >= 0 under a precondition nothing here can
+            check, and a negative `:elapsed` would read as a schedule that has
+            not started.
+      Inv : `:elapsed` <= `:span`. Both are measured from the same origin, so a
+            reader can divide one by the other without clamping."
+     [row origin-ms lead]
+     (let [baseline (min 0 (long (or (day-index origin-ms
+                                       (or (:study_schedules/covered_baseline_at row)
+                                         (:study_schedules/created_at row)))
+                                   0)))
+           deadline (fc/coverage-window
+                      (days-until (:study_schedules/target_date row)) lead)
+           span (max 1 (- deadline baseline))]
+       {:span span :elapsed (- span deadline)})))
 
 #?(:clj
    (defn- study-plan
      "The dated day-by-day plan §1.2 asks for: one row per day from today to
       the target.
 
-      Pre : `pages-remaining` >= 0, `horizon` >= 0, `load` is the derived daily
-            review histogram.
-      Post: a vector of {:day :date :weekday :pages :reviews :cumulative},
+      Pre : `pages-remaining` counts pages NOT YET COVERED, >= 0. `reading-days`
+            is `schedule-forecast/coverage-window`'s count, `horizon` >= 0, and
+            `load` is the derived daily review histogram.
+      Post: a vector of {:day :date :weekday :pages :phase :reviews :cumulative},
             one per day, `:date` an ISO string in the server's zone. The
             `:pages` column sums to `pages-remaining` exactly, and
             `:cumulative` is its running total, so the last row always reads
             the whole remainder.
-      Inv : `:pages` comes from `schedule-forecast/daily-page-plan`, the same
-            fn `today-plan` reads, so row 0 and the Today tile cannot drift."
-     [pages-remaining horizon load]
-     (let [pages (fc/daily-page-plan pages-remaining horizon)
+      Post: rows run to the TARGET while pages stop at the coverage deadline.
+            The tail rows carry `:phase :mature`, 0 pages and their own review
+            load — that window is the artefact this table exists to show, and
+            cutting the table at the deadline would hide it.
+      Inv : `:pages` comes from `schedule-forecast/plan-days`, the same fn
+            `today-plan` reads, so row 0 and the Today tile cannot drift."
+     [pages-remaining reading-days horizon load]
+     (let [days (fc/plan-days pages-remaining reading-days horizon)
            today (java.time.LocalDate/now)]
        (first
          (reduce (fn [[acc run] d]
-                   (let [p (long (nth pages d))
+                   (let [{:keys [pages phase deadline?]} (nth days d)
+                         p (long pages)
                          run' (+ run p)
                          date (.plusDays today d)]
-                     [(conj acc {:day d
-                                 :date (str date)
-                                 :weekday (.getDisplayName (.getDayOfWeek date)
-                                            java.time.format.TextStyle/SHORT
-                                            java.util.Locale/ENGLISH)
-                                 :pages p
-                                 :reviews (double (get load d 0.0))
-                                 :cumulative run'})
+                     ;; `:deadline?` is present on ONE row and absent from the
+                     ;; rest. These maps cross the wire per windowed row, and a
+                     ;; false on every row is a key paid for by every reader of
+                     ;; the table to say nothing.
+                     [(conj acc (cond-> {:day d
+                                         :date (str date)
+                                         :weekday (.getDisplayName (.getDayOfWeek date)
+                                                    java.time.format.TextStyle/SHORT
+                                                    java.util.Locale/ENGLISH)
+                                         :pages p
+                                         :phase phase
+                                         :reviews (double (get load d 0.0))
+                                         :cumulative run'}
+                                  deadline? (assoc :deadline? true)))
                       run']))
-           [[] 0] (range (count pages)))))))
+           [[] 0] (range (count days)))))))
 
 (def ^:const suggestion-epsilon
   "The ε the I1 date suggestion searches with (§6.6.1).
@@ -296,10 +384,18 @@
             `db/active-study-schedule-for-root`, so ownership is already
             checked.
       Post: {:origin-ms :capacity :horizon :pages :cfg-row :theta :scheduler
-             :pcards :status}. `:status` is
+             :pcards :lead :status}. `:status` is
               :ok         — Anki state exists for this document's cards
               :no-config  — Anki has never been read for this user (§8.1)
               :no-cards   — it has, but this document has none (§8.3)
+      Post: `:lead` is the maturation lead in days, and it is measured HERE
+            because three readers need it — the plan, the pace line and the
+            feasibility test — and each deriving its own would let them
+            disagree about when the reading has to stop.
+      Post: `:lead` is 0 on every status but `:ok`. With no card state there is
+            nothing to mature: `page-verdict` reads a done page as
+            `:uncarded-done` and it counts the day it is marked. A lead of 0 is
+            the truth on those paths, not a fallback.
       Inv : `:scheduler` and `:pcards` are non-nil EXACTLY when `:status` is
             `:ok`. Every other status has no memory state to project, which is
             what `current-progress` branches on."
@@ -318,7 +414,7 @@
            cfg-row (db/get-anki-deck-config user-id)
            deck-config (:anki_deck_configs/config cfg-row)
            base {:origin-ms origin-ms :capacity capacity :horizon horizon
-                 :pages pages :cfg-row cfg-row}]
+                 :pages pages :cfg-row cfg-row :lead 0}]
        (if (nil? deck-config)
          (assoc base :status :no-config :theta 0.9)
          (let [theta (double (or (:study_schedules/theta row)
@@ -334,9 +430,11 @@
                         (:anki_deck_configs/fingerprint cfg-row))]
            (if (empty? states)
              (assoc base :status :no-cards :theta theta)
-             (assoc base :status :ok :theta theta
-               :scheduler (sf/scheduler-from-deck-config deck-config theta)
-               :pcards (projection-cards states cards origin-ms capacity))))))))
+             (let [scheduler (sf/scheduler-from-deck-config deck-config theta)]
+               (assoc base :status :ok :theta theta
+                 :scheduler scheduler
+                 :lead (maturation-lead-for scheduler theta)
+                 :pcards (projection-cards states cards origin-ms capacity)))))))))
 
 #?(:clj
    (defn- current-progress
@@ -370,17 +468,22 @@
       while the line was measured against the KNOWN count, and a fresh schedule
       read '5 pages behind' on the day it was created.
 
+      The figure is COVERAGE, and every term moves with it: the reading is
+      `:covered`, the baseline is `start_covered`, and the line ends at the
+      coverage deadline. That is what the plan table asks for, so a user who
+      works the table reads `on plan` — which the known-based line could never
+      deliver, because known trails coverage by the maturation lead.
+
       Pre : `progress` is `current-progress` over `inputs`, both derived from
             `row`. Mixing a progress map from one schedule with another's row
             is a caller bug and produces a plausible wrong number.
       Post: `schedule-forecast/pace`'s {:required :actual :delta}."
      [row inputs progress]
-     (let [horizon (:horizon inputs)
-           span (schedule-span row (:origin-ms inputs))]
-       (fc/pace {:known-now (:known progress)
+     (let [{:keys [span elapsed]} (coverage-span row (:origin-ms inputs) (:lead inputs))]
+       (fc/pace {:covered-now (:covered progress)
                  :total-pages (:total progress)
-                 :start-known (:study_schedules/start_known row)
-                 :elapsed-days (- span horizon)
+                 :start-covered (:study_schedules/start_covered row)
+                 :elapsed-days elapsed
                  :total-days span}))))
 
 (def forecast-status-labels
@@ -435,12 +538,36 @@
      (if-let [row (db/get-study-schedule user-id schedule-id)]
        (let [inputs (schedule-inputs user-id row)
              {:keys [origin-ms capacity horizon pages cfg-row theta
-                     scheduler pcards status]} inputs
+                     scheduler pcards status lead]} inputs
              progress (current-progress inputs)
+             ;; The plan's unit. Pages the reader has not marked done is the
+             ;; only remainder a reading action can reduce today — the unknown
+             ;; count charges them again for every page whose cards are still
+             ;; young, and no amount of reading removes one of those.
+             uncovered (- (:total progress) (:covered progress))
+             reading-days (fc/coverage-window horizon lead)
              base {:schedule row
                    :horizon-days horizon
                    :cached-at (db/anki-state-cached-at user-id)
-                   :pages pages}]
+                   :pages pages
+                   ;; §1.2 — what the plan table's split is made of, named once
+                   ;; so the tile, the caption and the table cannot disagree.
+                   ;; `:cover-by` is the LAST day of the reading window, which
+                   ;; is the date the covering must meet. It is deliberately
+                   ;; not the last day that happens to carry a page: falling
+                   ;; behind redistributes the remainder across the days left,
+                   ;; so the window's end is the load-bearing date and the last
+                   ;; page's day is an artefact of today's rounding.
+                   ;;
+                   ;; `:mature-days` is the width of the maturation window, and
+                   ;; it equals the number of `:mature` rows `plan-days` emits
+                   ;; at every input — `schedule_fsrs_test` asserts that, which
+                   ;; is what lets the caption read this instead of counting
+                   ;; the plan on the client.
+                   :coverage {:lead lead
+                              :reading-days reading-days
+                              :mature-days (max 0 (- horizon reading-days))
+                              :cover-by (day->iso-date (dec reading-days))}}]
          (if (not= :ok status)
            ;; Anki has never been read, or this document has no pushed cards.
            ;; Either way there is no R and no review load. The PAGE plan needs
@@ -449,7 +576,7 @@
            ;; not have.
            (assoc base :status status :theta theta
              :progress progress
-             :plan (study-plan (- (:total progress) (:known progress)) horizon {}))
+             :plan (study-plan uncovered reading-days horizon {}))
 
            (let [[known-end verdicts-end projected]
                  (known-at scheduler pcards pages theta horizon {})
@@ -461,7 +588,9 @@
                              {:projected-known known-end
                               :required-pages total
                               :peak-load peak
-                              :observed-capacity capacity})
+                              :observed-capacity capacity
+                              :horizon horizon
+                              :maturation-lead lead})
                  ;; §6.6.1 — the date lever names a date, and only when the
                  ;; plan needs one. The search is nine more projections of
                  ;; the whole document, so a feasible plan never pays it.
@@ -504,9 +633,10 @@
                :peak-load peak
                ;; §1.2 — the plan the user actually follows. Pages come
                ;; from the straight line, reviews from the projection.
-               :plan (study-plan (- total (:known progress)) horizon load)
-               :today (fc/today-plan {:pages-remaining (- total (:known progress))
-                                      :days-remaining horizon
+               :plan (study-plan uncovered reading-days horizon load)
+               :today (fc/today-plan {:pages-remaining uncovered
+                                      :reading-days reading-days
+                                      :horizon horizon
                                       :daily-load load})
                :feasibility feas))))
        ;; No such schedule, or it belongs to somebody else. A distinct status,
@@ -609,8 +739,14 @@
    What the reading view's badge shows, and nothing more. It deliberately does
    NOT call `forecast`: that projects the whole document at the full horizon
    (339 ms at 90 days, 1.2 s at 365, measured) and searches up to seventeen
-   more horizons for the date lever, while a pace figure needs only h=0 (about
-   6 ms). Every figure here comes from `current-progress` and the row.
+   more horizons for the date lever, while a pace figure needs only h=0.
+   Every figure here comes from `current-progress` and the row.
+
+   Still about 6 ms after this feature, and that depends on
+   `maturation-lead-for` being a CACHE. The pace line ends at the coverage
+   deadline, so this needs the lead, and computing it costs 2.9 ms at θ 0.90
+   and 68.7 ms at θ 0.95 — which on this path, once per reading view, would
+   spend back a fifth of what refusing `forecast` saves.
 
    Pre : nothing — a nil or unscheduled `root-topic-id` is the ordinary case,
          not a caller bug. Ownership is checked in
@@ -648,9 +784,15 @@
   "One row per ACTIVE schedule, at TODAY's horizon only — the tab's home view.
 
    Every figure comes from `current-progress` at h=0 and the row itself, so a
-   summary costs about 5 ms. Calling `forecast` per schedule instead would cost
-   339 ms at a 90-day horizon and 1.2 s at a year, for a review column the home
-   view does not show.
+   summary costs 3.8 ms per row, measured. Calling `forecast` per schedule
+   instead would cost 339 ms at a 90-day horizon and 1.2 s at a year, for a
+   review column the home view does not show.
+
+   Per row is what makes `maturation-lead-for`'s cache load-bearing here. Every
+   row needs the lead, and every row of one user resolves to the SAME lead — one
+   deck config, one θ unless a schedule sets the I4 lever. Uncached, an
+   N-schedule home view would run N identical 2.9 ms scans at θ 0.90 and N
+   identical 68.7 ms scans at θ 0.95.
 
    Pre : nothing. A user with no schedules gets an empty vector, which is what
          the view renders its empty state from.
@@ -671,7 +813,7 @@
          (let [inputs (schedule-inputs user-id row)
                progress (current-progress inputs)
                p (pace-of row inputs progress)
-               remaining (- (:total progress) (:known progress))]
+               uncovered (- (:total progress) (:covered progress))]
            {:id (:study_schedules/id row)
             :title (or (:topics/doc_title row) "Untitled")
             :target-date (:study_schedules/target_date row)
@@ -683,7 +825,17 @@
             :covered (:covered progress)
             :known (:known progress)
             :total (:total progress)
-            :pages-today (first (fc/daily-page-plan remaining (:horizon inputs)))}))
+            ;; Through `today-plan`, not through its own split: that fn is the
+            ;; definition of 'pages today', and the home view must not answer
+            ;; the question differently from the tab it links to. The load is
+            ;; empty because this view shows no review column and projecting
+            ;; one would cost the 339 ms this fn exists to avoid.
+            :pages-today (:pages-today
+                          (fc/today-plan
+                            {:pages-remaining uncovered
+                             :reading-days (fc/coverage-window (:horizon inputs) (:lead inputs))
+                             :horizon (:horizon inputs)
+                             :daily-load {}}))}))
        (db/list-study-schedules user-id))
      :cljs []))
 
@@ -703,24 +855,26 @@
    Post: {:ok true :id n} or {:ok false :error msg}. The error shape is the
          project's, so the form's commit handler spends its token either way
          rather than leaving a submit button spinning.
-   Post: `start_known` is the known count TODAY, measured by the SAME rule the
-         pace figure of §6.2 compares against, so a schedule opened the day it
-         was made reads `on plan`.
+   Post: `start_covered` is the covered count TODAY, measured by the SAME rule
+         the pace figure of §6.2 compares against, so a schedule opened the day
+         it was made reads `on plan`. `start_known` is the known count at the
+         same instant, kept for the record.
 
-   The baseline is measured by running the forecast once at horizon 0, after
-   the row exists. Counting DONE pages instead is the obvious shortcut and it
-   is wrong: a done page whose cards fail the maturity gate is done but not
-   known, so the baseline would exceed the known count and a brand-new
-   schedule would open reporting itself several pages behind."
+   Both baselines come from ONE `current-progress` map, read by running the
+   forecast once at horizon 0 after the row exists. Two measurements would let
+   the pace line's two ends describe different moments, and taking the covered
+   count from a second query is how that drift starts."
   [user-id attrs]
   #?(:clj
      (try
        (let [row (db/create-study-schedule! user-id (assoc attrs :start-known 0))
              id (:study_schedules/id row)
-             known-now (or (get-in (forecast 0 user-id id) [:progress :known]) 0)]
-         (db/set-schedule-start-known! user-id id known-now)
+             progress (:progress (forecast 0 user-id id))
+             known-now (or (:known progress) 0)
+             covered-now (or (:covered progress) 0)]
+         (db/set-schedule-baselines! user-id id known-now covered-now)
          (cmd/bump-channels! user-id #{:schedule-mutations})
-         {:ok true :id id :start-known known-now})
+         {:ok true :id id :start-known known-now :start-covered covered-now})
        ;; Throwable for the reason `ingest-acquisition!` states: this calls
        ;; `forecast`, which builds a scheduler behind an `assert`.
        (catch Throwable e

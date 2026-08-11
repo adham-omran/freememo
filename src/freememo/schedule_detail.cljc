@@ -83,7 +83,13 @@
    {:label "Raise the daily review capacity — use Edit"
     :apply-date nil
     :editable? true}
-   {:label "Lower the retention target for this schedule"
+   ;; The caveat is required, not editorial. A lower θ makes intervals longer
+   ;; and reviews rarer, so the review that first clears 21 days arrives later:
+   ;; measured under the default weights, the lead is 8 days at θ 0.90 and 15
+   ;; at θ 0.85. A lever advertised as a way out that can make the window
+   ;; smaller has to say so.
+   {:label (str "Lower the retention target for this schedule — a lower target "
+             "can lengthen the maturation lead, not shorten it")
     :apply-date nil
     :editable? false}
    {:label "Exclude pages from carding — they then count as known and untested"
@@ -108,7 +114,8 @@
     (let [prog (e/server (:progress forecast))
           proj (e/server (:projected forecast))
           pace (e/server (:pace forecast))
-          today (e/server (:today forecast))]
+          today (e/server (:today forecast))
+          coverage (e/server (:coverage forecast))]
       (dom/div
         (dom/props {:class "sched-tiles"})
         (StatTile "Known now"
@@ -134,7 +141,14 @@
           (str "needs " (long (Math/round (double (e/server (:required pace))))) " by now"))
         (StatTile "Today"
           (fc/pages-label (e/server (:pages-today today)))
-          (str (approx (e/server (:reviews-today today))) " reviews"))))))
+          (str (approx (e/server (:reviews-today today))) " reviews"))
+        ;; Last, beside `Today`, because both are instructions. The five tiles
+        ;; before them report retention, which is the outcome. It answers the
+        ;; question the plan table could not: when must the reading be done.
+        (StatTile "Cover by"
+          (str (e/server (:cover-by coverage)))
+          (let [d (e/server (:reading-days coverage))]
+            (str d " reading day" (when (not= 1 d) "s"))))))))
 
 ;; Pre:  `lever` is one map from `levers`; `user-id` owns `schedule-id`.
 ;; Post: a list item. When `:apply-date` is set it carries an Apply control
@@ -210,6 +224,17 @@
                     :over-capacity (str "Peak day needs " (approx peak)
                                      " reviews against your sustained "
                                      (long (Math/round (double cap))) ".")
+                    ;; Both numbers from `feas`. The sentence is a statement
+                    ;; about the two together, and reading one from the
+                    ;; forecast map would let a future refactor drift them.
+                    :no-maturation-window (str "Cards need " (e/server (:maturation-lead feas))
+                                            " days to mature and the target is "
+                                            (e/server (:horizon feas))
+                                            " days away, so nothing covered from "
+                                            "today can count.")
+                    :maturity-unreachable (str "No card reaches the retention target "
+                                            "under this deck configuration, so no "
+                                            "amount of reading produces a known page.")
                     (str r))))))
           (dom/div (dom/props {:style {:font-weight "600" :margin-bottom "4px"}})
             (dom/text "What can move:"))
@@ -299,32 +324,44 @@
 (e/defn PlanRow [r i]
   (e/client
     (dom/tr
+      ;; `sched-mature` marks the maturation window. The row is not empty — it
+      ;; carries the reviews that make the covered pages count — so it must
+      ;; read as a different KIND of day, not as a day with nothing in it.
       (dom/props {:style {:--order i}
-                  :class (when (zero? (:day r)) "sched-today")})
+                  :class (str (when (zero? (:day r)) "sched-today ")
+                           (when (= :mature (:phase r)) "sched-mature ")
+                           (when (:deadline? r) "sched-deadline"))})
       (dom/td (dom/props {:class "sched-cell sched-dim"})
         (dom/text (if (zero? (:day r)) "today" (str "+" (:day r)))))
       (dom/td (dom/props {:class "sched-cell"})
         (dom/text (str (:date r) " · " (:weekday r))))
+      ;; An em dash, never 0. A maturation day asks for no reading, and a 0
+      ;; reads as a day the user failed to fill.
       (dom/td (dom/props {:class "sched-cell sched-num"})
-        (dom/text (str (:pages r))))
+        (dom/text (if (= :mature (:phase r)) "—" (str (:pages r)))))
       (dom/td (dom/props {:class "sched-cell sched-num sched-dim"})
         (dom/text (str (:cumulative r))))
       (dom/td (dom/props {:class "sched-cell sched-num"})
         ;; §6.4 — fractional, because V2 weights the branches that produce it.
         (dom/text (if (pos? (:reviews r)) (approx (:reviews r)) "—"))))))
 
-(e/defn PlanTable [forecast reading-days-only?]
+(e/defn PlanTable [forecast covering-days-only?]
   (e/client
     ;; A server-FORM binding: a 730-row plan would otherwise cross the wire
     ;; whole at an e/defn call boundary (CLAUDE.md, 'e/defn Returns Materialize
     ;; at the Call Site').
     ;;
-    ;; The filter drops days with no PAGES, not days with no work. Almost every
-    ;; day carries some review load, so a "days with work" filter would keep
-    ;; every row and promise a narrowing it can never deliver.
+    ;; The filter drops days with no COVERING, not days with no work. Almost
+    ;; every day carries some review load, so a "days with work" filter would
+    ;; keep every row and promise a narrowing it can never deliver.
+    ;;
+    ;; `fc/covering-day?`, never a local predicate: the label's count is taken
+    ;; with the same fn, and a rounding case makes the two disagree when they
+    ;; are written twice. A slow window can put 0 pages on the deadline day,
+    ;; and a bare `pos? :pages` would then hide the date the tile names.
     (let [rows (e/server
                  (let [p (vec (:plan forecast))]
-                   (if reading-days-only? (filterv #(pos? (:pages %)) p) p)))
+                   (if covering-days-only? (filterv fc/covering-day? p) p)))
           rc (e/server (count rows))]
       (dom/div
         (dom/props {:class "tape-scroll sched-table sched-plan-table"
@@ -343,7 +380,7 @@
               (dom/th (dom/props {:class "sched-th sched-num"}) (dom/text "Reviews")))))
         ;; §7.2 — the reset key is the FILTER, never the row count.
         (let [[offset limit] (Scroll-window plan-row-height rc dom/node
-                               {:overquery-factor 2 :reset-key [reading-days-only?]})]
+                               {:overquery-factor 2 :reset-key [covering-days-only?]})]
           (dom/table
             (dom/props {:style {:width "100%" :font-size "13px"}})
             (e/for [i (Tape offset limit)]
@@ -359,10 +396,18 @@
 
 (e/defn PlanControls [forecast]
   (e/client
+    ;; `cover-days` is the WINDOW and `covering-days` is the rows the filter
+    ;; leaves. They differ whenever the rate falls below one page a day, and
+    ;; conflating them would label the filter with a number it does not leave
+    ;; behind. Both counts come from the server: `:mature-days` because the
+    ;; server has every input for it, and the filter count through
+    ;; `fc/covering-day?` because the filter itself uses that predicate.
     (let [total-pages (e/server (reduce + 0 (map :pages (:plan forecast))))
-          days (e/server (count (:plan forecast)))
-          reading-days (e/server (count (filter #(pos? (:pages %)) (:plan forecast))))
-          reading-days-only?
+          coverage (e/server (:coverage forecast))
+          cover-days (e/server (:reading-days coverage))
+          mature-days (e/server (:mature-days coverage))
+          covering-days (e/server (count (filter fc/covering-day? (:plan forecast))))
+          covering-days-only?
           (dom/div
             (dom/props {:style {:display "flex" :align-items "baseline" :gap "10px"
                                 :margin-bottom "8px" :flex-wrap "wrap"}})
@@ -370,8 +415,12 @@
             (dom/span
               (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
                                   :flex "1"}})
-              (dom/text (str (fc/pages-label total-pages) " over " days
-                          " day" (when (not= 1 days) "s"))))
+              (dom/text (str (fc/pages-label total-pages) " over " cover-days
+                          " reading day" (when (not= 1 cover-days) "s")
+                          (when (pos? mature-days)
+                            (str ", then " mature-days " day"
+                              (when (not= 1 mature-days) "s")
+                              " for the cards to mature")))))
             ;; `forms/Checkbox` — the dataflow checkbox, which RETURNS its
             ;; checked state. A hand-rolled `dom/input` + `dom/On` + atom said
             ;; the same thing through a mutable cell, and the skill's rule is
@@ -389,9 +438,9 @@
               (let [checked? (forms/Checkbox false)]
                 ;; The label states the count it will leave, so the user knows
                 ;; before clicking whether the filter narrows anything.
-                (dom/text (str "Only reading days (" reading-days ")"))
+                (dom/text (str "Only covering days (" covering-days ")"))
                 checked?)))]
-      (PlanTable forecast reading-days-only?))))
+      (PlanTable forecast covering-days-only?))))
 
 (e/defn PlanSection [forecast]
   (e/client

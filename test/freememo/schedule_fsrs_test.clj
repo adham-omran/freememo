@@ -331,17 +331,17 @@
 
 (deftest a-document-exactly-on-plan-reads-zero
   (testing "§6.2 done-when"
-    (is (close? 0.0 (:delta (fc/pace {:known-now 50 :total-pages 100 :start-known 0
+    (is (close? 0.0 (:delta (fc/pace {:covered-now 50 :total-pages 100 :start-covered 0
                                       :elapsed-days 5 :total-days 10})) 1e-9))
-    (is (neg? (:delta (fc/pace {:known-now 20 :total-pages 100 :start-known 0
+    (is (neg? (:delta (fc/pace {:covered-now 20 :total-pages 100 :start-covered 0
                                 :elapsed-days 5 :total-days 10}))))
-    (is (pos? (:delta (fc/pace {:known-now 80 :total-pages 100 :start-known 0
+    (is (pos? (:delta (fc/pace {:covered-now 80 :total-pages 100 :start-covered 0
                                 :elapsed-days 5 :total-days 10}))))))
 
 (deftest pace-clamps-outside-the-schedule-window
-  (is (close? 100.0 (:required (fc/pace {:known-now 0 :total-pages 100 :start-known 0
+  (is (close? 100.0 (:required (fc/pace {:covered-now 0 :total-pages 100 :start-covered 0
                                          :elapsed-days 99 :total-days 10})) 1e-9))
-  (is (close? 100.0 (:required (fc/pace {:known-now 0 :total-pages 100 :start-known 0
+  (is (close? 100.0 (:required (fc/pace {:covered-now 0 :total-pages 100 :start-covered 0
                                          :elapsed-days 1 :total-days 0})) 1e-9)))
 
 (deftest concurrent-schedules-produce-one-combined-daily-number
@@ -372,18 +372,21 @@
   (testing "§6.6 — the warning names four levers whichever reason fired"
     (let [f (fc/feasibility {:projected-known 10 :required-pages 300
                              :peak-load 400.0 :observed-capacity 237.0
+                             :horizon 120 :maturation-lead 8
                              :earliest-day 120})]
       (is (false? (:feasible? f)))
       (is (= #{:short-of-target :over-capacity} (set (:reasons f))))
       (is (= [:push-target-date :raise-capacity :lower-theta :exclude-pages] (:levers f)))))
   (testing "§6.7 — over capacity alone is enough to warn"
     (let [f (fc/feasibility {:projected-known 300 :required-pages 300
-                             :peak-load 400.0 :observed-capacity 237.0})]
+                             :peak-load 400.0 :observed-capacity 237.0
+                             :horizon 120 :maturation-lead 8})]
       (is (false? (:feasible? f)))
       (is (= [:over-capacity] (:reasons f)))))
   (testing "a reachable target warns about nothing"
     (let [f (fc/feasibility {:projected-known 300 :required-pages 300
-                             :peak-load 60.0 :observed-capacity 237.0})]
+                             :peak-load 60.0 :observed-capacity 237.0
+                             :horizon 120 :maturation-lead 8})]
       (is (true? (:feasible? f)))
       (is (empty? (:reasons f))))))
 
@@ -594,7 +597,8 @@
     (doseq [[pages days] [[28 120] [60 3] [0 30] [1 90] [100 7]]]
       (is (= (first (fc/daily-page-plan pages days))
             (:pages-today (fc/today-plan {:pages-remaining pages
-                                          :days-remaining days
+                                          :reading-days days
+                                          :horizon days
                                           :daily-load {}})))
         (str pages "p/" days "d")))))
 
@@ -605,7 +609,8 @@
 
 (deftest today-plan-takes-its-share-and-leaves-reviews-fractional
   (testing "§1.2 and §6.4"
-    (let [p (fc/today-plan {:pages-remaining 10 :days-remaining 3 :daily-load {0 33.7}})]
+    (let [p (fc/today-plan {:pages-remaining 10 :reading-days 3 :horizon 3
+                                :daily-load {0 33.7}})]
       ;; 10 over 3 days is [3 4 3], which sums to 10. Rounding each day UP
       ;; would ask for 4+4+4 = 12 pages out of a 10-page remainder — a plan the
       ;; user cannot complete because the work does not exist.
@@ -613,6 +618,153 @@
       (is (= 10 (reduce + 0 (fc/daily-page-plan 10 3))) "and the three days sum exactly")
       (is (close? 33.7 (:reviews-today p) 1e-9)))
     (testing "a target reached today still asks for the whole remainder"
-      (let [p (fc/today-plan {:pages-remaining 5 :days-remaining 0 :daily-load {}})]
+      (let [p (fc/today-plan {:pages-remaining 5 :reading-days 1 :horizon 0
+                                  :daily-load {}})]
         (is (= 5 (:pages-today p)))
         (is (zero? (:reviews-today p)))))))
+
+;; ── The maturation lead and the coverage window ────────────────────
+
+(deftest the-maturation-lead-is-measured-not-assumed
+  (testing "days from a card's first review to the day it clears the known gate"
+    (is (= 11 (fc/maturation-lead sched 0.9 730))
+      "the canonical user's own weights")
+    (is (= 8 (fc/maturation-lead fsrs/default-scheduler 0.9 730))
+      "the FSRS-6 defaults")
+    (testing "no constant serves it — it moves with θ, and NOT monotonically"
+      (let [lead-at (fn [t] (fc/maturation-lead (fsrs/make-scheduler {:desired-retention t}) t 730))]
+        (is (> (lead-at 0.85) (lead-at 0.90))
+          "a LOWER retention target lengthens the lead: longer intervals mean
+           rarer reviews, so the review that first clears 21 days lands later")
+        (is (> (lead-at 0.95) (lead-at 0.90)))))))
+
+(deftest an-unreachable-gate-reports-nil-never-zero
+  (testing "a lead of nil must not read as 'no wait needed' — the caller plans
+            reading up to the target on zero and promises a target the cards
+            cannot meet"
+    (is (nil? (fc/maturation-lead sched 0.9 3)))
+    (is (nil? (fc/maturation-lead sched 0.9 0)))))
+
+(deftest the-coverage-window-always-leaves-a-day-to-work
+  (is (= 22 (fc/coverage-window 30 8)))
+  (testing "a horizon inside the lead still owes the work"
+    (is (= 1 (fc/coverage-window 3 8)))
+    (is (= 1 (fc/coverage-window 0 8))))
+  (testing "an unreachable gate spends the whole horizon reading"
+    (is (= 30 (fc/coverage-window 30 nil)))))
+
+(deftest the-plan-stops-covering-at-the-deadline
+  (testing "pages stop at the coverage deadline and the table runs to the target"
+    (doseq [[total horizon lead] [[23 30 8] [12 15 8] [7 7 8] [0 30 8] [1035 365 11]]]
+      (let [r (fc/coverage-window horizon lead)
+            days (fc/plan-days total r horizon)
+            label (str total "p/" horizon "d lead " lead)]
+        (is (= (max r (max 1 horizon)) (count days)) (str label " — one row per day to the target"))
+        (is (= total (reduce + 0 (map :pages days))) (str label " — sums exactly"))
+        (is (every? #(zero? (:pages %)) (filter #(= :mature (:phase %)) days))
+          (str label " — no maturation day asks for reading"))
+        (is (= 1 (count (filter :deadline? days))) (str label " — exactly one deadline day"))
+        (is (= :cover (:phase (first (filter :deadline? days))))
+          (str label " — the deadline is the LAST reading day, not the first mature one"))))))
+
+(deftest the-filter-keeps-the-deadline-even-with-no-pages
+  (testing "a slow window rounds 0 pages onto the last reading day, and a bare
+            pos?-pages filter would then hide the date the `Cover by` tile names"
+    (let [days (fc/plan-days 28 (fc/coverage-window 128 8) 128)
+          dl (first (filter :deadline? days))]
+      (is (zero? (:pages dl)) "the case this exists for is reachable")
+      (is (fc/covering-day? dl) "and the filter keeps it anyway")))
+  (testing "every day that hands out pages is kept"
+    (doseq [[total horizon lead] [[28 128 8] [20 30 8] [1 20 8] [5 40 11]]]
+      (let [days (fc/plan-days total (fc/coverage-window horizon lead) horizon)]
+        (is (every? fc/covering-day? (filter #(pos? (:pages %)) days)))
+        (is (not-any? fc/covering-day? (remove #(or (pos? (:pages %)) (:deadline? %)) days))))))
+  (testing "and no maturation day is"
+    (let [days (fc/plan-days 20 (fc/coverage-window 30 8) 30)]
+      (is (not-any? fc/covering-day? (filter #(= :mature (:phase %)) days))))))
+
+(deftest the-coverage-map-and-the-plan-agree-on-the-window
+  (testing "`forecast` reports `:mature-days` as max(0, horizon − reading-days)
+            rather than counting the plan. That arithmetic must equal the row
+            count at EVERY input, or the caption states a width the table does
+            not have."
+    (doseq [[horizon lead] [[30 8] [128 8] [0 8] [3 8] [20 11] [9 8] [8 8] [365 11] [1 0]]]
+      (let [r (fc/coverage-window horizon lead)
+            days (fc/plan-days 20 r horizon)
+            counted (count (filter #(= :mature (:phase %)) days))
+            reported (max 0 (- horizon r))]
+        (is (= counted reported)
+          (str "horizon " horizon " lead " lead ": plan has " counted
+            " maturation rows, :coverage reports " reported))))))
+
+(deftest a-horizon-inside-the-lead-owes-every-page-today
+  (testing "the reading is still owed even when it cannot mature in time —
+            feasibility is what says so, not a plan that hides the work"
+    (let [days (fc/plan-days 12 (fc/coverage-window 3 8) 3)]
+      (is (= 12 (:pages (first days))))
+      (is (= 1 (count (filter #(= :cover (:phase %)) days))))
+      (is (every? #(zero? (:pages %)) (rest days))))))
+
+(deftest the-today-tile-reads-day-zero-of-the-coverage-plan
+  (testing "one definition, so the tile and the table cannot disagree"
+    (doseq [[total horizon lead] [[23 30 8] [12 15 8] [7 7 8] [0 30 8]]]
+      (let [r (fc/coverage-window horizon lead)]
+        (is (= (:pages (first (fc/plan-days total r horizon)))
+              (:pages-today (fc/today-plan {:pages-remaining total :reading-days r
+                                            :horizon horizon :daily-load {}})))
+          (str total "p/" horizon "d lead " lead))))))
+
+(deftest a-user-who-works-the-plan-reads-on-plan-every-day
+  (testing "THE falsifier of plans/schedule-pace-pill.md §6.2.2, which the
+            known-based line could never satisfy: known trails coverage by the
+            maturation lead, so a user who did exactly what the table asked
+            still read `Behind` for the whole first stretch"
+    (doseq [[total horizon lead] [[23 30 8] [7 20 8] [60 90 11] [100 15 31] [12 15 8]]]
+      (let [r (fc/coverage-window horizon lead)
+            days (fc/plan-days total r horizon)
+            ;; covered[t] is what the user has done BEFORE day t's work
+            covered (vec (reductions + 0 (map :pages days)))]
+        (doseq [t (range (inc r))]
+          (let [p (fc/pace {:covered-now (nth covered t)
+                            :total-pages total
+                            :start-covered 0
+                            :elapsed-days t
+                            :total-days r})]
+            (is (= :on-plan (fc/pace-state (:delta p)))
+              (str total "p/" horizon "d lead " lead " — day " t
+                ": covered " (nth covered t) " against a line at " (:required p)))))))))
+
+(deftest the-known-gate-has-one-definition
+  (testing "`page-verdict` and `maturation-lead` read the SAME predicate, so
+            the lead cannot answer a question the verdict does not ask"
+    (is (= :mature (fc/carded-verdict 0.95 30.0 0.9)))
+    (is (= :immature (fc/carded-verdict 0.95 12.0 0.9)))
+    (is (= :below-theta (fc/carded-verdict 0.80 30.0 0.9)))
+    (testing "θ is tested first, so a page failing both is named by the gate the
+              user can act on first"
+      (is (= :below-theta (fc/carded-verdict 0.80 3.0 0.9))))
+    (testing "and the page verdict is that predicate plus the uncarded cases"
+      (doseq [[r ivl] [[0.95 30.0] [0.95 12.0] [0.80 30.0]]]
+        (is (= (fc/carded-verdict r ivl 0.9)
+              (:reason (fc/page-verdict {:page-id 1 :done? false}
+                         [{:projected {:retrievability r :interval-days ivl}}] 0.9))))))))
+
+(deftest an-impossible-maturation-window-names-itself
+  (testing "§6.6 — the levers stay four whichever reason fires"
+    (let [base {:projected-known 9 :required-pages 5 :peak-load 1.0
+                :observed-capacity 60 :horizon 90 :maturation-lead 8}
+          no-window (fc/feasibility (assoc base :horizon 3))
+          unreachable (fc/feasibility (assoc base :maturation-lead nil))]
+      (is (:feasible? (fc/feasibility base)))
+      (is (= [:no-maturation-window] (:reasons no-window)))
+      (is (= [:maturity-unreachable] (:reasons unreachable)))
+      (is (= 8 (:maturation-lead no-window)) "the panel names the number of days")
+      (is (= 3 (:horizon no-window))
+        "and the horizon beside it, so the sentence reads ONE map")
+      (is (nil? (:maturation-lead unreachable)))
+      (doseq [f [no-window unreachable]]
+        (is (= 4 (count (:levers f))))
+        (is (not (:feasible? f))))
+      (testing "a horizon exactly at the lead leaves no window"
+        (is (= [:no-maturation-window] (:reasons (fc/feasibility (assoc base :horizon 8)))))
+        (is (:feasible? (fc/feasibility (assoc base :horizon 9))))))))

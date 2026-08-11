@@ -4569,6 +4569,21 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     box-shadow: inset 2px 0 0 var(--color-primary);
 }
 
+/* The maturation window: the days after the coverage deadline. They ask for no
+   reading and still carry reviews, so they are dimmed rather than hidden — the
+   review column is the work that makes the covered pages count. The first one
+   carries a rule above it, which is the deadline itself. */
+.tape-scroll table tr.sched-mature td {
+    color: var(--color-text-secondary);
+    background: light-dark(#fafafa, #1a1a1a);
+}
+/* The deadline rule sits on the LAST reading day, marked from the server. A
+   sibling selector cannot find it: the Tape recycles rows, so DOM order does
+   not follow `--order`. */
+.tape-scroll table tr.sched-deadline td {
+    border-bottom: 2px solid var(--color-primary);
+}
+
 /* The five page verdicts. `immature` and `below-theta` are visually distinct
    because they call for different action: more reviews over time, against
    more reviews now. */
