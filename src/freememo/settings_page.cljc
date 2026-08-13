@@ -500,7 +500,15 @@
                                (shortcut-row "A" "Add card from selection")
                                (shortcut-row "S" "Scan Page (OCR)")
                                (shortcut-row "X" "Anki Sync")
-                               (shortcut-row "D" "Mark Done")]]
+                               (shortcut-row "D" "Mark Done")
+                               ;; The two cloze chords are editor-local — bound on
+                               ;; the cloze field's own Quill keyboard module, not
+                               ;; in freememo.commands — so they appear in no
+                               ;; registry-derived list and have to be written out
+                               ;; here. See editor-actions/install-cloze-bindings!.
+                               (shortcut-row "C" "New cloze deletion (in a cloze field)")
+                               {:key (str mod-key "+Shift+Alt+C")
+                                :desc "Same cloze number (in a cloze field)"}]]
                 
                 (dom/table
                   (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px"}})

@@ -27,7 +27,8 @@
   (:require [clojure.string :as str]
             [freememo.editor-actions :as editor-actions]
             [freememo.card-count :as cc]
-            [freememo.command-bus :as bus]))
+            [freememo.command-bus :as bus]
+            [freememo.commands :as commands]))
 
 ;; ---------------------------------------------------------------------------
 ;; Glyphs for the opt-in controls. Inline SVG with stroke="currentColor" (NOT
@@ -117,16 +118,21 @@
   (.addEventListener node "mousedown" (fn [^js e] (.preventDefault e))))
 
 (defn- glyph-button
-  "A single icon/glyph toolbar button. `on-click` fires with no args."
-  [glyph title on-click]
-  (let [b (el "button" "fmt-btn")]
-    (set! (.-type b) "button")
-    (set! (.-innerHTML b) glyph)
-    (.setAttribute b "title" title)
-    (.setAttribute b "aria-label" title)
-    (keep-selection! b)
-    (.addEventListener b "click" (fn [^js e] (.stopPropagation e) (on-click)))
-    b))
+  "A single icon/glyph toolbar button. `on-click` fires with no args.
+
+   `label` is the accessible name; `tooltip` (default `label`) is the hover text.
+   The two diverge exactly where a chord belongs in the tooltip but not in the
+   accessible name — `ExtractTopicButton`/`AddCardButton`'s established shape."
+  ([glyph label on-click] (glyph-button glyph label on-click label))
+  ([glyph label on-click tooltip]
+   (let [b (el "button" "fmt-btn")]
+     (set! (.-type b) "button")
+     (set! (.-innerHTML b) glyph)
+     (.setAttribute b "title" tooltip)
+     (.setAttribute b "aria-label" label)
+     (keep-selection! b)
+     (.addEventListener b "click" (fn [^js e] (.stopPropagation e) (on-click)))
+     b)))
 
 (defn- dropdown
   "A labelled dropdown: a trigger button that toggles a popup list of
@@ -384,15 +390,28 @@
     (.appendChild card row-blockfmt)
     ;; Cloze deletion row (cloze card only). reselect! restores the cached
     ;; range before insert-cloze! reads the live selection — focus moved to the
-    ;; button, so the editor's own getSelection would otherwise be stale.
+    ;; button, so the editor's own getSelection would otherwise be stale. The
+    ;; chords in each tooltip need no reselect!: they fire with focus still in
+    ;; the editor, so getSelection is already live.
     (when (:cloze? opts)
-      (let [cloze-row (section)]
+      (let [cloze-row (section)
+            inc-label "New cloze deletion"
+            eq-label  "Same cloze deletion"
+            ;; One formatter, so a tooltip cannot state a chord the binding does
+            ;; not fire. The ids name the action rather than a registry command —
+            ;; these chords are deliberately absent from freememo.commands, and
+            ;; display-chord reads `id` only for the palette's Firefox carve-out.
+            chord (fn [id mode]
+                    (str " (" (commands/display-chord
+                                id (get editor-actions/cloze-chords mode)) ")"))]
         (.appendChild cloze-row
-          (glyph-button cloze-inc-glyph "New cloze deletion"
-            (after #(do (reselect! q (get-rng)) (editor-actions/insert-cloze! q :inc)))))
+          (glyph-button cloze-inc-glyph inc-label
+            (after #(do (reselect! q (get-rng)) (editor-actions/insert-cloze! q :inc)))
+            (str inc-label (chord :cloze-inc :inc))))
         (.appendChild cloze-row
-          (glyph-button cloze-eq-glyph "Same cloze deletion"
-            (after #(do (reselect! q (get-rng)) (editor-actions/insert-cloze! q :eq)))))
+          (glyph-button cloze-eq-glyph eq-label
+            (after #(do (reselect! q (get-rng)) (editor-actions/insert-cloze! q :eq)))
+            (str eq-label (chord :cloze-eq :eq))))
         (.appendChild card (el "div" "fmt-divider"))
         (.appendChild card cloze-row)))
     ;; Card-gen row (document editor only, via :card-gen? opt) — count stepper

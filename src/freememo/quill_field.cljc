@@ -349,7 +349,8 @@
    initial-html. Wires text-change → on-change on each user edit, a clipboard
    matcher that uploads data-URI images, and the custom format-menu +
    code-lang-picker (the same components as the main document editor). When
-   `cloze?` is true the format-menu gains the cloze-deletion row. When `math?`
+   `cloze?` is true the format-menu gains the cloze-deletion row and the two
+   cloze chords are bound on this editor's keyboard module. When `math?`
    is true (KaTeX present — see freememo.math/on-katex-ready!) stored `\\(TeX\\)`
    is promoted to formula embeds on load and the formula popover is installed.
    When it is false the delimiters are deliberately left as text so a save cannot
@@ -420,6 +421,12 @@
          ;; also blurs, as belt-and-suspenders for nested contexts.
          (a11y/free-quill-tab! ed)
          (a11y/install-quill-tab-escape! ed)
+         ;; Cloze chords — mod+shift+C and mod+shift+alt+C, the keyboard twins of
+         ;; the format-menu's {+} / {=} buttons. Gated here rather than inside
+         ;; the installer: `cloze?` is the boundary that already decides whether
+         ;; this editor holds a cloze field, and it gates the format-menu row
+         ;; below through the same flag.
+         (when cloze? (editor-actions/install-cloze-bindings! ed))
          ;; Custom components — image on every card field, cloze row only when
          ;; cloze?. Teardowns are returned so destroy-quill-field! can remove
          ;; the body cards + document listeners on modal close.
@@ -539,8 +546,10 @@
                              debounce window.
      :cloze?        bool    OPTIONAL. When true, the format-menu shows the
                              cloze-deletion buttons wired to
-                             editor-actions/insert-cloze!. Used by the card
-                             modals' cloze field only.
+                             editor-actions/insert-cloze!, and the two cloze
+                             chords (editor-actions/cloze-chords) are bound on
+                             this editor. Used by the card modals' cloze field
+                             only.
      :autofocus?    bool    OPTIONAL. When true, focus the editor once it is
                              constructed (cursor lands in the field on open).
 

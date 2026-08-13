@@ -6,7 +6,9 @@
    Extracted from quill_field so both the QuillField lifecycle and the custom
    format-menu drive the same behavior without a namespace cycle (format-menu
    requires this ns; this ns requires neither). CLJS side effects; the CLJ
-   branch is inert so the ns loads on both peers."
+   branch is inert so the ns loads on both peers. `cloze-chords` is the one
+   member that is neither — plain data, carried without a reader conditional so
+   the two peers cannot disagree about it."
   (:require [clojure.string :as str]
             [freememo.client-errors :as ce]
             [freememo.math :as math]
@@ -101,6 +103,82 @@
                    (.setSelection ed (+ index (count prefix) length (count suffix)) 0 "user"))
                (do (insert-plain! index (str prefix suffix))
                    (.setSelection ed (+ index (count prefix)) 0 "user")))))))
+     :clj nil))
+
+(def cloze-chords
+  "The two cloze chords as `freememo.commands` bind specs, keyed by
+   `insert-cloze!` mode — the DISPLAY side of what `install-cloze-bindings!`
+   registers. Both halves live here so the tooltip in `freememo.format-menu`
+   cannot drift from the binding that fires.
+
+   `meta` reads as Cmd on macOS and Ctrl elsewhere, which is what BOTH sides
+   already do independently: `commands/effective-bind` rewrites the string, and
+   Quill's own `shortKey` resolves to `metaKey` on macOS and `ctrlKey` elsewhere
+   (`/Mac/i.test(navigator.platform)`, quill 2.0.3). No platform branch is
+   written in this codebase for these chords.
+
+   No reader conditional: this is shared vocabulary read from client scope, so
+   both peers must see plain literals (CLAUDE.md, `transcribe_language.cljc`)."
+  {:inc "meta+shift+c"
+   :eq  "meta+shift+alt+c"})
+
+(def ^:private cloze-chord-key-code
+  "`C`'s keyCode, the form the cloze bindings register under.
+
+   Quill's `Keyboard.match` accepts `binding.key === evt.key || binding.key ===
+   evt.which`, and its `listen` looks a stroke up in BOTH `bindings[evt.key]` and
+   `bindings[evt.which]` (quill 2.0.3). A string key would work for the plain
+   chord and silently fail for the Option one: macOS rewrites `evt.key` when
+   Option is held — ⌥C yields \"ç\" — so only the numeric form matches through
+   `evt.which`, which is layout- and modifier-independent.
+
+   Quill's own history module shows the string-key cost: it registers redo as
+   `{key: [\"z\", \"Z\"]}` because Shift changes `evt.key`'s case."
+  67)
+
+(defn install-cloze-bindings!
+  "Register the two cloze-insert chords on `ed`'s keyboard module — the keyboard
+   twins of the format-menu's {+} / {=} buttons.
+
+     mod+shift+C      → insert-cloze! :inc (next cloze number)
+     mod+shift+alt+C  → insert-cloze! :eq  (reuse the current max)
+
+   Editor-local by design: the action is meaningless without a focused cloze
+   field, so these chords carry no `freememo.commands` entry, no palette row and
+   no `:bind`. That is this feature's answer to CLAUDE.md's \"a new feature owes
+   the command palette a decision\".
+
+   Pre  : `ed` is a Quill instance whose keyboard module is constructed; the
+          caller has decided this editor holds a cloze field (violation = caller
+          bug — see `quill_field/init-quill-field!`'s `cloze?` gate).
+   Post : with focus in `ed`, each chord runs `insert-cloze!` exactly once and
+          the keydown is preventDefault'ed. The second half is not cosmetic: it
+          is what stops Chrome opening inspect-element mode, whose accelerator
+          is this same chord (`IDC_DEV_TOOLS_INSPECT`, reachable because
+          `BrowserCommandController::IsReservedCommandOrKey` excludes it, so the
+          renderer gets the event first). Returning nil rather than `true` is
+          what asks Quill for that preventDefault — its `listen` prevents unless
+          a matched handler returns literally `true`.
+   Inv  : the two bindings are mutually exclusive. `match` requires an omitted
+          modifier to be ABSENT (`!!binding[k] !== evt[k]`, with `null` the only
+          don't-care), so `:altKey false` on the :inc binding is what keeps
+          mod+shift+alt+C from firing it too — stated rather than left implicit.
+   Note : no teardown. The bindings live on the module instance, which dies with
+          the editor when `destroy-quill-field!` empties its container. This is
+          `a11y/install-quill-tab-escape!`'s argument, one layer in."
+  [ed]
+  #?(:cljs
+     (let [^js ed ed
+           ^js keyboard (.getModule ed "keyboard")
+           bind! (fn [alt? mode]
+                   (.addBinding keyboard
+                     #js {:key cloze-chord-key-code
+                          :shortKey true :shiftKey true :altKey alt?}
+                     (fn [_range _context _binding]
+                       (insert-cloze! ed mode)
+                       nil)))]
+       (bind! false :inc)
+       (bind! true :eq))
      :clj nil))
 
 ;; ---------------------------------------------------------------------------
