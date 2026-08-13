@@ -25,6 +25,7 @@
             [freememo.toast-stack :refer [ToastStack]]
             [freememo.optimistic :refer [CommandDispatcher]]
             [freememo.client-errors :refer [ClientErrorForwarder]]
+            [freememo.interaction-trail :as trail :refer [InteractionForwarder]]
             [freememo.undo-history-modal :refer [ActionsNavButton UndoHistoryModal]]
             [freememo.icons :as icons]
             [freememo.tooltip :as tooltip]
@@ -290,11 +291,19 @@
                     _collapse-tier (e/watch !collapse-tier)
                     !nav-overflow-open (atom false)
                     nav-overflow-open (e/watch !nav-overflow-open)
+                    ;; Every tab change funnels through here — nav tabs, the ⋮
+                    ;; overflow, in-page links and bus/run-nav! all call it — so
+                    ;; it is the one place a :nav trail entry belongs. Only the
+                    ;; nav TYPE is recorded: a search nav carries the user's
+                    ;; query text, which must not reach the log.
                     navigate! (fn
                                 ([tab]
+                                 (trail/record! :nav {:tab tab :from active-tab})
                                  (reset! !nav-cmd {:route (nav->route tab) :id (random-uuid)}))
                                 ([tab nav]
                                  (log/log-debug (str "Navigation tab=" tab " nav=" (pr-str nav)))
+                                 (trail/record! :nav {:tab tab :from active-tab
+                                                      :nav-type (:type nav)})
                                  (reset! !nav-cmd {:route (nav->route tab nav) :id (random-uuid)})))]
 
                 ;; Execute pending navigation via router
@@ -480,6 +489,9 @@
 
                 ;; Client→server error trail pump (headless; renders nothing)
                 (ClientErrorForwarder user-id)
+
+                ;; Client→server interaction trail pump (headless; renders nothing)
+                (InteractionForwarder user-id)
 
                 ;; Command architecture: queue-invocation bridge + palette
                 (bus/QueueInvoker user-id)

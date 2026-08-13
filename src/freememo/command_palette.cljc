@@ -61,8 +61,8 @@
 (defn- run-row! [row query]
   (close!)
   (if (= :search (:id row))
-    (bus/dispatch! :search {:text query})
-    (bus/dispatch! (:id row))))
+    (bus/dispatch! :search {:text query} :palette)
+    (bus/dispatch! (:id row) nil :palette)))
 
 ;; ── Platform-split helpers (top-level, frame-safe) ─────────────────────────
 

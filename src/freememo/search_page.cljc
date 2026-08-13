@@ -7,6 +7,7 @@
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [hyperfiddle.router5 :as r]
    [clojure.string :as str]
+   [freememo.logging :as log]
    [freememo.math :as math]
    [freememo.navigation :as nav]
    [freememo.tooltip :as tooltip]
@@ -14,8 +15,26 @@
    #?(:clj [freememo.search :as search])))
 
 ;; Server wrapper — plain defn with reader conditional, so :refer works from cljs
+;;
+;; The interaction is recorded HERE, not in search/search-content: this is the
+;; app-level "a user ran a search", while search-content is the query and also
+;; answers [] for the sub-minimum-length calls this wrapper never makes. It needs
+;; no interaction-trail queue — it already runs on the server. session-id is nil
+;; for that reason: this entry never passed through a browser queue.
+;;
+;; The query TEXT is deliberately absent. It is user content, and logs/app.log is
+;; read by operators and rendered into alert mail. Length, mode, kind filter and
+;; result count answer what the trail is for without carrying any of it.
 (defn run-search* [user-id query mode kind-filter]
-  #?(:clj (search/search-content user-id query mode kind-filter)
+  #?(:clj (let [rows (search/search-content user-id query mode kind-filter)]
+            ;; :kind-filter, not :kind — :kind is one of interaction!'s reserved
+            ;; base keys and names the interaction type, not a topic kind.
+            (log/interaction! user-id nil :search
+              {:mode mode
+               :kind-filter kind-filter
+               :query-length (count (str query))
+               :result-count (count rows)})
+            rows)
      :cljs []))
 
 (def ^:private kind-options

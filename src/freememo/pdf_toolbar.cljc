@@ -24,6 +24,7 @@
    [freememo.icons :as icons]
    [freememo.commands :as commands]
    [freememo.command-bus :as bus]
+   [freememo.interaction-trail :as trail]
    [freememo.copy-text :as copy]
    [freememo.pdf-action-dropdowns :refer [ScanDropdown CopyDropdown KgCommandSources]]
    [freememo.pdf-viewer :as viewer]
@@ -63,7 +64,14 @@
           input-val    (e/watch !input-val)
           !inp-focused (atom false)
           inp-focused  (e/watch !inp-focused)
-          nav! (fn [p]
+          ;; `via` names the control that drove this page change. Only DELIBERATE
+          ;; navigation is recorded here: the page count itself already reaches
+          ;; the server as a `last_page_<doc>` setting write on every page
+          ;; change, scroll included, so scroll-driven navigation is that total
+          ;; minus these entries. Recording both here would double-count, since
+          ;; go-to-page! makes the viewer emit its own page-change too.
+          nav! (fn [p via]
+                 (trail/record! :pdf-page {:via via :page p})
                  (viewer/go-to-page! p)
                  (when on-page-change! (on-page-change! p)))]
       (when (and (not inp-focused) (not= input-val (str page-number)))
@@ -78,7 +86,7 @@
             (dom/text "◀")
             (dom/On "click"
               (fn [_] (when (and (> page-number 1) (> total 0))
-                        (nav! (dec page-number)))) nil)))
+                        (nav! (dec page-number) :prev))) nil)))
         (dom/input
           (dom/props {:type "text" :value input-val
                       :style {:width "40px" :text-align "center" :padding "4px"
@@ -91,7 +99,7 @@
                 (reset! !inp-focused false)
                 (let [n (js/parseInt raw)]
                   (when (and (not (js/isNaN n)) (>= n 1) (<= n total))
-                    (nav! (max 1 (min total n)))))))
+                    (nav! (max 1 (min total n)) :input)))))
             nil)
           (dom/On "keydown"
             (fn [e] (when (= "Enter" (.-key e)) (.blur (.-target e)))) nil)
@@ -107,7 +115,7 @@
             (dom/text "▶")
             (dom/On "click"
               (fn [_] (when (and (< page-number total) (> total 0))
-                        (nav! (inc page-number)))) nil)))))))
+                        (nav! (inc page-number) :next))) nil)))))))
 
 (e/defn PdfZoomControls
   "−  [zoom%]  +  │  fit-toggle  │  rotate  │  layout-toggle.

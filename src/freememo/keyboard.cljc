@@ -22,8 +22,11 @@
    (defn- on-shortcut [e]
      (let [command-id (keyword (.-identifier e))]
        ;; Yield Cmd-Shift-Z to Quill's redo while editing rich text.
+       ;; :keyboard is what makes chord adoption measurable — dispatch! defaults
+       ;; to :button, so a chord that omitted it would be indistinguishable from
+       ;; a click on the same command.
        (when-not (and (= command-id :undo-newest) (in-quill-editor?))
-         (bus/dispatch! command-id)))))
+         (bus/dispatch! command-id nil :keyboard)))))
 
 #?(:cljs
    (defonce handler

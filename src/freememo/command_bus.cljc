@@ -38,6 +38,7 @@
    e/Token, same as any other Electric service."
   (:require [hyperfiddle.electric3 :as e]
             [freememo.commands :as commands]
+            [freememo.interaction-trail :as trail]
             [freememo.navigation :as nav]
             [freememo.optimistic :as opt]))
 
@@ -136,42 +137,65 @@
                 (some? (prepare ctx))
                 true)))))))
 
+(def invocation-sources
+  "Which frontend invoked a command. :button is every in-page control — toolbar
+   buttons, dropdown rows, the undo-history list — and is the default because a
+   control that reaches dispatch! without saying otherwise IS one. The keyboard
+   handler and the palette name themselves, so the trail can answer whether a
+   bound chord is ever pressed."
+  #{:button :keyboard :palette})
+
 (defn dispatch!
   "Invoke a command. With no `payload`, resolves one via the registered
    preparer (buttons that already hold their data pass it explicitly).
+   `source` ∈ invocation-sources, default :button — see that var.
    Returns :dispatched | :unavailable | :unknown-command.
    Post: :dispatched ⇒ the effect ran (client) or exactly one invocation was
-   queued (queue/electric)."
-  ([command-id] (dispatch! command-id nil))
-  ([command-id payload]
+   queued (queue/electric); exactly one :command trail entry is recorded on
+   EVERY path, including the two refusals — an :unavailable a user keeps
+   retrying is the signal that a command's availability rule is wrong, and
+   dropping it would hide that."
+  ([command-id] (dispatch! command-id nil :button))
+  ([command-id payload] (dispatch! command-id payload :button))
+  ([command-id payload source]
    (let [entry (some-> (commands/command command-id) (assoc :id command-id))
-         ctx @!ctx]
-     (cond
-       (nil? entry) :unknown-command
-       (and (nil? payload) (not (available? command-id ctx))) :unavailable
-       :else
-       (let [payload (or payload
-                         (when-let [prepare (get @!preparers command-id)]
-                           (prepare ctx))
-                         {})]
-         (case (commands/exec-mode entry)
-           :client
-           (if-let [handle (get @!handlers command-id)]
-             (do (handle ctx payload) :dispatched)
-             (if (:nav-tab entry)
-               (do (run-nav! entry ctx payload) :dispatched)
-               :unavailable))
+         ctx @!ctx
+         result
+         (cond
+           (nil? entry) :unknown-command
+           (and (nil? payload) (not (available? command-id ctx))) :unavailable
+           :else
+           (let [payload (or payload
+                             (when-let [prepare (get @!preparers command-id)]
+                               (prepare ctx))
+                             {})]
+             (case (commands/exec-mode entry)
+               :client
+               (if-let [handle (get @!handlers command-id)]
+                 (do (handle ctx payload) :dispatched)
+                 (if (:nav-tab entry)
+                   (do (run-nav! entry ctx payload) :dispatched)
+                   :unavailable))
 
-           :ui-button
-           (if-let [invoke (get @!invokers command-id)]
-             (do (invoke) :dispatched)
-             :unavailable)
+               :ui-button
+               (if-let [invoke (get @!invokers command-id)]
+                 (do (invoke) :dispatched)
+                 :unavailable)
 
-           (:queue :electric)
-           (do (swap! !invocations conj {:invocation-id (random-uuid)
-                                         :command-id command-id
-                                         :payload payload})
-               :dispatched)))))))
+               (:queue :electric)
+               (do (swap! !invocations conj {:invocation-id (random-uuid)
+                                             :command-id command-id
+                                             :payload payload})
+                   :dispatched))))]
+     ;; Payload is deliberately NOT recorded — it carries user content (a search
+     ;; string, a pasted card body). Command id, source, exec mode and outcome
+     ;; are what the trail is for.
+     (trail/record! :command {:command-id command-id
+                              :source source
+                              :exec (some-> entry commands/exec-mode)
+                              :active-tab (:active-tab ctx)
+                              :result result})
+     result)))
 
 ;; ── Electric bridges ───────────────────────────────────────────────────────
 

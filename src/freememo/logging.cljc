@@ -61,6 +61,46 @@
       (when duration-ms (str " " duration-ms "ms"))))
   nil)
 
+(def interaction-kinds
+  "Valid :kind values for `interaction!`."
+  #{:command :nav :pdf-page :search})
+
+(defn interaction!
+  "Log one user interaction that mutates nothing, so no `audit!` signal exists.
+
+   `audit!` records what content changed; this records what the user reached for.
+   The two are disjoint by construction — a command dispatch, a tab navigation
+   and a PDF page-nav click all happen entirely in the browser, and a search is a
+   read. Without this signal the server log cannot say which commands are used,
+   whether a keyboard chord is ever pressed, or which tabs users open.
+
+   Pre  : kind ∈ interaction-kinds; detail is a map of scalars — plain
+          serializable data (it crosses the Electric wire from the client pump),
+          carrying NO user content and no atoms, and using none of the reserved
+          keys #{:user-id :session-id :kind}. user-id may be nil (pre-auth
+          surfaces); session-id is the per-page-load id, nil for server-side
+          interactions that never passed through a browser queue.
+   Post : one :info signal, :id ::interaction, :data = detail plus the base keys.
+          Returns :logged (truthy — the client forwarder spends its token on it).
+   Pre violation (unknown kind) is a caller bug and still logs, tagged as given.
+
+   The base keys are merged LAST, so a detail key that collides is dropped rather
+   than winning. Detail-wins loses the discriminator every census groups by: a
+   search passing its kind filter as :kind rewrote :kind :search to \"all\" and
+   the entry stopped being a search at all. Losing one detail field is the
+   containable failure; losing :kind is not.
+
+   :info is required, not chosen — prod runs at :info, so :debug would never
+   reach logs/app.log. ::interaction is in no alert-routes :ids set below, so it
+   mails nobody."
+  [user-id session-id kind detail]
+  (tel/log! {:level :info
+             :id ::interaction
+             :data (merge detail
+                     {:user-id user-id :session-id session-id :kind kind})}
+    (str "interaction " (some-> kind name)))
+  :logged)
+
 (defn client-error!
   "Record a client-originating failure, shipped from the browser via e/server.
    Pre:  op (keyword|str) names the failed operation; message a str; user-id may be
