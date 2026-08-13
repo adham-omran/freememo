@@ -153,11 +153,21 @@
                       :when #{:viewer} :table #{:topics} :views #{:refresh}}
      :copy-all       {:label "Copy all text" :class :mutation :exec :ui-button
                       :when #{:viewer} :table #{:topics} :views #{:refresh}}
+     ;; :schedule-mutations is load-bearing on both. A page's done status IS the
+     ;; study plan's coverage figure, so day 0 of the plan — a quota that counts
+     ;; down — cannot move without it. Declaring it here rather than widening
+     ;; the three readers' watches fixes all three from the bump authority: the
+     ;; reading-view pace badge, the Schedule tab's Today tile and plan row 0,
+     ;; and the home-view `today:` segment. A document with no schedule pays one
+     ;; indexed read, because `schedule/root-schedule-pace` returns nil straight
+     ;; after `db/active-study-schedule-for-root` and never projects.
      :done           {:label "Mark done" :class :mutation :exec :ui-button
                       :bind "meta+shift+d" :when #{:viewer}
-                      :table #{:topics} :views #{:refresh :meta-refresh}}
+                      :table #{:topics}
+                      :views #{:refresh :meta-refresh :schedule-mutations}}
      :restore        {:label "Restore (un-done)" :class :mutation :exec :ui-button
-                      :when #{:viewer} :table #{:topics} :views #{:refresh :meta-refresh}}
+                      :when #{:viewer} :table #{:topics}
+                      :views #{:refresh :meta-refresh :schedule-mutations}}
      ;; Dismiss/Undismiss — recursive queue-visibility toggle, bumped directly
      ;; by RowActionsMenu (library) and DocumentOptionsModal (viewer); no palette
      ;; entry or invoker, so no :exec.
