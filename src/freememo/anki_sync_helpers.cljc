@@ -921,6 +921,59 @@
     field-map
     (get migrate-carry-fields kind)))
 
+(defn merge-note-tags
+  "Union of a note's CURRENT Anki tags with the tags this push adds.
+
+   AnkiConnect REPLACES a note's whole tag list whenever the request carries a
+   `tags` key — `updateNote` hands the key to `updateNoteTags`, which removes
+   every existing tag before adding the supplied ones, and `updateNoteModel`
+   documents the same. Anki's Mark IS the tag `marked`, so sending the settings
+   list bare deleted the user's mark (and `leech`, and every hand-added tag) on
+   every re-push, because do-anki-push! re-pushes each already-synced card
+   whether its body changed or not. See plans/anki-push-tag-merge.md.
+
+   Current tags keep their order and their Anki-side spelling. An added tag
+   already present under any casing is dropped, because Anki matches tags
+   case-insensitively and would otherwise hold `Marked` beside `marked`.
+
+   pre : current-tags is the note's notesInfo :tags — a collection, empty when
+         the note holds no tag. A caller that does not KNOW the note's current
+         tags must not call this (see the reported-note gate in do-anki-push!):
+         there is no tag list that is safe to send in ignorance. settings-tags
+         may be nil.
+   post: a vector containing EVERY current tag — a push never shortens a tag
+         list."
+  [current-tags settings-tags]
+  (reduce (fn [acc tag]
+            (let [t (str/trim (str tag))
+                  lower (str/lower-case t)]
+              (if (or (str/blank? t)
+                    (some #(= (str/lower-case %) lower) acc))
+                acc
+                (conj acc t))))
+    (vec current-tags)
+    settings-tags))
+
+(defn build-update-note
+  "The `note` parameter of an updateNote or updateNoteModel call, and the sole
+   owner of the `tags` key on the update path. Both actions route through here —
+   the same bare `:tags` expression inlined at two call sites is how the tag wipe
+   reached both of them.
+
+   The key is always present, because omitting it is not the safe choice it looks
+   like: `updateNote` skips tag work when the key is absent, but `updateNoteModel`
+   reads `note.get('tags', [])` and assigns the result, so an absent key CLEARS
+   every tag. One shape for both actions, and no caller has to know which.
+
+   pre : field-map is a build-update-fields or migrate-note-fields result;
+         current-tags is the note's notesInfo :tags, known (see merge-note-tags).
+   post: `:tags` contains every current tag. A caller that migrates the model
+         assocs `:modelName` onto the result."
+  [note-id field-map current-tags settings-tags]
+  {:id note-id
+   :fields field-map
+   :tags (merge-note-tags current-tags settings-tags)})
+
 #?(:cljs
    (defn do-anki-push!
      "Push cards to Anki. Returns Missionary task resolving to result map.
@@ -935,6 +988,10 @@
            ;; header text / use-header / tags propagate even when card body
            ;; content was not edited. Anki-side timestamp checks can't see these
            ;; settings, so optimizing here would silently drop legitimate updates.
+           ;; Tags propagate ADDITIVELY only: merge-note-tags unions the settings
+           ;; tags into what the note already carries, so a tag REMOVED from the
+           ;; form stays on notes already pushed. That asymmetry is the price of
+           ;; not deleting the user's Anki-side tags (Marked, leech) here.
            changed-cards (vec (filter #(some? (:flashcards/anki_note_id %)) cards))
            ;; Occlusion cards that actually carry group data (attached by
            ;; get-cards-for-sync); the same re-push-everything rule regenerates
@@ -1005,12 +1062,15 @@
                               (log/log-error (str "[anki-push] storeMediaFile FAILED id=" media-id
                                                " error=" (.-message err)))
                               [media-id (str "/api/media/" media-id)]))))))
-               ;; Phase 1.9: read every changed note's current model + fields.
-               ;; Phase 2 field-updates (updateNote) notes already on the owned
-               ;; model and migrates (updateNoteModel) notes on any other model —
-               ;; legacy foreign note types AND the pre-rename owned names.
+               ;; Phase 1.9: read every changed note's current model, fields and
+               ;; tags. Phase 2 field-updates (updateNote) notes already on the
+               ;; owned model and migrates (updateNoteModel) notes on any other
+               ;; model — legacy foreign note types AND the pre-rename owned names.
                ;; updateNoteModel wipes omitted fields, so the migrate map re-reads
                ;; the user-owned fields (Remarks / Back Extra) from these values.
+               ;; Tags come from the same reply: sending them is a REPLACEMENT, so
+               ;; the push must union in what the note already has. This one call
+               ;; answers every read below — the tag merge costs no extra call.
                changed-notes-info
                (if (empty? changed-cards)
                  []
@@ -1018,6 +1078,14 @@
                         {:notes (mapv :flashcards/anki_note_id changed-cards)})))
                model-by-note (into {} (map (fn [n] [(:noteId n) (:modelName n)])) changed-notes-info)
                fields-by-note (into {} (map (fn [n] [(:noteId n) (:fields n)])) changed-notes-info)
+               tags-by-note (into {} (map (fn [n] [(:noteId n) (vec (:tags n))])) changed-notes-info)
+               ;; The note ids notesInfo actually answered for. A note it did not
+               ;; report no longer exists in Anki (deleted there — the Library
+               ;; overlay's absent-note pass deletes the local card), and Phase 2
+               ;; must not touch it: with no current values, the migrate map would
+               ;; blank the user's Remarks and the tag merge would have nothing to
+               ;; preserve. Both updates would also fail at AnkiConnect anyway.
+               reported-note-ids (into #{} (keep :noteId) changed-notes-info)
                ;; Phase 1: add new cards (sequential, concurrency 1)
                add-result
                (m/? (m/reduce
@@ -1043,33 +1111,41 @@
                               kind (:flashcards/kind card)
                               note-id (:flashcards/anki_note_id card)]
                           (try
-                            (let [field-map (build-update-fields card settings filename-map)
-                                  owned-model (owned-model-name kind)
-                                  current-model (get model-by-note note-id)]
-                              (log/log-debug (str "[anki-push] update card-id=" (:flashcards/id card)
-                                               " kind=" kind " note-id=" note-id
-                                               " model=" (pr-str current-model) " → " (pr-str owned-model)
-                                               " field-keys=" (vec (keys field-map))))
-                              (if (= current-model owned-model)
-                                ;; Already on the owned model — field-only update
-                                ;; preserves user-owned fields (updateNote leaves
-                                ;; omitted fields intact).
-                                (m/? (anki-call! "updateNote"
-                                       {:note {:id note-id :fields field-map
-                                               :tags (:tags settings)}}))
-                                ;; On another model — migrate to the owned model.
-                                ;; Covers legacy foreign note types AND the pre-rename
-                                ;; owned names. updateNoteModel wipes omitted fields,
-                                ;; so re-supply the user-owned fields from current values.
-                                (let [migrate-map (migrate-note-fields kind field-map
-                                                    (get fields-by-note note-id))]
-                                  (m/? (anki-call! "updateNoteModel"
-                                         {:note {:id note-id :modelName owned-model
-                                                 :fields migrate-map
-                                                 :tags (:tags settings)}}))))
-                              {:pairs [{:card-id (:flashcards/id card)
-                                        :anki-note-id note-id}]
-                               :updated [1]})
+                            (if-not (contains? reported-note-ids note-id)
+                              (do (log/log-error (str "[anki-push] update SKIPPED card-id="
+                                                   (:flashcards/id card)
+                                                   " note-id=" note-id " — notesInfo did not report it"))
+                                {:errors [{:card-id (:flashcards/id card)
+                                           :error "Note no longer exists in Anki"}]})
+                              (let [field-map (build-update-fields card settings filename-map)
+                                    owned-model (owned-model-name kind)
+                                    current-model (get model-by-note note-id)]
+                                (log/log-debug (str "[anki-push] update card-id=" (:flashcards/id card)
+                                                 " kind=" kind " note-id=" note-id
+                                                 " model=" (pr-str current-model) " → " (pr-str owned-model)
+                                                 " field-keys=" (vec (keys field-map))))
+                                (if (= current-model owned-model)
+                                  ;; Already on the owned model — field-only update
+                                  ;; preserves user-owned fields (updateNote leaves
+                                  ;; omitted fields intact).
+                                  (m/? (anki-call! "updateNote"
+                                         {:note (build-update-note note-id field-map
+                                                  (get tags-by-note note-id)
+                                                  (:tags settings))}))
+                                  ;; On another model — migrate to the owned model.
+                                  ;; Covers legacy foreign note types AND the pre-rename
+                                  ;; owned names. updateNoteModel wipes omitted fields,
+                                  ;; so re-supply the user-owned fields from current values.
+                                  (let [migrate-map (migrate-note-fields kind field-map
+                                                      (get fields-by-note note-id))]
+                                    (m/? (anki-call! "updateNoteModel"
+                                           {:note (assoc (build-update-note note-id migrate-map
+                                                           (get tags-by-note note-id)
+                                                           (:tags settings))
+                                                    :modelName owned-model)}))))
+                                {:pairs [{:card-id (:flashcards/id card)
+                                          :anki-note-id note-id}]
+                                 :updated [1]}))
                             (catch :default err
                               (log/log-error (str "[anki-push] update FAILED card-id=" (:flashcards/id card)
                                                " error=" (.-message err)))
