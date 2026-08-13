@@ -24,6 +24,13 @@
    Electric's dual compile; every call site is e/client-sited, so the server-peer
    registry is inert.")
 
+(defonce ^{:doc "Per-page-load correlation id, tagging every signal one browser
+                 session ships to the server (client-errors and interaction-trail
+                 both read it) so one session's trail is joinable. Client-only —
+                 nil on the server peer. defonce = evaluated once per JS app load."}
+  session-id
+  #?(:cljs (str (random-uuid)) :clj nil))
+
 (defonce ^:private registry (atom {}))
 
 (defn get-atom

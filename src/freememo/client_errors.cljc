@@ -7,16 +7,15 @@
    watches that queue and ships each entry to the server via e/server — the same
    client→server bridge idiom as freememo.optimistic/CommandDispatcher.
 
-   `session-id` is a stable per-page-load id (defonce = evaluated once per JS app
-   load); it tags every shipped error so one browser session's trail is joinable."
+   `session-id` (freememo.client-state) is a stable per-page-load id; it tags
+   every shipped error so one browser session's trail is joinable. It lives in
+   client-state rather than here because freememo.interaction-trail tags its own
+   entries with the same id — a session is not an error concept."
   (:require
    [hyperfiddle.electric3 :as e]
+   [freememo.client-state :as cs]
    [freememo.logging :as log]
    #?(:clj [freememo.toasts :as toasts])))
-
-(defonce ^{:doc "Per-page-load correlation id (client-only; nil on the server)."}
-  session-id
-  #?(:cljs (str (random-uuid)) :clj nil))
 
 ;; Defined on both peers so the ClientErrorForwarder e/defn resolves under the
 ;; JVM Electric compiler; only ever written/read on the client (e/client scope).
@@ -63,10 +62,15 @@
    for pre-auth surfaces)."
   [user-id]
   (e/client
-    (e/for [err (e/diff-by :id (e/watch !queue))]
-      (let [[t _] (e/Token (:id err))]
-        (when t
-          (when-some [_ (e/server (log-client-error! user-id session-id
-                                    (:op err) (:message err) (:notify err)))]
-            (t)
-            (swap! !queue (fn [q] (filterv #(not= (:id err) (:id %)) q)))))))))
+    ;; sid MUST be let-bound at client scope — a bare session-id inside the
+    ;; (e/server …) form is a SERVER-side var read of a var whose :clj branch is
+    ;; nil. Every ::client-error signal recorded before this binding existed
+    ;; carries :session-id nil for that reason; they cannot be joined by session.
+    (let [sid cs/session-id]
+      (e/for [err (e/diff-by :id (e/watch !queue))]
+        (let [[t _] (e/Token (:id err))]
+          (when t
+            (when-some [_ (e/server (log-client-error! user-id sid
+                                      (:op err) (:message err) (:notify err)))]
+              (t)
+              (swap! !queue (fn [q] (filterv #(not= (:id err) (:id %)) q))))))))))
