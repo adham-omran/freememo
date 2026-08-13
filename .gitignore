@@ -24,7 +24,6 @@ logs/
 /.playwright-mcp/
 /db-backup/
 /repl.sh
-/reports/
 /data/
 /backup-1774968994.sql
 /.claude/
@@ -48,3 +47,4 @@ logs/
 # Third-party client assets: downloaded by `clj -X:build vendor/fetch!` and
 # hash-verified against vendor-lock.sha256. Never committed (3.4 MB of binaries).
 /resources/public/freememo/vendor/
+/reports/*.pdf
