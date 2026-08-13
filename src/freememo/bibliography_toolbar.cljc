@@ -31,21 +31,6 @@
               :ok)
      :cljs nil))
 
-(defn pace-word
-  "The state word the pace badge shows.
-
-   Pre : `state` is `schedule-forecast/pace-state`'s verdict, or nil when no
-         schedule covers the document.
-   Post: \"Behind\", \"On plan\", \"Ahead\", or nil.
-   Inv : nil in, nil out — the caller renders NOTHING for nil rather than an
-         empty capsule, so an unscheduled document grows no badge."
-  [state]
-  (case state
-    :behind "Behind"
-    :on-plan "On plan"
-    :ahead "Ahead"
-    nil))
-
 ;; Pre:  user-id + bib-topic-id from doc-context; bib-topic-id is the document
 ;;       ROOT, which is what `study_schedules.root_topic_id` names.
 ;; Post: one badge when an active schedule covers the document, nothing at all
@@ -69,11 +54,30 @@
       ;; hides at tier 2 with the progress badge beside it. A tier-1 class was
       ;; tried and reverted — a 1200px window already reports collapse-1, so
       ;; the badge was `display: none` on an ordinary desktop.
-      (when-some [word (pace-word (e/server (:state pace)))]
+      ;;
+      ;; The gate is the MAP's presence, not a word derived from it. `pace-word`
+      ;; used to render the state and double as this test; the state left the
+      ;; face, and a fn kept only for its nil-ness would have been a gate
+      ;; wearing a renderer's name.
+      (when (e/server (some? pace))
         (dom/span
           (dom/props {:class "toolbar-badge tooltip-right"})
+          ;; The pace verdict lives HERE now, in words, through `pace-phrase`.
+          ;; It left the face because a cumulative lag and a daily share are
+          ;; measured against different lines: `Behind · today 16 pages` beside
+          ;; `9 pages behind` asked the reader to reconcile two numbers that
+          ;; need not agree.
           (tooltip/Tooltip! (e/server (:tooltip pace)))
-          (dom/text word " · " (fc/deadline-token (e/server (:days-to-target pace)))))))))
+          ;; One string, not five nodes. `schedule-badge-face` owns both tokens
+          ;; and the rule that they must not both say `today`; composing them
+          ;; here would put that rule in a view, where the next surface pairing
+          ;; them cannot see it.
+          ;;
+          ;; It is also one characterData mutation per change rather than
+          ;; several, and the toolbar's tier detector observes characterData on
+          ;; this subtree (`toolbar_overflow.cljc:70`).
+          (dom/text (fc/schedule-badge-face (e/server (:pages-today pace))
+                      (e/server (:days-to-target pace)))))))))
 
 ;; Pre:  user-id non-nil; bib-topic-id = the citation's item (document root for
 ;;       PDF pages); citation is a string-or-nil; page-info is

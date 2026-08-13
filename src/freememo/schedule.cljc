@@ -497,6 +497,40 @@
                  :elapsed-days elapsed
                  :total-days span}))))
 
+#?(:clj
+   (defn- today-of
+     "§1.2's today figures for one schedule, from its inputs and progress.
+
+      THREE readers need this map — the forecast, the reading-view badge, and
+      the dashboard summary — and each assembling its own `fc/today-plan` call
+      is how the arguments drift. `pace-of` above exists for that reason and
+      records what the drift cost the first time.
+
+      `:daily-load` is the one argument a caller owns, because only `forecast`
+      holds a projection to pass. The other four are derived HERE, so no caller
+      can pair one schedule's remainder with another's reading window.
+
+      Pre : `progress` is `current-progress` over `inputs`. A progress map from
+            one schedule with another's inputs is a caller bug, and it yields a
+            plausible wrong quota rather than an error.
+      Pre : `load` is a day-index → reviews map, or `{}` for a caller with no
+            projection. It reaches `:reviews-today` and nothing else.
+      Post: `schedule-forecast/today-plan`'s {:pages-today :reviews-today
+            :pages-remaining}.
+      Post: `:pages-today` may be NEGATIVE — it is what is still OWED today, and
+            a reader past the allocation is owed less than nothing. Render it
+            through `fc/quota-phrase` or `fc/quota-cell`, never as a bare number.
+      Inv : `:covered-today` and the remainder come from the SAME progress map.
+            That is `today-plan`'s own precondition: a count taken separately
+            could describe a different instant and make the allocation drift."
+     [inputs progress load]
+     (fc/today-plan
+       {:pages-remaining (- (:total progress) (:covered progress))
+        :reading-days (fc/coverage-window (:horizon inputs) (:lead inputs))
+        :horizon (:horizon inputs)
+        :covered-today (:covered-today progress)
+        :daily-load load})))
+
 (def forecast-status-labels
   "One label per status `forecast` and `schedule-inputs` can report.
 
@@ -654,11 +688,7 @@
                ;; §1.2 — the plan the user actually follows. Pages come
                ;; from the straight line, reviews from the projection.
                :plan (study-plan uncovered reading-days horizon load covered-today)
-               :today (fc/today-plan {:pages-remaining uncovered
-                                      :reading-days reading-days
-                                      :horizon horizon
-                                      :covered-today covered-today
-                                      :daily-load load})
+               :today (today-of inputs progress load)
                :feasibility feas))))
        ;; No such schedule, or it belongs to somebody else. A distinct status,
        ;; not nil: the surface must say "this is gone" rather than "still
@@ -774,9 +804,23 @@
          `db/active-study-schedule-for-root`.
    Post: nil when no ACTIVE schedule covers the root, so the caller renders
          nothing rather than an empty badge.
-   Post: otherwise {:state :days-to-target :tooltip}, all plain data. `:state`
-         is `schedule-forecast/pace-state`'s three-way verdict, which the badge
-         names, and `:tooltip` is the finished hover string.
+   Post: otherwise {:days-to-target :pages-today :tooltip}, all plain data.
+         `:tooltip` is the finished hover string, and it is where the pace
+         verdict now lives — in words, through `schedule-forecast/pace-phrase`.
+   Post: `:state` is NOT returned. `schedule-forecast/pace-state`'s verdict is
+         consumed here, by the tooltip, and the badge's face carries the quota
+         instead. Returning a key no caller reads is a postcondition nothing can
+         be caught violating, so it is not one.
+   Post: `:pages-today` is day 0 of the plan — what is still OWED today — and it
+         may be NEGATIVE once the reader is past the allocation. It is REQUIRED
+         whenever this returns a map, and the badge renders it through
+         `schedule-forecast/quota-phrase`. No default stands in for it: 0 means
+         the day is settled, so defaulting a missing key to 0 would report
+         `done` on a schedule that had never been read.
+   Post: `:pages-today` is present on every status, not only `:ok`. The page
+         plan needs no R and no review load, and it is the half of §1.2 a user
+         with no Anki connection can act on — the same reason `forecast` emits
+         its plan on the degenerate branches.
    Post: the tooltip is built HERE, not on the client, for the reason
          `topic-state/get-page-info*` states about its own: the client only
          ever displays the string, so shipping the raw figures and formatting
@@ -784,9 +828,13 @@
    Post: `:days-to-target` is SIGNED — negative once the target is past. The
          badge has to tell 'today' from 'overdue', and `days-until`'s floor
          reports 0 for both.
-   Inv : `:state` is derived from the same `pace` call `forecast` makes, over
-         the same `current-progress`, so the badge and the Schedule tab cannot
-         report different pace for one schedule."
+   Inv : the tooltip's verdict and `:pages-today` come from the same `pace-of`
+         and `today-of` calls `forecast` makes, over the same `current-progress`,
+         so the badge and the Schedule tab cannot report different pace or a
+         different quota for one schedule.
+   Inv : the load passed to `today-of` is EMPTY, so `:reviews-today` is 0 and
+         goes unread. Projecting one would cost the 339 ms this fn refuses,
+         which is the whole reason it does not call `forecast`."
   [_refresh user-id root-topic-id]
   #?(:clj
      (when root-topic-id
@@ -795,8 +843,8 @@
                progress (current-progress inputs)
                p (pace-of row inputs progress)
                state (fc/pace-state (:delta p))]
-           {:state state
-            :days-to-target (signed-days-to-target (:study_schedules/target_date row))
+           {:days-to-target (signed-days-to-target (:study_schedules/target_date row))
+            :pages-today (:pages-today (today-of inputs progress {}))
             :tooltip (str (fc/pace-phrase state (:delta p))
                        " · target " (:study_schedules/target_date row))})))
      :cljs nil))
@@ -833,8 +881,7 @@
        (fn [row]
          (let [inputs (schedule-inputs user-id row)
                progress (current-progress inputs)
-               p (pace-of row inputs progress)
-               uncovered (- (:total progress) (:covered progress))]
+               p (pace-of row inputs progress)]
            {:id (:study_schedules/id row)
             :title (or (:topics/doc_title row) "Untitled")
             :target-date (:study_schedules/target_date row)
@@ -846,18 +893,12 @@
             :covered (:covered progress)
             :known (:known progress)
             :total (:total progress)
-            ;; Through `today-plan`, not through its own split: that fn is the
+            ;; Through `today-of`, not through its own split: that fn is the
             ;; definition of 'pages today', and the home view must not answer
             ;; the question differently from the tab it links to. The load is
             ;; empty because this view shows no review column and projecting
             ;; one would cost the 339 ms this fn exists to avoid.
-            :pages-today (:pages-today
-                          (fc/today-plan
-                            {:pages-remaining uncovered
-                             :reading-days (fc/coverage-window (:horizon inputs) (:lead inputs))
-                             :horizon (:horizon inputs)
-                             :covered-today (:covered-today progress)
-                             :daily-load {}}))}))
+            :pages-today (:pages-today (today-of inputs progress {}))}))
        (db/list-study-schedules user-id))
      :cljs []))
 

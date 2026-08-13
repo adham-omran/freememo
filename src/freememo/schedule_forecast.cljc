@@ -681,6 +681,43 @@
       (zero? d) "today"
       :else "overdue")))
 
+(defn schedule-badge-face
+  "The reading-view schedule badge's whole face: today's quota and the deadline.
+
+   It lives HERE rather than in the view because it owns nothing the view knows.
+   Both halves are this namespace's tokens, and the rule below is about the PAIR
+   — a view composing them would have to remember it, and a second surface
+   pairing them would have to remember it again.
+
+   Pre : `owed` is `schedule/root-schedule-pace`'s `:pages-today` — day 0 of the
+         plan, which may be negative. `days` is its SIGNED `:days-to-target`.
+         `days-until`'s floored count reports 0 for today and for last month, and
+         this face has to tell those apart.
+   Post: `today <quota> · <token>`, and `<quota> · <token>` in the one case the
+         token is itself `today`.
+   Post: **the label drops only on that repeat.** `today done · today` names one
+         word twice for two different things: the day the work is owed on, and
+         the day the target falls on. Nothing else earns the drop.
+   Inv : the word `today` is on the face either way, and that is what makes the
+         drop safe. The label anchors the quota — a bare `done` reads as the
+         whole SCHEDULE being finished, and a bare page count sits beside the
+         `44/60` progress badge, whose denominator is the whole document while
+         this one is the schedule's page range (`plans/schedule-pace-pill.md`
+         §4 rejected that collision twice). On the repeat day the DAY TOKEN
+         supplies the same word, so `3 pages · today` still reads as a count
+         owed today. The anchor moves; it does not go.
+   Inv : the drop tracks `deadline-token`'s output, not the quota's state. All
+         three quota states lose the label on the target date, because all three
+         would repeat the word.
+   Inv : NO state word. The pace verdict is in the badge's TOOLTIP, through
+         `pace-phrase`. Two figures on one face asked the reader to reconcile a
+         cumulative lag against a daily share, and those are measured against
+         different lines and need not agree: `Behind · today 16 pages` beside a
+         tooltip reading `9 pages behind` was the measured case."
+  [owed days]
+  (let [token (deadline-token days)]
+    (str (when (not= "today" token) "today ") (quota-phrase owed) " · " token)))
+
 (defn pace-phrase
   "`pace-state`'s verdict and `pace`'s `:delta` as a phrase, for a hover
    readout. Sits here rather than beside `pace-state` because it reads
