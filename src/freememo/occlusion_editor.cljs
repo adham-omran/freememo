@@ -473,11 +473,19 @@
   "Mount a textarea over `node` and focus it.
    Pre:  the stage is built, so :scale and :container are known, and node is a
          Konva Text on the label layer.
+   Pre:  a caller reached from a MOUSEDOWN has ALREADY suppressed that event's
+         default action. Otherwise the browser focuses the container after this
+         returns and the editor tears itself down — see wire-text!. The dblclick
+         caller in make-label! needs nothing: the default focus action ran on the
+         two mousedowns before it. What a TOUCHSTART owes is unverified — that
+         path has never been driven, on any device.
    Post: exactly one editor is open, the node is hidden while it is, and every
          keystroke the node's text follows the textarea immediately — the save
          and the dirty check both read the NODE, so nothing depends on a commit
          happening. Escape and blur only tear the textarea down.
-   Blame: calling this before build-stage! is a caller bug (scale is nil)."
+   Blame: calling this before build-stage! is a caller bug (scale is nil).
+          Focus lost immediately after mount is a caller bug too — the first
+          Pre was not paid."
   [handle ^js node]
   (close-label-editor! handle)
   (let [{:keys [container scale]} @handle
@@ -539,9 +547,13 @@
     ;; requestAnimationFrame. HTML :autofocus does not fire on a dynamically
     ;; inserted element — Forms5 says so in its own source and does the same
     ;; thing (electric_forms5.cljc, Input!: ":autofocus only works on page load,
-    ;; not dynamic insertion"). rAF would be worse than useless here: it would
-    ;; land after the pointerdown that created this node has finished, i.e. after
-    ;; the container has taken focus for itself.
+    ;; not dynamic insertion").
+    ;;
+    ;; A synchronous focus is necessary and NOT sufficient, which is the trap an
+    ;; earlier version of this comment fell into: it reasoned only about the
+    ;; container's pointerdown handler and concluded that focusing after it was
+    ;; enough. One event later, mousedown's own default action takes the focus
+    ;; back. Suppressing that is the caller's job — see this fn's first Pre.
     (.focus textarea)
     (.select textarea)))
 
@@ -715,8 +727,23 @@
   (let [{:keys [scale]} @handle
         ^js stage (:stage @handle)]
     (.on stage "mousedown touchstart"
-      (fn [e]
+      (fn [^js e]
         (when (and (= :text (:tool @handle)) (empty-canvas-target? stage e))
+          ;; Suppressing the default action is what makes the editor below
+          ;; usable, and it MUST happen on this event. The default action of
+          ;; mousedown moves focus to the nearest focusable ancestor of the
+          ;; canvas — the container, which prepare-container! made focusable —
+          ;; and it runs AFTER every listener, so it takes focus back from the
+          ;; textarea open-label-editor! just focused. That blur tore the editor
+          ;; down and blank-label? destroyed the node, so a click could never
+          ;; place a label at all: it flashed once and was gone, and the letters
+          ;; typed next reached wire-keys! as tool switches. Konva will not do
+          ;; this for us — its own preventDefault fires for touch only, and only
+          ;; when the hit test found a shape (an empty-canvas click finds none).
+          ;; Measured in Chrome 151: without this, activeElement after the click
+          ;; is the container and the textarea stays empty.
+          (let [^js native (.-evt e)]
+            (when (.-cancelable native) (.preventDefault native)))
           (close-label-editor! handle)
           (select-nodes! handle [])
           (when-let [{:keys [x y]} (natural-pointer stage scale)]

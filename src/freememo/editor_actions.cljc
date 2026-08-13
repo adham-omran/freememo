@@ -120,7 +120,7 @@
    is blank. The one mutation behind every popover exit.
 
    Pre  : `ed` is a Quill instance; `el` is a `span.ql-formula` still connected to
-          `ed`'s document; the formula module is enabled.
+          `ed`'s document; KaTeX is on window (`Formula.create` throws without it).
    Post : with a non-blank `tex`, one embed carrying it sits where `el` was and the
           caret is after it. With a blank `tex`, nothing sits there and the caret
           is where the formula was. Source \"user\", so text-change fires and the
@@ -218,7 +218,7 @@
    and Ctrl+Z can reach it — the escape hatch when a `\\(` typed as prose (writing
    ABOUT LaTeX) converts unintentionally.
 
-   Pre  : `ed` is a Quill instance or nil; the formula module is enabled.
+   Pre  : `ed` is a Quill instance or nil; KaTeX is on window.
    Post : `ed`'s text contains no `\\(…\\)` region outside code; each became one
           embed, with the caret left after the last one converted.
    Inv  : self-terminating — after conversion no region remains, so the
@@ -242,7 +242,7 @@
    invite. A microtask defers past the handler without costing a frame, so the
    formula still appears in the same frame as the keystroke.
 
-   Pre  : `ed` is a Quill instance; the formula module is enabled (KaTeX present).
+   Pre  : `ed` is a Quill instance; KaTeX is on window.
    Post : a `\\(…\\)` typed outside code renders immediately; one inside a code
           block stays text. The returned fn detaches the listener AND marks the
           install dead, so a microtask already queued cannot write into a

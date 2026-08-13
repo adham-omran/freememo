@@ -81,7 +81,7 @@
      :cljs
      (do
        (swap! !init-gen inc)
-       (when-let [{:keys [editor container toolbar import-popover-teardown internal-link-teardown format-menu-teardown code-lang-teardown formula-teardown a11y-observer]} @!editor-state]
+       (when-let [{:keys [editor container toolbar import-popover-teardown internal-link-teardown format-menu-teardown code-lang-teardown formula-teardown resize-focus-teardown a11y-observer]} @!editor-state]
          (let [^js ed editor
                ^js ct container
                ^js tb toolbar]
@@ -98,6 +98,8 @@
            (when code-lang-teardown (code-lang-teardown))
            ;; Remove the formula click/blur/Escape listeners on the editor root.
            (when formula-teardown (formula-teardown))
+           ;; Remove the resize focus-out listener on the editor container.
+           (when resize-focus-teardown (resize-focus-teardown))
            ;; Tear down the table action bar (appended to document.body)
            ;; and its window scroll/resize listeners. Idempotent; safe
            ;; even if table-ui/init! never ran.
@@ -391,7 +393,7 @@
                       ;; ancestor — otherwise it is positioned past the
                       ;; pane edge and clipped by the PDF pane. QuillField
                       ;; has no such ancestor and omits :bounds.
-                      (clj->js (quill-field/quill-config "Enter text..." {:bounds container} math?)))
+                      (clj->js (quill-field/quill-config "Enter text..." {:bounds container})))
            ^js clipboard (.-clipboard editor)
            ;; See quill-field/install-clipboard-matchers! for what each
            ;; matcher does and why (shared with QuillField's own editor).
@@ -447,10 +449,11 @@
                               ;; The KaTeX-wait outcome, recorded rather than
                               ;; re-derived: set-content! needs it to decide
                               ;; whether to promote stored math to blots, and
-                              ;; probing `(.getModule ed "formula")` for it
-                              ;; depends on Quill registering the formula module
-                              ;; under that name — an assumption this does not
-                              ;; need to make.
+                              ;; probing `(.getModule ed "formula")` for it would
+                              ;; return nil forever. Quill 2 has no formula
+                              ;; module — see the note in quill-config's :modules
+                              ;; map. Not making that assumption is what kept this
+                              ;; line correct.
                               :math? (boolean math?)
                               :a11y-observer (install-content-a11y! editor)
                               :import-popover-teardown (setup-link-import-popover! editor)
@@ -461,7 +464,15 @@
                               ;; when KaTeX arrived — Formula.create throws without
                               ;; it, and there is no insert button to gate instead.
                               :formula-teardown (when math?
-                                                  (formula-ui/install! editor))})
+                                                  (formula-ui/install! editor))
+                              ;; Bound the resize module's document keydown
+                              ;; listener to this editor — see
+                              ;; quill-field/install-resize-release-on-focus-out!.
+                              ;; Without it, an image selected here steals the
+                              ;; first keystroke typed into any modal, palette or
+                              ;; canvas label editor on the page.
+                              :resize-focus-teardown
+                              (quill-field/install-resize-release-on-focus-out! editor)})
        (setup-mobile-keyboard-suppression! editor)
        (table-ui/init! editor)
        ;; Bubble's toolbar lives in the floating .ql-tooltip inside the
@@ -480,7 +491,7 @@
    topic-id tags dirty-html so auto-save targets the correct topic.
 
    Construction is deferred until the KaTeX wait settles (see
-   freememo.math/on-katex-ready!) because Quill's formula module throws if KaTeX
+   freememo.math/on-katex-ready!) because Quill's Formula blot throws if KaTeX
    is absent. The wait is capped, so a blocked CDN costs `katex-wait-ms` and then
    yields a working editor without math rather than no editor at all.
 

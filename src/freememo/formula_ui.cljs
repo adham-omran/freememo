@@ -53,8 +53,8 @@
   "Wire the formula popover and the typed-source converter for `editor`.
    Returns a teardown fn removing both.
 
-   Pre:  `editor` is an initialized Quill instance whose formula module is enabled
-         — i.e. KaTeX is present (`freememo.math/on-katex-ready!` resolved true).
+   Pre:  `editor` is an initialized Quill instance, and KaTeX is on window
+         (`freememo.math/on-katex-ready!` resolved true).
          Callers MUST NOT install this otherwise: `Formula.create` throws without
          KaTeX.
    Post: clicking a rendered formula opens a popover anchored above it, prefilled

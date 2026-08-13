@@ -382,10 +382,13 @@
   "Call `k` with true once KaTeX is usable, or false if it failed to load or did
    not arrive within `katex-wait-ms`. The first call starts the load.
 
-   Callers use the boolean to decide whether to enable Quill's formula module. On
-   false they MUST also skip `stored->editor-html`: converting math to spans with
-   no blot registered would drop `data-value` and destroy the formula on the next
-   save. Leaving the delimiters as text costs rendering and keeps the bytes.
+   Callers use the boolean to decide whether to promote stored math to Formula
+   blots and install freememo.formula-ui. Nothing about Quill's own config depends
+   on it — Quill 2 registers `formats/formula` at load and has no formula module,
+   which the note in `quill-field/quill-config` records. On false callers MUST skip
+   `stored->editor-html`: converting math to spans while `Formula.create` throws
+   would drop `data-value` and destroy the formula on the next save. Leaving the
+   delimiters as text costs rendering and keeps the bytes.
 
    pre : `k` is a 1-arg fn.
    post: `k` is called exactly once, asynchronously, with a boolean. CLJ: no-op."

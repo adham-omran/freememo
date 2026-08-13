@@ -116,13 +116,10 @@
    floating tooltip to the editor pane; QuillField has no such ancestor to clamp
    to and passes nil.
 
-   `math?` enables Quill's built-in formula module (KaTeX). It MUST be false
-   unless KaTeX is on window — the module throws otherwise. No \"formula\" entry
-   is added to the toolbar, and there is no insert button anywhere: formulas are
-   created by typing `\\(…\\)` and edited through freememo.formula-ui's popover.
-   The module is enabled here purely so the Formula blot resolves — which is what
-   both the typed-source converter and the popover depend on."
-  [placeholder extra math?]
+   Nothing here is conditional on KaTeX. Math needs no module and no toolbar
+   entry — see the note inside :modules below — so the callers' `math?` never
+   reaches this fn."
+  [placeholder extra]
   (merge
      {:theme "bubble"
       :modules {:toolbar [["bold" "italic" "underline" "strike"]
@@ -135,6 +132,27 @@
                           ["code" "code-block"]
                           ["clean"]
                           ["table"]]
+                ;; NO math entry belongs in this map, in either half of it.
+                ;;
+                ;; Quill 2 has no `modules/formula`. The registered module names
+                ;; are clipboard, history, input, keyboard, syntax, table,
+                ;; toolbar, uiNode and uploader; formula is a FORMAT there, and
+                ;; `formats/formula` is registered when quill.js loads. So the
+                ;; Formula blot resolves for the typed-source converter and the
+                ;; formula-ui popover with nothing asked for here.
+                ;;
+                ;; A `:formula` key does not fail loudly. expandConfig logs
+                ;; `Cannot import modules/formula` plus `Cannot load formula
+                ;; module` and then DROPS the entry, so one arrived with math
+                ;; support and printed two lines per editor for its whole life —
+                ;; six pairs on the occlusion modal's Fields tab alone.
+                ;;
+                ;; A "formula" toolbar entry is just as pointless: both editors
+                ;; use the bubble theme and index.css hides
+                ;; `.ql-bubble .ql-tooltip`, so the button it renders is
+                ;; invisible. Formulas are created by typing `\(…\)` and edited
+                ;; through freememo.formula-ui's popover.
+                ;;
                 ;; Syntax module — requires window.hljs + clojure pack (loaded in
                 ;; index*.html). Same `:languages` list as the main editor for
                 ;; consistent picker UX across modals and the page editor.
@@ -163,7 +181,16 @@
                 ;; buttons write `ql-resize-style` classes, which `clean-html`
                 ;; strips from <img> — so alignment would persist in topic
                 ;; content and vanish on cards). "DisplaySize" is the live
-                ;; WxH readout; "Keyboard" is arrow-key nudging.
+                ;; WxH readout.
+                ;;
+                ;; "Keyboard" is arrow-key caret movement past a selected image
+                ;; plus Backspace/Delete to remove it — AND a keydown listener on
+                ;; `document` in the CAPTURE phase, registered for as long as the
+                ;; module holds a selection. That listener is a focus thief for
+                ;; the whole page; `install-resize-release-on-focus-out!` below is
+                ;; what bounds it. Dropping "Keyboard" from this vector would
+                ;; remove the listener outright, at the cost of both editing
+                ;; affordances — the reason it is still here.
                 ;;
                 ;; `:embedTags []` skips initializeEmbed!, which otherwise
                 ;; injects a <style> node and a pointer-events class for
@@ -184,8 +211,7 @@
                 :resize {:modules ["DisplaySize" "Resize" "Keyboard"]
                          :embedTags []
                          :parchment {:image {:attribute ["width"]
-                                             :limit {:minWidth 40}}}}
-                :formula (boolean math?)}
+                                             :limit {:minWidth 40}}}}}
       :placeholder (or placeholder "Enter text...")}
      extra))
 
@@ -234,6 +260,71 @@
      :clj nil))
 
 ;; ---------------------------------------------------------------------------
+;; Resize-module focus containment — shared by both editors, like the clipboard
+;; matchers above.
+;; ---------------------------------------------------------------------------
+
+(defn- release-resize-selection!
+  "Drop the resize module's hold on the blot it has selected, if it holds one.
+   Private: the installer below is the only sanctioned caller, because a release
+   that is not tied to focus leaving is the per-opener discipline this replaced.
+
+   `hide()` removes the overlay, clears `activeEle`, and calls `onDestroy` on the
+   module's sub-modules — which is what unregisters the document keydown listener
+   described beside `:resize` in `quill-config`.
+
+   Pre  : `ed` is a Quill instance or nil.
+   Post : that editor's resize module holds nothing and owns no document listener.
+          Idempotent, and a no-op when nothing is selected."
+  [ed]
+  #?(:cljs
+     (when ed
+       (let [^js ed ed
+             ^js resizer (.-resizer ed)]
+         (when (and resizer (.-activeEle resizer))
+           (.hide resizer))))
+     :clj nil))
+
+(defn install-resize-release-on-focus-out!
+  "Release `ed`'s resize selection as soon as focus leaves its container. Returns
+   a teardown fn removing the listener.
+
+   This is the whole defense against the resize module's document-level keydown
+   listener, and it belongs here rather than at each site that opens something
+   over an editor. While the module holds a selection it calls
+   `quill.setSelection` from that listener, which focuses this editor's root — so
+   the FIRST keystroke on any other surface is stolen. Capture-phase-on-document
+   runs before the real target, so the surface being typed into cannot defend
+   itself; its own `stopPropagation` is already too late. Releasing on focus-out
+   is early enough for every case, because focus always moves before a keystroke
+   arrives.
+
+   Two details make the guard exact. `relatedTarget` is the element RECEIVING
+   focus, and a resize handle cannot be it: the module appends its overlay to
+   `quill.container` (`this.quill.container.appendChild(this.overlay)`), so a
+   handle click stays inside and is filtered out by the containment test. And a
+   nil `relatedTarget` — focus falling to `<body>` — is deliberately left alone:
+   nothing is typing there, so the selection is still useful, and hiding on it
+   would drop a selection the user can still see.
+
+   Pre  : `ed` is a Quill instance whose container is mounted.
+   Post : no keystroke aimed at an element outside `ed`'s container can move focus
+          into `ed`.
+   Blame: a stolen keystroke means this was never installed, or its teardown ran
+          early."
+  [ed]
+  #?(:cljs
+     (let [^js ed ed
+           ^js container (.-container ed)
+           handler (fn [^js e]
+                     (let [^js next (.-relatedTarget e)]
+                       (when (and next (not (.contains container next)))
+                         (release-resize-selection! ed))))]
+       (.addEventListener container "focusout" handler)
+       (fn [] (.removeEventListener container "focusout" handler)))
+     :clj nil))
+
+;; ---------------------------------------------------------------------------
 ;; Quill instance lifecycle — plain defns so side effects are stable.
 ;; ---------------------------------------------------------------------------
 
@@ -259,10 +350,11 @@
    matcher that uploads data-URI images, and the custom format-menu +
    code-lang-picker (the same components as the main document editor). When
    `cloze?` is true the format-menu gains the cloze-deletion row. When `math?`
-   is true (KaTeX present — see freememo.math/on-katex-ready!) the formula module
-   is enabled, stored `\\(TeX\\)` is promoted to formula embeds on load, and the
-   format-menu gains the LaTeX-insert button. When it is false the delimiters are
-   deliberately left as text so a save cannot lose them.
+   is true (KaTeX present — see freememo.math/on-katex-ready!) stored `\\(TeX\\)`
+   is promoted to formula embeds on load and the formula popover is installed.
+   When it is false the delimiters are deliberately left as text so a save cannot
+   lose them. It reaches neither quill-config nor the Quill options: math needs no
+   module entry, which the note inside quill-config's :modules map explains.
    Returns {:editor <Quill> :teardowns [fn ...]} (CLJS) or nil (CLJ); the
    teardowns remove the format-menu / code-lang picker / formula listeners on
    destroy.
@@ -271,7 +363,7 @@
   #?(:cljs
      (when (and container (.-Quill js/window))
        (let [Quill (.-Quill js/window)
-             cfg (clj->js (quill-config placeholder nil math?))
+             cfg (clj->js (quill-config placeholder nil))
              ed (new Quill container cfg)
              cb (.-clipboard ed)
              ;; See install-clipboard-matchers! above for what each matcher
@@ -335,6 +427,10 @@
           :teardowns [(format-menu/install! ed {:image? true
                                                 :cloze? (boolean cloze?)})
                       (code-lang-picker/install! ed)
+                      ;; Bound the resize module's document keydown listener to
+                      ;; this editor. Card fields hold images too, and a modal
+                      ;; stacked over one is exactly the surface it steals from.
+                      (install-resize-release-on-focus-out! ed)
                       ;; Formula popover + typed-source conversion. Only when KaTeX
                       ;; arrived — Formula.create throws without it.
                       (when math? (formula-ui/install! ed))]}))
