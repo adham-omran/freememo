@@ -91,23 +91,22 @@
    preferred value if valid against the available list, else the first list
    item (pick) — run-fetch-config! no longer defaults it. Note types are
    app-owned, so no model/field selection is applied.
+
+   Scope, deck and allow-dupes only. Header and tags are per-document: each
+   loads and saves itself through HeaderSettings / TagSettings, so neither
+   passes through here or through the prefs map.
+
    `models` is accepted (call-site symmetry) but unused."
   [prefs conn form decks _models]
   (when (:scope prefs) (reset! (:!scope form) (:scope prefs)))
   (reset! (:!selected-deck conn) (pick (:deck prefs) decks))
   (when (some? (:allow-dupes prefs))
-    (reset! (:!allow-dupes form) (:allow-dupes prefs)))
-  ;; Header is no longer a form atom — it's per-PDF, loaded/saved by
-  ;; HeaderSettings directly. apply-prefs! no longer touches it.
-  (when (some? (:use-tags prefs))
-    (reset! (:!use-tags form) (:use-tags prefs)))
-  (when (:tags prefs)
-    (reset! (:!tags form) (:tags prefs))))
+    (reset! (:!allow-dupes form) (:allow-dupes prefs))))
 
 (e/defn AnkiSyncConnectedPanel
   "Connected state: preset auto-load (per the user's auto-load mode), form, and status.
    conn = {:!decks :!selected-deck ...}
-   form = {:!scope :!allow-dupes :!use-tags :!tags ...}
+   form = {:!scope :!allow-dupes}
    sync = {:!phase :!result :!error :!push-pairs}"
   [user-id selected-doc conn form sync !show-modal]
   (e/client
@@ -197,7 +196,7 @@
   "Sync state, executor, and modal DOM. Note types are app-owned, so there is
    no model/field resolution here.
    conn = {:!status :!selected-deck ...}
-   form = {:!scope :!allow-dupes :!use-tags :!tags ...}"
+   form = {:!scope :!allow-dupes}"
   [user-id selected-doc !show-modal conn form]
   (e/client
     (let [!sync-phase (atom nil)
@@ -221,11 +220,13 @@
             ;; Build prefs on the CLIENT (deref the client atoms here); only the
             ;; resulting plain map crosses to the server — never the atoms, which
             ;; are unserializable. (Mirrors AnkiSyncExecutor's prefs-map handling.)
+            ;; Tags are absent on purpose. They persist per document as the user
+            ;; edits them (TagSettings), and writing them here is what put one
+            ;; document's tag in an account-wide row for the next reconcile to
+            ;; apply everywhere. See plans/anki-tags-per-document.md.
             (let [prefs {:scope @(:!scope form)
                          :deck @(:!selected-deck conn)
-                         :allow-dupes @(:!allow-dupes form)
-                         :use-tags @(:!use-tags form)
-                         :tags @(:!tags form)}]
+                         :allow-dupes @(:!allow-dupes form)}]
               (case (e/server (e/Offload #(save-last-used-prefs!* user-id prefs)))
                 (do (reset! !show-modal false)
                     (reset! !sync-phase nil)

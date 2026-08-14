@@ -191,6 +191,14 @@
   ["last_page_" "pdf_layout_" "extract_style_" "ocr_model_" "card_model_"
    "goal_" "assistant_model_" "anki_preset_" "hierarchy_open_" "pins_open_"
    "assistant_tab_"
+   ;; The per-document Anki header and tags (settings.clj). Each is two rows
+   ;; keyed on the root topic id, with no account-wide row behind them, so an
+   ;; untranslated suffix does not degrade to a global default — it points at
+   ;; another user's topic and the setting is simply lost. The header pair was
+   ;; missing here from the day it was written; the tag pair arrived with
+   ;; plans/anki-tags-per-document.md.
+   "anki_use_header_" "anki_header_text_"
+   "anki_use_tags_" "anki_tags_"
    ;; `boox_file_<root topic id>` binds an EPUB document to a Google Drive file
    ;; (freememo.neoreader-sync/file-id-setting-prefix). The id needs the same
    ;; translation as every other per-topic key. The file id itself travels

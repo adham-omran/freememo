@@ -16,10 +16,21 @@
 ;; with them the `doc-context` require.
 
 (e/defn TagInput
-  "Multi-tag input with chip display and autocomplete from all-tags."
-  [!tags all-tags]
+  "Multi-tag input with chip display and autocomplete from all-tags.
+
+   pre : `!tags` holds a vector of tag strings. `on-edit` is a plain 1-arg fn.
+   post: every mutation writes `!tags` AND calls `(on-edit new-tags)` with the
+         vector the mutation produced.
+
+   The callback exists because the parent cannot tell an edit from the loaded
+   value by watching the atom: reverting to the loaded list is a real edit that
+   must be saved, and a value comparison reads it as no change. `on-edit` carries
+   the new value rather than a bare signal, so the trigger and the payload are
+   one signal and no frame can pair a new count with a stale list."
+  [!tags all-tags on-edit]
   (e/client
     (let [tags (e/watch !tags)
+          edit! (fn [f] (on-edit (swap! !tags f)))
           !search (atom "")
           search (e/watch !search)
           !focused (atom false)
@@ -37,7 +48,7 @@
                        vec))
           add-tag! (fn [t]
                      (when-not (some #{t} @!tags)
-                       (swap! !tags conj t))
+                       (edit! (fn [ts] (conj ts t))))
                      (reset! !search "")
                      (reset! !active-idx -1))]
       (dom/div
@@ -61,7 +72,7 @@
                                     :padding "0" :font-size "13px" :line-height "1"
                                     :color "var(--color-text-secondary)"}})
                 (dom/text "\u00d7")
-                (dom/On "click" (fn [_] (swap! !tags (fn [ts] (vec (remove #{t} ts))))) nil))))
+                (dom/On "click" (fn [_] (edit! (fn [ts] (vec (remove #{t} ts))))) nil))))
           ;; Text input
           (dom/input
             (dom/props {:type "text"
@@ -78,7 +89,7 @@
                 (let [val (string/trim @!search)]
                   (when (seq val)
                     (when-not (some #{val} @!tags)
-                      (swap! !tags conj val))
+                      (edit! (fn [ts] (conj ts val))))
                     (reset! !search ""))))
               nil)
             (let [v (dom/On "input" (fn [e] (-> e .-target .-value)) nil)]
@@ -111,7 +122,7 @@
                       (reset! !active-idx -1)
                       (reset! !focused false))
                     (and (= key "Backspace") (empty? search) (seq tags))
-                    (swap! !tags (fn [ts] (vec (butlast ts)))))))
+                    (edit! (fn [ts] (vec (butlast ts)))))))
               nil)))
         ;; Dropdown
         (when (seq filtered)
@@ -144,6 +155,18 @@
 (defn save-anki-header-for-topic!*
   [user-id root-topic-id use-header header-text]
   #?(:clj (settings/save-anki-header-for-topic! user-id root-topic-id use-header header-text)
+     :cljs nil))
+
+(defn resolve-anki-tags*
+  "Effective tags for a document (per-document setting, else none).
+   {:use-tags bool :tags [str]}."
+  [user-id root-topic-id]
+  #?(:clj (settings/resolve-anki-tags user-id root-topic-id)
+     :cljs nil))
+
+(defn save-anki-tags-for-topic!*
+  [user-id root-topic-id use-tags tags]
+  #?(:clj (settings/save-anki-tags-for-topic! user-id root-topic-id use-tags tags)
      :cljs nil))
 
 (e/defn HeaderSettings
@@ -184,19 +207,83 @@
           (case (e/server (save-anki-header-for-topic!* user-id root-id uh ht))
             (t)))))))
 
+(e/defn TagSettings
+  "Per-document Anki tags: a Forms5 checkbox plus `TagInput`, auto-saving each
+   edit to this document's tag rows. Same shape as `HeaderSettings`, and the same
+   reason — the setting belongs to the document, so it loads from and saves to
+   that document alone with no account-wide value in the path.
+
+   Two save services, because the two controls report edits differently. The
+   checkbox is a Forms5 field and emits edit maps; `TagInput` is a documented
+   Forms5 exception (CLAUDE.md) and reports through `on-edit`, which lands the new
+   vector in `!pending`.
+
+   Unticking the checkbox does NOT clear the tags. The stored list survives so
+   ticking the box again restores it; `settings/resolve-anki-tags` is what makes
+   an unticked setting apply nothing on the write path.
+
+   conn = {:!all-tags ...} — the autocomplete source, read from AnkiConnect."
+  [user-id root-id conn]
+  (e/client
+    (let [loaded    (e/server (e/Offload #(resolve-anki-tags* user-id root-id)))
+          all-tags  (e/watch (:!all-tags conn))
+          !use-tags (atom (e/snapshot (boolean (:use-tags loaded))))
+          use-tags  (e/watch !use-tags)
+          !tags     (atom (e/snapshot (vec (:tags loaded))))
+          tags      (e/watch !tags)
+          ;; The tag vector an edit wants persisted, or nil when nothing is
+          ;; pending. Seeded nil, so the loaded value never fires a save.
+          !pending  (atom nil)
+          pending   (e/watch !pending)
+          ;; Both children sit inside one `e/amb`, as in HeaderSettings. A
+          ;; `dom/div` body is an implicit `do`, whose VALUE is its last form —
+          ;; so two bare siblings here would bind `edits` to the TagInput branch
+          ;; and drop every checkbox edit. `TagInput` reports through `on-edit`
+          ;; rather than as edit maps, so its branch contributes nothing to
+          ;; `edits`; only the checkbox does.
+          edits
+          (dom/div (dom/props {:style {:margin-bottom "var(--sp-4)"}})
+            (e/amb
+              (dom/label
+                (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
+                                    :font-size "14px" :margin-bottom "6px"}})
+                (e/amb
+                  (forms/Checkbox! :use-tags use-tags)
+                  (do (dom/text "Tags") (e/amb))))
+              (if use-tags
+                (do (TagInput !tags all-tags (fn [v] (reset! !pending v)))
+                    (e/amb))
+                (e/amb))))]
+      ;; Checkbox save service. Persists the current tag list beside the new
+      ;; flag, then reflects the committed flag on token-spend so the managed
+      ;; widget does not revert.
+      (e/for [[t edit] (e/diff-by first (e/as-vec edits))]
+        (let [ut (boolean (:use-tags edit))]
+          (e/on-unmount #(reset! !use-tags ut))
+          (case (e/server (save-anki-tags-for-topic!* user-id root-id ut tags))
+            (t))))
+      ;; TagInput save service. `e/on-unmount` clears `!pending` INSIDE the token
+      ;; branch, per CLAUDE.md: a local mutation that unmounts the containing
+      ;; frame must fire on unmount, not as a sibling of the server call.
+      (when (some? pending)
+        (let [[t _] (e/Token pending)]
+          (when t
+            (e/on-unmount #(reset! !pending nil))
+            (case (e/server (save-anki-tags-for-topic!* user-id root-id use-tags pending))
+              (t))))))))
+
 (e/defn AnkiSyncOptions
-  "Custom header (per-PDF, Forms5) + allow-duplicates checkbox + tags.
-   conn = {:!all-tags ...}  form = {:!allow-dupes :!use-tags :!tags ...}
-   allow-dupes/use-tags have no per-field server save (unlike the header) —
-   they're pure client form state, read at push-time (anki-sync-panels) and
-   persisted only as part of the push's last-used prefs-map. Checkbox! still
-   writes straight through to the same form atoms so that consumer keeps
-   seeing the current value."
+  "Custom header (per-document) + allow-duplicates checkbox + tags (per-document).
+   conn = {:!all-tags ...}  form = {:!allow-dupes ...}
+
+   allow-dupes is the only option left in the form map, and the only one with no
+   per-field server save: it is client form state, read at handoff by
+   `anki-sync-panels` and persisted as part of the last-used prefs. Checkbox!
+   writes straight through to the form atom so that consumer keeps seeing the
+   current value. Header and tags own their own persistence, per document."
   [user-id root-id conn form]
   (e/client
-    (let [all-tags (e/watch (:!all-tags conn))
-          allow-dupes (e/watch (:!allow-dupes form))
-          use-tags (e/watch (:!use-tags form))]
+    (let [allow-dupes (e/watch (:!allow-dupes form))]
       (HeaderSettings user-id root-id)
       ;; Allow duplicates
       (dom/div
@@ -208,18 +295,7 @@
               (reset! (:!allow-dupes form) v)
               (t))
             (do (dom/text "Allow duplicates") (e/amb)))))
-      ;; Tags
-      (dom/div
-        (dom/props {:style {:margin-bottom "var(--sp-4)"}})
-        (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "14px" :margin-bottom "6px"}})
-          (e/amb
-            (e/for [[t {v :use-tags}] (forms/Checkbox! :use-tags use-tags)]
-              (reset! (:!use-tags form) v)
-              (t))
-            (do (dom/text "Tags") (e/amb))))
-        (when use-tags
-          (TagInput (:!tags form) all-tags))))))
+      (TagSettings user-id root-id conn))))
 
 (e/defn AnkiSyncForm
   "The connected-state form: deck, custom header, tags. Note types are app-owned

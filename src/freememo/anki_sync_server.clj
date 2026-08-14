@@ -13,15 +13,17 @@
 
 (defn load-anki-preferences
   "Load saved Anki sync preferences for a user (global). Note types are
-   app-owned (FreeMemo Basic/Cloze), so no model/field ordering is stored."
+   app-owned (FreeMemo Basic/Cloze), so no model/field ordering is stored.
+
+   Deck and allow-dupes only. Header and tags are per-document and resolve
+   through `settings/resolve-anki-header` and `settings/resolve-anki-tags`, which
+   have no account-wide fallback — see plans/anki-tags-per-document.md."
   [user-id]
   (try
     {:success true
      :prefs {:scope (settings/get-anki-scope user-id)
              :deck (settings/get-anki-deck user-id)
-             :allow-dupes (settings/get-anki-allow-dupes user-id)
-             :use-tags (settings/get-anki-use-tags user-id)
-             :tags (settings/get-anki-tags user-id)}}
+             :allow-dupes (settings/get-anki-allow-dupes user-id)}}
     (catch Exception e
       (tel/error! {:id ::load-anki-preferences} e)
       {:success false :prefs {}})))
@@ -37,17 +39,23 @@
   (settings/save-anki-preset user-id root-topic-id preset-map))
 
 (defn resolve-modal-prefs
-  "One-shot resolution of the modal's initial selection (deck / note types /
-   scope / dupes / tags), so the form paints once with correct values instead
-   of first-defaulting then overriding.
+  "One-shot resolution of the modal's initial selection (deck / scope / dupes),
+   so the form paints once with correct values instead of first-defaulting then
+   overriding.
 
    Precedence (deck is applied client-side, since the deck list comes from
    AnkiConnect and needs validation there):
      deck         : per-doc preset > last-used (skipped in 'none')
-     dupes/tags   : per-doc preset > global last-used
+     dupes        : per-doc preset > global last-used
      scope        : global last-used only (per-push choice, not per-item —
                     the modal saves it to global at handoff and it must win)
    'none' only skips the per-doc preset and the last-used deck.
+
+   Tags are NOT resolved here. They are per-document with no account-wide
+   fallback, so `TagSettings` reads `settings/resolve-anki-tags` directly, the
+   way `HeaderSettings` reads the header. Returning them from this map is what
+   let one document's tag prefill the box on the next document, and a Sync press
+   then bound that tag to a document the user never chose it for.
 
    :preset? reports whether a per-doc preset was applied (drives the
    'saved settings for this document' indicator)."
@@ -66,9 +74,7 @@
        :scope       (settings/normalize-scope (:scope global))
        :deck        (or (:deck preset)
                       (when (not= mode "none") (:deck global)))
-       :allow-dupes (if (some? (:allow-dupes preset)) (:allow-dupes preset) (:allow-dupes global))
-       :use-tags    (if (some? (:use-tags preset)) (:use-tags preset) (:use-tags global))
-       :tags        (or (:tags preset) (:tags global))})
+       :allow-dupes (if (some? (:allow-dupes preset)) (:allow-dupes preset) (:allow-dupes global))})
     (catch Exception e
       (tel/error! {:id ::resolve-modal-prefs} e)
       {:mode "global" :preset? false})))
@@ -269,45 +275,16 @@
       "client sync error"))
   nil)
 
-(defn finalize-push!
-  "Atomically (per-server-call) record pushed notes, save global last-used,
-   save per-item preset (when mode=\"per-item\"), and bump :sync-mutations.
-   One e/server round-trip from the client so the reactive graph observes
-   one settled result — Electric drops unused intermediate side-effects
-   when multiple sibling e/server calls sit in a do-body."
-  [user-id root-topic-id pairs prefs-map auto-load-mode]
-  (tel/log! {:level :info
-             :id ::finalize-push!
-             :data {:user-id user-id
-                    :root-topic-id root-topic-id
-                    :pair-count (count pairs)
-                    :auto-load-mode auto-load-mode
-                    :prefs-keys (vec (keys prefs-map))
-                    :deck (:deck prefs-map)}}
-    "finalize-push! invoked")
-  (try
-    (db/set-anki-note-ids user-id
-      (mapv (fn [{:keys [card-id anki-note-id]}]
-              [card-id anki-note-id])
-        pairs))
-    (tel/log! {:level :info :id ::finalize-push!.note-ids-saved} "anki note ids saved")
-    (settings/save-anki-sync-settings user-id prefs-map)
-    (tel/log! {:level :info :id ::finalize-push!.global-saved} "global last-used saved")
-    ;; Header is per-PDF, auto-saved on edit by HeaderSettings — not persisted here.
-    (when (= auto-load-mode "per-item")
-      (let [existing (or (settings/get-anki-preset user-id root-topic-id) {})
-            new-preset (merge existing prefs-map)]
-        (settings/save-anki-preset user-id root-topic-id new-preset))
-      (tel/log! {:level :info
-                 :id ::finalize-push!.per-item-saved
-                 :data {:root-topic-id root-topic-id}}
-        "per-item preset saved"))
-    (commands/bump! user-id :anki-sync)
-    (tel/log! {:level :info :id ::finalize-push!.done} "finalize-push! complete")
-    {:success true :count (count pairs)}
-    (catch Exception e
-      (tel/error! {:id ::finalize-push!} e)
-      {:success false :error (.getMessage e)})))
+;; `finalize-push!` lived here. It recorded pushed note ids, saved the global
+;; last-used prefs, and merged the whole prefs map into `anki_preset_<root-id>`.
+;; It lost its only caller when `AnkiSyncExecutor` gave way to
+;; `anki-reconcile-panels/ReconcileExecutor`, and its absence is what made this
+;; namespace's tag fallback reachable: with nothing writing a per-item preset,
+;; `anki-write-bundles` fell through to the account-wide tag row for every
+;; document. Reconcile records its own writes through
+;; `anki-reconcile-server/record-anki-writes!`, and tags now persist per document
+;; on edit, so nothing here needs to run at handoff.
+;; See plans/anki-tags-per-document.md.
 
 ;; ---------------------------------------------------------------------------
 ;; Library cards Anki overlay (anki-modified / marked / suspended + F4 deletes)
@@ -435,7 +412,15 @@
       would go to `deckName nil`.
 
    `:allow-dupes` joins it for the same reason — `build-note` reads it, and only
-   the add path does."
+   the add path does.
+
+   `:tags` comes from `settings/resolve-anki-tags` per root, NOT from `pick`.
+   There is no account-wide tag row to fall back to, deliberately: this fn is the
+   only settings builder on the write path, and a reconcile writes across the
+   whole collection, so a global fallback here applied one document's tag to
+   every note the run created. `:use-tags` false yields `[]` — the checkbox was
+   stored and never read until now, which is the second half of the same defect.
+   See plans/anki-tags-per-document.md."
   [user-id card-ids]
   (try
     (let [global (:prefs (load-anki-preferences user-id))
@@ -451,6 +436,7 @@
               (let [preset (or (load-item-preset user-id root-id) {})
                     pick (fn [k] (let [v (get preset k)] (if (some? v) v (get global k))))
                     header (settings/resolve-anki-header user-id root-id)
+                    tags (settings/resolve-anki-tags user-id root-id)
                     root-topic (db/get-topic-for-user user-id root-id)
                     source (when-let [sid (:topics/source_id root-topic)]
                              (db/get-source sid))
@@ -461,7 +447,7 @@
                             :allow-dupes (boolean (pick :allow-dupes))
                             :use-header (:use-header header)
                             :header-text (:header-text header)
-                            :tags (vec (or (pick :tags) []))
+                            :tags (if (:use-tags tags) (:tags tags) [])
                             :bibliography-html bib-html
                             :topic-title (:topics/title root-topic)
                             :topic-kind (:topics/kind root-topic)
@@ -521,9 +507,9 @@
 
 (defn finalize-bulk-push!
   "Record a bulk push: refresh anki_note_id + anki_synced_at for pairs and
-   bump :sync-mutations ONCE. Unlike finalize-push!, deliberately does NOT
-   save global last-used prefs or per-item presets — a bulk update is not a
-   preference-setting event.
+   bump :sync-mutations ONCE. Deliberately saves no preferences of any kind —
+   a bulk update is not a preference-setting event. (The `finalize-push!` this
+   contrasted with is gone; see the note above `apply-anki-overlay!`.)
    pairs: [{:card-id N :anki-note-id M} ...]"
   [user-id pairs]
   (try

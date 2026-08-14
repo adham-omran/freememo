@@ -10,6 +10,7 @@
    [freememo.toasts :as toasts]
    [freememo.transcribe-language :as tlang]
    [taoensso.telemere :as tel]
+   [clojure.edn :as edn]
    [clojure.java.io :as io]
    [clojure.string :as str]))
 
@@ -31,8 +32,10 @@
 (def ANKI_SCOPE "anki_scope")
 (def ANKI_DECK "anki_deck")
 (def ANKI_ALLOW_DUPES "anki_allow_dupes")
-(def ANKI_USE_TAGS "anki_use_tags")
-(def ANKI_TAGS "anki_tags")
+;; Tags are per-document, in their own rows — see `resolve-anki-tags` below.
+;; `anki_use_tags` and `anki_tags` were account-wide keys that
+;; `anki-write-bundles` read as a fallback for every document with no preset,
+;; which applied one document's tag to the whole collection. Both are gone.
 (def ANKI_AUTO_LOAD_MODE "anki_auto_load_mode")
 (def LLM_ENABLED "llm_enabled")
 (def LAST_DOCUMENT "last_document")
@@ -306,15 +309,6 @@
 
 (defn get-anki-allow-dupes [user-id]
   (= "true" (or (db/get-setting user-id ANKI_ALLOW_DUPES) "false")))
-
-(defn get-anki-use-tags [user-id]
-  (= "true" (or (db/get-setting user-id ANKI_USE_TAGS) "false")))
-
-(defn get-anki-tags [user-id]
-  (try
-    (let [raw (db/get-setting user-id ANKI_TAGS)]
-      (if (seq raw) (clojure.edn/read-string raw) []))
-    (catch Exception _ [])))
 
 (defn get-anki-auto-load-mode
   "Returns one of \"per-item\", \"global\", or \"none\". Defaults to \"per-item\"."
@@ -1020,15 +1014,14 @@
       {:success false :error "Failed to save theme"})))
 
 ;; Extraction button visibility toggles.
-(defn save-anki-sync-settings [user-id {:keys [scope deck allow-dupes use-tags tags]}]
+(defn save-anki-sync-settings [user-id {:keys [scope deck allow-dupes]}]
   (try
     (when scope (db/set-setting user-id ANKI_SCOPE scope))
     (when deck (db/set-setting user-id ANKI_DECK deck))
     (db/set-setting user-id ANKI_ALLOW_DUPES (str (boolean allow-dupes)))
-    ;; Header is a per-PDF setting (see save-anki-header-for-topic!), persisted
-    ;; on edit — NOT written here; it has no account-wide/global row.
-    (db/set-setting user-id ANKI_USE_TAGS (str (boolean use-tags)))
-    (db/set-setting user-id ANKI_TAGS (pr-str (or tags [])))
+    ;; Header and tags are per-document settings (see save-anki-header-for-topic!
+    ;; and save-anki-tags-for-topic!), persisted on edit — NOT written here.
+    ;; Neither has an account-wide row.
     {:success true}
     (catch Exception e
       (tel/error! {:id ::save-anki-sync-settings} e)
@@ -1042,7 +1035,7 @@
 (defn get-anki-preset [user-id root-topic-id]
   (try
     (when-let [raw (db/get-setting user-id (anki-preset-key root-topic-id))]
-      (clojure.edn/read-string raw))
+      (edn/read-string raw))
     (catch Exception e
       (tel/error! {:id ::get-anki-preset} e)
       nil)))
@@ -1099,6 +1092,69 @@
   (let [pdf (get-anki-header-for-topic user-id root-topic-id)]
     {:use-header  (boolean (:use-header pdf))
      :header-text (or (:header-text pdf) "")}))
+
+;; ── Per-document Anki tags ──
+;;
+;; Same shape as the header above, for the same reason. Tags persist per root
+;; topic in their own settings rows, an absent row means "no tags for this
+;; document", and there is NO account-wide default to fall back to.
+;;
+;; The account-wide `anki_tags` row this replaces was read by
+;; `anki-sync-server/anki-write-bundles` for every root with no per-item preset.
+;; A reconcile covers the whole collection, so one document's tag reached every
+;; note the run created — measured in production at 169 wrongly tagged notes
+;; across 9 documents. Removing the fallback is what fixes it; a per-document
+;; row is what keeps the feature. See plans/anki-tags-per-document.md.
+
+(defn anki-use-tags-key [root-topic-id]
+  (str "anki_use_tags_" root-topic-id))
+
+(defn anki-tags-key [root-topic-id]
+  (str "anki_tags_" root-topic-id))
+
+(defn get-anki-tags-for-topic
+  "Per-document tag setting for root-topic-id.
+   {:use-tags bool-or-nil, :tags vector-or-nil}; nil for a field means no
+   setting (resolve-anki-tags treats this as no tags).
+   A malformed tag row reads as nil rather than throwing — the row is user data
+   round-tripped through pr-str, and a push must not fail on it."
+  [user-id root-topic-id]
+  (let [raw-use (db/get-setting user-id (anki-use-tags-key root-topic-id))
+        raw-tags (db/get-setting user-id (anki-tags-key root-topic-id))]
+    {:use-tags (when (some? raw-use) (= "true" raw-use))
+     :tags (try
+             (when (seq raw-tags)
+               (let [v (edn/read-string raw-tags)]
+                 (when (sequential? v) (vec v))))
+             (catch Exception e
+               (tel/error! {:id ::get-anki-tags-for-topic} e)
+               nil))}))
+
+(defn save-anki-tags-for-topic!
+  "Persist the per-document tag setting.
+   `tags` is saved whatever `use-tags` says: a tag the user typed survives
+   unticking the checkbox, so ticking it again restores the list rather than
+   asking for it twice. `resolve-anki-tags` is what makes an unticked setting
+   apply nothing."
+  [user-id root-topic-id use-tags tags]
+  (try
+    (db/set-setting user-id (anki-use-tags-key root-topic-id) (str (boolean use-tags)))
+    (db/set-setting user-id (anki-tags-key root-topic-id) (pr-str (vec (or tags []))))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-anki-tags-for-topic!} e)
+      {:success false :error "Failed to save per-document tags"})))
+
+(defn resolve-anki-tags
+  "Effective tags for a topic: the per-document setting, else none.
+   post: {:use-tags bool :tags [str]}. `:tags` is the stored list even when
+   `:use-tags` is false — the modal needs it to repopulate the input, and the
+   write path is what must consult `:use-tags` before sending anything.
+   Single source of truth for the modal's display and every push path."
+  [user-id root-topic-id]
+  (let [doc (get-anki-tags-for-topic user-id root-topic-id)]
+    {:use-tags (boolean (:use-tags doc))
+     :tags (or (:tags doc) [])}))
 
 ;; ── Prompt overrides ──
 

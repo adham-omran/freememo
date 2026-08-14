@@ -1403,8 +1403,8 @@
 
 (defn run-push!
   "Execute push to Anki and update state atoms with results.
-   Always transitions to :recording — finalize-push! must run even when
-   there are no new pairs, so settings/per-item preset still persist.
+   Always transitions to :recording — the recording step must run even when
+   there are no new pairs.
    settings = {:deck :allow-dupes :use-header :header-text :tags
                :bibliography-html :app-base-url ...}
    sync     = {:!phase :!result :!error :!push-pairs}"
