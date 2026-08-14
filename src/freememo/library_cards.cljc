@@ -1424,10 +1424,19 @@ selection.
         ;; swap; `case` is here only to sequence it before spending the token.
         (let [[t _err] (e/Token (dom/On "click" identity nil))]
           (when t
-            (let [pairs (e/server (vec (:filtered-rows result)))]
-              (case (if all-filtered-selected?
-                      (swap! !selected #(reduce dissoc % (map first pairs)))
-                      (swap! !selected into (map vec pairs)))
+            ;; e/snapshot freezes the branch decision at click time, and it is
+            ;; load-bearing: swap! mutates the selection, which feeds
+            ;; all-filtered-selected?, which is this case's OWN test. Read live, the
+            ;; `if` re-evaluates after the swap lands and runs the other branch —
+            ;; undoing the selection. It survived without the snapshot only because
+            ;; all-filtered-selected? costs a server round trip, so (t) unmounted
+            ;; this frame first; that is latency, not a guarantee. Reading the value
+            ;; the user actually clicked on is also the correct semantics.
+            (let [select-all? (not (e/snapshot all-filtered-selected?))
+                  pairs (e/server (vec (:filtered-rows result)))]
+              (case (if select-all?
+                      (swap! !selected into (map vec pairs))
+                      (swap! !selected #(reduce dissoc % (map first pairs))))
                 (t)))))))))
 
 (e/defn SortHeaderCell "

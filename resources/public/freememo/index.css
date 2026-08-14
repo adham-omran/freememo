@@ -1379,6 +1379,90 @@ html, body {
     box-shadow: inset 2px 0 0 var(--color-primary);
 }
 
+/* ── Knowledge tables (freememo.tape-table) ───────────────────────────
+   The header is a sibling table ABOVE the scroll box, matching the cards table.
+   The body reserves `scrollbar-gutter: stable`, so the header is wider than the
+   body it labels by exactly that gutter and every column boundary drifts;
+   padding-right gives the header the same content width. 10px is the width
+   `.tape-scroll::-webkit-scrollbar` sets below, so this is exact in Blink and
+   WebKit. Firefox picks its own gutter width and stays approximate by a few px.
+
+   Every body cell's layout lives here, NOT in an inline :style map. Electric
+   applies each style property as its own reactive prop, so a merged per-cell map
+   cost ~46 prop nodes per row against ~4 for a cards row. One :class string is
+   one prop. Only genuinely data-dependent values stay inline. */
+.tape-table-header {
+    display: grid;
+    grid-template-columns: var(--grid-cols);
+    padding-right: 10px;
+    flex-shrink: 0;
+}
+.tape-table-header th {
+    text-align: left;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    border-bottom: 1px solid var(--color-border);
+}
+.tape-table-body td {
+    display: flex;
+    align-items: center;
+    padding-inline: 10px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--color-bg-subtle);
+}
+/* Cell roles. A cell takes one role class; .tape-cell-click composes with any of
+   them, because "this cell opens the editor" is a separate fact from how the
+   cell reads. */
+.tape-table-body td.tape-cell-check { justify-content: center; padding-inline: 4px; }
+.tape-table-body td.tape-cell-muted { color: var(--color-text-secondary); }
+.tape-table-body td.tape-cell-meta {
+    color: var(--color-text-secondary);
+    font-size: 12px;
+}
+.tape-table-body td.tape-cell-sm { font-size: 12px; }
+/* An action cell holds a variable run of sibling controls, so its spacing is the
+   container's gap rather than a margin on each button. Cells holding one label
+   plus an annotation keep a margin on the annotation (.tape-cell-tag) — a gap
+   there would also space the text from its own wrapper. */
+.tape-table-body td.tape-cell-actions {
+    justify-content: flex-end;
+    gap: 4px;
+    white-space: nowrap;
+}
+.tape-table-body td.tape-cell-toggles { gap: 4px; }
+.tape-table-body td.tape-cell-click { cursor: pointer; }
+/* Inline "(merging)" state note in an action cell. */
+.tape-table-body .tape-cell-note { font-size: 11px; }
+/* Inner spans. The td owns clipping (see `.tape-scroll table td` above, whose
+   :has([data-tooltip]:hover) escape must win so tooltips render uncut), so the
+   ellipsis lives here. */
+.tape-table-body .tape-cell-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.tape-table-body .tape-cell-tag {
+    color: var(--color-text-secondary);
+    font-size: 11px;
+    margin-left: 6px;
+    flex-shrink: 0;
+}
+/* Empty state. An overlay, never a branch that unmounts the table — see
+   freememo.tape-table. pointer-events:none so it never eats a click. */
+.tape-table-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 24px 12px;
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    pointer-events: none;
+}
+
 /* Sticky header for the cost-history table (.tx-head). It's a grid sharing the
    body's --grid-cols, so header and body are ONE track set and cannot drift.
    Higher specificity than the shared `.tape-scroll table` / `tr` rules above
@@ -3082,6 +3166,20 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
     transform: translateX(-50%);
 }
 .tape-scroll [data-tooltip].tooltip-right::after {
+    left: auto;
+    right: 0;
+    transform: none;
+}
+/* Right-anchor every tooltip in the LAST cell of a knowledge table, so the bubble
+   cannot leave the scroll box on the inline-end side. Measured: hovering a button
+   in that cell raised the container's scrollWidth from 888 to 897, because
+   `.tape-scroll table td:has([data-tooltip]:hover)` un-clips the cell and the
+   centered bubble then overhangs the right edge. A horizontal scrollbar there
+   shortens clientHeight, which re-runs Scroll-window and re-mounts the rows —
+   hover jitter. One rule rather than a class per button: the last cell is the
+   action cell in all four views, and a button added later cannot forget it.
+   Specificity (0,3,3) beats the rule above at (0,2,1). */
+.tape-table-body td:last-child [data-tooltip]::after {
     left: auto;
     right: 0;
     transform: none;

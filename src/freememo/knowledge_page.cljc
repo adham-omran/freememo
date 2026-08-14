@@ -11,14 +11,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   ;; Scroll-window from the app-local vendored copy, not the jar's: only it takes
-   ;; :reset-key, and without one it falls back to record-count, so switching the
-   ;; Facts view's status filter between two statuses of equal count would leave
-   ;; the scroll position mid-list over an entirely different result set. Tape is
-   ;; unchanged upstream and still comes from the jar (freememo.scroll re-exports
-   ;; nothing).
-   [freememo.scroll :refer [Scroll-window]]
-   [hyperfiddle.electric-scroll0 :refer [Tape]]
+   [freememo.tape-table :refer [TapeTable]]
    [hyperfiddle.router5 :as r]
    [clojure.string :as str]
    [freememo.icons :as icons]
@@ -240,75 +233,9 @@
 ;; Shared bits
 ;; ---------------------------------------------------------------------------
 
-(def ^:private th-style
-  {:text-align "left" :padding "6px 10px" :font-size "12px"
-   :color "var(--color-text-secondary)" :border-bottom "1px solid var(--color-border)"})
-
-(def ^:private fact-row-height 41)
-
-(def ^:private fact-cell-style
-  ;; No inline overflow here: .tape-scroll table td owns clipping and its
-  ;; :has([data-tooltip]:hover) escape must win so tooltips render below the
-  ;; control, uncut. Ellipsis lives on inner spans (fact-text-style).
-  {:display "flex" :align-items "center" :padding-inline "10px"
-   :font-size "13px" :border-bottom "1px solid var(--color-bg-subtle)"})
-
-(def ^:private fact-text-style
-  {:overflow "hidden" :text-overflow "ellipsis" :white-space "nowrap"})
-
-(e/defn TapeTable
-  "Shared virtualized zebra table (Tape idiom): sticky header + scroll body
-   windowed by Scroll-window at fact-row-height rows.
-
-   Header and body are BOTH grids inside the SAME scroll box, so they share one
-   width context and one --grid-cols track set and cannot drift. The header used
-   to live outside the scroll box, which made it wider than the body by the
-   reserved `scrollbar-gutter` — a constant offset that grew across the row,
-   visibly misaligning every column label. Pinning is the existing `.tx-head`
-   class (index.css), which also un-absolutes the header's tr; the body keeps the
-   per-row `--order` C1c positioning.
-
-   Scroll-window is given the scroll box, uncompensated for the sticky header's
-   band, matching cost-history: the resulting offset error is bounded by one
-   header height (~one row) and absorbed by the overquery buffer.
-   `reset-key` is what scrolls the body back to the top when it changes. Pass the
-   view's filter/sort state, NOT the row count: a count changes for reasons that
-   must not move the user (a background sweep marking rows, a delete), while a
-   changed filter genuinely means a different list. nil keeps the upstream
-   record-count fallback, which is right for a table with no filter of its own.
-   Pre:  Row is an e/fn of [i] rendering one dom/tr (nil-safe past the end);
-         the caller's container bounds the height (flex column, min-height 0).
-         Row is called from CLIENT scope, because it renders DOM — so Row owns
-         the siting of its own data access. A Row that closes over a server-side
-         collection MUST read it as `(e/server (nth coll i nil))`; a bare
-         `(nth coll i nil)` pulls the whole collection to the client on mount and
-         the window then buys nothing.
-   Post: only the visible window (± overquery buffer) is mounted; total
-         scroll height equals item-count rows; header column boundaries equal the
-         body's at every viewport width."
-  [headers grid-cols item-count reset-key Row]
-  (e/client
-    (dom/div
-      (dom/props {:class "tape-scroll"
-                  :style {:flex "1" :overflow-y "auto" :min-height "0"
-                          :scrollbar-gutter "stable"
-                          :--count item-count :--grid-cols grid-cols
-                          :--row-height (str fact-row-height "px")}})
-      (dom/table
-        (dom/props {:class "tx-head"
-                    :style {:width "100%" :grid-template-columns grid-cols}})
-        (dom/thead
-          (dom/props {:style {:display "contents"}})
-          (dom/tr
-            (dom/props {:style {:display "contents"}})
-            (e/for [h (e/diff-by identity headers)]
-              (dom/th (dom/props {:style th-style}) (dom/text h))))))
-      (let [[offset limit] (Scroll-window fact-row-height item-count dom/node
-                             {:overquery-factor 2 :reset-key reset-key})]
-        (dom/table
-          (dom/props {:style {:width "100%"}})
-          (e/for [i (Tape offset limit)]
-            (Row i)))))))
+;; Cell layout lives in index.css under `.tape-table-body` — see
+;; freememo.tape-table. A merged per-cell :style map is one reactive prop per
+;; property, which is what made these rows cost ~11× a cards row to mount.
 
 (e/defn SubViewTabs
   "Settings-style horizontal nav (see settings-page/SettingsNav). Copies the
@@ -392,7 +319,7 @@
   [user-id doc-id generating?]
   (e/client
     (dom/button
-      (dom/props {:class "btn btn-sm btn-secondary" :style {:margin-left "6px"}
+      (dom/props {:class "btn btn-sm btn-secondary"
                   :disabled generating?
                   :aria-label "Generate questions"})
       (tooltip/Tooltip! "One question per fact that doesn't have one yet")
@@ -426,20 +353,16 @@
     (let [{:keys [id title kind facts distilled?]} doc]
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt") :style {:--order i}})
-        (dom/td (dom/props {:style fact-cell-style})
-          (dom/span (dom/props {:style fact-text-style}) (dom/text title))
-          (dom/span (dom/props {:style {:color "var(--color-text-secondary)" :font-size "11px"
-                                        :margin-left "6px" :flex-shrink "0"}})
-            (dom/text kind)))
-        (dom/td (dom/props {:style fact-cell-style}) (dom/text (str facts)))
-        (dom/td (dom/props {:style (merge fact-cell-style
-                                     {:white-space "nowrap" :justify-content "flex-end"})})
+        (dom/td
+          (dom/span (dom/props {:class "tape-cell-text"}) (dom/text title))
+          (dom/span (dom/props {:class "tape-cell-tag"}) (dom/text kind)))
+        (dom/td (dom/text (str facts)))
+        (dom/td (dom/props {:class "tape-cell-actions"})
           (DistillButton user-id id (contains? distilling id) distilled? !redistill)
           (when (pos? facts)
             (GenerateQuestionsButton user-id id (contains? generating id)))
           (dom/button
             (dom/props {:class "btn btn-sm btn-secondary"
-                        :style {:margin-left "6px"}
                         :disabled (zero? facts)
                         :aria-label (str "Browse facts for " title)})
             (dom/text (str "Facts (" facts ")"))
@@ -475,15 +398,13 @@
                     nil))
                 (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
                   (dom/text (str item-count " doc" (when (not= 1 item-count) "s")))))
-              (if (zero? item-count)
-                (dom/p (dom/props {:style {:padding "16px" :color "var(--color-text-secondary)"}})
-                  (dom/text (if (str/blank? query)
-                              "No documents yet — import one first." "No matches.")))
-                (TapeTable ["Document" "Facts" ""]
-                  "minmax(240px,1fr) 70px minmax(340px,max-content)" item-count query
-                  (e/fn [i]
-                    (when-let [doc (e/server (nth docs i nil))]
-                      (DocumentRow user-id doc i navigate! distilling generating !redistill)))))
+              (TapeTable ["Document" "Facts" ""]
+                "minmax(240px,1fr) 70px minmax(340px,max-content)" item-count query
+                (if (str/blank? query)
+                  "No documents yet — import one first." "No matches.")
+                (e/fn [i]
+                  (when-let [doc (e/server (nth docs i nil))]
+                    (DocumentRow user-id doc i navigate! distilling generating !redistill))))
               ;; Single re-distill confirm for the whole view (virtualization-safe;
               ;; per-row modals would ride the Tape's reused DOM nodes). !redistill holds
               ;; the doc-id to re-run; ConfirmModal passes it back as the payload.
@@ -553,7 +474,7 @@
                 (if (:success result)
                   (do (reset! !editing nil) (t))
                   (t (:error result))))))))
-      (dom/span (dom/props {:style fact-text-style})
+      (dom/span (dom/props {:class "tape-cell-text"})
         (dom/text (or object_label object_literal))))))
 
 (e/defn FactSelectCell
@@ -562,8 +483,7 @@
   [id !selected selected]
   (e/client
     (dom/td
-      (dom/props {:style (merge fact-cell-style
-                           {:justify-content "center" :padding-inline "4px"})})
+      (dom/props {:class "tape-cell-check"})
       (dom/input
         (dom/props {:type "checkbox" :aria-label "Select fact"
                     :style {:cursor "pointer"}})
@@ -610,18 +530,15 @@
         (dom/props {:class (when (even? i) "row-alt")
                     :style {:--order i}})
         (FactSelectCell id !selected selected)
-        (dom/td (dom/props {:style fact-cell-style})
-          (dom/span (dom/props {:style fact-text-style}) (dom/text subject_label)))
-        (dom/td (dom/props {:style (merge fact-cell-style
-                                     {:color "var(--color-text-secondary)"})})
-          (dom/span (dom/props {:style fact-text-style}) (dom/text predicate_label)))
-        (dom/td (dom/props {:style fact-cell-style})
+        (dom/td
+          (dom/span (dom/props {:class "tape-cell-text"}) (dom/text subject_label)))
+        (dom/td (dom/props {:class "tape-cell-muted"})
+          (dom/span (dom/props {:class "tape-cell-text"}) (dom/text predicate_label)))
+        (dom/td
           (FactObjectCell user-id id object_label object_literal !editing editing))
-        (dom/td (dom/props {:style (merge fact-cell-style
-                                     {:color "var(--color-text-secondary)" :font-size "12px"})})
+        (dom/td (dom/props {:class "tape-cell-meta"})
           (dom/text (if page_number (str "p." page_number) "—")))
-        (dom/td (dom/props {:style (merge fact-cell-style
-                                     {:justify-content "flex-end" :gap "4px"})})
+        (dom/td (dom/props {:class "tape-cell-actions"})
           (when (not= editing id)
             (dom/button
               (dom/props {:class "btn btn-sm btn-secondary" :aria-label "Edit object"})
@@ -714,128 +631,154 @@
           ;; marked, invisible and unrestorable. 'rejected' rides along for the
           ;; same reason — it was already unreachable before this filter existed.
           !status (atom "approved") status (e/watch !status)
-          facts (e/server (e/Offload #(get-doc-facts* kg-bump user-id doc-id status query)))
-          ;; facts stays server-sited: both reads below and the row read are
-          ;; wrapped, so the count, the id vector and the window rows cross —
-          ;; not the fact bodies.
-          item-count (e/server (count facts))
-          ;; Ids of what is currently VISIBLE — the filtered select-all's target.
-          ;; No extra query: the ids are projected off the rows already fetched.
-          ;; Ids only (ints), and they must land client-side: the click handler
-          ;; is a plain fn and cannot reach across to the server.
-          filtered-ids (e/server (mapv :id facts))
-          ;; Ids of the whole document — the other select-all's target. Fetched only
-          ;; while a search is active, since that is the only time it differs from
-          ;; filtered-ids; the untaken branch never mounts, so there is no query.
+          ;; Ids of the whole document — the document-wide select-all's target.
+          ;; Server-sited: only the count crosses here, and the ids themselves are
+          ;; read inside that button's token frame below.
+          ;; Fetched only while a search is active, since that is the only time it
+          ;; differs from what the table already shows. The gate sits INSIDE the
+          ;; e/server: a client-side `when` around it would site the value on the
+          ;; client and pull the whole vector across.
           ;; Scoped to the SAME status the table is showing: a select-all that
           ;; reached approved facts while the view listed duplicates would delete
           ;; rows the user never saw.
-          ;; Ids only (ints), and they must land client-side: the click handler is a
-          ;; plain fn and cannot reach across to the server.
-          doc-ids (if (str/blank? query)
-                    []
-                    (vec (e/server (e/Offload #(doc-fact-ids* kg-bump user-id doc-id status)))))
+          doc-ids (e/server (when-not (str/blank? query)
+                              (e/Offload #(doc-fact-ids* kg-bump user-id doc-id status))))
+          doc-fact-count (e/server (count doc-ids))
           !selected (atom #{}) selected (e/watch !selected)
           !confirm-delete (atom nil) confirm-delete (e/watch !confirm-delete)
           ;; 34px checkbox column ahead of the data columns.
           grid-cols "34px minmax(140px,1fr) minmax(130px,1fr) minmax(160px,1.2fr) 60px 110px"
           !editing (atom nil)               ; fact id whose literal is being edited
           editing (e/watch !editing)]
-      (dom/div
-        (dom/props {:style {:padding "0 16px" :display "flex" :flex-direction "column"
-                            :height "calc(100vh - 160px)"}})
-        (dom/div
-          (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :margin "10px 0"}})
-          (dom/button
-            (dom/props {:class "btn btn-sm"})
-            (dom/text "← Documents")
-            (dom/On "click" (fn [_] (navigate! :knowledge)) nil))
-          (dom/input
-            (dom/props {:placeholder "Search facts…" :class "input"
-                        :aria-label "Search facts"
-                        :style {:flex "1" :min-width "140px"}})
-            (dom/On "input"
-              (fn [ev] (util/debounce! !query-timer !query (.. ev -target -value) 300))
-              nil))
-          (FactStatusFilter !status status)
-          (SweepDuplicatesButton user-id doc-id)
-          (SweepAllDuplicatesButton user-id)
-          (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
-            (dom/text (str item-count " fact" (when (not= 1 item-count) "s")))))
-        ;; Selection bar — the two select-alls differ in what they reach, so they are
-        ;; separate controls rather than one ambiguous "all". The document-wide one
-        ;; appears only while a search is narrowing the view; without a filter it
-        ;; would select exactly what the filtered one already does.
-        (dom/div
-          (dom/props {:style {:display "flex" :gap "8px" :align-items "center"
-                              :margin "0 0 10px" :min-height "30px" :flex-wrap "wrap"}})
-          (dom/label
-            (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
-                                :font-size "12px" :cursor "pointer"}})
-            (dom/input
-              (dom/props {:type "checkbox" :aria-label "Select all shown facts"
-                          :style {:cursor "pointer"}})
-              (set! (.-checked dom/node)
-                (boolean (and (seq filtered-ids) (every? selected filtered-ids))))
-              (dom/On "click"
-                (fn [_]
-                  (if (and (seq filtered-ids) (every? @!selected filtered-ids))
-                    (swap! !selected #(reduce disj % filtered-ids))
-                    (swap! !selected into filtered-ids)))
-                nil))
-            (dom/text (str "Select all " item-count " shown")))
-          (when (seq doc-ids)
-            (dom/button
-              (dom/props {:class "btn btn-sm"})
-              (tooltip/Tooltip! "Ignores the search box — selects the whole document")
-              (dom/text (str "Select all " (count doc-ids) " in this document"))
-              (dom/On "click" (fn [_] (swap! !selected into doc-ids)) nil)))
-          (when (seq selected)
+      ;; Spinner covers the first offloaded fetch (blank otherwise); filter changes
+      ;; revalidate in place via the Offload latch, no spinner reflash. The atoms
+      ;; above stay OUTSIDE the wrapper, matching the three sibling views.
+      (loading/WithLatestServerLoading
+        (e/fn [] (e/server (e/Offload #(get-doc-facts* kg-bump user-id doc-id status query))))
+        (e/fn [facts]
+          ;; facts stays server-sited — see WithLatestServerLoading. Every read of it
+          ;; is wrapped, so counts and the window rows cross, never the fact bodies
+          ;; and never a vector of ids.
+          (let [item-count (e/server (count facts))
+                ;; Counts only, both ints on the wire. `selected` crosses
+                ;; server-ward instead — #{} in the common case, and unchanged
+                ;; across filter changes, so work-skipping keeps it off the wire.
+                ;; The id vector the select-all writes is read in its token frame.
+                selected-shown (e/server (count (filterv #(contains? selected (:id %)) facts)))
+                all-shown-selected? (and (pos? item-count) (= item-count selected-shown))]
             (dom/div
-              (dom/props {:style {:display "flex" :gap "8px" :align-items "center"
-                                  :margin-left "auto"}})
-              (dom/span (dom/props {:style {:font-size "12px"}})
-                (dom/text (str (count selected) " selected")))
-              (dom/button
-                (dom/props {:class "btn btn-sm"})
-                (dom/text "Clear")
-                (dom/On "click" (fn [_] (reset! !selected #{})) nil))
-              (dom/button
-                (dom/props {:class "btn btn-sm btn-danger-fill"})
-                (dom/text "Delete")
-                (dom/On "click"
-                  (fn [_] (reset! !confirm-delete {:ids (vec @!selected)}))
-                  nil)))))
-        (if (zero? item-count)
-          (dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
-            (dom/text (cond
-                        (not (str/blank? query)) "No matches."
-                        (= "duplicate" status) "No duplicates marked in this document."
-                        (= "rejected" status) "Nothing deleted in this document."
-                        :else "No facts yet — distill first.")))
-          ;; reset-key, not the row count: a sweep changes the count under a user
-          ;; who is mid-scroll, and that must not snap them to the top; changing
-          ;; the status or the search genuinely means a different list.
-          (TapeTable ["" "Subject" "Predicate" "Object" "Page" ""] grid-cols item-count
-            [status query]
-            (e/fn [i]
-              (when-let [fact (e/server (nth facts i nil))]
-                (FactRow user-id fact i status !editing editing !selected selected)))))
-        ;; One op, one undo entry — see db/reject-kg-facts! for why this is not a
-        ;; loop over the single-fact reject.
-        (modal/ConfirmModal !confirm-delete
-          "Delete facts?"
-          (let [n (count (:ids confirm-delete))]
-            (str "Delete " n " selected fact" (when (not= 1 n) "s")
-              "? Questions covering them are retired too. One Undo restores all of it."))
-          "Delete" "btn btn-danger-fill"
-          (e/fn [payload]
-            (let [r (e/server (e/Offload #(reject-facts!* user-id (:ids payload))))]
-              (case r
-                (when (:success r)
-                  ;; Drop exactly what was deleted; anything skipped (already
-                  ;; rejected, not owned) stays ticked rather than silently vanishing.
-                  (swap! !selected #(reduce disj % (:ids payload))))))))))))
+              (dom/props {:style {:padding "0 16px" :display "flex" :flex-direction "column"
+                                  :height "calc(100vh - 160px)"}})
+              (dom/div
+                (dom/props {:style {:display "flex" :gap "8px" :align-items "center" :margin "10px 0"}})
+                (dom/button
+                  (dom/props {:class "btn btn-sm"})
+                  (dom/text "← Documents")
+                  (dom/On "click" (fn [_] (navigate! :knowledge)) nil))
+                (dom/input
+                  (dom/props {:placeholder "Search facts…" :class "input"
+                              :aria-label "Search facts"
+                              :style {:flex "1" :min-width "140px"}})
+                  (dom/On "input"
+                    (fn [ev] (util/debounce! !query-timer !query (.. ev -target -value) 300))
+                    nil))
+                (FactStatusFilter !status status)
+                (SweepDuplicatesButton user-id doc-id)
+                (SweepAllDuplicatesButton user-id)
+                (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
+                  (dom/text (str item-count " fact" (when (not= 1 item-count) "s")))))
+              ;; Selection bar — the two select-alls differ in what they reach, so they are
+              ;; separate controls rather than one ambiguous "all". The document-wide one
+              ;; appears only while a search is narrowing the view; without a filter it
+              ;; would select exactly what the filtered one already does.
+              (dom/div
+                (dom/props {:style {:display "flex" :gap "8px" :align-items "center"
+                                    :margin "0 0 10px" :min-height "30px" :flex-wrap "wrap"}})
+                (dom/label
+                  (dom/props {:style {:display "flex" :align-items "center" :gap "6px"
+                                      :font-size "12px" :cursor "pointer"}})
+                  (dom/input
+                    ;; Disabled at 0 rows: with nothing to select, all-shown-selected?
+                    ;; stays false, so the reactive set! below work-skips and the
+                    ;; browser's own toggle would leave the box visually checked over an
+                    ;; empty selection.
+                    (dom/props {:type "checkbox" :aria-label "Select all shown facts"
+                                :disabled (zero? item-count)
+                                :style {:cursor "pointer"}})
+                    (set! (.-checked dom/node) (boolean all-shown-selected?))
+                    ;; Token-gated so the id vector is subscribed only while this frame
+                    ;; is mounted — from click until the swap lands. Reading it here
+                    ;; instead of at mount is what keeps an O(rows) vector off the wire
+                    ;; on every keystroke (library_cards/SelectAllCell).
+                    (let [[t _] (e/Token (dom/On "click" identity nil))]
+                      (when t
+                        ;; e/snapshot freezes the branch decision at click time, and it
+                        ;; is load-bearing: swap! mutates `selected`, which feeds
+                        ;; all-shown-selected?, which is this case's OWN test. Read live,
+                        ;; the `if` re-evaluates after the swap lands and runs the other
+                        ;; branch — undoing the selection. Reading the value the user
+                        ;; actually clicked on is also the correct semantics.
+                        (let [select-all? (not (e/snapshot all-shown-selected?))
+                              ids (e/server (mapv :id facts))]
+                          (case (if select-all?
+                                  (swap! !selected into ids)
+                                  (swap! !selected #(reduce disj % ids)))
+                            (t))))))
+                  (dom/text (str "Select all " item-count " shown")))
+                (when (pos? doc-fact-count)
+                  (dom/button
+                    (dom/props {:class "btn btn-sm"})
+                    (tooltip/Tooltip! "Ignores the search box — selects the whole document")
+                    (dom/text (str "Select all " doc-fact-count " in this document"))
+                    (let [[t _] (e/Token (dom/On "click" identity nil))]
+                      (when t
+                        (let [ids (e/server (vec doc-ids))]
+                          (case (swap! !selected into ids)
+                            (t)))))))
+                (when (seq selected)
+                  (dom/div
+                    (dom/props {:style {:display "flex" :gap "8px" :align-items "center"
+                                        :margin-left "auto"}})
+                    (dom/span (dom/props {:style {:font-size "12px"}})
+                      (dom/text (str (count selected) " selected")))
+                    (dom/button
+                      (dom/props {:class "btn btn-sm"})
+                      (dom/text "Clear")
+                      (dom/On "click" (fn [_] (reset! !selected #{})) nil))
+                    (dom/button
+                      (dom/props {:class "btn btn-sm btn-danger-fill"})
+                      (dom/text "Delete")
+                      (dom/On "click"
+                        (fn [_] (reset! !confirm-delete {:ids (vec @!selected)}))
+                        nil)))))
+              ;; reset-key, not the row count: a sweep changes the count under a user
+              ;; who is mid-scroll, and that must not snap them to the top; changing
+              ;; the status or the search genuinely means a different list.
+              (TapeTable ["" "Subject" "Predicate" "Object" "Page" ""] grid-cols item-count
+                [status query]
+                (cond
+                  (not (str/blank? query)) "No matches."
+                  (= "duplicate" status) "No duplicates marked in this document."
+                  (= "rejected" status) "Nothing deleted in this document."
+                  :else "No facts yet — distill first.")
+                (e/fn [i]
+                  (when-let [fact (e/server (nth facts i nil))]
+                    (FactRow user-id fact i status !editing editing !selected selected))))
+              ;; One op, one undo entry — see db/reject-kg-facts! for why this is not a
+              ;; loop over the single-fact reject.
+              (modal/ConfirmModal !confirm-delete
+                "Delete facts?"
+                (let [n (count (:ids confirm-delete))]
+                  (str "Delete " n " selected fact" (when (not= 1 n) "s")
+                    "? Questions covering them are retired too. One Undo restores all of it."))
+                "Delete" "btn btn-danger-fill"
+                (e/fn [payload]
+                  (let [r (e/server (e/Offload #(reject-facts!* user-id (:ids payload))))]
+                    (case r
+                      (when (:success r)
+                        ;; Drop exactly what was deleted; anything skipped (already
+                        ;; rejected, not owned) stays ticked rather than silently vanishing.
+                        (swap! !selected #(reduce disj % (:ids payload)))))))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Questions view — searchable bank browser (same Tape/zebra shape as facts).
@@ -872,16 +815,15 @@
                             ;; A suspended question stays listed — this is its only
                             ;; unsuspend surface — but reads as withheld.
                             :opacity (if suspended "0.55" "1")}})
-        (dom/td (dom/props {:style (merge fact-cell-style {:cursor "pointer"})})
+        (dom/td (dom/props {:class "tape-cell-click"})
           (dom/On "click" open! nil)
-          (dom/span (dom/props {:style fact-text-style})
+          (dom/span (dom/props {:class "tape-cell-text"})
             (tooltip/Tooltip! question)
             (dom/text question)))
-        (dom/td (dom/props {:style (merge fact-cell-style
-                                     {:color "var(--color-text-secondary)" :cursor "pointer"})})
+        (dom/td (dom/props {:class "tape-cell-muted tape-cell-click"})
           (dom/On "click" open! nil)
-          (dom/span (dom/props {:style fact-text-style}) (dom/text reference_answer)))
-        (dom/td (dom/props {:style (merge fact-cell-style {:cursor "pointer"})})
+          (dom/span (dom/props {:class "tape-cell-text"}) (dom/text reference_answer)))
+        (dom/td (dom/props {:class "tape-cell-click"})
           (dom/On "click" open! nil)
           (dom/span
             (dom/props {:class "type-badge"
@@ -889,17 +831,16 @@
                                               "var(--color-badge-epub)"
                                               "var(--color-badge-pdf)")}})
             (dom/text kind)))
-        (dom/td (dom/props {:style (merge fact-cell-style {:font-size "12px" :cursor "pointer"})})
+        (dom/td (dom/props {:class "tape-cell-sm tape-cell-click"})
           (dom/On "click" open! nil)
           (dom/text (str fact_count)))
         ;; Flag / Suspend toggles — their own non-clickable cell so a toggle never
         ;; opens the editor. This is where an in-quiz flag or suspension is undone.
-        (dom/td (dom/props {:style (merge fact-cell-style {:gap "4px"})})
+        (dom/td (dom/props {:class "tape-cell-toggles"})
           (curate/FlagToggle user-id id flagged)
           (curate/SuspendToggle user-id id suspended))
         ;; Reject lives in its own non-clickable cell so × never opens the editor.
-        (dom/td (dom/props {:style (merge fact-cell-style
-                                     {:justify-content "flex-end"})})
+        (dom/td (dom/props {:class "tape-cell-actions"})
           (RejectQuestionButton user-id id))))))
 
 (e/defn ReflectScopeInUrl
@@ -941,7 +882,7 @@
           !suspended? (atom false) suspended? (e/watch !suspended?)
           ;; State track = 104px: two .btn-sm icon toggles are 38px each
           ;; (12px padding + 14px icon + 12px padding) plus the bar's 6px gap = 82px,
-          ;; inside fact-cell-style's 10px padding-inline each side = 102px needed.
+          ;; inside .tape-table-body td's 10px padding-inline each side = 102px needed.
           ;; At 82px the second toggle was clipped by `.tape-scroll table td`'s
           ;; overflow:hidden rather than widening the cell.
           grid-cols "minmax(200px,1.4fr) minmax(200px,1.4fr) 90px 55px 104px 60px"
@@ -987,19 +928,17 @@
                 (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
                   (dom/text (str item-count " question" (when (not= 1 item-count) "s")
                               " — click a row to edit"))))
-              (if (zero? item-count)
-                (dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
-                  (dom/text (cond
-                              flagged? "No flagged questions."
-                              suspended? "No suspended questions."
-                              (and (str/blank? query) (nil? source-id) (nil? entity-id))
-                              "No questions yet — generate from a document or synthesize from an entity."
-                              :else "No matches.")))
-                (TapeTable ["Question" "Answer" "Kind" "Facts" "State" ""] grid-cols item-count
-                  [query source-id entity-id flagged? suspended?]
-                  (e/fn [i]
-                    (when-let [q (e/server (nth questions i nil))]
-                      (QuestionRow user-id q i !editing)))))
+              (TapeTable ["Question" "Answer" "Kind" "Facts" "State" ""] grid-cols item-count
+                [query source-id entity-id flagged? suspended?]
+                (cond
+                  flagged? "No flagged questions."
+                  suspended? "No suspended questions."
+                  (and (str/blank? query) (nil? source-id) (nil? entity-id))
+                  "No questions yet — generate from a document or synthesize from an entity."
+                  :else "No matches.")
+                (e/fn [i]
+                  (when-let [q (e/server (nth questions i nil))]
+                    (QuestionRow user-id q i !editing))))
               (curate/QuestionEditorModal user-id !editing)
               (ReflectScopeInUrl navigate! :knowledge-questions route-doc-id source-id))))))))
 
@@ -1027,7 +966,7 @@
   [user-id entity-id label]
   (e/client
     (dom/button
-      (dom/props {:class "btn btn-sm btn-secondary" :style {:margin-left "4px"}
+      (dom/props {:class "btn btn-sm btn-secondary"
                   :aria-label (str "Synthesize questions for " label)})
       (tooltip/Tooltip! "Generate questions spanning this entity's facts")
       (icons/Icon :graduation-cap :size 14)
@@ -1049,7 +988,7 @@
     (let [{:keys [id label aliases fact_count]} entity]
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt") :style {:--order i}})
-        (dom/td (dom/props {:style fact-cell-style})
+        (dom/td
           (if (= renaming id)
             (dom/input
               (dom/props {:value label :class "input" :aria-label "Rename entity"})
@@ -1070,14 +1009,12 @@
                       (if (:success result)
                         (do (reset! !renaming nil) (t))
                         (t (:error result))))))))
-            (dom/span (dom/props {:style fact-text-style}) (dom/text label))))
-        (dom/td (dom/props {:style (merge fact-cell-style
-                                     {:color "var(--color-text-secondary)" :font-size "12px"})})
-          (dom/span (dom/props {:style fact-text-style})
+            (dom/span (dom/props {:class "tape-cell-text"}) (dom/text label))))
+        (dom/td (dom/props {:class "tape-cell-meta"})
+          (dom/span (dom/props {:class "tape-cell-text"})
             (dom/text (str/join ", " (or aliases [])))))
-        (dom/td (dom/props {:style fact-cell-style}) (dom/text (str fact_count)))
-        (dom/td (dom/props {:style (merge fact-cell-style
-                                     {:white-space "nowrap" :justify-content "flex-end"})})
+        (dom/td (dom/text (str fact_count)))
+        (dom/td (dom/props {:class "tape-cell-actions"})
           (when-not (= renaming id)
             (dom/button
               (dom/props {:class "btn btn-sm btn-secondary" :aria-label "Rename entity"})
@@ -1088,18 +1025,18 @@
           (cond
             (nil? merge-source)
             (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary" :style {:margin-left "4px"}
+              (dom/props {:class "btn btn-sm btn-secondary"
                           :aria-label (str "Merge " label " into another entity")})
               (dom/text "Merge…")
               (dom/On "click" (fn [_] (reset! !merge-source id)) nil))
 
             (= merge-source id)
-            (dom/span (dom/props {:style {:font-size "11px" :margin-left "4px"}})
+            (dom/span (dom/props {:class "tape-cell-note"})
               (dom/text "(merging)"))
 
             :else
             (dom/button
-              (dom/props {:class "btn btn-sm btn-secondary" :style {:margin-left "4px"}
+              (dom/props {:class "btn btn-sm btn-secondary"
                           :aria-label (str "Merge into " label)})
               (dom/text "Merge here")
               ;; Merge is irreversible (no undo — see plan 6.5): confirm first.
@@ -1151,16 +1088,14 @@
                     (dom/button (dom/props {:class "btn btn-sm"})
                       (dom/text "cancel")
                       (dom/On "click" (fn [_] (reset! !merge-source nil)) nil)))))
-              (if (zero? item-count)
-                (dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
-                  (dom/text (if (and (str/blank? query) (nil? source-id))
-                              "No entities yet — distill first." "No matches.")))
-                (TapeTable ["Entity" "Aliases" "Facts" ""]
-                  "minmax(200px,1fr) minmax(160px,1fr) 60px minmax(220px,max-content)" item-count
-                  [query source-id]
-                  (e/fn [i]
-                    (when-let [entity (e/server (nth entities i nil))]
-                      (EntityRow user-id entity i !renaming renaming !merge-source merge-source !merge-confirm)))))
+              (TapeTable ["Entity" "Aliases" "Facts" ""]
+                "minmax(200px,1fr) minmax(160px,1fr) 60px minmax(220px,max-content)" item-count
+                [query source-id]
+                (if (and (str/blank? query) (nil? source-id))
+                  "No entities yet — distill first." "No matches.")
+                (e/fn [i]
+                  (when-let [entity (e/server (nth entities i nil))]
+                    (EntityRow user-id entity i !renaming renaming !merge-source merge-source !merge-confirm))))
               ;; Guard the irreversible entity merge behind a confirm (merge undo is out
               ;; of scope, plan 6.5). One modal for the view; !merge-confirm carries the
               ;; {:target :source :target-label} payload set by the row's "Merge here".
