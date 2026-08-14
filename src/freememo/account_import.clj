@@ -124,7 +124,20 @@
    JSON, so a current archive does not carry it; this entry is what protects the
    import if that `:drop-keys` is ever removed."
   {:topics #{:id :staged_delete_id :content_preview}
-   :neoreader_highlights #{:id :quote_hash}})
+   :neoreader_highlights #{:id :quote_hash}
+   ;; The reconcile baselines and the conflict flag describe ONE Anki
+   ;; collection. On the target they would claim a card is in step with a
+   ;; collection it has never met. Dropped, the card arrives with no baseline:
+   ;; `anki-reconcile/classify` reads that as `:needs-baseline`, and since the
+   ;; target's Anki does not hold the note, the first run classifies it
+   ;; `:create` and pushes it fresh.
+   ;;
+   ;; `anki_note_id` is deliberately NOT dropped here — that is pre-existing
+   ;; behaviour and changing it is outside this work. The residual risk it
+   ;; carries: if the target collection happens to hold a note with the same id,
+   ;; the first backfill adopts it.
+   :flashcards #{:id :anki_baseline_digest :local_baseline_digest
+                 :anki_baseline_mod :anki_conflict_at}})
 
 (def ^:private html-columns
   "Plain-HTML columns holding `/api/media/<id>` URLs (§5.4.7).

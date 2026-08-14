@@ -139,7 +139,11 @@
    :kg_sessions "quiz session transcript — kg_reviews holds the durable record"
    :kg_answers "quiz session transcript — kg_reviews holds the durable record"
    :account_imports "import bookkeeping — target-instance state (§5.5.7)"
-   :account_import_ids "import bookkeeping — target-instance state (§5.5.7)"})
+   :account_import_ids "import bookkeeping — target-instance state (§5.5.7)"
+   :anki_note_tombstones "note ids of ONE Anki collection, owed a deletion the
+                          source instance may not have completed. Carrying them
+                          would tell the target instance to delete notes in a
+                          collection it has never synced with"})
 
 ;; ── Export scope ───────────────────────────────────────────────────
 ;;

@@ -77,9 +77,10 @@
             ["Create the cards" "Hide One, Guess One makes one card per mask group; Hide All, Guess One hides them all on every card. Push to Anki as image-occlusion notes."]]}
    {:title "Syncing to Anki"
     :intro "Push curated cards into your own Anki collection over AnkiConnect."
-    :steps [["Push ({anki-sync})" "Choose scope (this topic, its subtree, or the whole document), deck, tags, and a custom header, then push. FreeMemo owns the Basic and Cloze note types, so there's nothing to map."]
-            ["Quick Sync ({quick-sync})" "Re-push with your last-used settings in the background — no modal."]
-            ["Pull" "Bring edits made in Anki back into FreeMemo; a diff shows what changed."]]}
+    :steps [["Reconcile ({anki-sync})" "Choose the deck, tags and a custom header, then reconcile. FreeMemo owns the Basic and Cloze note types, so there's nothing to map."]
+            ["Reconcile now ({quick-sync})" "The same run with your saved settings, in the background — no modal."]
+            ["What a run does" "Each card moves whichever way it changed: edited here it goes to Anki, edited in Anki it comes back, deleted on one side it goes from the other. There is no direction to pick."]
+            ["Conflicts" "A card edited on BOTH sides is left untouched and reported. Filter Library › Cards by Conflict, then choose Keep FreeMemo or Keep Anki."]]}
    {:title "Reviewing (Learn)"
     :intro "Study what's due on a spaced-repetition schedule."
     :steps [["Start Learning" "The Learn tab opens the day's due queue as a single-file session."]
@@ -115,7 +116,7 @@
     :intro "Reach any action without hunting for its button."
     :steps [["Command palette ({toggle-palette})" "Open the palette, type to fuzzy-search every action — including ones with no shortcut, like Distill facts or Start quiz — and press Enter to run it."]
             ["While reading" "{scan} Scan page · {extract} Extract selection · {generate} Generate cards · {add-new} Add card · {done} Mark done."]
-            ["Anki" "{anki-sync} Push to Anki · {quick-sync} Quick push."]
+            ["Anki" "{anki-sync} Reconcile with Anki · {quick-sync} Reconcile now."]
             ["Undo" "{undo-newest} undoes your last action."]]}])
 
 (e/defn HelpPage []

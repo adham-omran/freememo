@@ -331,29 +331,36 @@
     (or (helpers/strip-html (math/stored->compare-html local-html kind)) "")))
 
 (defn apply-anki-overlay!
-  "Diff live Anki note state against local cards; delete cards whose
-   notes no longer exist in Anki.
+  "Flag live Anki note state against local cards, for the Library rows.
 
    pre:  present-notes [{:note-id long
                          :stripped-fields [str ...]   ; strip-html'd, Anki field order
                          :tags [str ...]
                          :suspended {:total n :suspended n}} ...]
-         absent-note-ids [long ...] — note ids notesInfo reported missing.
+         absent-note-ids [long ...] — accepted and IGNORED, see below.
          Both derive from ONE notesInfo batch on the client.
    post: {:success true
           :per-card {card-id {:anki-modified bool, :marked bool,
                               :suspended {:total n :suspended n}}}  ; SPARSE — flagged cards only
-          :deleted-count n}
-   invariants: reads/deletes only user-id's cards; bumps :sync-mutations
-   iff deleted-count > 0 (loop prevention — a no-delete pass must not
-   re-trigger the overlay); idempotent for the same input (absent cards
-   already deleted produce a no-op second pass).
-   Deletion is unconditional by product decision: a successful notesInfo
-   reply from a wrong/empty collection (fresh install, other profile)
-   will wipe the pushed cards — that risk is on the user.
+          :deleted-count 0}
+   invariants: reads only user-id's cards; deletes nothing.
    _rev is unused — callers pass a mutation revision so Electric re-runs
    the diff when LOCAL content changes under an unchanged Anki payload
-   (work-skipping would otherwise hold stale flags)."
+   (work-skipping would otherwise hold stale flags).
+
+   THIS NO LONGER DELETES. It used to remove every local card whose note
+   `notesInfo` did not report, and documented the consequence as accepted: a
+   successful reply from a wrong or empty collection wiped the pushed cards.
+   Reconcile makes that unnecessary and unacceptable at once — it decides
+   deletions per card behind `anki-reconcile/bulk-absence?`, which stops the whole
+   run when a majority of notes are missing rather than believing the reply.
+   Merely relocating the delete would have reproduced the wipe, since \"absent in
+   Anki, unchanged locally\" is a delete row in the contract; the guard is what
+   makes the move an improvement.
+
+   `deleted-count` stays in the reply, always 0, because the client's
+   `:sync-mutations` bump reads it. `absent-note-ids` stays in the signature so
+   the client's one batch keeps its shape."
   [_rev user-id present-notes absent-note-ids]
   (try
     (let [note-ids (mapv :note-id present-notes)
@@ -385,24 +392,17 @@
                                     (pos? suspended-n) (assoc :suspended suspended))]
                         (when (seq flags)
                           [(:flashcards/id card) flags])))))
-            present-notes)
-          ;; F4: delete locally what Anki no longer has.
-          absent-rows (db/get-flashcards-by-anki-note-ids user-id absent-note-ids)
-          deleted-count (do (doseq [r absent-rows]
-                              (db/delete-flashcard! user-id (:flashcards/id r)))
-                          (count absent-rows))]
-      (when (pos? deleted-count)
-        (commands/bump! user-id :pull-anki))
+            present-notes)]
       (tel/log! {:level :debug
                  :id ::apply-anki-overlay!
                  :data {:user-id user-id
                         :present (count present-notes)
                         :flagged (count per-card)
-                        :deleted deleted-count}}
+                        :absent (count absent-note-ids)}}
         "anki overlay applied")
       {:success true
        :per-card per-card
-       :deleted-count deleted-count})
+       :deleted-count 0})
     (catch Exception e
       (tel/error! {:id ::apply-anki-overlay!} e)
       {:success false :error (.getMessage e)})))
@@ -541,7 +541,7 @@
     (when (seq deleted-card-ids)
       (doseq [id deleted-card-ids]
         (db/delete-flashcard! user-id id)))
-    (commands/bump! user-id :pull-anki)
+    (commands/bump! user-id :anki-sync)
     {:success true :count (count updates) :deleted (count (or deleted-card-ids []))}
     (catch Exception e
       (tel/error! {:id ::apply-pull-updates} e)

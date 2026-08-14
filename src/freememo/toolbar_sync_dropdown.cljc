@@ -18,7 +18,6 @@
    [freememo.doc-context :as dctx]
    [freememo.anki-sync :refer [AnkiSyncButton]]
    [freememo.quick-sync :refer [QuickSyncButton]]
-   [freememo.anki-pull-button :refer [PullFromAnkiButton]]
    [freememo.export-button :refer [ExportButton]]
    [freememo.icons :as icons]
    [freememo.brand-icons :refer [AnkiMark]]
@@ -72,7 +71,9 @@
       (dom/div
         (dom/props {:class "toolbar-dropdown-sources"})
         (ExportButton user-id topic-id root-topic-id unsynced-count)
-        (PullFromAnkiButton user-id root-topic-id)
+        ;; `PullFromAnkiButton` and its `:pull-anki` menu item are gone. A pull
+        ;; is now one of the outcomes a reconcile chooses per card, never a
+        ;; direction the user picks for a whole document.
         (AnkiSyncButton user-id root-topic-id card-type unsynced-count)
         ;; Hidden proxy for background Quick Sync (Cmd-Shift-Opt-X). No menu
         ;; item — keyboard-only; the executor runs without opening the modal.
@@ -112,33 +113,21 @@
               (dom/props {:class "toolbar-dropdown-menu toolbar-sync-menu"
                           :role "menu"})
 
-              ;; Push to Anki
+              ;; Reconcile with Anki. One item, not two: the direction is
+              ;; decided per card, so there is nothing for the user to choose.
               (dom/button
                 (dom/props {:class "toolbar-dropdown-item"
                             :role "menuitem"
-                            :aria-label "Push to Anki"})
+                            :aria-label "Reconcile with Anki"})
                 (AnkiMark :size 16)
                 (dom/span (dom/text (if has-unsynced?
-                                      (str "Push to Anki (" unsynced-count ")...")
-                                      "Push to Anki...")))
+                                      (str "Reconcile with Anki (" unsynced-count " new)...")
+                                      "Reconcile with Anki...")))
                 (dom/span (dom/props {:class "dropdown-shortcut"})
                   (dom/text (str mod-key "+Shift+X")))
                 (dom/On "click"
                   (fn [_]
                     (bus/dispatch! :anki-sync)
-                    (reset! !open false))
-                  nil))
-
-              ;; Pull from Anki
-              (dom/button
-                (dom/props {:class "toolbar-dropdown-item"
-                            :role "menuitem"
-                            :aria-label "Pull from Anki"})
-                (icons/Icon :cloud-download :size 16)
-                (dom/span (dom/text "Pull from Anki"))
-                (dom/On "click"
-                  (fn [_]
-                    (bus/dispatch! :pull-anki)
                     (reset! !open false))
                   nil))
 

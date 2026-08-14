@@ -219,14 +219,17 @@
                        :when #{:viewer}
                        :table #{:topics :flashcards :undo_log :card_versions}
                        :views #{}} ; runtime-conditional: staged-delete/stage-deletion!
-     :anki-sync      {:label "Push to Anki…" :class :mutation :exec :ui-button
+     ;; One reconcile, two ways in. `:anki-sync` opens the modal (deck, header
+     ;; and tag configuration, then a Reconcile button); `:quick-sync` runs the
+     ;; same reconcile headlessly with the saved configuration. Neither picks a
+     ;; direction — `anki-reconcile/classify` does that per card.
+     ;; `:pull-anki` is gone: a pull is an outcome now, not a command.
+     :anki-sync      {:label "Reconcile with Anki…" :class :mutation :exec :ui-button
                       :bind "meta+shift+x" :when #{:viewer}
                       :table #{:flashcards} :views #{:sync-mutations}}
-     :quick-sync     {:label "Quick Anki push" :class :mutation :exec :ui-button
+     :quick-sync     {:label "Reconcile with Anki now" :class :mutation :exec :ui-button
                       :bind "meta+shift+alt+x" :when #{:viewer}
-                      :table #{:flashcards} :views #{}} ; record step bumps :anki-sync
-     :pull-anki      {:label "Pull from Anki" :class :mutation :exec :ui-button
-                      :when #{:viewer} :table #{:flashcards} :views #{:sync-mutations}}}
+                      :table #{:flashcards} :views #{:sync-mutations}}}
 
     ;; — Import launchers (freememo.import-page registers the handlers:
     ;;   set the pending-import intent, navigate to :import, page opens the

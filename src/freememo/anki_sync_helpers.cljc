@@ -3,6 +3,7 @@
   (:require
    [missionary.core :as m]
    [clojure.string :as str]
+   [freememo.anki-fields :as fields]
    [freememo.occlusion-svg :as osvg]
    [freememo.logging :as log]
    [freememo.math :as math]
@@ -29,19 +30,11 @@
     text
     (str "<p>" text "</p>")))
 
-(defn strip-html
-  "Remove all HTML tags and push-time decorations from Anki field text.
-   Strips: fm-header tagged headers, source/bibliography suffix (<hr>...),
-   then all remaining HTML tags."
-  [text]
-  (if (str/blank? text)
-    text
-    (-> text
-      (str/replace #"<p[^>]*class=\"fm-header\"[^>]*>.*?</p>" "") ;; strip tagged header
-      (str/replace #"\n?<hr[^>]*class=\"fm-(?:source|bibliography)\"[^>]*>[\s\S]*$" "") ;; strip tagged source/bib block
-      (str/replace #"<br\s*/?>" "\n") ;; preserve line breaks
-      (str/replace #"<[^>]*>" "") ;; strip all remaining tags
-      str/trim)))
+(def strip-html
+  "Re-export of `freememo.anki-fields/strip-html`, which is the canonical home.
+   The definition moved down so `freememo.anki-digest` can reach it without
+   requiring this namespace. Callers here and elsewhere are unaffected."
+  fields/strip-html)
 
 (declare html-escape)
 
@@ -1271,14 +1264,71 @@
              (update :errors into mask-errors)
              (assoc :updated (count (:updated update-result)))))))))
 
-(defn ordered-field-values
-  "Field values of an Anki notesInfo :fields map, sorted by Anki's :order.
-   Shared by pull (field-update detection) and the library cards Anki
-   overlay (anki-modified diff) — one definition of 'Anki's field order'."
-  [fields-map]
-  (->> fields-map
-    (sort-by (fn [[_ v]] (or (:order v) 0)))
-    (mapv (fn [[_ v]] (:value v)))))
+(def ordered-field-values
+  "Re-export of `freememo.anki-fields/ordered-field-values`. See `strip-html`
+   above for why the definition moved."
+  fields/ordered-field-values)
+
+(defn note->pull-update
+  "The local write that applying Anki's version of one note would make, or nil
+   when nothing this app tracks differs.
+
+   pre : `card` is a flashcards row; `anki-fields` is the note's notesInfo
+         `:fields` map, {:FieldName {:value s :order n}}, keywordized.
+   post: {:card-id n :question s :answer s} for basic,
+         {:card-id n :cloze s} for cloze,
+         {:card-id n :io-fields {k v}} for occlusion — only the changed keys,
+         nil for score and overlapping, and nil when nothing differs.
+
+   Takes the FIELDS map rather than `ordered-field-values`' output, because
+   occlusion must read by NAME. `modelFieldAdd` appends, so a model that existed
+   before `Links` holds it at index 11 while one created after holds it at 7 —
+   see `io-pull-field-names`. Basic and cloze still read the first one or two
+   positions, which is safe: their content fields lead every version of those
+   models, and only trailing fields were ever added.
+
+   Pure and shared: `do-anki-pull!` fetches its own notesInfo, reconcile already
+   holds one for the whole collection. Two copies of this cond would let the two
+   paths apply different edits from the same note."
+  [card anki-fields]
+  (let [kind (:flashcards/kind card)
+        ordered-vals (ordered-field-values anki-fields)]
+    (cond
+      ;; `fields/no-inverse-kinds` is THE definition; nothing is pulled for
+      ;; those. `anki-reconcile/apply-kind-limits` turns their pulls into
+      ;; conflicts, so this nil is never silently dropped there.
+      (not (fields/pullable-kind? kind)) nil
+
+      ;; Occlusion: diff the six text fields BY NAME (io-pull-field-names) —
+      ;; masks/Image/ID/Links are FM-owned and ignored. Both sides stripped so
+      ;; local Quill markup does not read as a diff. A field the note does not
+      ;; carry is skipped rather than read as "": absent means Anki has nothing
+      ;; to say, and treating it as empty would pull a blank over local content.
+      (= "occlusion" kind)
+      (let [io (or (:flashcards/io_fields card) {})
+            changed (reduce
+                      (fn [acc [k field-name]]
+                        (let [fk (keyword field-name)]
+                          (if-not (contains? anki-fields fk)
+                            acc
+                            (let [anki-v (strip-html (or (get-in anki-fields [fk :value]) ""))
+                                  local-v (strip-html (or (get io k) ""))]
+                              (if (= anki-v local-v) acc (assoc acc k anki-v))))))
+                      {} io-pull-field-names)]
+        (when (seq changed)
+          {:card-id (:flashcards/id card) :io-fields changed}))
+
+      (= "basic" kind)
+      (let [q (strip-html (first ordered-vals))
+            a (strip-html (second ordered-vals))]
+        (when (or (not= q (or (:flashcards/question card) ""))
+                (not= a (or (:flashcards/answer card) "")))
+          {:card-id (:flashcards/id card) :question q :answer a}))
+
+      :else
+      (let [c (strip-html (first ordered-vals))]
+        (when (not= c (or (:flashcards/cloze card) ""))
+          {:card-id (:flashcards/id card) :cloze c})))))
 
 #?(:cljs
    (defn do-anki-pull!
@@ -1320,60 +1370,7 @@
                                    card (get id->card note-id)]
                                (if-not card
                                  acc
-                                 (let [kind (:flashcards/kind card)
-                                       basic? (= kind "basic")
-                                       occlusion? (= kind "occlusion")
-                                       score? (= kind "score")
-                                       overlapping? (= kind "overlapping")
-                                       ordered-vals (ordered-field-values (:fields anki-note))
-                                       update-map
-                                       (cond
-                                         ;; Score/overlapping: fields are FM-derived
-                                         ;; (media refs, or the expanded list) — the
-                                         ;; Anki→FM inverse is lossy, so nothing is
-                                         ;; pulled.
-                                         (or score? overlapping?) nil
-                                         ;; Occlusion: diff the six text fields BY NAME
-                                         ;; (io-pull-field-names) — masks/Image/ID/Links
-                                         ;; are FM-owned and ignored. Both sides stripped
-                                         ;; so local Quill markup doesn't read as a diff.
-                                         ;; A field the note does not carry is skipped
-                                         ;; rather than read as "": absent means Anki has
-                                         ;; nothing to say, and treating it as empty would
-                                         ;; pull a blank over local content.
-                                         occlusion?
-                                         (let [io (or (:flashcards/io_fields card) {})
-                                               anki-fields (:fields anki-note)
-                                               changed (reduce
-                                                         (fn [acc [k field-name]]
-                                                           (let [fk (keyword field-name)]
-                                                             (if-not (contains? anki-fields fk)
-                                                               acc
-                                                               (let [anki-v (strip-html (or (get-in anki-fields [fk :value]) ""))
-                                                                     local-v (strip-html (or (get io k) ""))]
-                                                                 (if (= anki-v local-v)
-                                                                   acc
-                                                                   (assoc acc k anki-v))))))
-                                                         {} io-pull-field-names)]
-                                           (when (seq changed)
-                                             {:card-id (:flashcards/id card)
-                                              :io-fields changed}))
-
-                                         basic?
-                                         (let [q (strip-html (first ordered-vals))
-                                               a (strip-html (second ordered-vals))
-                                               local-q (or (:flashcards/question card) "")
-                                               local-a (or (:flashcards/answer card) "")]
-                                           (when (or (not= q local-q) (not= a local-a))
-                                             {:card-id (:flashcards/id card)
-                                              :question q :answer a}))
-
-                                         :else
-                                         (let [c (strip-html (first ordered-vals))
-                                               local-c (or (:flashcards/cloze card) "")]
-                                           (when (not= c local-c)
-                                             {:card-id (:flashcards/id card)
-                                              :cloze c})))]
+                                 (let [update-map (note->pull-update card (:fields anki-note))]
                                    (if update-map (conj acc update-map) acc)))))
                            []
                            notes-js)]

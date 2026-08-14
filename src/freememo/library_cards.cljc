@@ -14,6 +14,7 @@
    [freememo.navigation :as nav]
    [freememo.logging :as log]
    [freememo.anki-sync-helpers :as helpers]
+   [freememo.anki-reconcile-client :as rc]
    [freememo.card-components :refer [card-row-html set-inner-html! DeleteCardButton
                                      overlapping-row-html occlusion-row-html
                                      score-row-html try-delete-anki-notes!]]
@@ -24,6 +25,7 @@
    [freememo.tooltip :as tooltip]
    [freememo.util :as util]
    #?(:clj [freememo.anki-sync-server :as sync-server])
+   #?(:clj [freememo.anki-reconcile-server :as recon-server])
    #?(:clj [freememo.cards :as cards])
    #?(:clj [freememo.db :as db])
    #?(:clj [taoensso.telemere :as tel])
@@ -241,12 +243,13 @@
 ;; it rather than on the subset that happened to match.
 
 #?(:clj
-   (defn- filter-cards-origins [cards origins overlay-ids]
+   (defn- filter-cards-origins [cards origins overlay-ids conflict-ids]
      (if (empty? origins)
        cards
        ;; #{} rather than nil: these are used as PREDICATES over member ids
        ;; now, not as `contains?` arguments, and nil is not callable.
-       (let [anki-changed (or (:anki-changed overlay-ids) #{})]
+       (let [anki-changed (or (:anki-changed overlay-ids) #{})
+             conflicted (or conflict-ids #{})]
          (filterv
            (fn [c]
              (let [ids (:member-ids c)
@@ -260,11 +263,9 @@
                            "fm-changed"   (has? :modified)
                            "in-sync"      (has? :synced)
                            "anki-changed" anki?
-                           ;; one card must be BOTH, not one of each
-                           "both"         (boolean
-                                            (some (fn [[id st]]
-                                                    (and (= :modified st) (anki-changed id)))
-                                              (map vector ids states)))
+                           ;; The last reconcile's verdict, not a live diff —
+                           ;; it needs no Anki connection to be true.
+                           "conflict"     (boolean (some conflicted ids))
                            false))
                    origins))))
            cards)))))
@@ -416,9 +417,13 @@
              ;; would then delete a subset of its own group.
              all (mapv with-sync-states
                    (rows/collapse-groups (db/get-user-flashcards user-id)))
+             ;; Read only when the facet is on, so the ordinary view costs no
+             ;; extra query — same rule `overlay-ids-for` follows on the client.
+             conflict-ids (when (contains? origins "conflict")
+                            (set (db/list-anki-conflicts user-id)))
              filtered (-> all
                         (filter-cards-kinds kinds)
-                        (filter-cards-origins origins overlay-ids)
+                        (filter-cards-origins origins overlay-ids conflict-ids)
                         (filter-cards-flags flags overlay-ids)
                         (filter-cards-text text))
              sorted (sort-user-cards filtered sort-col sort-dir)
@@ -566,77 +571,14 @@
 
 (defonce !bulk-run-gen (atom 0))
 
-(defn- bulk-skips-text [{:keys [unpushed conflicts errors skipped-local]}]
-  (let [parts (cond-> []
-                (pos? (or unpushed 0)) (conj (str unpushed " unpushed"))
-                (pos? (or conflicts 0)) (conj (str conflicts " conflicts"))
-                (pos? (or skipped-local 0)) (conj (str skipped-local " with local edits"))
-                (pos? (or errors 0)) (conj (str errors " errors")))]
-    (when (seq parts) (str " · skipped: " (str/join ", " parts)))))
-
-(defn run-bulk-push!
-  "Execute the update-push for each per-root bundle, sequentially.
-   pre:  bundles-resp = success result of get-bulk-push-bundles; skips holds
-   the client-side conflict-exclusion count.
-   post (async): !bulk-pairs ← all pairs and !bulk-phase ← :recording-push,
-   or (nothing pushed / failure) !action-result set and !bulk-phase ← nil.
-   Note types are app-owned; do-anki-push! reads no model/field config."
-  [bundles-resp skips !bulk-pairs !bulk-skips !bulk-phase !action-result]
-  #?(:cljs
-     (let [g (swap! !bulk-run-gen inc)
-           bundles (:bundles bundles-resp)
-           skips (assoc skips :unpushed (:skipped-unpushed bundles-resp 0))]
-       ((m/sp
-          (let [results
-                (m/? (m/reduce conj []
-                       (m/ap
-                         (let [{:keys [cards settings]} (m/?> 1 (m/seed bundles))]
-                           (m/? (helpers/do-anki-push! cards settings))))))]
-            {:pairs (vec (mapcat :pairs results))
-             :errors (vec (mapcat :errors results))}))
-        (fn [{:keys [pairs errors]}]
-          (when (= g @!bulk-run-gen)
-            (let [skips (assoc skips :errors (count errors))]
-              (reset! !bulk-skips skips)
-              (if (seq pairs)
-                (do (reset! !bulk-pairs (vec pairs))
-                  (reset! !bulk-phase :recording-push))
-                (do (reset! !action-result (str "Pushed 0" (bulk-skips-text skips)))
-                  (reset! !bulk-phase nil))))))
-        (fn [err]
-          (when (= g @!bulk-run-gen)
-            (reset! !action-result (str "Push failed: " (.-message err)))
-            (reset! !bulk-phase nil)))))
-     :clj nil))
-
-(defn run-bulk-pull!
-  "Pull Anki content for the eligible cards (do-anki-pull! comparison).
-   post (async): !bulk-updates ← {:updates :deleted :skipped-conflicts} and
-   !bulk-phase ← :recording-pull, or already-in-sync/failure result text
-   and !bulk-phase ← nil."
-  [cards skipped-conflicts !bulk-updates !bulk-phase !action-result]
-  #?(:cljs
-     (let [g (swap! !bulk-run-gen inc)]
-       ((helpers/do-anki-pull! cards)
-        (fn [{:keys [updates deleted]}]
-          (when (= g @!bulk-run-gen)
-            (if (and (empty? updates) (empty? deleted))
-              (do (reset! !action-result
-                    (str "Pull: already in sync"
-                      (bulk-skips-text {:conflicts skipped-conflicts})))
-                (reset! !bulk-phase nil))
-              (do (reset! !bulk-updates {:updates (vec updates)
-                                         :deleted (vec deleted)
-                                         :skipped-conflicts skipped-conflicts})
-                (reset! !bulk-phase :recording-pull)))))
-        (fn [err]
-          (when (= g @!bulk-run-gen)
-            (reset! !action-result (str "Pull failed: " (.-message err)))
-            (reset! !bulk-phase nil)))))
-     :clj nil))
+;; `bulk-skips-text`, `run-bulk-push!` and `run-bulk-pull!` lived here. They
+;; drove the two direction buttons and reported how many cards each run had to
+;; skip — the count existed because a direction could not be applied to a card
+;; edited on the other side. Reconcile has no direction to skip for, and its
+;; conflicts are recorded on the card rather than counted in a sentence.
 
 ;; ---------------------------------------------------------------------------
-;; View toggle — shared by LibraryPage (tree header) and LibraryCardsView.
+;; View switcher.
 ;; Navigation is URL-backed: /library = documents tree, /library/cards = cards.
 ;; ---------------------------------------------------------------------------
 
@@ -1010,138 +952,118 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
             (BulkDeleteButton user-id !confirm-bulk-delete !selected !action-result)))))))
 
 ;; ---------------------------------------------------------------------------
-;; Bulk action state machine — :pushing → :recording-push, :pulling →
-;; :recording-pull. Server prep crosses only ids/settings; AnkiConnect work
-;; happens in the client runners; recording is token-gated.
+;; Conflict resolution.
+;;
+;; What stood here was the bulk push/pull machine: :pushing → :recording-push,
+;; :pulling → :recording-pull, plus an "Include conflicts" checkbox that let a
+;; direction run over cards edited on both sides. Every card a run touched moved
+;; the same way, which is what overwrote Anki-side edits.
+;;
+;; Reconcile owns direction now. What is left for a person to decide is the one
+;; case no rule can settle: both sides changed. Resolving writes no content and
+;; contacts Anki only for the FreeMemo side, which needs that note's current
+;; digest to declare Anki unchanged — see `anki-reconcile-server/resolve-conflicts!`.
 ;; ---------------------------------------------------------------------------
 
-(e/defn BulkPushRunner [user-id !bulk-phase !bulk-args !bulk-pairs !bulk-skips !action-result]
+(defn run-resolve!
+  "Read the selected conflicts' notes, then hand the side to the server.
+
+   pre : `side` is :freememo or :anki. `kind-by-note` maps note id to the local
+         card's kind and MUST be complete for :freememo — `anki-digest` reads a
+         kind's content fields, so a digest taken without kinds is one the next
+         run cannot reproduce, and the card returns as a conflict immediately.
+         :anki needs no Anki data at all: it moves the LOCAL baseline.
+   post (async): !scan-result set, or !action-result on failure."
+  [side card-ids kind-by-note !scan-result !bulk-phase !action-result]
+  #?(:cljs
+     (if (= :anki side)
+       (do (reset! !scan-result {:side side :card-ids card-ids :digests {}})
+         nil)
+       (let [g (swap! !bulk-run-gen inc)]
+         ((rc/scan! (vec (keys kind-by-note)) kind-by-note)
+          (fn [{:keys [digests]}]
+            (when (= g @!bulk-run-gen)
+              (reset! !scan-result {:side side :card-ids card-ids :digests digests})))
+          (fn [err]
+            (when (= g @!bulk-run-gen)
+              (reset! !action-result (str "Could not read Anki: " (.-message err)))
+              (reset! !bulk-phase nil))))
+         nil))
+     :clj nil))
+
+(e/defn ResolveConflictRunner
+  "Applies a resolution once its scan lands."
+  [user-id !bulk-phase !scan-result !action-result]
   (e/client
-    (let [bulk-phase (e/watch !bulk-phase)]
+    ;; The `some?` gate sits OUTSIDE the token, matching every other runner in
+    ;; this file. Inside it, a nil scan result would take a token the body then
+    ;; declines to spend, and the phase would never leave :resolving.
+    (when (and (= :resolving (e/watch !bulk-phase))
+            (some? (e/watch !scan-result)))
+      (let [sr (e/watch !scan-result)
+            [?t _] (e/Token sr)]
+        (when-some [t ?t]
+          (let [r (e/server (e/Offload #(recon-server/resolve-conflicts!
+                                          user-id (:card-ids sr) (:side sr) (:digests sr))))]
+            (when (map? r)
+              (case (e/client
+                      (do (reset! !action-result
+                            (if (:success r)
+                              (str "Resolved " (:count r)
+                                " — the next reconcile carries it out")
+                              (str "Resolve failed: " (:error r))))
+                        (reset! !scan-result nil)
+                        (reset! !bulk-phase nil)))
+                (t)))))))))
 
-      (when (= bulk-phase :pushing)
-        (let [args (e/watch !bulk-args)
-              ids (:ids args)
-              resp (e/server (e/Offload #(sync-server/get-bulk-push-bundles user-id ids)))]
-          (when (map? resp)
-            (if (:success resp)
-              (run-bulk-push! resp @!bulk-skips !bulk-pairs !bulk-skips !bulk-phase !action-result)
-              (do (reset! !action-result (str "Push failed: " (:error resp)))
-                (reset! !bulk-phase nil))))))
+(e/defn ResolveConflictButtons
+  "Keep FreeMemo / Keep Anki over the selected conflicted cards.
 
-      (when (= bulk-phase :recording-push)
-        (let [pairs (e/watch !bulk-pairs)
-              [?t _] (e/Token pairs)]
-          (when-some [t ?t]
-            (let [r (e/server (e/Offload #(sync-server/finalize-bulk-push! user-id pairs)))]
-              (when (map? r)
-                (case (e/client
-                        (do (reset! !action-result
-                              (if (:success r)
-                                (str "Pushed " (:count r) (bulk-skips-text @!bulk-skips))
-                                (str "Push record failed: " (:error r))))
-                          (reset! !bulk-phase nil)))
-                  (t))))))))))
+   `conflicts` is {card-id {:note-id n :kind s}} for every conflicted card — the
+   membership test, the note lookup the FreeMemo side needs, and the kinds its
+   digest must be taken under, in one value that cannot disagree with itself.
 
-(e/defn BulkPullRunner [user-id !bulk-phase !bulk-args !bulk-updates !action-result]
+   Disabled when nothing is selected, when a run is busy, or — for the FreeMemo
+   side only — when Anki is unreachable. Keeping Anki's version needs no
+   connection: it moves the LOCAL baseline, which the server computes alone."
+  [conflicts none-selected? busy? anki-ready?
+   !selected !action-result !scan-result !bulk-phase]
   (e/client
-    (let [bulk-phase (e/watch !bulk-phase)]
+    (let [conflicted (or conflicts {})
+          pick! (fn [side]
+                  (fn [_]
+                    (let [sel (filterv #(contains? conflicted %)
+                                (selected-card-ids @!selected))]
+                      (if (empty? sel)
+                        (reset! !action-result "No conflicted cards in the selection")
+                        (do (reset! !action-result nil)
+                          (reset! !bulk-phase :resolving)
+                          (run-resolve! side sel
+                            (into {} (map (fn [cid]
+                                            (let [e (get conflicted cid)]
+                                              [(:note-id e) (:kind e)])))
+                              sel)
+                            !scan-result !bulk-phase !action-result))))))]
+      (dom/button
+        (dom/props {:class "btn btn-sm btn-primary"
+                    :disabled (or none-selected? busy? (not anki-ready?))})
+        (tooltip/Tooltip! (if anki-ready?
+                            "Keep FreeMemo's version of the selected conflicts"
+                            "Requires Anki connection"))
+        (dom/text "Keep FreeMemo")
+        (dom/On "click" (pick! :freememo) nil))
+      (dom/button
+        (dom/props {:class "btn btn-sm btn-secondary"
+                    :disabled (or none-selected? busy?)})
+        (tooltip/Tooltip! "Keep Anki's version of the selected conflicts")
+        (dom/text "Keep Anki")
+        (dom/On "click" (pick! :anki) nil)))))
 
-      (when (= bulk-phase :pulling)
-        (let [args (e/watch !bulk-args)
-              ids (:ids args)
-              include? (boolean (:include? args))
-              anki-mod-ids (vec (:anki-modified-ids args))
-              resp (e/server (e/Offload #(sync-server/get-cards-for-bulk-pull
-                                           user-id ids include? anki-mod-ids)))]
-          (when (map? resp)
-            (if (:success resp)
-              (run-bulk-pull! (vec (:cards resp)) (:skipped-conflicts resp)
-                !bulk-updates !bulk-phase !action-result)
-              (do (reset! !action-result (str "Pull failed: " (:error resp)))
-                (reset! !bulk-phase nil))))))
-
-      (when (= bulk-phase :recording-pull)
-        (let [uv (e/watch !bulk-updates)
-              [?t _] (e/Token uv)]
-          (when-some [t ?t]
-            (let [r (e/server (e/Offload #(sync-server/apply-pull-updates user-id
-                                            (:updates uv) (:deleted uv))))]
-              (when (map? r)
-                (case (e/client
-                        (do (reset! !action-result
-                              (if (:success r)
-                                (str "Pulled " (:count r) " updated, " (:deleted r) " deleted"
-                                  (bulk-skips-text {:conflicts (:skipped-conflicts uv)}))
-                                (str "Pull apply failed: " (:error r))))
-                          (reset! !bulk-phase nil)))
-                  (t))))))))))
-
-(e/defn BulkActionRunner [user-id !bulk-phase !bulk-args !bulk-pairs !bulk-updates !bulk-skips !action-result]
-  (e/client
-    (BulkPushRunner user-id !bulk-phase !bulk-args !bulk-pairs !bulk-skips !action-result)
-    (BulkPullRunner user-id !bulk-phase !bulk-args !bulk-updates !action-result)))
-
-;; ---------------------------------------------------------------------------
-;; Action bar — appears when the selection is non-empty.
-;; Push skips Anki-side-edited cards (client overlay knowledge) and pull
-;; skips locally-edited cards (server knowledge) unless include-conflicts.
-;; ---------------------------------------------------------------------------
-
-(e/defn BulkPushButton [anki-overlay none-selected? busy? anki-ready?
-                        !selected !include-conflicts !action-result
-                        !bulk-args !bulk-skips !bulk-phase]
-  (e/client
-    (dom/button
-      (dom/props {:class "btn btn-sm btn-primary"
-                  :disabled (or none-selected? busy? (not anki-ready?))})
-      (tooltip/Tooltip! (cond
-                         none-selected? "Select cards first"
-                         (not anki-ready?) "Requires Anki connection"
-                         :else "Update the Anki notes of selected pushed cards"))
-      (dom/text "Push updates")
-      (dom/On "click"
-        (fn [_]
-          (let [sel (selected-card-ids @!selected)
-                include? @!include-conflicts
-                danger-ids (if include? #{} (anki-modified-ids anki-overlay))
-                ids (vec (remove danger-ids sel))]
-            (reset! !bulk-skips {:conflicts (count (filter danger-ids sel))})
-            (reset! !action-result nil)
-            (reset! !bulk-args {:ids ids})
-            (reset! !bulk-phase :pushing)))
-        nil))))
-
-(e/defn BulkPullButton [anki-overlay none-selected? busy? anki-ready?
-                        !selected !include-conflicts !action-result
-                        !bulk-args !bulk-skips !bulk-phase]
-  (e/client
-    (dom/button
-      (dom/props {:class "btn btn-sm btn-secondary"
-                  :disabled (or none-selected? busy? (not anki-ready?))})
-      (tooltip/Tooltip! (cond
-                         none-selected? "Select cards first"
-                         (not anki-ready?) "Requires Anki connection"
-                         :else "Apply Anki's content to selected cards"))
-      (dom/text "Pull")
-      (dom/On "click"
-        (fn [_]
-          (reset! !bulk-skips nil)
-          (reset! !action-result nil)
-          ;; conflict = locally-edited AND in this set; the server joins
-          ;; the two halves (it owns the timestamp half)
-          (reset! !bulk-args {:ids (selected-card-ids @!selected)
-                              :include? @!include-conflicts
-                              :anki-modified-ids (vec (anki-modified-ids anki-overlay))})
-          (reset! !bulk-phase :pulling))
-        nil))))
-
-(e/defn BulkActionBar [anki-overlay ov-status busy?
-                       !selected !include-conflicts !action-result
-                       !bulk-args !bulk-skips !bulk-phase !confirm-bulk-delete]
+(e/defn BulkActionBar [conflicts ov-status busy?
+                       !selected !action-result
+                       !scan-result !bulk-phase !confirm-bulk-delete]
   (e/client
     (let [selected (e/watch !selected)
-          include-conflicts (e/watch !include-conflicts)
           action-result (e/watch !action-result)
           anki-ready? (= ov-status :ready)
           none-selected? (zero? (count selected))
@@ -1155,13 +1077,9 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
           (dom/text (str (count selected) " selected"
                       (when (not= (count selected) selected-cards)
                         (str " · " selected-cards " cards")))))
-        (BulkPushButton anki-overlay none-selected? busy? anki-ready?
-          !selected !include-conflicts !action-result
-          !bulk-args !bulk-skips !bulk-phase)
-        (BulkPullButton anki-overlay none-selected? busy? anki-ready?
-          !selected !include-conflicts !action-result
-          !bulk-args !bulk-skips !bulk-phase)
-        ;; .btn-danger (outline) not .btn-danger-fill (solid): Push updates is
+        (ResolveConflictButtons conflicts none-selected? busy? anki-ready?
+          !selected !action-result !scan-result !bulk-phase)
+        ;; .btn-danger (outline) not .btn-danger-fill (solid): Keep FreeMemo is
         ;; the one filled/primary action in this bar. FLAGGED — the mockup shows
         ;; a light-red FILL with red text, which no existing class provides.
         (dom/button
@@ -1169,15 +1087,6 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
                       :disabled (or none-selected? busy?)})
           (dom/text "Delete")
           (dom/On "click" (fn [_] (reset! !confirm-bulk-delete true)) nil))
-        (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "4px"
-                              :cursor "pointer" :user-select "none"}})
-          (tooltip/Tooltip! "Conflicted cards (edited on both sides) are skipped unless checked")
-          (dom/input
-            (dom/props {:type "checkbox"})
-            (set! (.-checked dom/node) (boolean include-conflicts))
-            (dom/On "change" (fn [e] (reset! !include-conflicts (-> e .-target .-checked))) nil))
-          (dom/text "Include conflicts"))
         (dom/button
           (dom/props {:class "btn btn-sm btn-secondary"
                       :disabled none-selected?})
@@ -1232,11 +1141,17 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
 ;; [value label overlay-dependent? sync-source]
 ;; sync-source ("fm" / "anki" / nil) drives BOTH the leading dot colour and the
 ;; tinted inactive border — one field, not two, so the pair cannot disagree.
+;; "conflict" replaced "Both". The old facet was derived live on the client:
+;; a card counted when its timestamp said FreeMemo had moved AND the overlay's
+;; content diff said Anki had. That diff reports only that the two sides DIFFER,
+;; so a card edited only in FreeMemo satisfied it too. "conflict" reads
+;; `flashcards.anki_conflict_at`, which the last reconcile wrote from each side's
+;; own baseline — and being a column, it survives a reload without Anki running.
 (def ^:private origin-facets
   [["unpushed" "Unpushed" false nil]
    ["fm-changed" "FM changed" false "fm"]
    ["anki-changed" "Anki changed" true "anki"]
-   ["both" "Both" true nil]
+   ["conflict" "Conflict" false nil]
    ["in-sync" "In sync" false nil]])
 (def ^:private flag-facets [["marked" "Marked"] ["suspended" "Suspended"]])
 
@@ -1609,19 +1524,18 @@ bytecode cap in the :prod build, which dev compilation never emits.
           ;; selection unit and its member ids ride along from click time.
           !selected (atom {}) selected (e/watch !selected)
           !diff-card (atom nil)
-          !include-conflicts (atom false)
           !action-result (atom nil)
           !bulk-phase (atom nil) bulk-phase (e/watch !bulk-phase)
-          !bulk-args (atom nil)
-          !bulk-pairs (atom nil)
-          !bulk-updates (atom nil)
-          !bulk-skips (atom nil)
-          !confirm-bulk-delete (atom false)]
+          !scan-result (atom nil)
+          !confirm-bulk-delete (atom false)
+          ;; The last reconcile's verdict, read server-side. Needs no Anki
+          ;; connection, so the Keep Anki resolution stays available offline.
+          conflicts (e/server
+                      (e/Offload #(recon-server/conflicts-for-resolution user-id)))]
 
       (CardsModals user-id !diff-card !confirm-bulk-delete !selected !action-result)
 
-      (BulkActionRunner user-id !bulk-phase !bulk-args !bulk-pairs !bulk-updates
-        !bulk-skips !action-result)
+      (ResolveConflictRunner user-id !bulk-phase !scan-result !action-result)
 
       ;; Counts and the bulk-action bar share ONE line as two flex children, so
       ;; a narrow viewport wraps between the clusters, never mid-button-group.
@@ -1629,9 +1543,9 @@ bytecode cap in the :prod build, which dev compilation never emits.
       (dom/div
         (dom/props {:class "cards-summary"})
         (CardsCountSummary result ov-status filter-pending?)
-        (BulkActionBar anki-overlay ov-status (some? bulk-phase)
-          !selected !include-conflicts !action-result
-          !bulk-args !bulk-skips !bulk-phase !confirm-bulk-delete))
+        (BulkActionBar conflicts ov-status (some? bulk-phase)
+          !selected !action-result
+          !scan-result !bulk-phase !confirm-bulk-delete))
 
       (CardsTables user-id navigate! result row-height font-sz filters-active? scroll-reset-key
         anki-overlay selected !selected !sort-col !sort-dir
@@ -1678,9 +1592,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
    active — otherwise the query stays a pure function of the DB filters and
    overlay changes trigger no re-query."
   [origins flags anki-overlay]
-  (if (or (contains? origins "anki-changed")
-        (contains? origins "both")
-        (seq flags))
+  (if (or (contains? origins "anki-changed") (seq flags))
     (overlay->filter-ids anki-overlay)
     {:anki-changed #{} :marked #{} :suspended #{}}))
 

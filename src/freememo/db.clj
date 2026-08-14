@@ -366,9 +366,74 @@
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS topic_id INTEGER REFERENCES topics(id) ON DELETE CASCADE"])
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS root_topic_id INTEGER REFERENCES topics(id) ON DELETE CASCADE"])
 
+  ;; Reconcile baselines — what each SIDE held at the last successful sync.
+  ;;
+  ;; Two columns, not one, and the pairing is the whole mechanism. `stripped=`
+  ;; compares Anki's field against the local field, which reports THAT the two
+  ;; sides differ and never WHICH side moved — so a card edited only in FreeMemo
+  ;; satisfies both halves of `anki_sync_server/conflict?` and both bulk buttons
+  ;; skip it. Comparing each side against its own baseline makes the two
+  ;; questions independent.
+  ;;
+  ;; Neither digest is ever compared with the other. `anki_baseline_digest` is
+  ;; always produced from bytes READ BACK from Anki (never from the payload sent,
+  ;; which Anki may normalise on write); `local_baseline_digest` is always
+  ;; produced from the flashcards row. `freememo.anki-digest` owns both.
+  ;; A consequence worth keeping: score and overlapping need no Anki→local
+  ;; inverse to participate, because their two digests never meet.
+  ;;
+  ;; CHAR(64) is hex SHA-256, matching `media.sha256`.
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_baseline_digest CHAR(64)"])
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS local_baseline_digest CHAR(64)"])
+
+  ;; Anki's per-note `mod` at the last sync. Written, read by nothing.
+  ;; Measured on production: 58 of 1477 cards carried a `mod` newer than
+  ;; `anki_synced_at` and NONE of them had a content difference — tag writes move
+  ;; it. It is recorded so a future `notesModTime` fast path is a data question
+  ;; rather than a migration, and it must not become a change signal.
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_baseline_mod BIGINT"])
+
+  ;; When reconcile last classified this card as a conflict, NULL when it is not
+  ;; one. A timestamp rather than a boolean, so the Library row can say how long
+  ;; the card has been stuck. Server-side state on purpose: a conflict must
+  ;; survive a reload without re-running a whole reconcile to rediscover it.
+  ;; Cleared by resolving the conflict, and by any run that finds the card no
+  ;; longer conflicted.
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_conflict_at TIMESTAMP"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_anki_conflict
+                      ON flashcards(root_topic_id) WHERE anki_conflict_at IS NOT NULL"])
+
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_topic ON flashcards(topic_id)"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_root_topic ON flashcards(root_topic_id)"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_flashcards_anki_note_id ON flashcards(anki_note_id) WHERE anki_note_id IS NOT NULL"])
+
+  ;; Anki notes whose local card is gone — the durable half of a deletion.
+  ;;
+  ;; `card-components/try-delete-anki-notes!` already deletes the notes from the
+  ;; client on every local-delete path, and it is fire-and-forget: with Anki
+  ;; closed, the note survives with nothing left pointing at it. Ten such orphans
+  ;; were counted in production, three of them under a topic that no longer
+  ;; exists. This table is what lets the next reconcile finish the job.
+  ;;
+  ;; `anki_baseline_digest` is snapshotted from the card BEFORE it goes, because
+  ;; reconcile must still ask "did Anki's copy change since we last synced?" —
+  ;; and by then there is no row left to ask. Without it every tombstone would
+  ;; resolve to a conflict and no deletion would ever propagate.
+  ;;
+  ;; UNIQUE(user_id, anki_note_id) with ON CONFLICT DO NOTHING makes recording
+  ;; idempotent: deleting a card twice, or a retry after a failed run, adds
+  ;; nothing. user_id is the scope — a note id means nothing outside the
+  ;; collection it belongs to.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS anki_note_tombstones (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      anki_note_id BIGINT NOT NULL,
+      anki_baseline_digest CHAR(64),
+      deleted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )"])
+  (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_anki_tombstones_user_note
+                      ON anki_note_tombstones(user_id, anki_note_id)"])
 
   ;; Run migration if old tables exist
   (when (old-tables-exist?)
@@ -2600,9 +2665,69 @@
        id]
       {:builder-fn rs/as-unqualified-maps})))
 
+;; ---------------------------------------------------------------------------
+;; Anki note tombstones — see the table comment in setup-schema-core!
+;; ---------------------------------------------------------------------------
+
+(defn record-anki-tombstones!
+  "Record that `deleted-rows`' Anki notes have lost their local cards.
+
+   pre : `conn` is a connectable, and MUST be the same transaction that removed
+         the rows — a tombstone committed without its deletion would delete a
+         live note. `deleted-rows` are flashcards rows (namespaced or plain
+         keys); rows with no `anki_note_id` are skipped, since an unpushed card
+         owns no note.
+   post: one row per distinct synced note id, carrying the card's
+         `anki_baseline_digest`. Idempotent — a repeat is a no-op.
+
+   EVERY path that hard-deletes a synced card owes this call. No database trigger
+   does it instead: a `BEFORE DELETE` trigger on `flashcards` cannot read
+   `topics.user_id` when the delete arrives as a cascade from a deleted topic,
+   because the parent row is already gone by then. The test
+   `t30-every-flashcard-delete-path-tombstones` is what keeps the list honest."
+  [conn user-id deleted-rows]
+  (let [rows (into []
+               (comp
+                 (keep (fn [r]
+                         (when-let [nid (or (:flashcards/anki_note_id r) (:anki_note_id r))]
+                           {:user_id user-id
+                            :anki_note_id nid
+                            :anki_baseline_digest (or (:flashcards/anki_baseline_digest r)
+                                                    (:anki_baseline_digest r))})))
+                 (distinct))
+               deleted-rows)]
+    (when (seq rows)
+      (jdbc/execute! conn
+        (sql/format {:insert-into :anki_note_tombstones
+                     :values rows
+                     :on-conflict [:user_id :anki_note_id]
+                     :do-nothing true})))
+    (count rows)))
+
+(defn subtree-synced-cards
+  "The synced flashcards under the topic subtree rooted at `topic-id`.
+
+   Read BEFORE a cascading delete, for the reason `subtree-large-object-oids`
+   is: afterwards there is nothing left to read. Returns rows carrying
+   `anki_note_id` and `anki_baseline_digest`."
+  [conn topic-id]
+  (jdbc/execute! conn
+    ["WITH RECURSIVE subtree AS (
+        SELECT id FROM topics WHERE id = ?
+        UNION ALL
+        SELECT c.id FROM topics c JOIN subtree s ON c.parent_id = s.id
+      )
+      SELECT DISTINCT f.anki_note_id, f.anki_baseline_digest
+      FROM flashcards f
+      WHERE f.anki_note_id IS NOT NULL
+        AND (f.root_topic_id IN (SELECT id FROM subtree)
+             OR f.topic_id IN (SELECT id FROM subtree))"
+     topic-id]))
+
 (defn delete-topic-for-user!
   "Delete a topic scoped to user. Decrements usage_bytes by the subtree's
-   total stored bytes and unlinks its large objects atomically.
+   total stored bytes, unlinks its large objects, and tombstones the Anki notes
+   of every synced card it destroys — all atomically.
 
    §4.7 7.2: this is the hard-delete path (the staged path is
    stage-topic-for-deletion! + purge-staged-documents!). Unlinking here is safe
@@ -2612,9 +2737,13 @@
   (jdbc/with-transaction [tx ds]
     (let [freed (subtree-file-bytes tx id)
           oids (subtree-large-object-oids tx id)
+          ;; Both reads happen BEFORE the delete — the cards cascade away with
+          ;; the topics.
+          synced-cards (subtree-synced-cards tx id)
           result (jdbc/execute! tx
                    (sql/format {:delete-from :topics
                                 :where [:and [:= :id id] [:= :user_id user-id]]}))]
+      (record-anki-tombstones! tx user-id synced-cards)
       (doseq [oid oids] (lo/unlink! tx oid))
       (when (pos? freed)
         (bump-user-usage! tx user-id (- freed)))
@@ -3859,22 +3988,157 @@
     {:occlusion-groups (fully-deleted-groups-of user-id card-ids :occlusion_groups :occlusion_group_id)
      :score-groups (fully-deleted-groups-of user-id card-ids :score_groups :score_group_id)}))
 
+(defn get-cards-for-reconcile
+  "Flashcards `user-id` owns, carrying the columns the reconcile digest reads
+   plus both baselines. The 1-arity reads the whole collection (the run's
+   manifest); the 2-arity narrows to `card-ids` (re-reading the few a write
+   touched), because scanning the collection to digest three rows is the same
+   query run once per phase.
+
+   JSONB is parsed here. `anki-digest/local-digest` THROWS on a raw PGobject
+   rather than digesting nothing, so a query that skipped this would fail the
+   run loudly on the first occlusion or overlapping card."
+  ([user-id] (get-cards-for-reconcile user-id nil))
+  ([user-id card-ids]
+   (if (and (some? card-ids) (empty? card-ids))
+     []
+     (mapv (fn [r] (-> r
+                     (update :flashcards/io_fields pgobject->clj)
+                     (update :flashcards/overlapping pgobject->clj)))
+       (jdbc/execute! ds
+         (sql/format {:select [:f.id :f.kind :f.question :f.answer :f.cloze
+                               :f.io_fields :f.overlapping
+                               :f.score_direction :f.score_group_id
+                               :f.anki_note_id :f.anki_baseline_digest
+                               :f.local_baseline_digest]
+                      :from [[:flashcards :f]]
+                      :join [[:topics :root] [:= :f.root_topic_id :root.id]]
+                      :where (cond-> [:and [:= :root.user_id user-id]]
+                               (seq card-ids) (conj [:in :f.id (vec card-ids)]))}))))))
+
+(defn set-anki-conflicts!
+  "Make `user-id`'s stored conflict set exactly `card-ids`.
+
+   pre : `card-ids` came from one run over the whole collection.
+   post: those cards carry `anki_conflict_at`; every other card of this user
+         carries NULL. Clearing the rest is the point — a card that stopped
+         being a conflict must stop reading as one without a second action."
+  [user-id card-ids]
+  (jdbc/with-transaction [tx ds]
+    (let [owned {:select [:id] :from [:topics] :where [:= :user_id user-id]}]
+      (jdbc/execute! tx
+        (sql/format {:update :flashcards
+                     :set {:anki_conflict_at nil}
+                     :where (cond-> [:and
+                                     [:in :root_topic_id owned]
+                                     [:not= :anki_conflict_at nil]]
+                              (seq card-ids) (conj [:not-in :id (vec card-ids)]))}))
+      (when (seq card-ids)
+        (jdbc/execute! tx
+          (sql/format {:update :flashcards
+                       :set {:anki_conflict_at [:now]}
+                       :where [:and
+                               [:in :root_topic_id owned]
+                               [:in :id (vec card-ids)]
+                               [:= :anki_conflict_at nil]]}))))))
+
+(defn clear-anki-conflicts!
+  "Drop the conflict flag from `card-ids` only, leaving every other card's alone.
+   Distinct from `set-anki-conflicts!`, which makes the whole set exact: that one
+   belongs to a run over the collection, this one to resolving a few by hand."
+  [user-id card-ids]
+  (when (seq card-ids)
+    (jdbc/execute-one! ds
+      (sql/format {:update :flashcards
+                   :set {:anki_conflict_at nil}
+                   :where [:and
+                           [:in :root_topic_id
+                            {:select [:id] :from [:topics] :where [:= :user_id user-id]}]
+                           [:in :id (vec card-ids)]]}))))
+
+(defn list-anki-conflicts
+  "Card ids `user-id` currently has flagged as reconcile conflicts, oldest
+   first. The Library filter and the run toast read the same set."
+  [user-id]
+  (mapv :flashcards/id
+    (jdbc/execute! ds
+      (sql/format {:select [:f.id]
+                   :from [[:flashcards :f]]
+                   :join [[:topics :root] [:= :f.root_topic_id :root.id]]
+                   :where [:and [:= :root.user_id user-id]
+                           [:not= :f.anki_conflict_at nil]]
+                   :order-by [[:f.anki_conflict_at :asc]]}))))
+
+(defn set-card-baselines!
+  "Write both reconcile baselines for `user-id`'s cards, in ONE statement per
+   card.
+
+   pre : `entries` = [{:card-id n :anki-digest s :local-digest s :anki-mod n?} …].
+   post: both digests move together. Writing them in two statements would let a
+         crash between the two leave a half-written baseline, which
+         `anki-reconcile/classify` must then read as unknown — see its
+         `:needs-baseline` branch.
+   Also stamps `anki_synced_at`, so the shipped staleness counters keep working
+   while §8 is still pending."
+  [user-id entries]
+  (when (seq entries)
+    (jdbc/with-transaction [tx ds]
+      (doseq [{:keys [card-id anki-digest local-digest anki-mod]} entries]
+        (jdbc/execute-one! tx
+          (sql/format {:update :flashcards
+                       :set (cond-> {:anki_baseline_digest anki-digest
+                                     :local_baseline_digest local-digest
+                                     :anki_synced_at [:now]}
+                              anki-mod (assoc :anki_baseline_mod anki-mod))
+                       :where [:and
+                               [:= :id card-id]
+                               [:in :root_topic_id
+                                {:select [:id] :from [:topics]
+                                 :where [:= :user_id user-id]}]]}))))
+    (count entries)))
+
+(defn list-anki-tombstones
+  "Every outstanding tombstone for `user-id`, oldest first.
+   post: rows with :anki_note_tombstones/anki_note_id and /anki_baseline_digest."
+  [user-id]
+  (jdbc/execute! ds
+    (sql/format {:select [:*] :from [:anki_note_tombstones]
+                 :where [:= :user_id user-id]
+                 :order-by [[:deleted_at :asc]]})))
+
+(defn drop-anki-tombstones!
+  "Forget tombstones whose work is finished — the note is gone from Anki.
+   pre : `note-ids` were either deleted from Anki, or found already absent.
+   post: those rows no longer exist for `user-id`. Returns the count removed."
+  [user-id note-ids]
+  (if (empty? note-ids)
+    0
+    (or (::jdbc/update-count
+         (jdbc/execute-one! ds
+           (sql/format {:delete-from :anki_note_tombstones
+                        :where [:and [:= :user_id user-id]
+                                [:in :anki_note_id (vec note-ids)]]})))
+      0)))
+
 (defn delete-user-flashcards!
   "Bulk delete of user-id's flashcards. Ownership enforced via the root
    topic join. Returns the full deleted rows (RETURNING flashcards.*) so
    callers can both read :flashcards/anki_note_id and snapshot the rows for
-   undo."
+   undo. Tombstones every synced row in the same transaction."
   [user-id card-ids]
   (if (empty? card-ids)
     []
-    (jdbc/execute! ds
-      (sql/format {:delete-from :flashcards
-                   :using [[:topics :root]]
-                   :where [:and
-                           [:= :flashcards.root_topic_id :root.id]
-                           [:= :root.user_id user-id]
-                           [:in :flashcards.id (vec card-ids)]]
-                   :returning [:flashcards.*]}))))
+    (jdbc/with-transaction [tx ds]
+      (let [deleted (jdbc/execute! tx
+                      (sql/format {:delete-from :flashcards
+                                   :using [[:topics :root]]
+                                   :where [:and
+                                           [:= :flashcards.root_topic_id :root.id]
+                                           [:= :root.user_id user-id]
+                                           [:in :flashcards.id (vec card-ids)]]
+                                   :returning [:flashcards.*]}))]
+        (record-anki-tombstones! tx user-id deleted)
+        deleted))))
 
 (defn get-flashcards-by-anki-note-ids
   "Flashcards owned by user-id (via root topic) whose anki_note_id is in
@@ -3895,12 +4159,16 @@
   "Delete flashcard `card-id` iff owned by `user-id` (via its root topic).
    Returns the full deleted row (RETURNING *) so callers can read
    :flashcards/anki_note_id and snapshot it for undo, or nil when the card is
-   not the user's (0 rows — the ownership predicate is the security gate)."
+   not the user's (0 rows — the ownership predicate is the security gate).
+   Tombstones the row's Anki note in the same transaction."
   [user-id card-id]
-  (jdbc/execute-one! ds
-    ["DELETE FROM flashcards
-      WHERE id = ? AND root_topic_id IN (SELECT id FROM topics WHERE user_id = ?)
-      RETURNING *" card-id user-id]))
+  (jdbc/with-transaction [tx ds]
+    (let [deleted (jdbc/execute-one! tx
+                    ["DELETE FROM flashcards
+                      WHERE id = ? AND root_topic_id IN (SELECT id FROM topics WHERE user_id = ?)
+                      RETURNING *" card-id user-id])]
+      (when deleted (record-anki-tombstones! tx user-id [deleted]))
+      deleted)))
 
 (defn update-flashcard!
   "Update content fields of flashcard `card-id` iff owned by `user-id` (via its
@@ -4243,7 +4511,8 @@
             ;; returned first would decide what history records. Lowest ordinal
             ;; matches get-group-for-edit's documented choice.
             existing (jdbc/execute! tx
-                       ["SELECT id, mask_ordinal, anki_note_id, topic_id, root_topic_id, io_fields
+                       ["SELECT id, mask_ordinal, anki_note_id, anki_baseline_digest,
+                                topic_id, root_topic_id, io_fields
                          FROM flashcards WHERE occlusion_group_id = ?
                          ORDER BY mask_ordinal ASC" group-id])
             existing-ordinals (set (map :flashcards/mask_ordinal existing))
@@ -4291,6 +4560,15 @@
              :io_fields (:flashcards/io_fields template)}))
         (doseq [r removed]
           (jdbc/execute-one! tx ["DELETE FROM flashcards WHERE id = ?" (:flashcards/id r)]))
+        ;; The caller hands `:removed`'s note ids to `try-delete-anki-notes!`
+        ;; (occlusion_modal.cljc:432), which is fire-and-forget. The owner is not
+        ;; an argument here, so it is resolved from the group's root topic —
+        ;; inside the same transaction, before anything can move.
+        (when-some [owner (:user_id (jdbc/execute-one! tx
+                                      ["SELECT user_id FROM topics WHERE id = ?"
+                                       (:flashcards/root_topic_id template)]
+                                      {:builder-fn rs/as-unqualified-maps}))]
+          (record-anki-tombstones! tx owner removed))
         (jdbc/execute! tx
           (sql/format {:update :flashcards
                        :set {:io_fields (->jsonb io-fields')
@@ -5810,6 +6088,13 @@
             entry-id (insert-undo-entry-raw! tx user-id "delete-document" "document"
                        [topic-id] {:cards (mapv unqualify-row deleted)})
             freed (subtree-file-bytes tx topic-id)]
+        ;; Staging DOES destroy the Anki notes — the caller hands `:note-ids`
+        ;; straight to `try-delete-anki-notes!` (knowledge_tree.cljc:447), and
+        ;; `restore-flashcards-tx!` brings a card back UNSYNCED because of it.
+        ;; So the tombstone belongs here and not at purge time: the note is
+        ;; already being destroyed and the client attempt is fire-and-forget.
+        ;; An undo does not resurrect the note, so the tombstone stays correct.
+        (record-anki-tombstones! tx user-id deleted)
         (jdbc/execute! tx
           (sql/format {:update :topics
                        :set {:staged_delete_id entry-id}

@@ -7,28 +7,13 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.anki-sync-helpers :as helpers]
-   [freememo.doc-context :as dctx]
    [freememo.typeahead :refer [Typeahead]]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.settings :as settings])))
 
-(defn topic-scope-context*
-  "Reactive wrapper: {:kind :has-children?} for the in-view topic. Feeds the
-   scope selector's dynamic label + 'subtree' leaf gate."
-  [topic-id]
-  #?(:clj (db/topic-scope-context topic-id)
-     :cljs nil))
-
-(defn scope-label
-  "Display label for a scope key given the in-view topic kind. PDF pages read
-   'Page'; everything else 'Topic'. 'subtree' mirrors the noun."
-  [scope kind]
-  (let [page? (= kind "page")]
-    (case scope
-      "self"     (if page? "Current Page" "Current Topic")
-      "subtree"  (if page? "Current Page & Children" "Current Topic & Children")
-      "document" "Entire Document"
-      scope)))
+;; `topic-scope-context*` and `scope-label` lived here to drive the modal's Scope
+;; selector. Reconcile has no scope — see `AnkiSyncForm` — so both are gone, and
+;; with them the `doc-context` require.
 
 (e/defn TagInput
   "Multi-tag input with chip display and autocomplete from all-tags."
@@ -237,44 +222,23 @@
           (TagInput (:!tags form) all-tags))))))
 
 (e/defn AnkiSyncForm
-  "The connected-state form: scope, deck, custom header, tags. Note types are
-   app-owned (FreeMemo Basic/Cloze), so there is no model/field selection.
-   conn = {:!decks :!selected-deck :!all-tags ...}
-   form = {:!scope ...}"
+  "The connected-state form: deck, custom header, tags. Note types are app-owned
+   (FreeMemo Basic/Cloze), so there is no model/field selection.
+
+   There is no scope control. A reconcile covers everything ever synced by
+   definition — a card deleted in a document nobody has open still owes its Anki
+   note a deletion, and a note edited in Anki still owes its card the edit.
+   Narrowing the run would make both invisible. The deck and the options below
+   are configuration for the whole collection, not choices for one run.
+
+   conn = {:!decks :!selected-deck :!all-tags ...}"
   [user-id root-id conn form]
   (e/client
-    (let [scope (e/watch (:!scope form))
-          decks (e/watch (:!decks conn))
+    (let [decks (e/watch (:!decks conn))
           ;; An Anki deck name IS its identity — AnkiConnect exposes no deck id,
           ;; and :!selected-deck must keep holding the name because it flows on
           ;; into `settings {:deck …}` and the persisted prefs row.
-          deck-options (mapv (fn [d] {:id d :label d}) decks)
-          scope-ctx (e/server (e/Offload #(topic-scope-context* dctx/topic-id)))
-          kind (:kind scope-ctx)
-          has-children? (:has-children? scope-ctx)
-          ;; Coerce display when a leaf carries a stale 'subtree' pref — the
-          ;; option isn't rendered, so the select must not point at it.
-          shown-scope (if (and (= scope "subtree") (not has-children?)) "self" scope)]
-
-      ;; Scope
-      (dom/div
-        (dom/props {:style {:margin-bottom "var(--sp-3)"}})
-        (dom/label (dom/props {:style {:font-weight "600" :font-size "14px" :display "block" :margin-bottom "4px"}})
-          (dom/text "Scope"))
-        ;; reset! lives INSIDE the change callback (plain fn, always runs) — a
-        ;; bare (when v (reset! ..)) in the reactive body is work-skipped by
-        ;; Electric. Selection is reflected via per-option :selected. Mirrors
-        ;; card-modals/ExportScopeSelect.
-        (dom/select
-          (dom/props {:class "select" :style {:font-size "15px"}})
-          (dom/On "change" (fn [e] (reset! (:!scope form) (-> e .-target .-value))) nil)
-          (dom/option (dom/props {:value "self" :selected (= shown-scope "self")})
-            (dom/text (scope-label "self" kind)))
-          (when has-children?
-            (dom/option (dom/props {:value "subtree" :selected (= shown-scope "subtree")})
-              (dom/text (scope-label "subtree" kind))))
-          (dom/option (dom/props {:value "document" :selected (= shown-scope "document")})
-            (dom/text (scope-label "document" kind)))))
+          deck-options (mapv (fn [d] {:id d :label d}) decks)]
 
       ;; Deck
       (dom/div
@@ -287,47 +251,45 @@
       (AnkiSyncOptions user-id root-id conn form))))
 
 (e/defn AnkiSyncStatus
-  "Sync status display and Push/Cancel buttons. Pull lives in the toolbar.
+  "Status line and the modal's two buttons: Reconcile and Cancel.
+
+   One action, no direction. Which way each card moves is decided per card by
+   `anki-reconcile/classify`, from each side's own baseline — the Push and Pull
+   buttons this replaces could only ever move every selected card the same way,
+   which is what overwrote edits made in Anki.
+
+   The click hands off rather than running the work here: prefs are saved, the
+   modal closes, and `:quick-sync` runs the reconcile headlessly with toasts.
+   A run covers the whole collection and outlives the dialog that started it.
+
    sync = {:!phase :!result :!error :!push-pairs :!push-btn}
-   conn = {:!selected-deck ...} — for the push gate (deck-only; note types are
-   app-owned)."
+   conn = {:!selected-deck ...} — the deck gate; note types are app-owned."
   [sync !show-modal conn]
   (e/client
     (let [sync-phase (e/watch (:!phase sync))
-          sync-result (e/watch (:!result sync))
           sync-error (e/watch (:!error sync))
-          can-push? (helpers/pushable? (e/watch (:!selected-deck conn)))
+          can-run? (helpers/pushable? (e/watch (:!selected-deck conn)))
           {:keys [!phase !result !error !push-pairs !push-btn]} sync]
 
-      ;; Auto-close after a brief "Pushed to Anki" confirmation. Token-guarded
-      ;; so the timer schedules exactly once on the :done transition.
-      (when (= sync-phase :done)
-        (let [[t _] (e/Token :anki-autoclose)]
-          (when t (helpers/schedule-close! !show-modal 500))))
       ;; Status display
       (when sync-phase
         (dom/div
           (dom/props {:style {:margin-bottom "var(--sp-4)" :padding "var(--sp-3)" :background "var(--color-bg-subtle)"
                               :border-radius "var(--radius-sm)" :font-size "14px"}})
           (cond
-            (= sync-phase :pushing) (dom/text "Pushing cards to Anki...")
-            (= sync-phase :recording) (dom/text "Saving to database...")
+            (= sync-phase :pushing) (dom/text "Starting reconcile…")
             (= sync-phase :error)
             (dom/div
               (dom/props {:style {:color "var(--color-danger-text)"}})
               (dom/text (str "Error: " (or (:message sync-error) "Unknown error"))))
-            (= sync-phase :done)
-            (dom/div
-              (dom/props {:style {:color "var(--color-success)"}})
-              (dom/text "Pushed to Anki")))))
+            :else (dom/text "Working…"))))
 
       ;; Action buttons
       (dom/div
         (dom/props {:style {:display "flex" :justify-content "flex-end" :gap "var(--sp-2)" :margin-top "var(--sp-2)"}})
         (dom/button
           (dom/props {:class "btn btn-secondary" :style {:font-size "15px"}})
-
-          (dom/text (if (= sync-phase :done) "Close" "Cancel"))
+          (dom/text "Cancel")
           (dom/On "click" (fn [_]
                             (reset! !show-modal false)
                             (reset! !phase nil)
@@ -335,11 +297,11 @@
                             (reset! !error nil)
                             (reset! !push-pairs nil))
             nil))
-        (when-not (#{:pushing :recording} sync-phase)
+        (when-not (= :pushing sync-phase)
           (dom/button
             (dom/props {:class "btn btn-primary" :style {:font-size "15px"}
-                        :disabled (not can-push?)})
-            (dom/text "Push to Anki")
+                        :disabled (not can-run?)})
+            (dom/text "Reconcile")
             (reset! !push-btn dom/node)
             (e/on-unmount (fn [] (reset! !push-btn nil)))
             (dom/On "click"

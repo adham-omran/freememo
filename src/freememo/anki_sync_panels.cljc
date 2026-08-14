@@ -44,93 +44,13 @@
   #?(:clj (sync/resolve-modal-prefs user-id root-topic-id)
      :cljs nil))
 
-(e/defn AnkiSyncExecutor
-  "Handles push execution and server recording. Pull is handled by the
-   toolbar Pull button (content_toolbar_actions), not the modal.
-   conn = {:!status :!decks :!models :!selected-deck ...}
-   form = {:!scope :!allow-dupes :!use-tags :!tags}
-   sync = {:!phase :!result :!error :!push-pairs}"
-  [user-id selected-doc conn form sync]
-  (let [{:keys [!phase !error !push-pairs]} sync
-        sync-phase (e/watch (:!phase sync))
-        scope (e/watch (:!scope form))
-        selected-deck (e/watch (:!selected-deck conn))
-        allow-dupes (e/watch (:!allow-dupes form))
-        use-tags (e/watch (:!use-tags form))
-        tags (e/watch (:!tags form))
-        auto-load-mode (e/server (e/Offload #(get-anki-auto-load-mode* user-id)))
-        root-id (e/server (e/Offload #(get-root-topic-id* selected-doc)))
-        ;; Header is per-PDF, resolved server-side (override, else off) — the
-        ;; authoritative source for push. Not read from form atoms (decoupled).
-        resolved-header (e/server (e/Offload #(form/resolve-anki-header* user-id root-id)))
-        use-header (boolean (:use-header resolved-header))
-        header-text (or (:header-text resolved-header) "")
-        topic-info (e/server (when selected-doc
-                               (let [t (db/get-topic-for-user user-id selected-doc)]
-                                 {:kind (:topics/kind t)
-                                  :title (:topics/title t)})))
-        app-base-url (e/server (get-app-base-url*))
-        settings {:deck selected-deck
-                  :allow-dupes allow-dupes
-                  :use-header use-header
-                  :header-text header-text
-                  :tags tags
-                  :topic-kind (:kind topic-info)
-                  :topic-title (:title topic-info)
-                  :root-topic-id selected-doc
-                  :app-base-url app-base-url}
-        ;; Header is NOT in prefs-map — it's per-PDF (own rows), never the
-        ;; global last-used or the per-item preset blob.
-        prefs-map {:scope scope :deck selected-deck
-                   :allow-dupes allow-dupes
-                   :use-tags use-tags :tags tags}]
-
-    ;; All post-push server work in a single e/server call whose result is
-    ;; observed below — Electric drops unused intermediate side effects when
-    ;; multiple sibling e/server calls sit in a do-body.
-    (when (and (= sync-phase :recording) (some? (e/watch !push-pairs)))
-      (let [pairs (e/watch !push-pairs)
-            [?token _] (e/Token :record-push)]
-        (when-some [token ?token]
-          (log/log-info (str "[anki-sync] record branch firing pairs=" (count pairs)
-                          " auto-load-mode=" auto-load-mode
-                          " root-id=" root-id
-                          " deck=" selected-deck))
-          (let [result (e/server (e/Offload #(sync/finalize-push! user-id root-id pairs prefs-map auto-load-mode)))]
-            (log/log-info (str "[anki-sync] finalize-push! returned success=" (:success result)
-                            " error=" (:error result)))
-            (if (:success result)
-              (do (reset! !phase :done)
-                (token))
-              (do (reset! !error {:message (:error result) :source :server})
-                (reset! !phase :error)
-                (token)))))))
-
-    ;; Push execution. Scope resolves server-side against the in-view topic:
-    ;; 'self' → that topic only, 'subtree' → + descendants, 'document' → whole
-    ;; root tree. topic-id is the ambient in-view topic (dctx), not the root —
-    ;; so a nested Web syncs only its own cards under 'self'.
-    (e/client
-      (when (= sync-phase :pushing)
-        (let [cards-result (e/server (e/Offload #(sync/get-cards-for-sync
-                                                    {:user-id user-id
-                                                     :scope scope
-                                                     :topic-id dctx/topic-id
-                                                     :root-topic-id selected-doc})))]
-          (if-not (:success cards-result)
-            (do (reset! !error {:message (:error cards-result) :source :server})
-              (reset! !phase :error))
-            (let [cards (:cards cards-result)
-                  ;; Override mount-time topic info with fresh values from
-                  ;; this push's get-cards-for-sync call so PDF rename
-                  ;; propagates to the Source anchor.
-                  push-settings (assoc settings
-                                  :tags (if use-tags tags [])
-                                  :topic-title (:topic-title cards-result)
-                                  :topic-kind (:topic-kind cards-result)
-                                  :bibliography-text (:bibliography-text cards-result)
-                                  :bibliography-html (:bibliography-html cards-result))]
-              (helpers/run-push! cards push-settings sync))))))))
+;; `AnkiSyncExecutor` lived here: it resolved a scope, fetched that scope's
+;; cards, ran `do-anki-push!` over all of them and finalized. Every card it
+;; touched moved the same direction, which is what overwrote Anki-side edits.
+;; `anki-reconcile-panels/ReconcileExecutor` replaces it — same phase-machine
+;; shape, but the direction is decided per card from each side's own baseline,
+;; and the run is collection-wide because a deletion owed to Anki is not
+;; discoverable from whichever document happens to be open.
 
 (e/defn AnkiSyncErrorPanel
   "Error state with retry and cancel buttons.

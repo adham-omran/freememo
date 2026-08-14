@@ -122,22 +122,16 @@
         (dom/On "click" (fn [_]
                           (bus/dispatch! :export)
                           (reset! !overflow-open false)) nil))
+      ;; One Anki action. The separate Pull item is gone — a pull is an outcome
+      ;; reconcile chooses per card, not a direction the user picks.
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-sync"
-                    :aria-label "Pull from Anki"})
-        (icons/Icon :cloud-download :size 16)
-        (dom/span (dom/props {:class "icon-label"}) (dom/text "Pull from Anki"))
-        (dom/On "click" (fn [_]
-                          (bus/dispatch! :pull-anki)
-                          (reset! !overflow-open false)) nil))
-      (dom/button
-        (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-sync"
-                    :aria-label "Push to Anki"})
+                    :aria-label "Reconcile with Anki"})
         (AnkiMark :size 16)
         (dom/span (dom/props {:class "icon-label"})
           (dom/text (if (and unsynced-count (pos? unsynced-count))
-                      (str "Push to Anki (" unsynced-count ")...")
-                      "Push to Anki...")))
+                      (str "Reconcile with Anki (" unsynced-count " new)...")
+                      "Reconcile with Anki...")))
         (dom/On "click" (fn [_]
                           (bus/dispatch! :anki-sync)
                           (reset! !overflow-open false)) nil))
