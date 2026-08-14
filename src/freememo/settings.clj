@@ -55,6 +55,10 @@
 (def FSRS_REVIEW_PER_DAY "fsrs_review_per_day")
 (def FSRS_FUZZ "fsrs_fuzz")
 (def CARD_QUIZ_LLM_GRADING "card_quiz_llm_grading")
+(def KG_DEDUP_ENABLED "kg_dedup_enabled")
+(def KG_DEDUP_FLAT_TRIGRAM "kg_dedup_flat_trigram")
+(def KG_DEDUP_OBJECT_TRIGRAM "kg_dedup_object_trigram")
+(def KG_DEDUP_CONTAINMENT "kg_dedup_containment")
 ; Per-document page keys are dynamic: (str "last_page_" doc-id)
 
 (def kg-default-model-id
@@ -919,6 +923,88 @@
     (catch Exception e
       (tel/error! {:id ::save-card-gen-max-retries} e)
       {:success false :error "Failed to save retry setting"})))
+
+;; ── Near-duplicate fact detection ───────────────────────────────────────────
+;;
+;; Three thresholds and an on/off switch for freememo.kg-dedup's h3 detector.
+;; The defaults are FITTED VALUES, not guesses: over 234 hand-labelled fact pairs
+;; drawn from the four production documents that were distilled more than once,
+;; this triple scored precision 0.90, recall 0.78, F1 0.84 — the best of 21
+;; candidate detectors. Changing one changes what the sweep marks; a user who has
+;; never opened this section MUST get exactly the measured behaviour, which is why
+;; every read falls back to these numbers rather than to zero.
+;; See plans/kg-duplicate-fact-sweep.md.
+
+(def kg-dedup-defaults
+  "Measured h3 thresholds. Keys mirror the branches of kg-dedup/duplicate-pair?."
+  {:flat-trigram   0.55    ; branch 1 — whole-triple rewording
+   :object-trigram 0.50    ; branch 2 — same subject, drifted object
+   :containment    0.80})  ; branch 3 — one triple's words contain the other's
+
+(defn- threshold-or-default
+  "Parse a stored threshold, falling back to `fallback` on anything unusable.
+   A blank, unparseable or out-of-range value MUST read as the default and never
+   as 0.0: a zero threshold makes every pair on a page a duplicate, so a corrupt
+   settings row would empty the user's graph on the next sweep."
+  [s fallback]
+  (let [v (try (Double/parseDouble (str s)) (catch Exception _ nil))]
+    (if (and v (<= 0.0 v 1.0)) v fallback)))
+
+(defn get-kg-dedup-thresholds
+  "The user's h3 thresholds plus :enabled, in ONE query.
+   Batched deliberately: the sweep compares O(n²) pairs per page and a per-pair
+   read would put a round trip inside that loop. Callers read this once and pass
+   the map down.
+   Post: {:enabled bool :flat-trigram d :object-trigram d :containment d}, every
+         threshold in [0.0, 1.0]."
+  [user-id]
+  (let [m (db/get-settings user-id [KG_DEDUP_ENABLED KG_DEDUP_FLAT_TRIGRAM
+                                    KG_DEDUP_OBJECT_TRIGRAM KG_DEDUP_CONTAINMENT])]
+    {:enabled (not= "false" (get m KG_DEDUP_ENABLED))   ; absent = on
+     :flat-trigram   (threshold-or-default (get m KG_DEDUP_FLAT_TRIGRAM)
+                       (:flat-trigram kg-dedup-defaults))
+     :object-trigram (threshold-or-default (get m KG_DEDUP_OBJECT_TRIGRAM)
+                       (:object-trigram kg-dedup-defaults))
+     :containment    (threshold-or-default (get m KG_DEDUP_CONTAINMENT)
+                       (:containment kg-dedup-defaults))}))
+
+(defn save-kg-dedup-threshold
+  "Persist one threshold, clamped to [0.0, 1.0] and rounded to 2dp.
+   Pre:  `k` is one of :flat-trigram :object-trigram :containment.
+   Post: {:success true :value clamped} or {:success false :error msg}."
+  [user-id k value]
+  (let [key-of {:flat-trigram   KG_DEDUP_FLAT_TRIGRAM
+                :object-trigram KG_DEDUP_OBJECT_TRIGRAM
+                :containment    KG_DEDUP_CONTAINMENT}]
+    (try
+      (if-let [setting-key (key-of k)]
+        (let [parsed (Double/parseDouble (str value))
+              clamped (/ (Math/round (* 100.0 (max 0.0 (min 1.0 parsed)))) 100.0)]
+          (db/set-setting user-id setting-key (str clamped))
+          {:success true :value clamped})
+        {:success false :error (str "Unknown threshold: " k)})
+      (catch Exception e
+        (tel/error! {:id ::save-kg-dedup-threshold :data {:threshold k}} e)
+        {:success false :error "Failed to save threshold"}))))
+
+(defn save-kg-dedup-enabled [user-id on?]
+  (try
+    (db/set-setting user-id KG_DEDUP_ENABLED (if on? "true" "false"))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-kg-dedup-enabled} e)
+      {:success false :error "Failed to save setting"})))
+
+(defn reset-kg-dedup-thresholds
+  "Delete all three threshold rows so every read returns the measured defaults."
+  [user-id]
+  (try
+    (run! #(db/delete-setting user-id %)
+      [KG_DEDUP_FLAT_TRIGRAM KG_DEDUP_OBJECT_TRIGRAM KG_DEDUP_CONTAINMENT])
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::reset-kg-dedup-thresholds} e)
+      {:success false :error "Failed to reset thresholds"})))
 
 (defn get-theme [user-id]
   (or (db/get-setting user-id THEME) "auto"))

@@ -44,8 +44,12 @@
     "reject-question" (do (db/restore-rejected-question! (:snapshot entry)) nil)
     "reject-fact"     (do (db/restore-rejected-fact! (:snapshot entry)) nil)
     ;; One entry covering many facts — the snapshot is per-fact, so each gets its
-    ;; own prior status back rather than a shared one.
-    "bulk-reject-facts" (do (db/restore-rejected-facts! (:snapshot entry)) nil)))
+    ;; own prior status back rather than a shared one. A duplicate sweep writes
+    ;; the same snapshot shape through the same db/withdraw-kg-facts!, so it
+    ;; restores identically; the two action types stay distinct only so the undo
+    ;; history can name which one the user is reversing.
+    ("bulk-reject-facts" "mark-duplicate-facts")
+    (do (db/restore-withdrawn-facts! (:snapshot entry)) nil)))
 
 (defn- bump-views!
   "The one runtime-dynamic bump: the channels depend on the undone entry's

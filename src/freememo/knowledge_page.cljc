@@ -11,11 +11,19 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
-   [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
+   ;; Scroll-window from the app-local vendored copy, not the jar's: only it takes
+   ;; :reset-key, and without one it falls back to record-count, so switching the
+   ;; Facts view's status filter between two statuses of equal count would leave
+   ;; the scroll position mid-list over an entirely different result set. Tape is
+   ;; unchanged upstream and still comes from the jar (freememo.scroll re-exports
+   ;; nothing).
+   [freememo.scroll :refer [Scroll-window]]
+   [hyperfiddle.electric-scroll0 :refer [Tape]]
    [hyperfiddle.router5 :as r]
    [clojure.string :as str]
    [freememo.icons :as icons]
    [freememo.commands :as commands]
+   [freememo.command-bus :as bus]
    [freememo.modal-shell :as modal]
    [freememo.question-curation :as curate]
    [freememo.tooltip :as tooltip]
@@ -26,6 +34,7 @@
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.logging :as log])
    #?(:clj [freememo.kg-extract :as kg])
+   #?(:clj [freememo.kg-dedup :as kg-dedup])
    #?(:clj [freememo.kg-questions :as kgq])
    #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])))
@@ -59,15 +68,43 @@
          docs))))
 
 #?(:clj
-   (defn get-doc-facts* [_kg-bump user-id doc-id query]
-     (db/get-kg-facts user-id doc-id "approved" query)))
+   (defn get-doc-facts* [_kg-bump user-id doc-id status query]
+     (db/get-kg-facts user-id doc-id status query)))
 
 #?(:clj
    (defn doc-fact-ids*
-     "Every approved fact id of the document, ignoring the view's search filter —
-      the target set for \"select all in this document\"."
-     [_kg-bump user-id doc-id]
-     (db/kg-fact-ids-for-doc user-id doc-id)))
+     "Every fact id of the document in `status`, ignoring the view's search filter —
+      the target set for \"select all in this document\". Takes the status the view
+      is showing: a select-all that returned approved ids while the view listed
+      duplicates would delete rows the user never saw."
+     [_kg-bump user-id doc-id status]
+     (db/kg-fact-ids-for-doc user-id doc-id status)))
+
+#?(:clj
+   (defn unmark-duplicate!*
+     "Return one swept fact to approved — the exit every duplicate-marked row
+      offers. Audits + bumps. Returns :done whether or not a row changed (a
+      no-op on an already-approved or missing fact is silent, matching
+      reject-fact!*)."
+     [user-id fact-id]
+     (when (db/unmark-kg-fact-duplicate! user-id fact-id)
+       (commands/bump! user-id :distill)
+       (log/audit! {:id ::unmark-duplicate :user-id user-id :action :update
+                    :entity :kg-fact :entity-id fact-id})
+       (toasts/push! user-id {:level :success :message "Fact restored" :dedup? false}))
+     :done))
+
+#?(:clj
+   (defn sweep-duplicates!*
+     "Mark near-duplicate facts in one document (freememo.kg-dedup)."
+     [user-id doc-id]
+     (kg-dedup/sweep-document-command! user-id doc-id)))
+
+#?(:clj
+   (defn sweep-duplicates-all!*
+     "Mark near-duplicate facts across every document holding facts."
+     [user-id]
+     (kg-dedup/sweep-all-documents-command! user-id)))
 
 #?(:clj
    (defn list-entities* [_kg-bump user-id query source-id]
@@ -234,6 +271,11 @@
    Scroll-window is given the scroll box, uncompensated for the sticky header's
    band, matching cost-history: the resulting offset error is bounded by one
    header height (~one row) and absorbed by the overquery buffer.
+   `reset-key` is what scrolls the body back to the top when it changes. Pass the
+   view's filter/sort state, NOT the row count: a count changes for reasons that
+   must not move the user (a background sweep marking rows, a delete), while a
+   changed filter genuinely means a different list. nil keeps the upstream
+   record-count fallback, which is right for a table with no filter of its own.
    Pre:  Row is an e/fn of [i] rendering one dom/tr (nil-safe past the end);
          the caller's container bounds the height (flex column, min-height 0).
          Row is called from CLIENT scope, because it renders DOM — so Row owns
@@ -244,7 +286,7 @@
    Post: only the visible window (± overquery buffer) is mounted; total
          scroll height equals item-count rows; header column boundaries equal the
          body's at every viewport width."
-  [headers grid-cols item-count Row]
+  [headers grid-cols item-count reset-key Row]
   (e/client
     (dom/div
       (dom/props {:class "tape-scroll"
@@ -262,7 +304,7 @@
             (e/for [h (e/diff-by identity headers)]
               (dom/th (dom/props {:style th-style}) (dom/text h))))))
       (let [[offset limit] (Scroll-window fact-row-height item-count dom/node
-                             {:overquery-factor 2})]
+                             {:overquery-factor 2 :reset-key reset-key})]
         (dom/table
           (dom/props {:style {:width "100%"}})
           (e/for [i (Tape offset limit)]
@@ -438,7 +480,7 @@
                   (dom/text (if (str/blank? query)
                               "No documents yet — import one first." "No matches.")))
                 (TapeTable ["Document" "Facts" ""]
-                  "minmax(240px,1fr) 70px minmax(340px,max-content)" item-count
+                  "minmax(240px,1fr) 70px minmax(340px,max-content)" item-count query
                   (e/fn [i]
                     (when-let [doc (e/server (nth docs i nil))]
                       (DocumentRow user-id doc i navigate! distilling generating !redistill)))))
@@ -532,7 +574,35 @@
             (swap! !selected #(if (contains? % id) (disj % id) (conj % id))))
           nil)))))
 
-(e/defn FactRow [user-id fact i !editing editing !selected selected]
+(e/defn UnmarkDuplicateButton
+  "Return one swept fact to approved. The only exit from status='duplicate', and
+   the reason the Facts view needs a status filter at all: a marked fact is
+   filtered out of every other read in the app.
+   Not offered on rejected rows — restoring those replays an undo snapshot the
+   Facts view does not hold (see db/unmark-kg-fact-duplicate!)."
+  [user-id fact-id]
+  (e/client
+    (dom/button
+      (dom/props {:class "btn btn-sm btn-secondary" :aria-label "Not a duplicate"})
+      (tooltip/Tooltip! "Not a duplicate — restore this fact")
+      (icons/Icon :rotate-ccw :size 14)
+      ;; A fresh map per click, not the bare fact-id: work-skipping compares
+      ;; handler results with =, and the Tape recycles a row's DOM by feeding new
+      ;; data into the SAME frame rather than unmounting it — so a stable value
+      ;; could latch and leave the button dead. The id travels in the map.
+      (let [click (dom/On "click"
+                    (fn [e] (.stopPropagation e) {:id (str (random-uuid)) :fact-id fact-id})
+                    nil)
+            [t _] (e/Token click)]
+        (dom/props {:disabled (some? t)})
+        (when t
+          ;; fire-and-forget: unmark-duplicate!* always returns :done (a no-op on
+          ;; an already-approved or missing fact is silent by design).
+          (let [r (e/server (e/Offload #(unmark-duplicate!* user-id (:fact-id click))))]
+            (case r
+              (t))))))))
+
+(e/defn FactRow [user-id fact i status !editing editing !selected selected]
   (e/client
     (let [{:keys [id subject_label predicate_label
                   object_label object_literal page_number]} fact]
@@ -560,13 +630,91 @@
                                   "Relink this fact's object (other facts unaffected)"))
               (icons/Icon :pen-line :size 14)
               (dom/On "click" (fn [_] (reset! !editing id)) nil)))
+          (when (= "duplicate" status)
+            (UnmarkDuplicateButton user-id id))
           (RejectFactButton user-id id))))))
+
+(e/defn FactStatusFilter
+  "Which status the Facts table lists. A1-fallback select (Forms5 has no tracked
+   <select>); the atom is local to FactsView, which owns the query it feeds.
+   Purely local — no token, because switching a filter writes nothing."
+  [!status status]
+  (e/client
+    (dom/select
+      (dom/props {:value status :class "input" :aria-label "Filter facts by status"
+                  :style {:max-width "150px"}})
+      (dom/option (dom/props {:value "approved"}) (dom/text "Approved"))
+      (dom/option (dom/props {:value "duplicate"}) (dom/text "Duplicates"))
+      (dom/option (dom/props {:value "rejected"}) (dom/text "Deleted"))
+      (dom/On "change" (fn [ev] (reset! !status (.. ev -target -value))) nil))))
+
+(e/defn SweepDuplicatesButton
+  "Run the near-duplicate sweep over this document.
+
+   Blocking JDBC through e/Offload, and the token gates on the server result so
+   the button stays disabled for the whole run — the sweep compares every approved
+   pair on every page and is not instant on a large document.
+   Publishes a command-bus invoker so the palette can reach it; retracts on unmount
+   (a stale invoker makes the command look available from another tab)."
+  [user-id doc-id]
+  (e/client
+    (dom/button
+      (dom/props {:class "btn btn-sm" :aria-label "Mark duplicate facts in this document"})
+      (tooltip/Tooltip! "Find near-duplicate facts in this document and mark them")
+      (icons/Icon :git-compare :size 14)
+      (dom/span (dom/props {:class "icon-label"}) (dom/text "Mark duplicates"))
+      (let [node dom/node]
+        (bus/publish-invoker! :sweep-duplicates (fn [] (.click node)))
+        (e/on-unmount (fn [] (bus/retract-invoker! :sweep-duplicates))))
+      ;; A FRESH value per click, never doc-id: work-skipping compares handler
+      ;; results with =, so a stable value makes the second click a no-op and the
+      ;; button fires exactly once per mount. This button never unmounts, so
+      ;; nothing would re-arm it. Same idiom as DistillButton above.
+      (let [click (dom/On "click" (fn [_] {:id (str (random-uuid))}) nil)
+            [t ?error] (e/Token click)]
+        (dom/props {:disabled (some? t) :aria-busy (some? t)
+                    :aria-invalid (some? ?error)})
+        (when t
+          (let [r (e/server (e/Offload #(sweep-duplicates!* user-id doc-id)))]
+            (case r
+              (if (:success r) (t) (t (:error r))))))))))
+
+(e/defn SweepAllDuplicatesButton
+  "Run the sweep over every document holding facts.
+
+   Separate from the per-document button rather than a scope toggle on it: the two
+   differ in blast radius, and a hidden scope would make the wider one impossible
+   to name in the palette."
+  [user-id]
+  (e/client
+    (dom/button
+      (dom/props {:class "btn btn-sm" :aria-label "Mark duplicate facts in all documents"})
+      (tooltip/Tooltip! "Sweep every document that has facts. One Undo per document.")
+      (dom/text "All docs")
+      (let [node dom/node]
+        (bus/publish-invoker! :sweep-duplicates-all (fn [] (.click node)))
+        (e/on-unmount (fn [] (bus/retract-invoker! :sweep-duplicates-all))))
+      (let [click (dom/On "click" (fn [_] {:id (str (random-uuid))}) nil)
+            [t ?error] (e/Token click)]
+        (dom/props {:disabled (some? t) :aria-busy (some? t)
+                    :aria-invalid (some? ?error)})
+        (when t
+          (let [r (e/server (e/Offload #(sweep-duplicates-all!* user-id)))]
+            (case r
+              (if (:success r) (t) (t (:error r))))))))))
 
 (e/defn FactsView [user-id doc-id navigate! kg-bump]
   (e/client
     (let [!query (atom "") query (e/watch !query)
           !query-timer (atom nil)             ; debounces !query against the server search below
-          facts (e/server (e/Offload #(get-doc-facts* kg-bump user-id doc-id query)))
+          ;; Which status the table lists. 'approved' is the default so the view's
+          ;; behaviour is unchanged for anyone who never touches the filter.
+          ;; 'duplicate' is this view's ONLY surface: a swept fact is filtered out
+          ;; of every other read in the app, so without the filter it would be
+          ;; marked, invisible and unrestorable. 'rejected' rides along for the
+          ;; same reason — it was already unreachable before this filter existed.
+          !status (atom "approved") status (e/watch !status)
+          facts (e/server (e/Offload #(get-doc-facts* kg-bump user-id doc-id status query)))
           ;; facts stays server-sited: both reads below and the row read are
           ;; wrapped, so the count, the id vector and the window rows cross —
           ;; not the fact bodies.
@@ -579,11 +727,14 @@
           ;; Ids of the whole document — the other select-all's target. Fetched only
           ;; while a search is active, since that is the only time it differs from
           ;; filtered-ids; the untaken branch never mounts, so there is no query.
+          ;; Scoped to the SAME status the table is showing: a select-all that
+          ;; reached approved facts while the view listed duplicates would delete
+          ;; rows the user never saw.
           ;; Ids only (ints), and they must land client-side: the click handler is a
           ;; plain fn and cannot reach across to the server.
           doc-ids (if (str/blank? query)
                     []
-                    (vec (e/server (e/Offload #(doc-fact-ids* kg-bump user-id doc-id)))))
+                    (vec (e/server (e/Offload #(doc-fact-ids* kg-bump user-id doc-id status)))))
           !selected (atom #{}) selected (e/watch !selected)
           !confirm-delete (atom nil) confirm-delete (e/watch !confirm-delete)
           ;; 34px checkbox column ahead of the data columns.
@@ -606,6 +757,9 @@
             (dom/On "input"
               (fn [ev] (util/debounce! !query-timer !query (.. ev -target -value) 300))
               nil))
+          (FactStatusFilter !status status)
+          (SweepDuplicatesButton user-id doc-id)
+          (SweepAllDuplicatesButton user-id)
           (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
             (dom/text (str item-count " fact" (when (not= 1 item-count) "s")))))
         ;; Selection bar — the two select-alls differ in what they reach, so they are
@@ -654,11 +808,19 @@
                   nil)))))
         (if (zero? item-count)
           (dom/p (dom/props {:style {:color "var(--color-text-secondary)"}})
-            (dom/text (if (str/blank? query) "No facts yet — distill first." "No matches.")))
+            (dom/text (cond
+                        (not (str/blank? query)) "No matches."
+                        (= "duplicate" status) "No duplicates marked in this document."
+                        (= "rejected" status) "Nothing deleted in this document."
+                        :else "No facts yet — distill first.")))
+          ;; reset-key, not the row count: a sweep changes the count under a user
+          ;; who is mid-scroll, and that must not snap them to the top; changing
+          ;; the status or the search genuinely means a different list.
           (TapeTable ["" "Subject" "Predicate" "Object" "Page" ""] grid-cols item-count
+            [status query]
             (e/fn [i]
               (when-let [fact (e/server (nth facts i nil))]
-                (FactRow user-id fact i !editing editing !selected selected)))))
+                (FactRow user-id fact i status !editing editing !selected selected)))))
         ;; One op, one undo entry — see db/reject-kg-facts! for why this is not a
         ;; loop over the single-fact reject.
         (modal/ConfirmModal !confirm-delete
@@ -834,6 +996,7 @@
                               "No questions yet — generate from a document or synthesize from an entity."
                               :else "No matches.")))
                 (TapeTable ["Question" "Answer" "Kind" "Facts" "State" ""] grid-cols item-count
+                  [query source-id entity-id flagged? suspended?]
                   (e/fn [i]
                     (when-let [q (e/server (nth questions i nil))]
                       (QuestionRow user-id q i !editing)))))
@@ -994,6 +1157,7 @@
                               "No entities yet — distill first." "No matches.")))
                 (TapeTable ["Entity" "Aliases" "Facts" ""]
                   "minmax(200px,1fr) minmax(160px,1fr) 60px minmax(220px,max-content)" item-count
+                  [query source-id]
                   (e/fn [i]
                     (when-let [entity (e/server (nth entities i nil))]
                       (EntityRow user-id entity i !renaming renaming !merge-source merge-source !merge-confirm)))))

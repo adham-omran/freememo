@@ -135,6 +135,26 @@
      ;; covering questions is part of the same transaction, hence kg_questions here.
      :bulk-reject-facts {:label "Delete facts" :class :mutation :palette-hidden true
                          :table #{:kg_facts :kg_questions} :views #{:kg-mutations}}
+     ;; Near-duplicate sweep (freememo.kg-dedup). Two entries, not one: the
+     ;; document-scoped run and the whole-library run differ in blast radius, and
+     ;; a single command with a hidden scope would make the wider one unreachable
+     ;; by name. Both are reachable only where a document's facts are on screen,
+     ;; hence :when — a globally listed command that does nothing elsewhere is the
+     ;; failure the registry exists to prevent. Withdrawing a fact retires the
+     ;; questions it grounded, hence kg_questions here.
+     :sweep-duplicates {:label "Mark duplicate facts (this document)" :class :mutation
+                        :exec :ui-button :when #{:knowledge}
+                        :table #{:kg_facts :kg_questions} :views #{:kg-mutations}}
+     :sweep-duplicates-all {:label "Mark duplicate facts (all documents)" :class :mutation
+                            :exec :ui-button :when #{:knowledge}
+                            :table #{:kg_facts :kg_questions} :views #{:kg-mutations}}
+     ;; Reset of the three duplicate-detection thresholds. Bumped by the Settings
+     ;; panel because it rewrites values OTHER than the one the user touched, and
+     ;; each threshold field only ever updates its own local atom; a per-field save
+     ;; needs no bump and does not have one.
+     :reset-dedup-thresholds {:label "Reset duplicate thresholds" :class :mutation
+                              :palette-hidden true
+                              :table #{:settings} :views #{:settings-refresh}}
      ;; Flag / Suspend — per-question curation toggles, orthogonal to each other and
      ;; to status. Bumped directly by the in-quiz control bar and the Questions bank;
      ;; no palette entry or invoker, so no :exec (same shape as :dismiss/:undismiss).

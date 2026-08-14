@@ -17,6 +17,7 @@
    [freememo.commands :as commands]
    [freememo.toasts :as toasts]
    [freememo.kg-llm :as llm]
+   [freememo.kg-dedup :as kg-dedup]
    [freememo.user-state :as us]
    [freememo.text :as text]
    [freememo.cards :as cards]
@@ -228,6 +229,25 @@
                  ;; s = o self-loops say nothing; drop them.
                  (remove #(and (:o %) (= (entity-id (:s %)) (entity-id (:o %)))) triples))
           inserted (or (db/insert-kg-facts! rows) [])
+          ;; Near-duplicate sweep over what this run just added, scoped to
+          ;; (pre-existing × new). Restricting it to the new ids is what makes the
+          ;; automatic path safe: same-run pair behaviour is UNMEASURED, so a
+          ;; first distill of a fresh document must mark nothing, while an
+          ;; incremental re-distill still catches what it restates. The
+          ;; user-invoked sweep in freememo.kg-dedup compares every pair.
+          ;;
+          ;; Total: the facts are already inserted and the provider is already
+          ;; paid, so a sweep failure must not turn a successful distill into a
+          ;; failed one. It is also NOT billed — no model call is involved.
+          duplicates (try
+                       (:marked (kg-dedup/sweep-document! user-id root-topic-id inserted))
+                       (catch InterruptedException e (throw e))
+                       (catch Exception e
+                         (tel/log! {:level :warn :id ::dedup-sweep-failed
+                                    :data {:user-id user-id :root root-topic-id
+                                           :error (ex-message e)}}
+                           "Duplicate sweep failed after distillation; facts kept as-is")
+                         0))
           total-cost (reduce + link-cost (map :cost extractions))]
       (credits/record-cost-charge! user-id :kg.distill (:id entry) total-cost)
       (tel/log! {:level :info :id ::distill-complete
@@ -235,12 +255,14 @@
                         :pages (count pages)
                         :page-errors (count (filter :failed extractions))
                         :triples (count triples) :facts (count inserted)
+                        :duplicates duplicates
                         :cost-usd total-cost}}
         "Document distillation complete")
       {:success true
        :pages (count pages)
        :page-errors (count (filter :failed extractions))
        :facts (count inserted)
+       :duplicates duplicates
        :entities (count by-label)})
     ;; A cancelled run must surface as Cancelled to m/via, not as a failure map.
     (catch InterruptedException e (throw e))
@@ -289,6 +311,8 @@
                     :message (str (:facts result) " fact"
                                (when (not= 1 (:facts result)) "s")
                                " added"
+                               (when (pos? (:duplicates result 0))
+                                 (str ", " (:duplicates result) " marked duplicate"))
                                (when (pos? (:page-errors result 0))
                                  (str " (" (:page-errors result) " page(s) failed)"))
                                " — browse Knowledge to curate")}))

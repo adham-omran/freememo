@@ -44,6 +44,9 @@
          "reject-question"    "Rejected a question"
          "reject-fact"        "Rejected a fact"
          "bulk-reject-facts"  (str "Deleted " (plural "fact"))
+         ;; Distinct from a delete on purpose: this row is the detector's work,
+         ;; not the user's, and it is the only place they can tell them apart.
+         "mark-duplicate-facts" (str "Marked " (plural "fact") " duplicate")
          "Action"))))
 
 #?(:clj

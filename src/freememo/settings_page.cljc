@@ -10,6 +10,7 @@
    [freememo.credits-section :refer [CreditsSection]]
    [freememo.cost-history :refer [CostHistorySection]]
    [freememo.ai-features-section :refer [AIFeaturesSection]]
+   [freememo.dedup-section :refer [DedupSection]]
    [freememo.zotero-client :as zc]
    [freememo.commands :as commands]
    #?(:clj [freememo.settings :as settings])
@@ -466,7 +467,11 @@
           (dom/div
             (dom/props {:id "settings-ai"
                         :style (tab-style active "settings-ai")})
-            (AIFeaturesSection user-id enc-key))
+            (AIFeaturesSection user-id enc-key)
+            ;; Sits under AI Features rather than in a tab of its own: it tunes
+            ;; what distillation produces, and a tab per knob would make the
+            ;; sidebar longer than the settings it holds.
+            (DedupSection user-id))
 
       ;; ── Appearance section ──
           (dom/div

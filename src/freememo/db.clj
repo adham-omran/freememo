@@ -90,6 +90,20 @@
   ;; Enable pg_trgm for trigram-based substring and fuzzy search
   (jdbc/execute! ds ["CREATE EXTENSION IF NOT EXISTS pg_trgm"])
 
+  ;; Groundwork for the planned embedding tier of freememo.kg-dedup — the
+  ;; paraphrase residual h3 cannot reach (`hfql lacks-knowledge-of business
+  ;; domain` vs `hfql is-not omniscient` scores trigram 0.11, containment 0.25).
+  ;; NEITHER is an input to h3 today, and that is a measurement, not an
+  ;; oversight: over 234 hand-labelled fact pairs, normalized Levenshtein scored
+  ;; F1 0.52 against trigram's 0.78, and `max(trigram, levenshtein)` scored 0.55
+  ;; — WORSE than trigram alone. Levenshtein rewards shared structure regardless
+  ;; of meaning (`identity | must-be | injective` vs `resolver | must-be |
+  ;; injective` scores 0.73 and is not a duplicate). unaccent is untested on this
+  ;; corpus; it normalizes Latin diacritics and the observed residual is Arabic.
+  ;; See plans/kg-duplicate-fact-sweep.md.
+  (jdbc/execute! ds ["CREATE EXTENSION IF NOT EXISTS fuzzystrmatch"])
+  (jdbc/execute! ds ["CREATE EXTENSION IF NOT EXISTS unaccent"])
+
   ;; Create users table
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS users (
@@ -761,7 +775,7 @@
       user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       action_type TEXT NOT NULL CHECK (action_type IN
         ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','move-topic',
-         'reject-question','reject-fact','bulk-reject-facts')),
+         'reject-question','reject-fact','bulk-reject-facts','mark-duplicate-facts')),
       entity_type TEXT NOT NULL CHECK (entity_type IN ('flashcard','pin','setting','document','question','fact')),
       entity_refs JSONB NOT NULL,
       snapshot JSONB NOT NULL,
@@ -771,12 +785,15 @@
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_undo_log_user
                       ON undo_log(user_id, occurred_at DESC)"])
   ;; Widen the CHECK lists on installs created before 'delete-document'/'document'
-  ;; (CREATE TABLE IF NOT EXISTS won't alter a live constraint).
+  ;; and before 'mark-duplicate-facts' (CREATE TABLE IF NOT EXISTS won't alter a
+  ;; live constraint). Without the widening the duplicate sweep's undo insert
+  ;; throws INSIDE its transaction, rolling the whole sweep back — an unmarkable
+  ;; document with nothing in the log to explain it.
   (jdbc/execute! ds ["ALTER TABLE undo_log DROP CONSTRAINT IF EXISTS undo_log_action_type_check"])
   (jdbc/execute! ds ["ALTER TABLE undo_log ADD CONSTRAINT undo_log_action_type_check
                       CHECK (action_type IN
                         ('delete-card','bulk-delete-cards','remove-pin','reset-prompt','delete-document','move-topic',
-                         'reject-question','reject-fact','bulk-reject-facts'))"])
+                         'reject-question','reject-fact','bulk-reject-facts','mark-duplicate-facts'))"])
   (jdbc/execute! ds ["ALTER TABLE undo_log DROP CONSTRAINT IF EXISTS undo_log_entity_type_check"])
   (jdbc/execute! ds ["ALTER TABLE undo_log ADD CONSTRAINT undo_log_entity_type_check
                       CHECK (entity_type IN ('flashcard','pin','setting','document','question','fact'))"])
@@ -843,6 +860,14 @@
   ;; NOTHING). graph_topic_id = root document topic (the named graph);
   ;; page_number = provenance. Only status='approved' rows are published via
   ;; SPARQL, feed question generation, or feed grading.
+  ;;
+  ;; status 'duplicate' is written ONLY by freememo.kg-dedup's sweep: a NEAR
+  ;; duplicate the two partial unique indexes below cannot see, because they key
+  ;; on entity ids and a predicate id and the model rewords all three between
+  ;; runs. Measured on production: those indexes caught 4 of 49 labelled
+  ;; duplicates (recall 0.08). It is deliberately NOT 'rejected' — a human
+  ;; judgement and a 0.90-precision detector must stay tellable apart, and the
+  ;; Facts view filters on exactly this distinction.
   (jdbc/execute! ds ["
     CREATE TABLE IF NOT EXISTS kg_facts (
       id SERIAL PRIMARY KEY,
@@ -855,12 +880,20 @@
       graph_topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
       page_number INTEGER,
       status TEXT NOT NULL DEFAULT 'proposed'
-        CHECK (status IN ('proposed','approved','rejected')),
+        CHECK (status IN ('proposed','approved','rejected','duplicate')),
       source_model TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       reviewed_at TIMESTAMP,
       CHECK ((object_entity_id IS NULL) <> (object_literal IS NULL))
     )"])
+  ;; Widen the status CHECK on tables that predate 'duplicate'. CREATE TABLE IF
+  ;; NOT EXISTS above is a no-op on an existing table, so its inline CHECK never
+  ;; reaches one — without this DROP/ADD the sweep's UPDATE fails with a
+  ;; constraint violation on every database created before this line. Inline
+  ;; CHECKs are auto-named <table>_<column>_check.
+  (jdbc/execute! ds ["ALTER TABLE kg_facts DROP CONSTRAINT IF EXISTS kg_facts_status_check"])
+  (jdbc/execute! ds ["ALTER TABLE kg_facts ADD CONSTRAINT kg_facts_status_check
+                      CHECK (status IN ('proposed','approved','rejected','duplicate'))"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_facts_graph_status
                       ON kg_facts(graph_topic_id, status)"])
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_facts_user_status
@@ -7117,19 +7150,116 @@
       {:builder-fn rs/as-unqualified-maps})))
 
 (defn kg-fact-ids-for-doc
-  "Just the ids of a document's approved facts — the target set for \"select every
-   fact in this document\", which by design ignores the view's search filter.
+  "Just the ids of a document's facts in `status` — the target set for \"select
+   every fact in this document\", which by design ignores the view's search filter.
    Ids only: the display-joined rows get-kg-facts returns are far more than a
    selection needs, and the caller already holds rows for what it can see.
+   `status` MUST match the status the view is currently listing: a select-all that
+   returned approved ids while the view showed duplicates would delete rows the
+   user never saw.
+   Pre:  status is one of the kg_facts_status_check values.
    Post: vector of ids, page order then id, matching get-kg-facts."
-  [user-id graph-topic-id]
+  [user-id graph-topic-id status]
   (mapv :id
     (jdbc/execute! ds
       ["SELECT id FROM kg_facts
-        WHERE user_id = ? AND graph_topic_id = ? AND status = 'approved'
+        WHERE user_id = ? AND graph_topic_id = ? AND status = ?
         ORDER BY page_number NULLS LAST, id"
-       user-id graph-topic-id]
+       user-id graph-topic-id status]
       {:builder-fn rs/as-unqualified-maps})))
+
+(defn kg-documents-with-facts
+  "Root topic ids holding at least one approved fact — the scope of the
+   all-documents duplicate sweep. Not get-root-topics: that returns whole rows
+   including :content, and a document with no facts has nothing to sweep.
+   Post: vector of graph_topic_ids, ascending."
+  [user-id]
+  (mapv :graph_topic_id
+    (jdbc/execute! ds
+      ["SELECT DISTINCT graph_topic_id FROM kg_facts
+        WHERE user_id = ? AND status = 'approved' ORDER BY 1"
+       user-id]
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn kg-oversized-page-keys
+  "Page keys in this document holding more than `max-facts` approved facts — the
+   keys kg-duplicate-candidate-pairs refuses to expand. Reported so a bounded
+   sweep can say what it skipped instead of reading as complete coverage.
+   Post: vector of page keys (-1 for the page_number IS NULL group)."
+  [user-id graph-topic-id max-facts]
+  (mapv :pk
+    (jdbc/execute! ds
+      ["SELECT coalesce(page_number, -1) AS pk FROM kg_facts
+        WHERE user_id = ? AND graph_topic_id = ? AND status = 'approved'
+        GROUP BY 1 HAVING count(*) > ?"
+       user-id graph-topic-id max-facts]
+      {:builder-fn rs/as-unqualified-maps})))
+
+(defn kg-duplicate-candidate-pairs
+  "Every approved-fact pair sharing a page within one document, with the trigram
+   scores freememo.kg-dedup needs. The SQL half of the hybrid detector.
+
+   Returns ALL pairs on a page and applies NO similarity threshold. That is
+   deliberate: h3 is a three-branch disjunction and its containment branch fires
+   where trigram is low (`minecraft | uses | leb128` vs `minecraft |
+   uses-leb128-for | measuring lengths` scores trigram 0.34, containment 1.00), so
+   a similarity-gated shortlist here would silently delete that branch's recall.
+   Only the trigram scores come from SQL, because pg_trgm's `similarity` is what
+   the thresholds were fitted against and this project carries no trigram
+   implementation in Clojure to reproduce it with.
+
+   Pages are keyed `coalesce(page_number, -1)`: SQL equality is never true for
+   NULL, and wiki/web/markdown imports carry NULL on every fact (they have no page
+   children). On production those documents hold 43 of 49 labelled duplicates, so
+   a plain `a.page_number = b.page_number` would miss 88% of them.
+
+   `new-ids` nil compares every pair — the user-invoked sweep. A non-empty
+   collection restricts to (pre-existing × new), which is what the automatic
+   post-distill sweep wants: same-run pair behaviour is unmeasured, and this is
+   the comparison the 234 labelled pairs actually cover. An empty (non-nil)
+   collection is a no-op.
+
+   Invariant: `dup_id` is always the LATER-inserted fact of the pair, because
+   kg_facts.id is SERIAL and the join is `a.id < b.id`. Callers mark `dup_id` and
+   keep `keep_id`, so the earlier provenance and any questions already grounded on
+   it survive.
+   Pre:  graph-topic-id owned by user-id; max-facts-per-page > 0.
+   Post: rows of {:keep_id :dup_id :page_key :flat_sim :obj_sim :subj_eq :obj_eq
+         :keep_flat :dup_flat}, excluding page keys over max-facts-per-page."
+  [user-id graph-topic-id new-ids max-facts-per-page]
+  (if (and (some? new-ids) (empty? new-ids))
+    []
+    (let [restrict (when (seq new-ids)
+                     (let [ph (str/join ", " (repeat (count new-ids) "?"))]
+                       (str " AND b.id IN (" ph ") AND a.id NOT IN (" ph ")")))
+          ids (vec new-ids)]
+      (jdbc/execute! ds
+        (into [(str
+                 "WITH base AS (
+                    SELECT f.id, coalesce(f.page_number, -1) AS pk,
+                           lower(trim(s.label)) AS subj,
+                           lower(trim(coalesce(o.label, f.object_literal))) AS obj,
+                           lower(s.label) || ' ' || replace(lower(p.slug), '-', ' ')
+                             || ' ' || lower(coalesce(o.label, f.object_literal)) AS flat
+                    FROM kg_facts f
+                    JOIN kg_entities s ON s.id = f.subject_entity_id
+                    JOIN kg_predicates p ON p.id = f.predicate_id
+                    LEFT JOIN kg_entities o ON o.id = f.object_entity_id
+                    WHERE f.user_id = ? AND f.graph_topic_id = ? AND f.status = 'approved'
+                  ),
+                  sized AS (SELECT *, count(*) OVER (PARTITION BY pk) AS pk_n FROM base),
+                  ok AS (SELECT * FROM sized WHERE pk_n <= ?)
+                  SELECT a.id AS keep_id, b.id AS dup_id, a.pk AS page_key,
+                         similarity(a.flat, b.flat) AS flat_sim,
+                         similarity(a.obj,  b.obj)  AS obj_sim,
+                         (a.subj = b.subj) AS subj_eq,
+                         (a.obj  = b.obj)  AS obj_eq,
+                         a.flat AS keep_flat, b.flat AS dup_flat
+                  FROM ok a JOIN ok b ON a.pk = b.pk AND a.id < b.id"
+                 restrict)
+               user-id graph-topic-id max-facts-per-page]
+          (concat ids ids))
+        {:builder-fn rs/as-unqualified-maps}))))
 
 (defn get-kg-facts-context
   "Approved facts for assistant grounding — same display-join as get-kg-facts,
@@ -7209,10 +7339,15 @@
       {:builder-fn rs/as-unqualified-maps})))
 
 (defn list-kg-entities
-  "Entities with their fact usage count; trigram-filtered when query is
+  "Entities with their APPROVED fact usage count; trigram-filtered when query is
    non-blank, else busiest first. Optional `source-id` (a graph_topic_id) keeps
-   only entities that appear in a fact of that document. aliases normalized
-   PgArray → vector so rows are Electric-wire safe."
+   only entities that appear in an approved fact of that document. aliases
+   normalized PgArray → vector so rows are Electric-wire safe.
+
+   Both fact reads filter status='approved', matching every other fact read in the
+   app. They did not until 'duplicate' existed, and the omission was invisible
+   while rejects were rare: an entity whose facts were all withdrawn still counted
+   them, so the Entities view reported usage for a concept no longer in the graph."
   ([user-id query limit] (list-kg-entities user-id query limit nil))
   ([user-id query limit source-id]
    (let [blank? (or (nil? query) (str/blank? query))
@@ -7221,12 +7356,13 @@
          src-sql (if source-id
                    " AND EXISTS (SELECT 1 FROM kg_facts fs
                        WHERE (fs.subject_entity_id = e.id OR fs.object_entity_id = e.id)
-                         AND fs.graph_topic_id = ?)"
+                         AND fs.graph_topic_id = ? AND fs.status = 'approved')"
                    "")
          src-params (if source-id [source-id] [])
          base "SELECT e.id, e.label, e.aliases,
                  (SELECT COUNT(*) FROM kg_facts f
-                  WHERE f.subject_entity_id = e.id OR f.object_entity_id = e.id) AS fact_count
+                  WHERE (f.subject_entity_id = e.id OR f.object_entity_id = e.id)
+                    AND f.status = 'approved') AS fact_count
                FROM kg_entities e WHERE e.user_id = ?"
          rows (if blank?
                 (jdbc/execute! ds
@@ -7337,8 +7473,10 @@
     (when snap
       (insert-undo-entry! user-id "reject-fact" "fact" [fact-id] [snap]))))
 
-(defn reject-kg-facts!
-  "Reject many facts as ONE operation: one transaction, one undo entry.
+(defn- withdraw-kg-facts!
+  "Move many facts OUT of the approved set as ONE operation: one transaction, one
+   undo entry. `target-status` is \"rejected\" (a human's judgement) or
+   \"duplicate\" (freememo.kg-dedup's sweep); `action-type` names the undo entry.
 
    Not a loop over reject-kg-fact!. That would write one undo entry, one toast and
    one invalidation bump per fact — and the undo log is hard-capped at 100 rows per
@@ -7349,21 +7487,28 @@
    its own prev-status, and the retired question ids are recorded PER FACT rather
    than unioned, so undo un-retires exactly the questions this operation retired and
    never one that was already retired beforehand.
-   Pre:  fact-ids from the user's selection; ownership re-checked in SQL.
-   Post: {:rejected n :undo-id id-or-nil} — n counts only facts that were owned and
-         not already rejected; :undo-id is nil iff n = 0. Already-rejected and
-         foreign ids are skipped silently, exactly as the single-fact path skips
-         them."
-  [user-id fact-ids]
+
+   Both statuses retire covering questions, and that is load-bearing: every fact
+   read outside this namespace filters status='approved' (7 Ontop mapping queries,
+   get-doc-facts*, get-kg-facts-context, kg-fact-ids-for-doc, cards-from-facts), so
+   a withdrawn fact leaves any question grounded solely on it grading against
+   nothing. Invariant: no approved question is left covering zero approved facts.
+   Pre:  fact-ids from the user's selection or a sweep; ownership re-checked in SQL.
+         target-status is a kg_facts_status_check value other than 'approved'.
+   Post: {:withdrawn n :undo-id id-or-nil} — n counts only facts that were owned and
+         not already in target-status; :undo-id is nil iff n = 0. Foreign ids and
+         ids already in target-status are skipped silently, exactly as the
+         single-fact path skips them."
+  [user-id fact-ids target-status action-type]
   (if (empty? fact-ids)
-    {:rejected 0 :undo-id nil}
+    {:withdrawn 0 :undo-id nil}
     (let [{:keys [snaps undo-id]}
           (jdbc/with-transaction [tx ds]
             (let [rows (jdbc/execute! tx
                          (sql/format {:select [:id :status] :from :kg_facts
                                       :where [:and [:= :user_id user-id]
                                               [:in :id (vec fact-ids)]
-                                              [:not= :status "rejected"]]
+                                              [:not= :status target-status]]
                                       :for :update})
                          {:builder-fn rs/as-unqualified-maps})
                   ids (mapv :id rows)]
@@ -7389,25 +7534,67 @@
                       qids (into [] (distinct) (map :id links))]
                   (jdbc/execute! tx
                     (sql/format {:update :kg_facts
-                                 :set {:status "rejected" :reviewed_at [:now]}
+                                 :set {:status target-status :reviewed_at [:now]}
                                  :where [:and [:= :user_id user-id] [:in :id ids]]}))
                   (when (seq qids)
                     (jdbc/execute! tx
                       (sql/format {:update :kg_questions :set {:status "retired"}
                                    :where [:in :id qids]})))
                   {:snaps snaps
-                   :undo-id (insert-undo-entry-raw! tx user-id "bulk-reject-facts" "fact"
+                   :undo-id (insert-undo-entry-raw! tx user-id action-type "fact"
                               ids snaps)}))))]
       ;; Pruning is deliberately outside the transaction — insert-undo-entry-raw!
       ;; does not prune, and the caller owns it once the mutation has committed.
       (when undo-id (prune-undo-log! ds user-id))
-      {:rejected (count snaps) :undo-id undo-id})))
+      {:withdrawn (count snaps) :undo-id undo-id})))
 
-(defn restore-rejected-facts!
-  "Undo a bulk-reject-facts: restore every fact's own pre-reject status and set
-   exactly the questions that operation retired back to approved.
+(defn reject-kg-facts!
+  "Reject a selection of facts — a human's judgement that they are wrong.
+   Post: {:rejected n :undo-id id-or-nil}; see withdraw-kg-facts! for the rest."
+  [user-id fact-ids]
+  (let [{:keys [withdrawn undo-id]}
+        (withdraw-kg-facts! user-id fact-ids "rejected" "bulk-reject-facts")]
+    {:rejected withdrawn :undo-id undo-id}))
+
+(defn mark-kg-facts-duplicate!
+  "Mark a sweep's findings as near-duplicates of a fact already in the document.
+   Distinct from reject: the detector runs at 0.90 measured precision, so roughly
+   one in ten marks is wrong and the user needs to tell machine marks from their
+   own deletions to find and reverse them.
+   Post: {:marked n :undo-id id-or-nil}; see withdraw-kg-facts! for the rest."
+  [user-id fact-ids]
+  (let [{:keys [withdrawn undo-id]}
+        (withdraw-kg-facts! user-id fact-ids "duplicate" "mark-duplicate-facts")]
+    {:marked withdrawn :undo-id undo-id}))
+
+(defn unmark-kg-fact-duplicate!
+  "Return one duplicate-marked fact to approved — the exit the Facts view's
+   duplicate filter offers on every marked row.
+
+   Writes 'approved' literally rather than replaying an undo snapshot: undo
+   snapshots are pruned at 100 rows per user, so a mark old enough to have fallen
+   out of the log would otherwise be unreversible. The sweep only ever withdraws
+   approved facts (freememo.kg-dedup/candidate-pairs filters status='approved'),
+   so 'approved' IS the prior status.
+
+   Questions this mark retired are NOT un-retired — the undo entry owns that, and
+   replaying it here would un-retire questions a later reject also retired.
+   Pre:  fact-id owned by user-id; ownership enforced in SQL.
+   Post: true iff a duplicate-marked row changed."
+  [user-id fact-id]
+  (pos? (::jdbc/update-count
+          (jdbc/execute-one! ds
+            ["UPDATE kg_facts SET status = 'approved', reviewed_at = now()
+              WHERE id = ? AND user_id = ? AND status = 'duplicate'"
+             fact-id user-id]))))
+
+(defn restore-withdrawn-facts!
+  "Undo a bulk-reject-facts or a mark-duplicate-facts: restore every fact's own
+   prior status and set exactly the questions that operation retired back to
+   approved. Named for withdraw-kg-facts!, not for 'rejected' — it reverses both
+   statuses that function writes.
    Pre:  snapshot is the vector of {:fact-id :prev-status :retired-question-ids}
-         written by reject-kg-facts!.
+         written by withdraw-kg-facts!.
    Post: each fact carries its own prior status again — not a single shared one."
   [snapshot]
   (jdbc/with-transaction [tx ds]
