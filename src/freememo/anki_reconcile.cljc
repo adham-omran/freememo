@@ -257,13 +257,44 @@
   (set (map first report-order)))
 
 (defn report-line
-  "One-line run summary.
-   pre : `counts` is a `summarize` result.
+  "One-line summary of what a run DECIDED.
+
+   pre : `counts` is a `summarize` result over `outcomes`.
    post: a string naming every non-zero outcome except `:unchanged`, in
-         `report-order`, or \"nothing to do\" when none is non-zero."
+         `report-order`, or \"nothing to do\" when none is non-zero.
+
+   This is the plan, not the result. Only a dry run may show it to the user —
+   `outcome-text` is what a run that wrote things reports. Reporting the plan
+   after a real run is how a run that created nothing came to say \"46
+   created\"."
   [counts]
   (let [parts (for [[k label] report-order
                     :let [n (get counts k 0)]
                     :when (pos? n)]
                 (str n " " label))]
     (if (seq parts) (str/join ", " parts) "nothing to do")))
+
+(def ^:private outcome-order
+  "Every step `anki-reconcile-server/finish-run!` counts, and how to say it.
+   `:conflicts` is omitted — the caller phrases it as an instruction, because a
+   conflict is the one outcome that asks the user to do something."
+  [[:writes "sent to Anki"]
+   [:pulls "pulled from Anki"]
+   [:tombstones "notes removed from Anki"]
+   [:backfilled "baselines set"]])
+
+(defn outcome-text
+  "One-line summary of what a run DID.
+
+   pre : `counts` is `finish-run!`'s `:counts` — per step, not per outcome.
+   post: a string naming every non-zero step, or \"already in sync\".
+
+   `:writes` counts cards whose note was written AND read back afterwards, so it
+   cannot report a create that Anki refused. That is the whole point of taking
+   the number from here rather than from the plan."
+  [counts]
+  (let [parts (for [[k label] outcome-order
+                    :let [n (get counts k 0)]
+                    :when (pos? n)]
+                (str n " " label))]
+    (if (seq parts) (str/join ", " parts) "already in sync")))

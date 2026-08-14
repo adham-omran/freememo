@@ -59,7 +59,7 @@
    post: id lists only — the card rows never leave the server. Every key is what
          one later phase consumes:
 
-           :write-card-ids     create ∪ push, for `get-bulk-push-bundles`
+           :write-card-ids     create ∪ push, for `anki-write-bundles`
            :kind-by-card       so `read-back!` can digest by the right fields
            :pull-card-ids      what `apply-pulls!` will write
            :pull-note-ids      which notes the client must send back for it
@@ -363,7 +363,7 @@
     {:success (empty? failures)
      :counts  (update-vals results #(or (:count %) 0))
      :report  (if (seq failures)
-                (str "Reconcile finished with errors: "
+                (str "Sync finished with errors: "
                   (str/join ", " (map (fn [[k v]] (str (name k) " — " (:error v)))
                                    failures)))
-                "Reconcile complete")}))
+                "Sync complete")}))

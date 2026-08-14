@@ -148,6 +148,20 @@
   (is (= "2 pushed, 1 conflicts"
         (rec/report-line (rec/summarize [:push :push :conflict :unchanged])))))
 
+(deftest t16c-outcome-text-reports-what-happened-not-what-was-planned
+  (testing "a run that wrote nothing says so, however much the plan intended"
+    (is (= "already in sync" (rec/outcome-text {})))
+    (is (= "already in sync" (rec/outcome-text {:writes 0 :pulls 0}))))
+  (testing "the counts come from the recorder's steps, not from outcomes"
+    (is (= "46 sent to Anki" (rec/outcome-text {:writes 46})))
+    (is (= "2 sent to Anki, 1 pulled from Anki, 3 notes removed from Anki"
+          (rec/outcome-text {:writes 2 :pulls 1 :tombstones 3}))))
+  (testing "conflicts are the caller's to phrase — they ask for an action"
+    (is (= "already in sync" (rec/outcome-text {:conflicts 5}))))
+  (testing "the plan's own wording stays available and stays distinct"
+    (is (= "46 created" (rec/report-line {:create 46})))
+    (is (not= (rec/report-line {:create 46}) (rec/outcome-text {:writes 0})))))
+
 (deftest t16b-every-outcome-except-unchanged-is-reportable
   (testing "an outcome missing from the report order never reaches the user"
     (is (= (disj rec/outcomes :unchanged) rec/reportable-outcomes)))

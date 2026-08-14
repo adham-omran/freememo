@@ -16,6 +16,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [freememo.anki-reconcile-client :as rc]
+   [freememo.anki-reconcile :as rec]
    [freememo.logging :as log]
    #?(:clj [freememo.anki-reconcile-server :as recon])
    #?(:clj [freememo.anki-sync-server :as sync])
@@ -29,8 +30,8 @@
 (defn plan* [user-id digests absent]
   #?(:clj (recon/plan user-id digests absent) :cljs nil))
 
-(defn push-bundles* [user-id card-ids]
-  #?(:clj (sync/get-bulk-push-bundles user-id card-ids) :cljs nil))
+(defn write-bundles* [user-id card-ids]
+  #?(:clj (sync/anki-write-bundles user-id card-ids) :cljs nil))
 
 (defn finish-run!* [user-id outcome]
   #?(:clj (recon/finish-run! user-id outcome) :cljs nil))
@@ -67,7 +68,7 @@
             (if (:aborted? p)
               (case (e/server
                       (toast!* user-id :error
-                        (str "Reconcile stopped: Anki reported most of your notes missing. "
+                        (str "Sync stopped: Anki reported most of your notes missing. "
                           "Check that the right profile is open.")))
                 (do (reset! (:!error recon) "aborted — most notes absent")
                     (reset! (:!phase recon) :error)
@@ -84,20 +85,28 @@
                   (t))))))))))
 
 (e/defn ReconcileAnkiWork
-  "Phase 3 — create, update, re-read, delete. Everything that touches Anki."
+  "Phase 3 — create, update, re-read, delete. Everything that touches Anki.
+
+   A failed bundle build ENDS the run. Passing its nil `:bundles` on would give
+   an empty write, zero pairs, and a report of a clean run — the same silence
+   that let a whole document's creates disappear."
   [user-id recon]
   (e/client
     (when (= :writing (e/watch (:!phase recon)))
       (let [p (e/watch (:!plan recon))
             [t _] (e/Token :reconcile-write)]
         (when t
-          (let [bundles (e/server (e/Offload #(push-bundles* user-id (:write-card-ids p))))]
-            (case (rc/run-anki-work! (:bundles bundles)
-                    (:kind-by-card p)
-                    (:note-ids-to-delete p)
-                    (:note-ids-to-drop p)
-                    recon)
-              (t))))))))
+          (let [bundles (e/server (e/Offload #(write-bundles* user-id (:write-card-ids p))))]
+            (if-not (:success bundles)
+              (case (reset! (:!error recon) (:error bundles))
+                (case (reset! (:!phase recon) :error)
+                  (t)))
+              (case (rc/run-anki-work! (:bundles bundles)
+                      (:kind-by-card p)
+                      (:note-ids-to-delete p)
+                      (:note-ids-to-drop p)
+                      recon)
+                (t)))))))))
 
 (e/defn ReconcileRecord
   "Phase 4 — one server call writes every baseline, pull, conflict and tombstone.
@@ -121,35 +130,52 @@
                          :conflict-card-ids (:conflict-card-ids p)
                          :finished-note-ids finished}
                 result (e/server (e/Offload #(finish-run!* user-id outcome)))]
-            (case (reset! (:!result recon) (assoc result :counts (:counts p)))
+            (case (reset! (:!result recon) result)
               (case (reset! (:!phase recon) :done)
                 (t)))))))))
 
 (e/defn ReconcileOutcome
   "Reports the run, once, and releases the running flag.
 
-   The success message is the plan's report, not the recorder's counts: a user
-   wants to know what the run decided, and a run that decided nothing says so."
+   The message reports what HAPPENED, never what the plan intended. A run that
+   planned 46 creates and wrote none must not say 46 — that was the shape of the
+   first defect here, where `anki-write-bundles` (then filtering to already-
+   pushed cards) silently dropped every create while the toast read them off the
+   plan and claimed success.
+
+   Anki-side write errors are surfaced for the same reason. `do-anki-push!`
+   returns them per card and they used to be collected and discarded, so a run
+   in which every `addNote` failed looked identical to one that worked."
   [user-id recon !running?]
   (e/client
     (let [phase (e/watch (:!phase recon))
           result (e/watch (:!result recon))
           plan (e/watch (:!plan recon))
+          writes (e/watch (:!writes recon))
           err (e/watch (:!error recon))]
       (when (= :done phase)
         (let [[t _] (e/Token :reconcile-done)]
           (when t
             (let [dry? (nil? result)          ; a dry run stops before recording
-                  conflicts (count (:conflict-card-ids plan))
-                  msg (str (when dry? "Dry run — nothing applied. ")
-                        (:report plan)
-                        (when (and (not dry?) (pos? conflicts))
-                          (str " — " conflicts
-                            (if (= 1 conflicts) " card needs" " cards need")
-                            " a decision in Library")))]
-              (log/log-info (str "[reconcile] " msg))
+                  errors (count (:errors writes))
+                  conflicts (get-in result [:counts :conflicts] 0)
+                  msg (if dry?
+                        (str "Dry run — nothing applied. " (:report plan))
+                        (str (rec/outcome-text (:counts result))
+                          (when (pos? conflicts)
+                            (str " — " conflicts
+                              (if (= 1 conflicts) " card needs" " cards need")
+                              " a decision in Library"))
+                          (when (pos? errors)
+                            (str " — " errors
+                              (if (= 1 errors) " card" " cards")
+                              " Anki refused"))))]
+              (log/log-info (str "[reconcile] " msg
+                              " plan=" (pr-str (:counts plan))))
               (case (e/server (toast!* user-id
-                                (if (or dry? (:success result)) :success :warning)
+                                (cond dry? :success
+                                  (or (not (:success result)) (pos? errors)) :warning
+                                  :else :success)
                                 msg))
                 (do (reset! !running? false)
                     (reset! (:!phase recon) nil)
@@ -157,7 +183,7 @@
       (when (= :error phase)
         (let [[t _] (e/Token :reconcile-error)]
           (when t
-            (case (e/server (toast!* user-id :error (str "Reconcile failed: " err)))
+            (case (e/server (toast!* user-id :error (str "Sync failed: " err)))
               (do (reset! !running? false)
                   (reset! (:!phase recon) nil)
                   (t)))))))))

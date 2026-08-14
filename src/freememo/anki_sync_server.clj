@@ -2,6 +2,7 @@
   "Server-side Anki sync operations — fetching cards for sync,
    recording pushed note IDs, and applying pull updates."
   (:require
+   [clojure.string :as str]
    [freememo.db :as db]
    [freememo.settings :as settings]
    [freememo.commands :as commands]
@@ -411,18 +412,30 @@
 ;; Library cards bulk actions (selection-based push / pull)
 ;; ---------------------------------------------------------------------------
 
-(defn get-bulk-push-bundles
-  "Group the user's selected, already-pushed cards by root topic and resolve
-   each root's push settings — the per-root preset wins over user-level
-   prefs, mirroring what the sync modal would use for that document.
-   pre:  card-ids — the selection; ownership enforced in the lookup.
-   post: {:success true
-          :bundles [{:root-topic-id N :cards [...] :settings {...}}]
-          :skipped-unpushed n}
-   Settings carry everything build-update-fields reads (header,
-   source/bibliography display modes, topic title/kind, app-base-url, :tags).
-   Note types are app-owned, so no model/field config is carried. Deck is
-   omitted — update does not move cards between decks."
+(defn anki-write-bundles
+  "Group `card-ids` by root topic and resolve each root's push settings — the
+   per-root preset wins over user-level prefs, mirroring what the sync modal
+   would use for that document.
+
+   pre:  card-ids — a reconcile's `:create` and `:push` decisions together;
+         ownership enforced in the lookup.
+   post: {:success true :bundles [{:root-topic-id N :cards [...] :settings {…}}]}
+         Every card given is in a bundle. Settings carry everything BOTH
+         `build-note` and `build-update-fields` read.
+
+   Two things this used to get wrong, when it served the bulk Push-updates
+   button and was named `get-bulk-push-bundles`:
+
+   1. It dropped every card with no `anki_note_id`. That button could only
+      update, so unpushed cards were noise to it. To a reconcile they are the
+      `:create` set — filtering them made a run report cards it had created and
+      add nothing to Anki.
+   2. It omitted `:deck`, on the reasoning that an update does not move cards
+      between decks. True, and `addNote` requires one: without it every create
+      would go to `deckName nil`.
+
+   `:allow-dupes` joins it for the same reason — `build-note` reads it, and only
+   the add path does."
   [user-id card-ids]
   (try
     (let [global (:prefs (load-anki-preferences user-id))
@@ -430,8 +443,8 @@
                  (attach-occlusion-groups (db/get-flashcards-by-ids user-id card-ids)))
           ;; Page locator resolved ONCE for the whole selection, before the
           ;; group-by — one statement however many roots the selection spans.
-          pushed (attach-card-pdf-page (filterv :flashcards/anki_note_id rows))
-          by-root (group-by :flashcards/root_topic_id pushed)
+          with-page (attach-card-pdf-page rows)
+          by-root (group-by :flashcards/root_topic_id with-page)
           bundles
           (mapv
             (fn [[root-id cards]]
@@ -444,7 +457,9 @@
                     bib-html (helpers/format-bibliography-html (:sources/csl source))]
                 {:root-topic-id root-id
                  :cards (attach-card-bibliography (vec cards))
-                 :settings {:use-header (:use-header header)
+                 :settings {:deck (pick :deck)
+                            :allow-dupes (boolean (pick :allow-dupes))
+                            :use-header (:use-header header)
                             :header-text (:header-text header)
                             :tags (vec (or (pick :tags) []))
                             :bibliography-html bib-html
@@ -452,12 +467,25 @@
                             :topic-kind (:topics/kind root-topic)
                             :root-topic-id root-id
                             :app-base-url settings/app-base-url}}))
-            by-root)]
-      {:success true
-       :bundles bundles
-       :skipped-unpushed (- (count rows) (count pushed))})
+            by-root)
+          ;; A create needs a deck; an update does not. Reported once, before
+          ;; anything is sent, because the alternative is one AnkiConnect refusal
+          ;; per card and a toast that names a count instead of a cause. The
+          ;; modal gates its button on `helpers/pushable?` for the same reason —
+          ;; a headless run has no button to gray out.
+          deckless (filterv (fn [b]
+                              (and (str/blank? (get-in b [:settings :deck]))
+                                (some #(nil? (:flashcards/anki_note_id %)) (:cards b))))
+                     bundles)]
+      (if (seq deckless)
+        {:success false
+         :error (str "No Anki deck is set"
+                  (when-let [t (:topic-title (:settings (first deckless)))]
+                    (str " for \"" t "\""))
+                  ". Open Sync with Anki and choose one.")}
+        {:success true :bundles bundles}))
     (catch Exception e
-      (tel/error! {:id ::get-bulk-push-bundles} e)
+      (tel/error! {:id ::anki-write-bundles} e)
       {:success false :error (.getMessage e)})))
 
 (defn get-cards-for-bulk-pull

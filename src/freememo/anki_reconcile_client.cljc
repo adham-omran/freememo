@@ -73,7 +73,7 @@
    (defn write!
      "Create and update notes in Anki for one run.
 
-      pre : `bundles` is `get-bulk-push-bundles`' `:bundles` — cards grouped by
+      pre : `bundles` is `anki-write-bundles`' `:bundles` — cards grouped by
             root topic with that root's push settings. `do-anki-push!` splits new
             from existing by `anki_note_id`, which is exactly the `:create` /
             `:push` split the plan made, so the two need not be told apart here.
@@ -177,7 +177,7 @@
   "Phase 3. Create and update notes, re-read what was written, then delete the
    tombstoned notes. Moves to `:recording`.
 
-   pre : `bundles` from `get-bulk-push-bundles`; `kind-by-card` and the two note
+   pre : `bundles` from `anki-write-bundles`; `kind-by-card` and the two note
          id lists from the plan.
    post (async): !writes ← {:pairs :errors}, !readback ← [{:card-id :note-id
          :anki-digest :anki-mod} …], !finished-note-ids ← every tombstone this
