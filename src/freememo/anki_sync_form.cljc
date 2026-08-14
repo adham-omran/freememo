@@ -277,7 +277,7 @@
           (dom/props {:style {:margin-bottom "var(--sp-4)" :padding "var(--sp-3)" :background "var(--color-bg-subtle)"
                               :border-radius "var(--radius-sm)" :font-size "14px"}})
           (cond
-            (= sync-phase :pushing) (dom/text "Starting reconcile…")
+            (= sync-phase :pushing) (dom/text "Starting sync…")
             (= sync-phase :error)
             (dom/div
               (dom/props {:style {:color "var(--color-danger-text)"}})
@@ -301,7 +301,7 @@
           (dom/button
             (dom/props {:class "btn btn-primary" :style {:font-size "15px"}
                         :disabled (not can-run?)})
-            (dom/text "Reconcile")
+            (dom/text "Sync")
             (reset! !push-btn dom/node)
             (e/on-unmount (fn [] (reset! !push-btn nil)))
             (dom/On "click"

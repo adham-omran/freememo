@@ -1010,7 +1010,7 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
                       (do (reset! !action-result
                             (if (:success r)
                               (str "Resolved " (:count r)
-                                " — the next reconcile carries it out")
+                                " — the next sync carries it out")
                               (str "Resolve failed: " (:error r))))
                         (reset! !scan-result nil)
                         (reset! !bulk-phase nil)))

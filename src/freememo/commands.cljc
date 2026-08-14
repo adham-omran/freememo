@@ -224,10 +224,10 @@
      ;; same reconcile headlessly with the saved configuration. Neither picks a
      ;; direction — `anki-reconcile/classify` does that per card.
      ;; `:pull-anki` is gone: a pull is an outcome now, not a command.
-     :anki-sync      {:label "Reconcile with Anki…" :class :mutation :exec :ui-button
+     :anki-sync      {:label "Sync with Anki…" :class :mutation :exec :ui-button
                       :bind "meta+shift+x" :when #{:viewer}
                       :table #{:flashcards} :views #{:sync-mutations}}
-     :quick-sync     {:label "Reconcile with Anki now" :class :mutation :exec :ui-button
+     :quick-sync     {:label "Sync with Anki now" :class :mutation :exec :ui-button
                       :bind "meta+shift+alt+x" :when #{:viewer}
                       :table #{:flashcards} :views #{:sync-mutations}}}
 

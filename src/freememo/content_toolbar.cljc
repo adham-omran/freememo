@@ -125,12 +125,12 @@
       ;; reconcile chooses per card, not a direction the user picks.
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-panel-action toolbar-overflow-sync"
-                    :aria-label "Reconcile with Anki"})
+                    :aria-label "Sync with Anki"})
         (AnkiMark :size 16)
         (dom/span (dom/props {:class "icon-label"})
           (dom/text (if (and unsynced-count (pos? unsynced-count))
-                      (str "Reconcile with Anki (" unsynced-count " new)...")
-                      "Reconcile with Anki...")))
+                      (str "Sync with Anki (" unsynced-count " new)...")
+                      "Sync with Anki...")))
         (dom/On "click" (fn [_]
                           (bus/dispatch! :anki-sync)
                           (reset! !overflow-open false)) nil))

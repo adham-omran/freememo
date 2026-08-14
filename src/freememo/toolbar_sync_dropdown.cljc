@@ -119,11 +119,11 @@
               (dom/button
                 (dom/props {:class "toolbar-dropdown-item"
                             :role "menuitem"
-                            :aria-label "Reconcile with Anki"})
+                            :aria-label "Sync with Anki"})
                 (AnkiMark :size 16)
                 (dom/span (dom/text (if has-unsynced?
-                                      (str "Reconcile with Anki (" unsynced-count " new)...")
-                                      "Reconcile with Anki...")))
+                                      (str "Sync with Anki (" unsynced-count " new)...")
+                                      "Sync with Anki...")))
                 (dom/span (dom/props {:class "dropdown-shortcut"})
                   (dom/text (commands/display-chord :anki-sync)))
                 (dom/On "click"

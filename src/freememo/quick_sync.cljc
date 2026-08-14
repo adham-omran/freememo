@@ -8,7 +8,7 @@
 
    No deck or note-type configuration is fetched here. A reconcile's first Anki
    call is `notesInfo`, and the settings a push needs are resolved per root topic
-   by `get-bulk-push-bundles` on the server. The connect / apply-prefs phases the
+   by `anki-write-bundles` on the server. The connect / apply-prefs phases the
    push version needed are therefore gone."
   (:require
    [hyperfiddle.electric3 :as e]
@@ -33,11 +33,11 @@
       (when (pos? trigger)
         (let [[t _] (e/Token [:qs-start trigger])]
           (when t
-            (case (e/server (push-toast!* user-id :info "Reconciling with Anki…")) (t)))))
+            (case (e/server (push-toast!* user-id :info "Syncing with Anki…")) (t)))))
       (when (pos? busy-bump)
         (let [[t _] (e/Token [:qs-busy busy-bump])]
           (when t
-            (case (e/server (push-toast!* user-id :info "Reconcile already in progress")) (t))))))))
+            (case (e/server (push-toast!* user-id :info "Sync already in progress")) (t))))))))
 
 (e/defn QuickSyncButton
   "Hidden host button for the `:quick-sync` command (Cmd-Shift-Opt-X or the
