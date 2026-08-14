@@ -34,6 +34,17 @@ img {
     height: auto;
 }
 
+/* The Links paragraph build-links-field emits, on every owned note type.
+
+   ALIGNMENT ONLY. The four per-type wrappers (.fm-extra, .fm-ol-extra,
+   .score-extra, .io-extra-entry) already set border-top, margin, padding-top and
+   font-size, so any of those here would stack on top of theirs and double the
+   spacing. This rule exists because the IO card is the one type whose wrapper
+   (.io-extra-entry) is left-aligned, and Links centers on all four others. */
+.fm-links {
+    text-align: center;
+}
+
 /* ================================================================
    FreeMemo Anki Card Stylesheet
    ----------------------------------------------------------------
@@ -363,7 +374,7 @@ pre > code {
    Image Occlusion — required by the "FreeMemo IO" note type.
    This entire file is pushed as that note type's Styling on every
    IO push (ensure-and-enforce); edits made in Anki are overwritten.
-   fm-io-css v3
+   fm-io-css v4
    ================================================================ */
 
 /* ── Occlusion reveal (do not edit) ───────────────────────────── */

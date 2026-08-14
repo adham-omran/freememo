@@ -88,3 +88,66 @@
       (is (= 2 calls) (str "expected 2 update call sites, found " calls))
       (is (= calls routed)
         (str routed " of " calls " update call sites route through build-update-note")))))
+
+;; ── IO pull fields ──────────────────────────────────────────────────────────
+;;
+;; Pull reads occlusion fields by name, so a typo in io-pull-field-names is the
+;; whole failure surface. It is silent: the named field is absent from the note,
+;; the diff skips it, and an Anki-side edit to that field is never pulled.
+
+(deftest t11-io-pull-fields-exist-in-the-model
+  (testing "every name pull looks for is a field the model actually has"
+    (let [model (set helpers/io-field-names)]
+      (doseq [[k field-name] helpers/io-pull-field-names]
+        (is (contains? model field-name)
+          (str k " reads " (pr-str field-name)
+            ", which is not in io-field-names"))))))
+
+(deftest t12-pull-claims-no-fm-owned-field
+  (testing "pulling a generated field would overwrite io_fields with FM's own
+            output — Links, the masks, Image and the hidden id are all FM's"
+    (let [claimed (set (vals helpers/io-pull-field-names))]
+      (doseq [fm-owned ["ID (hidden)" "Image" "Question Mask" "Answer Mask"
+                        "Original Mask" "Links"]]
+        (is (not (contains? claimed fm-owned))
+          (str fm-owned " is FM-generated and must not be pulled"))))))
+
+(deftest t13-every-user-editable-io-field-is-pulled
+  (testing "a text field with no pull entry is edited in Anki and silently lost"
+    (is (= #{:header :footer :remarks :sources :extra1 :extra2}
+          (set (keys helpers/io-pull-field-names))))))
+
+(deftest t14-the-first-io-field-stays-first
+  (testing "Anki's duplicate check reads field 0, and build-io-note depends on
+            'ID (hidden)' being unique per note"
+    (is (= "ID (hidden)" (first helpers/io-field-names)))))
+
+;; ── build-io-fields ─────────────────────────────────────────────────────────
+
+(def ^:private io-card
+  {:occlusion-group {:anki-key "k1" :mode "hide-all" :image-media-id 7
+                     :geometry {:width 100 :height 80 :rects [{:x 1 :y 1 :w 2 :h 2 :ordinal 1}]}}
+   :flashcards/mask_ordinal 1
+   :flashcards/kind "occlusion"
+   :flashcards/topic_id 42
+   :flashcards/io_fields {:header "H" :footer "F" :remarks "R"
+                          :sources "S" :extra1 "E1" :extra2 "E2"}
+   :fm/bibliography-html "Compilers: principles, techniques, &amp; tools — (2007)"
+   :fm/pdf-page 5})
+
+(def ^:private io-settings {:app-base-url "https://example.test"})
+
+(deftest t15-io-notes-carry-the-links-field
+  (let [f (helpers/build-io-fields io-card io-settings {})]
+    (testing "Links is produced by the one shared builder, not a second copy"
+      (is (= (get (helpers/build-links-field io-card io-settings) "Links")
+            (get f "Links"))))
+    (testing "the citation line carries the page locator"
+      (is (re-find #"— p\. 5" (get f "Links"))))
+    (testing "the deep-link points at the card's own topic"
+      (is (re-find #"https://example\.test/viewer/topic/42" (get f "Links"))))))
+
+(deftest t16-build-io-fields-covers-every-canonical-field
+  (testing "a field in the model with no value here is blanked by updateNote"
+    (is (= (set helpers/io-field-names)
+          (set (keys (helpers/build-io-fields io-card io-settings {})))))))

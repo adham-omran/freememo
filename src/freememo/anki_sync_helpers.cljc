@@ -194,20 +194,42 @@
 (def io-template-name "IO Card")
 
 (def io-field-names
+  "Canonical field order. `Links` sits beside `Sources` because the two read as
+   one group on the card. canonicalize-field-order! is what gives an already-
+   existing model that same order — see its docstring."
   ["ID (hidden)" "Header" "Image" "Question Mask" "Footer" "Remarks"
-   "Sources" "Extra 1" "Extra 2" "Answer Mask" "Original Mask"])
+   "Sources" "Links" "Extra 1" "Extra 2" "Answer Mask" "Original Mask"])
 
-(def io-pull-field-indexes
-  "io_fields key -> index into the model's field order. The pull-side diff
-   reads notesInfo values by Anki's :order; safe because this app owns the
-   model's field list (io-field-names)."
-  {:header 1 :footer 4 :remarks 5 :sources 6 :extra1 7 :extra2 8})
+(def io-pull-field-names
+  "io_fields key -> the Anki field that holds it. The pull-side diff reads
+   notesInfo values by NAME, never by position.
+
+   Position would be the cheaper-looking choice, because `ordered-field-values`
+   already sorts a note's fields by Anki's :order — but it is not safe here and
+   the failure is silent. `modelFieldAdd` appends, so a model that existed
+   before `Links` holds it at index 11 while a model created after holds it at
+   7, and no single index map serves both. A pull against the wrong one writes
+   `Extra 2`'s text into :extra1 and blanks :extra2, through a JSONB merge that
+   keeps no copy of what it overwrote.
+
+   Reading by name needs no extra AnkiConnect call: notesInfo already answers
+   with {FieldName {:value .. :order ..}}. It also means pull depends on nothing
+   a push must do first — pull is reachable on its own (anki-pull-button), and
+   ensure-io-model! runs only inside do-anki-push!.
+
+   Guarded by anki-sync-helpers-test/t11-io-pull-fields-exist-in-the-model."
+  {:header "Header"
+   :footer "Footer"
+   :remarks "Remarks"
+   :sources "Sources"
+   :extra1 "Extra 1"
+   :extra2 "Extra 2"})
 
 (def io-card-front
   "{{#Image}}\n<div id=\"io-header\">{{Header}}</div>\n<div id=\"io-wrapper\">\n  <div id=\"io-overlay\">{{Question Mask}}</div>\n  <div id=\"io-original\">{{Image}}</div>\n</div>\n<div id=\"io-footer\">{{Footer}}</div>\n\n<script>\n// Prevent original image from loading before mask\naFade = 50, qFade = 0;\nvar mask = document.querySelector('#io-overlay>img');\nfunction loaded() {\n    var original = document.querySelector('#io-original');\n    original.style.visibility = \"visible\";\n}\nif (mask === null || mask.complete) {\n    loaded();\n} else {\n    mask.addEventListener('load', loaded);\n}\n</script>\n{{/Image}}\n")
 
 (def io-card-back
-  "{{#Image}}\n<div id=\"io-header\">{{Header}}</div>\n<div id=\"io-wrapper\">\n  <div id=\"io-overlay\">{{Answer Mask}}</div>\n  <div id=\"io-original\">{{Image}}</div>\n</div>\n{{#Footer}}<div id=\"io-footer\">{{Footer}}</div>{{/Footer}}\n<button id=\"io-revl-btn\" onclick=\"toggle();\">Toggle Masks</button>\n<div id=\"io-extra-wrapper\">\n  <div id=\"io-extra\">\n    {{#Remarks}}\n      <div class=\"io-extra-entry\">\n        <div class=\"io-field-descr\">Remarks</div>{{Remarks}}\n      </div>\n    {{/Remarks}}\n    {{#Sources}}\n      <div class=\"io-extra-entry\">\n        <div class=\"io-field-descr\">Sources</div>{{Sources}}\n      </div>\n    {{/Sources}}\n    {{#Extra 1}}\n      <div class=\"io-extra-entry\">\n        <div class=\"io-field-descr\">Extra 1</div>{{Extra 1}}\n      </div>\n    {{/Extra 1}}\n    {{#Extra 2}}\n      <div class=\"io-extra-entry\">\n        <div class=\"io-field-descr\">Extra 2</div>{{Extra 2}}\n      </div>\n    {{/Extra 2}}\n  </div>\n</div>\n\n<script>\n// Toggle answer mask on clicking the image\nvar toggle = function() {\n  var amask = document.getElementById('io-overlay');\n  if (amask.style.display === 'block' || amask.style.display === '')\n    amask.style.display = 'none';\n  else\n    amask.style.display = 'block'\n}\n\n// Prevent original image from loading before mask\naFade = 50, qFade = 0;\nvar mask = document.querySelector('#io-overlay>img');\nfunction loaded() {\n    var original = document.querySelector('#io-original');\n    original.style.visibility = \"visible\";\n}\nif (mask === null || mask.complete) {\n    loaded();\n} else {\n    mask.addEventListener('load', loaded);\n}\n</script>\n{{/Image}}\n")
+  "{{#Image}}\n<div id=\"io-header\">{{Header}}</div>\n<div id=\"io-wrapper\">\n  <div id=\"io-overlay\">{{Answer Mask}}</div>\n  <div id=\"io-original\">{{Image}}</div>\n</div>\n{{#Footer}}<div id=\"io-footer\">{{Footer}}</div>{{/Footer}}\n<button id=\"io-revl-btn\" onclick=\"toggle();\">Toggle Masks</button>\n<div id=\"io-extra-wrapper\">\n  <div id=\"io-extra\">\n    {{#Links}}\n      <div class=\"io-extra-entry fm-links\">{{Links}}</div>\n    {{/Links}}\n    {{#Remarks}}\n      <div class=\"io-extra-entry\">\n        <div class=\"io-field-descr\">Remarks</div>{{Remarks}}\n      </div>\n    {{/Remarks}}\n    {{#Sources}}\n      <div class=\"io-extra-entry\">\n        <div class=\"io-field-descr\">Sources</div>{{Sources}}\n      </div>\n    {{/Sources}}\n    {{#Extra 1}}\n      <div class=\"io-extra-entry\">\n        <div class=\"io-field-descr\">Extra 1</div>{{Extra 1}}\n      </div>\n    {{/Extra 1}}\n    {{#Extra 2}}\n      <div class=\"io-extra-entry\">\n        <div class=\"io-field-descr\">Extra 2</div>{{Extra 2}}\n      </div>\n    {{/Extra 2}}\n  </div>\n</div>\n\n<script>\n// Toggle answer mask on clicking the image\nvar toggle = function() {\n  var amask = document.getElementById('io-overlay');\n  if (amask.style.display === 'block' || amask.style.display === '')\n    amask.style.display = 'none';\n  else\n    amask.style.display = 'block'\n}\n\n// Prevent original image from loading before mask\naFade = 50, qFade = 0;\nvar mask = document.querySelector('#io-overlay>img');\nfunction loaded() {\n    var original = document.querySelector('#io-original');\n    original.style.visibility = \"visible\";\n}\nif (mask === null || mask.complete) {\n    loaded();\n} else {\n    mask.addEventListener('load', loaded);\n}\n</script>\n{{/Image}}\n")
 
 (def app-anki-css-url "/freememo/freememo-anki.css")
 
@@ -382,30 +404,103 @@
          true))))
 
 #?(:cljs
+   (defn canonicalize-field-order!
+     "Missionary task: move an app-owned model's fields into canonical order.
+
+      Two code paths put a field on a model and they disagree on where it lands.
+      `createModel :inOrderFields` honours the canonical vector. `modelFieldAdd`
+      appends. So a field placed anywhere but the tail of a *-field-names vector
+      sits at one index on a model that already existed and another on a model
+      created fresh — `Links` at 11 versus 7 on FreeMemo IO.
+
+      What this buys, and what it does NOT.
+      NO reader depends on it. Push writes every field by name, and pull reads
+      occlusion fields by name (io-pull-field-names) precisely so that it does
+      not need a push to have run first. What it buys is that the field ORDER a
+      *-field-names vector declares is the order every user actually sees in
+      Anki's note editor, new collection or old. Without it a deliberate
+      placement only ever takes effect for users who had no model yet.
+      The cost is one converging pass — up to (count field-names) reposition
+      calls, 25 for Overlapping — and nothing after that.
+
+      Ascending placement is what makes one pass enough. Anki's reposition
+      removes the field and re-inserts it, so placing index i moves only fields
+      at positions >= i and leaves every already-placed prefix alone.
+
+      pre : every name in field-names is a field of the model — the caller's
+            modelFieldAdd loop has already run. live-names is the model's order
+            AFTER that loop.
+      post: field-names occupies positions 0..n-1 in that order. A field the
+            model carries that field-names does not name — one the user added in
+            Anki — keeps its value and is pushed after them. So the post is a
+            PREFIX equality, not a whole-order equality.
+      invariant: index 0 keeps the same field. Every *-field-names vector already
+      starts with the field Anki's duplicate check reads (`ID (hidden)`, `Front`,
+      `Text`, `Question`), and ascending placement returns that name to 0.
+      Blame: a field-names entry the model lacks is a caller bug (the append loop
+      skipped it). AnkiConnect answers it with an error, which fails the push —
+      the ensure-*-model! path is mandatory by design.
+
+      The guard compares the PREFIX, not the whole order, for the same reason the
+      post is stated that way: whole-order equality is never true for a user who
+      added a field of their own, so every push would re-run the full loop and
+      log a drift that no longer exists."
+     [model-name field-names live-names]
+     (m/sp
+       (if (= (vec (take (count field-names) live-names)) (vec field-names))
+         true
+         (do
+           (log/log-debug (str "[anki-push] " model-name " field order drifted — "
+                            (pr-str (vec live-names)) " → " (pr-str (vec field-names))))
+           (loop [i 0]
+             (when (< i (count field-names))
+               (m/? (anki-call! "modelFieldReposition"
+                      {:modelName model-name
+                       :fieldName (nth field-names i)
+                       :index i}))
+               (recur (inc i))))
+           true)))))
+
+#?(:cljs
    (defn- ensure-owned-model!
      "Create an app-owned model if absent, else reconcile it toward canon:
       apply field-name migrations (renames/removals), append any missing owned
-      fields, then restore styling + template on strict-equality drift (same
-      policy as ensure-io-model!/ensure-score-model!). Migrations run BEFORE the
-      append so a rename lands before the new field would otherwise be added
-      empty. Field appends land after the existing fields, so Front/Back (index
-      0/1) and Text (index 0) — created first via :inOrderFields — keep their
-      order-based-pull positions. Resolves to true; throws on AnkiConnect error."
+      fields, put the fields in canonical ORDER, then restore styling + template
+      on strict-equality drift (same policy as ensure-io-model!/
+      ensure-score-model!).
+
+      The three field steps are ordered and each ordering is load-bearing.
+      Migrations run BEFORE the append so a rename lands before the new field
+      would otherwise be added empty. The append runs before the reorder because
+      repositioning a field the model lacks is an error. Both run before the
+      template restore, so a template naming a new field never reaches a model
+      without it.
+
+      canonicalize-field-order! owns the ordering rule and states what it is
+      worth; this caller only has to feed it the right input. It takes the
+      post-append order rather than re-reading it: Anki appends in the order
+      given, so (into live missing) IS that order, and the steady-state push
+      spends no extra round trip.
+
+      Resolves to true; throws on AnkiConnect error."
      [{:keys [model-name template-name field-names is-cloze front back renames removals]} css]
      (m/sp
        (let [models (vec (js->clj (m/? (anki-call! "modelNames" nil))))]
          (if (some #{model-name} models)
            (do
              (m/? (migrate-fields! model-name renames removals))
-             (let [fields (set (js->clj (m/? (anki-call! "modelFieldNames"
-                                               {:modelName model-name}))))
-                   missing (vec (remove fields field-names))]
+             (let [live (vec (js->clj (m/? (anki-call! "modelFieldNames"
+                                             {:modelName model-name}))))
+                   present (set live)
+                   missing (vec (remove present field-names))]
                (loop [[f & more] missing]
                  (when f
                    (log/log-debug (str "[anki-push] " model-name ": adding field " f))
                    (m/? (anki-call! "modelFieldAdd"
                           {:modelName model-name :fieldName f}))
-                   (recur more))))
+                   (recur more)))
+               (m/? (canonicalize-field-order! model-name field-names
+                      (into live missing))))
              (let [styling (js->clj (m/? (anki-call! "modelStyling" {:modelName model-name})))]
                (when (not= (get styling "css") css)
                  (log/log-debug (str "[anki-push] " model-name " styling drifted — restoring"))
@@ -430,11 +525,18 @@
 #?(:cljs
    (defn ensure-io-model!
      "Missionary task: create-or-restore the FreeMemo IO model via
-      ensure-owned-model! — no field migrations for this model (renames/removals
-      empty; io-field-names has been stable since the model was cloned from
-      Image Occlusion Enhanced's \"IO Card\"). Drift check is strict string
-      equality — any Anki-side edit is restored. Resolves to true; throws on
-      AnkiConnect errors (the caller's whole push fails with that message)."
+      ensure-owned-model!. No field NAME migrations are needed (renames/removals
+      empty) — the model was cloned from Image Occlusion Enhanced's \"IO Card\"
+      and no field has ever been renamed or dropped.
+
+      Its field ORDER is not stable: `Links` was added at index 7 after the model
+      had shipped, so an already-existing model holds it at 11 until
+      canonicalize-field-order! runs. See that fn for what the reorder is and is
+      not worth. Nothing on the pull side depends on it.
+
+      Drift check is strict string equality — any Anki-side edit is restored.
+      Resolves to true; throws on AnkiConnect errors (the caller's whole push
+      fails with that message)."
      []
      (m/sp
        (let [css (m/? (fetch-text! app-anki-css-url))]
@@ -670,10 +772,21 @@
     {"Links" (if body (str "<p class=\"fm-links\">" body "</p>") "")}))
 
 (defn build-io-fields
-  "Field map for an FreeMemo IO note: generated media references plus the six
-   io_fields text values (with /api/media srcs rewritten to uploaded names).
-   Pre: card carries :occlusion-group and :flashcards/mask_ordinal."
-  [card filename-map]
+  "Field map for a FreeMemo IO note: generated media references, the six
+   io_fields text values (with /api/media srcs rewritten to uploaded names), and
+   the FM-owned Links field.
+
+   Every field here is written from FreeMemo's own state, which is why
+   migrate-carry-fields carries nothing for this kind. The six text fields hold
+   the user's writing, but their source of truth is the io_fields column, so a
+   push re-supplies them from the database instead of reading them back out of
+   Anki. That is the difference from Basic's Remarks or Cloze's Back Extra, which
+   exist ONLY in Anki and would be blanked if a migration omitted them.
+
+   Pre: card carries :occlusion-group and :flashcards/mask_ordinal; settings
+   carries the Links inputs (:app-base-url, :bibliography-html), and the card
+   carries :fm/bibliography-html and :fm/pdf-page from get-cards-for-sync."
+  [card settings filename-map]
   (let [{:keys [anki-key image-media-id]} (:occlusion-group card)
         ordinal (:flashcards/mask_ordinal card)
         io (or (:flashcards/io_fields card) {})
@@ -681,17 +794,19 @@
         image-filename (get filename-map (str image-media-id)
                          (str "/api/media/" image-media-id))
         rw (fn [k] (rewrite-media-srcs (or (get io k) "") filename-map))]
-    {"ID (hidden)" (osvg/note-hidden-id anki-key ordinal)
-     "Header" (rw :header)
-     "Image" (str "<img src=\"" image-filename "\" />")
-     "Question Mask" (str "<img src=\"" (:q names) "\" />")
-     "Footer" (rw :footer)
-     "Remarks" (rw :remarks)
-     "Sources" (rw :sources)
-     "Extra 1" (rw :extra1)
-     "Extra 2" (rw :extra2)
-     "Answer Mask" (str "<img src=\"" (:a names) "\" />")
-     "Original Mask" (str "<img src=\"" (:o names) "\" />")}))
+    (merge
+      {"ID (hidden)" (osvg/note-hidden-id anki-key ordinal)
+       "Header" (rw :header)
+       "Image" (str "<img src=\"" image-filename "\" />")
+       "Question Mask" (str "<img src=\"" (:q names) "\" />")
+       "Footer" (rw :footer)
+       "Remarks" (rw :remarks)
+       "Sources" (rw :sources)
+       "Extra 1" (rw :extra1)
+       "Extra 2" (rw :extra2)
+       "Answer Mask" (str "<img src=\"" (:a names) "\" />")
+       "Original Mask" (str "<img src=\"" (:o names) "\" />")}
+      (build-links-field card settings))))
 
 (defn build-io-note
   "AnkiConnect note map for an occlusion card. The 'ID (hidden)' first field
@@ -699,7 +814,7 @@
   [card settings filename-map]
   {:deckName (:deck settings)
    :modelName io-model-name
-   :fields (build-io-fields card filename-map)
+   :fields (build-io-fields card settings filename-map)
    :tags (:tags settings)
    :options {:allowDuplicate false :duplicateScope "deck"}})
 
@@ -879,7 +994,7 @@
       filename-map = {media-id -> \"<id>.<ext>\"} for src rewrite."
      [card settings filename-map]
      (-> (cond
-           (occlusion-card? card) (build-io-fields card filename-map)
+           (occlusion-card? card) (build-io-fields card settings filename-map)
            (score-card? card) (build-score-fields card settings filename-map)
            (overlapping-card? card) (build-overlapping-content-fields card settings filename-map)
            (= "cloze" (:flashcards/kind card)) (build-cloze-content-fields card settings filename-map)
@@ -900,8 +1015,9 @@
   "Per kind, the field names an updateNoteModel migration must re-supply from the
    note's CURRENT Anki values. build-update-fields omits these (user Anki-side
    space) and updateNoteModel wipes omitted fields, so without re-supplying them
-   the migration would blank them. Occlusion carries nothing — build-io-fields is
-   already complete."
+   the migration would blank them. Occlusion carries nothing — every IO field is
+   FM-owned (the six text fields live in io_fields, Links is generated), so
+   build-io-fields is already complete."
   {"basic"       ["Remarks"]
    "cloze"       ["Remarks" "Back Extra"]
    "overlapping" ["Remarks"]
@@ -1217,20 +1333,28 @@
                                          ;; Anki→FM inverse is lossy, so nothing is
                                          ;; pulled.
                                          (or score? overlapping?) nil
-                                         ;; Occlusion: diff the six text fields by the
-                                         ;; app-owned field order; masks/Image/ID are
-                                         ;; FM-owned and ignored. Both sides stripped so
-                                         ;; local Quill markup doesn't read as a diff.
+                                         ;; Occlusion: diff the six text fields BY NAME
+                                         ;; (io-pull-field-names) — masks/Image/ID/Links
+                                         ;; are FM-owned and ignored. Both sides stripped
+                                         ;; so local Quill markup doesn't read as a diff.
+                                         ;; A field the note does not carry is skipped
+                                         ;; rather than read as "": absent means Anki has
+                                         ;; nothing to say, and treating it as empty would
+                                         ;; pull a blank over local content.
                                          occlusion?
                                          (let [io (or (:flashcards/io_fields card) {})
+                                               anki-fields (:fields anki-note)
                                                changed (reduce
-                                                         (fn [acc [k idx]]
-                                                           (let [anki-v (strip-html (or (nth ordered-vals idx nil) ""))
-                                                                 local-v (strip-html (or (get io k) ""))]
-                                                             (if (= anki-v local-v)
+                                                         (fn [acc [k field-name]]
+                                                           (let [fk (keyword field-name)]
+                                                             (if-not (contains? anki-fields fk)
                                                                acc
-                                                               (assoc acc k anki-v))))
-                                                         {} io-pull-field-indexes)]
+                                                               (let [anki-v (strip-html (or (get-in anki-fields [fk :value]) ""))
+                                                                     local-v (strip-html (or (get io k) ""))]
+                                                                 (if (= anki-v local-v)
+                                                                   acc
+                                                                   (assoc acc k anki-v))))))
+                                                         {} io-pull-field-names)]
                                            (when (seq changed)
                                              {:card-id (:flashcards/id card)
                                               :io-fields changed}))
