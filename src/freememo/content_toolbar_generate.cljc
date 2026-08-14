@@ -11,6 +11,7 @@
    [freememo.content-toolbar-helpers :as helpers]
    [freememo.icons :as icons]
    [freememo.command-bus :as bus]
+   [freememo.commands :as commands]
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.settings :as settings])))
 
@@ -18,7 +19,7 @@
   (e/client
     (let [user-id dctx/user-id enc-key dctx/enc-key topic-id dctx/topic-id root-topic-id dctx/root-topic-id
           page-number dctx/page-number content-text dctx/content-text context-mode dctx/context-mode
-          mod-key dctx/mod-key llm-enabled? dctx/llm-enabled?
+          llm-enabled? dctx/llm-enabled?
           card-type dctx/card-type card-count-val dctx/card-count-val use-context dctx/use-context
           context-window dctx/context-window
           gen-active? dctx/gen-active? gen-pending dctx/gen-pending gen-error dctx/gen-error
@@ -67,7 +68,7 @@
                           :aria-label action-summary})
               (tooltip/Tooltip! (if no-content?
                                   "Extract text first to generate flashcards"
-                                  (str action-summary " (" mod-key "+Shift+G)")))
+                                  (str action-summary " (" (commands/display-chord :generate) ")")))
               (if (and gen-active? (nil? gen-error))
                 (icons/Icon :loader-2 :size 16 :class "spin")
                 (icons/Icon :sparkles :size 16))

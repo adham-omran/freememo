@@ -14,7 +14,7 @@
 
 (defn resolve-chords
   "Replace `{command-id}` tokens in `s` with the platform display chord
-   (commands/display-chord) — \"⌘⇧S\" on macOS, \"Ctrl+Shift+S\" elsewhere.
+   (commands/display-chord) — \"⌘S\" on macOS, \"Ctrl+S\" elsewhere.
    Unknown or unbound ids stay as literal text."
   [s]
   (str/replace s #"\{([a-z-]+)\}"

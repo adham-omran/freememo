@@ -4,7 +4,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
-   [freememo.util :refer [mac-platform?]]
+   [freememo.editor-actions :as editor-actions]
    [freememo.storage-section :refer [StorageSection]]
    [freememo.account-transfer-section :refer [AccountTransferSection]]
    [freememo.credits-section :refer [CreditsSection]]
@@ -492,28 +492,31 @@
             (ZoteroSection user-id))
 
       ;; ── Keyboard Shortcuts section (read-only) ──
-          (let [mac? (e/client (mac-platform?))
-                mod-key (if mac? "Cmd" "Ctrl")]
-            (dom/div
-              (dom/props {:class "card" :id "settings-keyboard"
-                          :style (tab-style active "settings-keyboard")})
-              (dom/h3 (dom/props {:class "section-title"}) (dom/text "Keyboard Shortcuts"))
-              (let [shortcut-row (fn [key desc]
-                                   {:key (str mod-key "+Shift+" key) :desc desc})
-                    shortcuts [(shortcut-row "E" "Extract topic from selection")
-                               (shortcut-row "G" "Generate cards")
-                               (shortcut-row "A" "Add card from selection")
-                               (shortcut-row "S" "Scan Page (OCR)")
-                               (shortcut-row "X" "Anki Sync")
-                               (shortcut-row "D" "Mark Done")
-                               ;; The two cloze chords are editor-local — bound on
-                               ;; the cloze field's own Quill keyboard module, not
-                               ;; in freememo.commands — so they appear in no
-                               ;; registry-derived list and have to be written out
-                               ;; here. See editor-actions/install-cloze-bindings!.
-                               (shortcut-row "C" "New cloze deletion (in a cloze field)")
-                               {:key (str mod-key "+Shift+Alt+C")
-                                :desc "Same cloze number (in a cloze field)"}]]
+          (dom/div
+            (dom/props {:class "card" :id "settings-keyboard"
+                        :style (tab-style active "settings-keyboard")})
+            (dom/h3 (dom/props {:class "section-title"}) (dom/text "Keyboard Shortcuts"))
+            ;; Derived from the registry, never transcribed. A hand-written
+            ;; table here stated Cmd+Shift+E/G/S/D for a whole release after
+            ;; those chords shortened, and listed six of the nine bound
+            ;; commands. See plans/short-keyboard-chords.md.
+            (let [shortcuts (concat
+                              (->> (commands/bindings)
+                                   (map (fn [[id bind]]
+                                          {:key  (commands/display-chord id bind)
+                                           :desc (:label (commands/command id))}))
+                                   (sort-by :desc))
+                              ;; The two cloze chords are editor-local — bound on
+                              ;; the cloze field's own Quill keyboard module, not
+                              ;; in freememo.commands — so they appear in no
+                              ;; registry-derived list and have to be written out
+                              ;; here. See editor-actions/install-cloze-bindings!.
+                              [{:key (commands/display-chord
+                                       :cloze-inc (:inc editor-actions/cloze-chords))
+                                :desc "New cloze deletion (in a cloze field)"}
+                               {:key (commands/display-chord
+                                       :cloze-eq (:eq editor-actions/cloze-chords))
+                                :desc "Same cloze number (in a cloze field)"}])]
                 
                 (dom/table
                   (dom/props {:style {:width "100%" :border-collapse "collapse" :font-size "14px"}})
@@ -522,4 +525,4 @@
                       (dom/td (dom/props {:style {:padding "6px 0" :color "var(--color-text-secondary)" :width "180px"}})
                         (dom/text (:key s)))
                       (dom/td (dom/props {:style {:padding "6px 0" :color "var(--color-text-primary)"}})
-                        (dom/text (:desc s))))))))))))))
+                        (dom/text (:desc s)))))))))))))

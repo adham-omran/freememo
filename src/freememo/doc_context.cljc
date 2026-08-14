@@ -78,7 +78,6 @@
 (e/declare gen-active?)
 (e/declare gen-pending)
 (e/declare gen-error)
-(e/declare mod-key)
 (e/declare unsynced-count)
 
 ;; ── Layout / display ─────────────────────────────────────────────────────

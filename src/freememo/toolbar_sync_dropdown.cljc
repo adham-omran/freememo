@@ -22,6 +22,7 @@
    [freememo.icons :as icons]
    [freememo.brand-icons :refer [AnkiMark]]
    [freememo.command-bus :as bus]
+   [freememo.commands :as commands]
    [freememo.toolbar-overflow :as overflow]
    [freememo.tooltip :as tooltip]))
 
@@ -55,7 +56,7 @@
   (e/client
     (let [user-id dctx/user-id topic-id dctx/topic-id root-topic-id dctx/root-topic-id
           card-type dctx/card-type
-          unsynced-count dctx/unsynced-count mod-key dctx/mod-key
+          unsynced-count dctx/unsynced-count
           !open (atom false)
           open (e/watch !open)
           has-unsynced? (and unsynced-count (pos? unsynced-count))
@@ -124,7 +125,7 @@
                                       (str "Reconcile with Anki (" unsynced-count " new)...")
                                       "Reconcile with Anki...")))
                 (dom/span (dom/props {:class "dropdown-shortcut"})
-                  (dom/text (str mod-key "+Shift+X")))
+                  (dom/text (commands/display-chord :anki-sync)))
                 (dom/On "click"
                   (fn [_]
                     (bus/dispatch! :anki-sync)

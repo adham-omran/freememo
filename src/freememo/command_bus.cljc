@@ -166,14 +166,37 @@
       :open-subset-review  (navigate! nav-tab (nav/nav-subset-review (:root-id payload) (:root-name payload)))
       (navigate! nav-tab))))
 
-(defn available?
-  "See ns docstring for the availability contract."
-  ([command-id] (available? command-id @!ctx))
+(defn applies-here?
+  "True when `command-id`'s declared surface includes the active tab — the
+   :when half of the availability contract, WITHOUT the can-act-right-now half.
+
+   The keyboard layer needs the halves apart, because they answer different
+   questions. `applies-here?` answers \"is this key the app's on this screen\",
+   which is a property of the surface and holds even while no button is
+   mounted to serve it. `available?` answers \"can the app act on it right
+   now\", which a collapsed toolbar or a non-PDF document can flip at any
+   moment. Suppressing the browser default on the second one sends ⌘S to
+   Chrome's Save Page dialog on every non-PDF topic — see
+   plans/short-keyboard-chords.md.
+
+   Post: true iff the entry exists and its :when is nil or contains the active
+         tab. Implies nothing about whether dispatch! will act."
+  ([command-id] (applies-here? command-id @!ctx))
   ([command-id ctx]
    (let [{active-when :when :as entry} (commands/command command-id)]
+     (boolean (and entry
+                   (or (nil? active-when)
+                       (contains? active-when (:active-tab ctx))))))))
+
+(defn available?
+  "See ns docstring for the availability contract.
+   Post: available? ⇒ applies-here? — the surface check is the first half."
+  ([command-id] (available? command-id @!ctx))
+  ([command-id ctx]
+   (let [entry (commands/command command-id)]
      (boolean
        (and entry
-            (or (nil? active-when) (contains? active-when (:active-tab ctx)))
+            (applies-here? command-id ctx)
             (if (= :ui-button (commands/exec-mode entry))
               (contains? @!invokers command-id)
               (if-let [prepare (get @!preparers command-id)]

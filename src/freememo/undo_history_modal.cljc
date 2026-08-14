@@ -1,7 +1,7 @@
 (ns freememo.undo-history-modal
   "Undo/Actions UI: a modal listing the user's recent reversible actions
    (12h / 100 cap, newest first). Each row reverses one action via the
-   :undo-entry command; Cmd-Shift-Z dispatches :undo-newest through the
+   :undo-entry command; Cmd-Z dispatches :undo-newest through the
    registry-driven keyboard layer. Rows whose target was touched by a newer
    action are shown as superseded and disabled (the hybrid ordering model —
    keyboard pops the newest, the list undoes selectively).

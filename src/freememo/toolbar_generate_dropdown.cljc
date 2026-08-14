@@ -23,6 +23,7 @@
    [freememo.content-toolbar-settings :as settings]
    [freememo.icons :as icons]
    [freememo.command-bus :as bus]
+   [freememo.commands :as commands]
    [freememo.toolbar-overflow :as overflow]
    [freememo.tooltip :as tooltip]))
 
@@ -68,7 +69,7 @@
           gen-pending dctx/gen-pending gen-error dctx/gen-error
           card-type dctx/card-type card-count-val dctx/card-count-val use-context dctx/use-context
           context-window dctx/context-window context-tooltip dctx/context-tooltip
-          content-text dctx/content-text mod-key dctx/mod-key
+          content-text dctx/content-text
           !use-context dctx/!use-context !context-window dctx/!context-window !card-type dctx/!card-type
           !card-count dctx/!card-count
           !open (atom false)
@@ -112,10 +113,10 @@
                                   :cursor (if no-content? "not-allowed" "pointer")
                                   :font-weight "bold"}
                           :disabled no-content?
-                          :aria-label (str action-summary " (" mod-key "+Shift+G)")})
+                          :aria-label (str action-summary " (" (commands/display-chord :generate) ")")})
               (tooltip/Tooltip! (if no-content?
                                   "Extract text first to generate flashcards"
-                                  (str action-summary " (" mod-key "+Shift+G)")))
+                                  (str action-summary " (" (commands/display-chord :generate) ")")))
               (if (and gen-active? (nil? gen-error))
                 (icons/Icon :loader-2 :size 16 :class "spin")
                 (icons/Icon :sparkles :size 16))

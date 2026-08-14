@@ -26,8 +26,7 @@
    [freememo.brand-icons :refer [AnkiMark]]
    [freememo.command-bus :as bus]
    [freememo.toolbar-overflow :refer [install-overflow-detector!]]
-   [freememo.tooltip :as tooltip]
-   [freememo.util :refer [mac-platform?]]))
+   [freememo.tooltip :as tooltip]))
 
 ;; State map keys:
 ;; {:user-id       — user identifier
@@ -171,8 +170,7 @@
 
 (e/defn ContentToolbar []
   (e/client
-    (let [mod-key (if (mac-platform?) "Cmd" "Ctrl")
-          user-id dctx/user-id enc-key dctx/enc-key topic-id dctx/topic-id audio? dctx/audio?
+    (let [user-id dctx/user-id enc-key dctx/enc-key topic-id dctx/topic-id audio? dctx/audio?
           root-topic-id dctx/root-topic-id page-number dctx/page-number content-text dctx/content-text
           context-mode dctx/context-mode context-tooltip dctx/context-tooltip llm-enabled? dctx/llm-enabled?
           extract-status dctx/extract-status navigate! dctx/navigate! origin dctx/origin on-done! dctx/on-done!
@@ -250,7 +248,7 @@
             (dom/props {:class "toolbar"})
             (dom/div
               (dom/props {:class "toolbar-group"})
-              (binding [dctx/mod-key mod-key dctx/card-type card-type]
+              (binding [dctx/card-type card-type]
                 (actions/ToolbarActions)))))
 
         (dom/div
@@ -288,7 +286,7 @@
           ;; 1. Extract + Add new (IR Tools).
               (dom/div
                 (dom/props {:class "toolbar-group"})
-                (binding [dctx/mod-key mod-key dctx/card-type card-type]
+                (binding [dctx/card-type card-type]
                   (actions/ToolbarActions)))
 
               (dom/div (dom/props {:class "toolbar-group-divider"}))
@@ -300,7 +298,7 @@
           ;; first to collapse (.toolbar-collapse-first).
               (dom/div
                 (dom/props {:class "toolbar-group toolbar-generate-cluster"})
-                (binding [dctx/mod-key mod-key dctx/card-type card-type
+                (binding [dctx/card-type card-type
                           dctx/card-count-val card-count-val dctx/use-context use-context
                           dctx/context-window context-window dctx/gen-active? gen-active?
                           dctx/gen-pending gen-pending dctx/gen-error gen-error
@@ -315,8 +313,7 @@
           ;; 3. Sync dropdown (unboxed, lone trigger) — Export + Pull + Anki Sync.
           ;; Source buttons mount hidden inside so refs/modals/e/Token paths stay
           ;; live; .toolbar-collapse-sync sits on the visible trigger inside.
-              (binding [dctx/card-type card-type dctx/unsynced-count unsynced-count
-                        dctx/mod-key mod-key]
+              (binding [dctx/card-type card-type dctx/unsynced-count unsynced-count]
                 (SyncDropdown))
 
           ;; Divider hides with Sync at tier 7 (no dangling separator).

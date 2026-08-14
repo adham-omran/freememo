@@ -22,7 +22,7 @@
                                        flow and publishes an invoke handle
                                        (command-bus/publish-invoker!); its
                                        server steps bump via bump!
-     :bind   string|nil    — goog KeyboardShortcutHandler spec (\"meta+shift+e\")
+     :bind   string|nil    — goog KeyboardShortcutHandler spec (\"meta+e\")
      :when   set|nil       — active-tab keywords where the command applies;
                              nil = everywhere
      :data   map           — payload fields and their sources (documentation;
@@ -100,7 +100,7 @@
      :update-score-group {:label "Update score card" :class :mutation :palette-hidden true
                           :table #{:flashcards :score_groups :media :card_versions}
                           :views #{:card-mutations}}
-     :undo-newest      {:label "Undo last action" :class :mutation :bind "meta+shift+z"
+     :undo-newest      {:label "Undo last action" :class :mutation :bind "meta+z"
                         :table #{:undo_log :flashcards :topics :topic_pins :settings}
                         :views #{}} ; runtime-dynamic: undo/bump-views! by entity type
      :undo-entry       {:label "Undo action" :class :mutation :palette-hidden true
@@ -110,17 +110,17 @@
 
     ;; — Toolbar flows owned by mounted components (:exec :ui-button) —
     {:extract        {:label "Extract selection" :class :mutation :exec :ui-button
-                      :bind "meta+shift+e" :when #{:viewer}
+                      :bind "meta+e" :when #{:viewer}
                       :data {:selection :dom} :table #{:topics} :views #{:tree-mutations}}
      :generate       {:label "Generate cards" :class :mutation :exec :ui-button
-                      :bind "meta+shift+g" :when #{:viewer}
+                      :bind "meta+g" :when #{:viewer}
                       :table #{:flashcards} :views #{:card-mutations}}
      :gen-prompt     {:label "Generate with prompt…" :class :mutation :exec :ui-button
                       :when #{:viewer} :views #{}} ; opens dialog; the run bumps :generate
      :compare-card-gen {:label "Compare card models" :class :mutation :exec :ui-button
                         :when #{:viewer} :table #{:flashcards} :views #{:card-mutations}}
      :scan           {:label "Scan page (OCR)" :class :mutation :exec :ui-button
-                      :bind "meta+shift+s" :when #{:viewer}
+                      :bind "meta+s" :when #{:viewer}
                       :table #{:topics} :views #{:refresh}}
      :distill        {:label "Distill facts (KG)" :class :mutation :exec :ui-button
                       :when #{:viewer}
@@ -182,7 +182,7 @@
      ;; indexed read, because `schedule/root-schedule-pace` returns nil straight
      ;; after `db/active-study-schedule-for-root` and never projects.
      :done           {:label "Mark done" :class :mutation :exec :ui-button
-                      :bind "meta+shift+d" :when #{:viewer}
+                      :bind "meta+d" :when #{:viewer}
                       :table #{:topics}
                       :views #{:refresh :meta-refresh :schedule-mutations}}
      :restore        {:label "Restore (un-done)" :class :mutation :exec :ui-button
@@ -401,23 +401,30 @@
 (defn display-chord
   "Human-readable chord for command `id` (registry `bind`), for the current
    platform+browser. Renders the resolved chord (effective-bind), so the shown
-   key always matches the key that actually fires: \"⌘⇧E\" on macOS (glyphs,
-   joined tight), \"Ctrl+Shift+E\" (or \"Ctrl+/\" for the palette on Firefox)
+   key always matches the key that actually fires: \"⌘E\" on macOS (glyphs,
+   joined tight), \"Ctrl+E\" (or \"Ctrl+/\" for the palette on Firefox)
    elsewhere.
 
+   The 1-arity reads the bind from the registry, which is what a UI label
+   wants: a tooltip that names its own chord must never be able to state one
+   that does not fire, so it may not carry a hand-written copy. Four labels
+   read `(str mod-key \"+Shift+E\")` and went stale the day those chords
+   shortened — see plans/short-keyboard-chords.md.
+
    Pre : `bind` is a goog spec string or nil.
-   Post: display string, or nil when `bind` is nil."
-  [id bind]
-  (when bind
-    (let [mac? (util/mac-platform?)
-          eff  (effective-bind id bind)
-          part (fn [p] (case p
-                         "meta"  "⌘"
-                         "ctrl"  (if mac? "⌃" "Ctrl")
-                         "shift" (if mac? "⇧" "Shift")
-                         "alt"   (if mac? "⌥" "Alt")
-                         (str/upper-case p)))]
-      (str/join (if mac? "" "+") (map part (str/split eff #"\+"))))))
+   Post: display string, or nil when the command has no bind."
+  ([id] (display-chord id (:bind (command id))))
+  ([id bind]
+   (when bind
+     (let [mac? (util/mac-platform?)
+           eff  (effective-bind id bind)
+           part (fn [p] (case p
+                          "meta"  "⌘"
+                          "ctrl"  (if mac? "⌃" "Ctrl")
+                          "shift" (if mac? "⇧" "Shift")
+                          "alt"   (if mac? "⌥" "Alt")
+                          (str/upper-case p)))]
+       (str/join (if mac? "" "+") (map part (str/split eff #"\+")))))))
 
 (defn palette-listed
   "Entries the palette shows on `active-tab`: not :palette-hidden and

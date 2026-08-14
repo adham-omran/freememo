@@ -9,9 +9,10 @@
    [freememo.rich-text-editor :as editor]
    [freememo.card-modals :refer [AddCardModal]]
    [freememo.command-bus :as bus]
+   [freememo.commands :as commands]
    [freememo.tooltip :as tooltip]))
 
-(e/defn AddCardButton [user-id topic-id root-topic-id card-type mod-key]
+(e/defn AddCardButton [user-id topic-id root-topic-id card-type]
   (e/client
     (let [!show-add (atom false)
           show-add (e/watch !show-add)
@@ -27,7 +28,7 @@
                     ;; name — so :aria-label is set here rather than via
                     ;; Tooltip!'s :aria? (which would mirror the chord text).
                     :aria-label "Add new card"})
-        (tooltip/Tooltip! (str "Add new card (" mod-key "+Shift+A)"))
+        (tooltip/Tooltip! (str "Add new card (" (commands/display-chord :add-new) ")"))
         (icons/Icon :plus :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Add new card"))
         (let [node dom/node]

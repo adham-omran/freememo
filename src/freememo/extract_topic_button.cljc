@@ -11,20 +11,22 @@
    [freememo.icons :as icons]
    [freememo.commands :as commands]
    [freememo.command-bus :as bus]
+   [freememo.commands :as commands]
    [freememo.logging :as log]
    [freememo.tooltip :as tooltip]))
 
-(e/defn ExtractTopicButton [user-id topic-id context-mode mod-key]
+(e/defn ExtractTopicButton [user-id topic-id context-mode]
   (e/client
     (let [!error (atom nil)
-          error (e/watch !error)]
+          error (e/watch !error)
+          chord (commands/display-chord :extract)]
       (dom/button
         (dom/props {:class "btn btn-sm btn-primary"
                     :style {:font-weight "500"}
                     :aria-label "Extract"})
         (tooltip/Tooltip! (if (= context-mode :extract)
-                            (str "Extract selected text as a child topic (" mod-key "+Shift+E)")
-                            (str "Extract selected text as a topic (" mod-key "+Shift+E)")))
+                            (str "Extract selected text as a child topic (" chord ")")
+                            (str "Extract selected text as a topic (" chord ")")))
         (icons/Icon :scissors :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Extract"))
         (let [node dom/node]
