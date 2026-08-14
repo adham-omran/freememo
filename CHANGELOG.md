@@ -9,6 +9,424 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
+## v20260814-1e4cf45
+
+### For users
+
+- **Anki sync is now one run that decides the direction per card.** Push and
+  Pull are gone. The toolbar action reads `Sync with Anki` and the quick action
+  reads `Sync with Anki now`.
+  - **Each side keeps its own record of what it held at the last sync.** FreeMemo
+    can now tell which side moved. A push used to overwrite an edit you made in
+    Anki, and you had to remember which side you had edited and press the two
+    buttons in the right order.
+  - **One run covers every card you ever synced**, not only the document you have
+    open. A card you deleted in a document nobody has open still owes its Anki
+    note a deletion.
+  - **Per card the run pushes, pulls, creates, deletes on either side, or reports
+    a conflict.** A card edited on both sides applies nothing and waits for you.
+  - **Conflicts are settled in Library → Cards.** The origin filter gains
+    `conflict`, and `Keep FreeMemo` / `Keep Anki` resolve the selected rows.
+  - **A delete made while Anki was closed is retried on the next run.** Ten such
+    orphan notes were counted on production.
+  - **Score and overlapping cards take part in change detection for the first
+    time.**
+  - **A run stops itself when Anki reports most of your notes missing.** The old
+    overlay deleted every local card it could not find, which wiped cards when
+    you opened the wrong Anki profile.
+  - **The toast counts what the run wrote, not what it decided to write.** A
+    card counts as sent only after FreeMemo reads the note back from Anki, so a
+    run cannot claim a card Anki refused.
+  - **A run that fails now says why.** Per-card errors from Anki reach the
+    toast, and a run that cannot assemble its work ends with the reason instead
+    of a clean-looking report over nothing.
+  - **A sync with new cards and no deck set refuses before it writes**, and
+    names the document. Choose a deck in `Sync with Anki…` and run it again.
+- Bug fix: **a push no longer clears your Anki tags.** AnkiConnect replaces a
+  note's whole tag list whenever a request carries tags, so every push spent the
+  Marked status of every card it touched, along with `leech` and every tag you
+  added by hand. With the Tags checkbox off it cleared them all. Tags now merge.
+  Measured on a live collection: 869 of 1335 FreeMemo Basic notes carried no tag
+  at all.
+- **A new Schedule tab plans a PDF to a deadline.** Pick a document and a page
+  range, state a target date, and get a dated table with pages to read and cards
+  to review, one row per day.
+  - **The tab is a plan, not a queue.** It writes nothing to Anki and nothing to
+    your learn queue. You follow it by hand, the way you would follow a training
+    programme.
+  - **A page counts as known when its Anki cards clear your deck's retention
+    target and reach a projected interval of at least 21 days.** The browser
+    reads your review history from Anki and the server replays it through FSRS
+    with your own weights. Every Anki action is read-only.
+  - **Today's row is a quota that counts down.** Mark pages done and it falls to
+    `done`, then to `N ahead`. It used to divide the whole remainder by the days
+    left, so marking three pages moved it from 3 to 2.
+  - **The plan leaves the cards time to mature.** Reading is spread over the days
+    up to the coverage deadline rather than up to the target, so the days a card
+    needs to settle are visible instead of implied. The days past that deadline
+    carry their review load and an em dash.
+  - **A `Covered` tile counts the pages you marked done.** A page you had read
+    and carded used to appear in no figure on the tab, so half a document read as
+    `Known now 0 / 23`.
+  - **The home view is one card per schedule** — pace, covered pages, pages due
+    today, and that schedule's own Anki status. It was a line of placeholder
+    text.
+  - **An `Edit` button revises a schedule**, and the infeasibility panel's target
+    date carries an `Apply` control that writes it.
+  - **The reading view shows a second badge with pace and today's quota**, such
+    as `today 3 pages · 14d`. The full verdict is in the tooltip.
+  - **`Go to Schedule` is in the command palette.** The tab shipped without one.
+  - Bug fix: **marking a page done now moves every schedule surface at once.**
+    The badge, the Today tile, plan row 0 and the home view all read stale until
+    a reload.
+  - Bug fix: **a document whose cards you gathered into a filtered deck no longer
+    reports `FSRS is off in Anki`.** FreeMemo now finds the deck preset that
+    governs the cards, and reads the review history per card rather than per
+    deck. Eleven cards sitting outside the named deck used to contribute no
+    reviews at all.
+  - Bug fix: **applying the suggested target date now clears the warning that
+    offered it.** The warning measured against the whole page range while the
+    date search measured against the pages a projection can reach, so no date
+    could ever close it.
+  - Bug fix: **pages with no cards no longer read as an impossible target.** The
+    panel used to say the target was out of reach and, in the same box, that the
+    plan below schedules the reading that reaches those pages. Both cannot hold.
+- **Create a copy of a card instead of retyping it.** Text cards get
+  `Create copy…` in the edit modal, between History and Cancel. It commits the
+  card you are editing, closes, and opens the add modal filled from what you had
+  on screen. Occlusion and score editors get `Duplicate` instead, because those
+  write the copy on click.
+  - The copy modal refuses to save while the copy still equals its source.
+  - Bug fix: **a save where every card was already present used to report
+    `Card added` and add nothing.** Generate and Add reached that path too.
+- **The image occlusion editor can add text labels.** An image with no labels
+  often cannot be occluded usefully, because what you want to recall is not in
+  the pixels. A label is drawn under the masks, so a mask over it hides it on the
+  question and the answer reveals it. This needs no Anki model or template
+  change, so notes you already pushed are untouched.
+  - Bug fix: **a click with the Text tool now creates a label.** The tool shipped
+    unusable. The label and its editor were gone before a keystroke could reach
+    them, and the letters you typed switched tools instead.
+  - **The editor gains a `Delete` button.** Deleting a mask was on the Delete key
+    alone.
+- **Both card tables show one row per authoring group.** A 7-mask image with no
+  grouping filled 7 rows. Deleting the row deletes every card it stands for, and
+  that delete is now undoable. Counts state rows and cards separately.
+  - Clicking an occlusion row used to open the editor with no way to tell which
+    mask the row stood for. That edit path never worked.
+- **Occlusion notes get a Links field**, at the same place as the other four
+  FreeMemo note types. An occlusion card made from a PDF page carried no
+  citation, no page locator and no link back into FreeMemo. FreeMemo also puts
+  the fields of all five of its note types into a fixed order, so a note type you
+  already had gets the field in the same place a new one does.
+- **A card made from a PDF page carries its page number into Anki again**, on the
+  citation line: `Compilers: principles, techniques, & tools — (2007) — p. 5`.
+  The page number was lost when Source and Bibliography became one Links field.
+- **The keyboard chords lost a modifier.** Marking a page done is a constant
+  action in a reading session and cost three keys. Mark done is `⌘D`, Extract is
+  `⌘E`, Scan page is `⌘S`, Generate cards is `⌘G`, and Undo is `⌘Z`. Add card
+  (`⌘⇧A`), Sync with Anki (`⌘⇧X`), Sync now (`⌘⇧⌥X`) and the command palette
+  (`⌘K`) are unchanged. On Windows and Linux read `Ctrl` for `⌘`.
+  A chord now takes the browser's key only on the screen where the action
+  belongs. `⌘Z` yields to any text field or editor you are typing in. The
+  Settings shortcuts table is read from the registry, so it can no longer go
+  stale — it listed six of the nine bound commands.
+- **Two chords insert a cloze in the card editor.** `⌘⇧C` inserts the next cloze
+  number and `⌘⇧⌥C` reuses the current highest. The `{+}` and `{=}` buttons
+  appear only on a selection, so a collapsed caret had no way to make a cloze.
+- **Knowledge marks facts that restate a fact you already have.** Re-distilling a
+  document produces reworded copies, and the database indexes cannot see them.
+  Measured on production, those indexes caught 4 of 49 duplicate pairs by hand
+  count. The detector runs after each distillation, and on demand over one
+  document or all of them.
+  - **A marked fact takes a new `duplicate` status, not `rejected`.** Your
+    judgement and a detector's guess stay tellable apart. Nothing is deleted, and
+    a mark is reversible per fact and through undo.
+  - **The Facts view gains a status filter**, which is the only place a withdrawn
+    fact is listed. Rejected facts had been unreachable the same way.
+  - **Settings → Duplicate detection holds the three thresholds and an on/off
+    switch.**
+- **A large EPUB imports.** The upload takes the same chunked route video and
+  archives already use, the parser reads the book without holding it in memory,
+  and the zip-bomb guard measures a ratio rather than a fixed size. A 596 MB book
+  imports and deletes cleanly.
+- **A Sphinx documentation build imports as a topic tree.** Drop the zip in, and
+  the directory layout becomes the topic tree. Images become media and internal
+  links navigate inside FreeMemo. Verified against the full Blender 5.2 manual:
+  2356 pages, 13 559 links rewritten, 3138 images stored.
+- Bug fix: **an imported documentation page no longer flattens into a wall of
+  paragraphs.** Quill holds no element for a definition list, a horizontal rule,
+  a figure or a keyboard key, and it dropped each one on load. Worse, the editor
+  wrote the flattened page back, so one keystroke destroyed the structure for
+  good. 1787 web pages and 968 SuperMemo pages were exposed.
+- Bug fix: **the Learn page no longer says `Nothing due — you're all caught up.`
+  when topics are waiting.** A single document could abort the queue query for a
+  whole account. Three users hit it, and one of them lost all 2512 due topics.
+  The page now shows the error instead of an empty queue.
+- Bug fix: **the navigation bar is reachable on a 320px phone.** The ⋮ trigger
+  laid out past the right edge of the strip, where it was invisible but still
+  took every click aimed at Settings. The seven tabs behind that menu had no way
+  in, and nothing recovered from it.
+- Bug fix: **an upload under a stale sign-in now answers `401` and signs you
+  out.** It failed with `500 Upload could not be started`, which sent you to
+  inspect a file that was never at fault.
+- Bug fix: **math scanned from a page renders in the editor.** A model that
+  answers with `$…$` or `\[…\]` produced text that rendered on cards and sat as
+  literal characters in the editor — one document reading two ways.
+- **The Library and Knowledge tables are faster and steadier.** Both cap at ten
+  rows of scroll container, so 15 rows mount whatever your window height instead
+  of about 44. All four Knowledge views now share the Cards table's scroll, its
+  empty state and its cell styling. The Facts view loaded slowly and jittered
+  when the pointer crossed a row.
+
+### Known issues
+
+- **FreeMemo can no longer remove a tag from Anki.** A tag you clear in the sync
+  form stays on the notes that already carry it. Additions propagate, removals do
+  not. That asymmetry is the price of not deleting your own tags.
+- **A score or overlapping card cannot receive a pull.** FreeMemo has no way to
+  read those kinds back from Anki, so a run reports them as conflicts rather than
+  dropping them without saying so.
+- **An Anki push of a copied occlusion group has not been attempted.** The score
+  `Duplicate` button also has no browser test, because no score document exists
+  to drive one.
+- **The Schedule tab needs Anki with FSRS on and an optimized deck preset.**
+  Without it a schedule reports its status per row and shows no forecast. If your
+  cards sit in a filtered deck, empty it first.
+- **The feasibility warning measures against the daily review capacity you
+  declared, not against your measured rate.** No read-only Anki action reports a
+  collection's review rate.
+- **Every page you marked done before this release reads as `not today`.** The
+  first day after the deploy starts today's quota from a plain count rather than
+  from `done`.
+- **Pace and today's quota are measured against different lines and need not
+  agree.** Pace runs from the coverage baseline to the coverage deadline. The
+  quota divides today's allocation. The pace verdict now sits in the tooltip
+  alone for that reason.
+- **Every schedule that predates this release reads `On plan` on the day it
+  deploys.** Coverage at creation time is unrecoverable, so each schedule takes a
+  fresh baseline and whatever lag its old line had measured is forgiven.
+- **Two of the four infeasibility levers are marked `(not editable yet)`.**
+  Retention target and page exclusions are real ways out of an impossible plan,
+  so they are named rather than hidden.
+- **`p. N` in an Anki note is the physical PDF page index.** There is no page
+  label or offset model, so a book with front matter disagrees with its own
+  numbering. A document nested inside a PDF page also pairs its own citation with
+  the host PDF's page.
+- **An occlusion label never becomes a card**, and it does not wrap — only your
+  own line breaks split a line. The label's vertical alignment on a real Anki
+  card is unverified. If a label sits wrong on your card, contact me.
+- **Roughly one duplicate-fact mark in ten is wrong.** The detector scored 0.90
+  precision against 234 hand-labelled pairs. Every mark is reversible. The
+  thresholds were fitted against four documents from two users and will need
+  moving.
+- **A first distillation marks nothing**, and facts from the same run are never
+  compared with each other. The detector compares new facts against facts the
+  document already had.
+- **Documentation you imported before this release stays flat.** A backfill
+  cannot restore tags the sanitizer already deleted, so those trees need a
+  re-import. The first edit of a freshly imported page also rewrites the stored
+  row once, as Quill normalizes it. That is a one-time change and stable
+  afterwards.
+- **A Sphinx import drops in-page anchors.** A link to a heading inside a page
+  lands on the page. Nested definition lists lose one indent step.
+- **A book with several thousand images can still exhaust memory on import.** The
+  bound is the image count, not the file size. A 596 MB book imports inside a 1 GB
+  heap.
+- **The EPUB import has not been driven end to end through the browser.** The
+  server side is verified against PostgreSQL, including the upload, the finalize
+  and the delete.
+- **The first server start after this release may take longer.** One table gains
+  a generated column, and adding it rewrites the table. That cost is unmeasured
+  against a production-sized table.
+- **A deleted account still reaches an empty app on any page that reads no
+  quota.** The sign-out happens on the next upload.
+- **`⌘D` still bookmarks the page outside a document.** The chord belongs to the
+  reading view, so every other screen leaves the key to the browser.
+
+### Technical
+
+- **Six namespaces carry Anki reconcile.** `freememo.anki-reconcile` holds
+  `classify`, which answers "did Anki change?" and "did FreeMemo change?" from
+  four digests and nothing else. `anki-reconcile-client` is the browser half,
+  `anki-reconcile-server` the server half, `anki-reconcile-panels` the UI, and
+  `anki-digest` and `anki-fields` the shared vocabulary. `anki_pull_button.cljc`
+  is deleted.
+  - **The interface says Sync and the code says reconcile, on purpose.** A sync
+    is what the user asks for. A reconciliation is how the direction is decided.
+    Every string a user reads carries the first word. Namespaces, functions and
+    docstrings keep the second.
+  - **`get-bulk-push-bundles` is renamed `anki-write-bundles` and no longer
+    filters on `anki_note_id`.** It was written for the bulk Push-updates
+    button, which could only update, so an unpushed card was noise to it. To a
+    sync those rows ARE the `:create` set. It also omitted `:deck` and
+    `:allow-dupes`, both of which `addNote` needs, so every create would have
+    gone to `deckName nil`. It now refuses up front when a bundle has creates
+    and no deck, naming the document.
+  - **`report-line` and `outcome-text` are separate functions.** The first says
+    what a run DECIDED and only a dry run shows it. The second counts
+    `finish-run!`'s steps, and `:writes` counts cards whose note was written and
+    read back. Reporting the plan after a real run is how a run that created
+    nothing came to say "46 created".
+  - **`do-anki-push!`'s per-card errors are reported rather than collected and
+    dropped**, and a failed bundle build ends the run instead of passing a nil
+    `:bundles` onward into an empty write.
+  - `flashcards` gains `anki_baseline_digest`, `local_baseline_digest`,
+    `anki_baseline_mod` and `anki_conflict_at`. `anki_baseline_mod` is recorded
+    and read by nothing, so a future `notesModTime` fast path is a data question
+    rather than a migration.
+  - New table `anki_note_tombstones`. Every path that hard-deletes a synced card
+    writes one, and a run retries the deletion from it.
+  - Measured on the production account beforehand: 58 of 1477 cards carried an
+    Anki `mod` newer than their sync stamp, and none of them had a content
+    difference. Tag writes move it.
+  - `build-update-note` owns the `tags` key for both update actions. The same
+    bare `:tags` expression inlined at two call sites is how the tag wipe reached
+    both of them. Omitting the key looks safe and is not — AnkiConnect reads
+    `note.get('tags', [])` and assigns the result.
+- **Seven namespaces carry the Schedule tab**, plus three tables.
+  `study_schedules` is user intent and is exported. `anki_card_states` and
+  `anki_deck_configs` cache what Anki already knows and are excluded from account
+  transfer.
+  - Projection branches on all four ratings at every review, weighted by your
+    measured rating distribution, and prunes below 1e-4 probability. A 365-day
+    horizon over 879 cards runs in 1.2 s inside `e/Offload`.
+  - The maturation lead is derived per schedule and memoized on the scheduler
+    map. It is 11 days under the canonical deck config and 8 under the FSRS-6
+    defaults, and it is not monotonic in the retention target — 15 days at 0.85
+    against 8 at 0.90. The search is therefore a linear scan.
+  - `topics.done_at` is what makes a daily quota possible. All three writers of
+    `topics.status` own it. It is deliberately not backfilled, because NULL reads
+    as "not today".
+  - `study_schedules.start_covered` and `covered_baseline_at` put pace on the
+    coverage axis. Copying `start_known` instead was measured and rejected — over
+    six live rows it understated four baselines, two of them by 32 pages.
+  - `:done` and `:restore` now declare `:schedule-mutations`. The three plan
+    readers watched that channel and nothing bumped it, so Electric skipped the
+    work with no dep change and no unmount.
+  - `revlog!` reads through `getReviewsOfCards`, batched at 999: 137 cards in
+    30 ms and 12 KB, against 365 ms for one deck-wide sweep. That removed
+    `normalize-card-reviews`, `db/anki-state-high-water` and the incremental
+    replay, so every replay starts fresh and the write no longer depends on
+    order.
+- **`freememo.doc-html` is the seam between imported markup and Quill.** It
+  rewrites a definition term to a bold paragraph, a definition body to
+  `ql-indent-1`, a `kbd` to inline `code` and a Sphinx admonition to a
+  blockquote. It runs before `clean-html`, because the sanitizer strips the
+  classes that identify the constructs.
+  - `hr` needs a `BlockEmbed` blot, and that blot is a production-only hazard.
+    `blotName` is in no Closure extern, so writing it with `set!` on a
+    dot-property is a write `:advanced` believes nothing reads. Closure deleted
+    the assignment, the bundle compiled with zero warnings, and every `<hr>`
+    dropped in production. `aset` with a string key survives, and
+    `clj -X:build bundle-check/verify!` now asserts it against the built
+    artifact.
+  - Both importers parsed with Jsoup pretty-print left on, so `clean-html` kept
+    the re-indentation as text nodes. `.ql-editor` is `white-space: pre-wrap`, so
+    one page measured 30180px tall against 9292px collapsed.
+- **`freememo.sphinx-import` walks a build into a tree.** Ids are drawn from the
+  sequence before anything is written, because a page's links point at topics not
+  yet inserted. Nodes are ordered by tree depth, not by path segment count.
+  Detection requires `.buildinfo`, `objects.inv` and `searchindex.js` together.
+  - A stored `href` cannot navigate for two independent reasons: Chrome does not
+    follow an anchor click inside a `contenteditable`, and router5 attaches its
+    click handler per node inside `router/Link`. A listener on the Quill root is
+    the only route.
+- **EPUB uploads move to the chunked transport**, with chunk, abort and status
+  shared through `freememo.upload-http` and five new `/api/epub` routes. Bytes
+  land in a new `topic_epubs` table as a large object, so finalize hands the
+  session's OID to the topic instead of copying. The parse reads through a
+  commons-compress `ZipFile` with random access rather than forcing a
+  `{path -> byte[]}` map.
+  - `ceilings*` reported `upload_max_bytes` while the middleware enforced
+    `request-max-bytes`. In production the first is unlimited and the second is
+    100 MB, so the client check was off and the chip row showed no limit.
+    `STORAGE_REQUEST_MAX_BYTES` is now in the compose allowlist.
+- **`topics.content_preview` is a STORED generated column holding
+  `left(content_text || '', 400)`.** The concatenation forces a full detoast, so
+  PostgreSQL takes no byte slice and cannot end one inside a multi-byte
+  character. `get-learning-queue` now returns `{:rows … :error …}` and never
+  throws, because an exception there crosses `e/server` and closes the WebSocket.
+- **`freememo.kg-dedup` holds the duplicate detector**, the best of 21 scored
+  against 234 hand-labelled pairs at precision 0.90 and recall 0.78. Three
+  branches, each catching what the others miss. Trigram similarity comes from
+  `pg_trgm`, because the thresholds were fitted against it. `fuzzystrmatch` and
+  `unaccent` are installed as groundwork for a planned embedding tier and feed
+  nothing today. `kg_facts.status` and `undo_log.action_type` both widen their
+  CHECK.
+- **A repo-wide siting audit moved 33 blocking database reads into `e/Offload`**,
+  across 10 namespaces. Each one ran on its session's reactive thread and stalled
+  the whole graph for the length of the query. `loading/WithLatestServerLoading`
+  is new and additive: it calls the thunk inside `e/server` and latches a
+  readiness boolean, so a large collection stays on the server.
+  - `content-card-table` read `:success` and `:error` in client scope from a map
+    holding every card of the document. The Anki pull path sent every card with
+    bibliography HTML and group geometry attached, then dropped the unpushed rows
+    in the browser.
+- **`freememo.tape-table` owns the header, the scroll container, the row window
+  and the empty state for all four Knowledge views.** Cell layout moved from
+  merged inline `:style` maps to role classes — a row cost about 46 reactive prop
+  nodes against 4 for a Cards row. Both Library tables and the Knowledge tables
+  cap the container at ten rows with an overquery factor of 1.5.
+- **`freememo.card-rows` owns the collapsed-row model.** `:row-key` is the
+  selection unit, `:member-ids` is the delete, push and pull unit, and `:members`
+  never crosses the wire. Collapse runs before filtering, or a row would delete a
+  subset of its own group.
+- **`freememo.interaction-trail` records one `::interaction` signal** with
+  `:kind` as the discriminator: `:command`, `:nav`, `:pdf-page` and `:search`.
+  `command-bus/dispatch!` is instrumented rather than its 18 call sites, and a
+  command carries `:source #{:button :keyboard :palette}`, which is what makes
+  chord adoption measurable. Card bodies and search text stay out of the log
+  deliberately — ids, counts and enums answer the question without them.
+- **`applies-here?` is split out of `available?` in the command bus.** The first
+  asks whether a key is the app's on this screen, the second adds whether
+  anything is mounted to serve it. Suppressing on the second hands `⌘S` to
+  Chrome's Save Page sheet on every non-PDF topic, because `:scan`'s only
+  publisher sits behind `(when is-pdf? …)`.
+  - Closure defaults `alwaysPreventDefault_` to true and calls `preventDefault`
+    before it dispatches the shortcut event, so every registered chord ate its
+    browser default on every tab. Only a literal `false` return suppresses.
+  - `commands/display-chord` gains a 1-arity that reads the bind from the
+    registry. Seven labels built their chord text by hand and four went stale the
+    moment these chords shortened.
+  - `command-bus` keys published invokers by publisher. `:copy-card` has three
+    publishers and two of them can mount together.
+- **Every Quill instance installs
+  `quill-field/install-resize-release-on-focus-out!`.** `quill-resize-module`
+  owns `document` keydown in the capture phase while it holds a selected image,
+  and calls `quill.setSelection` from it. A right-click on an image arms it, so
+  any text surface on the page loses its first keystroke and cannot defend
+  itself.
+- **Signal ids: `::interaction` is new.** `::client-error` now carries a real
+  `:session-id` — the forwarder read the var inside `e/server`, which is a
+  server-side read of a browser-only value, so every entry ever recorded reported
+  nil. `session-id` moved to `freememo.client-state`.
+- **`freememo.markdown` holds the OCR math conversions**, and `math/display->inline`
+  rewrites a `\[…\]` region to `\(…\)`. Normalization happens where both OCR
+  lanes pass, not in the prompt, because the plugin lane never receives one.
+- **Deps and images:** `org.postgresql/postgresql` `42.7.3` → `42.7.13`, and the
+  postgres image pinned from `16-alpine` to `16.14-alpine`. 16.14 carries 11 CVE
+  fixes. `deploy.sh` runs `up -d postgres` every deploy, and an unchanged tag
+  pulls nothing, so the minor only moves when that line moves. The driver audit
+  is recorded in `plans/postgres-16-14-and-jdbc-42-7-13-bump.md` for the next
+  bump to reuse. `ontop` carries its own copy of the driver jar, bumped to match.
+- **The build stage sets `JAVA_TOOL_OPTIONS="-Xmx3g"`.** Nothing set a heap
+  before, so the JVM took a quarter of whatever the host had. Three deploys died
+  with `OutOfMemoryError` inside `uberjar` on the 7.9 GB box while the same
+  commits built fine on a 16 GB machine. Raising this without raising the box's
+  headroom risks the OOM killer choosing the live container.
+- **`deploy.sh` tees its whole output to `logs/deploy/<utc>-<commit>.log`** and
+  points `logs/deploy/latest` at it. A failed deploy used to leave nothing on the
+  box to read. Capture opens before the lock, so a rejected concurrent run is
+  recorded too. `test-deploy-transcript.sh` drives the real script against a stub
+  docker in a temporary git repo, 20 checks, no network.
+- **Coverage counts moved:** Routes 12 → 13, Nav destinations 9 → 10, Registry
+  commands 82 → 86, HTTP routes 36 → 41. `coverage-counts.spec.mjs` derives each
+  from `src/` and fails until `docs/post-deploy-checklist.md` matches.
+- **`freememo.scroll` gains a container cap and `compute-overquery` accepts a
+  fractional factor.** Mounting fewer rows than the container shows paints a
+  blank band, so the cap is on `:max-height`, never on the window.
+
 ## v20260806-5467b1f
 
 ### For users
