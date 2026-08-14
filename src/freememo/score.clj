@@ -106,6 +106,50 @@
       (tel/error! {:id ::get-group-for-edit :data {:group-id group-id}} e)
       {:success false :error (.getMessage e)})))
 
+(defn duplicate-group!
+  "Create a NEW group over the SAME clip and crops, with the same geometry and
+   the same set of directions.
+
+   Pre : `user-id` owns `group-id`.
+   Post: {:success true :group-id id :ids [card-id ...]} or
+         {:success false :error msg}.
+   Invariant: the copy lands on the SOURCE CARDS' topic, read here rather than
+         taken from the client.
+   Invariant: media is SHARED. :clip-media-id and each rect's :media-id are
+         carried across untouched, so no audio is re-cut and no page re-cropped.
+         media is unique per (user_id, sha256), so re-materializing the same
+         bytes would return the same rows anyway. Deleting either group leaves
+         them — the foreign key runs group → media, and db.clj:4490 records
+         that orphan media is tolerated here.
+
+   This copies what is STORED, not the editor's current selection, and that
+   follows from sharing the media: a rect only gains its :media-id when
+   produce-assets! crops it at save time, so an unsaved rectangle has no crop to
+   share. The button says so.
+
+   db/insert-score-group! mints a new anki_key, so the copy's Anki media
+   filenames and note ids do not collide with the source's."
+  [user-id group-id]
+  (try
+    (if (not= user-id (db/score-group-owner group-id))
+      {:success false :error "Score group not found"}
+      (let [source (db/get-score-group group-id)
+            cards (db/get-score-cards group-id)
+            origin-card (first cards)]
+        (if (or (nil? source) (nil? origin-card))
+          {:success false :error "Score group not found"}
+          (create-group! user-id
+            {:topic-id (:flashcards/topic_id origin-card)
+             :root-topic-id (:flashcards/root_topic_id origin-card)
+             :start-ms (:score_groups/start_ms source)
+             :end-ms (:score_groups/end_ms source)
+             :clip-media-id (:score_groups/clip_media_id source)
+             :geometry (:score_groups/geometry source)
+             :directions (mapv :flashcards/score_direction cards)}))))
+    (catch Exception e
+      (tel/error! {:id ::duplicate-group! :data {:group-id group-id}} e)
+      {:success false :error (.getMessage e)})))
+
 ;; ---------------------------------------------------------------------------
 ;; Optimistic-queue commands. Contract (see freememo.optimistic ns docstring):
 ;; methods own the effect + toast; optimistic/execute! bumps the registry

@@ -86,19 +86,62 @@
 ;; a 0-arg invoke handle (typically #(.click node)) so keyboard/palette/menus
 ;; trigger the SAME flow the visible button runs.
 
-(defonce !invokers (atom {}))   ; command-id → 0-arg client fn
+(defonce !invokers (atom {}))   ; command-id → {publisher-key → 0-arg client fn}
+
+(def ^:private sole-publisher
+  "The publisher key a 2-arity publish uses.
+
+   Most :ui-button commands have exactly one component that can be mounted, so
+   they need no key and share this one. A command with two or more possible
+   publishers MUST pass distinct keys — see the 3-arity."
+  ::sole)
 
 (defn publish-invoker!
   "Publish the invoke handle for a :ui-button command. The publisher MUST
-   retract on unmount (e/on-unmount) — see the context contract above."
-  [command-id f]
-  (swap! !invokers assoc command-id f)
-  nil)
+   retract on unmount (e/on-unmount) — see the context contract above.
+
+   Pre : with the 3-arity, `publisher-key` is unique per mounted publisher and
+         equal between a publish and its matching retract. The publisher's DOM
+         node is the natural choice: every publisher already holds one, and two
+         mounted components can never share it.
+   Post: the command is available while at least ONE publisher holds it.
+
+   The key exists because the registry is per command, not per component, and
+   two components CAN publish the same command at once. :copy-card is the
+   deliberate case — one command, three surfaces (the card edit modal, the
+   occlusion modal, the score toolbar), and a score topic holding a basic card
+   mounts two of them together. Without a key the second publish overwrites the
+   first, and whichever unmounts first retracts the command out from under the
+   one still on screen, leaving a visible button the palette calls unavailable.
+
+   :done has the same shape today (content_toolbar_extract and pdf_toolbar both
+   publish it on a PDF page) and has not been migrated."
+  ([command-id f] (publish-invoker! command-id sole-publisher f))
+  ([command-id publisher-key f]
+   (swap! !invokers update command-id assoc publisher-key f)
+   nil))
 
 (defn retract-invoker!
+  "Remove one publisher's handle. Pre: `publisher-key` matches the publish.
+   Post: the command-id key is gone once its LAST publisher retracts, so
+   `available?`'s contains? check stays exact."
+  ([command-id] (retract-invoker! command-id sole-publisher))
+  ([command-id publisher-key]
+   (swap! !invokers
+     (fn [m]
+       (let [remaining (dissoc (get m command-id) publisher-key)]
+         (if (seq remaining)
+           (assoc m command-id remaining)
+           (dissoc m command-id)))))
+   nil))
+
+(defn- invoker-for
+  "Any one mounted publisher's handle, or nil.
+   Post: with several publishers the choice is arbitrary but every candidate is
+   mounted, so whichever runs is a live button. Only :copy-card reaches this,
+   and its three surfaces are mutually exclusive in what a user is looking at."
   [command-id]
-  (swap! !invokers dissoc command-id)
-  nil)
+  (first (vals (get @!invokers command-id))))
 
 ;; ── Invocation queue (for :queue and :electric exec) ───────────────────────
 
@@ -178,7 +221,7 @@
                    :unavailable))
 
                :ui-button
-               (if-let [invoke (get @!invokers command-id)]
+               (if-let [invoke (invoker-for command-id)]
                  (do (invoke) :dispatched)
                  :unavailable)
 

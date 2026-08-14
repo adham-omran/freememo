@@ -9,7 +9,7 @@
    [contrib.data :refer [clamp-left]]
    [freememo.card-components :refer [CardRow PendingCardRow rtl-text?]]
    [freememo.card-rows :as rows]
-   [freememo.card-modals :refer [EditCardModal]]
+   [freememo.card-modals :refer [EditCardModal CopyCardModal]]
    [freememo.occlusion-modal :refer [OcclusionModal]]
    [freememo.score-toolbar :refer [ScoreEditLoader]]
    [freememo.client-state :as cs]
@@ -46,15 +46,19 @@
           editing-card (e/watch !editing-card)]
 
       (when editing-card
-        (case (:kind editing-card)
-          ;; CardRow puts {:kind "occlusion" :mode :edit :group-id N} in the
-          ;; atom — the occlusion modal treats it as its edit request.
-          "occlusion" (OcclusionModal !editing-card user-id)
-          ;; Score rows load their group into the in-view score editor
-          ;; (waveform region + rect pages) instead of opening a modal.
-          "score" (when dctx/is-score?
-                    (ScoreEditLoader user-id !editing-card))
-          (EditCardModal !editing-card user-id)))
+        ;; :mode is checked before :kind because a copy request carries BOTH,
+        ;; and its kind must not route it back to the editor it came from.
+        (if (= :copy (:mode editing-card))
+          (CopyCardModal !editing-card user-id)
+          (case (:kind editing-card)
+            ;; CardRow puts {:kind "occlusion" :mode :edit :group-id N} in the
+            ;; atom — the occlusion modal treats it as its edit request.
+            "occlusion" (OcclusionModal !editing-card user-id)
+            ;; Score rows load their group into the in-view score editor
+            ;; (waveform region + rect pages) instead of opening a modal.
+            "score" (when dctx/is-score?
+                      (ScoreEditLoader user-id !editing-card))
+            (EditCardModal !editing-card user-id))))
 
       ;; Both branch reads are server-sited. `cards-result` holds the whole card
       ;; vector; reading :success (or :error) from client scope would pull that

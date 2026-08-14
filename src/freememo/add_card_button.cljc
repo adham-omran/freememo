@@ -16,7 +16,10 @@
     (let [!show-add (atom false)
           show-add (e/watch !show-add)
           !card-kind (atom card-type)
-          !captured-selection (atom "")]
+          ;; AddCardModal's prefill map. Only :primary is ever set here — a
+          ;; captured selection seeds the front field, and there is nothing to
+          ;; put in the back. Create copy… is what fills the rest.
+          !prefill (atom {})]
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary toolbar-overflow-item"
                     :style {:font-weight "500"}
@@ -41,8 +44,9 @@
               (when taken?
                 (editor/highlight-range! index length
                   :color "var(--color-highlight-gold)"))
-              (reset! !captured-selection (if taken? html "")))
+              (reset! !prefill {:primary (if taken? html "")}))
             (reset! !show-add true))
           nil))
       (when show-add
-        (AddCardModal !show-add !card-kind !captured-selection topic-id root-topic-id user-id)))))
+        (AddCardModal (fn [] (reset! !show-add false))
+          !card-kind !prefill topic-id root-topic-id user-id nil)))))

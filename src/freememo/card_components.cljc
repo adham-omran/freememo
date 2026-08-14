@@ -204,6 +204,13 @@
           ol (e/server (:flashcards/overlapping card))
           group-id (e/server (:flashcards/occlusion_group_id card))
           score-group-id (e/server (:flashcards/score_group_id card))
+          ;; The card's OWN topic, which is not the ambient one. On a root
+          ;; topic get-cards-for-topic* calls get-all-flashcards, so this table
+          ;; lists every descendant's cards while dctx/page-topic-id is the
+          ;; root — a copy sited from the ambient topic would land on the wrong
+          ;; page. Create copy… reads these instead.
+          topic-id (e/server (:flashcards/topic_id card))
+          root-topic-id (e/server (:flashcards/root_topic_id card))
           ;; Built server-side from the members: a group row's front cell
           ;; describes the whole group, and its dot folds every member's state.
           front-html (e/server (row-front-html card))
@@ -227,9 +234,11 @@
                                         ;; Routes to EditCardModal (default case)
                                         ;; carrying the parsed list so the
                                         ;; overlapping pane can pre-fill.
-                                        {:id id :kind kind :overlapping ol}
+                                        {:id id :kind kind :overlapping ol
+                                         :topic-id topic-id :root-topic-id root-topic-id}
                                         :else
-                                        {:id id :kind kind :question question :answer answer :cloze cloze})]
+                                        {:id id :kind kind :question question :answer answer :cloze cloze
+                                         :topic-id topic-id :root-topic-id root-topic-id})]
                              (log/log-debug (str "Edit card clicked id=" id " kind=" kind))
                              (reset! !editing-card data)))]
         (dom/tr

@@ -22,6 +22,8 @@
    [freememo.quill-field :refer [QuillField]]
    [freememo.card-modals :refer [attach-modal-tab-nav!]]
    [freememo.card-history-modal :refer [CardHistoryModal]]
+   [freememo.commands :as commands]
+   [freememo.command-bus :as bus]
    [freememo.card-components :refer [try-delete-anki-notes!]]
    [freememo.occlusion-ordinals :as ord]
    [freememo.tooltip :as tooltip]
@@ -42,6 +44,10 @@
 
 (defn enqueue-add-occlusion!* [id payload]
   (opt/enqueue-pending! :add-occlusion id payload))
+
+(defn duplicate-group!* [user-id payload]
+  #?(:clj (occ/duplicate-group! user-id payload)
+     :cljs nil))
 
 (defn enqueue-update-occlusion!* [payload]
   (opt/enqueue! {:type :update-occlusion :payload payload}))
@@ -353,6 +359,99 @@
     (OcclusionFieldRow "Extra 1:" "Back-side extra..." :extra1 initial-fields !fields field-key modal-font)
     (OcclusionFieldRow "Extra 2:" "Back-side extra..." :extra2 initial-fields !fields field-key modal-font)))
 
+(e/defn OcclusionDuplicateButton
+  "Duplicate — commit this group's edits, then create a second group over the
+   same image and reopen the editor on it.
+
+   Pre : edit mode only. `group` is the loaded source group, `!handle` the live
+         Konva editor, `!fields` the IO text fields, `initial-*` the values the
+         editor mounted with.
+   Post: !request holds {:mode :edit :group-id <the copy>}, so the modal is
+         editing the copy and the source is left saved and closed.
+   Invariant: the source is committed FIRST, and only when dirty. The copy
+         takes the editor buffer, so without that write the source would silently
+         lose the very edits the copy keeps.
+
+   The word is Duplicate, not Create copy…, because this writes on click while
+   the text modal opens an unsaved draft. One label for two commitments would
+   promise the wrong thing on one of them."
+  [group !request !handle !fields initial-rects initial-elements initial-geometry
+   initial-fields user-id]
+  (e/client
+    (let [[click-event btn-node]
+          (dom/button
+            (dom/props {:class "btn btn-secondary" :style {:order "0"}
+                        :data-tooltip "Save this group, then start a second one over the same image"})
+            (dom/text "Duplicate")
+            ;; Same command as the text modal's Create copy… — see
+            ;; commands/:copy-card. Keyed by node, because this button and the
+            ;; card modal's can be mounted at the same time.
+            (let [node dom/node]
+              (bus/publish-invoker! :copy-card node (fn [] (.click node)))
+              (e/on-unmount (fn [] (bus/retract-invoker! :copy-card node))))
+            [(dom/On "click" identity nil) dom/node])
+          [t ?error] (e/Token click-event)]
+      ;; Disable + aria-busy while the duplicate is in flight. e/Token alone
+      ;; does not close the double-submit hole: a second click during the
+      ;; round-trip fires a second concurrent e/server call, which here would
+      ;; write a second group and race the !request reset below.
+      (dom/props btn-node {:disabled (some? t) :aria-busy (some? t)})
+      (when ?error
+        (dom/div (dom/props {:style {:order "-1" :margin-right "auto"
+                                     :color "var(--color-danger-text)" :font-size "12px"}})
+          (dom/text "Error: " ?error)))
+      (when t
+        (let [geometry (editor-geometry !handle initial-geometry)
+              ;; Deref HERE, in client scope. Inside the (e/server (e/Offload …))
+              ;; thunk below, `!fields` would be a free variable Electric has to
+              ;; transfer — and an atom is not serializable, so the socket throws
+              ;; `[unserializable] … Value: [object Object]` and the whole
+              ;; application crashes with no server-side trace. The atom's VALUE
+              ;; is a plain map and crosses fine. Same rule as "never put an atom
+              ;; in a map passed to an e/defn", one layer down: never let one be
+              ;; captured by a server-sited closure either.
+              io-fields (deref !fields)
+              dirty? (occlusion-dirty? !handle initial-rects initial-elements
+                       !fields initial-fields)]
+          (if (or (nil? geometry) (empty? (:rects geometry)))
+            (t "Draw at least one mask first")
+            ;; `case` sequences the ENQUEUE, not the write. enqueue-update-
+            ;; occlusion!* hands the command to the optimistic queue and returns;
+            ;; the row is written later by the pump. The weaker guarantee is
+            ;; enough here because the duplicate shares no state with the update:
+            ;; it reads the source's topic ids from the database, which the
+            ;; update never touches, and its geometry from this client buffer.
+            ;; The one consequence is that a failed update still leaves the copy,
+            ;; holding the buffer the user was looking at. That failure toasts.
+            (case (if dirty?
+                    (enqueue-update-occlusion!*
+                      {:group-id (:group-id group) :mode (:mode group)
+                       :geometry geometry :io-fields io-fields})
+                    :clean)
+              (let [result (e/server
+                             (e/Offload
+                               #(duplicate-group!* user-id
+                                  {:group-id (:group-id group) :mode (:mode group)
+                                   :geometry geometry :io-fields io-fields})))]
+                (if (:success result)
+                  ;; e/snapshot freezes the new group id as a plain number for
+                  ;; the callback. An e/on-unmount closure reads a SIGNAL at fire
+                  ;; time, not at creation time, so closing over `result` would
+                  ;; have it read a server binding during its own teardown — the
+                  ;; hazard video_pane records. A frozen scalar cannot move.
+                  (let [copy-group-id (e/snapshot (:group-id result))]
+                    ;; :kind is REQUIRED, not decoration. In ContentCardTable
+                    ;; this atom IS !editing-card, and that host routes on :kind
+                    ;; — a request without it falls through to EditCardModal,
+                    ;; which then opens a card modal with a nil card id over an
+                    ;; occlusion group. Matches the request CardRow writes.
+                    (e/on-unmount
+                      (fn [] (reset! !request {:kind "occlusion" :mode :edit
+                                               :group-id copy-group-id})))
+                    (case (e/server (commands/bump! user-id :add-occlusion))
+                      (t)))
+                  (t (:error result)))))))))))
+
 (e/defn OcclusionActions
   "Create mode: two generate buttons (each = save with that mode).
    Edit mode: one Save. Plus Cancel with the dirty-discard guard.
@@ -364,7 +463,8 @@
   [ctx !primary-btn !history-open?]
   (e/client
     (let [{:keys [edit? group request !request !handle !fields
-                  initial-rects initial-geometry user-id close!]} ctx
+                  initial-rects initial-geometry initial-elements initial-fields
+                  user-id close!]} ctx
           !submit (atom nil)                    ; {:mode s :n int} — :n re-arms the token
           submit (e/watch !submit)
           submit! (fn [mode] (swap! !submit (fn [prev] {:mode mode :n (inc (:n prev 0))})))
@@ -403,6 +503,9 @@
         ;; Opens the modal that OcclusionModalBody mounts — mounting it here
         ;; would nest a .modal-backdrop inside this modal's pointer-events:none
         ;; container, making its own backdrop and Close unclickable.
+        (when edit?
+          (OcclusionDuplicateButton group !request !handle !fields
+            initial-rects initial-elements initial-geometry initial-fields user-id))
         (when edit?
           (dom/button
             (dom/props {:class "btn btn-secondary" :style {:order "0"}
@@ -540,6 +643,10 @@
           (OcclusionActions {:edit? edit? :group group :request request
                              :!request !request :!handle !handle :!fields !fields
                              :initial-rects initial-rects :initial-geometry initial-geometry
+                             ;; Plain data, for Duplicate's dirty test — the
+                             ;; same four values close! already compares.
+                             :initial-elements initial-elements
+                             :initial-fields initial-fields
                              :user-id user-id :close! close!}
             !primary-btn !history-open?)))
       ;; Sibling of the overlay div above, NOT a descendant of it — the overlay
@@ -563,7 +670,16 @@
           (let [result (e/server (e/Offload #(get-group-for-edit* user-id (:group-id request))))]
             (cond
               (nil? result) nil                      ; server round-trip in flight
-              (:success result) (OcclusionModalBody request !request user-id (:group result))
+              ;; Keyed on the group id so moving from one group to another is an
+              ;; honest unmount and mount, not an in-place swap. Duplicate ends
+              ;; by pointing !request at the copy, and init-occlusion-editor!
+              ;; carries no generation guard: re-evaluated in place it would
+              ;; reset! !handle to a SECOND Konva stage while the first is still
+              ;; mounted, and only the second would ever be destroyed. Same rule
+              ;; and same remedy as video_pane's per-topic key.
+              (:success result)
+              (e/for-by identity [gid [(:group-id request)]]
+                (OcclusionModalBody request !request user-id (:group result)))
               :else (dom/div
                       (dom/props {:style {:position "fixed" :bottom "20px" :right "20px"
                                           :background "var(--color-danger-bg)" :color "var(--color-danger-text)"

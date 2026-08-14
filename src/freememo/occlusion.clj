@@ -15,6 +15,7 @@
    [freememo.db :as db]
    [freememo.html-cleaner :as cleaner]
    [freememo.input-check :as input]
+   [freememo.occlusion-ordinals :as ord]
    [freememo.optimistic :as opt]
    [freememo.toasts :as toasts]
    [taoensso.telemere :as tel]))
@@ -131,6 +132,51 @@
       (assoc result :success true))
     (catch Exception e
       (tel/error! {:id ::update-group! :data {:group-id (:group-id payload)}} e)
+      {:success false :error (.getMessage e)})))
+
+(defn duplicate-group!
+  "Create a NEW group over the SAME image, holding the given mask placement.
+
+   payload = {:group-id :mode :geometry :io-fields}, where :geometry is the
+   editor's current buffer — so a duplicate carries unsaved mask moves, the
+   same way Create copy… carries unsaved text.
+
+   Pre : `user-id` owns :group-id.
+   Post: {:success true :group-id id :ids [card-id ...]} or
+         {:success false :error msg}.
+   Invariant: the copy lands on the SOURCE CARDS' topic, read here rather than
+         taken from the client. The card table on a root topic lists every
+         descendant's cards, so an ambient topic id would put the copy on the
+         root instead of the page the masks belong to.
+   Invariant: the image is SHARED, not duplicated. media is unique per
+         (user_id, sha256), so re-inserting the same bytes returns the same row
+         and duplication is not reachable anyway. Deleting either group leaves
+         the bytes — the foreign key runs group → media, never the reverse.
+   Invariant: rects are re-keyed as new mask groups (ord/rekey-as-new-groups)
+         so the copy mints its own ordinals from 1 and its next_ordinal lands
+         past them. Passing stored geometry through unchanged is the defect
+         that function exists to prevent.
+
+   A new anki_key is minted by db/insert-occlusion-group!, so the copy's Anki
+   media filenames and note ids do not collide with the source's. The same
+   image bytes therefore upload to Anki a second time, under the new key."
+  [user-id payload]
+  (try
+    (if (not= user-id (db/occlusion-group-owner (:group-id payload)))
+      {:success false :error "Occlusion group not found"}
+      (let [source (db/get-occlusion-group (:group-id payload))
+            origin-card (first (db/get-occlusion-cards (:group-id payload)))]
+        (if (or (nil? source) (nil? origin-card))
+          {:success false :error "Occlusion group not found"}
+          (create-group! user-id
+            {:topic-id (:flashcards/topic_id origin-card)
+             :root-topic-id (:flashcards/root_topic_id origin-card)
+             :image-media-id (:occlusion_groups/image_media_id source)
+             :mode (:mode payload)
+             :geometry (update (:geometry payload) :rects ord/rekey-as-new-groups)
+             :io-fields (:io-fields payload)}))))
+    (catch Exception e
+      (tel/error! {:id ::duplicate-group! :data {:group-id (:group-id payload)}} e)
       {:success false :error (.getMessage e)})))
 
 (defn get-group-for-edit

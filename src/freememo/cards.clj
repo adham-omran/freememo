@@ -497,11 +497,25 @@
    Bakes pinned images into each card's HTML before insert, then re-hosts any
    remaining data: <img src> into /api/media URLs (rehost-row-data-uris!) so no
    base64 reaches the flashcards table.
-   Returns {:success true :ids [id...]} — the ids of the newly inserted cards,
-   in order (may be shorter than `cards` if ON CONFLICT skipped duplicates) —
-   or {:success false :error msg} on failure. Nothing is inserted when an image
-   could not be stored: the card is rejected with that reason rather than saved
-   without its image.
+   Returns {:success true :ids [id...] :skipped n} — the ids of the newly
+   inserted cards, in order — or {:success false :error msg} on failure.
+   Nothing is inserted when an image could not be stored: the card is rejected
+   with that reason rather than saved without its image.
+
+   :skipped is how many rows the flashcard uniqueness indexes dropped
+   (db/insert-flashcards! uses ON CONFLICT DO NOTHING), so
+   (+ (count ids) skipped) = (count cards). A save whose rows were ALL
+   duplicates still returns :success true with no ids — inserting nothing is
+   not a failure here, because a batch generate legitimately re-proposes cards
+   the topic already holds. Callers that submit ONE card and must tell the user
+   whether it landed MUST read :skipped: without it, an all-duplicate save is
+   indistinguishable from a successful one and reports \"Card added\" having
+   added nothing (freememo.card-modals/run-command! :add-card).
+
+   NOTE the two kinds this cannot see. An overlapping row leaves question,
+   answer and cloze NULL, and NULLs are distinct in a B-tree, so neither
+   partial unique index applies and :skipped is always 0 for that kind.
+   Occlusion and score rows never reach here at all.
 
    bake? false skips bake-card-html — used by the manual Add-Card path, which
    prefills pinned images into the editor content itself (pins-prefill-html), so
@@ -553,14 +567,16 @@
                              :unstored unstored :reason reason}}
              "save-cards rejected — pasted image could not be stored")
            {:success false :error (str "Image could not be stored: " reason)})
-         (let [ids (vec (db/insert-flashcards! (mapv :row rehosted)))]
+         (let [ids (vec (db/insert-flashcards! (mapv :row rehosted)))
+               skipped (- (count rehosted) (count ids))]
            (log/audit! {:id ::save-cards :user-id user-id :action :create
                         :entity :card :n (count ids)})
            (tel/log! {:level :info :id ::save-cards-detail
                       :data {:user-id user-id :topic-id topic-id :kind kind
-                             :ids ids :n (count ids) :card-hash (hash cards)}}
+                             :ids ids :n (count ids) :skipped skipped
+                             :card-hash (hash cards)}}
              "save-cards detail")
-           {:success true :ids ids})))
+           {:success true :ids ids :skipped skipped})))
      (catch Exception e
        (tel/error! {:id ::save-cards} e)
        {:success false :error (.getMessage e)}))))

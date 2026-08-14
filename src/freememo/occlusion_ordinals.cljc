@@ -42,6 +42,36 @@
           rects)]
     [out next]))
 
+(defn rekey-as-new-groups
+  "Re-key rects so every mask group becomes a NEW one, preserving the grouping.
+   Pre:  rects satisfy the membership contract.
+   Post: no rect carries an :ordinal. Rects that shared an :ordinal share one
+         :gid, so they stay one mask group and one card. A rect that already
+         carried a :gid keeps it, and one carrying neither stays a singleton.
+   Blame: a rect carrying both keys is a caller bug, as everywhere else here;
+         :ordinal wins, matching assign-ordinals.
+
+   Exists for duplication. assign-ordinals KEEPS an incoming :ordinal and never
+   raises its watermark, so feeding a stored group's geometry to
+   insert-occlusion-group! verbatim would store next_ordinal = 1 while the
+   copy's cards already hold the source's ordinals. Minting then walks 1, 2, 3…
+   straight back into that range and violates uq_flashcards_mask_ordinal — on
+   the FIRST mask drawn when the source's ordinals start at 1 (a group created
+   fresh), and on a later one when they do not. Verified: rects at ordinals
+   3, 3, 7 yield next_ordinal 1, and the third mask added remints 3.
+
+   Re-keying states the truth instead: a copy's masks are new mask groups,
+   because they bind new rows and new notes.
+
+   The prefix keeps a converted ordinal from colliding with a :gid the editor
+   minted for a rect drawn in the same session."
+  [rects]
+  (mapv (fn [rect]
+          (if-let [ordinal (:ordinal rect)]
+            (-> rect (dissoc :ordinal) (assoc :gid (str "copy-" ordinal)))
+            rect))
+    rects))
+
 (defn ordinals-in-order
   "Distinct ordinals of `rects` in first-appearance order — one per card.
    Pre:  every rect carries an :ordinal (i.e. post-assign-ordinals).

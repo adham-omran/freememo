@@ -17,6 +17,8 @@
    [freememo.score-rect-modal :refer [ScoreRectModal]]
    [freememo.tooltip :as tooltip]
    [freememo.client-errors :as ce]
+   [freememo.commands :as commands]
+   [freememo.command-bus :as bus]
    #?(:cljs [freememo.score-wavesurfer :as ws])
    #?(:cljs [freememo.score-audio :as score-audio])
    #?(:cljs [freememo.vendor-libs :as vendor])
@@ -125,6 +127,10 @@
   (reset! !score-pages {})
   (reset! !score-edit nil)
   nil)
+
+(defn duplicate-score-group!* [user-id group-id]
+  #?(:clj (score/duplicate-group! user-id group-id)
+     :cljs nil))
 
 (defn enqueue-add-score!* [id payload]
   (opt/enqueue-pending! :add-score-group id payload))
@@ -251,6 +257,52 @@
                         "Notation")))
           (dom/On "click" (fn [_] (reset! dctx/!score-modal-open? true)) nil))))))
 
+(e/defn ScoreDuplicateButton
+  "Duplicate — create a second score group over the same clip and crops.
+
+   Pre : edit mode, so `group-id` names a stored group this user owns.
+   Post: a new group with the same geometry and the same directions exists, and
+         the card table shows it once :card-mutations propagates. The editor
+         stays on the SOURCE, unchanged — nothing about the copy is loaded.
+   Invariant: this copies what is STORED. A rect gains its crop's media id only
+         when produce-assets! runs at save time, so an unsaved rectangle has no
+         crop to share and cannot travel. The tooltip states it rather than
+         leaving the user to infer it from a missing rectangle.
+
+   Its own e/defn so ScoreAddDropdown's already-large body does not grow a
+   second token and a second effect chain."
+  [user-id group-id]
+  (e/client
+    (let [[click-event btn-node]
+          (dom/button
+            (dom/props {:class "btn btn-sm btn-secondary"})
+            (tooltip/Tooltip!
+              "Make a second card set from the saved clip and rectangles. Unsaved changes are not included.")
+            (dom/text "Duplicate")
+            ;; Same command as the other two copy surfaces — see
+            ;; commands/:copy-card. Keyed by node, because this toolbar and the
+            ;; card edit modal are both mounted by DocumentRoot: a score topic
+            ;; holding a basic card can show this button and Create copy… at once.
+            (let [node dom/node]
+              (bus/publish-invoker! :copy-card node (fn [] (.click node)))
+              (e/on-unmount (fn [] (bus/retract-invoker! :copy-card node))))
+            [(dom/On "click" identity nil) dom/node])
+          [t ?error] (e/Token click-event)]
+      ;; Disable + aria-busy while in flight — e/Token does not stop a second
+      ;; click from firing a second concurrent e/server call, and here that
+      ;; writes a second group.
+      (dom/props btn-node {:disabled (some? t) :aria-busy (some? t)})
+      (when ?error
+        (dom/span
+          (dom/props {:style {:color "var(--color-danger-text)" :font-size "12px"}})
+          (dom/text (str ?error))))
+      (when t
+        (let [result (e/server (e/Offload #(duplicate-score-group!* user-id group-id)))]
+          (if (:success result)
+            (case (e/server (commands/bump! user-id :add-score-group))
+              (t))
+            (t (:error result))))))))
+
 (e/defn ScoreAddDropdown
   "Add card ▾ → Audio front / Sheet front / Both. Disabled until a region and
    at least one rect exist. Edit mode: Update / Cancel instead."
@@ -326,6 +378,7 @@
                           :disabled (or (not ready?) (some? busy) (some? t))})
               (dom/text "Update cards")
               (dom/On "click" (fn [_] (start-pipeline! nil)) nil))
+            (ScoreDuplicateButton user-id (:group-id edit))
             (dom/button
               (dom/props {:class "btn btn-sm btn-secondary"})
               (dom/text "Cancel edit")

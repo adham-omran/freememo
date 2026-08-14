@@ -12,6 +12,7 @@
    [freememo.quill-field :refer [QuillField flush-syntax-tokens!]]
    [freememo.card-history-modal :refer [CardHistoryModal]]
    [freememo.commands :as commands]
+   [freememo.command-bus :as bus]
    [freememo.cloze :as cloze]
    #?(:clj [freememo.toasts :as toasts])
    [freememo.optimistic :as opt]
@@ -81,6 +82,52 @@
   [s]
   #?(:cljs (let [n (js/parseInt (str s) 10)] (if (js/isNaN n) 1 (max 0 n)))
      :clj (max 0 (or (parse-long (str s)) 1))))
+
+(defn composed-card
+  "The authored card as plain comparable data — the identity Create copy… tests
+   against its source, and the same value the dirty test reads.
+
+   Pre : `kind` is \"basic\", \"cloze\" or \"overlapping\". `fields` is a
+         card-fields map (see below). BOTH sides of a comparison MUST be built
+         here, or they are not comparable.
+   Post: a map holding no atoms and no editor handles, so `=` decides it. Only
+         the keys the kind actually uses appear, so a stale value in an unused
+         field cannot read as a difference.
+   Invariant: no HTML normalization. A difference Quill introduced when it
+         mounted the source counts as an edit and unblocks Save, which is the
+         safe direction — the duplicate then reaches the flashcard uniqueness
+         indexes, and run-command! :add-card reports the drop rather than
+         claiming a card was added. The guard and that report are two layers
+         over one hazard, and neither is load-bearing alone.
+
+   A card-fields map is {:question :answer :cloze :ol-question :ol-items-html
+   :ol-before :ol-reveal}. It names BOTH text fields rather than one 'primary',
+   because the two modals disagree about which is which: the edit modal keeps
+   question and cloze in separate atoms, while the add modal shares one across
+   the Basic/Cloze switch and writes it to both keys. Reading the field the
+   kind selects here is what lets one shape serve both."
+  [kind {:keys [question answer cloze ol-question ol-items-html ol-before ol-reveal]}]
+  (case kind
+    "overlapping" {:question ol-question
+                   :items (quill-html->items ol-items-html)
+                   :before (ol-before-int ol-before)
+                   :reveal? (boolean ol-reveal)}
+    "basic" {:primary question :answer answer}
+    {:primary cloze :answer answer}))
+
+(defn copy-prefill
+  "What AddCardModal must be seeded with to open a copy of an authored card.
+   Pre : `fields` is a card-fields map (see composed-card).
+   Post: the :prefill shape AddCardModal reads — :primary/:answer for the two
+         text kinds, :ol for overlapping."
+  [kind fields]
+  (case kind
+    "overlapping" {:ol {:question (:ol-question fields)
+                        :items (quill-html->items (:ol-items-html fields))
+                        :before (ol-before-int (:ol-before fields))
+                        :reveal? (boolean (:ol-reveal fields))}}
+    "basic" {:primary (:question fields) :answer (:answer fields)}
+    {:primary (:cloze fields) :answer (:answer fields)}))
 
 (defn flush-editors!
   "Force-flush each [editor-atom target-atom] pair's Quill syntax-highlight
@@ -428,6 +475,144 @@
               (dom/On "change" (fn [e] (reset! !reveal (-> e .-target .-checked))) nil))
             (dom/text "Reveal-all card")))))))
 
+(defn edit-validation-error
+  "The message the edit modal must show instead of saving, or nil to proceed.
+   Pre : `fields` is a card-fields map (see composed-card). `items` is already
+         parsed, because that parse is CLJS DOM work the caller does once and
+         hands to both this and edit-fields.
+   Post: nil, or a string a user can act on."
+  [kind fields items]
+  (cond
+    (= kind "overlapping") (when (empty? items) "Add at least one list item")
+    (= kind "cloze")       (cloze/validate (:cloze fields))
+    (= kind "basic")       (when (blank-html? (:question fields)) "Question can't be empty")))
+
+(defn edit-fields
+  "The edit modal's live values as the plain map save-card-edit!* takes.
+   Pre : `fields` is a card-fields map, `items` its parsed list.
+   Post: for overlapping, an :ol map carrying the expanded settings; otherwise
+         the three raw HTML fields, unsanitized — sanitation belongs at the
+         call that persists, so the text crosses the wire once."
+  [kind fields items]
+  (if (= kind "overlapping")
+    {:ol {:question (:ol-question fields) :items items
+          :settings {:before (ol-before-int (:ol-before fields))
+                     :after 0 :reveal-all? (:ol-reveal fields)}}}
+    {:question (:question fields) :answer (:answer fields) :cloze (:cloze fields)}))
+
+(defn save-card-edit!*
+  "Persist the edit modal's current fields to card `card-id`.
+
+   Pre : `kind` is \"basic\", \"cloze\" or \"overlapping\", `fields` came from
+         edit-fields, and edit-validation-error already returned nil.
+   Post: {:success true} or {:success false :error msg}. Both update paths log
+         the superseded rendition, so a card_versions row is written.
+   Invariant: Save and Create copy… MUST persist through here. Create copy…
+         commits the card first, and a second copy of this sequence could
+         sanitize or shape a field differently from Save without any test
+         noticing — the two write the same row.
+
+   Body-level reader conditional, not whole-form: the bare symbol is named
+   inside (e/server (e/Offload #(…))) in a reactive body, which CLJS compiles,
+   so the var must exist on both peers."
+  [user-id card-id kind fields]
+  #?(:clj
+     (if (= kind "overlapping")
+       (cards/update-overlapping-card user-id card-id (:ol fields))
+       (let [clean-q (sanitize-card-field (:question fields))
+             clean-a (sanitize-card-field (:answer fields))
+             clean-c (sanitize-card-field (:cloze fields))
+             updated (if (= kind "basic")
+                       {:question clean-q :answer clean-a}
+                       (cond-> {:cloze clean-c}
+                         (and clean-a (not (str/blank? clean-a)))
+                         (assoc :answer clean-a)))]
+         (cards/update-card user-id card-id updated)))
+     :cljs nil))
+
+(e/defn CopyCardButton
+  "Create copy… — commit the card being edited, then hand its content to a
+   fresh Copy Card modal.
+
+   Pre : `live-fields` is a card-fields map of the modal's CURRENT values.
+         `flush!` writes the Quill syntax-tokenized HTML into the atoms behind
+         them, and MUST run in the click handler, before anything reads them.
+         `dirty?` says whether those values differ from what the editors
+         mounted with.
+   Post: !editing-card holds a {:mode :copy} request. That single reset! is
+         both halves of the transition — the edit modal unmounts and the copy
+         modal mounts — so no frame has both open, and none has neither.
+   Invariant: the original is committed FIRST, and only when dirty. A clean
+         form skips the write because cards/update-card versions every call,
+         and a no-op version entry per copy would bury the card's real history.
+   Blame: a caller that passes stale live-fields (no flush!) copies whatever
+         the atoms held before the click, which for a code block is the
+         untokenized HTML.
+
+   Its own e/defn rather than three more buttons inline: card_modals.cljc is
+   the file the 'Method code too large!' guidance was written about, and each
+   e/defn compiles to its own JVM method."
+  [!editing-card user-id live-fields dirty? flush!]
+  (e/client
+    (let [editing-card (e/watch !editing-card)
+          card-id (:id editing-card)
+          kind (:kind editing-card)
+          ;; Derived from live-fields, so it tracks the flush. An e/on-unmount
+          ;; closure reads the LATEST value of a signal at fire time, which is
+          ;; what makes reading it from the callback below correct.
+          copy-request {:mode :copy
+                        :kind kind
+                        :topic-id (:topic-id editing-card)
+                        :root-topic-id (:root-topic-id editing-card)
+                        :prefill (copy-prefill kind live-fields)
+                        :source (composed-card kind live-fields)}
+          [click-event btn-node]
+          (dom/button
+            (dom/props {:class "btn btn-secondary" :style {:order "0"}
+                        :data-tooltip "Save this card, then start a new one from its content"})
+            (dom/text "Create copy…")
+            ;; The palette entry is tab-scoped and cannot say "a card editor is
+            ;; open", so this registration IS the modal-scope guard. Retracting
+            ;; on unmount is required: a stale invoker makes :copy-card look
+            ;; available with nothing to click.
+            ;;
+            ;; Keyed by node, because :copy-card has three publishers and two of
+            ;; them CAN be mounted together — a score topic holding a basic card
+            ;; shows the score toolbar's Duplicate while this modal is open.
+            ;; Unkeyed, whichever closed first would retract the command out from
+            ;; under the other.
+            (let [node dom/node]
+              (bus/publish-invoker! :copy-card node (fn [] (.click node)))
+              (e/on-unmount (fn [] (bus/retract-invoker! :copy-card node))))
+            [(dom/On "click" (fn [e] (flush!) e) nil)
+             dom/node])
+          [t ?error] (e/Token click-event)]
+      (dom/props btn-node {:disabled (some? t) :aria-busy (some? t)})
+      (when ?error
+        (dom/div (dom/props {:style {:order "-1" :margin-right "auto"
+                                     :color "var(--color-danger-text)" :font-size "12px"}})
+          (dom/text "Error: " ?error)))
+      (when t
+        (if dirty?
+          (let [items (quill-html->items (:ol-items-html live-fields))
+                validation-error (edit-validation-error kind live-fields items)]
+            (if validation-error
+              ;; The copy is refused along with the save. Opening a copy of a
+              ;; card whose own edit does not validate would strand the invalid
+              ;; edit with nowhere to go.
+              (t validation-error)
+              (let [result (e/server
+                             (e/Offload
+                               #(save-card-edit!* user-id card-id kind
+                                  (edit-fields kind live-fields items))))]
+                (if (:success result)
+                  (do (e/on-unmount (fn [] (reset! !editing-card copy-request)))
+                      (case (e/server (commands/bump! user-id :edit-card))
+                        (t)))
+                  (t (:error result))))))
+          (do (e/on-unmount (fn [] (reset! !editing-card copy-request)))
+              (t)))))))
+
 (e/defn EditCardModal [!editing-card user-id]
   (e/client
     (let [editing-card (e/watch !editing-card)
@@ -437,15 +622,23 @@
           init-a (or (:answer editing-card) "")
           init-c (or (:cloze editing-card) "")
           init-ol (:overlapping editing-card)
+          ;; Bound once and used three ways: to seed the atoms, to mount the
+          ;; QuillFields, and to build init-shape below. All three MUST read
+          ;; the same values, or the dirty test compares the editors against
+          ;; something they were never given.
+          init-ol-question (or (:question init-ol) "")
+          init-ol-items-html (ol-items->html (:items init-ol))
+          init-ol-before (str (get-in init-ol [:settings :before] 1))
+          init-ol-reveal (get-in init-ol [:settings :reveal-all?] true)
           !question (atom init-q)
           !answer (atom init-a)
           !cloze (atom init-c)
-          !ol-question (atom (or (:question init-ol) ""))
+          !ol-question (atom init-ol-question)
           !ol-question-editor (atom nil)
-          !ol-items-html (atom (ol-items->html (:items init-ol)))
+          !ol-items-html (atom init-ol-items-html)
           !ol-items-editor (atom nil)
-          !ol-before (atom (str (get-in init-ol [:settings :before] 1)))
-          !ol-reveal (atom (get-in init-ol [:settings :reveal-all?] true))
+          !ol-before (atom init-ol-before)
+          !ol-reveal (atom init-ol-reveal)
           !q-editor (atom nil)
           !a-editor (atom nil)
           !c-editor (atom nil)
@@ -458,6 +651,26 @@
           ol-reveal (e/watch !ol-reveal)
           card-font-sz (e/server (settings/get-card-font-size user-id))
           modal-font (str (or card-font-sz 14) "px")
+          ;; One derivation, two jobs. init-shape is what the editors were
+          ;; mounted with and live-shape is what they hold now, so their
+          ;; inequality IS the dirty test — and live-shape is also the identity
+          ;; Create copy… hands the copy modal to guard against. Deriving both
+          ;; through composed-card is what makes them comparable at all.
+          init-fields {:question init-q :answer init-a :cloze init-c
+                       :ol-question init-ol-question :ol-items-html init-ol-items-html
+                       :ol-before init-ol-before :ol-reveal init-ol-reveal}
+          live-fields {:question question :answer answer :cloze cloze
+                       :ol-question ol-question :ol-items-html ol-items-html
+                       :ol-before ol-before :ol-reveal ol-reveal}
+          dirty? (not= (composed-card kind init-fields)
+                   (composed-card kind live-fields))
+          ;; Flushing is the Quill syntax module's tokenized HTML landing in the
+          ;; field atoms, and BOTH buttons that read those atoms must do it —
+          ;; see flush-syntax-tokens!. Bound once so the two cannot list
+          ;; different editors.
+          flush! (fn []
+                   (flush-editors! [[!q-editor !question] [!a-editor !answer] [!c-editor !cloze]
+                                    [!ol-items-editor !ol-items-html] [!ol-question-editor !ol-question]]))
           !primary-btn (atom nil)
           !history-open? (atom false)]
       (dom/div
@@ -488,8 +701,8 @@
                                 (= kind "basic") "Basic" :else "Cloze") " Card"))
           (cond
             (= kind "overlapping")
-            (OverlappingPane !ol-question !ol-question-editor (or (:question init-ol) "") [:edit-ol-q card-id]
-              !ol-items-html !ol-items-editor (ol-items->html (:items init-ol)) [:edit-ol card-id]
+            (OverlappingPane !ol-question !ol-question-editor init-ol-question [:edit-ol-q card-id]
+              !ol-items-html !ol-items-editor init-ol-items-html [:edit-ol card-id]
               !ol-before !ol-reveal modal-font)
             (= kind "basic")
             (dom/div
@@ -537,12 +750,7 @@
                     ;; letting the error render beside the buttons (not inside
                     ;; this blue one) and letting the button gate its own
                     ;; disabled/aria-busy state on the resulting token.
-                    [(dom/On "click"
-                       (fn [e]
-                         (flush-editors! [[!q-editor !question] [!a-editor !answer] [!c-editor !cloze]
-                                           [!ol-items-editor !ol-items-html] [!ol-question-editor !ol-question]])
-                         e)
-                       nil)
+                    [(dom/On "click" (fn [e] (flush!) e) nil)
                      dom/node])
                   [t ?error] (e/Token click-event)]
               ;; Disable + aria-busy while a Save is in flight — closes the
@@ -554,52 +762,32 @@
                 (dom/div (dom/props {:style {:order "-1" :margin-right "auto" :color "var(--color-danger-text)" :font-size "12px"}})
                   (dom/text "Error: " ?error)))
               (when t
-                (if (= kind "overlapping")
-                  (let [items (quill-html->items ol-items-html)]
-                    (if (empty? items)
-                      (t "Add at least one list item")
-                      (let [result (e/server (e/Offload #(cards/update-overlapping-card user-id card-id
-                                                            {:question ol-question :items items
-                                                             :settings {:before (ol-before-int ol-before)
-                                                                        :after 0 :reveal-all? ol-reveal}})))]
-                        (if (:success result)
-                          (do (e/on-unmount #(reset! !editing-card nil))
-                              (case (e/server (commands/bump! user-id :edit-card))
-                                (t)))
-                          (t (:error result))))))
-                  (let [validation-error (cond
-                                           (= kind "cloze") (cloze/validate cloze)
-                                           (= kind "basic") (when (blank-html? question)
-                                                              "Question can't be empty"))]
-                    (if validation-error
-                      (t validation-error)
-                      ;; Sanitize inside the call that persists. Three separate
-                      ;; (e/server (sanitize-card-field …)) bindings sent each
-                      ;; field to the server, returned the cleaned HTML to the
-                      ;; client, and then sent the assembled map back — four
-                      ;; round trips carrying the same text. The fields map is
-                      ;; assembled server-side now, so the text crosses once.
-                      (let [result (e/server
-                                     (e/Offload
-                                       #(let [clean-q (sanitize-card-field question)
-                                              clean-a (sanitize-card-field answer)
-                                              clean-c (sanitize-card-field cloze)
-                                              fields (if (= kind "basic")
-                                                       {:question clean-q :answer clean-a}
-                                                       (cond-> {:cloze clean-c}
-                                                         (and clean-a (not (str/blank? clean-a)))
-                                                         (assoc :answer clean-a)))]
-                                           (cards/update-card user-id card-id fields))))]
-                        (if (:success result)
-                          (do (e/on-unmount #(reset! !editing-card nil))
-                              (case (e/server (commands/bump! user-id :edit-card))
-                                (t)))
-                          (t (:error result)))))))))
+                ;; Sanitation stays inside save-card-edit!*, at the call that
+                ;; persists. Three separate (e/server (sanitize-card-field …))
+                ;; bindings sent each field to the server, returned the cleaned
+                ;; HTML to the client, and then sent the assembled map back —
+                ;; four round trips carrying the same text.
+                (let [items (quill-html->items ol-items-html)
+                      validation-error (edit-validation-error kind live-fields items)]
+                  (if validation-error
+                    (t validation-error)
+                    (let [result (e/server
+                                   (e/Offload
+                                     #(save-card-edit!* user-id card-id kind
+                                        (edit-fields kind live-fields items))))]
+                      (if (:success result)
+                        (do (e/on-unmount #(reset! !editing-card nil))
+                            (case (e/server (commands/bump! user-id :edit-card))
+                              (t)))
+                        (t (:error result))))))))
             (dom/button
               (dom/props {:class "btn btn-secondary" :style {:order "0"}
                           :data-tooltip "View previous versions of this card"})
               (dom/text "History")
               (dom/On "click" (fn [_] (reset! !history-open? true)) nil))
+            ;; Between History and Cancel. Save carries :order "1" and so stays
+            ;; rightmost whatever the DOM order of the :order "0" group is.
+            (CopyCardButton !editing-card user-id live-fields dirty? flush!)
             (dom/button
               (dom/props {:class "btn btn-secondary"})
               (dom/text "Cancel")
@@ -631,6 +819,15 @@
 ;; or error toast. Effect + toast only, returning the outcome map — the client
 ;; dispatcher flips the overlay entry (:confirmed with real ids, or :error) and
 ;; run-command-effect! bumps the registry :views.
+;;
+;; An all-duplicate save is reported as a FAILURE here, though save-cards calls
+;; it a success. The two are not in conflict: save-cards serves batch generate,
+;; where re-proposing a card the topic already holds is normal and inserting
+;; nothing is not an error. This path submits exactly one card at a user's
+;; request, so "nothing was inserted" is the whole outcome and must reach them.
+;; Without this branch the modal toasts "Card added", closes, and leaves no
+;; card — the shape Create copy… would hit on every unedited copy, because the
+;; flashcard uniqueness indexes key on (topic_id, kind, md5(question|cloze)).
 #?(:clj
    (defmethod opt/run-command! :add-card [user-id {:keys [payload]}]
      (let [{:keys [topic-id root-topic-id kind card-data]} payload
@@ -648,10 +845,21 @@
                          card-data))
            ;; bake? false — the Add-Card modal already inlined pinned images
            ;; into card-data via pins-prefill-html; baking would duplicate them.
-           result (cards/save-cards user-id topic-id root-topic-id kind card-data false)]
-       (if (:success result)
+           result (cards/save-cards user-id topic-id root-topic-id kind card-data false)
+           dropped-every-row? (and (:success result)
+                                (empty? (:ids result))
+                                (pos? (or (:skipped result) 0)))
+           duplicate-msg "That card already exists in this topic"]
+       (cond
+         dropped-every-row?
+         (do (toasts/push! user-id {:level :error :message duplicate-msg})
+             {:ok? false :error duplicate-msg})
+
+         (:success result)
          (do (toasts/push! user-id {:level :success :message "Card added"})
              {:ok? true :real-ids (:ids result)})
+
+         :else
          (do (toasts/push! user-id {:level :error
                                     :message (or (:error result) "Failed to add card")})
              {:ok? false :error (:error result)})))))
@@ -660,22 +868,45 @@
 ;; <button> inside a <form> defaults to type=submit and would submit on click.
 ;; Returns empty e/amb so it contributes no edit to the form. Mirrors
 ;; ExportCancelButton.
-(e/defn AddCancelButton [!show-add]
+(e/defn AddCancelButton [close!]
   (dom/button
     (dom/props {:class "btn btn-secondary" :type "button"})
     (dom/text "Cancel")
-    (dom/On "click" (fn [_] (reset! !show-add false)) nil))
+    (dom/On "click" (fn [_] (close!)) nil))
   (e/amb))
 
 ;; Add card modal — uses topic-id and root-topic-id instead of doc-id + page-number
-(e/defn AddCardModal [!show-add !card-kind !captured-selection topic-id root-topic-id user-id]
+;;
+;; Serves two acts, told apart by `copy-source` alone. nil = compose a card from
+;; nothing (the Add-new button, optionally seeded with the editor selection).
+;; Non-nil = compose a card from an existing one (Create copy…), and it holds
+;; that card's `composed-card` shape.
+;;
+;; ONE parameter carries the whole difference on purpose. A copy differs in four
+;; ways — its title, its locked kind, its suppressed topic pins, and the Save
+;; guard — and separate flags for each could be set inconsistently (pins on with
+;; a source set would silently add images the source never had). Derived from one
+;; value, the four cannot disagree.
+;;
+;; `close!` is a 0-arg thunk rather than a show-atom, because the two callers end
+;; the modal differently: AddCardButton flips its own boolean, while the copy
+;; host clears !editing-card. Neither should be a concern of this component.
+(e/defn AddCardModal [close! !card-kind !prefill topic-id root-topic-id user-id copy-source]
   (e/client
-    (let [initial-text (or @!captured-selection "")
+    (let [prefill (or @!prefill {})
+          copy? (some? copy-source)
+          initial-text (or (:primary prefill) "")
           prefill? (not (str/blank? initial-text))
           ;; Pinned images inline into the editors (model B): front pin → primary
           ;; (Question/Cloze), back pin → answer (Answer/Back-Extra). The Save
           ;; below passes bake? false so these are not appended a second time.
-          pins-prefill (e/server (cards/pins-prefill-html topic-id))
+          ;;
+          ;; A copy takes NO pins. Its content already holds whatever the source
+          ;; baked in at ITS creation, so appending the topic's current pins
+          ;; would give the copy images the original never had — and the guard
+          ;; below would then read that as an edit and let an unwanted duplicate
+          ;; through.
+          pins-prefill (e/server (when-not copy? (cards/pins-prefill-html topic-id)))
           front-pin-html (:front pins-prefill)
           back-pin-html (:back pins-prefill)
           ;; Front (basic Question) and Cloze Text share !primary so typed
@@ -683,17 +914,24 @@
           ;; share !answer. A captured selection prefills whichever renders;
           ;; pin HTML is appended after it to match bake ordering.
           init-primary (str (if prefill? initial-text "") front-pin-html)
+          init-answer (str (or (:answer prefill) "") back-pin-html)
+          ol-prefill (:ol prefill)
+          ;; Bound once and used twice — as the atom's seed AND as the
+          ;; QuillField's mount HTML. The two MUST agree, or the pane paints
+          ;; content the atom does not hold and the first save loses it.
+          init-ol-question (or (:question ol-prefill) "")
+          init-ol-items-html (ol-items->html (:items ol-prefill))
           kind (e/watch !card-kind)
           !primary (atom init-primary)
-          !answer (atom back-pin-html)
+          !answer (atom init-answer)
           !primary-editor (atom nil)
           !a-editor (atom nil)
-          !ol-question (atom "")
+          !ol-question (atom init-ol-question)
           !ol-question-editor (atom nil)
-          !ol-items-html (atom "")
+          !ol-items-html (atom init-ol-items-html)
           !ol-items-editor (atom nil)
-          !ol-before (atom "1")
-          !ol-reveal (atom true)
+          !ol-before (atom (str (or (:before ol-prefill) 1)))
+          !ol-reveal (atom (if (some? ol-prefill) (boolean (:reveal? ol-prefill)) true))
           primary (e/watch !primary)
           answer (e/watch !answer)
           ol-question (e/watch !ol-question)
@@ -702,6 +940,13 @@
           ol-reveal (e/watch !ol-reveal)
           card-font-sz (e/server (settings/get-card-font-size user-id))
           modal-font (str (or card-font-sz 14) "px")
+          modal-title (if copy? "Copy Card" "Add Card")
+          ;; :question and :cloze both read `primary` because this modal shares
+          ;; one atom across the Basic↔Cloze switch — composed-card picks the
+          ;; one the kind uses, so the same map serves either.
+          live-fields {:question primary :cloze primary :answer answer
+                       :ol-question ol-question :ol-items-html ol-items-html
+                       :ol-before ol-before :ol-reveal ol-reveal}
           ;; One idempotency key per modal-open: a re-fired or double-submitted
           ;; commit reuses it, so enqueue-add-card! collapses duplicates to a
           ;; single save (freememo.optimistic/enqueue-pending-card!).
@@ -712,7 +957,7 @@
                             :justify-content "center" :z-index "1000"
                             :pointer-events "none"}
                     :tabindex "-1"})
-        (modal/ModalEscape (fn [] (reset! !show-add false)) "Add Card")
+        (modal/ModalEscape (fn [] (close!)) modal-title)
         (dom/On "keydown"
           (fn [e] (modal/mod-enter-request-submit! e))
           nil)
@@ -733,7 +978,11 @@
           (dom/h3 (dom/props {:style {:margin-top "0" :cursor "move" :user-select "none"
                                       :padding-bottom "var(--sp-2)" :margin-bottom "var(--sp-3)"
                                       :border-bottom "1px solid var(--color-border)"}})
-            (dom/text "Add Card"))
+            (dom/text modal-title))
+          ;; A copy keeps its source's kind — changing it would strand the
+          ;; prefill, since the three kinds do not share fields. The radios are
+          ;; therefore absent rather than disabled: there is no choice to make.
+          (when-not copy?
           (dom/div
             (dom/props {:style {:display "flex" :align-items "center" :gap "var(--sp-3)" :margin-bottom "var(--sp-4)"}})
             (dom/label
@@ -756,11 +1005,11 @@
                 (dom/props {:type "radio" :name "add-card-kind" :value "overlapping"
                             :checked (= kind "overlapping")})
                 (dom/On "change" (fn [_] (reset! !card-kind "overlapping")) nil))
-              (dom/text "Overlapping")))
+              (dom/text "Overlapping"))))
           (cond
             (= kind "overlapping")
-            (OverlappingPane !ol-question !ol-question-editor "" [:add-ol-q]
-              !ol-items-html !ol-items-editor "" [:add-ol]
+            (OverlappingPane !ol-question !ol-question-editor init-ol-question [:add-ol-q]
+              !ol-items-html !ol-items-editor init-ol-items-html [:add-ol]
               !ol-before !ol-reveal modal-font)
             (= kind "basic")
             (dom/div
@@ -806,9 +1055,18 @@
                               (e/amb
                                 (forms/SubmitButton! :label "Save" :class "btn btn-primary"
                                   :style {:border-radius "var(--radius-sm)" :order "1"})
-                                (AddCancelButton !show-add))))
+                                (AddCancelButton close!))))
                           :Parse (e/fn [_ _]
-                                   (case kind
+                                   (if (and copy? (= copy-source (composed-card kind live-fields)))
+                                     ;; Saving here would insert a row the
+                                     ;; flashcard uniqueness indexes drop, and
+                                     ;; the user would be told a card was added
+                                     ;; that does not exist. Refusing with a
+                                     ;; reason is the whole point of the copy
+                                     ;; opening pre-filled: it is a starting
+                                     ;; point, not a finished card.
+                                     (ex-info "Change something first — this is still identical to the card it was copied from" {})
+                                     (case kind
                                      "overlapping"
                                      (let [items (quill-html->items ol-items-html)]
                                        (if (empty? items)
@@ -825,7 +1083,7 @@
                                      (if-let [err (cloze/validate primary)]
                                        (ex-info err {})
                                        [`Add-card {:kind "cloze" :topic-id topic-id :root-topic-id root-topic-id
-                                                   :primary primary :answer answer}])))
+                                                   :primary primary :answer answer}]))))
                           :type :command
                           :show-buttons false)]
             ;; Service: one branch per committed submit. e/snapshot freezes the
@@ -852,5 +1110,29 @@
                 (case (opt/enqueue-add-card! add-id
                         {:topic-id topic-id :root-topic-id root-topic-id
                          :kind kind :card-data card-data})
-                  (do (e/on-unmount #(reset! !show-add false)) (t)))))))))))
+                  (do (e/on-unmount (fn [] (close!))) (t)))))))))))
+
+(e/defn CopyCardModal
+  "Mounts AddCardModal in copy mode from a {:mode :copy} !editing-card request.
+
+   Pre : @!editing-card matches the copy shape written by CopyCardButton —
+         {:mode :copy :kind :topic-id :root-topic-id :prefill :source}. The
+         host mounts this only while that holds.
+   Post: closing clears !editing-card, so the card table returns to no modal.
+   Invariant: :topic-id is the SOURCE CARD's topic, never the ambient one. On a
+         root topic the card table lists every descendant's cards, so a copy
+         sited from the ambient topic would land on the root instead of the
+         page the card lives on.
+
+   A wrapper rather than a call from the two hosts, so the kind and prefill
+   atoms have one stable frame to live in and neither host has to build them."
+  [!editing-card user-id]
+  (e/client
+    (let [request (e/watch !editing-card)
+          !card-kind (atom (:kind request))
+          !prefill (atom (:prefill request))]
+      (AddCardModal (fn [] (reset! !editing-card nil))
+        !card-kind !prefill
+        (:topic-id request) (:root-topic-id request)
+        user-id (:source request)))))
 

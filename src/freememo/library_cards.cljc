@@ -18,7 +18,7 @@
                                      overlapping-row-html occlusion-row-html
                                      score-row-html try-delete-anki-notes!]]
    [freememo.card-rows :as rows]
-   [freememo.card-modals :refer [EditCardModal]]
+   [freememo.card-modals :refer [EditCardModal CopyCardModal]]
    [freememo.icons :as icons]
    [freememo.math :as math]
    [freememo.tooltip :as tooltip]
@@ -661,8 +661,18 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Row — status dot · kind badge · front · back · document · added · delete.
-;; Row click opens EditCardModal ({:id :kind :question :answer :cloze}
-;; contract); document cell click navigates to the card's topic instead.
+;; Row click opens EditCardModal ({:id :kind :question :answer :cloze :topic-id
+;; :root-topic-id} contract); document cell click navigates to the card's topic
+;; instead.
+;;
+;; !editing-card carries TWO shapes, and the host routes on :mode:
+;;   edit (no :mode) — the contract above; EditCardModal updates card :id
+;;   copy ({:mode :copy}) — CopyCardModal composes a NEW card from :prefill,
+;;     with no :id, since nothing is written until its own Save
+;; One reset! moves between them, so the edit modal never coexists with the
+;; copy modal and no frame has neither mounted. See card-modals/CopyCardModal.
+;; :topic-id/:root-topic-id are the CARD's own, never the ambient topic — the
+;; copy must land where the card lives.
 ;; ---------------------------------------------------------------------------
 
 (defn selected-card-ids
@@ -835,9 +845,12 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
           edit-card! (fn [_]
                        (case kind
                          ("occlusion" "score") (navigate! :viewer (nav/nav-topic topic-id :library))
-                         "overlapping" (reset! !editing-card {:id id :kind kind :overlapping ol})
+                         "overlapping" (reset! !editing-card
+                                         {:id id :kind kind :overlapping ol
+                                          :topic-id topic-id :root-topic-id root-topic-id})
                          (reset! !editing-card {:id id :kind kind :question question
-                                                :answer answer :cloze cloze})))]
+                                                :answer answer :cloze cloze
+                                                :topic-id topic-id :root-topic-id root-topic-id})))]
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt")
                     ;; 0-based absolute index → per-row translateY (C1c)
@@ -1631,8 +1644,13 @@ bytecode cap in the :prod build, which dev compilation never emits.
           ;; border. font-sz sizes the text within the row, not the row itself.
           row-height 41]
 
-      (when (e/watch !editing-card)
-        (EditCardModal !editing-card user-id))
+      (let [editing-card (e/watch !editing-card)]
+        (when editing-card
+          ;; A copy request carries a :kind too, so :mode is what tells the two
+          ;; apart — see card-modals/CopyCardButton.
+          (if (= :copy (:mode editing-card))
+            (CopyCardModal !editing-card user-id)
+            (EditCardModal !editing-card user-id))))
 
       (if (= false success?)
         (dom/div

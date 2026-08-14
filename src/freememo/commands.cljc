@@ -201,6 +201,16 @@
                       :when #{:viewer} :table #{:topic_repetitions} :views #{:queue-mutations}}
      :add-new        {:label "Add new card…" :class :nav :exec :ui-button
                       :bind "meta+shift+a" :when #{:viewer} :views #{}}
+     ;; Three components publish this invoker, and exactly one is ever mounted:
+     ;; card-modals/EditCardModal, occlusion-modal (edit mode) and the score
+     ;; toolbar. :when is tab-scoped and cannot say "a card editor is open", so
+     ;; the invoker IS the modal-scope guard (command-bus/available?).
+     ;; The label stays neutral because the three surfaces differ in WHEN they
+     ;; write: the text editor opens an unsaved copy, while occlusion and score
+     ;; duplicate the group at once. Their buttons say so; one palette row
+     ;; cannot, so it promises nothing about timing.
+     :copy-card      {:label "Copy card…" :class :nav :exec :ui-button
+                      :when #{:viewer :library} :views #{}}
      :export         {:label "Export cards…" :class :query :exec :ui-button
                       :when #{:viewer} :views #{}}
      ;; :card_versions is reached by cascade, not by a direct write — deleting
