@@ -22,6 +22,8 @@
             [freememo.help-page :refer [HelpPage]]
             [freememo.subset-review :refer [SubsetReviewSession]]
             [freememo.landing-page :refer [LandingPage]]
+            [freememo.legal-copy :as legal]
+            [freememo.legal-page :refer [LegalPage]]
             [freememo.toast-stack :refer [ToastStack]]
             [freememo.optimistic :refer [CommandDispatcher]]
             [freememo.client-errors :refer [ClientErrorForwarder]]
@@ -250,7 +252,20 @@
   (e/client
     (binding [dom/node js/document.body]
       (let [user-id (e/server (get-in ring-request [:session :user-id]))
-            session-data (e/server (reconstruct-session* user-id))
+            ;; Only the PATH crosses the wire. Resolving the document on the
+            ;; client keeps the copy off the wire entirely: `freememo.legal-copy`
+            ;; is already in the client bundle, because `freememo.legal-page`
+            ;; reads it, so sending the text too would ship it twice.
+            legal-uri (e/server (:uri ring-request))
+            legal-doc (legal/document-at legal-uri)
+            ;; A legal page renders no app, so resuming a session for it would
+            ;; write a `session_resume` row and accrue storage for nothing. The
+            ;; guard repeats the lookup server-side rather than reading
+            ;; `legal-doc`: that binding is client-sited, and reading it here
+            ;; would add a client→server round trip to every app boot.
+            session-data (e/server
+                           (when-not (legal/document-at (:uri ring-request))
+                             (reconstruct-session* user-id)))
             username (e/server (:username session-data))
             enc-key (e/server (:enc-key session-data))
             auth-error (e/server (get-in ring-request [:session :auth-error]))
@@ -261,7 +276,20 @@
                       (get-theme* (e/watch (us/get-atom user-id :settings-refresh))
                         user-id)))]
         (dom/props {:data-theme (when (and theme (not= theme "auto")) theme)})
-        (if (e/server (some? user-id))
+        (cond
+          ;; Public legal document — same words for a visitor, a signed-in
+          ;; reader, and (through freememo.crawler-page) a crawler.
+          ;;
+          ;; Decided before the sign-in branch because it does not depend on
+          ;; `user-id`. That placement also keeps these paths out of the router,
+          ;; which lives inside the authenticated branch: routed as a tab,
+          ;; /privacy would yield an `active-tab` that matches no
+          ;; `(when (= active-tab …))` branch and render an empty page.
+          ;; The test is client-sited, so it costs no round trip.
+          (some? legal-doc)
+          (LegalPage legal-doc)
+
+          (e/server (some? user-id))
           ;; Authenticated: render app with URL router
           (dom/div
             (dom/props {:style {:height "100dvh" :display "flex" :flex-direction "column" :overflow "hidden"}})
@@ -501,6 +529,7 @@
                 ;; Actions history modal (undo-newest is a :queue command now)
                 (UndoHistoryModal user-id !undo-modal-open?))))
 
+          :else
           ;; Not authenticated: render landing page
           (LandingPage auth-error (e/server (config/auth-mode))))))))
 

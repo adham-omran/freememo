@@ -19,6 +19,7 @@
    See plans/crawler-rendering-and-well-known-files.md."
   (:require
    [freememo.landing-copy :as lc]
+   [freememo.legal-copy :as legal]
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]))
 
@@ -260,6 +261,7 @@
         (dom/a (dom/props {:href "https://github.com/adham-omran/freememo"
                            :target "_blank" :rel "noopener"})
           (dom/text "Source"))
+        (dom/a (dom/props {:href legal/privacy-path}) (dom/text "Privacy"))
         (when (show-google? auth-mode)
           (dom/a (dom/props {:href "/auth/google"}) (dom/text "Sign in")))))))
 

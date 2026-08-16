@@ -17,6 +17,7 @@
             [clojure.test :refer [deftest is testing]]
             [freememo.crawler-page :as crawler-page]
             [freememo.landing-copy :as lc]
+            [freememo.legal-copy :as legal]
             [freememo.shell :as shell]))
 
 (def ^:private document (crawler-page/landing-document))
@@ -125,6 +126,118 @@
           (str needle " is never read by freememo.crawler-page — a crawler cannot see it"))))))
 
 ;; ---------------------------------------------------------------------------
+;; Legal documents. Same two-renderer split as the landing page, and the same
+;; silent failure: a part shape one renderer implements and the other does not
+;; is a paragraph a crawler never reads, with nothing in any log.
+;; ---------------------------------------------------------------------------
+
+(def ^:private legal-parts
+  "Every body part in every legal document, flattened."
+  (for [doc (vals legal/documents)
+        section (:sections doc)
+        part (:body section)]
+    part))
+
+(deftest every-legal-part-classifies
+  ;; A part `part-kind` cannot classify still renders — as
+  ;; `unrenderable-part-marker`, so it is visible rather than missing. This test
+  ;; is what keeps that marker out of a deploy.
+  (doseq [part legal-parts]
+    (is (contains? legal/part-kinds (legal/part-kind part))
+      (str "no part kind matches " (pr-str part)))))
+
+(def ^:private part-of-kind
+  "One minimal part per kind, for exercising a renderer over the whole closed
+   set rather than over the kinds today's copy happens to use."
+  {:text {:p "PARTKINDPROBE"}
+   ;; The plain fragment carries the whole marker: a run puts markup BETWEEN
+   ;; fragments, so a marker split across two of them would never appear intact.
+   :run  {:p [{:t "PARTKINDPROBE "} {:t "LINKED" :href "https://example.invalid/"}]}
+   :list {:ul ["PARTKINDPROBE"]}})
+
+(deftest legal-renderers-implement-every-part-kind
+  (testing "the probe set covers the closed set"
+    ;; Without this, adding a kind to `part-kinds` and forgetting a probe would
+    ;; leave the renderer assertion below vacuously true for that kind.
+    (is (= legal/part-kinds (set (keys part-of-kind)))))
+
+  (testing "the crawler renderer emits real markup for each kind"
+    ;; Executed, not grepped. An earlier version of this file searched the
+    ;; renderer's SOURCE for `:t` and `:href`, and passed because those keywords
+    ;; appear in a docstring — so deleting the fragment branch outright would
+    ;; not have failed anything.
+    (let [part-html #'crawler-page/part-html]
+      (doseq [[kind part] part-of-kind]
+        (let [html (part-html part)]
+          (is (str/includes? html "PARTKINDPROBE") (str kind " dropped its text"))
+          (is (not (str/includes? html legal/unrenderable-part-marker))
+            (str kind " is not handled by freememo.crawler-page"))))
+
+      (testing "the run kind keeps its link, which is the branch a grep missed"
+        (is (str/includes? (part-html (:run part-of-kind))
+              "<a href=\"https://example.invalid/\">LINKED</a>")))
+
+      (testing "an unclassifiable part is visible, not silent"
+        (is (str/includes? (part-html {:heading "not a part"})
+              legal/unrenderable-part-marker)))))
+
+  (testing "the Electric renderer loads and dispatches on the same classifier"
+    ;; `freememo.legal-page` cannot be executed here — rendering it needs a
+    ;; running Electric peer. Two things ARE checkable from the JVM: that the
+    ;; namespace compiles at all, and that it names every kind it must handle.
+    ;; Playwright row 15.6 is what compares its OUTPUT against this renderer's.
+    (require 'freememo.legal-page)
+    (let [src (slurp (io/file "src/freememo/legal_page.cljc"))]
+      (doseq [kind legal/part-kinds]
+        ;; `boolean` keeps a failure from dumping the whole namespace source
+        ;; into the report.
+        (is (boolean (str/includes? src (str "(= " kind " kind)")))
+          (str "freememo.legal-page/Part has no branch for " kind))))))
+
+(deftest no-document-holds-an-unrenderable-part
+  (doseq [[path _] legal/documents]
+    (is (not (str/includes? (crawler-page/legal-document path)
+               legal/unrenderable-part-marker))
+      (str path " renders a part neither renderer understands"))))
+
+(deftest every-legal-part-reaches-the-crawler-document
+  (let [document (crawler-page/legal-document legal/privacy-path)]
+    (is (some? document) "the privacy path must produce a document")
+
+    (testing "no asset a crawler cannot use, as with the landing document"
+      (is (not (str/includes? document "<script")))
+      (is (not (str/includes? document "rel=\"stylesheet\""))))
+
+    (testing "the canonical link names this path, not the site root"
+      ;; Sharing the root's canonical would tell a crawler the policy and the
+      ;; landing page are one URL, and one of them would be dropped.
+      (is (str/includes? document
+            (str "<link rel=\"canonical\" href=\"" crawler-page/canonical-url "privacy\">"))))
+
+    (testing "every sentence of the copy is in the document"
+      (let [text (visible-text document)]
+        (doseq [part legal-parts]
+          (let [p (:p part)]
+            (cond
+              (string? p) (is (str/includes? text p) p)
+              (some? p) (doseq [{:keys [t]} p] (is (str/includes? text t) t))
+              :else (doseq [item (:ul part)] (is (str/includes? text item) item)))))))))
+
+(deftest the-privacy-policy-answers-what-the-gdpr-asks
+  ;; Article 13 names what a notice must carry. These are word checks, not legal
+  ;; advice: they fail when a rewrite drops a required subject, which is the one
+  ;; failure a reader of the page would not notice.
+  (let [text (str/lower-case (visible-text (crawler-page/legal-document legal/privacy-path)))]
+    (doseq [subject ["controller" "article 6(1)(b)" "openrouter" "wayl"
+                     "standard contractual clauses" "one month"
+                     "data protection authority" "cookie"]]
+      (is (str/includes? text (str/lower-case subject))
+        (str "the policy no longer mentions " subject)))
+
+    (testing "the contact address a request must go to is on the page"
+      (is (str/includes? text (str/lower-case legal/contact-email))))))
+
+;; ---------------------------------------------------------------------------
 ;; Who gets the document. A fixed allowlist, never an inverted browser list: an
 ;; inverted list hands the static page to any browser it fails to recognize.
 ;; ---------------------------------------------------------------------------
@@ -176,22 +289,35 @@
 (def ^:private bot "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")
 (def ^:private browser "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/151.0.0.0 Safari/537.36")
 
-(deftest shell-serves-the-document-to-crawlers-at-the-root-only
-  (testing "a crawler at / gets the document"
+(deftest shell-serves-documents-to-crawlers-at-published-paths-only
+  (testing "a crawler at / gets the landing document"
     (let [r (get-as "/" bot)]
       (is (= 200 (:status r)))
       (is (str/includes? (get-in r [:headers "Content-Type"]) "text/html"))
       (is (not (str/includes? (:body r) "<script")))
       (is (str/includes? (:body r) (:hero/headline lc/copy)))))
 
-  (testing "a crawler anywhere else gets 404 — one crawlable URL, no duplicate content"
+  (testing "a crawler at a legal path gets that document, not the landing one"
+    ;; Without an entry in `crawler-response` this path 404s for a crawler while
+    ;; rendering for a visitor — a privacy policy no regulator's fetcher can read.
+    (let [r (get-as legal/privacy-path bot)]
+      (is (= 200 (:status r)))
+      (is (str/includes? (get-in r [:headers "Content-Type"]) "text/html"))
+      (is (not (str/includes? (:body r) "<script")))
+      (is (str/includes? (:body r) (:title (legal/document-at legal/privacy-path))))
+      (is (not (str/includes? (:body r) (:hero/headline lc/copy)))
+        "each path must carry its own text, or the two are duplicate content")))
+
+  (testing "a crawler anywhere else gets 404 — bounded URLs, no duplicate content"
     (doseq [uri ["/library" "/viewer/topic/5" "/settings" "/anything"]]
       (let [r (get-as uri bot)]
         (is (= 404 (:status r)) uri)
         (is (not (str/includes? (str (:body r)) "<!DOCTYPE")) uri))))
 
   (testing "a browser always gets the app shell, at every path"
-    (doseq [uri ["/" "/library" "/viewer/topic/5"]]
+    ;; A legal path included: the Electric renderer serves it to a person, so
+    ;; the shell must arrive there like anywhere else.
+    (doseq [uri ["/" "/library" "/viewer/topic/5" legal/privacy-path]]
       (let [r (get-as uri browser)]
         (is (= 200 (:status r)) uri)
         (is (str/includes? (:body r) "<!DOCTYPE html>") uri)

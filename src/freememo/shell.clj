@@ -86,17 +86,28 @@
   (and (= :get (:request-method ring-req))
        (crawler-page/crawler-user-agent? (get-in ring-req [:headers "user-agent"]))))
 
-(defn- crawler-response
-  "The response a recognized crawler gets for `uri`.
+(defn- crawler-document
+  "The static document a crawler gets for `uri`, or nil.
 
-   Post: the static landing document for \"/\", and 404 for every other path.
-   One crawlable URL is the point: this handler is the catch-all, so serving the
-   document everywhere would put identical text on unbounded URLs, which search
-   engines discount as duplicate content.
+   Post: nil for every path this deployment does not publish. A bounded set is
+   the point: this handler is the catch-all, so answering everywhere would put
+   identical text on unbounded URLs, which search engines discount as duplicate
+   content.
+   The legal paths come from `freememo.legal-copy/documents` rather than a list
+   here, so this branch cannot disagree with `freememo.main` about which paths
+   are documents.
    A future public page needs an entry here, or it stays invisible to crawlers."
   [uri]
   (if (= "/" uri)
-    (-> (ring-response/response (crawler-page/landing-document))
+    (crawler-page/landing-document)
+    (crawler-page/legal-document uri)))
+
+(defn- crawler-response
+  "The response a recognized crawler gets for `uri`.
+   Post: 200 text/html for a published document, and 404 for every other path."
+  [uri]
+  (if-some [html (crawler-document uri)]
+    (-> (ring-response/response html)
       (ring-response/content-type "text/html; charset=utf-8")
       ;; Static per deploy, unlike the shell's no-store: the document is the same
       ;; for every crawler until the copy or the build changes.

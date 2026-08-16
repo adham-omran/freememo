@@ -39,7 +39,8 @@
    See plans/crawler-rendering-and-well-known-files.md."
   (:require
    [clojure.string :as str]
-   [freememo.landing-copy :as lc]))
+   [freememo.landing-copy :as lc]
+   [freememo.legal-copy :as legal]))
 
 ;; ── Who gets this document ──
 
@@ -54,8 +55,13 @@
    `mediapartners-google` was a member until 2026-08-06. It is the ad-network
    crawler, so it stopped arriving when the ad path was removed, and a member that
    can never match is a claim about traffic that no longer exists.
-   `adsbot-google` is NOT the same thing: it belongs to the advertiser side, which
-   this deployment still uses. See plans/ad-path-removal.md.
+
+   `adsbot-google` is NOT the same thing: it belongs to the advertiser side, and
+   it arrives only while this deployment buys ad clicks. Removing the Google Ads
+   conversion tag on 2026-08-16 did NOT settle that — a tag reports conversions,
+   and campaigns can run without one. **Drop this member when the campaigns stop,
+   on the same reasoning that removed `mediapartners-google`.** See
+   plans/ad-path-removal.md and plans/legal-pages-and-ads-tag-removal.md.
 
    A fixed allowlist, never an inverted browser list: inverting it would hand the
    static document to any browser this list failed to recognize."
@@ -201,20 +207,22 @@
        (str/join (for [[title desc] lc/features]
                    (str (tag "h3" (esc title)) (para desc))))))
 
-(defn- answer-html
-  "An FAQ answer, which is a string or a vector of `{:t :href}` parts.
-   Post: link parts become anchors and plain parts become escaped text. A
-   renderer that assumed a string would drop the one answer that carries a link."
-  [answer]
-  (if (string? answer)
-    (esc answer)
-    (str/join (for [{:keys [t href]} answer]
+(defn- fragments-html
+  "A text run, which is a string or a vector of `{:t :href}` fragments.
+   Post: link fragments become anchors and plain fragments become escaped text.
+   A renderer that assumed a string would drop every run that carries a link.
+   Both the FAQ answers and the legal body paragraphs are this shape, which is
+   why the name says what it renders rather than where it is used."
+  [run]
+  (if (string? run)
+    (esc run)
+    (str/join (for [{:keys [t href]} run]
                 (if href (link href t) (esc t))))))
 
 (defn- faq-html []
   (str (tag "h2" (esc (:faq/title lc/copy)))
        (str/join (for [[q a] lc/faq-items]
-                   (str (tag "h3" (esc q)) (tag "p" (answer-html a)))))))
+                   (str (tag "h3" (esc q)) (tag "p" (fragments-html a)))))))
 
 (defn- pact-html []
   (str (tag "h2" (esc (:pact/title lc/copy)))
@@ -246,5 +254,79 @@
        (tag "footer"
          (str (link "https://github.com/adham-omran/freememo" "Source")
               " "
-              (link "mailto:contact@adham-omran.com" "Contact")))
+              (link "mailto:contact@adham-omran.com" "Contact")
+              " "
+              (link legal/privacy-path "Privacy")))
        "</body></html>"))
+
+;; ── Legal documents ──
+;;
+;; Section order does NOT live here. A legal document is a flat list of whole
+;; sections, so this renderer walks `freememo.legal-copy/documents` rather than
+;; naming a section at a time. That is why these pages carry no renderer-owned
+;; prose and need no equivalent-meaning rule.
+
+(defn- legal-head-html
+  "The head of one legal document.
+
+   Post: a title, a description, and a canonical link for THIS path — not the
+   site root. Sharing `canonical-url` across both documents would tell a crawler
+   the privacy policy and the landing page are the same URL.
+   No Open Graph set: the unfurlers in `crawler-user-agents` are here for shared
+   marketing links, and a legal document is not one.
+   Pre: `path` is a key of `legal/documents`. `canonical-url` carries a trailing
+   slash and a path carries a leading one, so the join drops one rather than
+   slicing `path` — a slice would depend on a leading slash this fn cannot check,
+   and would build a wrong canonical in silence if a key ever lacked one."
+  [path doc]
+  (str "<head>"
+       "<meta charset=\"utf-8\">"
+       "<title>" (esc (str (:title doc) " — " page-title)) "</title>"
+       "<link rel=\"canonical\" href=\""
+       (esc (str (str/replace canonical-url #"/$" "") path)) "\">"
+       (meta-tag "name" "description"
+         (str "The " (str/lower-case (:title doc)) " for " page-title "."))
+       (meta-tag "name" "viewport" "width=device-width, initial-scale=1")
+       "</head>"))
+
+(defn- part-html
+  "One body part, dispatched on `freememo.legal-copy/part-kind`.
+
+   Pre: `part` is a map from a section body.
+   Post: markup for every kind in `legal/part-kinds`, and
+   `legal/unrenderable-part-marker` for a part that classifies to nil.
+   The shape is NOT re-derived from the part's keys here: `part-kind` is the one
+   classifier, and `freememo.legal-page/Part` dispatches on the same value, so
+   the two renderers cannot disagree about what a part is."
+  [part]
+  (case (legal/part-kind part)
+    :text (para (:p part))
+    :run  (tag "p" (fragments-html (:p part)))
+    :list (items (:ul part))
+    (para legal/unrenderable-part-marker)))
+
+(defn- legal-section-html [section]
+  (str (tag "h2" (esc (:heading section)))
+       (str/join (map part-html (:body section)))))
+
+(defn legal-document
+  "The static document for the legal page at `path`, or nil.
+
+   Pre: `path` is a request path or nil.
+   Post: nil when `path` names no legal document, so a caller branches on this
+   rather than repeating the path set. Otherwise a complete HTML document with
+   NO `<script>`, no stylesheet link and no font link, for the reason
+   `landing-document` states.
+   Pure: reads only `freememo.legal-copy`."
+  [path]
+  (when-some [doc (legal/document-at path)]
+    (str "<!DOCTYPE html>"
+         "<html lang=\"en\">"
+         (legal-head-html path doc)
+         "<body>"
+         (tag "main"
+           (str (tag "h1" (esc (:title doc)))
+                (para (str "Last updated " (:updated doc)))
+                (str/join (map legal-section-html (:sections doc)))))
+         (tag "footer" (link "/" (str "Back to " page-title)))
+         "</body></html>")))

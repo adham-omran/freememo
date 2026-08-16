@@ -2966,6 +2966,74 @@ html:has(.landing-layout) { scroll-behavior: smooth; }
 }
 .landing-footer-nav a:hover { color: var(--color-primary-text); }
 
+/* ── Legal documents (privacy policy) ────────────────────────── */
+/* A prose column, not a marketing page. It carries no header and no sign-in
+   control on purpose: a reader arriving from a footer link or from a data
+   protection authority wants the text, and the footer link back to `/` is the
+   whole navigation this page owes. */
+.legal-layout {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--color-bg-page);
+    color: var(--color-text-primary);
+}
+.legal-main {
+    flex: 1;
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 48px 24px 64px;
+}
+.legal-title {
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    margin: 0 0 4px;
+}
+.legal-updated {
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    margin: 0 0 32px;
+}
+.legal-section { margin-bottom: 28px; }
+.legal-section-title {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0 0 8px;
+}
+/* 68ch keeps a line inside the range that reads without the eye losing its
+   place on return. The column cap above already holds it for a wide viewport. */
+.legal-p {
+    font-size: 15px;
+    line-height: 1.65;
+    max-width: 68ch;
+    margin: 0 0 12px;
+}
+.legal-list {
+    font-size: 15px;
+    line-height: 1.65;
+    max-width: 68ch;
+    margin: 0 0 12px;
+    padding-left: 22px;
+}
+.legal-list li { margin-bottom: 8px; }
+/* Underlined, not color-only: color alone does not distinguish a link
+   (WCAG 1.4.1), and this page is mostly prose with links inside it. */
+.legal-p a,
+.legal-footer a {
+    color: var(--color-primary-text);
+    text-decoration: underline;
+}
+.legal-footer {
+    border-top: 1px solid var(--color-border);
+    padding: 24px;
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    font-size: 14px;
+}
+
 /* Mobile reflow */
 @media (max-width: 800px) {
     .landing-loop-grid { grid-template-columns: 1fr; gap: 24px; }
