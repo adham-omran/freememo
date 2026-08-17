@@ -89,11 +89,23 @@
    badge switches.
 
    A field the note does not carry digests as \"\", which is what makes a foreign
-   or half-migrated model classify as changed rather than stop the run."
+   or half-migrated model classify as changed rather than stop the run.
+
+   `strip-push-decorations`, NOT `strip-html`. Markup is content here: a word
+   restyled to `<code>` in Anki has to move this digest, and stripping tags made
+   it identical. Only what push itself prepended comes off, so a header change
+   does not read as an Anki-side edit — which would classify `:pull` where
+   `:push` is correct.
+
+   Deliberately asymmetric with `local-parts`: this side does NOT cover the
+   bibliography, because `Links` is outside `content-field-names` and no Anki-side
+   edit of it is ours to detect. The two digests never meet (see the ns
+   docstring), so they need not cover the same content — only the same content as
+   their own earlier selves."
   [kind anki-fields]
   (if-let [names (get fields/content-field-names kind)]
-    (mapv (fn [n] (fields/strip-html (get-in anki-fields [(keyword n) :value]))) names)
-    (mapv (fn [k] (fields/strip-html (get-in anki-fields [k :value])))
+    (mapv (fn [n] (fields/strip-push-decorations (get-in anki-fields [(keyword n) :value]))) names)
+    (mapv (fn [k] (fields/strip-push-decorations (get-in anki-fields [k :value])))
       (sort (keys anki-fields)))))
 
 (defn anki-digest
@@ -153,14 +165,55 @@
    edit pulled from Anki clears the flag it raised."
   [:header :footer :remarks :sources :extra1 :extra2])
 
+(def ^:private settings-part-count
+  "How many parts `settings-parts` contributes. Stated so a reader of
+   `local-parts` can see that the tail is fixed-width and kind-independent."
+  2)
+
+(defn- settings-parts
+  "The push settings the card's Anki note embeds, read from the row's snapshot
+   columns.
+
+   Pre : `card` carries `:flashcards/anki_header_text` and
+         `:flashcards/anki_bibliography_html` — nil is legal and means \"none\".
+   Post: exactly `settings-part-count` strings.
+
+   These are NOT the source of truth. Push resolves the header from
+   `settings/get-anki-header-for-topic` and the bibliography from the source
+   walk; `db/refresh-anki-settings-snapshot!` copies what it resolved onto the
+   row. The columns exist so that a change to either one moves this digest, which
+   is the only way a settings edit can dirty a card — a `settings` write and a
+   `sources` write touch no flashcards row, so the timestamp predicate never saw
+   them either.
+
+   Appended to EVERY kind's parts, occlusion included. Occlusion's own
+   `io_fields[:header]` is a different value with a different owner (the user
+   types it per card in the authoring modal), and it stays a separate part, so
+   editing one cannot mask the other.
+
+   NULL and \"\" digest alike, and that is correct: `prepend-header` writes
+   nothing for a blank header, so the two produce the same Anki note."
+  [card]
+  [(or (:flashcards/anki_header_text card) "")
+   (or (:flashcards/anki_bibliography_html card) "")])
+
 (defn- local-parts
-  "The row's comparable content, normalised the way `stripped=` normalises it:
-   the cloze brace spacing that push applies, then tags stripped.
+  "The row's comparable content, plus the push settings its note embeds.
+
+   Content is normalised ONLY by `math/stored->compare-html` — the cloze brace
+   spacing that push applies. Tags are NOT stripped: markup is content here, and
+   a word restyled to `<code>` has to move this digest. `strip-html` used to run
+   after the spacing, which made every markup-only edit invisible and left the
+   card reading `:unchanged` while the card table counted it unsynced.
 
    `math/stored->compare-html` is gated on `math/cloze-bearing-kinds`, THE single
    definition of which kinds get that spacing. Applying it unconditionally would
    make every basic card with nested TeX braces digest differently after each
    push.
+
+   Nothing here strips push decorations, because the row never holds one — the
+   header lives in `anki_header_text`, not inside `question`/`cloze`.
+   `anki-parts` does strip them, for the opposite reason.
 
    Known limitation, `score`: the digest covers which direction the card runs and
    which group it belongs to. Anki's Front and Back for a score card are media
@@ -173,36 +226,47 @@
    gives."
   [card]
   (let [kind (:flashcards/kind card)
-        norm #(fields/strip-html (math/stored->compare-html % kind))
+        norm #(math/stored->compare-html % kind)
         io   #(parsed-jsonb (:flashcards/io_fields card) :io_fields)
-        ovl  #(parsed-jsonb (:flashcards/overlapping card) :overlapping)]
-    (case kind
-      "basic"       [(norm (:flashcards/question card))
-                     (norm (:flashcards/answer card))]
-      "cloze"       [(norm (:flashcards/cloze card))]
-      "occlusion"   (mapv #(norm (get (io) %)) io-text-keys)
-      "score"       [(str (:flashcards/score_direction card))
-                     (str (:flashcards/score_group_id card))]
-      "overlapping" [(norm (:flashcards/question card))
-                     (stable-str (ovl))]
-      (into [(norm (:flashcards/question card))
-             (norm (:flashcards/answer card))
-             (norm (:flashcards/cloze card))
-             (str (:flashcards/score_direction card))
-             (str (:flashcards/score_group_id card))
-             (stable-str (ovl))]
-        (mapv #(norm (get (io) %)) io-text-keys)))))
+        ovl  #(parsed-jsonb (:flashcards/overlapping card) :overlapping)
+        content
+        (case kind
+          "basic"       [(norm (:flashcards/question card))
+                         (norm (:flashcards/answer card))]
+          "cloze"       [(norm (:flashcards/cloze card))]
+          "occlusion"   (mapv #(norm (get (io) %)) io-text-keys)
+          "score"       [(str (:flashcards/score_direction card))
+                         (str (:flashcards/score_group_id card))]
+          "overlapping" [(norm (:flashcards/question card))
+                         (stable-str (ovl))]
+          (into [(norm (:flashcards/question card))
+                 (norm (:flashcards/answer card))
+                 (norm (:flashcards/cloze card))
+                 (str (:flashcards/score_direction card))
+                 (str (:flashcards/score_group_id card))
+                 (stable-str (ovl))]
+            (mapv #(norm (get (io) %)) io-text-keys)))]
+    (into content (settings-parts card))))
 
 (defn local-digest
   "Digest of what FreeMemo currently holds for a card.
 
    pre : `card` is a flashcards row with namespaced keys, carrying at least
-         `:flashcards/kind` and the columns its kind reads. JSONB columns are
-         parsed (see `parsed-jsonb`).
-   post: a hex digest over that kind's editable content.
+         `:flashcards/kind`, the content columns its kind reads, and the two
+         snapshot columns `anki_header_text` / `anki_bibliography_html`. JSONB
+         columns are parsed (see `parsed-jsonb`). A query that omits a snapshot
+         column silently digests it as \"\", so a settings change would stop
+         dirtying the card — select both, or add them to the query's column list.
+   post: a hex digest over that kind's editable content AND the push settings its
+         note embeds.
+
+   Sensitive to markup. `<code>x</code>` and `x` are different cards here, which
+   is the whole point of the fn.
 
    Deliberately blind to `updated_at`. The timestamp moves whenever a write
-   touches the row, including a write that changes nothing after normalisation —
-   which is why item 2.5 of the plan replaces the timestamp test with this."
+   touches the row, including a write that changes nothing after normalisation.
+   `db.flashcards.local_current_digest` holds this value for every row, and every
+   staleness surface reads that column — so the card table and the reconcile can
+   no longer disagree about whether a card is synced."
   [card]
   (digest-of (:flashcards/kind card) (local-parts card)))

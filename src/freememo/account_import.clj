@@ -136,13 +136,37 @@
    ;; behaviour and changing it is outside this work. The residual risk it
    ;; carries: if the target collection happens to hold a note with the same id,
    ;; the first backfill adopts it.
+   ;;
+   ;; `local_current_digest` is NOT dropped, and that is load-bearing. It is a
+   ;; derived column, so dropping it looks right — but the baselines beside it ARE
+   ;; dropped, and `db/unsynced-sql` reads the PAIR. With current NULL and baseline
+   ;; NULL, `NULL IS DISTINCT FROM NULL` is false, so an imported card that carries
+   ;; an `anki_note_id` would read as SYNCED while the reconcile classified it
+   ;; `:needs-baseline` and then `:create` — the count-versus-runner disagreement
+   ;; this predicate exists to remove. Carried, it holds the source's digest
+   ;; against a NULL baseline, which reads unsynced.
+   ;;
+   ;; The value is safe to carry because it is a pure function of the row's own
+   ;; content: the target recomputes the same string from the same columns. Nothing
+   ;; refills it on arrival — `backfill-local-card-digests!` runs at boot, not after
+   ;; an import.
+   ;;
+   ;; `anki_header_text` and `anki_bibliography_html` are carried for the same
+   ;; reason: the digest covers them, so dropping them would make the carried
+   ;; digest disagree with the carried content.
    :flashcards #{:id :anki_baseline_digest :local_baseline_digest
                  :anki_baseline_mod :anki_conflict_at}})
 
 (def ^:private html-columns
   "Plain-HTML columns holding `/api/media/<id>` URLs (§5.4.7).
    `assistant_messages.content` has no code path that writes such a URL, but an
-   assistant reply can echo one out of injected document context."
+   assistant reply can echo one out of injected document context.
+
+   `flashcards.anki_bibliography_html` holds HTML and is deliberately absent. It
+   is built by `anki-sync-helpers/format-bibliography-html`, whose only URL is the
+   citation's own `csl :URL` — a web address, never `/api/media/`. Listing it would
+   claim a property it does not have, and the push path rewrites the column on
+   every run anyway."
   {:topics [:content]
    :flashcards [:question :answer :cloze]
    :card_versions [:question :answer :cloze]

@@ -10,6 +10,7 @@
    [cheshire.core :as json]
    [taoensso.telemere :as tel]
    [clojure.string :as str]
+   [freememo.anki-digest :as digest]
    [freememo.cloze :as cloze]
    [freememo.csl-util :as csl]
    [freememo.html-cleaner :as cleaner]
@@ -28,6 +29,7 @@
 (declare sanitize-utf8)
 (declare migrate-to-topics!)
 (declare backfill-content-text!)
+(declare backfill-local-card-digests!)
 (declare backfill-sources!)
 (declare backfill-pdf-sources!)
 (declare run-grandfather-migration!)
@@ -386,6 +388,49 @@
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_baseline_digest CHAR(64)"])
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS local_baseline_digest CHAR(64)"])
 
+  ;; `anki-digest/local-digest` of the row AS IT STANDS. The baseline above says
+  ;; what the last sync agreed on; this says what is true now, and the pair is THE
+  ;; definition of "unsynced":
+  ;;
+  ;;   local_current_digest IS DISTINCT FROM local_baseline_digest
+  ;;     OR anki_note_id IS NULL
+  ;;
+  ;; It exists because that predicate has to be expressible in SQL. Three of the
+  ;; five staleness surfaces are aggregates (`get-unsynced-card-count` by topic and
+  ;; by root, and `synced_cards` behind the document tree's Unsynced filter), and a
+  ;; kind-aware Clojure digest is not a WHERE clause. Before this column they ran a
+  ;; timestamp test instead — `updated_at > anki_synced_at` — while the reconcile
+  ;; ran the digest. The two disagreed on exactly the edits that move one and not
+  ;; the other, and a card caught between them could never be cleared: the count
+  ;; said work existed and the runner said none did.
+  ;;
+  ;; Every content write restamps it, through `restamp-card-digests!` — see
+  ;; `update-flashcard!`. A writer that skips that helper leaves a stale digest,
+  ;; which is the one failure mode this column has.
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS local_current_digest CHAR(64)"])
+
+  ;; The push settings the card's Anki note embeds, snapshotted for the digest.
+  ;;
+  ;; NOT the source of truth. Push resolves the header through
+  ;; `settings/get-anki-header-for-topic` and the bibliography through the
+  ;; effective-source walk; these columns record what it resolved.
+  ;;
+  ;; They exist because a settings edit has to be able to dirty a card, and it had
+  ;; no way to. The header lives in two `settings` rows per root topic and the
+  ;; bibliography in `sources.csl`, so changing either wrote no flashcards row —
+  ;; invisible to the timestamp test AND to the digest.
+  ;;
+  ;; `write-anki-settings-snapshot!` is the ONLY writer, and it owns the ownership
+  ;; clause, the transaction and the batching. Three public fns reach it:
+  ;; `set-anki-header-snapshot!` and `set-anki-bibliography-snapshot!` at edit
+  ;; time, and `refresh-anki-settings-snapshot!` from the push path just before it
+  ;; takes baselines.
+  ;;
+  ;; NULL header means header off, which digests the same as "" — correct, because
+  ;; `prepend-header` writes nothing for a blank header.
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_header_text TEXT"])
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_bibliography_html TEXT"])
+
   ;; Anki's per-note `mod` at the last sync. Written, read by nothing.
   ;; Measured on production: 58 of 1477 cards carried a `mod` newer than
   ;; `anki_synced_at` and NONE of them had a content difference — tag writes move
@@ -482,6 +527,14 @@
         (tel/log! {:level :error :id ::flashcard-unique-index-migration
                    :data {:error (.getMessage e)}}
           "Could not install the flashcard uniqueness indexes — card dedupe is OFF"))))
+
+  ;; Fill `local_current_digest` for rows that predate the column (idempotent).
+  ;; Baselines are deliberately left alone — see the fn's docstring for why the
+  ;; first reconcile after this deploy re-pushes the collection once.
+  (let [n (backfill-local-card-digests!)]
+    (when (pos? n)
+      (tel/log! {:level :info :id ::backfill-local-card-digests :data {:count n}}
+        (str "Backfilled " n " card digest(s)"))))
 )
 
 (defn- setup-schema-activity!
@@ -2864,7 +2917,19 @@
 (defn update-source!
   "Update a sources row. attrs = {:id :csl-type :csl :url :title}. id required;
    other keys updated only when present. Bumps updated_at. container_title
-   is re-denormalized when csl is provided."
+   is re-denormalized when csl is provided.
+
+   CALLER OBLIGATION: a citation change must reach the cards that cite it.
+   Follow this with `set-anki-bibliography-snapshot!`, passing
+   `anki-sync-helpers/format-bibliography-html` of the new CSL — otherwise the
+   push keeps sending the new citation while every staleness surface reports the
+   card as synced, so nothing ever sends it.
+
+   The call is not folded in here on purpose: rendering the citation is
+   `anki-sync-helpers`' job, and requiring that namespace from this one would put
+   missionary and the CLJS push pipeline under every namespace that touches the
+   database. Three call sites carry it instead —
+   `biblio-import/…` twice and `bibliography-form/save-source-for-topic!*`."
   [{:keys [id csl-type csl url title]}]
   (when (nil? id) (throw (ex-info "update-source! requires :id" {:type ::missing-id})))
   (let [set-map (cond-> {:updated_at (java.sql.Timestamp. (System/currentTimeMillis))}
@@ -3682,6 +3747,379 @@
     (partition-all (max 1 (quot max-statement-params (max 1 (count cols))))
       (mapv #(merge blanks %) rows))))
 
+;; ---------------------------------------------------------------------------
+;; local_current_digest — the one staleness predicate
+;; ---------------------------------------------------------------------------
+;;
+;; See the column's comment in `setup-schema-flashcards!`. ONE entry point,
+;; `restamp-card-digests!`, called by every writer that can change what the
+;; digest covers — the four content writers, the settings fan-out and the push
+;; refresh. It re-reads the rows rather than digesting the values it was handed,
+;; which is what makes it correct for a PARTIAL update: `update-flashcard!` is
+;; given one field at a time by the pull path, and digesting only that field
+;; would treat every other column as empty.
+;;
+;; A content writer that skips it leaves a stale digest, and a stale digest is a
+;; card that reads synced when it is not. That is the failure mode this column
+;; has, and it is why the helper lives here rather than at the call sites.
+
+(def ^:private digest-columns
+  "THE flashcards columns `anki-digest/local-digest` reads.
+
+   One definition, two readers: `restamp-card-digests!` and
+   `get-cards-for-reconcile`. A third appears the moment the digest covers a new
+   column — `local-digest` treats a missing column as \"\", so a query that omits
+   one silently stops detecting changes to it, which is exactly how a settings edit
+   went undetected before `anki_header_text` existed."
+  [:f.id :f.kind :f.question :f.answer :f.cloze
+   :f.io_fields :f.overlapping
+   :f.score_direction :f.score_group_id
+   :f.anki_header_text :f.anki_bibliography_html])
+
+(defn- parse-digest-jsonb
+  "Parse the two JSONB columns of a digest row.
+   `anki-digest/local-digest` THROWS on a raw PGobject rather than digesting
+   nothing, so every reader of `digest-columns` owes this."
+  [row]
+  (-> row
+    (update :flashcards/io_fields pgobject->clj)
+    (update :flashcards/overlapping pgobject->clj)))
+
+(defn restamp-card-digests!
+  "Recompute `local_current_digest` for `card-ids` from the rows as they stand.
+
+   pre : `connectable` sees the rows; ownership is the caller's to enforce.
+   post: every named card's digest equals `local-digest` of its current row.
+         Returns the number of cards restamped.
+   inv : writes nothing but that derived column, so a caller that passes an id it
+         does not own corrupts nothing — the value written is still that row's
+         own correct digest.
+
+   THAT LAXITY DOES NOT TRAVEL. It holds only because the column is a pure
+   function of the row, so a wrong id costs a wasted correct write. Any writer of a
+   column that carries user content owes a real ownership clause;
+   `write-anki-settings-snapshot!` is the one to copy, not this fn.
+
+   One statement per batch, two parameters per card, bounded by
+   `max-statement-params`. A per-row UPDATE would be thousands of statements for
+   a document-wide header change, which is the main caller.
+
+   Pass the enclosing transaction wherever one exists. On a bare `ds` a crash
+   between the content write and this leaves the digest NULL, which the staleness
+   predicate reads as unsynced for a NEW card through its `anki_note_id IS NULL`
+   clause, but as SYNCED for an already-pushed one — `NULL IS DISTINCT FROM NULL`
+   is false. That second case is why the content writers below take a
+   transaction."
+  [connectable card-ids]
+  (let [ids (vec (distinct (remove nil? card-ids)))]
+    (if (empty? ids)
+      0
+      (let [pairs (into []
+                    (comp (map parse-digest-jsonb)
+                      (map (juxt :flashcards/id digest/local-digest)))
+                    (jdbc/execute! connectable
+                      (sql/format {:select digest-columns
+                                   :from [[:flashcards :f]]
+                                   :where [:in :f.id ids]})))]
+        (doseq [batch (partition-all (quot max-statement-params 2) pairs)]
+          (jdbc/execute-one! connectable
+            (into [(str "UPDATE flashcards AS f SET local_current_digest = v.digest "
+                     "FROM (VALUES "
+                     (str/join "," (repeat (count batch) "(?::int, ?::char(64))"))
+                     ") AS v(id, digest) WHERE f.id = v.id")]
+              (mapcat identity batch))))
+        (count pairs)))))
+
+;; ---------------------------------------------------------------------------
+;; anki_header_text / anki_bibliography_html — the settings snapshot
+;; ---------------------------------------------------------------------------
+;;
+;; See those columns' comment in `setup-schema-flashcards!`. Three writers, and
+;; the split is about how many cards share one value:
+;;
+;;   `set-anki-header-snapshot!`        one header  → every card under a root
+;;   `set-anki-bibliography-snapshot!`  one citation → every card the source cites
+;;   `refresh-anki-settings-snapshot!`  per-card values, used by the push path
+;;
+;; The first two are the EDIT-time fan-out: a `settings` write and a `sources`
+;; write touch no flashcards row, so without them a header or citation change is
+;; invisible to every staleness surface. The third is what makes a missed fan-out
+;; self-healing rather than permanent.
+;;
+;; All three go through `write-anki-settings-snapshot!`, which owns the ownership
+;; clause, the transaction and the parameter bound. None of them may take a
+;; caller-built predicate: a callee that cannot check its own scope is how the push
+;; refresh came to write content columns with no ownership clause at all.
+
+(defn topic-ids-for-source
+  "Topics whose EFFECTIVE source is `source-id`.
+
+   pre : `source-id` is a sources.id.
+   post: every topic that cites it, itself included — and NO topic under a nearer
+         source. Returns [] for nil.
+   inv : the inverse of `resolve-effective-source-id`. For every returned topic t,
+         `(resolve-effective-source-id t)` = `source-id`; for every topic under a
+         descendant carrying its own source, it does not.
+
+   The descent stops at `t.source_id IS NULL` failing, and that one predicate IS
+   the shadowing rule the forward walk expresses as \"prefer the shallowest\". A
+   fan-out that instead took the whole root subtree would write a citation onto
+   cards that cite something else.
+
+   Written as the inverse relation rather than as a per-topic loop over
+   `resolve-effective-source-id`, which would be one query per topic for a
+   document-wide citation edit.
+
+   The 2-arity takes the connectable, so a fan-out can resolve its scope inside the
+   transaction that then writes it. Reading through `ds` first would leave a window
+   in which a re-parent makes the write apply to a scope that no longer holds."
+  ([source-id] (topic-ids-for-source ds source-id))
+  ([connectable source-id]
+   (if (nil? source-id)
+     []
+     (mapv :id
+       (jdbc/execute! connectable
+         ["WITH RECURSIVE sub(id) AS (
+             SELECT id FROM topics WHERE source_id = ?
+             UNION ALL
+             SELECT t.id FROM topics t JOIN sub s ON t.parent_id = s.id
+              WHERE t.source_id IS NULL)
+           SELECT id FROM sub"
+          source-id]
+         {:builder-fn rs/as-unqualified-maps})))))
+
+(def ^:private snapshot-id-batch
+  "How many card ids one snapshot UPDATE may name.
+
+   `SET anki_header_text = ?, anki_bibliography_html = ? WHERE id IN (…)
+    AND root_topic_id IN (SELECT id FROM topics WHERE user_id = ?)` binds two
+   column values plus the ownership id alongside the ids, so the id list gets
+   `max-statement-params` minus three.
+
+   NOT `param-bounded-batches`. That fn divides the ceiling by a row's COLUMN
+   count, which is the right arithmetic for a multi-row `VALUES` insert and the
+   wrong arithmetic here: one column per row would give it 65535 ids in a batch,
+   and the three other parameters then put the statement one over the ceiling —
+   which the driver refuses whole rather than truncating."
+  (- max-statement-params 3))
+
+(defn- owned-topic-ids-subquery
+  "HoneySQL subquery for the topic ids `user-id` owns.
+
+   pre : `user-id` is NOT nil — callers guard, because HoneySQL renders
+         `[:= :user_id nil]` as `user_id IS NULL` rather than as the never-true
+         `user_id = NULL`. A nil would therefore scope a write to every topic whose
+         `user_id` is NULL, which child topics legitimately are, and fan one
+         account's header across others. Measured on dev data."
+  [user-id]
+  {:select [:id] :from [:topics] :where [:= :user_id user-id]})
+
+(defn- snapshot-scope-predicate
+  "HoneySQL predicate for one snapshot scope, ownership included.
+
+   pre : `user-id` non-nil. `scope` is one of
+           [:root root-topic-id]  — every card under a root, how the header is stored
+           [:topics topic-ids]    — every card under an already-resolved topic set
+           [:cards card-ids]      — the exact cards the push is about to write
+         `[:source id]` is resolved to `[:topics …]` by `snapshot-scope-card-ids`
+         before it reaches here, because that walk needs a connectable.
+   post: a predicate no caller can widen. Ownership is applied HERE, which is the
+         whole reason `scope` is a descriptor and not a predicate the caller hands
+         in — a callee that cannot check its own precondition is how the push
+         refresh came to write content columns with no ownership clause at all.
+
+   `[:topics …]` matches on `COALESCE(topic_id, root_topic_id)`, the same key
+   `anki-sync-server/attach-card-bibliography` resolves a card's citation by, so
+   the fan-out and the push cannot disagree about which cards a source reaches."
+  [user-id scope]
+  (let [owned [:in :root_topic_id (owned-topic-ids-subquery user-id)]]
+    (case (first scope)
+      :root   [:and [:= :root_topic_id (second scope)] owned]
+      :topics [:and [:in [:coalesce :topic_id :root_topic_id] (vec (second scope))] owned]
+      :cards  [:and [:in :id (vec (second scope))] owned])))
+
+(defn- snapshot-scope-card-ids
+  "The card ids one snapshot scope names, read through `tx`.
+
+   pre : `user-id` non-nil; `scope` per `snapshot-scope-predicate`, plus
+         `[:source source-id]`.
+   post: ids of cards `user-id` owns. `[:source …]` resolves the effective-source
+         walk HERE rather than in the caller, so the scope is read inside the same
+         transaction that writes it."
+  [tx user-id scope]
+  (let [scope (if (= :source (first scope))
+                [:topics (topic-ids-for-source tx (second scope))]
+                scope)]
+    (if (and (#{:topics :cards} (first scope)) (empty? (second scope)))
+      []
+      (mapv :id
+        (jdbc/execute! tx
+          (sql/format {:select [:id] :from [:flashcards]
+                       :where (snapshot-scope-predicate user-id scope)})
+          {:builder-fn rs/as-unqualified-maps})))))
+
+(defn- write-anki-settings-snapshot!
+  "THE writer of `anki_header_text` and `anki_bibliography_html`. One transaction.
+
+   pre : `user-id` non-nil. `scope` per `snapshot-scope-card-ids`. `columns` is a
+         map of column → value naming ONLY the columns to write; an absent column
+         keeps its stored value.
+   post: every card in scope holds those values and a `local_current_digest`
+         computed from the row as written. Returns the number of cards touched.
+   inv : the column write and the digest restamp commit together. Writing the value
+         and failing to restamp would leave every card in scope reading synced with
+         a stale digest, which no later edit could correct — so the two must never
+         be separate statements outside a transaction.
+   inv : `updated_at` is NOT bumped. It means \"a user edited this card's content\",
+         and a document-wide citation change did not.
+
+   Scope resolution happens INSIDE the transaction, so a re-parent concurrent with
+   a citation edit cannot make the fan-out write a scope that no longer holds.
+
+   The push path calls this too, through `refresh-anki-settings-snapshot!`. It used
+   to run its own unscoped, untransacted loop of one UPDATE per card; `e/Offload`'s
+   latest-wins cancellation could then interrupt that loop mid-way and leave part
+   of a run's cards written with stale digests. One transaction makes a cancelled
+   attempt roll back instead."
+  [user-id scope columns]
+  (if (or (nil? user-id) (empty? columns))
+    0
+    (jdbc/with-transaction [tx ds]
+      (let [ids (snapshot-scope-card-ids tx user-id scope)]
+        (when (seq ids)
+          (doseq [batch (partition-all snapshot-id-batch ids)]
+            (jdbc/execute-one! tx
+              (sql/format {:update :flashcards
+                           :set columns
+                           :where (snapshot-scope-predicate user-id [:cards batch])})))
+          (restamp-card-digests! tx ids))
+        (count ids)))))
+
+(defn set-anki-header-snapshot!
+  "Record the header every card under `root-topic-id` will be pushed with.
+
+   pre : `header-text` is the EFFECTIVE text — nil when the note will carry no
+         header. The caller owns that derivation, because
+         `anki-sync-helpers/effective-header-text` owns the condition and this
+         namespace must not require that one.
+   post: those cards' digests move iff the header actually changed. Returns the
+         count. A nil `user-id` or `root-topic-id` is a caller bug and returns 0.
+
+   Scoped by `root_topic_id` because that is how the header is stored: two
+   `settings` rows keyed `anki_use_header_<root-id>` / `anki_header_text_<root-id>`,
+   with no account-wide fallback."
+  [user-id root-topic-id header-text]
+  (if (nil? root-topic-id)
+    0
+    (write-anki-settings-snapshot! user-id [:root root-topic-id]
+      {:anki_header_text header-text})))
+
+(defn set-anki-bibliography-snapshot-for-topics!
+  "Record the citation every card under `topic-ids` will be pushed with.
+
+   pre : `bib-html` is the rendered citation body, or nil. `topic-ids` is the exact
+         set whose cards cite it — `topic-ids-for-source` produces it from a source
+         id, and `push-bibliography-to-descendants!` returns it directly.
+   post: those cards hold it, and their digests move iff it changed. Returns the
+         count."
+  [user-id topic-ids bib-html]
+  (let [topic-ids (vec (distinct (remove nil? topic-ids)))]
+    (if (empty? topic-ids)
+      0
+      (write-anki-settings-snapshot! user-id [:topics topic-ids]
+        {:anki_bibliography_html bib-html}))))
+
+(defn set-anki-bibliography-snapshot!
+  "Record the citation every card whose EFFECTIVE source is `source-id` will be
+   pushed with — the shape the three `update-source!` call sites need.
+
+   pre : `bib-html` is the rendered citation body, or nil.
+   post: exactly the cards `topic-ids-for-source` reaches hold it. Returns the
+         count.
+
+   The walk resolves inside the write transaction (`snapshot-scope-card-ids`), so a
+   re-parent concurrent with a citation edit cannot make this write a scope that no
+   longer holds."
+  [user-id source-id bib-html]
+  (if (nil? source-id)
+    0
+    (write-anki-settings-snapshot! user-id [:source source-id]
+      {:anki_bibliography_html bib-html})))
+
+(defn refresh-anki-settings-snapshot!
+  "Set both snapshot columns for the cards a push is about to write, then restamp.
+
+   pre : `user-id` non-nil. `entries` = [{:card-id n :header-text s-or-nil
+         :bibliography-html s-or-nil} …], resolved by the push from `settings` and
+         the source walk.
+   post: every named card the user owns holds those values and a digest computed
+         from the row as written. Returns the number of cards touched. An id the
+         user does not own is silently skipped — ownership is enforced by
+         `write-anki-settings-snapshot!`, not by trusting the caller.
+
+   This is what makes a missed fan-out self-healing. Push reads the header and the
+   citation from their real homes, so a card whose snapshot went stale sends the
+   RIGHT bytes; without this refresh the baseline taken afterwards would be
+   computed from the stale snapshot and disagree with what Anki now holds, for
+   good.
+
+   Entries are grouped by their VALUE PAIR, so a whole-document push — every card
+   under one root sharing one header and one citation — costs one UPDATE, not one
+   per card. The migration re-pushes an entire collection by design, which is the
+   run where that difference is measured in thousands of statements."
+  [user-id entries]
+  (let [by-values (group-by (juxt :header-text :bibliography-html)
+                    (remove (comp nil? :card-id) entries))]
+    (reduce-kv
+      (fn [n [header bib] group]
+        (+ n (write-anki-settings-snapshot! user-id [:cards (mapv :card-id group)]
+               {:anki_header_text header :anki_bibliography_html bib})))
+      0 by-values)))
+
+(defn backfill-local-card-digests!
+  "Fill `local_current_digest` for every flashcard that has none. Returns the
+   number filled.
+
+   pre : the column exists (`setup-schema-flashcards!` has run).
+   post: every row this pass could digest holds one. Returns the count.
+   inv : restartable and idempotent — it selects only NULL rows, so an
+         interrupted run resumes where it stopped and a completed run is a no-op
+         costing one indexless count.
+
+   Deliberately does NOT touch `local_baseline_digest`. Leaving the baselines
+   alone is what makes the first reconcile after this deploy classify every synced
+   card as locally moved, so the collection re-pushes once — the alternative was
+   to declare current content to be the baseline, which would write off any
+   pre-deploy edit that never reached Anki.
+
+   Paginates by id rather than by `LIMIT` alone, so a row whose digest cannot be
+   computed cannot stall the loop. Such a row stays NULL, which reads as unsynced
+   against a non-NULL baseline and is therefore repaired by its next push — the
+   safe direction, and the reason a failed batch is logged and stepped over
+   instead of aborting boot."
+  []
+  (let [batch-size 2000]
+    (loop [filled 0 after 0]
+      (let [ids (mapv :id
+                  (jdbc/execute! ds
+                    ["SELECT id FROM flashcards
+                      WHERE local_current_digest IS NULL AND id > ?
+                      ORDER BY id LIMIT ?"
+                     after batch-size]
+                    {:builder-fn rs/as-unqualified-maps}))]
+        (if (empty? ids)
+          filled
+          (let [ok (try
+                     (restamp-card-digests! ds ids)
+                     (catch Exception e
+                       (tel/log! {:level :error
+                                  :id ::backfill-local-card-digests-batch
+                                  :data {:from (first ids) :to (last ids) :count (count ids)
+                                         :error (.getMessage e)}}
+                         "skipped a digest backfill batch")
+                       0))]
+            (recur (+ filled ok) (apply max ids))))))))
+
 (defn insert-flashcards!
   "Batch insert flashcards. Rows should include :topic_id and :root_topic_id.
    Uses ON CONFLICT DO NOTHING to prevent duplicates.
@@ -3711,16 +4149,20 @@
                         (cond-> row
                           (some? (:overlapping row)) (update :overlapping ->jsonb)))
                   rows)]
-       (into []
-         (comp (mapcat (fn [batch]
-                         (jdbc/execute! connectable
-                           (sql/format {:insert-into :flashcards
-                                        :values (vec batch)
-                                        :on-conflict []
-                                        :do-nothing true
-                                        :returning [:id]}))))
-           (map :flashcards/id))
-         (param-bounded-batches rows))))))
+       (let [ids (into []
+                   (comp (mapcat (fn [batch]
+                                   (jdbc/execute! connectable
+                                     (sql/format {:insert-into :flashcards
+                                                  :values (vec batch)
+                                                  :on-conflict []
+                                                  :do-nothing true
+                                                  :returning [:id]}))))
+                     (map :flashcards/id))
+                   (param-bounded-batches rows))]
+         ;; One extra select+update per 32k cards, not per card — a new card must
+         ;; carry a `local_current_digest` or its first edit cannot be detected.
+         (restamp-card-digests! connectable ids)
+         ids)))))
 
 ;; ── Batch inserts for collection import ────────────────────────────
 ;; An importer owns values the user never typed — titles from a foreign
@@ -3997,20 +4439,21 @@
 
    JSONB is parsed here. `anki-digest/local-digest` THROWS on a raw PGobject
    rather than digesting nothing, so a query that skipped this would fail the
-   run loudly on the first occlusion or overlapping card."
+   run loudly on the first occlusion or overlapping card.
+
+   The content columns come from `digest-columns`, so a column the digest starts
+   covering cannot be forgotten here. That mattered the moment the digest gained
+   `anki_header_text` — a hand-listed select would have digested it as \"\" and
+   quietly stopped detecting header changes, with nothing failing."
   ([user-id] (get-cards-for-reconcile user-id nil))
   ([user-id card-ids]
    (if (and (some? card-ids) (empty? card-ids))
      []
-     (mapv (fn [r] (-> r
-                     (update :flashcards/io_fields pgobject->clj)
-                     (update :flashcards/overlapping pgobject->clj)))
+     (mapv parse-digest-jsonb
        (jdbc/execute! ds
-         (sql/format {:select [:f.id :f.kind :f.question :f.answer :f.cloze
-                               :f.io_fields :f.overlapping
-                               :f.score_direction :f.score_group_id
-                               :f.anki_note_id :f.anki_baseline_digest
-                               :f.local_baseline_digest]
+         (sql/format {:select (into digest-columns
+                                [:f.anki_note_id :f.anki_baseline_digest
+                                 :f.local_baseline_digest])
                       :from [[:flashcards :f]]
                       :join [[:topics :root] [:= :f.root_topic_id :root.id]]
                       :where (cond-> [:and [:= :root.user_id user-id]]
@@ -4078,8 +4521,14 @@
          crash between the two leave a half-written baseline, which
          `anki-reconcile/classify` must then read as unknown — see its
          `:needs-baseline` branch.
-   Also stamps `anki_synced_at`, so the shipped staleness counters keep working
-   while §8 is still pending."
+   Also stamps `anki_synced_at`, which is now a display timestamp only — no
+   staleness predicate reads it.
+
+   `local_current_digest` is set to the SAME value as `local_baseline_digest`, in
+   the same statement. The caller derived `local-digest` from the row it just
+   wrote, so the two already agree; writing both makes the card read synced at
+   every surface as an invariant of this fn rather than as a consequence of
+   whoever restamped last."
   [user-id entries]
   (when (seq entries)
     (jdbc/with-transaction [tx ds]
@@ -4088,6 +4537,7 @@
           (sql/format {:update :flashcards
                        :set (cond-> {:anki_baseline_digest anki-digest
                                      :local_baseline_digest local-digest
+                                     :local_current_digest local-digest
                                      :anki_synced_at [:now]}
                               anki-mod (assoc :anki_baseline_mod anki-mod))
                        :where [:and
@@ -4174,17 +4624,27 @@
   "Update content fields of flashcard `card-id` iff owned by `user-id` (via its
    root topic). Sets updated_at for sync tracking. :io_fields (a plain map) is
    converted to JSONB here — callers never touch PGobject. No-op (0 rows) when
-   the card is not the user's."
+   the card is not the user's.
+
+   Transactional so the content write and the `local_current_digest` restamp
+   commit together. A crash between them would leave an already-pushed card
+   reading synced with changed content — see `restamp-card-digests!`."
   [user-id card-id fields]
-  (jdbc/execute-one! ds
-    (sql/format {:update :flashcards
-                 :set (cond-> (assoc fields :updated_at [:now])
-                        (contains? fields :io_fields) (update :io_fields ->jsonb)
-                        (contains? fields :overlapping) (update :overlapping ->jsonb))
-                 :where [:and
-                         [:= :id card-id]
-                         [:in :root_topic_id {:select :id :from :topics
-                                              :where [:= :user_id user-id]}]]})))
+  (jdbc/with-transaction [tx ds]
+    (let [result (jdbc/execute-one! tx
+                   (sql/format {:update :flashcards
+                                :set (cond-> (assoc fields :updated_at [:now])
+                                       (contains? fields :io_fields) (update :io_fields ->jsonb)
+                                       (contains? fields :overlapping) (update :overlapping ->jsonb))
+                                :where [:and
+                                        [:= :id card-id]
+                                        [:in :root_topic_id {:select :id :from :topics
+                                                             :where [:= :user_id user-id]}]]}))]
+      ;; Only on a row that was actually the user's — a 0-row update must not
+      ;; restamp a foreign card, harmless though that write would be.
+      (when (pos? (or (:next.jdbc/update-count result) 0))
+        (restamp-card-digests! tx [card-id]))
+      result)))
 
 ;; ---------------------------------------------------------------------------
 ;; Card edit history — write-behind version log (plans/card-edit-history.md).
@@ -4271,6 +4731,9 @@
                        :set (cond-> (assoc fields :updated_at [:now])
                               (contains? fields :overlapping) (update :overlapping ->jsonb))
                        :where [:= :id card-id]}))
+        ;; Same transaction as the version row and the content write, so the
+        ;; digest can never describe a rendition that was rolled back.
+        (restamp-card-digests! tx [card-id])
         {:updated? true :versioned? changed?})
       {:updated? false :versioned? false})))
 
@@ -4392,14 +4855,24 @@
   "Shallow-merge a partial map into a card's io_fields (JSONB ||) and mark it
    synced — the Anki-pull write path for occlusion text fields. Unchanged
    keys keep their local values; updated_at is untouched so the row does not
-   read as locally modified."
+   read as locally modified.
+
+   The digest IS restamped, unlike `updated_at`. A pull that lands Anki's text
+   makes the row's content differ from what the last sync agreed on, and the
+   baseline stamp that follows is what records the new agreement — leaving the
+   current digest stale would make the card read as changed against its own new
+   baseline."
   [user-id card-id partial-fields]
-  (jdbc/execute-one! ds
-    ["UPDATE flashcards
-      SET io_fields = COALESCE(io_fields, '{}'::jsonb) || ?,
-          anki_synced_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND root_topic_id IN (SELECT id FROM topics WHERE user_id = ?)"
-     (->jsonb partial-fields) card-id user-id]))
+  (jdbc/with-transaction [tx ds]
+    (let [result (jdbc/execute-one! tx
+                   ["UPDATE flashcards
+                     SET io_fields = COALESCE(io_fields, '{}'::jsonb) || ?,
+                         anki_synced_at = CURRENT_TIMESTAMP
+                     WHERE id = ? AND root_topic_id IN (SELECT id FROM topics WHERE user_id = ?)"
+                    (->jsonb partial-fields) card-id user-id])]
+      (when (pos? (or (:next.jdbc/update-count result) 0))
+        (restamp-card-digests! tx [card-id]))
+      result)))
 
 ;; ---------------------------------------------------------------------------
 ;; Occlusion groups — geometry lives here, one 'occlusion' flashcard row per
@@ -4778,7 +5251,17 @@
         {:group-deleted? false}))))
 
 (defn mark-cards-exported
-  "Mark cards as exported (sets anki_synced_at). Used after CSV export."
+  "Mark cards as exported (sets anki_synced_at). Used after CSV export.
+
+   `anki_synced_at` is now a DISPLAY timestamp — no staleness predicate reads it
+   (`unsynced-sql` and `card-components/unsynced?` read the digests and
+   `anki_note_id`), so a CSV export no longer changes how any card reads. That is
+   the intended answer, not an oversight: the old timestamp rule reported a
+   CSV-exported card as synced to Anki, which `library-cards/flashcard-sync-state`
+   already contradicted with `:unpushed`. A card is exported, not pushed.
+
+   Making \"exported to CSV\" visible again needs its own column and its own badge;
+   overloading a sync timestamp for it is what produced the contradiction."
   [card-ids]
   (when (seq card-ids)
     (jdbc/execute! ds
@@ -4786,21 +5269,54 @@
                    :set {:anki_synced_at [:now]}
                    :where [:in :id (vec card-ids)]}))))
 
+(defn unsynced-sql
+  "THE staleness predicate, as SQL. `prefix` is a table alias with a trailing
+   dot (\"f.\"), or \"\" for an unaliased `flashcards`.
+
+   A card is unsynced when its content no longer matches what the last sync agreed
+   on, or when it has never been pushed:
+
+     local_current_digest IS DISTINCT FROM local_baseline_digest
+       OR anki_note_id IS NULL
+
+   `IS DISTINCT FROM` rather than `<>` because both sides are nullable and
+   `NULL <> NULL` is NULL, not true. The `anki_note_id` clause is not redundant:
+   for a never-pushed card both digests can be NULL, and `NULL IS DISTINCT FROM
+   NULL` is FALSE — so without it a new card would read as synced.
+
+   One definition, four readers: the two counts below, `synced_cards` in
+   `get-document-tree-rows`, and `card-components/sync-state` (the Clojure
+   restatement, which reads the same two columns off the row).
+
+   It replaced `updated_at > anki_synced_at`. That test moved on writes the digest
+   normalises away and stayed still on settings changes the digest now covers, so
+   it and the reconcile disagreed — and a card caught between them could never be
+   cleared, because the count said work existed and the runner said none did.
+
+   Both operators are strict: `IS DISTINCT FROM` and `IS NULL` return true or
+   false, never NULL. So `NOT (…)` around this is total, which is what lets the
+   document tree count SYNCED cards from the same definition instead of writing a
+   second one."
+  ([] (unsynced-sql ""))
+  ([prefix]
+   (str "(" prefix "local_current_digest IS DISTINCT FROM " prefix "local_baseline_digest"
+     " OR " prefix "anki_note_id IS NULL)")))
+
 (defn get-unsynced-card-count
-  "Count unsynced cards for a specific topic."
+  "Count unsynced cards for a specific topic. See `unsynced-sql`."
   [topic-id]
   (let [result (jdbc/execute-one! ds
-                 ["SELECT COUNT(*) AS cnt FROM flashcards
-                   WHERE topic_id = ? AND (anki_synced_at IS NULL OR (updated_at IS NOT NULL AND updated_at > anki_synced_at))"
+                 [(str "SELECT COUNT(*) AS cnt FROM flashcards
+                        WHERE topic_id = ? AND " (unsynced-sql))
                   topic-id])]
     (or (:cnt result) 0)))
 
 (defn get-unsynced-card-count-for-root
-  "Count unsynced cards for an entire root topic tree."
+  "Count unsynced cards for an entire root topic tree. See `unsynced-sql`."
   [root-topic-id]
   (let [result (jdbc/execute-one! ds
-                 ["SELECT COUNT(*) AS cnt FROM flashcards
-                   WHERE root_topic_id = ? AND (anki_synced_at IS NULL OR (updated_at IS NOT NULL AND updated_at > anki_synced_at))"
+                 [(str "SELECT COUNT(*) AS cnt FROM flashcards
+                        WHERE root_topic_id = ? AND " (unsynced-sql))
                   root-topic-id])]
     (or (:cnt result) 0)))
 
@@ -4814,10 +5330,15 @@
    For non-PDFs: counts root itself + all descendants (recursive).
    Returns a vector of maps with :id, :title, :kind, :created_at,
    :total_items, :done_items, :total_cards, :synced_cards, plus
-   bibliography fields from sources (:sources/title etc.)."
+   bibliography fields from sources (:sources/title etc.).
+
+   `synced_cards` is `NOT (unsynced-sql)` rather than its own condition, so this
+   count and every unsynced count answer one question. The Status tab's
+   `unsynced?` derives from total minus synced, so a second condition here would
+   have shown a document as fully synced while its own card table said otherwise."
   [user-id]
   (jdbc/execute! ds
-    ["SELECT t.id, t.title, t.kind, t.created_at,
+    [(str "SELECT t.id, t.title, t.kind, t.created_at,
              s.title, s.csl_type, s.container_title,
              CASE WHEN t.kind = 'pdf' THEN COALESCE(ps.total_pages, 0)
                   ELSE COALESCE(ds.total_items, 0)
@@ -4850,14 +5371,13 @@
         ) d
       ) ds ON true
       LEFT JOIN LATERAL (
-        SELECT COUNT(*)                                            AS total_cards,
-               COUNT(*) FILTER (WHERE f.anki_synced_at IS NOT NULL
-                                      AND (f.updated_at IS NULL OR f.updated_at <= f.anki_synced_at)) AS synced_cards
+        SELECT COUNT(*) AS total_cards,
+               COUNT(*) FILTER (WHERE NOT " (unsynced-sql "f.") ") AS synced_cards
         FROM flashcards f
         WHERE f.root_topic_id = t.id
       ) cs ON true
       WHERE t.user_id = ? AND t.parent_id IS NULL AND t.staged_delete_id IS NULL
-      ORDER BY t.created_at DESC"
+      ORDER BY t.created_at DESC")
      user-id]))
 
 ;; ---------------------------------------------------------------------------
@@ -6181,11 +6701,20 @@
    fresh private sources row (overwrite-all). Excludes kind='page' descendants
    and topic-id itself, so each affected extract owns an independent copy.
    Pre:  user-id owns the subtree root above topic-id.
-   Post: {:ok true :count n} — n descendants re-pointed to new source copies;
+   Post: {:ok true :count n :topic-ids [...] :csl m} — n descendants re-pointed to
+         new source copies;
          {:ok false :error :no-source} when topic-id has no effective source;
          {:ok false :error :not-owned} when ownership fails.
    Invariant: one transaction; prior descendant source rows are left in place
-   (sources are not garbage-collected here)."
+   (sources are not garbage-collected here).
+
+   CALLER OBLIGATION: `:topic-ids` and `:csl` are returned so the caller can call
+   `set-anki-bibliography-snapshot-for-topics!` with the rendered citation. This
+   is overwrite-all, so a descendant that carried a DIFFERENT citation now carries
+   this one, and its cards' Anki notes are out of date. The fan-out is not folded
+   in for the reason `update-source!` gives — rendering the citation belongs to
+   `anki-sync-helpers` — and it runs outside this transaction, because
+   `set-anki-bibliography-snapshot-for-topics!` opens its own."
   [user-id topic-id]
   (let [src-id (resolve-effective-source-id topic-id)]
     (if-not src-id
@@ -6222,7 +6751,9 @@
                   (jdbc/execute! tx
                     ["UPDATE topics SET source_id = ? WHERE id = ?"
                      (:sources/id new-src) id])))
-              {:ok true :count (count descendants)})))))))
+              {:ok true :count (count descendants)
+               :topic-ids (mapv :id descendants)
+               :csl csl})))))))
 
 (defn purge-staged-documents!
   "Hard-delete topic subtrees whose staging entry has aged past the 12h window,

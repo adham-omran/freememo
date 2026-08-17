@@ -15,9 +15,10 @@
    [freememo.logging :as log]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.anki-reconcile-client :as rc]
-   [freememo.card-components :refer [card-row-html set-inner-html! DeleteCardButton
-                                     overlapping-row-html occlusion-row-html
-                                     score-row-html try-delete-anki-notes!]]
+   [freememo.card-components :as cc
+    :refer [card-row-html set-inner-html! DeleteCardButton
+            overlapping-row-html occlusion-row-html
+            score-row-html try-delete-anki-notes!]]
    [freememo.card-rows :as rows]
    [freememo.card-modals :refer [EditCardModal CopyCardModal]]
    [freememo.icons :as icons]
@@ -33,20 +34,27 @@
    #?(:clj [freememo.user-state :as us])))
 
 ;; ---------------------------------------------------------------------------
-;; Sync-state model — four states keyed on the RIGHT columns.
-;; Deliberately diverges from card-components/sync-state: a card exported to
-;; CSV gets anki_synced_at WITHOUT an anki_note_id, and must show :unpushed
-;; here, not :synced. :anki-modified is reserved for the Phase 2 client
-;; overlay (live AnkiConnect diff) and is never produced server-side.
+;; Sync-state model — four states, composed from card-components' two predicates.
+;; The rule is shared with the card-table dot and with `db/unsynced-sql`; only the
+;; vocabulary differs (:unpushed here, :unsynced there), because this table's
+;; badges, `:status` sort and delete-danger treatment key on these names.
+;;
+;; The CSV-export divergence this comment used to record is GONE: a card exported
+;; to CSV got `anki_synced_at` without an `anki_note_id`, which the timestamp rule
+;; read as :synced. Nothing reads `anki_synced_at` now, so `pushed?` answers that
+;; case directly.
+;;
+;; :anki-modified is still reserved for the client overlay (live AnkiConnect diff)
+;; and is never produced server-side.
 ;; ---------------------------------------------------------------------------
 
 (defn flashcard-sync-state
-  "Derive :unpushed | :modified | :synced from a flashcard row."
-  [{:flashcards/keys [anki_note_id anki_synced_at updated_at]}]
+  "Derive :unpushed | :modified | :synced from a flashcard row.
+   Pre: the row carries :flashcards/anki_note_id and both local digests."
+  [card]
   (cond
-    (nil? anki_note_id) :unpushed
-    (and updated_at anki_synced_at
-      (pos? (compare (str updated_at) (str anki_synced_at)))) :modified
+    (not (cc/pushed? card)) :unpushed
+    (cc/content-moved? card) :modified
     :else :synced))
 
 ;; ---------------------------------------------------------------------------

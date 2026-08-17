@@ -2,6 +2,7 @@
   "Business logic for application settings."
   (:require
    [freememo.db :as db]
+   [freememo.anki-sync-helpers :as anki-helpers]
    [freememo.card-models :as card-models]
    [freememo.config :as config]
    [freememo.fsrs :as fsrs]
@@ -1074,11 +1075,24 @@
 
 (defn save-anki-header-for-topic!
   "Persist the per-PDF header override. header-text is saved verbatim — an
-   explicit empty string is a valid override, NOT a fallback-to-global signal."
+   explicit empty string is a valid override, NOT a fallback-to-global signal.
+
+   Also fans the EFFECTIVE header out onto every card under `root-topic-id`.
+   Without that, this write touches no flashcards row and the change is invisible
+   to the reconcile and to every unsynced count — the card would keep the header
+   it was last pushed with, silently and for good. `db/set-anki-header-snapshot!`
+   restamps the digests, so the cards read unsynced immediately.
+
+   The fan-out is inside the same `try`. A failure leaves the settings rows
+   written and the snapshot stale, which the push path's own
+   `refresh-anki-settings-snapshot!` repairs on the next run — a stale snapshot is
+   recoverable, an unsaved setting is not, so this order is the safe one."
   [user-id root-topic-id use-header header-text]
   (try
     (db/set-setting user-id (anki-use-header-key root-topic-id) (str (boolean use-header)))
     (db/set-setting user-id (anki-header-text-key root-topic-id) (or header-text ""))
+    (db/set-anki-header-snapshot! user-id root-topic-id
+      (anki-helpers/effective-header-text use-header header-text))
     {:success true}
     (catch Exception e
       (tel/error! {:id ::save-anki-header-for-topic!} e)

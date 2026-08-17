@@ -9,6 +9,52 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
+## Unreleased
+
+### For users
+
+- **A change to formatting now syncs.** Styling a word as `code`, bold, italic or
+  any other inline format counts as a change, in both directions. Before this,
+  sync compared the visible text only, so a formatting-only edit was invisible —
+  the card table said `1 unsynced` while the run said `already in sync`, and
+  nothing could clear it.
+- **Changing a document's Anki header or its bibliography marks its cards for
+  sync.** Those two live outside the card, so nothing used to notice they had
+  changed and the notes kept the old header or citation for good.
+- **Every unsynced count and badge now answers one question.** The card table, the
+  Library badges, the document tree's Unsynced filter and the Status tab all read
+  the same rule the sync run reads, so they cannot disagree.
+- **An edit made in Anki keeps its formatting when it comes back.** A pull used to
+  overwrite the local card with plain text, discarding the formatting on both
+  sides.
+- **A pulled edit keeps your images.** Pulling a card that holds an image used to
+  drop the image.
+- **A card you exported to CSV no longer shows as synced to Anki.** It shows as
+  unsynced, which is what it is — exporting is not pushing. The Library already
+  said `unpushed` for those cards while the document card table said `synced`; the
+  two now agree.
+
+### Known issues
+
+- **The first sync after this update re-sends every card you have ever synced.**
+  Change detection now reads the card's formatting, so no earlier record matches
+  it. Nothing is lost. A card you also edited in Anki is reported as a conflict
+  and waits for you in Library → Cards.
+
+### Technical
+
+- `flashcards` gains `local_current_digest`, `anki_header_text` and
+  `anki_bibliography_html`. The first is the one staleness predicate
+  (`db/unsynced-sql` and `card-components/unsynced?` are its two restatements);
+  the other two are a snapshot of the push settings, so a settings edit can move
+  a digest.
+- `anki-fields/strip-push-decorations` splits the decoration half out of
+  `strip-html`. The reconcile digests and the pull comparison use it; the
+  cross-side overlay and display still use `strip-html`.
+- Pulled HTML now passes `clean-html` (`anki-sync-server/sanitized-pull-update`).
+  Pull was the only unsanitized HTML path into `flashcards`.
+- `plans/anki-html-change-detection.md` holds the spec.
+
 ## v20260814-1e4cf45
 
 ### For users

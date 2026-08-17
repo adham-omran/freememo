@@ -12,6 +12,7 @@
    [freememo.icons :as icons]
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.anki-sync-helpers :as anki-helpers])
    #?(:clj [taoensso.telemere :as tel])
    [freememo.optimistic :as opt]
    #?(:clj [freememo.toasts :as toasts])
@@ -240,6 +241,11 @@
                               sid     (:sources/id new-src)]
                           (db/attach-source-to-topic! user-id topic-id sid)
                           {:ok true :source-id sid}))]
+           ;; The citation reaches Anki in the Links field, so every card citing
+           ;; this source is now out of date. A `sources` write touches no
+           ;; flashcards row, so this is the only thing that says so.
+           (db/set-anki-bibliography-snapshot! user-id (:source-id result)
+             (anki-helpers/format-bibliography-html csl))
            ;; No bump here: optimistic/execute! bumps :save-biblio's :views.
            result))
        (catch Exception e

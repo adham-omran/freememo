@@ -7,7 +7,7 @@
    [freememo.doc-context :as dctx]
    [hyperfiddle.electric-scroll0 :refer [Scroll-window Tape]]
    [contrib.data :refer [clamp-left]]
-   [freememo.card-components :refer [CardRow PendingCardRow rtl-text?]]
+   [freememo.card-components :refer [CardRow PendingCardRow rtl-text? unsynced?]]
    [freememo.card-rows :as rows]
    [freememo.card-modals :refer [EditCardModal CopyCardModal]]
    [freememo.occlusion-modal :refer [OcclusionModal]]
@@ -70,10 +70,13 @@
               card-count (e/server (rows/card-count cards-vec))
               ;; Counted over MEMBERS, not rows: this is an Anki-note count and
               ;; a group row holds one note per member.
-              unsynced-count (e/server (count (filter #(or (nil? (:flashcards/anki_synced_at %))
-                                                         (and (:flashcards/updated_at %)
-                                                           (pos? (compare (str (:flashcards/updated_at %))
-                                                                   (str (:flashcards/anki_synced_at %))))))
+              ;; `card-components/unsynced?` is the same rule `db/unsynced-sql`
+              ;; runs, so this label and every SQL count answer one question. It
+              ;; used to be a timestamp test while the reconcile ran the digest,
+              ;; and the two disagreed on exactly the edits that move one and not
+              ;; the other — which is how "13 rows (1 unsynced)" sat next to
+              ;; "already in sync" with nothing able to clear it.
+              unsynced-count (e/server (count (filter unsynced?
                                                 (mapcat :members (:cards cards-result)))))
               font-sz (or card-font-size 13)
               ;; Fixed row height: 12px padding + 28px content line + 1px border.

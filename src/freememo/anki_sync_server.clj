@@ -8,6 +8,7 @@
    [freememo.commands :as commands]
    [freememo.anki-sync-helpers :as helpers]
    [freememo.bibliography-form :as bibform]
+   [freememo.html-cleaner :as cleaner]
    [freememo.math :as math]
    [taoensso.telemere :as tel]))
 
@@ -389,6 +390,35 @@
 ;; Library cards bulk actions (selection-based push / pull)
 ;; ---------------------------------------------------------------------------
 
+(defn- snapshot-entries
+  "The settings snapshot rows implied by a set of write bundles.
+
+   pre : `bundles` is `anki-write-bundles`' output — each bundle's `:settings`
+         carries the root's resolved header, each of its `:cards` carries
+         `:fm/bibliography-html` resolved from that card's OWN topic.
+   post: [{:card-id n :header-text s-or-nil :bibliography-html s-or-nil} …], one
+         per card.
+
+   The header is read through `helpers/effective-header-text`, the same condition
+   `helpers/prepend-header` applies. Storing the raw override instead would make
+   the snapshot say \"header: Chapter 1\" for a note whose checkbox is off, and
+   the digest would then disagree with the note forever.
+
+   The citation is per CARD, not per bundle: `attach-card-bibliography` walks each
+   card's own topic to its nearest source, so two cards under one root can cite
+   different things."
+  [bundles]
+  (into []
+    (mapcat (fn [{:keys [settings cards]}]
+              (let [header (helpers/effective-header-text
+                             (:use-header settings) (:header-text settings))]
+                (map (fn [card]
+                       {:card-id (:flashcards/id card)
+                        :header-text header
+                        :bibliography-html (:fm/bibliography-html card)})
+                  cards))))
+    bundles))
+
 (defn anki-write-bundles
   "Group `card-ids` by root topic and resolve each root's push settings — the
    per-root preset wins over user-level prefs, mirroring what the sync modal
@@ -469,41 +499,44 @@
                   (when-let [t (:topic-title (:settings (first deckless)))]
                     (str " for \"" t "\""))
                   ". Open Sync with Anki and choose one.")}
-        {:success true :bundles bundles}))
+        (do
+          ;; Record what these notes are ABOUT to be pushed with, before anything
+          ;; is sent and so before `record-anki-writes!` takes baselines from the
+          ;; rows. This is what makes a missed settings fan-out self-healing: push
+          ;; reads the header and the citation from their real homes, so a card
+          ;; whose snapshot went stale still sends the right bytes — and without
+          ;; this write the baseline would be computed from the stale snapshot and
+          ;; disagree with what Anki then holds, permanently.
+          ;;
+          ;; A failed send leaves the snapshot moved and the baseline untouched,
+          ;; which is the safe direction: the card still reads unsynced and the
+          ;; next run retries.
+          ;;
+          ;; THIS WRITE AND THE BASELINE STAMP CANNOT SHARE A TRANSACTION, and the
+          ;; separation is not an oversight to close. `record-anki-writes!` runs
+          ;; after the client has written to Anki and read the notes back, so a
+          ;; WebSocket round trip sits between the two. Ordering carries the
+          ;; guarantee instead: snapshot first, baseline only from bytes read back,
+          ;; so a crash anywhere between leaves the card unsynced and retried —
+          ;; never the reverse.
+          ;;
+          ;; `refresh-anki-settings-snapshot!` is itself transactional, which is
+          ;; what this reactive call site needs: `anki-reconcile-panels` runs it
+          ;; inside `e/Offload`, whose latest-wins cancellation can abandon a
+          ;; half-finished attempt when the plan changes.
+          (db/refresh-anki-settings-snapshot! user-id (snapshot-entries bundles))
+          {:success true :bundles bundles})))
     (catch Exception e
       (tel/error! {:id ::anki-write-bundles} e)
       {:success false :error (.getMessage e)})))
 
-(defn get-cards-for-bulk-pull
-  "Selected cards eligible for a bulk pull.
-   pre:  card-ids — the selection; anki-modified-ids — card ids the client
-   overlay marked as edited in Anki.
-   include-conflicts? false skips only TRUE conflicts (edited on both
-   sides). A card edited only in FreeMemo pulls bare — pulling it is an
-   explicit discard of the local edit in favor of Anki's version.
-   post: {:success true :cards [...] :skipped-conflicts n}; cards without
-   an anki_note_id are dropped silently (nothing to pull)."
-  [user-id card-ids include-conflicts? anki-modified-ids]
-  (try
-    (let [anki-mod (set anki-modified-ids)
-          rows (db/get-flashcards-by-ids user-id card-ids)
-          pushed (filterv :flashcards/anki_note_id rows)
-          local-edit? (fn [c]
-                        (let [u (:flashcards/updated_at c)
-                              s (:flashcards/anki_synced_at c)]
-                          (and u s (pos? (compare (str u) (str s))))))
-          conflict? (fn [c]
-                      (and (local-edit? c)
-                        (contains? anki-mod (:flashcards/id c))))
-          eligible (if include-conflicts?
-                     pushed
-                     (filterv (complement conflict?) pushed))]
-      {:success true
-       :cards eligible
-       :skipped-conflicts (- (count pushed) (count eligible))})
-    (catch Exception e
-      (tel/error! {:id ::get-cards-for-bulk-pull} e)
-      {:success false :error (.getMessage e)})))
+;; `get-cards-for-bulk-pull` lived here. It lost its only caller when the
+;; reconcile replaced the bulk Pull button (`plans/anki-reconcile.md` §8.1, and
+;; the note at `library_cards.cljc:582`), and it held the LAST timestamp-based
+;; staleness test in the codebase — `updated_at > anki_synced_at`, in a private
+;; `local-edit?`. Removed with the rest of that predicate rather than left as an
+;; invitation to revive it: `anki-reconcile/classify` decides direction per card
+;; from the two digests, and `db/unsynced-sql` is the only definition of unsynced.
 
 (defn finalize-bulk-push!
   "Record a bulk push: refresh anki_note_id + anki_synced_at for pairs and
@@ -521,6 +554,67 @@
       (tel/error! {:id ::finalize-bulk-push!} e)
       {:success false :error (.getMessage e)})))
 
+(defn- clean-pulled-field
+  "`clean-html` one pulled field value, and say so when it removed something.
+
+   pre : `html` is stored-form HTML — decorations already off, `<anki-mathjax>`
+         already converted by `helpers/note->pull-update`.
+   post: HTML whose every tag, class token and style declaration is allow-listed.
+
+   The `:warn` is not decoration. `clean-html` drops what
+   `quill-class-allow-list` and `safe-color-props` do not admit, and the reconcile
+   digest is now markup-sensitive — so a format Anki holds and this app does not
+   becomes a local difference on the very next run and pushes straight back. That
+   would read as a card which never settles, with nothing to grep for."
+  [card-id field html]
+  (let [cleaned (cleaner/clean-html html)]
+    (when (not= cleaned html)
+      (tel/log! {:level :warn
+                 :id ::pulled-html-sanitized
+                 :data {:card-id card-id :field field
+                        :before (count (or html "")) :after (count (or cleaned ""))}}
+        "clean-html changed a pulled Anki field"))
+    cleaned))
+
+(defn sanitized-pull-update
+  "One `helpers/note->pull-update` map with every HTML value sanitized.
+
+   pre : `pull-update` is that fn's output. Stored-form HTML sits in `:question`,
+         `:answer`, `:cloze`, or in the string values of `:io-fields`.
+   post: the same keys, every HTML value through `clean-html`. Non-string
+         `:io-fields` values are untouched, because the map shape is the
+         caller's.
+   inv : nothing reaches `db/update-flashcard!` or
+         `db/merge-flashcard-io-fields!` unsanitized. Both are bare UPDATEs.
+
+   Pull is the only path by which HTML this app did not author enters
+   `flashcards`. Every other writer already sanitizes — `card-modals/
+   sanitize-card-field`, `content-toolbar-helpers/create-extract-topic-safe!`.
+   Omitting it here was safe only while `note->pull-update` stripped every tag,
+   which is exactly what made a `<code>` edit undetectable.
+
+   `.clj`, not `.cljc`: `clean-html` is Jsoup. The two apply sites are both
+   server-side, so one definition serves both without putting the sanitizer on
+   the CLJS peer."
+  [pull-update]
+  (let [card-id (:card-id pull-update)]
+    (cond-> pull-update
+      (contains? pull-update :question)
+      (update :question #(clean-pulled-field card-id :question %))
+
+      (contains? pull-update :answer)
+      (update :answer #(clean-pulled-field card-id :answer %))
+
+      (contains? pull-update :cloze)
+      (update :cloze #(clean-pulled-field card-id :cloze %))
+
+      (contains? pull-update :io-fields)
+      (update :io-fields
+        (fn [io]
+          (reduce-kv (fn [m k v]
+                       (assoc m k (if (string? v) (clean-pulled-field card-id k v) v)))
+            {} io))))))
+
 (defn apply-pull-updates
   "After pull, update card content from Anki edits and delete locally cards removed from Anki.
    Bumps :sync-mutations so the client toolbar refreshes counts.
@@ -528,27 +622,25 @@
             [{:card-id N :io-fields {partial map}} ...] for occlusion cards
    deleted-card-ids: [N ...] — cards whose Anki notes no longer exist
 
-   Anki's `<anki-mathjax>` is converted back to the stored `\\(TeX\\)` form here,
-   the last point before the write: `db/update-flashcard!` is a bare UPDATE with
-   no sanitization, so a vendor tag reaching it would persist in the database and
-   then be stripped — silently losing the formula — the next time the card is
-   edited in the app through `clean-html`. The brace spacing applied on push is
-   deliberately NOT reversed: the extra space is valid TeX, and undoing it would
-   have to guess which spaces the user typed."
+   `sanitized-pull-update` is the last step before the write, and it is the whole
+   protection: `db/update-flashcard!` is a bare UPDATE with no sanitization.
+
+   `<anki-mathjax>` is already stored form by the time it arrives —
+   `helpers/note->pull-update` converts it, because its comparison needs the
+   stored form anyway. Converting again here would re-wrap nothing and was
+   removed. The brace spacing applied on push is deliberately NOT reversed: the
+   extra space is valid TeX, and undoing it would have to guess which spaces the
+   user typed."
   [user-id updates deleted-card-ids]
   (try
-    (doseq [{:keys [card-id question answer cloze io-fields]} updates]
+    (doseq [{:keys [card-id question answer cloze io-fields]} (map sanitized-pull-update updates)]
       (if (seq io-fields)
         ;; Occlusion: shallow JSONB merge — unchanged keys keep local values.
-        ;; Values are converted individually; the map shape is the caller's.
-        (db/merge-flashcard-io-fields! user-id card-id
-          (reduce-kv (fn [m k v]
-                       (assoc m k (if (string? v) (math/anki->stored-html v) v)))
-            {} io-fields))
+        (db/merge-flashcard-io-fields! user-id card-id io-fields)
         (let [fields (cond-> {}
-                       question (assoc :question (math/anki->stored-html question))
-                       answer (assoc :answer (math/anki->stored-html answer))
-                       cloze (assoc :cloze (math/anki->stored-html cloze)))]
+                       question (assoc :question question)
+                       answer (assoc :answer answer)
+                       cloze (assoc :cloze cloze))]
           (when (seq fields)
             (db/update-flashcard! user-id card-id fields)
             (db/mark-anki-synced user-id card-id)))))

@@ -90,13 +90,62 @@
                     (t)))
                 (t (:error result))))))))))
 
+;; ---------------------------------------------------------------------------
+;; Staleness — the Clojure restatement of `db/unsynced-sql`
+;; ---------------------------------------------------------------------------
+;;
+;; Two predicates, and every sync badge in the app composes them: this file's
+;; `sync-state` (the card-table dot) and `library-cards/flashcard-sync-state`
+;; (the Library badge, which keeps its own :unpushed vocabulary). One rule, so a
+;; badge cannot disagree with the count beside it.
+;;
+;; They must stay equivalent to `db/unsynced-sql`, which is the SQL half — the
+;; two counts and the document tree's synced_cards read that. `not=` on two nils
+;; is false and `NULL IS DISTINCT FROM NULL` is false, so the two agree on a card
+;; that has never been digested.
+;;
+;; NEITHER reads `updated_at` or `anki_synced_at` any more. The timestamp moved on
+;; writes the digest normalises away and stayed still on the settings changes the
+;; digest now covers, so it and the reconcile disagreed — and a card caught
+;; between them could never be cleared.
+
+(defn pushed?
+  "True iff the card has an Anki note. Pre: `card` carries
+   :flashcards/anki_note_id."
+  [card]
+  (some? (:flashcards/anki_note_id card)))
+
+(defn content-moved?
+  "True iff the card's content no longer matches what the last sync agreed on.
+
+   Pre : `card` carries :flashcards/local_current_digest and
+         :flashcards/local_baseline_digest. A query that selects neither reads
+         nil = nil and reports every card as settled, so a caller that renders a
+         badge owes both columns."
+  [card]
+  (not= (:flashcards/local_current_digest card)
+    (:flashcards/local_baseline_digest card)))
+
+(defn unsynced?
+  "True iff a sync has work to do for this card — the literal mirror of
+   `db/unsynced-sql`, for the counts that are computed in Clojure rather than in
+   SQL.
+
+   Pre : `card` carries :flashcards/anki_note_id and both local digests.
+   Inv : `(unsynced? c)` agrees with what `db/unsynced-sql` would say about the
+         same row. That agreement is the whole contract — a visible unsynced count
+         must mean a sync run has work, or the row is stuck."
+  [card]
+  (or (not (pushed? card)) (content-moved? card)))
+
 ;; Card table row component
 (defn sync-state
-  "Derive sync state from card fields. Returns :unsynced, :synced, or :modified."
-  [synced-at updated-at]
+  "Derive sync state from a flashcard row. Returns :unsynced, :synced or :modified.
+   Pre: `card` carries the three columns `pushed?` and `content-moved?` read."
+  [card]
   (cond
-    (nil? synced-at) :unsynced
-    (and updated-at (pos? (compare (str updated-at) (str synced-at)))) :modified
+    (not (pushed? card)) :unsynced
+    (content-moved? card) :modified
     :else :synced))
 
 (defn occlusion-row-html
@@ -188,9 +237,7 @@
    A one-member row returns exactly what sync-state gave before groups
    collapsed."
   [c]
-  (let [states (into #{} (map #(sync-state (:flashcards/anki_synced_at %)
-                                 (:flashcards/updated_at %)))
-                 (:members c))]
+  (let [states (into #{} (map sync-state) (:members c))]
     (if (= 1 (count states)) (first states) :mixed)))
 
 (e/defn CardRow [card !editing-card user-id order]

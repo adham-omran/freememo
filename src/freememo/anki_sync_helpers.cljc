@@ -13,13 +13,35 @@
 ;; Client-side AnkiConnect wrapper
 ;; ---------------------------------------------------------------------------
 
+(defn effective-header-text
+  "The header text a note will actually carry, or nil when it will carry none.
+
+   pre : the raw per-root override — `use-header` boolean-ish, `header-text`
+         string or nil.
+   post: `header-text` when a header will be written, else nil.
+   inv : THE condition. `prepend-header` applies it, and
+         `db/set-anki-header-snapshot!`'s caller resolves the column through it,
+         so the digest's idea of the header and the pushed note's cannot diverge.
+         An explicit empty string is header-off here, which matches
+         `settings/save-anki-header-for-topic!` treating \"\" as a valid override
+         rather than a fallback."
+  [use-header header-text]
+  (when (and use-header (not (str/blank? header-text)))
+    header-text))
+
 (defn prepend-header
   "Prepend optional HTML header to note front text.
-   Tagged with fm-header class so pull can strip it without contaminating the question."
+   Tagged with fm-header class so pull can strip it without contaminating the question.
+
+   `anki-fields/strip-push-decorations` is the inverse and the ONLY reader of
+   that class. It runs on the Anki side of both reconcile digests and at the head
+   of the pull chain. A change to the markup written here is a change to that
+   fn's patterns, in the same commit — otherwise every card carrying a header
+   reads as changed forever, on both sides."
   [front use-header header-text]
   (let [base (or front "")]
-    (if (and use-header (not (str/blank? header-text)))
-      (str "<p class=\"fm-header\">" header-text "</p>" base)
+    (if-some [text (effective-header-text use-header header-text)]
+      (str "<p class=\"fm-header\">" text "</p>" base)
       base)))
 
 (defn wrap-p
@@ -35,6 +57,10 @@
    The definition moved down so `freememo.anki-digest` can reach it without
    requiring this namespace. Callers here and elsewhere are unaffected."
   fields/strip-html)
+
+(def strip-push-decorations
+  "Re-export of `freememo.anki-fields/strip-push-decorations`. See `strip-html`."
+  fields/strip-push-decorations)
 
 (declare html-escape)
 
@@ -1289,10 +1315,43 @@
 
    Pure and shared: `do-anki-pull!` fetches its own notesInfo, reconcile already
    holds one for the whole collection. Two copies of this cond would let the two
-   paths apply different edits from the same note."
+   paths apply different edits from the same note.
+
+   MARKUP IS CONTENT. This used to run `strip-html` over the Anki side and
+   compare it against RAW local HTML, which made the guard true for every card
+   carrying any tag and then wrote bare text over it. A `<code>` edit in Anki was
+   both undetectable and destructive at once.
+
+   The values returned are STORED form, not sanitized. `clean-html` is a JVM
+   fn and this is `.cljc` — `anki-sync-server/sanitized-pull-update` runs it at
+   the two apply sites, which is the last point before the database.
+
+   Push applies four transforms to a field body and this undoes three (see
+   `push-inverse` bindings below). The fourth, `rewrite-media-srcs`, has no
+   inverse, so `fields/mask-img-tags` takes images out of the COMPARISON and
+   `fields/restore-img-tags` keeps the local tags in the WRITE."
   [card anki-fields]
   (let [kind (:flashcards/kind card)
-        ordered-vals (ordered-field-values anki-fields)]
+        ordered-vals (ordered-field-values anki-fields)
+        ;; Anki side → stored form.
+        ;;   prepend-header     → strip-push-decorations
+        ;;   stored->anki-html  → anki->stored-html
+        anki->stored (fn [v]
+                       (math/anki->stored-html
+                         (fields/strip-push-decorations (or v ""))))
+        ;; Local side → the SAME form, so the two are comparable.
+        ;;   stored->compare-html supplies the cloze TeX brace spacing push
+        ;;     applies and pull deliberately does not reverse.
+        ;;   wrap-p supplies the <p> wrapper build-basic-content-fields adds.
+        ;;     Basic only: build-cloze-content-fields and build-io-fields do not
+        ;;     wrap, so wrapping their local side would invent a difference.
+        local->stored (fn [v wrap?]
+                        (math/stored->compare-html
+                          (cond-> (or v "") wrap? wrap-p) kind))
+        ;; Images are compared masked. A field differing only in its media srcs
+        ;; is NOT a pull — that difference is push's own rewrite, not an edit.
+        same? (fn [anki-v local-v]
+                (= (fields/mask-img-tags anki-v) (fields/mask-img-tags local-v)))]
     (cond
       ;; `fields/no-inverse-kinds` is THE definition; nothing is pulled for
       ;; those. `anki-reconcile/apply-kind-limits` turns their pulls into
@@ -1300,8 +1359,7 @@
       (not (fields/pullable-kind? kind)) nil
 
       ;; Occlusion: diff the six text fields BY NAME (io-pull-field-names) —
-      ;; masks/Image/ID/Links are FM-owned and ignored. Both sides stripped so
-      ;; local Quill markup does not read as a diff. A field the note does not
+      ;; masks/Image/ID/Links are FM-owned and ignored. A field the note does not
       ;; carry is skipped rather than read as "": absent means Anki has nothing
       ;; to say, and treating it as empty would pull a blank over local content.
       (= "occlusion" kind)
@@ -1311,24 +1369,37 @@
                         (let [fk (keyword field-name)]
                           (if-not (contains? anki-fields fk)
                             acc
-                            (let [anki-v (strip-html (or (get-in anki-fields [fk :value]) ""))
-                                  local-v (strip-html (or (get io k) ""))]
-                              (if (= anki-v local-v) acc (assoc acc k anki-v))))))
+                            (let [anki-v (anki->stored (get-in anki-fields [fk :value]))
+                                  local-v (local->stored (get io k) false)]
+                              (if (same? anki-v local-v)
+                                acc
+                                (assoc acc k (fields/restore-img-tags anki-v local-v)))))))
                       {} io-pull-field-names)]
         (when (seq changed)
           {:card-id (:flashcards/id card) :io-fields changed}))
 
+      ;; Only the fields that actually differ, the way the occlusion branch
+      ;; reports only changed keys. Writing the matching field too would persist
+      ;; its NORMALISED form (`wrap-p`'s `<p>` wrapper), which the digest does not
+      ;; apply — so the card would dirty on the write and push back for nothing.
       (= "basic" kind)
-      (let [q (strip-html (first ordered-vals))
-            a (strip-html (second ordered-vals))]
-        (when (or (not= q (or (:flashcards/question card) ""))
-                (not= a (or (:flashcards/answer card) "")))
-          {:card-id (:flashcards/id card) :question q :answer a}))
+      (let [anki-q (anki->stored (first ordered-vals))
+            anki-a (anki->stored (second ordered-vals))
+            local-q (local->stored (:flashcards/question card) true)
+            local-a (local->stored (:flashcards/answer card) true)
+            q-changed? (not (same? anki-q local-q))
+            a-changed? (not (same? anki-a local-a))]
+        (when (or q-changed? a-changed?)
+          (cond-> {:card-id (:flashcards/id card)}
+            q-changed? (assoc :question (fields/restore-img-tags anki-q local-q))
+            a-changed? (assoc :answer (fields/restore-img-tags anki-a local-a)))))
 
       :else
-      (let [c (strip-html (first ordered-vals))]
-        (when (not= c (or (:flashcards/cloze card) ""))
-          {:card-id (:flashcards/id card) :cloze c})))))
+      (let [anki-c (anki->stored (first ordered-vals))
+            local-c (local->stored (:flashcards/cloze card) false)]
+        (when-not (same? anki-c local-c)
+          {:card-id (:flashcards/id card)
+           :cloze (fields/restore-img-tags anki-c local-c)})))))
 
 #?(:cljs
    (defn do-anki-pull!

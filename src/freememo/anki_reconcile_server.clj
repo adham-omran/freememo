@@ -23,7 +23,7 @@
    [freememo.anki-digest :as digest]
    [freememo.anki-reconcile :as rec]
    [freememo.anki-sync-helpers :as helpers]
-   [freememo.math :as math]
+   [freememo.anki-sync-server :as sync-server]
    [taoensso.telemere :as tel]))
 
 ;; ---------------------------------------------------------------------------
@@ -113,7 +113,12 @@
          where `:anki-digest` was computed from a notesInfo read taken AFTER the
          write — see the namespace invariant.
    post: each card holds its note id and both baselines, written together.
-         Returns {:success true :count n}."
+         Returns {:success true :count n}.
+
+   Deliberately NOT in the same transaction as
+   `anki-sync-server/anki-write-bundles`' settings-snapshot refresh: that runs
+   before the client sends, and a WebSocket round trip to Anki sits between the
+   two. The ordering is what carries the guarantee — see the comment there."
   [user-id entries]
   (try
     (let [locals (fresh-local-digests user-id (map :card-id entries))]
@@ -144,10 +149,10 @@
          Returns {:success true :count n}.
 
    The update is built HERE, not on the client, so `note->pull-update` runs once
-   for the whole app. `<anki-mathjax>` is converted at this last point before the
-   write, for the reason `apply-pull-updates` documents: `db/update-flashcard!`
-   is a bare UPDATE with no sanitisation, so a vendor tag reaching it would
-   persist and then be stripped — silently losing the formula — on the next edit.
+   for the whole app. `sync-server/sanitized-pull-update` is the last step before
+   the write, for the reason it documents: `db/update-flashcard!` is a bare UPDATE
+   with no sanitisation, and pull is the only path by which HTML this app did not
+   author reaches `flashcards`.
 
    A card whose tracked fields turn out not to differ is skipped entirely,
    baseline included. Stamping one would record agreement with content this run
@@ -160,19 +165,17 @@
             (keep (fn [card]
                     (let [nid (:flashcards/anki_note_id card)
                           note (get notes-by-id nid)
-                          upd (when note
-                                (helpers/note->pull-update card (:fields note)))]
+                          upd (some-> (when note
+                                        (helpers/note->pull-update card (:fields note)))
+                                sync-server/sanitized-pull-update)]
                       (when upd
                         (let [{:keys [question answer cloze io-fields]} upd]
                           (if (seq io-fields)
-                            (db/merge-flashcard-io-fields! user-id (:flashcards/id card)
-                              (reduce-kv (fn [m k v]
-                                           (assoc m k (if (string? v) (math/anki->stored-html v) v)))
-                                {} io-fields))
+                            (db/merge-flashcard-io-fields! user-id (:flashcards/id card) io-fields)
                             (let [flds (cond-> {}
-                                         question (assoc :question (math/anki->stored-html question))
-                                         answer   (assoc :answer (math/anki->stored-html answer))
-                                         cloze    (assoc :cloze (math/anki->stored-html cloze)))]
+                                         question (assoc :question question)
+                                         answer   (assoc :answer answer)
+                                         cloze    (assoc :cloze cloze))]
                               (when (seq flds)
                                 (db/update-flashcard! user-id (:flashcards/id card) flds))))
                           {:card-id (:flashcards/id card) :anki-digest (get digests nid)})))))

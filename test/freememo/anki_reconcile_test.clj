@@ -499,3 +499,177 @@
                         :local-now (digest/local-digest edited-locally)
                         :local-baseline (digest/local-digest
                                           (basic-card "<p>q</p>" "<p>a</p>"))})))))))
+
+;; ── markup is content: the defect these were written for ────────────────────
+;;
+;; Styling a word as <code> moved neither digest, because both sides ran
+;; `strip-html`. The card classified :unchanged while the card table counted it
+;; unsynced, and nothing could clear it. See plans/anki-html-change-detection.md.
+
+(deftest t30-strip-push-decorations-takes-the-header-and-nothing-else
+  (testing "the header paragraph goes, every other tag stays"
+    (is (= "<p>a <code>b</code></p>"
+          (af/strip-push-decorations
+            "<p class=\"fm-header\">H</p><p>a <code>b</code></p>"))))
+  (testing "the legacy bibliography suffix goes with everything after it"
+    (is (= "<p>body</p>"
+          (af/strip-push-decorations
+            "<p>body</p><hr class=\"fm-source\"><p>cite</p>"))))
+  (testing "idempotent — a second application cannot remove content"
+    (let [once (af/strip-push-decorations "<p class=\"fm-header\">H</p><p>x</p>")]
+      (is (= once (af/strip-push-decorations once)))))
+  (testing "an undecorated field is returned byte-identical"
+    (let [s "<table><tr><td data-row=\"1\"><code>x</code></td></tr></table>"]
+      (is (= s (af/strip-push-decorations s)))))
+  (testing "nil and blank pass through, as strip-html does"
+    (is (nil? (af/strip-push-decorations nil)))
+    (is (= "" (af/strip-push-decorations ""))))
+  (testing "strip-html still removes markup — its four callers are unchanged"
+    (is (= "a b" (af/strip-html "<p class=\"fm-header\">H</p><p>a <code>b</code></p>")))))
+
+(defn- cloze-card [c] {:flashcards/kind "cloze" :flashcards/cloze c})
+(defn- occlusion-card [header]
+  {:flashcards/kind "occlusion" :flashcards/io_fields {:header header}})
+(defn- overlapping-card [q]
+  {:flashcards/kind "overlapping" :flashcards/question q
+   :flashcards/overlapping {:cloze-count 2}})
+(defn- score-card []
+  {:flashcards/kind "score" :flashcards/score_direction "both"
+   :flashcards/score_group_id 7})
+
+(deftest t31-local-digest-sees-markup-in-every-markup-bearing-kind
+  (testing "basic"
+    (is (not= (digest/local-digest (basic-card "<p>a b</p>" ""))
+          (digest/local-digest (basic-card "<p>a <code>b</code></p>" "")))))
+  (testing "cloze"
+    (is (not= (digest/local-digest (cloze-card "{{c1::x}} y"))
+          (digest/local-digest (cloze-card "{{c1::x}} <code>y</code>")))))
+  (testing "occlusion, through io_fields"
+    (is (not= (digest/local-digest (occlusion-card "note"))
+          (digest/local-digest (occlusion-card "<code>note</code>")))))
+  (testing "overlapping"
+    (is (not= (digest/local-digest (overlapping-card "<p>q</p>"))
+          (digest/local-digest (overlapping-card "<p><code>q</code></p>")))))
+  (testing "score is insensitive BY DESIGN — its Anki fields are generated media"
+    (is (= (digest/local-digest (score-card))
+          (digest/local-digest (assoc (score-card) :flashcards/question "<code>x</code>"))))))
+
+(deftest t31b-anki-digest-sees-markup-but-not-the-header-push-added
+  (let [plain (fields "Front" "<p>a b</p>" "Back" "" "Links" "" "Remarks" "")
+        coded (fields "Front" "<p>a <code>b</code></p>" "Back" "" "Links" "" "Remarks" "")
+        headered (fields "Front" "<p class=\"fm-header\">H</p><p>a b</p>"
+                   "Back" "" "Links" "" "Remarks" "")]
+    (testing "a markup edit in Anki moves the Anki digest"
+      (is (not= (digest/anki-digest plain "basic") (digest/anki-digest coded "basic"))))
+    (testing "the header push prepends does NOT — otherwise a header change would
+              classify :pull where :push is correct"
+      (is (= (digest/anki-digest plain "basic") (digest/anki-digest headered "basic"))))))
+
+(deftest t32-local-digest-covers-the-push-settings-snapshot
+  (let [base (basic-card "<p>q</p>" "<p>a</p>")]
+    (testing "a header change dirties the card — nothing else can see it, because
+              a settings write touches no flashcards row"
+      (is (not= (digest/local-digest base)
+            (digest/local-digest (assoc base :flashcards/anki_header_text "Chapter 1")))))
+    (testing "a citation change dirties the card"
+      (is (not= (digest/local-digest base)
+            (digest/local-digest (assoc base :flashcards/anki_bibliography_html "<a>x</a>")))))
+    (testing "NULL and \"\" agree — prepend-header writes nothing for a blank header"
+      (is (= (digest/local-digest base)
+            (digest/local-digest (assoc base :flashcards/anki_header_text "")))))
+    (testing "the two snapshot columns are distinct parts"
+      (is (not= (digest/local-digest (assoc base :flashcards/anki_header_text "x"))
+            (digest/local-digest (assoc base :flashcards/anki_bibliography_html "x")))))
+    (testing "occlusion's own io_fields header does not mask the snapshot header"
+      (let [o (occlusion-card "typed")]
+        (is (not= (digest/local-digest o)
+              (digest/local-digest (assoc o :flashcards/anki_header_text "typed"))))))))
+
+;; ── media across the pull boundary ──────────────────────────────────────────
+
+(deftest t33-img-tags-are-masked-for-comparison-and-restored-for-the-write
+  (testing "push's src rewrite is not an edit"
+    (is (= (af/mask-img-tags "x<img src=\"/api/media/9\">y")
+          (af/mask-img-tags "x<img src=\"9.png\">y"))))
+  (testing "but different text still differs"
+    (is (not= (af/mask-img-tags "x<img src=\"a.png\">")
+          (af/mask-img-tags "z<img src=\"a.png\">"))))
+  (testing "the write keeps the local reference, which is the one this app serves"
+    (is (= "t<img src=\"/api/media/9\">u"
+          (af/restore-img-tags "t<img src=\"9.png\">u" "t<img src=\"/api/media/9\">u"))))
+  (testing "no img on either side is a no-op"
+    (is (= "plain" (af/restore-img-tags "plain" "plain"))))
+  (testing "an img added in Anki keeps Anki's reference — there is no local tag to take"
+    (is (= "<img src=\"a.png\"><img src=\"new.png\">"
+          (af/restore-img-tags "<img src=\"x.png\"><img src=\"new.png\">"
+            "<img src=\"a.png\">"))))
+  (testing "the returned tag count is always Anki's"
+    (is (= 1 (count (af/img-tags
+                      (af/restore-img-tags "<img src=\"x.png\">"
+                        "<img src=\"a.png\"><img src=\"b.png\">")))))))
+
+;; ── the pull comparison, against what push actually writes ──────────────────
+
+(deftest t34-pull-does-not-fire-on-what-push-itself-did
+  (testing "header, <p> wrap and <code> all round-trip with no pull"
+    (is (nil? (helpers/note->pull-update
+                {:flashcards/id 1 :flashcards/kind "basic"
+                 :flashcards/question "a <code>b</code>" :flashcards/answer ""}
+                (fields "Front" "<p class=\"fm-header\">H</p><p>a <code>b</code></p>"
+                  "Back" "")))))
+  (testing "an anki-mathjax element round-trips through the cloze brace spacing"
+    (is (nil? (helpers/note->pull-update
+                {:flashcards/id 2 :flashcards/kind "cloze"
+                 :flashcards/cloze "{{c1::x}} \\(a^{b}\\)"}
+                (fields "Text" (str "<p class=\"fm-header\">H</p>{{c1::x}} "
+                                 "<anki-mathjax>a^{b}</anki-mathjax>"))))))
+  (testing "a rewritten media src is not an edit"
+    (is (nil? (helpers/note->pull-update
+                {:flashcards/id 3 :flashcards/kind "basic"
+                 :flashcards/question "<p><img src=\"/api/media/9\"></p>" :flashcards/answer ""}
+                (fields "Front" "<p><img src=\"9.png\"></p>" "Back" "")))))
+  (testing "score and overlapping are never pulled"
+    (is (nil? (helpers/note->pull-update {:flashcards/id 4 :flashcards/kind "score"}
+                (fields "Front" "x" "Back" "y"))))
+    (is (nil? (helpers/note->pull-update {:flashcards/id 5 :flashcards/kind "overlapping"}
+                (fields "Question" "x"))))))
+
+(deftest t35-pull-lands-an-anki-side-markup-edit
+  (testing "a <code> edit made in Anki reaches the local card"
+    (is (= {:card-id 1 :question "<p>a <code>b</code></p>"}
+          (helpers/note->pull-update
+            {:flashcards/id 1 :flashcards/kind "basic"
+             :flashcards/question "<p>a b</p>" :flashcards/answer "<p>keep</p>"}
+            (fields "Front" "<p class=\"fm-header\">H</p><p>a <code>b</code></p>"
+              "Back" "<p>keep</p>")))))
+  (testing "only the field that changed is reported — writing the other would
+            persist its normalised form and dirty the card for nothing"
+    (is (= {:card-id 2 :answer "<p>new</p>"}
+          (helpers/note->pull-update
+            {:flashcards/id 2 :flashcards/kind "basic"
+             :flashcards/question "<p>q</p>" :flashcards/answer "<p>old</p>"}
+            (fields "Front" "<p>q</p>" "Back" "<p>new</p>")))))
+  (testing "a text edit beside an image keeps the local media reference"
+    (is (= {:card-id 3 :question "<p>new<img src=\"/api/media/9\"></p>"}
+          (helpers/note->pull-update
+            {:flashcards/id 3 :flashcards/kind "basic"
+             :flashcards/question "<p>old<img src=\"/api/media/9\"></p>" :flashcards/answer ""}
+            (fields "Front" "<p>new<img src=\"9.png\"></p>" "Back" "")))))
+  (testing "occlusion reports only the io keys that changed"
+    (is (= {:card-id 4 :io-fields {:remarks "<p><b>bold</b></p>"}}
+          (helpers/note->pull-update
+            {:flashcards/id 4 :flashcards/kind "occlusion"
+             :flashcards/io_fields {:header "<p>h</p>" :remarks "<p>bold</p>"}}
+            (fields "Header" "<p>h</p>" "Remarks" "<p><b>bold</b></p>"))))))
+
+(deftest t36-effective-header-text-is-the-one-condition
+  (testing "prepend-header and the snapshot column must agree, or the digest
+            disagrees with the note forever"
+    (is (= "H" (helpers/effective-header-text true "H")))
+    (is (nil? (helpers/effective-header-text false "H")))
+    (is (nil? (helpers/effective-header-text true "")))
+    (is (nil? (helpers/effective-header-text true nil))))
+  (testing "prepend-header writes exactly when effective-header-text says so"
+    (doseq [[uh ht] [[true "H"] [false "H"] [true ""] [true nil]]]
+      (is (= (some? (helpers/effective-header-text uh ht))
+            (boolean (re-find #"fm-header" (helpers/prepend-header "<p>b</p>" uh ht))))))))

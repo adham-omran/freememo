@@ -22,6 +22,7 @@
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.anki-sync-helpers :as anki-helpers])
    #?(:clj [freememo.settings :as settings])))
 
 (def ^:private style-options [["ask"    "Ask every time (compare A vs B)"]
@@ -155,10 +156,19 @@
   "Server: push the item's effective bibliography into every descendant extract
    (overwrite-all), then bump :refresh so citations re-read.
    Pre:  user-id, topic-id non-nil.
-   Post: {:ok true :count n} | {:ok false :error kw}."
+   Post: {:ok true :count n} | {:ok false :error kw}.
+
+   The snapshot fan-out is this fn's obligation, stated at
+   `db/push-bibliography-to-descendants!`. Overwrite-all means a descendant that
+   carried a different citation now carries this one, so its cards' Anki notes are
+   out of date — and a `sources` write touches no flashcards row, so nothing else
+   would say so."
   [user-id topic-id]
   #?(:clj (let [r (db/push-bibliography-to-descendants! user-id topic-id)]
-            (when (:ok r) (commands/bump! user-id :push-biblio))
+            (when (:ok r)
+              (db/set-anki-bibliography-snapshot-for-topics! user-id (:topic-ids r)
+                (anki-helpers/format-bibliography-html (:csl r)))
+              (commands/bump! user-id :push-biblio))
             r)
      :cljs nil))
 

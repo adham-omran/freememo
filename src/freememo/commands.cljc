@@ -87,9 +87,12 @@
                         :data {:topic-id :payload :root-topic-id :payload
                                :kind :payload :card-data :payload}
                         :table #{:flashcards} :views #{:card-mutations}}
+     ;; Writes `flashcards` too: a citation change fans out onto every citing
+     ;; card's `anki_bibliography_html` snapshot, so the unsynced counts move.
      :save-biblio      {:label "Save bibliography" :class :mutation :palette-hidden true
                         :data {:topic-id :payload :data :payload}
-                        :table #{:sources :topics} :views #{:refresh}}
+                        :table #{:sources :topics :flashcards}
+                        :views #{:refresh :card-mutations}}
      :add-occlusion    {:label "Add occlusion cards" :class :mutation :palette-hidden true
                         :table #{:flashcards :occlusion_groups} :views #{:card-mutations}}
      :update-occlusion {:label "Update occlusion" :class :mutation :palette-hidden true
@@ -295,10 +298,13 @@
                            ;; unmount and read only on the next mount. Bumping
                            ;; here would re-render the player mid-playback.
                            :table #{:topic_videos} :views #{}}
+     ;; Both write `flashcards` — see the note on `:save-biblio`.
      :push-biblio     {:label "Push bibliography to children" :class :mutation :palette-hidden true
-                       :table #{:sources :topics} :views #{:refresh}}
+                       :table #{:sources :topics :flashcards}
+                       :views #{:refresh :card-mutations}}
      :refetch-biblio  {:label "Refetch bibliography" :class :mutation :palette-hidden true
-                       :table #{:sources} :views #{:refresh}}
+                       :table #{:sources :flashcards}
+                       :views #{:refresh :card-mutations}}
      :import-document {:label "Import document" :class :mutation :palette-hidden true
                        :table #{:topics :topic_files :sources} :views document-views}
      ;; A SuperMemo collection lands a whole tree at once — topics, their

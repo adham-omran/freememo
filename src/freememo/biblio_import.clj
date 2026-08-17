@@ -5,6 +5,7 @@
    bibliography modal on its next mount."
   (:require [clojure.string :as str]
             [freememo.db :as db]
+            [freememo.anki-sync-helpers :as anki-helpers]
             [freememo.biblio-pdf :as bp]
             [freememo.biblio-merge :as bm]
             [freememo.biblio-resolver :as br]
@@ -194,6 +195,11 @@
                                   sid     (:sources/id new-src)]
                               (db/attach-source-to-topic! user-id topic-id sid)
                               {:ok true :source-id sid}))]
+         ;; The citation reaches Anki through the Links field, so a card citing
+         ;; this source is now out of date. Nothing else notices: a `sources`
+         ;; write touches no flashcards row.
+         (db/set-anki-bibliography-snapshot! user-id (:source-id result)
+           (anki-helpers/format-bibliography-html merged))
          (mark-for-show! user-id topic-id)
          result))
      (catch Exception e
@@ -291,6 +297,10 @@
                 title        (or (:title merged) (:topics/title topic))]
             (db/update-source! {:id current-sid :csl-type csl-type
                                 :csl merged :url url :title title})
+            ;; See the same call in `prepare-biblio!` — a refetch changes the
+            ;; citation, so it changes every citing card's Anki note.
+            (db/set-anki-bibliography-snapshot! user-id current-sid
+              (anki-helpers/format-bibliography-html merged))
             (commands/bump! user-id :refetch-biblio)
             {:ok true :source-id current-sid
              :resolver (:resolver resolver-result)}))))
