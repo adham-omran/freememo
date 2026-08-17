@@ -33,6 +33,13 @@ Format contract (see freememo.changelog):
   unsynced, which is what it is — exporting is not pushing. The Library already
   said `unpushed` for those cards while the document card table said `synced`; the
   two now agree.
+- **The conflict diff shows formatting differences.** It compared visible text, so
+  a conflict caused by formatting alone appeared as two identical texts under a
+  removed/added legend, with nothing to choose between. When the two sides really
+  are identical it now says so.
+- **`Keep FreeMemo` and `Keep Anki` are greyed out unless a conflicted card is
+  selected.** They used to look available on any selection and then do nothing but
+  print a small note beside themselves.
 
 - **Your first sync after this update rebuilds its records instead of resending
   your collection.** Change detection reads formatting now, so no record written

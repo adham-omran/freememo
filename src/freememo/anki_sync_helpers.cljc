@@ -62,6 +62,46 @@
   "Re-export of `freememo.anki-fields/strip-push-decorations`. See `strip-html`."
   fields/strip-push-decorations)
 
+;; ---------------------------------------------------------------------------
+;; One comparable form for the two sides of a field
+;; ---------------------------------------------------------------------------
+;;
+;; Push applies four transforms to a field body — `wrap-p` (basic only),
+;; `rewrite-media-srcs`, `prepend-header` and `stored->anki-html`. Three have an
+;; inverse and these two fns apply them, so a field that nobody edited compares
+;; equal across the boundary. The fourth has none; `fields/mask-img-tags` handles
+;; it at the comparison, not here.
+;;
+;; TWO consumers, and they must not drift: `note->pull-update` decides whether to
+;; pull, and `library-cards/CardDiffModal` shows the user WHY a card is a
+;; conflict. A modal normalising differently from the differ shows a diff that
+;; does not explain the verdict — which is what `strip-html` there did, hiding
+;; every markup-only difference behind two identical-looking texts.
+
+(defn anki-field->comparable
+  "One Anki field value in the form the local side is stored in.
+
+   pre : `v` is a notesInfo field value, or nil.
+   post: decorations removed and `<anki-mathjax>` back to `\\(TeX\\)`. Markup is
+         otherwise untouched — it is content.
+   inv : paired with `local-field->comparable` for the same card. Comparing a
+         value from one against a value from the other is the only supported use."
+  [v]
+  (math/anki->stored-html (fields/strip-push-decorations (or v ""))))
+
+(defn local-field->comparable
+  "One stored field value in the form Anki holds it.
+
+   pre : `v` is stored HTML or nil; `kind` is the card's kind; `wrap?` is true
+         only for a basic Front/Back, because `build-basic-content-fields` wraps
+         those and the cloze and IO builders do not.
+   post: the cloze TeX brace spacing push applies, and the `<p>` wrapper it adds
+         for basic. Pull deliberately does not reverse the spacing, so applying it
+         to this side is how the two are made comparable.
+   inv : see `anki-field->comparable`."
+  [v kind wrap?]
+  (math/stored->compare-html (cond-> (or v "") wrap? wrap-p) kind))
+
 (declare html-escape)
 
 #?(:clj
@@ -1333,21 +1373,10 @@
   [card anki-fields]
   (let [kind (:flashcards/kind card)
         ordered-vals (ordered-field-values anki-fields)
-        ;; Anki side → stored form.
-        ;;   prepend-header     → strip-push-decorations
-        ;;   stored->anki-html  → anki->stored-html
-        anki->stored (fn [v]
-                       (math/anki->stored-html
-                         (fields/strip-push-decorations (or v ""))))
-        ;; Local side → the SAME form, so the two are comparable.
-        ;;   stored->compare-html supplies the cloze TeX brace spacing push
-        ;;     applies and pull deliberately does not reverse.
-        ;;   wrap-p supplies the <p> wrapper build-basic-content-fields adds.
-        ;;     Basic only: build-cloze-content-fields and build-io-fields do not
-        ;;     wrap, so wrapping their local side would invent a difference.
-        local->stored (fn [v wrap?]
-                        (math/stored->compare-html
-                          (cond-> (or v "") wrap? wrap-p) kind))
+        ;; The two sides into one comparable form. `CardDiffModal` calls the same
+        ;; pair, so the diff it shows explains the verdict this reaches.
+        anki->stored  anki-field->comparable
+        local->stored (fn [v wrap?] (local-field->comparable v kind wrap?))
         ;; Images are compared masked. A field differing only in its media srcs
         ;; is NOT a pull — that difference is push's own rewrite, not an edit.
         same? (fn [anki-v local-v]

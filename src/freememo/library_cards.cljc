@@ -550,9 +550,17 @@
 (defonce !diff-fetch-gen (atom 0))
 
 (defn fetch-anki-note-fields!
-  "Fetch one note's stripped field values for the diff modal.
+  "Fetch one note's field values for the diff modal, in comparable form.
+
    post (async): !result ← {:state :ready :fields [str ...]}
-                          | {:state :absent} | {:state :unavailable}."
+                          | {:state :absent} | {:state :unavailable}.
+
+   `helpers/anki-field->comparable`, NOT `strip-html`. The modal exists to show
+   WHY a card is a conflict, and change detection is markup-sensitive — stripping
+   tags here rendered every markup-only conflict as two identical texts under a
+   removed/added legend, with nothing for the user to decide on. It also removes
+   the header `prepend-header` added, which is push's own decoration and not a
+   difference anyone can act on."
   [note-id !result]
   #?(:cljs
      (let [g (swap! !diff-fetch-gen inc)]
@@ -564,7 +572,7 @@
               (reset! !result
                 (if (and (map? note) (:noteId note))
                   {:state :ready
-                   :fields (mapv helpers/strip-html
+                   :fields (mapv helpers/anki-field->comparable
                              (helpers/ordered-field-values (:fields note)))}
                   {:state :absent})))))
         (fn [_err]
@@ -850,8 +858,20 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
                          [["Cloze" local-front (nth anki-fields 0 "")]]
                          [["Front" local-front (nth anki-fields 0 "")]
                           ["Back" local-back (nth anki-fields 1 "")]])
+              ;; A conflict whose two sides are identical is the honest answer for
+              ;; a card whose baselines were written by an older digest generation:
+              ;; both sides read as moved because the FUNCTION moved. Saying so is
+              ;; the actionable fact — without it the modal shows context lines, no
+              ;; −/+ anywhere, and a legend promising removals and additions.
+              identical? (every? (fn [[_ a b]] (= a b)) sections)
               html (apply str (map (fn [[label a b]] (diff-section-html label a b))
                                 sections))]
+          (when identical?
+            (dom/p
+              (dom/props {:style {:font-size "12px" :margin "0 0 8px 0"
+                                  :color "var(--color-text-secondary)"}})
+              (dom/text (str "No content difference — the two sides are identical. "
+                          "Either resolution settles this card."))))
           (e/for-by identity [_k [(str "diff-" id)]]
             (dom/div
               (dom/props {:style {:max-height "50vh" :overflow-y "auto"
@@ -866,8 +886,12 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
       (when dc
         (let [{:keys [id kind question answer cloze note-id]} dc
               cloze? (= kind "cloze")
-              local-front (helpers/strip-html (or (if cloze? cloze question) ""))
-              local-back (helpers/strip-html (or answer ""))
+              ;; The same pair `note->pull-update` compares with, so the diff shown
+              ;; here explains the verdict the run reached. `wrap?` is true only for
+              ;; basic, matching `build-basic-content-fields`.
+              local-front (helpers/local-field->comparable
+                            (if cloze? cloze question) kind (not cloze?))
+              local-back (helpers/local-field->comparable answer kind (not cloze?))
               !anki-result (atom nil)
               anki-result (e/watch !anki-result)]
           (when note-id
@@ -1031,10 +1055,21 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
    membership test, the note lookup the FreeMemo side needs, and the kinds its
    digest must be taken under, in one value that cannot disagree with itself.
 
-   Disabled when nothing is selected, when a run is busy, or — for the FreeMemo
-   side only — when Anki is unreachable. Keeping Anki's version needs no
-   connection: it moves the LOCAL baseline, which the server computes alone."
-  [conflicts none-selected? busy? anki-ready?
+   Disabled when the selection holds no conflicted card, when a run is busy, or —
+   for the FreeMemo side only — when Anki is unreachable. Keeping Anki's version
+   needs no connection: it moves the LOCAL baseline, which the server computes
+   alone.
+
+   `no-conflicts-selected?` is a separate argument rather than a second
+   `e/watch` on `!selected`: `BulkActionBar` already watches it, so deriving the
+   count there keeps one reactive read of that atom.
+
+   The conflictedness gate belongs in `:disabled`, not only in the click handler.
+   Both buttons used to enable on any selection and then set a small grey
+   \"No conflicted cards in the selection\" beside themselves, which reads as a
+   button that does nothing. The handler keeps its check — it is the postcondition,
+   and the selection can change between render and click."
+  [conflicts none-selected? no-conflicts-selected? busy? anki-ready?
    !selected !action-result !scan-result !bulk-phase]
   (e/client
     (let [conflicted (or conflicts {})
@@ -1054,16 +1089,20 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
                             !scan-result !bulk-phase !action-result))))))]
       (dom/button
         (dom/props {:class "btn btn-sm btn-primary"
-                    :disabled (or none-selected? busy? (not anki-ready?))})
-        (tooltip/Tooltip! (if anki-ready?
-                            "Keep FreeMemo's version of the selected conflicts"
-                            "Requires Anki connection"))
+                    :disabled (or none-selected? no-conflicts-selected?
+                                busy? (not anki-ready?))})
+        (tooltip/Tooltip! (cond
+                            no-conflicts-selected? "Select a conflicted card first"
+                            (not anki-ready?) "Requires Anki connection"
+                            :else "Keep FreeMemo's version of the selected conflicts"))
         (dom/text "Keep FreeMemo")
         (dom/On "click" (pick! :freememo) nil))
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary"
-                    :disabled (or none-selected? busy?)})
-        (tooltip/Tooltip! "Keep Anki's version of the selected conflicts")
+                    :disabled (or none-selected? no-conflicts-selected? busy?)})
+        (tooltip/Tooltip! (if no-conflicts-selected?
+                            "Select a conflicted card first"
+                            "Keep Anki's version of the selected conflicts"))
         (dom/text "Keep Anki")
         (dom/On "click" (pick! :anki) nil)))))
 
@@ -1077,7 +1116,11 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
           none-selected? (zero? (count selected))
           ;; Summed from the selection itself, whose member-ids were captured
           ;; at click time — no read of :filtered-rows, no server round trip.
-          selected-cards (transduce (map count) + 0 (vals selected))]
+          selected-cards (transduce (map count) + 0 (vals selected))
+          ;; Derived here, where `selected` is already watched, so the resolve
+          ;; buttons need no second reactive read of the same atom.
+          no-conflicts-selected? (not-any? #(contains? (or conflicts {}) %)
+                                   (selected-card-ids selected))]
       (dom/div
         (dom/props {:class "cards-summary-actions"})
         (dom/span
@@ -1085,7 +1128,8 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
           (dom/text (str (count selected) " selected"
                       (when (not= (count selected) selected-cards)
                         (str " · " selected-cards " cards")))))
-        (ResolveConflictButtons conflicts none-selected? busy? anki-ready?
+        (ResolveConflictButtons conflicts none-selected? no-conflicts-selected?
+          busy? anki-ready?
           !selected !action-result !scan-result !bulk-phase)
         ;; .btn-danger (outline) not .btn-danger-fill (solid): Keep FreeMemo is
         ;; the one filled/primary action in this bar. FLAGGED — the mockup shows
