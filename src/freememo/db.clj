@@ -1044,6 +1044,78 @@
                       ON kg_facts(subject_entity_id, predicate_id, md5(object_literal), graph_topic_id)
                       WHERE object_literal IS NOT NULL"])
 
+  ;; Per-page extraction log — what makes a re-distill skip pages it already did,
+  ;; and what makes a cancelled or timed-out run resumable instead of total loss.
+  ;; See plans/kg-page-skip-extraction.md.
+  ;;
+  ;; `page_topic_id` is UNIQUE on its own: a page topic has exactly one parent, so
+  ;; it belongs to exactly one document. The wiki/web documents that have no page
+  ;; children point it at the root topic itself, which is why this table has no
+  ;; nullable page_number and no `IS NULL` special case anywhere.
+  ;;
+  ;; `fact_count IS NULL` means "extracted, not yet linked" — the fail-open marker
+  ;; the whole design rests on. A row in that state is only skippable while its
+  ;; staged triples still exist (see pages-needing-extraction), so an account
+  ;; import, which drops kg_staged_triples as in-flight state, arrives with those
+  ;; pages eligible again rather than marked done with no facts. Its VALUE counts
+  ;; the triples linking built for the page and overcounts rows the fact indexes
+  ;; dropped, so it is the marker and NOT a display figure — the Knowledge views
+  ;; read fact counts from kg_facts.
+  ;;
+  ;; `attempt_count` is scoped to `content_digest`: a failure records the digest it
+  ;; failed on so that editing the page resets the count (see
+  ;; record-page-extraction-failure!). A failure row is therefore digest-matching
+  ;; AND unlinked AND unstaged, which the selector reads as "retry, until the cap".
+  ;;
+  ;; `prompt_version`, `extract_model_id` and the predicate vocabulary size are
+  ;; RECORDED, never compared. Gating the skip on the vocabulary would make it
+  ;; almost never fire, because the vocabulary grows on every curation.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS kg_page_extractions (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      graph_topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+      page_topic_id INTEGER NOT NULL UNIQUE REFERENCES topics(id) ON DELETE CASCADE,
+      content_digest TEXT NOT NULL,
+      digest_version INTEGER NOT NULL,
+      fact_count INTEGER,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      prompt_version TEXT,
+      extract_model_id TEXT,
+      extracted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_page_extractions_graph
+                      ON kg_page_extractions(graph_topic_id)"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_page_extractions_user
+                      ON kg_page_extractions(user_id)"])
+
+  ;; Raw pass-1 output, awaiting pass-2 entity linking. Labels only — no entity
+  ;; ids, because linking has not run yet.
+  ;;
+  ;; This table exists so extraction can persist per PAGE while linking stays ONE
+  ;; batched call per invocation. Linking per page would multiply LLM calls by page
+  ;; count, and would match each page's labels against a nearly empty kg_entities,
+  ;; which under-merges and creates duplicate entities.
+  ;;
+  ;; The XOR CHECK mirrors kg_facts': it enforces kg-extract/valid-triple?'s shape
+  ;; at the boundary, so no reader of a staged row has to re-check it.
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS kg_staged_triples (
+      id BIGSERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      page_extraction_id INTEGER NOT NULL
+        REFERENCES kg_page_extractions(id) ON DELETE CASCADE,
+      subject_label TEXT NOT NULL,
+      predicate_label TEXT NOT NULL,
+      object_label TEXT,
+      object_literal TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK ((object_label IS NULL) <> (object_literal IS NULL))
+    )"])
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_kg_staged_triples_extraction
+                      ON kg_staged_triples(page_extraction_id)"])
+
   ;; Question bank — generated from approved facts, curated by exception
   ;; (edit/reject); 'retired' marks questions whose underlying fact was
   ;; rejected. kind: 'atomic' covers one fact, 'synthesis' spans an entity's
@@ -7958,6 +8030,401 @@
                                    :returning [:id]})
                       {:builder-fn rs/as-unqualified-maps}))))
         (partition-all per-chunk rows)))))
+
+;; ---------------------------------------------------------------------------
+;; Per-page extraction log — the facts-extraction page skip.
+;; See plans/kg-page-skip-extraction.md.
+;; ---------------------------------------------------------------------------
+
+(defn- extractable-page-text
+  "The condition that makes a page worth extracting from, as SQL for table `alias`.
+
+   ONE definition, because three readers apply it and a drift between any two is
+   a page silently extracted twice or never: `document-page-extraction-state`
+   selects on it, `extractable-pages-cte` counts on it, and
+   `root-topic-extraction-state` applies it to the fallback root. It takes an alias
+   rather than hardcoding one so each caller supplies its own.
+
+   `content_text` rather than `content`: it is the stripped text extraction
+   actually sends, every content writer maintains it, and `backfill-content-text!`
+   runs unconditionally at schema setup (db.clj:785), so it is non-null wherever
+   `content` is."
+  [alias]
+  (str alias ".content_text IS NOT NULL AND btrim(" alias ".content_text) <> ''"))
+
+(defn- truncated-error
+  "An error message clipped to fit `kg_page_extractions.last_error` without
+   dominating the row. Post: nil, or a string of at most 500 characters."
+  [message]
+  (when-let [s (some-> message sanitize-utf8)]
+    (if (> (count s) 500) (subs s 0 500) s)))
+
+(defn document-page-extraction-state
+  "Every extractable page of `root-topic-id`, joined to its extraction record.
+
+   ONE query, not one per page. The digest itself is NOT computed here —
+   `freememo.kg-page-digest` owns it, and computing it in SQL as well would put
+   the definition in two languages where a drift is undetectable. The caller
+   digests `content_text` and compares.
+
+   THE COST that choice carries: every page's full text crosses into heap, INCLUDING
+   pages that will be skipped. A 500-page book re-distilled with nothing changed
+   makes zero LLM calls and still reads the whole book, because a page cannot be
+   known skippable without its digest and the digest needs the text. Bounded by one
+   document, and the alternative is a second hashing algorithm in SQL that could
+   drift from the first undetectably. If this ever needs fixing, fix it by making
+   SQL the ONLY home of the digest, never by adding a second one.
+
+   Pre : `root-topic-id` is a root document topic owned by the caller's user.
+   Post: rows of {:page_topic_id :page_number :content_text :extraction_id
+         :content_digest :digest_version :fact_count :attempt_count :has_staged},
+         page order. The last six are nil/false for a page never attempted.
+   Inv : a row appears here iff `extractable-page-text` admits it, so this cannot
+         disagree with `kg-extraction-progress` about what a document holds."
+  [root-topic-id]
+  (jdbc/execute! ds
+    [(str "SELECT t.id AS page_topic_id, t.page_number, t.content_text,
+                  e.id AS extraction_id, e.content_digest, e.digest_version,
+                  e.fact_count, e.attempt_count,
+                  COALESCE(EXISTS (SELECT 1 FROM kg_staged_triples s
+                                    WHERE s.page_extraction_id = e.id), false)
+                    AS has_staged
+             FROM topics t
+             LEFT JOIN kg_page_extractions e ON e.page_topic_id = t.id
+            WHERE t.parent_id = ? AND t.kind = 'page'
+              AND " (extractable-page-text "t")
+       " ORDER BY t.page_number ASC")
+     root-topic-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn root-topic-extraction-state
+  "The same row shape as `document-page-extraction-state`, for a document with no
+   page children (wiki, web, markdown imports).
+
+   Those documents extract from the root topic's own content, so the extraction
+   row's `page_topic_id` IS the root id. That is what keeps this table free of a
+   nullable page number and every reader free of an `IS NULL` branch.
+
+   Pre : `root-topic-id` is a root document topic.
+   Post: one row, or none when the root holds no extractable text."
+  [root-topic-id]
+  (jdbc/execute-one! ds
+    [(str "SELECT t.id AS page_topic_id, NULL::int AS page_number, t.content_text,
+                  e.id AS extraction_id, e.content_digest, e.digest_version,
+                  e.fact_count, e.attempt_count,
+                  COALESCE(EXISTS (SELECT 1 FROM kg_staged_triples s
+                                    WHERE s.page_extraction_id = e.id), false)
+                    AS has_staged
+             FROM topics t
+             LEFT JOIN kg_page_extractions e ON e.page_topic_id = t.id
+            WHERE t.id = ? AND " (extractable-page-text "t"))
+     root-topic-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn- upsert-page-extraction!
+  "Write one page's extraction record and drop whatever it staged before.
+
+   Every caller reaches this through `record-page-extraction!` or
+   `record-page-extraction-failure!`, which is where the two contracts differ.
+   Both share the stale-staged delete, and that delete is not optional: a page
+   selected for re-extraction may still carry staged triples from an OLDER digest,
+   and leaving them would make the new digest plus those rows read as satisfied.
+
+   `attempt_count` counts CONSECUTIVE FAILURES on the page's current text, not
+   writes. The two callers therefore need different behaviour from this column and
+   `attempts` says which:
+
+     :reset     a success. The count goes to 0, because a page that produced
+                output owes nothing to its earlier failures. Without this a page
+                that succeeded and then failed ONCE sat at the cap immediately,
+                since the success itself had left the count at 1.
+     :increment a failure. One more attempt when the digest and version are
+                unchanged, or 1 when they are not — which is how editing a page
+                clears a cap reached against its old text.
+
+   The rule lives in SQL rather than in the callers so it has one home, and the
+   two `attempts` fragments are literal code chosen by `case`, never caller data.
+
+   Pre : `tx` is a connectable inside a transaction the caller owns.
+         `attempts` is :reset or :increment.
+   Post: exactly one row for `page-topic-id`, its id returned, and no staged row
+         referencing it."
+  [tx {:keys [user-id graph-topic-id page-topic-id content-digest digest-version
+              fact-count last-error prompt-version extract-model-id attempts]}]
+  (let [insert-attempts (case attempts :reset "0" :increment "1")
+        update-attempts (case attempts
+                          :reset "0"
+                          :increment
+                          "CASE WHEN kg_page_extractions.content_digest = EXCLUDED.content_digest
+                                 AND kg_page_extractions.digest_version = EXCLUDED.digest_version
+                                THEN kg_page_extractions.attempt_count + 1
+                                ELSE 1 END")
+        row (jdbc/execute-one! tx
+              [(str "INSERT INTO kg_page_extractions
+                       (user_id, graph_topic_id, page_topic_id, content_digest,
+                        digest_version, fact_count, attempt_count, last_error,
+                        prompt_version, extract_model_id)
+                     VALUES (?, ?, ?, ?, ?, ?, " insert-attempts ", ?, ?, ?)
+                     ON CONFLICT (page_topic_id) DO UPDATE SET
+                       graph_topic_id = EXCLUDED.graph_topic_id,
+                       content_digest = EXCLUDED.content_digest,
+                       digest_version = EXCLUDED.digest_version,
+                       fact_count = EXCLUDED.fact_count,
+                       attempt_count = " update-attempts ",
+                       last_error = EXCLUDED.last_error,
+                       prompt_version = EXCLUDED.prompt_version,
+                       extract_model_id = EXCLUDED.extract_model_id,
+                       extracted_at = now()
+                     RETURNING id")
+               user-id graph-topic-id page-topic-id content-digest digest-version
+               fact-count last-error prompt-version extract-model-id]
+              {:builder-fn rs/as-unqualified-maps})]
+    (jdbc/execute! tx
+      ["DELETE FROM kg_staged_triples WHERE page_extraction_id = ?" (:id row)])
+    (:id row)))
+
+(defn record-page-extraction!
+  "Record a page's successful extraction and stage its triples, atomically.
+
+   `fact_count` is set to 0 for an EMPTY triple list and left NULL otherwise. That
+   0 is the barren-page marker: nothing was staged, so linking will never visit
+   the page, and without the 0 the selector would read it as unfinished and pay to
+   extract it again on every run. A page with triples gets its count from
+   `finalize-linked-pages!` once linking has run.
+
+   `attempt_count` is RESET here, because a page that produced output owes nothing
+   to its earlier failures. See `upsert-page-extraction!` for what happens without
+   that reset.
+
+   Pre : `triples` are shape-valid per `kg-extract/valid-triple?` — exactly one of
+         :o / :lit non-blank. The XOR CHECK on `kg_staged_triples` enforces it, so
+         a violation surfaces here as a constraint error rather than as a bad fact
+         later.
+   Post: one extraction row for the page, `(count triples)` staged rows, no staged
+         row from any earlier attempt, and all of it committed together — so a
+         process death after this call cannot lose the page's paid LLM work."
+  [{:keys [user-id graph-topic-id page-topic-id content-digest digest-version
+           prompt-version extract-model-id triples]}]
+  (jdbc/with-transaction [tx ds]
+    (let [extraction-id (upsert-page-extraction! tx
+                          {:user-id user-id :graph-topic-id graph-topic-id
+                           :page-topic-id page-topic-id
+                           :content-digest content-digest
+                           :digest-version digest-version
+                           :fact-count (when (empty? triples) 0)
+                           :last-error nil
+                           :attempts :reset
+                           :prompt-version prompt-version
+                           :extract-model-id extract-model-id})]
+      (when (seq triples)
+        (jdbc/execute! tx
+          (sql/format {:insert-into :kg_staged_triples
+                       :values (mapv (fn [{:keys [s p o lit]}]
+                                       {:user_id user-id
+                                        :page_extraction_id extraction-id
+                                        :subject_label (sanitize-utf8 s)
+                                        :predicate_label (sanitize-utf8 p)
+                                        :object_label (some-> o sanitize-utf8)
+                                        :object_literal (some-> lit sanitize-utf8)})
+                                 triples)})))
+      extraction-id)))
+
+(defn record-page-extraction-failure!
+  "Record that a page's extraction failed, and count the attempt.
+
+   The row stores the digest it failed ON, which is what scopes `attempt_count` to
+   the text: editing the page changes the digest and `upsert-page-extraction!`
+   resets the count to 1, so a cap reached against old text never blocks new text.
+
+   `fact_count` stays NULL and nothing is staged, so the selector reads this row as
+   \"retry, until the cap\" rather than as work already done.
+
+   Pre : `error-message` is a string or nil.
+   Post: the page's `attempt_count` is one higher when the digest is unchanged, or
+         1 when it is not; no staged row references the page."
+  [{:keys [user-id graph-topic-id page-topic-id content-digest digest-version
+           prompt-version extract-model-id error-message]}]
+  (jdbc/with-transaction [tx ds]
+    (upsert-page-extraction! tx
+      {:user-id user-id :graph-topic-id graph-topic-id
+       :page-topic-id page-topic-id
+       :content-digest content-digest
+       :digest-version digest-version
+       :fact-count nil
+       :last-error (truncated-error error-message)
+       :attempts :increment
+       :prompt-version prompt-version
+       :extract-model-id extract-model-id})))
+
+(defn staged-triples-for-document
+  "Every unlinked triple of a document, oldest page first.
+
+   This is what makes linking one call per INVOCATION rather than one per page: it
+   returns the triples this invocation just staged AND everything an earlier
+   cancelled or timed-out invocation left behind, so a resumed run links the whole
+   accumulated set at once.
+
+   Pre : `root-topic-id` is owned by `user-id`.
+   Post: rows of {:id :page_extraction_id :page_number :subject_label
+         :predicate_label :object_label :object_literal}. `page_number` is nil for
+         a document extracted from its root topic."
+  [user-id root-topic-id]
+  (jdbc/execute! ds
+    ["SELECT s.id, s.page_extraction_id, pt.page_number,
+             s.subject_label, s.predicate_label, s.object_label, s.object_literal
+        FROM kg_staged_triples s
+        JOIN kg_page_extractions e ON e.id = s.page_extraction_id
+        JOIN topics pt ON pt.id = e.page_topic_id
+       WHERE e.user_id = ? AND e.graph_topic_id = ?
+       ORDER BY pt.page_number ASC NULLS FIRST, s.id ASC"
+     user-id root-topic-id]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn finalize-linked-pages!
+  "Mark pages linked and discard the triples that fed the link, atomically.
+
+   `fact_count` is set from the staged-row count, which OVERCOUNTS rows the
+   flashcard-style unique indexes on `kg_facts` dropped. That is deliberate: the
+   column's job is to be non-NULL, and no surface displays it — the Knowledge views
+   read fact counts from `kg_facts`. See the table comment in setup-schema-kg!.
+
+   Pre : the caller has already inserted the facts these triples produced. Calling
+         this first would mark pages linked whose facts do not exist, which no
+         later run would repair, because the selector would skip them.
+   Post: every named page has a non-NULL `fact_count` and no staged rows. Both
+         happen in one transaction, so a crash between them is not a state the
+         selector can observe. Returns how many pages were marked."
+  [user-id extraction-ids]
+  (if (empty? extraction-ids)
+    0
+    (let [ids (int-array extraction-ids)]
+      (jdbc/with-transaction [tx ds]
+        (let [marked (:next.jdbc/update-count
+                      (jdbc/execute-one! tx
+                        ["UPDATE kg_page_extractions e
+                             SET fact_count = c.n
+                            FROM (SELECT page_extraction_id, COUNT(*) AS n
+                                    FROM kg_staged_triples
+                                   WHERE page_extraction_id = ANY(?)
+                                   GROUP BY page_extraction_id) c
+                           WHERE e.id = c.page_extraction_id AND e.user_id = ?"
+                         ids user-id]))]
+          (jdbc/execute! tx
+            ["DELETE FROM kg_staged_triples s
+               USING kg_page_extractions e
+               WHERE s.page_extraction_id = e.id
+                 AND s.page_extraction_id = ANY(?) AND e.user_id = ?"
+             ids user-id])
+          marked)))))
+
+(defn clear-document-extraction-records!
+  "Forget every extraction record of a document, so the next run re-extracts it.
+
+   This is the ONLY path by which a prompt or model improvement reaches pages
+   already extracted, because the skip gates on content alone. It is destructive of
+   nothing a user made: facts, edits and rejections live in `kg_facts` and are
+   untouched, and `insert-kg-facts!`'s unique indexes stop the re-run resurrecting
+   a rejected fact.
+
+   Pre : `root-topic-id` is owned by `user-id`.
+   Post: no `kg_page_extractions` row for the document, and by cascade no staged
+         triple. Returns the number of pages forgotten."
+  [user-id root-topic-id]
+  (:next.jdbc/update-count
+   (jdbc/execute-one! ds
+     ["DELETE FROM kg_page_extractions WHERE user_id = ? AND graph_topic_id = ?"
+      user-id root-topic-id])))
+
+(def ^:private extractable-pages-cte
+  "The user's extractable pages, one row per page, as (page_topic_id, graph_topic_id).
+
+   Both branches drive from the user's ROOT topics, which is what scopes the walk
+   to one account. An earlier revision counted pages in a subquery with no
+   `user_id` predicate at all: the plan was a seq scan aggregating every page topic
+   of every account, with a `btrim` detoast per row, on a path that runs on every
+   Knowledge render and every :kg-mutations bump. One account's growth slowed every
+   other account's Knowledge tab.
+
+   The second branch is the root fallback `kg-extract/document-pages` applies —
+   a document with no extractable page children extracts from its own content, and
+   its extraction row keys on the root id. `NOT EXISTS` makes the two branches
+   disjoint, so `UNION ALL` needs no dedup.
+
+   Two `?`, both the user id."
+  (str "SELECT t.id AS page_topic_id, r.id AS graph_topic_id
+          FROM topics r
+          JOIN topics t ON t.parent_id = r.id
+         WHERE r.user_id = ? AND r.parent_id IS NULL
+           AND t.kind = 'page' AND " (extractable-page-text "t")
+    " UNION ALL
+        SELECT r.id AS page_topic_id, r.id AS graph_topic_id
+          FROM topics r
+         WHERE r.user_id = ? AND r.parent_id IS NULL
+           AND " (extractable-page-text "r")
+    "     AND NOT EXISTS (SELECT 1 FROM topics t
+                           WHERE t.parent_id = r.id AND t.kind = 'page'
+                             AND " (extractable-page-text "t") ")"))
+
+(defn kg-extraction-progress
+  "Per-document extraction progress: pages extracted, given up on, and held.
+
+   ONE query, because the three figures have to agree. `total` and `done` were two
+   independent queries — one counting currently-extractable pages, the other
+   counting extraction ROWS — and nothing joined them, so clearing a page's content
+   dropped it from `total` while its row stayed in `done` and the column rendered
+   `30/29`. Counting both over the same LEFT JOIN makes `done <= total` structural
+   rather than something a caller has to clamp.
+
+   `done` counts pages the selector would skip as accounted for — linked, or barren
+   (`fact_count` 0). `at-cap` counts pages it would skip for the OTHER reason,
+   having failed `attempt-cap` times on text unchanged since. The two are disjoint
+   by construction, since `fact_count` is non-NULL for exactly the first set.
+
+   A page recorded but neither done nor at cap is mid-flight or retryable, and is
+   deliberately in neither figure — calling it done would be the lie this table
+   exists to prevent. So `done + at-cap <= attempted <= total`, and each shortfall
+   is work outstanding.
+
+   `attempted` exists because `total` alone cannot answer \"has anything ever run
+   here?\". Every document with extractable text gets a row from this query, so
+   presence in the result means \"has pages\", NOT \"has been distilled\". Callers
+   that need the second question — the spend confirm, and whether there is anything
+   to forget — MUST read `attempted`; reading presence reported every document as
+   already distilled and put the confirm in front of every FIRST distill.
+
+   Pre : `attempt-cap` is the cap the extraction run enforces. A different value
+         here makes the surface disagree with the run about which pages are dead.
+   Inv : admission is `extractable-page-text`, the same definition
+         `document-page-extraction-state` selects on, so this cannot disagree with
+         the selector about which pages a document holds.
+   Post: {root-topic-id {:done n :at-cap n :attempted n :total n}}, omitting
+         documents with no extractable text at all."
+  [user-id attempt-cap]
+  (into {}
+    (map (juxt :graph_topic_id
+           #(hash-map :done (:done %) :at-cap (:at_cap %)
+              :attempted (:attempted %) :total (:total %))))
+    (jdbc/execute! ds
+      ;; `e.user_id = ?` belongs in the JOIN condition, not in a WHERE. In a WHERE it
+       ;; would discard the null-extended rows and silently turn this into an inner
+       ;; join, so every never-attempted page would vanish from `total`. In the ON it
+       ;; bounds the hash build to this account — without it the join reads every
+       ;; account's extraction rows, which is the same leak the CTE comment describes
+       ;; one table down. The result was already correct either way, because
+       ;; page_topic_id is unique and the pages are this user's; only the cost leaked.
+      [(str "WITH pages AS (" extractable-pages-cte ")
+             SELECT p.graph_topic_id,
+                    COUNT(*) AS total,
+                    COUNT(e.id) AS attempted,
+                    COUNT(*) FILTER (WHERE e.fact_count IS NOT NULL) AS done,
+                    COUNT(*) FILTER (WHERE e.fact_count IS NULL
+                                       AND e.attempt_count >= ?) AS at_cap
+               FROM pages p
+               LEFT JOIN kg_page_extractions e
+                 ON e.page_topic_id = p.page_topic_id AND e.user_id = ?
+              GROUP BY p.graph_topic_id")
+       user-id user-id attempt-cap user-id]
+      {:builder-fn rs/as-unqualified-maps})))
 
 (defn get-kg-facts
   "Facts for a root document, display-joined (subject/object/predicate labels).

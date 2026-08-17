@@ -87,6 +87,7 @@
    :video_segments {:topic_id :topics}
    :kg_facts {:subject_entity_id :kg_entities :predicate_id :kg_predicates
               :object_entity_id :kg_entities :graph_topic_id :topics}
+   :kg_page_extractions {:graph_topic_id :topics :page_topic_id :topics}
    :kg_question_facts {:question_id :kg_questions :fact_id :kg_facts}
    :kg_reviews {:question_id :kg_questions :flashcard_id :flashcards}})
 
@@ -107,6 +108,11 @@
    :video_segments #{:topic_id}
    :neoreader_highlights #{:root_topic_id}
    :kg_facts #{:subject_entity_id :predicate_id :graph_topic_id}
+   ;; Both are NOT NULL and both identify the row's subject. An extraction record
+   ;; whose page did not translate would claim a page of the wrong document, and
+   ;; the UNIQUE on page_topic_id makes that a hard failure rather than a wrong
+   ;; skip — dropping the row instead re-extracts one page.
+   :kg_page_extractions #{:graph_topic_id :page_topic_id}
    :kg_question_facts #{:question_id :fact_id}})
 
 (def ^:private dropped-columns

@@ -1448,6 +1448,27 @@ html, body {
     margin-left: 6px;
     flex-shrink: 0;
 }
+/* Extraction progress: "12/30" plus an optional "2 failed". Two sibling spans, so
+   spacing is the cell's gap — same reasoning as .tape-cell-actions above. Classes
+   rather than an inline style map because this cell mounts inside a Tape window,
+   where Electric bills one reactive prop node per style property. */
+.tape-table-body td.tape-cell-progress {
+    gap: 6px;
+    white-space: nowrap;
+    font-size: 12px;
+}
+/* Pages the run has stopped retrying. `--color-danger-text` is the accent-TEXT
+   role (see the token comment at the top of this file); `--color-danger` is for
+   filled backgrounds and fails contrast as text. */
+.tape-table-body .tape-cell-warn {
+    color: var(--color-danger-text);
+    font-size: 11px;
+    flex-shrink: 0;
+}
+/* The em-dash placeholder for a figure that has no value — nothing extractable in
+   this document. A distinct name from `td.tape-cell-muted`, which is a CELL ROLE
+   per the convention above; one name at two levels would mean two things. */
+.tape-table-body .tape-cell-absent { color: var(--color-text-secondary); }
 /* Empty state. An overlay, never a branch that unmounts the table — see
    freememo.tape-table. pointer-events:none so it never eats a click. */
 .tape-table-empty {

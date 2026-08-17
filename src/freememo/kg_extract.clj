@@ -7,6 +7,31 @@
    Pass 2 — linking: distinct extracted labels are trigram-matched against
    kg_entities; one batched LLM call decides merge-vs-new per label.
 
+   THE TWO PASSES PERSIST AT DIFFERENT GRANULARITIES, and that is the whole page
+   skip. Pass 1 writes each page's triples to `kg_staged_triples` as soon as that
+   page returns, with a row in `kg_page_extractions` recording the digest of the
+   text it read. Pass 2 runs ONCE per invocation over every staged triple the
+   document holds, including triples an earlier cancelled invocation left behind.
+
+   Two properties follow, and neither held before:
+
+     A re-distill pays only for pages whose text changed. `classify-page` skips
+     the rest, so the cost of re-running scales with edits rather than with the
+     document.
+
+     A cancel or the 20-minute timeout is a pause, not a loss. Extraction used to
+     hold every page's triples in memory and insert once at the end, so a cancel
+     at page 400 of 500 discarded 400 pages of paid LLM calls — and a document
+     past roughly 300 pages could never finish inside the timeout at all.
+
+   What the skip does NOT gate on: the prompt, the extraction model, and the
+   predicate vocabulary. All three are recorded on the extraction row and never
+   compared, because the vocabulary grows on every curation and an auto-compared
+   prompt hash would re-bill every page of every document over a typo fix.
+   `db/clear-document-extraction-records!` is the deliberate path for reaching
+   already-extracted pages after such a change. See
+   plans/kg-page-skip-extraction.md.
+
    Facts and predicates land status='approved' — curation is by exception in
    the Knowledge facts browser (decision revised 2026-07-04). Costs of all
    calls are summed and billed once (endpoint :kg.distill), mirroring
@@ -18,8 +43,8 @@
    [freememo.toasts :as toasts]
    [freememo.kg-llm :as llm]
    [freememo.kg-dedup :as kg-dedup]
+   [freememo.kg-page-digest :as digest]
    [freememo.user-state :as us]
-   [freememo.text :as text]
    [freememo.cards :as cards]
    [taoensso.telemere :as tel]
    [clojure.string :as str]
@@ -55,12 +80,32 @@
 
 (defn- extraction-prompt
   "kg-extract.md + the user's approved vocabulary (empty on a fresh graph —
-   the model then proposes everything, per the no-seed decision)."
-  [vocab]
-  (str (cards/load-prompt-template "kg-extract.md")
+   the model then proposes everything, per the no-seed decision).
+
+   Takes `template` rather than loading it, so the caller can record the
+   template's version on the extraction rows without reading the file twice."
+  [template vocab]
+  (str template
     (if (seq vocab)
       (str/join "\n" (map #(str "- " (:label %)) vocab))
       "(none yet — propose predicates freely)")))
+
+(defn- prompt-template-version
+  "A short digest of the extraction template, recorded on every extraction row.
+
+   Forensic only — `classify-page` never reads it. That is what lets it be a
+   content hash instead of a hand-bumped constant: a hand-bumped constant goes
+   stale silently, and an auto-compared hash would re-bill every page of every
+   document the moment someone fixes a typo in the prompt. Recorded, it answers
+   \"which prompt produced these facts?\" and costs nothing.
+
+   The VOCABULARY is deliberately excluded, even though the model sees it: it grows
+   on every curation, so including it would make this column change constantly and
+   say nothing about the prompt.
+
+   Post: 12 hex characters, or nil for a blank template."
+  [template]
+  (some-> (digest/digest-of template) (subs 0 12)))
 
 (defn- extract-page-triples!
   "Pass 1 for one page. Post: {:triples [...] :cost usd}; triples are
@@ -79,41 +124,123 @@
     {:triples (mapv #(assoc % :page page-number) valid)
      :cost cost}))
 
+(def attempt-cap
+  "How many times one page's extraction may fail on unchanged text before this
+   stops paying to retry it.
+
+   The cap is scoped to the page's content digest, so editing the page resets the
+   count (`db/record-page-extraction-failure!` owns that rule). A capped page is
+   excluded from selection AND reported per document, because a page nobody can
+   see was abandoned is the failure this log exists to prevent.
+
+   Two, because a transient provider error clears on the first retry and a
+   deterministic one — content the model refuses, a page too long for the context
+   — will not clear on the tenth. `db/kg-extraction-progress` MUST be called with
+   this value, or the surface disagrees with the run."
+  2)
+
 (def ^:private extract-page-concurrency
   "Bounds concurrent per-page extraction calls — mirrors page-ocr's
    compare-ocr-limiter; a long PDF's pages must not fire N OpenRouter calls
    at once."
   4)
 
-(defn- extract-pages!
-  "Pass 1 over every page, bounded-concurrent (extract-page-concurrency at a
-   time) instead of one page at a time, serially. Post: a seq of
-   extract-page-triples!'s results (or a {:failed true} stub on error),
-   order matching `pages`.
+(defn- record-failure-quietly!
+  "Count a failed attempt, swallowing any database error.
+
+   A throw here would replace the page's outcome with an exception and lose the
+   cost the caller still has to bill, so this path reports and returns. The price
+   of swallowing is one uncounted attempt, which costs one extra retry — strictly
+   better than losing the run."
+  [ctx page-state error]
+  (try
+    (db/record-page-extraction-failure!
+      (assoc ctx
+        :page-topic-id (:page_topic_id page-state)
+        :content-digest (:digest page-state)
+        :error-message (ex-message (llm/root-cause error))))
+    (catch InterruptedException e (throw e))
+    (catch Exception e
+      (tel/log! {:level :warn :id ::failure-record-failed
+                 :data {:page (:page_number page-state)
+                        :error (ex-message e)}}
+        "Could not record a failed page extraction; its attempt is uncounted"))))
+
+(defn- extract-and-stage-page!
+  "One page's whole unit of work: extract, then persist, before returning.
+
+   Persisting HERE rather than after the fan-out is what makes a cancelled or
+   timed-out run resumable. The previous shape held every page's triples in memory
+   and inserted once at the end, so a cancel at page 400 of 500 discarded 400 pages
+   of paid LLM calls and the document could never finish inside the 20-minute
+   timeout.
+
+   Pre : `page-state` carries :page_topic_id, :page_number, :content_text and the
+         :digest of that text.
+   Post: {:cost usd :extracted true} or {:cost usd :failed true}. `:cost` is what
+         the provider charged whether or not the write succeeded — a lost write
+         does not un-bill the call. Exactly one extraction row is written either
+         way, so the page is never left unaccounted."
+  [api-key model-slug prompt ctx page-state]
+  (let [outcome (try
+                  {:kind :extracted
+                   :result (extract-page-triples! api-key model-slug prompt
+                             (:page_number page-state) (:content_text page-state))}
+                  (catch InterruptedException e (throw e))
+                  (catch Exception e {:kind :failed :error e}))]
+    (case (:kind outcome)
+      :extracted
+      (let [{:keys [triples cost]} (:result outcome)]
+        (try
+          (db/record-page-extraction!
+            (assoc ctx
+              :page-topic-id (:page_topic_id page-state)
+              :content-digest (:digest page-state)
+              :triples triples))
+          {:cost cost :extracted true}
+          (catch InterruptedException e (throw e))
+          (catch Exception e
+            (tel/log! {:level :warn :id ::page-staging-failed
+                       :data {:page (:page_number page-state)
+                              :triples (count triples)
+                              :error (ex-message e)}}
+              "Extracted a page but could not stage it; the page will be retried")
+            (record-failure-quietly! ctx page-state e)
+            {:cost cost :failed true})))
+
+      :failed
+      (do
+        (tel/log! {:level :warn :id ::page-extraction-failed
+                   :data {:root (:graph-topic-id ctx)
+                          :page (:page_number page-state)
+                          :error (ex-message (llm/root-cause (:error outcome)))}}
+          "Page extraction failed; the page keeps its place in the queue")
+        (record-failure-quietly! ctx page-state (:error outcome))
+        {:cost 0.0 :failed true}))))
+
+(defn- extract-and-stage-pages!
+  "Pass 1 over the pages that need it, bounded-concurrent (extract-page-concurrency
+   at a time), each page persisted as it completes.
+
    Checks llm/interrupt-checkpoint! before fan-out and again after each page
-   completes, so a cancelled run unwinds without waiting out the rest — the
-   handful of pages already in flight when cancellation lands keep running to
-   completion in the background, same blast radius as the prior sequential
-   loop's one in-flight call, just bounded by extract-page-concurrency
-   instead of 1."
-  [api-key model-slug prompt pages root-topic-id]
+   completes, so a cancelled run unwinds without waiting out the rest. The handful
+   of pages already in flight when cancellation lands run to completion in the
+   background, and — unlike before — their work survives, because each one writes
+   its own row.
+
+   Pre : every member of `page-states` needs extraction. Deciding that is
+         `classify-page`'s job, not this function's.
+   Post: a seq of extract-and-stage-page! results, order matching `page-states`."
+  [api-key model-slug prompt ctx page-states]
   (llm/interrupt-checkpoint!)
   (let [limiter (Semaphore. extract-page-concurrency)
-        futs (mapv
-               (fn [{:keys [page text]}]
-                 (future
-                   (.acquire limiter)
-                   (try
-                     (extract-page-triples! api-key model-slug prompt page text)
-                     (catch InterruptedException e (throw e))
-                     (catch Exception e
-                       (tel/log! {:level :warn :id ::page-extraction-failed
-                                  :data {:root root-topic-id :page page
-                                         :error (ex-message (llm/root-cause e))}}
-                         "Page extraction failed; skipping page")
-                       {:triples [] :cost 0.0 :failed true})
-                     (finally (.release limiter)))))
-               pages)]
+        futs (mapv (fn [state]
+                     (future
+                       (.acquire limiter)
+                       (try
+                         (extract-and-stage-page! api-key model-slug prompt ctx state)
+                         (finally (.release limiter)))))
+               page-states)]
     (mapv (fn [f] (llm/interrupt-checkpoint!) (deref f)) futs)))
 
 (defn- link-entities!
@@ -164,31 +291,80 @@
 ;; Orchestrator
 ;; ---------------------------------------------------------------------------
 
-(defn- document-pages
-  "Pages with text under root-topic-id; falls back to the root topic's own
-   content (wiki/web imports have no page children). Post: seq of
-   {:page nilable-int :text string}, text non-blank, HTML stripped."
+(defn classify-page
+  "Whether a page needs extraction, is already accounted for, or has been given up
+   on. Pure, so the skip rule is testable with no database and no LLM.
+
+   Three outcomes, and the ORDER of the tests matters:
+
+     :skip    the stored digest and version match, and the page is either linked
+              (`fact_count` non-nil, which includes a barren page's 0) or still
+              holds staged triples waiting for this invocation's link.
+     :at-cap  same digest and version, nothing linked and nothing staged, and
+              `attempt-cap` attempts already spent on this exact text.
+     :extract everything else — never attempted, text changed, digest generation
+              bumped, or retryable below the cap.
+
+   `has_staged` is half of the :skip test and not an optimisation. Without it, an
+   account import — which drops `kg_staged_triples` as in-flight state — would
+   arrive with pages whose digest matches and whose facts do not exist, and no
+   later run would ever revisit them.
+
+   Pre : `state` carries :digest (of the page's CURRENT text) and the stored
+         :content_digest, :digest_version, :fact_count, :attempt_count,
+         :has_staged. The stored five are nil/false for a page never attempted.
+   Post: one of :skip, :at-cap, :extract."
+  [attempt-cap digest-version {:keys [digest content_digest digest_version
+                                      fact_count attempt_count has_staged]}]
+  (let [current? (and (some? content_digest)
+                   (= content_digest digest)
+                   (= digest_version digest-version))]
+    (cond
+      (not current?) :extract
+      (or (some? fact_count) has_staged) :skip
+      (>= (or attempt_count 0) attempt-cap) :at-cap
+      :else :extract)))
+
+(defn- document-page-states
+  "Every extractable page of the document, each carrying its current digest.
+
+   Falls back to the root topic's own content when the document has no page
+   children, which is the wiki, web and markdown shape. The fallback's extraction
+   row keys on the ROOT topic id, so nothing downstream needs a nil-page branch.
+
+   Post: seq of `db/document-page-extraction-state` rows plus :digest, page order."
   [root-topic-id]
-  (let [pages (->> (db/get-context-pages root-topic-id 1 Integer/MAX_VALUE)
-                (keep (fn [row]
-                        (let [t (text/strip-html (:topics/content row))]
-                          (when-not (str/blank? t)
-                            {:page (:topics/page_number row) :text t})))))]
+  (let [with-digest (fn [row]
+                      (assoc row :digest (digest/digest-of (:content_text row))))
+        pages (mapv with-digest (db/document-page-extraction-state root-topic-id))]
     (if (seq pages)
       pages
-      (when-let [t (text/strip-html (:topics/content (db/get-topic root-topic-id)))]
-        (when-not (str/blank? t)
-          [{:page nil :text t}])))))
+      (when-let [root (db/root-topic-extraction-state root-topic-id)]
+        [(with-digest root)]))))
 
 (defn distill-document!
   "Distill root-topic-id's pages into facts (status='approved'). Synchronous —
    run it on the executor via start-distill!.
+
+   Pages already extracted from their current text are SKIPPED, and each page
+   extracted here is persisted before the next one starts. Together those make a
+   re-distill cost only the pages that changed, and make a cancelled or timed-out
+   run resumable rather than a total loss. See plans/kg-page-skip-extraction.md.
+
+   The two passes persist at different granularities on purpose. Extraction is per
+   page, because it is the expensive one — one call per page, and the calls a
+   cancelled run loses are the whole cost. Linking is one call per INVOCATION over
+   every staged triple the document has accumulated, because linking per page would
+   multiply calls by page count and match each page's labels against a nearly empty
+   kg_entities.
+
    Pre:  root-topic-id belongs to user-id (callers pass ids from the user's
          own tree — violation = caller bug); OpenRouter key configured.
-   Post: {:success true :pages n :page-errors n :facts n :entities n}
-         with facts inserted as 'proposed' and the summed cost billed, or
-         {:success false :error msg :error-type kw?}. Per-page extraction
-         failures skip the page, never abort the run."
+   Post: {:success true :pages n :skipped n :at-cap n :page-errors n :facts n
+         :entities n} with facts inserted as 'approved' and this invocation's cost
+         billed, or {:success false :error msg :error-type kw?}. `:pages` counts
+         pages this invocation extracted, not pages the document holds. Per-page
+         extraction failures skip the page, never abort the run."
   [user-id root-topic-id]
   (try
     ;; Extraction and entity-linking are independently configurable steps
@@ -197,12 +373,32 @@
     ;; :source_model and what the summed distill cost bills under.
     (let [{:keys [api-key entry model-slug]} (llm/resolve-model+gate! user-id :extract)
           link-slug (:model-slug (llm/resolve-model+gate! user-id :link))
-          pages (or (seq (document-pages root-topic-id))
-                    (throw (ex-info "No page text. Extract text first." {})))
-          prompt (extraction-prompt (db/get-kg-approved-predicates user-id))
-          extractions (extract-pages! api-key model-slug prompt pages root-topic-id)
+          all-states (or (seq (document-page-states root-topic-id))
+                         (throw (ex-info "No page text. Extract text first." {})))
+          by-outcome (group-by #(classify-page attempt-cap digest/digest-version %)
+                       all-states)
+          to-extract (vec (:extract by-outcome))
+          template (cards/load-prompt-template "kg-extract.md")
+          prompt (extraction-prompt template (db/get-kg-approved-predicates user-id))
+          ;; Recorded on every extraction row, never compared — see
+          ;; kg-page-digest's docstring for why the skip gates on content alone.
+          ctx {:user-id user-id
+               :graph-topic-id root-topic-id
+               :digest-version digest/digest-version
+               :prompt-version (prompt-template-version template)
+               :extract-model-id (:id entry)}
+          extractions (extract-and-stage-pages! api-key model-slug prompt ctx to-extract)
           _ (llm/interrupt-checkpoint!)
-          triples (into [] (mapcat :triples) extractions)
+          ;; Everything unlinked for this document, including whatever an earlier
+          ;; cancelled invocation left staged. This is the set one linking call
+          ;; covers, and the reason a resumed run needs no special case.
+          staged (db/staged-triples-for-document user-id root-topic-id)
+          triples (mapv (fn [row]
+                          {:s (:subject_label row) :p (:predicate_label row)
+                           :o (:object_label row) :lit (:object_literal row)
+                           :page (:page_number row)})
+                    staged)
+          staged-extraction-ids (into #{} (map :page_extraction_id) staged)
           entity-labels (into [] (comp (mapcat (juxt :s :o)) (remove nil?)) triples)
           {:keys [by-label] link-cost :cost}
           (if (seq entity-labels)
@@ -229,6 +425,11 @@
                  ;; s = o self-loops say nothing; drop them.
                  (remove #(and (:o %) (= (entity-id (:s %)) (entity-id (:o %)))) triples))
           inserted (or (db/insert-kg-facts! rows) [])
+          ;; ONLY after the insert. Marking a page linked before its facts exist
+          ;; would make the selector skip a page whose facts never landed, and no
+          ;; later run would revisit it — the one way this design can lose content
+          ;; permanently.
+          linked-pages (db/finalize-linked-pages! user-id staged-extraction-ids)
           ;; Near-duplicate sweep over what this run just added, scoped to
           ;; (pre-existing × new). Restricting it to the new ids is what makes the
           ;; automatic path safe: same-run pair behaviour is UNMEASURED, so a
@@ -250,16 +451,25 @@
                          0))
           total-cost (reduce + link-cost (map :cost extractions))]
       (credits/record-cost-charge! user-id :kg.distill (:id entry) total-cost)
+      ;; :skipped and :at-cap are logged because they are what the page skip
+      ;; bought and what it withheld. A capped page is reported here AND per
+      ;; document in the Knowledge view, because a page silently given up on is
+      ;; the failure this log exists to prevent.
       (tel/log! {:level :info :id ::distill-complete
                  :data {:user-id user-id :root root-topic-id
-                        :pages (count pages)
+                        :pages (count to-extract)
+                        :skipped (count (:skip by-outcome))
+                        :at-cap (count (:at-cap by-outcome))
+                        :linked-pages linked-pages
                         :page-errors (count (filter :failed extractions))
                         :triples (count triples) :facts (count inserted)
                         :duplicates duplicates
                         :cost-usd total-cost}}
         "Document distillation complete")
       {:success true
-       :pages (count pages)
+       :pages (count to-extract)
+       :skipped (count (:skip by-outcome))
+       :at-cap (count (:at-cap by-outcome))
        :page-errors (count (filter :failed extractions))
        :facts (count inserted)
        :duplicates duplicates
@@ -278,6 +488,41 @@
 ;; ---------------------------------------------------------------------------
 ;; Async entry point — mirrors pdf-action-dropdowns/start-ocr-scan!
 ;; ---------------------------------------------------------------------------
+
+(defn distill-summary
+  "One sentence for the completion toast.
+
+   The skip makes \"0 facts added\" a normal and CONFUSING outcome: a re-run that
+   read nothing because nothing changed is a success, and the old wording read as a
+   failure with no reason given. So a run that extracted no pages leads with why.
+
+   Capped pages are named here as well as in the log and the Pages column, because
+   a toast is the one surface a user is certainly looking at when the run ends.
+
+   Pre : `result` is a successful `distill-document!` return.
+   Post: a non-blank string."
+  [{:keys [facts pages skipped at-cap duplicates page-errors]}]
+  (let [n (or facts 0)
+        parts (cond-> []
+                (pos? n) (conj (str n " fact" (when (not= 1 n) "s") " added"))
+                (and (zero? n) (zero? (or pages 0)) (pos? (or skipped 0)))
+                (conj (str "Nothing to do — all " skipped " page"
+                        (when (not= 1 skipped) "s") " already extracted"))
+                (and (zero? n) (pos? (or pages 0)))
+                (conj (str "No new facts from " pages " page"
+                        (when (not= 1 pages) "s")))
+                (pos? (or duplicates 0)) (conj (str duplicates " marked duplicate"))
+                (pos? (or page-errors 0)) (conj (str page-errors " page"
+                                                  (when (not= 1 page-errors) "s")
+                                                  " failed"))
+                (pos? (or at-cap 0)) (conj (str at-cap " page"
+                                             (when (not= 1 at-cap) "s")
+                                             " given up on after "
+                                             attempt-cap " tries")))]
+    (if (seq parts)
+      (str (str/join ", " parts)
+        (when (pos? n) " — browse Knowledge to curate"))
+      "Nothing to extract")))
 
 (defonce distill-executor (Executors/newFixedThreadPool 2))
 
@@ -308,14 +553,7 @@
                (do (commands/bump! uid :distill)
                  (toasts/push! uid
                    {:level :success
-                    :message (str (:facts result) " fact"
-                               (when (not= 1 (:facts result)) "s")
-                               " added"
-                               (when (pos? (:duplicates result 0))
-                                 (str ", " (:duplicates result) " marked duplicate"))
-                               (when (pos? (:page-errors result 0))
-                                 (str " (" (:page-errors result) " page(s) failed)"))
-                               " — browse Knowledge to curate")}))
+                    :message (distill-summary result)}))
                (toasts/push! uid
                  {:level :error
                   :message (:error result)

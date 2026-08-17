@@ -53,9 +53,9 @@
 
 ;; ── Entity order (§5.2.1) ──────────────────────────────────────────
 
-(deftest entity-tables-is-a-set-of-25-in-a-fixed-order
-  (is (= 26 (count fmt/entity-tables)))
-  (is (= 26 (count (set fmt/entity-tables))) "no table may appear twice"))
+(deftest entity-tables-is-a-set-of-27-in-a-fixed-order
+  (is (= 27 (count fmt/entity-tables)))
+  (is (= 27 (count (set fmt/entity-tables))) "no table may appear twice"))
 
 (defn- before?
   "Whether `a` precedes `b` in `entity-tables`. Pre: both are members."
@@ -90,6 +90,9 @@
              [:kg_facts :topics]
              [:kg_question_facts :kg_questions]
              [:kg_question_facts :kg_facts]
+             ;; Both of its topic columns are NOT NULL: graph_topic_id is the
+             ;; document and page_topic_id the page inside it.
+             [:kg_page_extractions :topics]
              ;; kg_reviews' CHECK requires exactly one of question_id /
              ;; flashcard_id (db.clj:1006), so it needs both tables present.
              [:kg_reviews :kg_questions]

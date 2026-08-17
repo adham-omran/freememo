@@ -39,26 +39,67 @@
 
 #?(:clj
    (defn get-knowledge-docs*
-     "Root documents + fact counts, lean maps for the wire. `query` filters by
-      title (case-insensitive substring, mirroring knowledge-tree/filter-root-topics);
-      blank/nil = all. Post: [{:id :title :kind :facts :distilled?}]."
+     "Root documents + fact counts + extraction progress, lean maps for the wire.
+      `query` filters by title (case-insensitive substring, mirroring
+      knowledge-tree/filter-root-topics); blank/nil = all.
+
+      Post: [{:id :title :kind :facts :distilled? :pages-done :pages-at-cap
+              :pages-total}]. The three page figures are 0 for a document nothing
+      has ever extracted from."
      [_kg-bump user-id query]
      (let [stats (db/kg-fact-stats user-id)
+           ;; The cap MUST be the one the run enforces, or the column reports a
+           ;; page as given up on that the next run will retry, or the reverse.
+           ;; One query carries all three page figures — see kg-extraction-progress
+           ;; for why splitting `total` out of it rendered "30/29".
+           progress (db/kg-extraction-progress user-id kg/attempt-cap)
            q (some-> query str/trim not-empty str/lower-case)
            docs (mapv (fn [t]
-                        (let [id (:topics/id t)]
+                        (let [id (:topics/id t)
+                              p (get progress id)]
                           {:id id
                            :title (:topics/title t)
                            :kind (:topics/kind t)
                            :facts (get-in stats [id "approved"] 0)
-                           ;; distilled? — any fact of ANY status exists (status-agnostic),
-                           ;; so a doc whose facts were all rejected still counts as
-                           ;; distilled and re-distilling it is guarded by a confirm.
-                           :distilled? (pos? (reduce + 0 (vals (get stats id))))}))
+                           ;; distilled? — any extraction attempt OR any fact of any
+                           ;; status. The fact half is not redundant: documents
+                           ;; distilled before the extraction log existed have facts
+                           ;; and no extraction rows, and dropping that half would
+                           ;; take the spend confirm away from every one of them.
+                           ;; The attempt half is what adds the all-barren document,
+                           ;; which has attempts and no facts.
+                           ;;
+                           ;; `:attempted`, never `(some? p)`: every document with
+                           ;; extractable text has a progress entry, so presence means
+                           ;; "has pages" and would put the spend confirm in front of
+                           ;; every first distill.
+                           :distilled? (or (pos? (:attempted p 0))
+                                         (pos? (reduce + 0 (vals (get stats id)))))
+                           :pages-attempted (:attempted p 0)
+                           :pages-done (:done p 0)
+                           :pages-at-cap (:at-cap p 0)
+                           :pages-total (:total p 0)}))
                   (db/get-root-topics user-id))]
        (if q
          (filterv #(str/includes? (str/lower-case (:title %)) q) docs)
          docs))))
+
+#?(:clj
+   (defn clear-extraction-records!*
+     "Forget a document's extraction records so the next distill re-reads every page.
+
+      The deliberate path for reaching pages already extracted after a prompt or
+      model change, because the skip gates on page content alone. Destroys no
+      curation: facts, edits and rejections live in kg_facts, and the per-document
+      unique indexes stop a re-run resurrecting a rejected fact.
+
+      Pre : doc-id belongs to user-id (callers pass ids from the user's own tree).
+      Post: {:cleared n} — pages forgotten; the caller bumps :distill."
+     [user-id doc-id]
+     (let [n (db/clear-document-extraction-records! user-id doc-id)]
+       (log/log-info (str "Cleared extraction records doc-id=" doc-id " pages=" n))
+       (commands/bump! user-id :distill)
+       {:cleared n})))
 
 #?(:clj
    (defn get-doc-facts* [_kg-bump user-id doc-id status query]
@@ -304,8 +345,12 @@
               (t))))))
     (when distilling?
       (dom/button
-        (dom/props {:class "btn btn-sm" :aria-label "Cancel distillation"})
-        (dom/text "Cancel")
+        ;; "Pause", not "Cancel": every page extracted so far is already persisted,
+        ;; so stopping keeps that work and the next Distill resumes from it. The old
+        ;; label was honest when a stop discarded the whole run.
+        (dom/props {:class "btn btn-sm" :aria-label "Pause distillation"})
+        (tooltip/Tooltip! "Stop after the pages in flight. Pages already extracted are kept — Distill resumes from where this stopped.")
+        (dom/text "Pause")
         (let [click (dom/On "click" (fn [_] {:id (str (random-uuid))}) nil)
               [t _] (e/Token click)]
           (when t
@@ -348,19 +393,64 @@
             (case (e/server (kgq/cancel-atomic-generation! user-id doc-id))
               (t))))))))
 
-(e/defn DocumentRow [user-id doc i navigate! distilling generating !redistill]
+(e/defn ExtractionProgressCell
+  "Pages extracted, out of the pages the document holds, plus pages given up on.
+
+   The at-cap figure is the reason this column exists rather than a tooltip: a page
+   the run has stopped paying to retry is invisible everywhere else, and a silently
+   abandoned page is the failure the extraction log was built to prevent.
+
+   Styling is by class, never a per-row inline style map — every cell here mounts
+   inside a Tape window, where Electric bills one prop node per style property."
+  [pages-done pages-at-cap pages-total]
   (e/client
-    (let [{:keys [id title kind facts distilled?]} doc]
+    (dom/td
+      (dom/props {:class "tape-cell-progress"})
+      (if (pos? pages-total)
+        (dom/span
+          (dom/props {:data-tooltip (str pages-done " of " pages-total
+                                      " page" (when (not= 1 pages-total) "s")
+                                      " extracted")})
+          (dom/text (str pages-done "/" pages-total)))
+        (dom/span (dom/props {:class "tape-cell-absent"}) (dom/text "—")))
+      (when (pos? pages-at-cap)
+        (dom/span
+          (dom/props {:class "tape-cell-warn"
+                      :data-tooltip (str pages-at-cap " page"
+                                      (when (not= 1 pages-at-cap) "s")
+                                      " failed twice and will not be retried."
+                                      "\nEditing a page clears its attempts.")})
+          (dom/text (str pages-at-cap " failed")))))))
+
+(e/defn DocumentRow [user-id doc i navigate! distilling generating
+                     !redistill !forget]
+  (e/client
+    (let [{:keys [id title kind facts distilled?
+                  pages-attempted pages-done pages-at-cap pages-total]} doc
+          ;; `pages-attempted`, not done+at-cap: a document whose only page is
+          ;; extracted-but-unlinked counts in neither of those, and it has records
+          ;; to forget.
+          extracted-any? (pos? pages-attempted)]
       (dom/tr
         (dom/props {:class (when (even? i) "row-alt") :style {:--order i}})
         (dom/td
           (dom/span (dom/props {:class "tape-cell-text"}) (dom/text title))
           (dom/span (dom/props {:class "tape-cell-tag"}) (dom/text kind)))
         (dom/td (dom/text (str facts)))
+        (ExtractionProgressCell pages-done pages-at-cap pages-total)
         (dom/td (dom/props {:class "tape-cell-actions"})
           (DistillButton user-id id (contains? distilling id) distilled? !redistill)
           (when (pos? facts)
             (GenerateQuestionsButton user-id id (contains? generating id)))
+          ;; Only where there is something to forget. A document with no extraction
+          ;; records would have the button do nothing, which reads as broken.
+          (when extracted-any?
+            (dom/button
+              (dom/props {:class "btn btn-sm btn-secondary"
+                          :aria-label (str "Forget extraction records for " title)})
+              (tooltip/Tooltip! "Make the next Distill re-read every page. Needed after an extraction-model or prompt change; facts and rejections are kept.")
+              (dom/text "Forget extractions")
+              (dom/On "click" (fn [_] (reset! !forget id)) nil)))
           (dom/button
             (dom/props {:class "btn btn-sm btn-secondary"
                         :disabled (zero? facts)
@@ -374,7 +464,8 @@
           !query-timer (atom nil)             ; debounces !query against the server search below
           distilling (e/server (e/watch (us/get-atom user-id :distilling-docs)))
           generating (e/server (e/watch (us/get-atom user-id :generating-questions)))
-          !redistill (atom nil)]              ; doc-id pending a re-distill confirm, or nil
+          !redistill (atom nil)               ; doc-id pending a re-distill confirm, or nil
+          !forget (atom nil)]                 ; doc-id pending a forget-extractions confirm
       ;; Spinner covers the first offloaded fetch (blank otherwise); the search
       ;; input lives inside Loaded and revalidates in place via the Offload latch.
       (loading/WithLatestServerLoading
@@ -398,21 +489,43 @@
                     nil))
                 (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
                   (dom/text (str item-count " doc" (when (not= 1 item-count) "s")))))
-              (TapeTable ["Document" "Facts" ""]
-                "minmax(240px,1fr) 70px minmax(340px,max-content)" item-count query
+              (TapeTable ["Document" "Facts" "Pages" ""]
+                "minmax(240px,1fr) 70px 110px minmax(340px,max-content)" item-count query
                 (if (str/blank? query)
                   "No documents yet — import one first." "No matches.")
                 (e/fn [i]
                   (when-let [doc (e/server (nth docs i nil))]
-                    (DocumentRow user-id doc i navigate! distilling generating !redistill))))
+                    (DocumentRow user-id doc i navigate! distilling generating
+                      !redistill !forget))))
               ;; Single re-distill confirm for the whole view (virtualization-safe;
               ;; per-row modals would ride the Tape's reused DOM nodes). !redistill holds
               ;; the doc-id to re-run; ConfirmModal passes it back as the payload.
+              ;;
+              ;; The copy states the SKIP first, because that is what decides the
+              ;; cost. It no longer promises "only adds new facts" as the headline:
+              ;; still true, but it read as the reason re-running was cheap, and the
+              ;; reason is now that unchanged pages are not read again.
               (modal/ConfirmModal !redistill
                 "Re-distill document?"
-                "This document is already distilled. Re-running spends credits and takes time, and only adds new facts — it won't change your edits or rejected facts."
+                (str "Pages already extracted are skipped, so this reads only pages "
+                  "that changed since the last run, plus any that failed. Your edits "
+                  "and rejected facts are untouched.\n\n"
+                  "To re-read every page — after changing the extraction model, say — "
+                  "use Forget extractions first.")
                 "Re-distill" "btn btn-primary"
-                (e/fn [doc-id] (e/server (kg/start-distill! user-id doc-id)))))))))))
+                (e/fn [doc-id] (e/server (kg/start-distill! user-id doc-id))))
+              ;; Second confirm, for the OTHER direction. The skip gates on page
+              ;; content alone, so this is the only path by which a prompt or model
+              ;; change reaches pages already extracted. Separate modal rather than a
+              ;; second button inside the first: ConfirmModal takes one action, and
+              ;; the two answer different questions.
+              (modal/ConfirmModal !forget
+                "Forget extraction records?"
+                (str "The next Distill will read every page again and bill for all of "
+                  "them. Nothing you curated is lost — facts, edits and rejections "
+                  "stay, and a rejected fact is not resurrected.")
+                "Forget" "btn btn-danger"
+                (e/fn [doc-id] (e/server (clear-extraction-records!* user-id doc-id)))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Facts view — searchable browser over a document's approved facts.

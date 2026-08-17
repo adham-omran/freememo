@@ -82,7 +82,7 @@
 ;; ── Entity tables ──────────────────────────────────────────────────
 
 (def entity-tables
-  "§5.2.1 — the 25 exported tables, in the order an import must insert them.
+  "§5.2.1 — the 27 exported tables, in the order an import must insert them.
 
    Invariant: the order is forced by foreign keys. A table may not appear
    before every table it references. Three constraints are easy to lose:
@@ -112,6 +112,7 @@
    :kg_entities
    :kg_predicates
    :kg_facts
+   :kg_page_extractions
    :kg_questions
    :kg_question_facts
    :kg_reviews
@@ -129,6 +130,13 @@
    :credit_transactions "billing of the source deployment"
    :undo_log "a 12-hour operational window, capped at 100 rows per user"
    :upload_sessions "in-flight transport state"
+   :kg_staged_triples "in-flight extraction state — pass-1 triples a distill run
+                       has not linked into kg_facts yet. Safe to drop ONLY because
+                       kg_page_extractions.fact_count is NULL until linking
+                       finishes: kg-extract/classify-page reads a digest-matching
+                       row with no fact count and no staged rows as needing
+                       extraction, so the pages arrive eligible again rather than
+                       marked done with no facts"
    :kg_graph_layout "a render cache that a version compare invalidates"
    :anki_card_states "a cache of FSRS state replayed out of Anki, and Anki is
                       the source of truth for it (study-scheduler-spec §3.5).
@@ -290,6 +298,21 @@
    :kg_predicates {:where "t.user_id = ?" :params 1 :order "t.id"}
 
    :kg_facts {:where (str "t.id IN (" owned-kg-facts ")") :params 2 :order "t.id"}
+
+   ;; Scoped through BOTH topic columns rather than through `graph_topic_id`
+   ;; alone. A page of an owned document is itself owned today, because
+   ;; `stage-topic-for-deletion!` marks the whole subtree — but that is a fact
+   ;; about another function, and the second invariant above has to hold locally.
+   ;;
+   ;; `content_digest` and `digest_version` are deliberately NOT dropped on
+   ;; import. Content travels with the account, so the digest still matches on
+   ;; arrival and the skip holds; dropping them would re-extract, and re-bill, the
+   ;; importer's whole account. `kg_staged_triples` IS dropped (§5.2.2), which is
+   ;; what keeps an archive taken mid-run honest.
+   :kg_page_extractions {:where (str "t.user_id = ? AND t.graph_topic_id IN ("
+                                  owned-topics ") AND t.page_topic_id IN ("
+                                  owned-topics ")")
+                         :params 3 :order "t.id"}
 
    :kg_questions {:where "t.user_id = ?" :params 1 :order "t.id"}
 
