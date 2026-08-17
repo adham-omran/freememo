@@ -32,6 +32,11 @@
                          tombstone stands in for it.
           `:anki-baseline` / `:local-baseline` — hex digest, or nil when this card
                          has never completed a sync.
+          `:baseline-version` — the `anki-digest/digest-version` the two baselines
+                         were computed under, or nil for a row that predates the
+                         column. An absent key is treated as nil, so a caller that
+                         omits it gets `:needs-baseline` rather than a comparison
+                         between generations.
    post : a member of `outcomes`.
    inv  : each side's question is answered by that side's OWN baseline, and by
           nothing else. Both sides present asks both questions and so needs both
@@ -53,15 +58,23 @@
      :delete-local    remove the local card
      :delete-anki     delete the Anki note, then drop the tombstone
      :drop-tombstone  both sides are already gone
-     :needs-baseline  a synced card with no baseline — backfill, do not classify
+     :needs-baseline  a synced card whose baselines are missing, or were computed
+                      by a different `digest-version` — backfill, do not classify
 
    `:ignore` from the plan's contract table is NOT produced here. A FreeMemo-model
    note with no local card and no tombstone has no card to classify; the run's
    Anki-side scan owns it, and reports it (10 such notes exist in production).
 
    A one-sided deletion meeting a change on the other side is a conflict rather
-   than a delete, so no run can destroy an edit it can see."
-  [{:keys [anki-now anki-baseline local-now local-baseline]}]
+   than a delete, so no run can destroy an edit it can see.
+
+   A stale `:baseline-version` diverts only the both-sides-present branch, and
+   that is deliberate. The two one-sided branches compare a digest against a
+   baseline too, so a version change invalidates their comparison as well — but
+   each already falls to `:conflict` when the comparison fails, which is the
+   fail-safe answer, and `:needs-baseline` is meaningless for a tombstone with no
+   row left to baseline."
+  [{:keys [anki-now anki-baseline local-now local-baseline baseline-version]}]
   (let [anki-gone?  (= :absent anki-now)
         local-gone? (= :absent local-now)]
     (cond
@@ -83,8 +96,13 @@
         (and (some? local-baseline) (= local-now local-baseline))  :delete-local
         :else                                                      :conflict)
 
-      ;; Both sides present, so both questions are asked.
-      (or (nil? anki-baseline) (nil? local-baseline)) :needs-baseline
+      ;; Both sides present, so both questions are asked — but only if the two
+      ;; baselines are comparable with the digests being handed in. A missing
+      ;; baseline and a baseline from another generation are the same problem:
+      ;; there is nothing here that a comparison could mean.
+      (or (nil? anki-baseline)
+        (nil? local-baseline)
+        (not= baseline-version digest/digest-version)) :needs-baseline
 
       :else (let [anki-moved?  (not= anki-now anki-baseline)
                   local-moved? (not= local-now local-baseline)]
@@ -170,7 +188,9 @@
   "One card's decision.
 
    pre : `card` is a `db/get-cards-for-reconcile` row — JSONB parsed, both
-         baselines present as columns. `anki-digest-by-note` maps note id to the
+         baselines and `baseline_digest_version` present as columns. A query that
+         omits the version column reads nil and every card re-baselines, which is
+         wasteful but never wrong. `anki-digest-by-note` maps note id to the
          digest the client computed from notesInfo. `absent-notes` is the set of
          note ids notesInfo did not report.
    post: {:card-id :note-id :kind :outcome :anki-digest :local-digest}, where
@@ -190,10 +210,11 @@
      :kind         kind
      :anki-digest  (when (string? anki-now) anki-now)
      :local-digest local-now
-     :outcome      (-> (classify {:anki-now       anki-now
-                                  :anki-baseline  (:flashcards/anki_baseline_digest card)
-                                  :local-now      local-now
-                                  :local-baseline (:flashcards/local_baseline_digest card)})
+     :outcome      (-> (classify {:anki-now         anki-now
+                                  :anki-baseline    (:flashcards/anki_baseline_digest card)
+                                  :local-now        local-now
+                                  :local-baseline   (:flashcards/local_baseline_digest card)
+                                  :baseline-version (:flashcards/baseline_digest_version card)})
                      (apply-kind-limits kind))}))
 
 (defn tombstone-decision

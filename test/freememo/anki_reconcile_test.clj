@@ -16,7 +16,15 @@
 (def ^:private A "aaa")
 (def ^:private B "bbb")
 
-(defn- c [m] (rec/classify m))
+(defn- c
+  "classify with a CURRENT-generation baseline unless the case says otherwise.
+
+   Every test below t1..t13 is about comparing digests, not about which
+   generation wrote them, so the version is defaulted rather than repeated. A
+   case that omits it deliberately overrides it to nil — see
+   t30b-a-stale-baseline-version-needs-a-baseline."
+  [m]
+  (rec/classify (merge {:baseline-version digest/digest-version} m)))
 
 (deftest t1-unchanged
   (is (= :unchanged (c {:anki-now A :anki-baseline A :local-now B :local-baseline B}))))
@@ -412,13 +420,16 @@
 ;; ── plan-run: classify over a manifest ──────────────────────────────────────
 
 (defn- card-row
-  "A get-cards-for-reconcile row."
+  "A get-cards-for-reconcile row, baselined by the CURRENT digest generation.
+   A row without `baseline_digest_version` classifies `:needs-baseline` whatever
+   its digests say, which is the point of that column and is covered separately."
   [id note-id q a anki-base local-base]
   {:flashcards/id id :flashcards/kind "basic"
    :flashcards/question q :flashcards/answer a
    :flashcards/anki_note_id note-id
    :flashcards/anki_baseline_digest anki-base
-   :flashcards/local_baseline_digest local-base})
+   :flashcards/local_baseline_digest local-base
+   :flashcards/baseline_digest_version digest/digest-version})
 
 (defn- local-of [q a]
   (digest/local-digest {:flashcards/kind "basic"
@@ -494,11 +505,10 @@
       (is (not= (digest/local-digest edited-locally)
             (digest/local-digest (basic-card "<p>q</p>" "<p>a</p>"))))
       (testing "so the card classifies as push, not conflict"
-        (is (= :push (rec/classify
-                       {:anki-now before :anki-baseline before
-                        :local-now (digest/local-digest edited-locally)
-                        :local-baseline (digest/local-digest
-                                          (basic-card "<p>q</p>" "<p>a</p>"))})))))))
+        (is (= :push (c {:anki-now before :anki-baseline before
+                         :local-now (digest/local-digest edited-locally)
+                         :local-baseline (digest/local-digest
+                                           (basic-card "<p>q</p>" "<p>a</p>"))})))))))
 
 ;; ── markup is content: the defect these were written for ────────────────────
 ;;
@@ -661,6 +671,65 @@
             {:flashcards/id 4 :flashcards/kind "occlusion"
              :flashcards/io_fields {:header "<p>h</p>" :remarks "<p>bold</p>"}}
             (fields "Header" "<p>h</p>" "Remarks" "<p><b>bold</b></p>"))))))
+
+;; ── digest generations: the incident this column exists to prevent ──────────
+;;
+;; Version 2 shipped as a bare code change. It moved every card's digest on BOTH
+;; sides without any card changing, and classify read that as edits on both sides
+;; — 1459 of one account's 1528 cards were reported as conflicts needing a manual
+;; decision, and nothing could push. See plans/anki-html-change-detection.md.
+
+(deftest t30b-a-stale-baseline-version-needs-a-baseline
+  (testing "a baseline written before the column existed is not comparable"
+    (is (= :needs-baseline
+          (rec/classify {:anki-now A :anki-baseline A :local-now B :local-baseline B
+                         :baseline-version nil}))))
+  (testing "nor is one from any other generation, in either direction"
+    (is (= :needs-baseline
+          (rec/classify {:anki-now A :anki-baseline A :local-now B :local-baseline B
+                         :baseline-version (dec digest/digest-version)})))
+    (is (= :needs-baseline
+          (rec/classify {:anki-now A :anki-baseline A :local-now B :local-baseline B
+                         :baseline-version (inc digest/digest-version)}))))
+  (testing "an omitted key is nil, so a caller that forgets re-baselines rather
+            than comparing across generations"
+    (is (= :needs-baseline
+          (rec/classify {:anki-now A :anki-baseline A :local-now B :local-baseline B}))))
+  (testing "the current generation compares normally — all four outcomes reachable"
+    (is (= :unchanged (c {:anki-now A :anki-baseline A :local-now B :local-baseline B})))
+    (is (= :push      (c {:anki-now A :anki-baseline A :local-now "n" :local-baseline B})))
+    (is (= :pull      (c {:anki-now "n" :anki-baseline A :local-now B :local-baseline B})))
+    (is (= :conflict  (c {:anki-now "x" :anki-baseline A :local-now "y" :local-baseline B})))))
+
+(deftest t30c-a-version-change-does-not-divert-the-one-sided-branches
+  (testing "a tombstone still resolves from Anki's baseline alone — :needs-baseline
+            would be meaningless with no row left to baseline"
+    (is (= :delete-anki
+          (rec/classify {:anki-now A :anki-baseline A :local-now :absent
+                         :local-baseline B :baseline-version nil}))))
+  (testing "and a missing note still resolves from the local baseline alone"
+    (is (= :delete-local
+          (rec/classify {:anki-now :absent :anki-baseline A :local-now B
+                         :local-baseline B :baseline-version nil})))))
+
+(deftest t30d-card-decision-reads-the-version-off-the-row
+  (let [note (fields "Front" "<p>q</p>" "Back" "<p>a</p>" "Links" "" "Remarks" "")
+        anki-d (digest/anki-digest note "basic")
+        row (card-row 1 99 "<p>q</p>" "<p>a</p>" anki-d nil)
+        local-d (digest/local-digest row)
+        current (assoc row :flashcards/local_baseline_digest local-d)]
+    (testing "a fully baselined current-generation row is unchanged"
+      (is (= :unchanged (:outcome (rec/card-decision current {99 anki-d} #{})))))
+    (testing "the same row with a stale version needs a baseline"
+      (is (= :needs-baseline
+            (:outcome (rec/card-decision
+                        (assoc current :flashcards/baseline_digest_version 1)
+                        {99 anki-d} #{})))))
+    (testing "and with the column absent entirely"
+      (is (= :needs-baseline
+            (:outcome (rec/card-decision
+                        (dissoc current :flashcards/baseline_digest_version)
+                        {99 anki-d} #{})))))))
 
 (deftest t36-effective-header-text-is-the-one-condition
   (testing "prepend-header and the snapshot column must agree, or the digest

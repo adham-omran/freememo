@@ -36,6 +36,30 @@
   #?(:clj (:import [java.security MessageDigest])
      :cljs (:import [goog.crypt Sha256])))
 
+(def digest-version
+  "Which generation of `local-digest` / `anki-digest` a stored baseline came from.
+
+   BUMP THIS whenever `local-parts`, `anki-parts`, `settings-parts`, `digest-of`
+   or `unit-separator` changes what it feeds the hash. A change to any of them
+   moves every card's digest without any card changing, so a baseline written by
+   the old generation is not comparable with a digest computed by the new one.
+
+   `anki-reconcile/classify` reads a baseline of any other version as
+   `:needs-baseline`, so a bump makes the whole collection re-baseline itself on
+   the next run — one extra query per card, no writes to Anki, and no card
+   reported as changed. That is the recovery this constant exists to provide.
+
+   Version 2 is the markup-sensitive generation. Version 1 stripped tags on both
+   sides and carried no settings tail; it shipped without this constant, so a row
+   whose `baseline_digest_version` is NULL is version 1 or earlier.
+
+   The incident that produced this: version 2 shipped as a bare code change, and
+   the first run afterwards read every card as changed on BOTH sides — 1459 of one
+   account's 1528 cards were reported as conflicts needing a manual decision, and
+   nothing could push, because `classify` has no way to tell \"the content moved\"
+   from \"the function moved\". See plans/anki-html-change-detection.md."
+  2)
+
 ;; ---------------------------------------------------------------------------
 ;; Hash
 ;; ---------------------------------------------------------------------------

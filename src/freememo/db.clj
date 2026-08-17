@@ -388,6 +388,21 @@
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS anki_baseline_digest CHAR(64)"])
   (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS local_baseline_digest CHAR(64)"])
 
+  ;; Which generation of the digest functions wrote the two baselines above.
+  ;; `anki-digest/digest-version` is the current value and carries the bump rule.
+  ;;
+  ;; Without this column a change to either digest function moves every card's
+  ;; digest without any card changing, and `classify` cannot tell that from real
+  ;; edits on both sides — so it reports the whole collection as conflicts and
+  ;; nothing can push. That is not hypothetical: version 2 shipped as a bare code
+  ;; change and did exactly that to 1459 of one account's 1528 cards.
+  ;;
+  ;; NULL means version 1 or earlier, which shipped before the column existed.
+  ;; `classify` reads any mismatch as `:needs-baseline`, so the recovery is one
+  ;; ordinary run: it re-baselines from the current state of both sides, writes
+  ;; nothing to Anki, and reports no card as changed.
+  (jdbc/execute! ds ["ALTER TABLE flashcards ADD COLUMN IF NOT EXISTS baseline_digest_version INTEGER"])
+
   ;; `anki-digest/local-digest` of the row AS IT STANDS. The baseline above says
   ;; what the last sync agreed on; this says what is true now, and the pair is THE
   ;; definition of "unsynced":
@@ -4453,7 +4468,8 @@
        (jdbc/execute! ds
          (sql/format {:select (into digest-columns
                                 [:f.anki_note_id :f.anki_baseline_digest
-                                 :f.local_baseline_digest])
+                                 :f.local_baseline_digest
+                                 :f.baseline_digest_version])
                       :from [[:flashcards :f]]
                       :join [[:topics :root] [:= :f.root_topic_id :root.id]]
                       :where (cond-> [:and [:= :root.user_id user-id]]
@@ -4528,7 +4544,14 @@
    the same statement. The caller derived `local-digest` from the row it just
    wrote, so the two already agree; writing both makes the card read synced at
    every surface as an invariant of this fn rather than as a consequence of
-   whoever restamped last."
+   whoever restamped last.
+
+   `baseline_digest_version` is stamped here, which is why it is stamped exactly
+   once: this is the only writer of the two baselines, and all four callers —
+   `record-anki-writes!`, `apply-pulls!`, `backfill-baselines!` and
+   `resolve-conflicts!` — reach the columns through it. A caller that wrote a
+   baseline without the version would leave a row that re-baselines on every
+   subsequent run, forever."
   [user-id entries]
   (when (seq entries)
     (jdbc/with-transaction [tx ds]
@@ -4538,6 +4561,7 @@
                        :set (cond-> {:anki_baseline_digest anki-digest
                                      :local_baseline_digest local-digest
                                      :local_current_digest local-digest
+                                     :baseline_digest_version digest/digest-version
                                      :anki_synced_at [:now]}
                               anki-mod (assoc :anki_baseline_mod anki-mod))
                        :where [:and

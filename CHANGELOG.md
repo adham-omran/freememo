@@ -34,12 +34,17 @@ Format contract (see freememo.changelog):
   said `unpushed` for those cards while the document card table said `synced`; the
   two now agree.
 
+- **Your first sync after this update rebuilds its records instead of resending
+  your collection.** Change detection reads formatting now, so no record written
+  by the old version matches. FreeMemo notices that and rebuilds the records from
+  what both sides currently hold — nothing is sent to Anki and no card is reported
+  as changed.
+
 ### Known issues
 
-- **The first sync after this update re-sends every card you have ever synced.**
-  Change detection now reads the card's formatting, so no earlier record matches
-  it. Nothing is lost. A card you also edited in Anki is reported as a conflict
-  and waits for you in Library → Cards.
+- **A card you edited in FreeMemo but never synced still needs one decision.**
+  Three such cards existed across all accounts when this shipped. They wait in
+  Library → Cards; `Keep FreeMemo` sends your edit to Anki.
 
 ### Technical
 
@@ -53,6 +58,12 @@ Format contract (see freememo.changelog):
   cross-side overlay and display still use `strip-html`.
 - Pulled HTML now passes `clean-html` (`anki-sync-server/sanitized-pull-update`).
   Pull was the only unsanitized HTML path into `flashcards`.
+- `flashcards.baseline_digest_version` records which generation of the digest
+  functions wrote a card's baselines. `anki-reconcile/classify` reads a mismatch
+  as `:needs-baseline`, so a future change to `local-parts` or `anki-parts` needs
+  only a bump of `anki-digest/digest-version` to re-baseline every account on its
+  next run. Version 2 shipped without this and reported 1459 of 1528 cards on one
+  account as conflicts; the recovery was a manual baseline reset.
 - `plans/anki-html-change-detection.md` holds the spec.
 
 ## v20260814-1e4cf45

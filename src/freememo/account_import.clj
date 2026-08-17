@@ -154,7 +154,12 @@
    ;; `anki_header_text` and `anki_bibliography_html` are carried for the same
    ;; reason: the digest covers them, so dropping them would make the carried
    ;; digest disagree with the carried content.
+   ;; `baseline_digest_version` goes with the baselines it describes. Keeping it
+   ;; while dropping them would leave a row claiming a current-generation baseline
+   ;; and holding none — harmless, because `classify` tests the nil baselines
+   ;; first, but a lie in the data either way.
    :flashcards #{:id :anki_baseline_digest :local_baseline_digest
+                 :baseline_digest_version
                  :anki_baseline_mod :anki_conflict_at}})
 
 (def ^:private html-columns
