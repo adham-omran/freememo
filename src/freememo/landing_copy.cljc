@@ -85,7 +85,7 @@
   [["Import what you actually read"
     "PDFs, EPUBs, HTML, Markdown, web articles, and pasted text. Wikipedia gets its own cleaner extraction."]
    ["Zotero, without the export dance"
-    "Pull a PDF and its citation metadata straight from your local library. Zotero data goes to your browser directly — never through our server."]
+    "Pull a PDF and its citation metadata straight from your local library. Your browser talks to Zotero directly — we never connect to your library, and only the item you pick gets imported."]
    ["Live Documents"
     "A PDF you keep adding to. Take or upload photos, rotate and crop each one, append them as pages. HEIC converts automatically."]
    ["Codebases as course material"
@@ -110,7 +110,7 @@
   [["What does it cost?"
     "The app is free. The steps that call a model spend credits: OCR, card generation, transcription, fact distillation, and grading a quiz answer. Reading, extracting, editing, reviewing, and Anki sync never touch a paid API. Credits are hosted, or you set your own OpenRouter key when self-hosting."]
    ["Where does my reading go?"
-    "PDFs, EPUBs, extracted text, and your cards all live on the FreeMemo server, tied to your account. Anki sync pushes copies into your local collection over AnkiConnect. Zotero imports are the exception: they travel from Zotero straight to your browser and never reach our server."]
+    "PDFs, EPUBs, extracted text, and your cards all live on the FreeMemo server, tied to your account — a Zotero import included, once you pick it. Anki sync pushes copies into your local collection over AnkiConnect, and edits you make there pull back. We never connect to Zotero or Anki ourselves: your browser does that over a local connection, and we only ever see the items you chose."]
    ["Will my cards work in regular Anki?"
     "Yes. FreeMemo installs and owns its own note types — FreeMemo Basic, FreeMemo Cloze, FreeMemo Overlapping Cloze, FreeMemo IO for image occlusion, and FreeMemo Score — so there is nothing for you to map. Cloze cards use Anki's standard {{c1::}} syntax. Sync runs over AnkiConnect, so any standard Anki with the AnkiConnect plugin works."]
    ["Do quiz questions go to Anki too?"

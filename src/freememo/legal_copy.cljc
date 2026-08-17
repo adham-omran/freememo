@@ -97,7 +97,7 @@
 (def privacy-updated
   "The date the privacy text last changed. Edit it whenever `privacy-sections`
    changes, so a reader can tell a revision from a redeploy."
-  "16 August 2026")
+  "17 August 2026")
 
 (def privacy-sections
   "The privacy policy, in the order a reader meets it.
@@ -158,9 +158,23 @@
     :body [{:p "If you think FreeMemo has handled your data badly, tell the operator first. That is usually the fastest route to a fix."}
            {:p "You also have the right to complain to your national data protection authority. You do not have to contact FreeMemo before you do that."}]}
 
-   {:heading "What FreeMemo never sees"
-    :body [{:p "Zotero imports go from your Zotero library straight to your browser. Those files never reach a FreeMemo server."}
-           {:p "Anki sync writes to the Anki running on your own machine. Your Anki collection never reaches a FreeMemo server."}]}
+   ;; Read the code before you edit this section. It is the one place in this
+   ;; document that states what a local integration does NOT send, and both
+   ;; claims here were false when the policy first shipped: they were copied
+   ;; from `freememo.landing-copy`, not read from source. The four sources are
+   ;; `api.clj/zotero-stage-handler` (the PDF and the citation record are
+   ;; uploaded), `anki-sync-server/apply-pull-updates` (pulled note text is
+   ;; stored), `settings.clj/save-anki-sync-settings` plus the per-topic tag
+   ;; keys (deck name and tags are stored), and
+   ;; `anki-reconcile-server/scan-targets` (the scan sends digests, not notes).
+   {:heading "Zotero and Anki"
+    :body [{:p "The FreeMemo server never connects to your Zotero library. Your browser reads the library over a local connection, and none of that list reaches FreeMemo. When you pick an item, your browser uploads that one PDF and its citation record. FreeMemo stores them like every other import."}
+           {:p "The FreeMemo server never connects to Anki either. Your browser talks to Anki on your own machine. FreeMemo never reads your whole collection. It asks only about the notes it created, and it compares them by a digest rather than by their text."}
+           {:p "Four things from Anki do reach the server."}
+           {:ul ["The deck name you choose."
+                 "The tags you choose."
+                 "The Anki note identifier of every card FreeMemo pushed."
+                 "The new text of a card that you edit in Anki and then pull back."]}]}
 
    {:heading "Cookies"
     :body [{:p "FreeMemo sets one cookie. It holds your sign-in session and nothing else."}
