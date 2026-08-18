@@ -2459,6 +2459,19 @@ textarea:hover {
     z-index: 1;
 }
 .format-menu .fmt-dd-popup.open { display: block; }
+/* Card placed ABOVE the selection (format-menu/place! sets .fmt-above): its
+   lists must open upward. A downward list is ~150px against an 8px gap, so it
+   would reach back over the selected text the placement just cleared.
+   The mirror case is deliberately NOT handled: a card placed below, near the
+   window's bottom edge, opens its list downward past that edge. That list
+   covers no selected text — the selection is above the card — so it falls
+   outside the never-cover contract, and clipping it would need a second
+   measured flip. Recorded as out of scope in
+   plans/format-menu-never-obscure-selection.md §6. */
+.format-menu.fmt-above .fmt-dd-popup {
+    top: auto;
+    bottom: calc(100% + 4px);
+}
 .format-menu .fmt-dd-item {
     display: block;
     width: 100%;

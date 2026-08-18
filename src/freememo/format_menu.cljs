@@ -8,10 +8,24 @@
    Placement contract (the reason this exists — the native tooltip collided
    with the app command bar and covered content):
      - position:fixed, so no editor-pane overflow ancestor clips it.
-     - never crosses ABOVE the editor content top (below the command bar).
-     - anchored to the selection's first visual line; prefers BELOW it, flips
-       above only when the card would overflow the viewport bottom, and caps its
-       height + scrolls when neither side fits.
+     - NEVER covers the visible part of the selection. The vertical side comes
+       from the selection's whole bounding box, so a multi-line selection is
+       cleared rather than straddled.
+     - four tiers, first fit wins: below the box inside the Quill container,
+       above the box inside the container, below the VISIBLE box inside the
+       viewport (over whatever sits under the editor), else hidden. No tier
+       above the container top — that is the app command bar's floor. The
+       container is clipped to the viewport first, so a container an ancestor
+       scrolled off screen still cannot place the card off screen.
+     - horizontal: the card's near edge sits at the selection's focus point,
+       mirrored for RTL, clamped to the viewport edges.
+     - hidden while the selection is scrolled out of the container, and shown
+       again on the way back. `!open?` (not the card's display) is what says a
+       selection still wants the card.
+     - one size. No height cap and no scrolling card: a tier that does not fit
+       is not taken.
+   freememo.selection-placement holds the arithmetic and its tests; this ns
+   measures the rects and applies the result.
 
    `install!` wires the selection / scroll / resize / dismiss listeners, builds
    the card once, and returns a teardown fn that removes them and the card.
@@ -28,7 +42,8 @@
             [freememo.editor-actions :as editor-actions]
             [freememo.card-count :as cc]
             [freememo.command-bus :as bus]
-            [freememo.commands :as commands]))
+            [freememo.commands :as commands]
+            [freememo.selection-placement :as sel-place]))
 
 ;; ---------------------------------------------------------------------------
 ;; Glyphs for the opt-in controls. Inline SVG with stroke="currentColor" (NOT
@@ -321,9 +336,9 @@
   "Build the menu card and its controls. Returns
    {:card <el> :refresh (fn []) :!sync <atom>}.
    `refresh` syncs active-state from the cached range. Every control, after
-   mutating the document, calls `(@!sync)` — install! sets that to
-   refresh + re-place, so active-state and geometry stay current after a format
-   (e.g. a heading changes line height). `get-rng` returns the cached
+   mutating the document, calls `(@!sync)` — install! sets that to refresh
+   ALONE, deliberately not re-placing: a format that changes the text metrics
+   would otherwise jitter the card under the cursor. `get-rng` returns the cached
    {:index :length}. `opts` = {:image? :cloze? :card-gen?}: :image?/:cloze?
    toggle card-editor controls; :card-gen? adds the document-editor card-count
    row (§ ns docstring). Returns :card-count-sync (nil unless :card-gen?)."
@@ -435,43 +450,91 @@
 ;; Placement
 ;; ---------------------------------------------------------------------------
 
-(defn- first-line-rect
-  "Viewport rect of the selection's first visual line (where it starts)."
+(defn- focus-line-rtl?
+  "True when the line holding the selection's focus point resolves right-to-left.
+   Reads the COMPUTED direction, not Quill's `direction` format: a document that
+   inherits RTL from an ancestor carries no format on the range.
+
+   Read ONCE when the selection changes, never per placement. A scroll must not
+   change which edge the card anchors by, and applying the ⇄ control mid-selection
+   deliberately does not re-place the card (see build-card), so re-reading here
+   would make the anchor edge jump on the next scroll instead."
   []
-  (let [sel (.getSelection js/window)]
-    (when (and sel (pos? (.-rangeCount sel)))
-      (let [rects (.getClientRects (.getRangeAt sel 0))]
-        (when (pos? (.-length rects)) (aget rects 0))))))
+  (let [^js sel (.getSelection js/window)
+        node (when sel (.-focusNode sel))
+        ^js el (when node (if (= 3 (.-nodeType node)) (.-parentElement node) node))]
+    (boolean (and el (= "rtl" (.-direction (js/window.getComputedStyle el)))))))
+
+(defn- focus-x
+  "Viewport x of the selection's focus point — the end the user dragged to.
+   Falls back to the box's left edge when the collapsed range yields no rect
+   (an element focusNode does): the horizontal result cannot break the
+   never-cover invariant, which the vertical tiers carry alone."
+  [^js sel ^js box]
+  (or (when-let [node (.-focusNode sel)]
+        (let [^js r (js/document.createRange)]
+          (try
+            (.setStart r node (.-focusOffset sel))
+            (.collapse r true)
+            (let [^js rect (.getBoundingClientRect r)]
+              (when (pos? (.-height rect)) (.-left rect)))
+            (catch :default _ nil))))
+    (.-left box)))
+
+(defn- selection-geometry
+  "Vertical span and focus x of the live DOM selection, or nil when there is no
+   non-collapsed selection INSIDE `container`. The span is the WHOLE box
+   (`getBoundingClientRect` over the range), which is what makes a multi-line
+   selection unstraddleable.
+
+   The containment test is what makes a card provably about its own editor. The
+   DOM selection is global while `!open?` is per install, so an editor whose open
+   state outlived its focus would otherwise place its card against a DIFFERENT
+   editor's selection — a card modal over the document editor puts the two in
+   overlapping coordinates. The test holds whatever Quill does or does not emit on
+   blur, so no part of this depends on that behaviour.
+
+   The focus x is NOT cached across placements: it is a viewport coordinate, so a
+   scroll moves it. Direction is cached — see focus-line-rtl?."
+  [^js container]
+  (let [^js sel (.getSelection js/window)]
+    (when (and sel (pos? (.-rangeCount sel)) (not (.-isCollapsed sel))
+            (.contains container (.-focusNode sel)))
+      (let [^js box (.getBoundingClientRect (.getRangeAt sel 0))]
+        {:selection {:top (.-top box) :bottom (.-bottom box)}
+         :focus-x (focus-x sel box)}))))
 
 (defn- place!
-  "Position `card` (fixed) relative to the selection, clamped to the region
-   [content-top, viewport-bottom]. Prefer below; flip above if it overflows the
-   viewport; cap height + scroll if neither side fits."
-  [^js card ^js container]
-  (when-let [line (first-line-rect)]
-    (let [m 8, gap 8
-          vw (.-innerWidth js/window)
-          vh (.-innerHeight js/window)
-          region-top (.-top (.getBoundingClientRect container))   ; below the command bar
-          region-bottom (- vh m)
-          ;; measure at natural height, overflow visible so popups aren't clipped
-          _ (set! (.. card -style -maxHeight) "")
-          _ (set! (.. card -style -overflowY) "")
-          w (.-offsetWidth card)
-          h (.-offsetHeight card)
-          below-top (+ (.-bottom line) gap)
-          above-top (- (.-top line) gap h)
-          [top capped?] (cond
-                          (<= (+ below-top h) region-bottom) [below-top false]
-                          (>= above-top region-top)          [above-top false]
-                          :else                              [region-top true])
-          left (max m (min (- (+ (.-left line) (/ (.-width line) 2)) (/ w 2))
-                          (- vw w m)))]
-      (set! (.. card -style -left) (str (js/Math.round left) "px"))
-      (set! (.. card -style -top) (str (js/Math.round top) "px"))
-      (when capped?
-        (set! (.. card -style -maxHeight) (str (js/Math.round (- region-bottom region-top)) "px"))
-        (set! (.. card -style -overflowY) "auto")))))
+  "Position `card` (fixed) where it covers no visible selected text, or hide it
+   when no tier fits. freememo.selection-placement decides; this measures.
+
+   Pre  : `card` is in the document, `container` is the Quill container element,
+          `rtl?` was read when the selection changed (focus-line-rtl?).
+   Post : the card's display is \"block\" with left/top applied, or \"none\".
+          The `fmt-above` class is set exactly when the card sits above the
+          selection, which flips its dropdowns upward (index.css).
+   Inv  : the applied rect never intersects the selection's visible rows."
+  [^js card ^js container rtl?]
+  ;; Display first: offsetWidth/Height read 0 while display is none. Both writes
+  ;; land in one task, so a card that ends up hidden never paints.
+  (set! (.. card -style -display) "block")
+  (let [^js con (.getBoundingClientRect container)
+        placement (when-let [geom (selection-geometry container)]
+                    (sel-place/place
+                      (assoc geom
+                        :rtl? rtl?
+                        :container {:top (.-top con) :bottom (.-bottom con)}
+                        :viewport {:width (.-innerWidth js/window)
+                                   :height (.-innerHeight js/window)}
+                        :menu {:width (.-offsetWidth card)
+                               :height (.-offsetHeight card)})))]
+    (if placement
+      (do (set! (.. card -style -left) (str (js/Math.round (:left placement)) "px"))
+          (set! (.. card -style -top) (str (js/Math.round (:top placement)) "px"))
+          (if (= :above (:side placement))
+            (.add (.-classList card) "fmt-above")
+            (.remove (.-classList card) "fmt-above")))
+      (set! (.. card -style -display) "none"))))
 
 ;; ---------------------------------------------------------------------------
 ;; install! — lifecycle
@@ -483,9 +546,11 @@
 
    Pre:  `editor` is an initialized Quill instance whose native `.ql-tooltip`
          is hidden by CSS.
-   Post: a non-empty user selection shows the card near the selection; a
-         collapse / Escape / outside-click hides it; scroll & resize keep it
-         placed. Teardown leaves no listeners or DOM behind.
+   Post: a non-empty user selection in `editor` places the card clear of every
+         visible selected row, or shows nothing when no position clears them; a
+         collapse / Escape / outside-click hides it; scroll & resize re-place it,
+         hiding the card while the selection is out of view and placing it again
+         on the way back. Teardown leaves no listeners or DOM behind.
 
    `opts` (default {}) = {:image? :cloze?}; see the ns docstring. Multiple
    editors each build their own card — the card carries no id, only the
@@ -498,26 +563,35 @@
         {:keys [card refresh !sync card-count-sync]} (build-card q #(deref !rng) opts)
         ;; Unique per-install key so N editors' watches never collide.
         watch-key (gensym "fmt-cardcount")
-        visible? #(= "block" (.. card -style -display))
-        hide! (fn [] (set! (.. card -style -display) "none"))
-        show! (fn [] (set! (.. card -style -display) "block") (refresh) (place! card container))
+        ;; A selection wants the card — true even while place! keeps it hidden
+        ;; because the selection scrolled out of the container. Guarding on the
+        ;; card's own display instead would strand it: the scroll that hides it
+        ;; would also stop the scroll back from ever re-placing it.
+        !open? (atom false)
+        ;; Read when the selection changes, not per placement — focus-line-rtl?.
+        !rtl? (atom false)
+        open? #(deref !open?)
+        place-now! #(place! card container @!rtl?)
+        hide! (fn [] (reset! !open? false) (set! (.. card -style -display) "none"))
+        show! (fn [] (reset! !open? true) (reset! !rtl? (focus-line-rtl?))
+                (refresh) (place-now!))
         ;; After a control mutates the doc: refresh active-state only — do NOT
         ;; re-place. Applying a format (e.g. bold widens the word) nudges the
         ;; selection's centre, and re-placing would jitter the card under the
         ;; cursor. Position changes only on a new selection / scroll / resize.
-        _ (reset! !sync (fn [] (when (visible?) (refresh))))
+        _ (reset! !sync (fn [] (when (open?) (refresh))))
         on-selection (fn [^js range _old _source]
                        (if (and range (pos? (.-length range)))
                          (do (reset! !rng {:index (.-index range) :length (.-length range)})
                              (show!))
                          (hide!)))
-        reposition (fn [_] (when (visible?) (place! card container)))
+        reposition (fn [_] (when (open?) (place-now!)))
         on-doc-down (fn [^js e]
-                      (when (and (visible?)
+                      (when (and (open?)
                               (not (.contains card (.-target e)))
                               (not (.contains (.-root q) (.-target e))))
                         (hide!)))
-        on-key (fn [^js e] (when (and (visible?) (= "Escape" (.-key e))) (hide!)))]
+        on-key (fn [^js e] (when (and (open?) (= "Escape" (.-key e))) (hide!)))]
     (set! (.. card -style -display) "none")
     (.appendChild js/document.body card)
     (.on q "selection-change" on-selection)
