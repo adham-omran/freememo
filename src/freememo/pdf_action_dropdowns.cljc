@@ -45,17 +45,37 @@
      (do
        (swap! (us/get-atom uid :scanning-pages) conj [doc page])
        (swap! (us/get-atom uid :ocr-errors) dissoc [doc page])
+       ;; A fresh scan clears any standing cancellation for this page, or a
+       ;; cancel would silently swallow every later attempt at it.
+       (swap! (us/get-atom uid :scan-cancelled) disj [doc page])
        (log/log-info (str "OCR scan started topic-id=" doc " page=" page))
        (let [cancel-fn
              ((m/timeout
-                (m/via ocr-executor (page/extract-page-text uid doc page ek dpi))
+                (m/via ocr-executor
+                  (page/extract-page-text uid doc page ek dpi
+                    ;; Cooperative: the request cannot be aborted, so the save is
+                    ;; where cancelling takes effect.
+                    {:cancelled? (fn [] (contains? @(us/get-atom uid :scan-cancelled)
+                                          [doc page]))}))
                 30000
                 {:success false :error "Scan timed out after 30 seconds"})
               (fn [result]
                 (swap! (us/get-atom uid :scan-cancellers) dissoc [doc page])
-                (if (:success result)
+                (swap! (us/get-atom uid :scan-cancelled) disj [doc page])
+                (cond
+                  (:success result)
                   (do (log/log-info (str "OCR scan complete topic-id=" doc " page=" page))
                     (commands/bump! uid :scan))
+
+                  ;; A cancelled scan is not a failure. Without this branch the
+                  ;; user got an error toast reading "Scan cancelled" for
+                  ;; something they chose, and `:ocr-errors` recorded it — which
+                  ;; both shows a scan error on the page and makes the Activity
+                  ;; monitor close the run as a failure.
+                  (:cancelled? result)
+                  (log/log-info (str "OCR scan cancelled topic-id=" doc " page=" page))
+
+                  :else
                   (do (log/log-info (str "OCR scan failed topic-id=" doc " page=" page " error=" (:error result)))
                     (swap! (us/get-atom uid :ocr-errors) assoc [doc page] (:error result))
                     (toasts/push! uid
@@ -67,12 +87,20 @@
                 (swap! (us/get-atom uid :scanning-pages) disj [doc page]))
               (fn [e]
                 (swap! (us/get-atom uid :scan-cancellers) dissoc [doc page])
+                (swap! (us/get-atom uid :scan-cancelled) disj [doc page])
                 (when-not (instance? Cancelled e)
                   (log/log-info (str "OCR scan error topic-id=" doc " page=" page " ex=" (.getMessage e)))
                   (swap! (us/get-atom uid :ocr-errors) assoc [doc page] (.getMessage e))
                   (toasts/push! uid {:level :error :message (.getMessage e)}))
                 (swap! (us/get-atom uid :scanning-pages) disj [doc page])))]
-         (swap! (us/get-atom uid :scan-cancellers) assoc [doc page] cancel-fn))
+         ;; The stored canceller MARKS as well as interrupting. The interrupt is
+         ;; only an attempt — clj-http's socket read ignores it — so the mark is
+         ;; what actually stops the page being overwritten, and what keeps a
+         ;; cancelled scan from being re-discovered while its request drains.
+         (swap! (us/get-atom uid :scan-cancellers) assoc [doc page]
+           (fn []
+             (swap! (us/get-atom uid :scan-cancelled) conj [doc page])
+             (cancel-fn))))
        ;; AFTER the canceller, not after the membership swap. Discovery reads
        ;; cancellability at the moment it opens the row, so nudging earlier
        ;; recorded `cancellable = false` for a run the server could stop.

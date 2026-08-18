@@ -93,7 +93,7 @@
 
    Post: `(reader uid work-key)` is nil when the owner has forgotten this work,
          else a map carrying at least `:phase`."
-  [{:keys [state-key phase cancel-key key-fn entry->state unrecoverable?]}]
+  [{:keys [state-key phase cancel-key key-fn entry->state unrecoverable? in-flight?]}]
   (when state-key
     (let [key-fn (or key-fn key->id)]
       (fn [uid work-key]
@@ -101,7 +101,10 @@
           (let [state @(us/get-atom uid state-key)]
             ;; `contains?` reads membership for a set and key-presence for a map,
             ;; so both shapes answer "is this work in flight" the same way.
-            (when (contains? state owner-key)
+            ;; `:in-flight?` narrows it for an owner whose membership outlives the
+            ;; work — a cancelled page scan whose request is still draining.
+            (when (and (contains? state owner-key)
+                    (or (nil? in-flight?) (in-flight? uid owner-key)))
               (let [base {:cancellable (cancellable? uid cancel-key owner-key)
                           :unrecoverable (boolean unrecoverable?)}]
                 (if entry->state
@@ -128,6 +131,11 @@
    :entry->state  for the two owners whose entry decides phase or progress
    :key-fn      work_key -> the key the owner's atom uses (default: parse-long)
    :cancel-key  the per-user atom of missionary cancel fns, when the owner has one
+   :in-flight?  (uid owner-key) -> bool, narrowing membership for an owner whose
+                atom outlives the work it describes. Only page scan needs it: a
+                cancelled scan stays in `:scanning-pages` until its uncancellable
+                request drains, and without this it would be re-discovered as a
+                second activity that then closed as a success
    :unrecoverable?  SERVER TIER ONLY — leaving mid-run strands state the user
                 cannot recover. Read by `state-reader`, so a pushed-tier entry
                 declaring it would be config nothing reads: those drivers pass
@@ -186,6 +194,13 @@
     ;; no wrapping — and `doc` is the subject, being the topic the viewer opens.
     :key-fn key->doc-page :owner-key->args identity
     :cancel-key :scan-cancellers
+    ;; A cancelled scan reads as GONE even though its request is still draining.
+    ;; Membership alone would have discovery open a SECOND row the moment the
+    ;; first was terminated as cancelled, and that row would then close as
+    ;; "Done" when the abandoned request finished — which is exactly the pair of
+    ;; rows a user saw after cancelling once.
+    :in-flight? (fn [uid owner-key]
+                  (not (contains? @(us/get-atom uid :scan-cancelled) owner-key)))
     :error-fn (fn [uid work-key]
                 (get @(us/get-atom uid :ocr-errors) (key->doc-page work-key)))}
 

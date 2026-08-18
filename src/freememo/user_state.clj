@@ -52,6 +52,13 @@
           :processing-videos (atom #{})     ; video topic ids in the ffmpeg/Whisper pipeline
           :ocr-errors       (atom {})
           :scan-cancellers  (atom {})
+          ;; Cancelling a page scan cannot abort its OCR request — clj-http's
+          ;; socket read ignores Thread.interrupt() — so the missionary cancel is
+          ;; only an attempt, and THIS is what makes cancelling mean something:
+          ;; `extract-page-text` reads it before writing and leaves the page
+          ;; alone. Also what keeps a cancelled scan from being re-discovered as
+          ;; a second activity while its request drains.
+          :scan-cancelled   (atom #{})      ; [doc page] pairs the user abandoned
           :distilling-docs  (atom #{})      ; root topic ids with a distill run in flight
           :distill-cancellers (atom {})     ; root topic id -> missionary cancel fn
           :distilling-repos (atom #{})      ; repo root topic ids with a code-distill run in flight

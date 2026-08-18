@@ -15,21 +15,48 @@
   "Extract text from a specific page of a PDF topic and save to database.
    topic-id is the root PDF topic ID.
    Returns {:success true :text ...} or {:success false :error ...}
-   DPI defaults to 150 if not provided."
+   DPI defaults to 150 if not provided.
+
+   `:cancelled?` is a 0-arity predicate consulted immediately BEFORE the save,
+   and that placement is the whole of it. Cancelling a scan cannot abort the OCR
+   request: it goes through clj-http, whose socket read ignores
+   `Thread.interrupt()`, so missionary's cancellation of the surrounding task
+   leaves the call running to completion. Worse, the `catch Exception` below
+   swallows the `InterruptedException` too — so without this check the request
+   finished and OVERWROTE the page the user had just asked to abandon.
+
+   What cancelling therefore means here: the model call is already paid for and
+   cannot be recalled, but the page is left alone. That is the part the user
+   asked for. Same cooperative shape as card generation, which cannot stop an
+   in-flight LLM call either.
+
+   Post: {:success false :cancelled? true} when cancelled before the save, and
+         the page is NOT written."
   ([user-id topic-id page-number enc-key]
-   (extract-page-text user-id topic-id page-number enc-key 150))
+   (extract-page-text user-id topic-id page-number enc-key 150 {}))
   ([user-id topic-id page-number enc-key dpi]
+   (extract-page-text user-id topic-id page-number enc-key dpi {}))
+  ([user-id topic-id page-number enc-key dpi {:keys [cancelled?]}]
    (try
      (let [file-row (db/get-topic-file topic-id)]
        (if-not file-row
          {:success false :error "Document not found"}
          (let [pdf-bytes (:topic_files/file_data file-row)
                result (ocr/extract-text user-id topic-id pdf-bytes (dec page-number) enc-key dpi)]
-           (if (:success result)
-             (do
-               (db/save-page-text! topic-id page-number (:text result))
+           (cond
+             ;; Checked after the call and before the write, because that is the
+             ;; only point between them where cancellation can still be honoured.
+             (and cancelled? (cancelled?))
+             (do (tel/log! {:level :info :id ::extract-page-text-cancelled
+                            :data {:user-id user-id :topic-id topic-id :page page-number}}
+                   "Page scan cancelled before save")
+               {:success false :cancelled? true :error "Scan cancelled"})
+
+             (:success result)
+             (do (db/save-page-text! topic-id page-number (:text result))
                {:success true :text (:text result)})
-             result))))
+
+             :else result))))
      (catch Exception e
        (tel/error! {:id ::extract-page-text} e)
        {:success false :error (str "Failed to extract text: " (.getMessage e))}))))
