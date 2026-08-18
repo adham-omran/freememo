@@ -43,6 +43,7 @@
             [freememo.account-transfer-format :as fmt]
             [freememo.largeobj :as lo]
             [freememo.quota :as quota]
+            [freememo.user-state :as us]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [taoensso.telemere :as tel])
@@ -847,7 +848,7 @@
   (jdbc/execute-one! ds
     ["UPDATE account_imports SET report = ? WHERE id = ?" (->jsonb report) import-id]))
 
-(defn import-archive!
+(defn- import-archive!*
   "Import an extracted account archive for `user-id`.
 
    Pre  : `dir` holds an archive `freememo.archive/extract-to-temp-dir!` produced.
@@ -961,3 +962,18 @@
                              :data {:user-id user-id :export-id (:export-id manifest)}} e)
                 {:ok false :error (str "The import failed and nothing was kept: "
                                     (.getMessage e))}))))))))
+
+(defn import-archive!
+  "`import-archive!*`, published in the Activity monitor for its duration.
+
+   The membership lives here rather than at `web-import`'s two call sites: both
+   would have to remember it, and a third caller would silently report nothing.
+   `with-in-flight` supplies the `finally`, so a throw mid-import still closes
+   the activity instead of leaving it to time out as interrupted.
+
+   A thin delegate rather than a wrapper around the body, deliberately — the
+   body is 100 lines of nested transaction handling, and re-indenting it to add
+   one enclosing form is a large diff over code this change does not touch."
+  [ds user-id ^File dir parent-topic-id opts]
+  (us/with-in-flight user-id :importing-accounts "account"
+    (import-archive!* ds user-id dir parent-topic-id opts)))

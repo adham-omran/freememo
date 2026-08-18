@@ -149,8 +149,9 @@
    conn = {:!status :!error ...}  sync = {:!phase ...}"
   [user-id selected-doc !show-modal conn form sync]
   (e/client
-    (let [conn-status (e/watch (:!status conn))
-          sync-phase (e/watch (:!phase sync))]
+    ;; No `sync-phase` binding: it existed only to gate close, and close is now
+    ;; ungated. The phase still drives the body's own panels through `sync`.
+    (let [conn-status (e/watch (:!status conn))]
       (dom/div
         (dom/props {:class "modal-backdrop" :style {:background "rgba(0,0,0,0.5)"}
                     :role "dialog" :aria-modal "true" :aria-label "Anki sync"
@@ -161,11 +162,16 @@
         ;; fires once at mount; the rAF defer lets FocusReturn's
         ;; synchronous opener-capture win before focus moves in.
         (e/snapshot (modal-shell/focus-on-mount! dom/node))
-        (dom/On "click" (fn [_] (when-not sync-phase (reset! !show-modal false))) nil)
+        ;; Close is UNGATED. It used to be `(when-not sync-phase …)`, which held
+        ;; the user in front of a spinner for the length of a sync. The run no
+        ;; longer depends on this modal being mounted — the reconcile driver is
+        ;; at the app root — so closing reports progress to the Activity monitor
+        ;; instead of cancelling anything.
+        (dom/On "click" (fn [_] (reset! !show-modal false)) nil)
         (dom/On "keydown"
           (fn [e]
             (cond
-              (and (helpers/escape-key? e) (not sync-phase))
+              (helpers/escape-key? e)
               (reset! !show-modal false)
 
               (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))

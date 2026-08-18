@@ -52,7 +52,7 @@
   #{:refresh :credits-refresh :meta-refresh :settings-refresh
     :card-mutations :sync-mutations :tree-mutations
     :queue-mutations :pin-mutations :assistant-mutations :undo-mutations :kg-mutations
-    :schedule-mutations})
+    :schedule-mutations :activity-mutations})
 
 ;; ── Channel groups ─────────────────────────────────────────────────────────
 ;; Named unions used by entries below and by dynamic bumpers (freememo.undo
@@ -359,6 +359,11 @@
      ;; — App shell —
      :toggle-palette    {:label "Command palette" :class :nav :bind "meta+k"}
      :open-undo-history {:label "Action history"  :class :nav}
+     ;; Opens the Activity popover. :class :nav with no :nav-tab — it is a
+     ;; toggle, not a destination, so command-bus flips the shell atom rather
+     ;; than routing. Globally available: work runs on every tab, so a :when
+     ;; would hide the command exactly where a user went looking for it.
+     :open-activity     {:label "Activity"        :class :nav}
 
      ;; — Queries —
      :search {:label "Search" :class :query :data {:text :palette-input}}}

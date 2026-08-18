@@ -17,7 +17,6 @@
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.doc-context :as dctx]
    [freememo.anki-sync :refer [AnkiSyncButton]]
-   [freememo.quick-sync :refer [QuickSyncButton]]
    [freememo.export-button :refer [ExportButton]]
    [freememo.icons :as icons]
    [freememo.brand-icons :refer [AnkiMark]]
@@ -75,10 +74,12 @@
         ;; `PullFromAnkiButton` and its `:pull-anki` menu item are gone. A pull
         ;; is now one of the outcomes a reconcile chooses per card, never a
         ;; direction the user picks for a whole document.
-        (AnkiSyncButton user-id root-topic-id card-type unsynced-count)
-        ;; Hidden proxy for background Quick Sync (Cmd-Shift-Opt-X). No menu
-        ;; item — keyboard-only; the executor runs without opening the modal.
-        (QuickSyncButton user-id root-topic-id card-type unsynced-count))
+        (AnkiSyncButton user-id root-topic-id card-type unsynced-count))
+
+      ;; `QuickSyncButton` used to mount in the div above. It moved to the app
+      ;; root: a reconcile spans the whole collection, so making its driver a
+      ;; child of one document's toolbar meant navigating away tore down an
+      ;; in-flight run. See freememo.quick-sync.
 
       ;; Visible dropdown. `toolbar-collapse-sync` participates in the tier
       ;; ladder — hidden at viewport-tier 7 so only the trigger collapses;

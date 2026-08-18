@@ -209,11 +209,35 @@
      (let [tid (:topic-id item)
            uid (:user-id item)]
        (log/log-info (str "Card gen enqueued topic=" tid))
+       ;; A fresh enqueue clears any standing cancellation for this topic —
+       ;; otherwise a cancel would silently swallow every future run.
+       (swap! (us/get-atom uid :card-gen-cancelled) disj tid)
        (swap! (us/get-atom uid :card-gen-status) update tid
          (fn [s] (update (or s {:active-id nil :error nil :pending 0}) :pending inc)))
+       (swap! (us/get-atom uid :card-gen-cancellers) assoc tid
+         (fn [] (swap! (us/get-atom uid :card-gen-cancelled) conj tid) nil))
        (card-gen-mbx item)
        :enqueued)
      :cljs nil))
+
+#?(:clj
+   (defn- forget-card-gen-item!
+     "Drop one outstanding item from a topic's counters, clearing the topic's
+      cancellation state once nothing of it is left.
+
+      Pre : called exactly once per dequeued item, run or skipped.
+      Post: `:pending` decremented; at zero the topic's canceller and its
+            standing cancellation are removed, so the next enqueue starts clean."
+     [uid tid]
+     (let [remaining (-> (swap! (us/get-atom uid :card-gen-status) update tid
+                           (fn [s] (-> s
+                                     (assoc :active-id nil)
+                                     (update :pending #(max 0 (dec (or % 0)))))))
+                       (get tid) :pending)]
+       (when (zero? (or remaining 0))
+         (swap! (us/get-atom uid :card-gen-cancellers) dissoc tid)
+         (swap! (us/get-atom uid :card-gen-cancelled) disj tid))
+       remaining)))
 
 ;; Infinite flow that reads from the mailbox one item at a time
 #?(:clj
@@ -231,28 +255,33 @@
                 tid (:topic-id item)
                 uid (:user-id item)
                 !status (us/get-atom uid :card-gen-status)]
-            (swap! !status update tid assoc :active-id (:id item) :error nil)
-            ;; 120s: the fact path (KG→cards bridge) runs a fact-selection call
-            ;; before the card-gen call + its retries — two LLM round-trips must
-            ;; fit the budget. Raw-text gen uses only the first half.
-            (let [result (m/? (m/timeout
-                                (m/via m/blk (generate-and-save! item))
-                                120000
-                                {:success false :error "Card generation timed out"}))]
-              (swap! !status update tid
-                (fn [s] (-> s
-                          (assoc :active-id nil)
-                          (update :pending #(max 0 (dec (or % 0)))))))
-              (if (:success result)
-                (do (commands/bump! uid :generate)
-                  (log/log-info (str "Card gen complete topic=" tid)))
-                (do (log/log-warn (str "Card gen failed topic=" tid " error=" (:error result)))
-                  (swap! !status update tid assoc :error (:error result))
-                  (toasts/push! uid
-                    {:level :error
-                     :message (:error result)
-                     :actions (if (= :insufficient-credits (:error-type result))
-                                [{:label "Top up credits" :nav :settings}]
-                                [])})))))))
+            ;; Cancellation is checked HERE, at dequeue, and nowhere else. That
+            ;; is the whole of it: an item still in the mailbox has spent
+            ;; nothing, so dropping it is free and complete, while one already
+            ;; running has committed its LLM call and its credits.
+            (if (contains? @(us/get-atom uid :card-gen-cancelled) tid)
+              (do (log/log-info (str "Card gen skipped (cancelled) topic=" tid))
+                (forget-card-gen-item! uid tid))
+              (do
+                (swap! !status update tid assoc :active-id (:id item) :error nil)
+                ;; 120s: the fact path (KG→cards bridge) runs a fact-selection call
+                ;; before the card-gen call + its retries — two LLM round-trips must
+                ;; fit the budget. Raw-text gen uses only the first half.
+                (let [result (m/? (m/timeout
+                                    (m/via m/blk (generate-and-save! item))
+                                    120000
+                                    {:success false :error "Card generation timed out"}))]
+                  (forget-card-gen-item! uid tid)
+                  (if (:success result)
+                    (do (commands/bump! uid :generate)
+                      (log/log-info (str "Card gen complete topic=" tid)))
+                    (do (log/log-warn (str "Card gen failed topic=" tid " error=" (:error result)))
+                      (swap! !status update tid assoc :error (:error result))
+                      (toasts/push! uid
+                        {:level :error
+                         :message (:error result)
+                         :actions (if (= :insufficient-credits (:error-type result))
+                                    [{:label "Top up credits" :nav :settings}]
+                                    [])})))))))))
       (fn [_] nil)
       (fn [e] (log/log-error (str "Card gen processor crashed: " e))))))

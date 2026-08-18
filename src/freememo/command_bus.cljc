@@ -298,6 +298,13 @@
   (fn [ctx _payload]
     (some-> (:undo-modal-open-atom ctx) (reset! true))))
 
+;; The panel is a toggle, not a destination: opening it changes no route, so the
+;; handler flips the shell's atom rather than navigating. Same shape as
+;; :open-undo-history above.
+(register-handler! :open-activity
+  (fn [ctx _payload]
+    (some-> (:activity-open-atom ctx) (reset! true))))
+
 (register-handler! :search
   (fn [ctx payload]
     (when-let [navigate! (:navigate! ctx)]

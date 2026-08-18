@@ -19,6 +19,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [freememo.modal-shell :as modal-shell]
+   [freememo.activity-client :as ac]
    [freememo.navigation :as nav]
    [freememo.commands :as commands]
    [freememo.video-format :refer [format-bytes format-ms]]
@@ -387,6 +388,30 @@
                               :color "var(--color-text-secondary)"}})
           (dom/text message))))))
 
+;; ---------------------------------------------------------------------------
+;; Transfer state, hoisted OUT of the modal (plans/activity-monitor.md).
+;;
+;; These used to be `(atom …)` in `VideoImportModal`'s let, which is why closing
+;; the modal had to cancel the transfer: the promise chain outlived the frame and
+;; kept POSTing chunks into atoms nobody watched, finishing by creating a topic
+;; the user had asked to abandon.
+;;
+;; At module level they outlive the modal, so `VideoUploadActivity` — mounted at
+;; the app root — keeps watching them and the Activity monitor reports a transfer
+;; whose modal is long closed. Closing is now just closing.
+;;
+;; Per PAGE LOAD, and one transfer at a time per tab: the modal already refuses a
+;; second while `!uploading` is true, and a run that outlived its document would
+;; be writing into a session that no longer exists.
+;; ---------------------------------------------------------------------------
+
+(defonce !upload-run-id (atom nil))   ; work_key for the activity row
+(defonce !uploading (atom false))
+(defonce !upload-progress (atom nil))
+(defonce !upload-done (atom nil))
+(defonce !upload-error (atom nil))
+(defonce !upload-cancel (atom false))
+
 (defn start-upload!
   "Kick off the transfer. Returns nil immediately; results land in the atoms.
 
@@ -404,6 +429,14 @@
    cannot retroactively change what the already-finalized files did."
   [files parent-id transcribe? !uploading !progress !done !error !cancel]
   #?(:cljs (do
+             ;; Clear the previous run before starting: these atoms outlive the
+             ;; modal now, so a stale `!done` would navigate the moment the modal
+             ;; reopened, and a stale `!error` would greet the next upload.
+             (reset! !done nil)
+             (reset! !error nil)
+             (reset! !progress nil)
+             (reset! !cancel false)
+             (reset! !upload-run-id (str (random-uuid)))
              (reset! !uploading true)
              (-> (vu/upload-files!
                    {:files files
@@ -728,6 +761,31 @@
           (case (start! parent-id)
             (t)))))))
 
+(e/defn VideoUploadActivity
+  "Mirror the transfer into the Activity monitor. Mounted at the APP ROOT, so it
+   keeps watching after the modal closes — which is the whole reason the transfer
+   atoms were hoisted out of that frame.
+
+   `unrecoverable?` is true throughout: an abandoned transfer strands a quota
+   reservation and a large object until the hourly sweep reaps the session, so
+   leaving the page mid-upload is worth a warning."
+  [user-id]
+  (e/client
+    (let [uploading? (e/watch !uploading)
+          run-id (e/watch !upload-run-id)
+          progress (e/watch !upload-progress)
+          error (e/watch !upload-error)]
+      (when (some? run-id)
+        (ac/ActivityMirror user-id "video-upload" run-id
+          uploading?
+          "uploading"
+          (:sent progress) (:total progress)
+          (fn [] (reset! !upload-cancel true))
+          true
+          nil
+          (if error "failure" "success")
+          error)))))
+
 (e/defn NavigateWhenDone
   "Leave the modal for the uploaded content once the transfer completes.
 
@@ -874,26 +932,28 @@
           !uploaded-parent (atom nil)
           uploaded-parent (e/watch !uploaded-parent)
           !file-input (atom nil)
-          !progress (atom nil)
+          ;; The transfer atoms are module-level (see the hoist above), not
+          ;; created here: the run has to outlive this frame.
+          !progress !upload-progress
           progress (e/watch !progress)
-          !done (atom nil)
+          !done !upload-done
           done (e/watch !done)
-          !error (atom nil)
+          !error !upload-error
           error (e/watch !error)
-          !cancel (atom false)
-          !uploading (atom false)
+          !cancel !upload-cancel
+          ;; `!uploading` is the module-level defonce; the symbol resolves to it.
           uploading? (e/watch !uploading)
           !start (atom nil)
           start-click (e/watch !start)
           [t ?token-error] (e/Token start-click)
           busy? (or uploading? (some? t))
-          ;; Closing while a transfer is in flight MUST cancel it. Without the
-          ;; `reset!` the promise chain outlives the frame, keeps POSTing chunks
-          ;; into atoms nobody watches, and finishes by creating a topic the user
-          ;; asked to abandon — the uploader then compensates the session, so the
-          ;; bytes are reclaimed either way, but only after a wasted transfer.
-          ;; Reached from the Cancel button, Escape (ModalEscape), and unmount.
-          close! (fn [] (reset! !cancel true) (reset! !show false))
+          ;; Closing NO LONGER cancels. It had to while the transfer atoms lived
+          ;; in this frame — the promise chain outlived it and wrote where nobody
+          ;; watched. They are module-level now and `VideoUploadActivity` watches
+          ;; them from the app root, so the transfer runs on and reports to the
+          ;; Activity monitor. Cancel is still available: from the Cancel button
+          ;; here while busy, and from the monitor afterwards.
+          close! (fn [] (reset! !show false))
           ;; One entry point for both the picker and the drop zone: `accept`
           ;; only biases the file dialog, and a drop bypasses it entirely, so
           ;; the filter has to live where the files arrive rather than on the

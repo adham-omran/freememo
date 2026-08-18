@@ -151,7 +151,12 @@
    :anki_note_tombstones "note ids of ONE Anki collection, owed a deletion the
                           source instance may not have completed. Carrying them
                           would tell the target instance to delete notes in a
-                          collection it has never synced with"})
+                          collection it has never synced with"
+   :activities "in-flight and historical operation state of ONE deployment, the
+                same reason `upload_sessions` is excluded. An in-flight row
+                carries a `work_key` naming work no process on the target is
+                doing, so it would import already stale and read as an
+                operation the user never ran"})
 
 ;; ── Export scope ───────────────────────────────────────────────────
 ;;

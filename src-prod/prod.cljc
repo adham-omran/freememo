@@ -26,7 +26,8 @@
    #?(:clj [freememo.google-oauth :as google-oauth])
    #?(:clj [freememo.shell :as shell])
    #?(:clj [freememo.config :as config])
-   #?(:clj [freememo.quota :as quota])))
+   #?(:clj [freememo.quota :as quota])
+   #?(:clj [freememo.activity-reporter :as activity-reporter])))
 
 ;; Prod default card model — a freememo.card-models registry :id, used as the
 ;; default when a user has no allowed saved selection (overridable per-user
@@ -145,6 +146,11 @@
 
        ;; Initialize database
        (db/setup-schema)
+
+       ;; Activity monitor: keeps in-flight server-owned rows fresh. Must follow
+       ;; setup-schema — it queries `activities`. Requiring this namespace is also
+       ;; what registers the activity sweeps into the hourly sweep.
+       (activity-reporter/start!)
 
        ;; Self-host: seed admin from env (if absent) and sanity-check auth config.
        (seed-admin-user!)

@@ -188,6 +188,43 @@
                   (reset! (:!phase recon) nil)
                   (t)))))))))
 
+(def cancellable-phases
+  "Phases a run may be stopped in.
+
+   `:recording` is excluded. It writes the baselines that say which cards are in
+   sync, from bytes already read back out of Anki — stopping partway leaves some
+   cards baselined and some not. That state is RECOVERABLE (the ordering
+   guarantee is snapshot-then-baseline, so an unbaselined card reads as unsynced
+   and is retried, never as falsely synced), but it is short-lived work and
+   there is nothing to gain by interrupting it.
+
+   `:done` and `:error` are excluded because the run is already over."
+  #{:scanning :planning :writing})
+
+(def unrecoverable-phases
+  "Phases where leaving the page strands state the user cannot undo: notes are
+   already being written into their Anki collection."
+  #{:writing :recording})
+
+(defn cancel!
+  "Stop a run by clearing its phase, which unmounts every phase component and
+   tears down whatever `e/Offload` was in flight.
+
+   pre : `recon` is a `fresh-state` map.
+   post: `!running?` false and phase nil; returns :cancelled, or :not-cancellable
+         when the current phase is not in `cancellable-phases`.
+   Invariant: safe against a half-written collection. Push writes the settings
+         snapshot before sending and takes baselines only from bytes read back,
+         so a run stopped between those leaves its cards unsynced and retried."
+  [recon !running?]
+  #?(:cljs
+     (if (contains? cancellable-phases @(:!phase recon))
+       (do (reset! (:!phase recon) nil)
+         (reset! !running? false)
+         :cancelled)
+       :not-cancellable)
+     :clj nil))
+
 (e/defn ReconcileExecutor
   "Mounts every phase. Headless — the caller owns the trigger and the DOM."
   [user-id recon !running?]

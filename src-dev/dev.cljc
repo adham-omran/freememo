@@ -15,6 +15,10 @@
    #?(:clj [freememo.api :as api])
    #?(:clj [freememo.config :as config])
    #?(:clj [freememo.quota :as quota])
+   ;; Electric-free by design (activity → db + commands, neither requires
+   ;; electric), so this require does NOT put a reactive compile on the main
+   ;; thread — see load-app-namespaces! below.
+   #?(:clj [freememo.activity-reporter :as activity-reporter])
 
    #?(:clj [nrepl.server :as nrepl])
    #?(:clj [ring.adapter.jetty :as ring])
@@ -165,6 +169,11 @@
 
      ;; Initialize database
      (db/setup-schema)
+
+     ;; Activity monitor: keeps in-flight server-owned rows fresh. Must follow
+     ;; setup-schema — it queries `activities`. Requiring this namespace is also
+     ;; what registers the activity sweeps into the hourly sweep.
+     (activity-reporter/start!)
 
      (def nrepl-server (start-nrepl-on-free-port! 7888 20))
 

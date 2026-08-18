@@ -4995,3 +4995,159 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 
     .sched-cell, .sched-th { padding: 6px 6px; font-size: 12px; }
 }
+
+/* ── Activity monitor ───────────────────────────────────────────────────────
+   The nav badge and its popover (plans/activity-monitor.md).
+
+   Row styling lives here rather than in per-row inline :style maps: Electric
+   applies each style property as its own reactive prop, so a merged map costs
+   several prop nodes per cell, while one :class string is one prop. Only the
+   progress bar's width stays inline, because it is genuinely data-dependent.
+
+   z-index sits at 99/100 to match .nav-overflow-*, deliberately BELOW the toast
+   stack's 9999 — a toast reporting a failure must stay readable over the panel
+   that lists it. */
+
+.activity-nav-btn { position: relative; }
+
+.activity-badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 3px;
+    border-radius: 8px;
+    background: var(--color-accent, #2563eb);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 15px;
+    text-align: center;
+    pointer-events: none;
+}
+
+.activity-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 99;
+}
+
+.activity-panel {
+    position: absolute;
+    top: 100%;
+    right: 8px;
+    z-index: 100;
+    width: min(360px, calc(100vw - 24px));
+    max-height: min(60vh, 480px);
+    display: flex;
+    flex-direction: column;
+    background: var(--color-bg-card);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md, 6px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16);
+}
+
+.activity-panel-head {
+    padding: 10px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.activity-list {
+    overflow-y: auto;
+    min-height: 0;
+}
+
+.activity-empty {
+    padding: 16px 12px;
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    text-align: center;
+}
+
+.activity-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--color-bg-subtle);
+}
+.activity-row:last-child { border-bottom: none; }
+.activity-row.is-terminal { opacity: 0.72; }
+
+.activity-row-main { flex: 1; min-width: 0; }
+
+.activity-row-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.activity-label {
+    font-size: 13px;
+    color: var(--color-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.activity-status {
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    overflow-wrap: anywhere;
+}
+
+.activity-outcome {
+    flex-shrink: 0;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--color-bg-subtle);
+    color: var(--color-text-secondary);
+}
+.activity-outcome-success { background: light-dark(#dcfce7, #14532d); color: light-dark(#166534, #bbf7d0); }
+.activity-outcome-failure { background: light-dark(#fee2e2, #7f1d1d); color: light-dark(#991b1b, #fecaca); }
+.activity-outcome-cancelled { background: var(--color-bg-subtle); color: var(--color-text-secondary); }
+.activity-outcome-interrupted { background: light-dark(#fef3c7, #78350f); color: light-dark(#92400e, #fde68a); }
+
+.activity-bar {
+    margin-top: 6px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--color-bg-subtle);
+    overflow: hidden;
+}
+.activity-bar-fill {
+    height: 100%;
+    background: var(--color-accent, #2563eb);
+    transition: width 200ms linear;
+}
+
+.activity-row-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.activity-action {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 6px;
+    border: 1px solid var(--color-border);
+    border-radius: 3px;
+    background: none;
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+}
+.activity-action:hover {
+    background: var(--color-bg-subtle);
+    color: var(--color-text-primary);
+}

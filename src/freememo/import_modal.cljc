@@ -12,6 +12,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [clojure.string :as str]
+   [freememo.activity-client :as ac]
    [freememo.loading :as loading]
    [freememo.modal-shell :as modal]
    [freememo.navigation :as nav]
@@ -208,6 +209,50 @@
                             :flow flow})))
        (.catch (fn [e]
                  (on-error (or (some-> e .-message) "Upload failed — please try again.")))))))
+
+;; ---------------------------------------------------------------------------
+;; Staging-upload visibility (plans/activity-monitor.md).
+;;
+;; Module level, so the state outlives this modal's frame — the transfer is a
+;; plain promise chain and would otherwise keep writing where nobody watches.
+;; One atom because only one staging upload runs at a time: the modal is in its
+;; `:fetching` stage for the whole transfer and offers no way to start a second.
+;;
+;; This gives the monitor VISIBILITY only. The modal's close semantics are
+;; deliberately unchanged: the transfer is one step of a wizard, and the confirm
+;; step that follows needs the staging context the modal holds, so closing
+;; mid-upload still abandons the import.
+;; ---------------------------------------------------------------------------
+
+(defonce !staging-upload
+  (atom nil)) ; {:run-id :type :filename :sent :total :error :running?}
+
+#?(:cljs
+   (defn- with-upload-activity
+     "Decorate an upload's callbacks so the Activity monitor sees the transfer.
+
+      Wrapping the callbacks rather than editing the two call sites keeps the
+      reporting in one place — and both wrappers already take exactly these
+      three, so there is nothing else to thread through.
+
+      Pre : `type` is a `:pushed`-tier registry type; `opts` carries
+            :on-progress/:on-staged/:on-error.
+      Post: the returned opts behave identically, and additionally publish the
+            transfer's progress and terminal state."
+     [type ^js f {:keys [on-progress on-staged on-error] :as opts}]
+     (let [run-id (str (random-uuid))]
+       (reset! !staging-upload {:run-id run-id :type type :filename (.-name f)
+                                :sent 0 :total (.-size f) :running? true})
+       (assoc opts
+         :on-progress (fn [sent total]
+                        (swap! !staging-upload merge {:sent sent :total total})
+                        (when on-progress (on-progress sent total)))
+         :on-staged (fn [staged]
+                      (swap! !staging-upload merge {:running? false :error nil})
+                      (when on-staged (on-staged staged)))
+         :on-error (fn [msg]
+                     (swap! !staging-upload merge {:running? false :error msg})
+                     (when on-error (on-error msg)))))))
 
 #?(:cljs
    (defn- upload-epub!
@@ -971,6 +1016,30 @@
 ;; `!intake` is nil at every card call site and an atom at the intake-area call
 ;; site. It is a positional parameter, never a key in a map argument — Electric
 ;; serializes map arguments as data and an atom cannot be serialized.
+(e/defn StagingUploadActivity
+  "Mirror a chunked staging upload into the Activity monitor. Mounted at the APP
+   ROOT so it keeps reporting after the modal closes.
+
+   No canceller: `upload-archive!`/`upload-epub!` take a `:cancelled?` poll that
+   this modal never wires, so there is nothing here that could stop the transfer,
+   and offering Cancel would be a button that does nothing. Abandoning it is
+   still safe — the uploader compensates on failure, and the hourly sweep reaps
+   a session whose tab vanished."
+  [user-id]
+  (e/client
+    (let [{:keys [run-id type filename sent total error running?]}
+          (e/watch !staging-upload)]
+      (when (some? run-id)
+        (ac/ActivityMirror user-id type run-id
+          (boolean running?)
+          (or filename "uploading")
+          sent total
+          nil
+          true
+          nil
+          (if error "failure" "success")
+          error)))))
+
 (e/defn ImportModal [!show user-id source-preset navigate! !intake]
   (e/client
     (let [!source (atom (or source-preset :url))
@@ -1039,21 +1108,22 @@
                           (archive-file? f)
                           (do (reset! !stage :fetching)
                               (upload-archive! f
-                                {:on-progress
-                                 (fn [sent total]
-                                   (reset! !busy-msg
-                                     (str "Uploading… " (upload-percent sent total)
-                                          " of " (format-mb total))))
-                                 :on-staged
-                                 (fn [staged]
-                                   (reset! !busy-msg nil)
-                                   (reset! !staged staged)
-                                   (reset! !flow (:flow staged))
-                                   (reset! !stage :confirming))
-                                 :on-error
-                                 (fn [msg]
-                                   (reset! !busy-msg nil)
-                                   (handle-fetch-err msg))}))
+                                (with-upload-activity "archive-upload" f
+                                  {:on-progress
+                                   (fn [sent total]
+                                     (reset! !busy-msg
+                                       (str "Uploading… " (upload-percent sent total)
+                                            " of " (format-mb total))))
+                                   :on-staged
+                                   (fn [staged]
+                                     (reset! !busy-msg nil)
+                                     (reset! !staged staged)
+                                     (reset! !flow (:flow staged))
+                                     (reset! !stage :confirming))
+                                   :on-error
+                                   (fn [msg]
+                                     (reset! !busy-msg nil)
+                                     (handle-fetch-err msg))})))
 
                           ;; One ceiling check for every non-archive file, from
                           ;; the ceiling its own type carries: 25 MB for audio
@@ -1078,21 +1148,22 @@
                           (= :epub-session (itypes/transport-for (.-name f)))
                           (do (reset! !stage :fetching)
                               (upload-epub! f
-                                {:on-progress
-                                 (fn [sent total]
-                                   (reset! !busy-msg
-                                     (str "Uploading… " (upload-percent sent total)
-                                          " of " (format-mb total))))
-                                 :on-staged
-                                 (fn [staged]
-                                   (reset! !busy-msg nil)
-                                   (reset! !staged staged)
-                                   (reset! !flow (:flow staged))
-                                   (reset! !stage :confirming))
-                                 :on-error
-                                 (fn [msg]
-                                   (reset! !busy-msg nil)
-                                   (handle-fetch-err msg))}))
+                                (with-upload-activity "epub-upload" f
+                                  {:on-progress
+                                   (fn [sent total]
+                                     (reset! !busy-msg
+                                       (str "Uploading… " (upload-percent sent total)
+                                            " of " (format-mb total))))
+                                   :on-staged
+                                   (fn [staged]
+                                     (reset! !busy-msg nil)
+                                     (reset! !staged staged)
+                                     (reset! !flow (:flow staged))
+                                     (reset! !stage :confirming))
+                                   :on-error
+                                   (fn [msg]
+                                     (reset! !busy-msg nil)
+                                     (handle-fetch-err msg))})))
 
                           :else
                           (do (reset! !stage :fetching)

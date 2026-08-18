@@ -1751,6 +1751,86 @@
       PRIMARY KEY (user_id, deck)
     )"]))
 
+(defn- setup-schema-activity-monitor!
+  "One row per long-running operation a user started — the Activity monitor's
+   durable record (plans/activity-monitor.md). Must run after
+   setup-schema-topics!: `subject_id` FKs topics.
+
+   NOT `setup-schema-activity!`. That one owns `user_events`, `media` and
+   `topic_pins` — 'activity' there means analytics. A plural near-twin of its
+   name would put two unrelated fns one character apart.
+
+   This table is a SNAPSHOT, never the source of truth. The per-user atoms in
+   freememo.user-state stay authoritative for live state; `freememo.activity`
+   writes this behind them on a timer. That is what makes a missed write
+   self-healing rather than permanent — the next tick corrects it. Same
+   discipline as `flashcards.anki_header_text`.
+
+   Identity is `work_key`, NOT `subject_id`. The owners key their in-flight
+   state five different ways — a topic id (card gen), a `[doc page]` pair (OCR),
+   a root topic id (distill), an upload session id (TEXT), and nothing at all
+   (an Anki reconcile has no scope to narrow, per quick-sync's docstring). One
+   integer column cannot carry all five, so each owner supplies a `work_key`
+   string it composes itself, and OCR's is `\"<doc>/<page>\"`.
+
+   `subject_id` exists ONLY so the popover can navigate somewhere, and it is
+   nullable because two types have nowhere to go: an Anki reconcile spans the
+   collection, and an upload has no topic until it lands. What a `subject_id`
+   MEANS is declared once per type in the activity registry, which is why there
+   is no `subject_kind` column duplicating that per row.
+
+   The unique index is PARTIAL on `terminated_at IS NULL`. Absolute uniqueness
+   would forbid ever re-running the same card generation; the contract is only
+   that one run of one piece of work is in flight at a time — which is what the
+   owners already enforce (`:processing-videos` dedupes on (user, topic);
+   `reconcile/start!` returns :busy).
+
+   `type` is plain TEXT with no CHECK, matching topic kinds and card kinds: the
+   vocabulary lives in code, in the activity registry."
+  []
+  (jdbc/execute! ds ["
+    CREATE TABLE IF NOT EXISTS activities (
+      id BIGSERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      work_key TEXT NOT NULL,
+      subject_id INTEGER REFERENCES topics(id) ON DELETE SET NULL,
+      phase TEXT NOT NULL,
+      -- BIGINT, not INTEGER: an upload reports BYTES, and a 3 GB video would
+      -- overflow int4 silently at the driver rather than loudly here.
+      done BIGINT,
+      total BIGINT,
+      cancellable BOOLEAN NOT NULL DEFAULT FALSE,
+      unrecoverable BOOLEAN NOT NULL DEFAULT FALSE,
+      outcome TEXT CHECK (outcome IN ('success','failure','cancelled','interrupted')),
+      error TEXT,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      terminated_at TIMESTAMPTZ,
+      CONSTRAINT activities_terminal_agrees
+        CHECK ((terminated_at IS NULL) = (outcome IS NULL)),
+      CONSTRAINT activities_total_needs_done
+        CHECK (total IS NULL OR done IS NOT NULL)
+    )"])
+  ;; Widen an activities table created before bytes were a progress unit.
+  (jdbc/execute! ds ["ALTER TABLE activities ALTER COLUMN done TYPE BIGINT"])
+  (jdbc/execute! ds ["ALTER TABLE activities ALTER COLUMN total TYPE BIGINT"])
+  ;; The idempotency contract of `activity/start!`: at most one in-flight run per
+  ;; (user, type, work_key). Partial, so a completed run does not block a retry.
+  (jdbc/execute! ds ["CREATE UNIQUE INDEX IF NOT EXISTS idx_activities_inflight
+                      ON activities(user_id, type, work_key)
+                      WHERE terminated_at IS NULL"])
+  ;; The popover's query: this user's activities, newest first.
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_activities_user_started
+                      ON activities(user_id, started_at DESC)"])
+  ;; The staleness sweep reads only in-flight rows, by how long they have been quiet.
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_activities_stale
+                      ON activities(updated_at) WHERE terminated_at IS NULL"])
+  ;; The prune sweep keeps failures longer than successes, so it reads by both.
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_activities_prune
+                      ON activities(outcome, terminated_at)
+                      WHERE terminated_at IS NOT NULL"]))
+
 (defn setup-schema []
   (tel/log! :info "Setting up database schema")
 
@@ -1769,6 +1849,7 @@
   (setup-schema-neoreader!)
   (setup-schema-account-transfer!)
   (setup-schema-study-scheduler!)
+  (setup-schema-activity-monitor!)
 
   ;; One-time grandfather credit grant (idempotent; no-op when credits disabled)
   (run-grandfather-migration!)

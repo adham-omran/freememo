@@ -29,6 +29,10 @@
             [freememo.client-errors :refer [ClientErrorForwarder]]
             [freememo.interaction-trail :as trail :refer [InteractionForwarder]]
             [freememo.undo-history-modal :refer [ActionsNavButton UndoHistoryModal]]
+            [freememo.activity-panel :refer [ActivityNavButton ActivityPanel]]
+            [freememo.quick-sync :refer [QuickSyncButton]]
+            [freememo.video-import-modal :refer [VideoUploadActivity]]
+            [freememo.import-modal :refer [StagingUploadActivity]]
             [freememo.icons :as icons]
             [freememo.tooltip :as tooltip]
             [freememo.toolbar-overflow :refer [install-overflow-detector!]]
@@ -301,6 +305,11 @@
                     ;; Undo/Actions modal open-state (shared by nav button + modal)
                     !undo-modal-open? (atom false)
 
+                    ;; Activity monitor open-state (shared by nav badge + popover).
+                    ;; Same split as Actions above: the badge lives inside
+                    ;; .nav-utils, the popover must sit outside .tab-bar.
+                    !activity-open? (atom false)
+
                     ;; Navigation bridge: children call navigate!, reactive graph calls Navigate!
                     !nav-cmd (atom nil)
                     nav-cmd (e/watch !nav-cmd)
@@ -343,7 +352,8 @@
                 ;; Re-published whenever active-tab changes (merge overwrites).
                 (bus/publish-ctx! {:active-tab active-tab
                                    :navigate! navigate!
-                                   :undo-modal-open-atom !undo-modal-open?})
+                                   :undo-modal-open-atom !undo-modal-open?
+                                   :activity-open-atom !activity-open?})
 
                 ;; Skip link — first focusable element; visually hidden until
                 ;; focused (.skip-link CSS). WCAG 2.4.1 bypass for the nav bar.
@@ -450,14 +460,19 @@
                     (dom/div (dom/props {:class "nav-utils"})
                       (NavUtil active-tab navigate! :help :circle-help "Help")
                       (NavUtil active-tab navigate! :settings :settings "Settings")
-                      (ActionsNavButton !undo-modal-open?))
+                      (ActionsNavButton !undo-modal-open?)
+                      (ActivityNavButton user-id !activity-open?))
 
                     ;; Backdrop for outside-click close — outside .tab-bar so
                     ;; clipping can't hide it.
                     (when nav-overflow-open
                       (dom/div
                         (dom/props {:class "nav-overflow-backdrop"})
-                        (dom/On "click" (fn [_] (reset! !nav-overflow-open false)) nil)))))
+                        (dom/On "click" (fn [_] (reset! !nav-overflow-open false)) nil)))
+
+                    ;; Activity popover — sibling of .tab-bar for the same reason
+                    ;; the ⋮ panel is: inside it would inherit `overflow-x: clip`.
+                    (ActivityPanel user-id !activity-open? navigate!)))
 
                 ;; Storage warning banner — appears when usage exceeds 80%.
                 (let [refresh (e/server (e/watch (us/get-atom user-id :refresh)))
@@ -514,6 +529,18 @@
 
                 ;; Optimistic-update command pump (headless; renders nothing)
                 (CommandDispatcher user-id)
+
+                ;; Anki reconcile driver (headless). At the root, not in the
+                ;; toolbar it used to live in: a reconcile spans the whole
+                ;; collection, so a driver mounted under one document died on
+                ;; navigation and took the in-flight run with it.
+                (QuickSyncButton user-id)
+
+                ;; Activity mirrors for the pushed tier (headless). At the root
+                ;; because the transfers they watch outlive the modals that
+                ;; started them — that is the whole point of hoisting their state.
+                (VideoUploadActivity user-id)
+                (StagingUploadActivity user-id)
 
                 ;; Client→server error trail pump (headless; renders nothing)
                 (ClientErrorForwarder user-id)

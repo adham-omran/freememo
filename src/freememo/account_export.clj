@@ -28,6 +28,7 @@
             [freememo.db :as db]
             [freememo.largeobj :as lo]
             [freememo.settings :as settings]
+            [freememo.user-state :as us]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [ring.core.protocols :as ring-protocols]
@@ -308,8 +309,17 @@
     ;; Ring closes the stream on the success path only — it leaves it open on a
     ;; throw so the adapter can still report. `write-archive!` therefore does not
     ;; close it either.
-    (write-archive! (:ds this) (:user-id this) out (:instance-url this))
-    (.close out)))
+    ;;
+    ;; Membership in `:exporting-accounts` is what the Activity monitor sees:
+    ;; the reporter discovers the work from this set, keeps its row alive while
+    ;; the archive streams, and closes it when the set empties. `finally`, not
+    ;; the success path — a client that disconnects mid-download breaks the pipe
+    ;; here, and a set left populated would report an export that is over as
+    ;; running until staleness caught it 60s later.
+    (let [uid (:user-id this)]
+      (us/with-in-flight uid :exporting-accounts "account"
+        (write-archive! (:ds this) uid out (:instance-url this))
+        (.close out)))))
 
 (def ^:private filename-date
   (.withZone (DateTimeFormatter/ofPattern "yyyy-MM-dd") java.time.ZoneOffset/UTC))
