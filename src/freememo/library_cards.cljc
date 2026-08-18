@@ -23,6 +23,7 @@
    [freememo.card-modals :refer [EditCardModal CopyCardModal]]
    [freememo.icons :as icons]
    [freememo.math :as math]
+   [freememo.quiz-item-stats :as stats]
    [freememo.tooltip :as tooltip]
    [freememo.util :as util]
    #?(:clj [freememo.anki-sync-server :as sync-server])
@@ -762,7 +763,25 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
       (dom/props {:class "card-cell-center"})
       (DeleteCardButton member-ids user-id))))
 
-(e/defn LibraryCardRow [card navigate! !editing-card !diff-card !selected selected user-id i anki-overlay]
+(e/defn RowStatsCell
+  "Lifetime stats for the card this row stands for.
+
+   Only basic and cloze cards are quiz items — occlusion, score and overlapping
+   carry no typed answer, so the quiz never asks them and they have no schedule to
+   show (db/card-quiz-ords, and card-quiz-where beneath it). Those rows render an
+   empty cell rather than a button that opens onto nothing. They are also the only
+   kinds that make a row stand for several flashcards, so a row that HAS this button
+   is always exactly one card — the ord, when there are several, is resolved inside
+   the modal.
+   Its own cell with stopPropagation: the rest of the row opens the edit modal."
+  [id kind !stats]
+  (e/client
+    (dom/td
+      (dom/props {:class "card-cell-center"})
+      (when (#{"basic" "cloze"} kind)
+        (stats/StatsOpenerButton !stats {:card id})))))
+
+(e/defn LibraryCardRow [card navigate! !editing-card !diff-card !selected selected user-id i anki-overlay !stats]
   (e/client
     ;; Plain client-sited keyword lookups, NOT 16 × (e/server (:k card)).
     ;; Each e/server read is its own cross-peer reactive node; at 22 windowed
@@ -825,13 +844,18 @@ cell siblings — that shape overflows the 64 KB per-e/defn bytecode cap in the
         (RowContentCells span2? id front-html back-html)
         (RowDocCell doc-label topic-id navigate!)
         (RowAddedCell added)
+        (RowStatsCell id kind !stats)
         (RowDeleteCell member-ids user-id)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Main view
 ;; ---------------------------------------------------------------------------
 
-(def ^:private grid-cols "32px 44px 64px 1fr 1fr 200px 80px 44px")
+;; Nine tracks. The trailing pair is stats then delete, each 44px — one .btn-sm
+;; icon inside .cards-table-body td's padding. Front/Back are the two 1fr tracks
+;; and RowContentCells spans Front across both when a card has no Back, so a track
+;; added at the END cannot disturb that.
+(def ^:private grid-cols "32px 44px 64px 1fr 1fr 200px 80px 44px 44px")
 
 ;; ---------------------------------------------------------------------------
 ;; Diff modal — read-only git-style view of FreeMemo (−) vs Anki (+).
@@ -1451,7 +1475,8 @@ bytecode cap in the :prod build, which dev compilation never emits.
             (dom/th (dom/text "Back"))
             (SortHeaderCell "Document" :document :asc nil sort-col sort-dir !sort-col !sort-dir nil)
             (SortHeaderCell "Added" :added :desc "cards-th-right" sort-col sort-dir !sort-col !sort-dir nil)
-            (dom/th (dom/text ""))))))))
+            (dom/th (dom/text ""))      ; stats
+            (dom/th (dom/text ""))))))))  ; delete
 
 ;; Virtual-scrolled body. The table is ALWAYS mounted — it renders for every
 ;; card-count, including 0, and the empty-state message is an absolutely
@@ -1465,7 +1490,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
 ;; the only virtual-scroll site with an overlay, and 10 others share that class.
 (e/defn CardsTableBody [cards-vec row-count row-height font-sz filters-active? scroll-reset-key
                         navigate! !editing-card !diff-card !selected selected
-                        user-id anki-overlay]
+                        user-id anki-overlay !stats]
   (e/client
     (dom/div
       ;; max-height caps the table at 10 rows, and the window follows it: 10 ×
@@ -1496,7 +1521,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
             (let [card (e/server (nth cards-vec i nil))]
               (when card
                 (LibraryCardRow card navigate! !editing-card !diff-card !selected
-                  selected user-id i anki-overlay)))))
+                  selected user-id i anki-overlay !stats)))))
         ;; Sibling overlay — never a branch that unmounts the table above.
         (when (zero? row-count)
           (dom/div
@@ -1533,17 +1558,20 @@ bytecode cap in the :prod build, which dev compilation never emits.
         (or (:per-card overlay-resp) {})))))
 
 ;; Diff + bulk-delete modals, mounted on their state atoms.
-(e/defn CardsModals [user-id !diff-card !confirm-bulk-delete !selected !action-result]
+(e/defn CardsModals [user-id !diff-card !confirm-bulk-delete !selected !action-result !stats]
   (e/client
     (when (e/watch !diff-card)
       (CardDiffModal !diff-card))
     (when (e/watch !confirm-bulk-delete)
-      (BulkDeleteConfirmModal user-id !confirm-bulk-delete !selected !action-result))))
+      (BulkDeleteConfirmModal user-id !confirm-bulk-delete !selected !action-result))
+    ;; A sibling of the other two, never nested in one: pointer-events:none
+    ;; inherits and a nested modal shares its ancestor's Escape (CLAUDE.md).
+    (stats/QuizItemStatsModal user-id !stats)))
 
 ;; Fixed header + virtual-scrolled body pair.
 (e/defn CardsTables [user-id navigate! result row-height font-sz filters-active? scroll-reset-key
                      anki-overlay selected !selected !sort-col !sort-dir
-                     !editing-card !diff-card]
+                     !editing-card !diff-card !stats]
   (e/client
     (let [cards-vec (e/server (vec (:cards result)))
           row-count (e/server (or (:count result) 0))
@@ -1564,7 +1592,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
 
       (CardsTableBody cards-vec row-count row-height font-sz filters-active? scroll-reset-key
         navigate! !editing-card !diff-card !selected selected
-        user-id anki-overlay))))
+        user-id anki-overlay !stats))))
 
 ;; Phase 3: selection + diff modal + bulk action state, plus the tables.
 ;; Owns the selection/bulk atoms; mounted on the query success branch.
@@ -1576,6 +1604,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
           ;; selection unit and its member ids ride along from click time.
           !selected (atom {}) selected (e/watch !selected)
           !diff-card (atom nil)
+          !stats (atom nil)          ; {:card id} whose lifetime stats are open
           !action-result (atom nil)
           !bulk-phase (atom nil) bulk-phase (e/watch !bulk-phase)
           !scan-result (atom nil)
@@ -1585,7 +1614,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
           conflicts (e/server
                       (e/Offload #(recon-server/conflicts-for-resolution user-id)))]
 
-      (CardsModals user-id !diff-card !confirm-bulk-delete !selected !action-result)
+      (CardsModals user-id !diff-card !confirm-bulk-delete !selected !action-result !stats)
 
       (ResolveConflictRunner user-id !bulk-phase !scan-result !action-result)
 
@@ -1601,7 +1630,7 @@ bytecode cap in the :prod build, which dev compilation never emits.
 
       (CardsTables user-id navigate! result row-height font-sz filters-active? scroll-reset-key
         anki-overlay selected !selected !sort-col !sort-dir
-        !editing-card !diff-card))))
+        !editing-card !diff-card !stats))))
 
 ;; Everything downstream of the query result: edit modal, error branch,
 ;; selection region. Takes `result` from LibraryCardsView's gate — the query

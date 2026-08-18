@@ -1244,10 +1244,18 @@
   ;; at all (the FSRS schedule is untouched), so a failed grade leaves no history and
   ;; the answer text is lost; the session flows persist before grading instead.
   ;; question_text = the wording at grade time (see kg_answers above).
+  ;;
+  ;; duration_ms = how long the turn took, client-measured from turn mount to
+  ;; submit-or-rating. NULL means NOT RECORDED, never zero: every row written
+  ;; before the column existed is NULL and there is no backfill, so a stats
+  ;; average must state its own denominator rather than treat NULL as 0. The
+  ;; value is client-supplied and therefore untrusted — clamp-duration-ms is the
+  ;; single bound, applied in apply-fsrs-review!.
   (doseq [col ["user_answer TEXT"
                "explanation TEXT"
                "question_text TEXT"
-               "missed_fact_ids INTEGER[] NOT NULL DEFAULT '{}'"]]
+               "missed_fact_ids INTEGER[] NOT NULL DEFAULT '{}'"
+               "duration_ms INTEGER"]]
     (jdbc/execute! ds [(str "ALTER TABLE kg_reviews ADD COLUMN IF NOT EXISTS " col)]))
 
   ;; Graph-view layout cache — one row per (user, scope). payload is the
@@ -9793,6 +9801,26 @@
        card-id ord]
       {:builder-fn rs/as-unqualified-maps})))
 
+(def duration-cap-ms
+  "Upper bound on one turn's recorded duration, in milliseconds.
+
+   A learner who walks away mid-turn would otherwise record hours and poison every
+   average that reads the column. 120 s rather than Anki's 60 s because both graded
+   arms here take a typed free-text answer, which routinely exceeds a minute."
+  120000)
+
+(defn- clamp-duration-ms
+  "Bound one client-supplied turn duration.
+
+   The value crosses from an untrusted peer, so this is the single place it is
+   bounded — every kg_reviews write goes through apply-fsrs-review!, so a caller
+   cannot skip it.
+   Post: nil (not recorded) for a nil or non-numeric input; otherwise an int in
+         [0, duration-cap-ms]. Never throws."
+  [v]
+  (when (number? v)
+    (-> (long v) (max 0) (min duration-cap-ms))))
+
 (defn apply-fsrs-review!
   "Advance one quiz item's FSRS schedule by `rating` and append a kg_reviews row,
    in one transaction. Postgres now() is the transaction clock, so the elapsed gap
@@ -9804,9 +9832,11 @@
 
    The Review flow writes no kg_answers row, so this row IS its answer history:
    `record` carries {:verdict :explanation :user-answer :missed-fact-ids
-   :grade-source} and the item's current wording is snapshotted by subselect. On the
-   self-graded arm there is no verdict, explanation or answer — :grade-source 'self'
-   is what tells that row apart from one written before grade_source existed.
+   :grade-source :duration-ms} and the item's current wording is snapshotted by
+   subselect. On the self-graded arm there is no verdict, explanation or answer —
+   :grade-source 'self' is what tells that row apart from one written before
+   grade_source existed. :duration-ms is untrusted and passes through
+   clamp-duration-ms; absent or unusable leaves the column NULL.
    Pre:  the item belongs to user-id (else returns nil, no write); rating ∈ 1..4.
    Post: the item's FSRS state advanced; exactly one kg_reviews row inserted;
          returns {:state :reps :lapses :scheduled-days :due-today?}."
@@ -9872,6 +9902,7 @@
                          :elapsed_days elapsed :scheduled_days scheduled-days
                          :user_answer (some-> (:user-answer record) sanitize-utf8)
                          :explanation (some-> (:explanation record) sanitize-utf8)
+                         :duration_ms (clamp-duration-ms (:duration-ms record))
                          :missed_fact_ids (int-array-value (:missed-fact-ids record))
                          ;; The wording as asked. A cloze card stores its RAW text —
                          ;; with `ord` alongside, history can re-derive the exact
@@ -9890,19 +9921,81 @@
 
 (defn fsrs-review-history-daily
   "Per-day Review tallies over the last `days` days (server-local).
-   Post: [{:day date :reviews n :good n :again n :new n}] newest first."
+
+   One query feeds the whole dashboard footer: the heatmap grid, the daily average,
+   the days-learned share, and today's line — today is simply the row whose :day is
+   CURRENT_DATE. Days with no reviews are ABSENT rather than zero-filled; the caller
+   builds the grid and reads a missing day as 0.
+
+   :timed is how many of the day's reviews carry a duration, so a caller can state
+   its own denominator: duration_ms is NULL for every review taken before the column
+   existed, and NULL is not zero.
+   Post: [{:day date :reviews n :good n :again n :new n :timed n :duration_ms n|nil}]
+         newest first."
   [user-id days]
   (jdbc/execute! ds
     ["SELECT reviewed_at::date AS day,
-             COUNT(*)                          AS reviews,
-             COUNT(*) FILTER (WHERE rating = 3) AS good,
-             COUNT(*) FILTER (WHERE rating = 1) AS again,
-             COUNT(*) FILTER (WHERE reps_before = 0) AS new
+             COUNT(*)                                AS reviews,
+             COUNT(*) FILTER (WHERE rating = 3)      AS good,
+             COUNT(*) FILTER (WHERE rating = 1)      AS again,
+             COUNT(*) FILTER (WHERE reps_before = 0) AS new,
+             COUNT(duration_ms)                      AS timed,
+             SUM(duration_ms)                        AS duration_ms
       FROM kg_reviews
       WHERE user_id = ? AND reviewed_at >= CURRENT_DATE - make_interval(days => ?::int)
       GROUP BY day ORDER BY day DESC"
      user-id days]
     {:builder-fn rs/as-unqualified-maps}))
+
+(defn kg-review-streaks
+  "Consecutive-day review streaks over ALL history, Anki-style.
+
+   All-time on purpose, while the heatmap beside it is bounded to a rolling window:
+   a 400-day streak reported as 365 because the grid stops there would be visibly
+   wrong to the one person who has it.
+
+   Deliberately NOT get-study-streak, which answers the same question over
+   topic_repetitions — incremental-reading advances, a different activity that
+   disagrees with this one on most days. Only the anchor rule is shared: today
+   counts if reviewed, else yesterday, so a day not yet over does not break a
+   streak.
+   Post: EITHER {:current n :longest n} — both 0 when nothing was ever reviewed —
+         OR {:error msg} with NEITHER count present.
+
+         The failure branch carries no numbers on purpose. Returning zeros would
+         report a 400-day streak as 0 and be indistinguishable from a true zero,
+         which is the defect get-learning-queue's empty-collection catch produced
+         (CLAUDE.md). A caller MUST test :error before reading a count — a
+         (:current s 0) default would put the lie straight back."
+  [user-id]
+  (try
+    (let [dayset (into #{}
+                   (map #(java.time.LocalDate/parse (str (:d %))))
+                   (jdbc/execute! ds
+                     ["SELECT DISTINCT reviewed_at::date AS d
+                       FROM kg_reviews WHERE user_id = ?" user-id]
+                     {:builder-fn rs/as-unqualified-maps}))
+          today (java.time.LocalDate/now)
+          anchor (cond (contains? dayset today) today
+                       (contains? dayset (.minusDays today 1)) (.minusDays today 1)
+                       :else nil)
+          run-back (fn [from] (loop [d from n 0]
+                                (if (contains? dayset d)
+                                  (recur (.minusDays ^java.time.LocalDate d 1) (inc n))
+                                  n)))]
+      {:current (if anchor (run-back anchor) 0)
+       ;; Walk back from each run's END, never its start. run-back counts backwards,
+       ;; so a day whose PREDECESSOR is absent returns 1 however long the run ahead
+       ;; of it is — that selector capped every streak at 1. A day whose SUCCESSOR
+       ;; is absent ends exactly one run, so each run is still measured once and the
+       ;; whole sweep stays linear.
+       :longest (transduce
+                  (comp (remove #(contains? dayset (.plusDays ^java.time.LocalDate % 1)))
+                    (map run-back))
+                  max 0 dayset)})
+    (catch Exception e
+      (tel/error! {:id ::kg-review-streaks} e)
+      {:error "Streaks are unavailable right now."})))
 
 (defn review-due-count
   "How many items the next Review sitting would draw — the dashboard's due tile.
@@ -9978,21 +10071,38 @@
    cannot rewrite the record, while the detail reads the live item by id. A nil
    :prompt marks a row written before the snapshot column existed — \"not
    recorded\", which the UI must not present as \"unchanged\".
+
+   `day` (ISO date string) scopes the log to one calendar day — the review-day
+   detail. One fn rather than two: the row shape and the review-row-prompt mapping
+   are identical, and a parallel query would be a duplicate free to drift.
+   `limit` still applies, but a day cannot plausibly exceed it.
    Post: ≤ `limit` rows {:id :question_id :flashcard_id :ord :prompt :question_text
-         :verdict :rating :grade_source :reviewed_at}, newest first."
-  [user-id limit]
-  (into []
-    (map (fn [r] (assoc r :prompt (review-row-prompt r))))
-    (jdbc/execute! ds
-      ["SELECT r.id, r.question_id, r.flashcard_id, r.ord, r.question_text,
-               r.verdict, r.rating, r.grade_source,
-               to_char(r.reviewed_at, 'YYYY-MM-DD HH24:MI') AS reviewed_at
-        FROM kg_reviews r
-        WHERE r.user_id = ?
-        ORDER BY r.reviewed_at DESC, r.id DESC
-        LIMIT ?"
-       user-id limit]
-      {:builder-fn rs/as-unqualified-maps})))
+         :verdict :rating :grade_source :duration_ms :reviewed_at}, newest first;
+         scoped to `day` when given."
+  ([user-id limit] (fsrs-review-log user-id limit nil))
+  ([user-id limit day]
+   (into []
+     (map (fn [r] (assoc r :prompt (review-row-prompt r))))
+     (jdbc/execute! ds
+       (into [(str "SELECT r.id, r.question_id, r.flashcard_id, r.ord, r.question_text,
+                           r.verdict, r.rating, r.grade_source, r.duration_ms,
+                           to_char(r.reviewed_at, 'YYYY-MM-DD HH24:MI') AS reviewed_at
+                    FROM kg_reviews r
+                    WHERE r.user_id = ?"
+               ;; Half-open range, NEVER reviewed_at::date = ?::date. The cast form
+               ;; is not sargable, so idx_kg_reviews_user_time can serve only the
+               ;; user_id half and the LIMIT cannot stop at the day boundary —
+               ;; opening a two-year-old day walks every newer row of that user's
+               ;; history. reviewed_at is TIMESTAMPTZ and the bounds are dates, so
+               ;; both sides resolve through the same session TimeZone the cast used
+               ;; and the two forms select exactly the same rows.
+               (when day " AND r.reviewed_at >= ?::date AND r.reviewed_at < ?::date + 1")
+               " ORDER BY r.reviewed_at DESC, r.id DESC
+                 LIMIT ?")]
+         ;; Parameter order follows the ? order above: the day appears TWICE, once
+         ;; per bound, and sits between the two constants rather than at the end.
+         (if day [user-id day day limit] [user-id limit]))
+       {:builder-fn rs/as-unqualified-maps}))))
 
 (defn kg-review-detail
   "One review as the answer view needs it: what was answered, how it was graded, the
@@ -10044,6 +10154,159 @@
      user-id limit]
     {:builder-fn rs/as-unqualified-maps}))
 
+;; ── Per-item lifetime stats ────────────────────────────────────────────────
+;; One quiz item's whole scheduling record: what it is, where it came from, its
+;; current memory state, and every review of it. The two arms return the SAME map,
+;; because a question and a card deletion differ in how they are asked, not in how
+;; they are scheduled — freememo.quiz-item-stats renders one panel for both.
+;;
+;; Every instant is returned TWICE: a to_char label for display and an epoch for
+;; arithmetic. The forgetting curve needs real deltas and freememo.fsrs is .cljc, so
+;; the curve is computed on the client from the epochs rather than as a point series
+;; built here and shipped.
+
+(def ^:private item-review-sql
+  ;; `id` is here to be a stable diff key: at_epoch is truncated to the second, and
+  ;; three learning-step reviews of one item inside one second is ordinary.
+  "SELECT id,
+          to_char(reviewed_at, 'YYYY-MM-DD HH24:MI') AS reviewed_at,
+          EXTRACT(EPOCH FROM reviewed_at)::bigint     AS at_epoch,
+          rating, state_before, elapsed_days, scheduled_days,
+          stability_after, difficulty_after, duration_ms, grade_source
+   FROM kg_reviews
+   WHERE user_id = ? AND ")
+
+(defn- item-stats-shape
+  "Assemble the arms' common return from a schedule row and its reviews.
+   Pre:  `sched` carries :state :stability :difficulty :reps :lapses :due
+         :due_epoch :last_review :days_since, all nilable — an item never reviewed
+         has no schedule row at all and passes nil.
+   Post: the map quiz-item-stats documents."
+  [base sched reviews]
+  (assoc base
+    :schedule sched
+    :reviews (vec reviews)))
+
+(defn- question-item-stats [user-id question-id]
+  (when-let [q (jdbc/execute-one! ds
+                 ["SELECT q.id, q.kind, q.question,
+                          to_char(q.created_at, 'YYYY-MM-DD') AS added,
+                          q.fsrs_state AS state, q.fsrs_stability AS stability,
+                          q.fsrs_difficulty AS difficulty, q.fsrs_reps AS reps,
+                          q.fsrs_lapses AS lapses,
+                          to_char(q.fsrs_due, 'YYYY-MM-DD') AS due,
+                          EXTRACT(EPOCH FROM q.fsrs_due)::bigint AS due_epoch,
+                          -- ::float8, not the bare division: EXTRACT yields
+                          -- numeric, which reaches the client as a BigDecimal that
+                          -- fsrs/retrievability cannot multiply.
+                          (EXTRACT(EPOCH FROM (now() - q.fsrs_last_review))/86400.0)::float8
+                            AS days_since
+                   FROM kg_questions q
+                   WHERE q.id = ? AND q.user_id = ?"
+                  question-id user-id]
+                 {:builder-fn rs/as-unqualified-maps})]
+    (item-stats-shape
+      {:item-kind :question
+       :item-label (str "Question " (:id q))
+       :prompt (:question q)
+       :card-kind (:kind q)
+       :added (:added q)
+       ;; A question's document is where its facts were distilled from, so it can
+       ;; legitimately be several — the inverse walk of the question generator.
+       :sources (mapv :title
+                  (jdbc/execute! ds
+                    ["SELECT DISTINCT t.title
+                      FROM kg_question_facts qf
+                      JOIN kg_facts f ON f.id = qf.fact_id
+                      JOIN topics t ON t.id = f.graph_topic_id
+                      WHERE qf.question_id = ?
+                      ORDER BY t.title" question-id]
+                    {:builder-fn rs/as-unqualified-maps}))}
+      (select-keys q [:state :stability :difficulty :reps :lapses :due :due_epoch
+                      :days_since])
+      (jdbc/execute! ds
+        [(str item-review-sql "question_id = ? ORDER BY reviewed_at ASC")
+         user-id question-id]
+        {:builder-fn rs/as-unqualified-maps}))))
+
+(defn- card-item-stats [user-id card-id ord]
+  (when-let [c (jdbc/execute-one! ds
+                 ["SELECT f.id, f.kind,
+                          to_char(f.created_at, 'YYYY-MM-DD') AS added,
+                          root.title AS doc_title
+                   FROM flashcards f
+                   JOIN topics root ON root.id = f.root_topic_id
+                   WHERE f.id = ? AND root.user_id = ?"
+                  card-id user-id]
+                 {:builder-fn rs/as-unqualified-maps})]
+    (item-stats-shape
+      {:item-kind :card
+       :item-label (str "Card " card-id (when (pos? (long ord)) (str " · c" ord)))
+       ;; nil when the deletion has been edited away since it was last reviewed —
+       ;; the history stays, the prompt is gone.
+       :prompt (:prompt (get-card-item user-id card-id ord))
+       :card-kind (:kind c)
+       :added (:added c)
+       :sources [(:doc_title c)]}
+      ;; ABSENT means never introduced — card_schedules rows are created lazily on
+      ;; first review (load-card-memory!), so nil here is normal, not an error.
+      (jdbc/execute-one! ds
+        ["SELECT state, stability, difficulty, reps, lapses,
+                 to_char(due, 'YYYY-MM-DD') AS due,
+                 EXTRACT(EPOCH FROM due)::bigint AS due_epoch,
+                 -- ::float8 — see question-item-stats.
+                 (EXTRACT(EPOCH FROM (now() - last_review))/86400.0)::float8 AS days_since
+          FROM card_schedules WHERE flashcard_id = ? AND ord = ?"
+         card-id ord]
+        {:builder-fn rs/as-unqualified-maps})
+      (jdbc/execute! ds
+        [(str item-review-sql "flashcard_id = ? AND ord = ? ORDER BY reviewed_at ASC")
+         user-id card-id ord]
+        {:builder-fn rs/as-unqualified-maps}))))
+
+(defn card-quiz-ords
+  "The live quiz-item ords of one card, in ascending order.
+
+   A card row in the Library is ONE flashcard but can be several quiz items, and
+   only this layer knows which: the kind restriction and the live-ord rule both
+   live here. A caller therefore never parses cloze text to decide whether to offer
+   a picker — it asks.
+   Post: [] when the card is not this user's, is not basic/cloze (occlusion, score
+         and overlapping yield no quiz items — card-quiz-where), or has no live
+         deletion left; [0] for a basic card; the live cloze ords otherwise."
+  [user-id card-id]
+  (if-let [c (jdbc/execute-one! ds
+               [(str "SELECT f.kind, f.cloze FROM flashcards f
+                      JOIN topics root ON root.id = f.root_topic_id
+                      WHERE f.id = ? AND root.user_id = ? AND " (card-quiz-where "f"))
+                card-id user-id]
+               {:builder-fn rs/as-unqualified-maps})]
+    (if (= "basic" (:kind c)) [0] (vec (sort (cloze/ords (:cloze c)))))
+    []))
+
+(defn quiz-item-stats
+  "One quiz item's lifetime record — the stats panel's whole payload.
+
+   `item-ref` is [:question id] or [:card flashcard-id ord], the same shape the
+   review queue and the review log speak. Ownership is enforced in SQL on both arms
+   (kg_questions.user_id; flashcards → topics.root.user_id), so an id that is not
+   this user's returns nil and reads nothing further.
+
+   Pre:  a card ref names a basic or cloze card — those are the only kinds that
+         yield quiz items (card-quiz-where), so the caller must not offer this for
+         an occlusion, score or overlapping card.
+   Post: nil when not found or not owned, else
+         {:item-kind :item-label :prompt :card-kind :added :sources [str]
+          :schedule {…}|nil :reviews [{…}]}.
+         :schedule nil = never introduced. :reviews is OLDEST FIRST, because the
+         forgetting curve reads it as a time series; the panel's table reverses it."
+  [user-id item-ref]
+  (let [[item-kind a b] item-ref]
+    (case item-kind
+      :question (question-item-stats user-id a)
+      :card (card-item-stats user-id a (long b))
+      nil)))
+
 (defn kg-fact-alternates
   "Approved facts that share a predicate+object or subject+predicate with any
    of `fact-ids` (excluding them) — the grader's 'also true' context, so an
@@ -10085,21 +10348,90 @@
      session-id user-id]
     {:builder-fn rs/as-unqualified-maps}))
 
-(defn list-kg-sessions
-  "Finished sessions, newest first, with verdict tallies — the history list.
-   Post: [{:id :kind :total :started :correct :partial :incorrect}]."
+(def quiz-history-limit
+  "Rows one history payload carries. The list is windowed, so this bounds the wire
+   payload and nothing else — deliberately far above any plausible history, unlike
+   the 100-sitting cap it replaces, which a daily user hit inside four months."
+  500)
+
+(defn list-quiz-history
+  "The Quiz history list: finished quiz/exam sittings AND Review days, interleaved.
+
+   A Review sitting is persisted nowhere — the FSRS flow writes no kg_sessions row
+   — so its unit here is the CALENDAR DAY of kg_reviews. That is a real boundary
+   rather than a guessed one, and it is how Anki reports too. A day sorts by its
+   LAST review, so a day and a sitting on the same date interleave by clock rather
+   than the day always leading.
+
+   The two shapes share a row and each keeps its own column names, NULL where the
+   column does not apply — `:kind` is what a reader dispatches on. The score itself
+   is NOT computed here: quiz-dashboard/session-score and /retention own it, and
+   duplicating either in SQL would give the same number two definitions.
+   Post: ≤ quiz-history-limit rows, newest first,
+         {:kind \"quiz\"|\"exam\"|\"review\" :key str :at_label str
+          :total :correct :partial :incorrect   — sittings only, else NULL
+          :reviewed :again}                     — review days only, else NULL.
+         :key is the session id as a string, or the ISO date."
   [user-id]
   (jdbc/execute! ds
-    ["SELECT s.id, s.kind, cardinality(s.question_ids) AS total,
-             to_char(s.started_at, 'YYYY-MM-DD HH24:MI') AS started,
-             COUNT(a.verdict) FILTER (WHERE a.verdict = 'correct')   AS correct,
-             COUNT(a.verdict) FILTER (WHERE a.verdict = 'partial')   AS partial,
-             COUNT(a.verdict) FILTER (WHERE a.verdict = 'incorrect') AS incorrect
-      FROM kg_sessions s
-      LEFT JOIN kg_answers a ON a.session_id = s.id
-      WHERE s.user_id = ? AND s.finished_at IS NOT NULL
-      GROUP BY s.id ORDER BY s.id DESC LIMIT 100"
-     user-id]
+    ["WITH sittings AS (
+        SELECT s.kind, s.id::text AS key, s.started_at AS at,
+               to_char(s.started_at, 'YYYY-MM-DD HH24:MI') AS at_label,
+               cardinality(s.question_ids) AS total,
+               COUNT(a.verdict) FILTER (WHERE a.verdict = 'correct')   AS correct,
+               COUNT(a.verdict) FILTER (WHERE a.verdict = 'partial')   AS partial,
+               COUNT(a.verdict) FILTER (WHERE a.verdict = 'incorrect') AS incorrect
+        FROM kg_sessions s
+        LEFT JOIN kg_answers a ON a.session_id = s.id
+        WHERE s.user_id = ? AND s.finished_at IS NOT NULL
+        GROUP BY s.id
+      ), days AS (
+        SELECT MAX(r.reviewed_at) AS at,
+               to_char(r.reviewed_at::date, 'YYYY-MM-DD') AS key,
+               COUNT(*)                             AS reviewed,
+               COUNT(*) FILTER (WHERE r.rating = 1) AS again
+        FROM kg_reviews r
+        WHERE r.user_id = ?
+        GROUP BY r.reviewed_at::date
+      )
+      SELECT kind, key, at, at_label, total, correct, partial, incorrect,
+             NULL::bigint AS reviewed, NULL::bigint AS again
+      FROM sittings
+      UNION ALL
+      SELECT 'review', key, at, key, NULL::int, NULL::bigint, NULL::bigint,
+             NULL::bigint, reviewed, again
+      FROM days
+      ORDER BY at DESC
+      LIMIT ?"
+     user-id user-id quiz-history-limit]
+    {:builder-fn rs/as-unqualified-maps}))
+
+(defn kg-review-day-summary
+  "One Review day's totals — the header above that day's review list.
+
+   :duration_ms sums only the rows that carry one, and :timed says how many did, so
+   the caller can state its own denominator. NULL in that column means NOT RECORDED
+   (every row predating it, and any turn whose measurement failed), which is not
+   zero and must not be averaged as zero.
+   Pre:  `day` is an ISO date string.
+   Post: {:reviewed n :new n :again n :hard n :good n :easy n :timed n
+          :duration_ms n|nil} — :reviewed 0 for a day with no reviews."
+  [user-id day]
+  (jdbc/execute-one! ds
+    ;; Half-open range, for the reason fsrs-review-log states: reviewed_at::date =
+    ;; ?::date would aggregate one day by scanning the user's entire history.
+    ["SELECT COUNT(*)                                  AS reviewed,
+             COUNT(*) FILTER (WHERE reps_before = 0)   AS new,
+             COUNT(*) FILTER (WHERE rating = 1)        AS again,
+             COUNT(*) FILTER (WHERE rating = 2)        AS hard,
+             COUNT(*) FILTER (WHERE rating = 3)        AS good,
+             COUNT(*) FILTER (WHERE rating = 4)        AS easy,
+             COUNT(duration_ms)                        AS timed,
+             SUM(duration_ms)                          AS duration_ms
+      FROM kg_reviews
+      WHERE user_id = ?
+        AND reviewed_at >= ?::date AND reviewed_at < ?::date + 1"
+     user-id day day]
     {:builder-fn rs/as-unqualified-maps}))
 
 (defn kg-session-detail

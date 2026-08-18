@@ -9,6 +9,7 @@
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
    [clojure.string :as str]
+   [freememo.modal-shell :as modal-shell]
    #?(:clj [freememo.db :as db])))
 
 ;; ---------------------------------------------------------------------------
@@ -164,7 +165,15 @@
 
 (e/defn EntityCardPopover
   "Concept card: the clicked entity's label, aliases, and fact neighborhood.
-   Fact rows link onward — the popover walks the graph."
+   Fact rows link onward — the popover walks the graph.
+
+   It mounts INSIDE the turn container that carries
+   modal-shell/mod-enter-click-primary!, so it must contain its keys as well as its
+   clicks. Without that, Cmd/Ctrl+Enter while the card is open resolves the turn's
+   primary button and advances the question behind it, leaving the reader looking
+   at a concept card for an item they have left. Taking focus is the other half:
+   the entity chip that opened this sits outside the popover but inside the same
+   container, so the keydown would never pass through here to be stopped."
   [user-id !entity-card entity-card]
   (e/client
     (when entity-card
@@ -177,13 +186,19 @@
           (dom/On "click" (fn [_] (reset! !entity-card nil)) nil)
           (dom/div
             (dom/props {:role "dialog" :aria-label (str "About " (:label card))
+                        :tabindex "-1"
                         :style {:background "var(--color-bg-card)"
                                 :color "var(--color-text-primary)"
                                 :border-radius "8px" :padding "16px 20px"
                                 :max-width "600px" :width "90%"
                                 :max-height "70vh" :overflow-y "auto"
                                 :box-shadow "0 8px 32px rgba(0,0,0,0.25)"}})
+            ;; tabindex="-1" + rAF focus, the pattern CLAUDE.md's modal-focus table
+            ;; prescribes for a non-Forms5 node: :autofocus never fires on a
+            ;; dynamically inserted element.
+            (e/snapshot (modal-shell/focus-on-mount! dom/node))
             (dom/On "click" (fn [e] (.stopPropagation e) nil) nil)
+            (dom/On "keydown" (fn [e] (.stopPropagation e) nil) nil)
             (dom/h3 (dom/props {:dir "auto" :style {:font-size "16px" :margin "0 0 4px"}})
               (dom/text (:label card)))
             ;; The "Also: " prefix shares this paragraph's bidi run, so dir="auto"

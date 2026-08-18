@@ -29,11 +29,13 @@
    [clojure.string :as str]
    [taoensso.telemere :as tel]
    [freememo.command-bus :as bus]
+   [freememo.modal-shell :as modal-shell]
    [freememo.navigation :as nav]
    [freememo.question-curation :as curate]
    [freememo.quiz-card-turn :as card-turn]
    [freememo.quiz-dashboard :as qd]
    [freememo.quiz-feedback :as fb]
+   [freememo.turn-timing :as timing]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.kg-grade :as grade])
    #?(:clj [freememo.settings :as settings])
@@ -118,9 +120,10 @@
 #?(:clj
    (defn review-answer!*
      "Grade one Review answer and advance its FSRS schedule (no session row).
+      Pre:  `duration-ms` is the turn's client measurement, or nil (untimed).
       Post: {:result <grade map> :schedule {:due-today? …}|nil}."
-     [user-id question-id answer]
-     (grade/review-question! user-id question-id answer)))
+     [user-id question-id answer duration-ms]
+     (grade/review-question! user-id question-id answer duration-ms)))
 
 ;; ---------------------------------------------------------------------------
 ;; Views
@@ -291,6 +294,8 @@
               (case counts ; wait on the value — do would race the transition
                 (reset! !summary {:counts counts :total total}))))
           (dom/div
+            ;; Cmd/Ctrl+Enter → Submit, then Next question / Finish. See QuestionTurn.
+            (dom/On "keydown" modal-shell/mod-enter-click-primary! nil)
             (dom/div
               (dom/props {:style {:display "flex" :justify-content "space-between"
                                   :align-items "center"}})
@@ -318,6 +323,7 @@
                                      :class "input" :rows 4 :dir "auto"
                                      :placeholder "Answer in your own words…"
                                      :aria-label "Your answer"
+                                     :autofocus true
                                      :style {:width "100%" :resize "vertical"})
                                    (forms/Button! [::submit]
                                      :class "btn btn-primary" :style {:margin-top "8px"}
@@ -346,6 +352,8 @@
                 (dom/button
                   (dom/props {:class "btn btn-primary" :style {:margin-top "12px"}})
                   (dom/text (if (< (inc idx) total) "Next question" "Finish"))
+                  ;; Focus on mount — see QuestionTurn's Next.
+                  (e/snapshot (modal-shell/focus-on-mount! dom/node))
                   (if (< (inc idx) total)
                     (dom/On "click" (fn [_]
                                       (reset! !feedback nil)
@@ -381,7 +389,9 @@
 ;; Exam sitting — timed, no feedback until submitted
 ;; ---------------------------------------------------------------------------
 
-(defn- now-ms [] #?(:cljs (js/Date.now) :clj 0))
+;; The exam clock reads timing/start-ms — the same "epoch ms on the client, 0 on
+;; the server" mark a Review turn takes. A private now-ms sat here saying exactly
+;; that; two names for one reading is how the two drift.
 
 (defn fmt-mmss
   "Seconds → m:ss."
@@ -406,8 +416,8 @@
           total (count qids)
           !idx (atom (min answered (dec total))) idx (e/watch !idx)
           !draft (atom "") draft (e/watch !draft)
-          !now (atom (now-ms)) now (e/watch !now)
-          deadline (+ (now-ms) (* 1000 (max 0 (- (or limit 0) (or elapsed 0)))))
+          !now (atom (timing/start-ms)) now (e/watch !now)
+          deadline (+ (timing/start-ms) (* 1000 (max 0 (- (or limit 0) (or elapsed 0)))))
           ;; e/on-unmount + let must live on BOTH peers (identical frame slots);
           ;; guarding only the JS interop keeps CLJ/CLJS frame counts in lockstep.
           ;; Wrapping e/on-unmount itself in #?(:cljs …) diverged the frames and
@@ -465,6 +475,10 @@
                 ;; instead of leaving the user stuck on "Grading…" forever.
                 (reset! !submit-req nil))))
           (dom/div
+            ;; Cmd/Ctrl+Enter → Save & next, and on the last question Save & submit
+            ;; exam. That submits the paper with no confirmation, deliberately: the
+            ;; chord was typed and the button says what it does.
+            (dom/On "keydown" modal-shell/mod-enter-click-primary! nil)
             (dom/div
               (dom/props {:style {:display "flex" :justify-content "space-between"
                                   :align-items "center"}})
@@ -497,6 +511,7 @@
                                  :class "input" :rows 4 :dir "auto"
                                  :placeholder "Answer in your own words — graded when you submit the exam"
                                  :aria-label "Your answer"
+                                 :autofocus true
                                  :style {:width "100%" :resize "vertical"})
                                (forms/Button! [::save]
                                  :class "btn btn-primary" :style {:margin-top "8px"}
@@ -556,6 +571,10 @@
    !entity-card entity-card !editing navigate-source! advance!]
   (e/client
     (let [kg-bump (e/server (e/watch (us/get-atom user-id :kg-mutations)))
+          ;; e/snapshot, so a re-render — a flag toggle bumping kg-bump, say —
+          ;; cannot restart the clock mid-turn. ReviewFlow's keyed frame remounts
+          ;; this component per item, which is what makes the mark per-turn.
+          started-at (e/snapshot (timing/start-ms))
           qdata (e/server (e/Offload #(quiz-question* kg-bump user-id qid)))
           ;; Unanswered: no tally, no return.
           skip! (fn [] (advance! false false))
@@ -563,6 +582,11 @@
           ;; must never be re-enqueued or it would reappear immediately.
           leave-suspended! (fn [] (advance! true false))]
       (dom/div
+        ;; Cmd/Ctrl+Enter clicks whichever button is primary right now — Submit
+        ;; before the grade, Next after it — so one handler serves both states with
+        ;; no branch. It only sees the key while focus is inside this div, which is
+        ;; why the textarea autofocuses below and the Next button focuses on mount.
+        (dom/On "keydown" modal-shell/mod-enter-click-primary! nil)
         (dom/h3 (dom/props {:dir "auto" :style {:font-size "16px" :margin "14px 0"}})
           (dom/text (str (:question qdata))))
         ;; Pre-answer a suspend is a skip; post-answer the grade already counted,
@@ -581,6 +605,7 @@
                                  :class "input" :rows 4 :dir "auto"
                                  :placeholder "Answer in your own words…"
                                  :aria-label "Your answer"
+                                 :autofocus true
                                  :style {:width "100%" :resize "vertical"})
                                (forms/Button! [::submit]
                                  :class "btn btn-primary" :style {:margin-top "8px"}
@@ -592,8 +617,13 @@
                   (if (str/blank? answer)
                     (t) ; defence in depth — the button is disabled for this
                     (do (reset! !grading? true)
-                      (let [res (e/server
-                                  (e/Offload #(review-answer!* user-id qid answer)))]
+                      ;; Read the clock in CLIENT scope and pass the number. Naming
+                      ;; `started-at` inside the server-sited closure would make it a
+                      ;; value Electric has to transfer, which is the unserializable
+                      ;; crash with an empty server log (CLAUDE.md).
+                      (let [ms (timing/elapsed-ms started-at)
+                            res (e/server
+                                  (e/Offload #(review-answer!* user-id qid answer ms)))]
                         (case res ; wait on the value — do would race the token
                           (do (reset! !grading? false)
                             (when (:success (:result res))
@@ -607,6 +637,10 @@
             (dom/button
               (dom/props {:class "btn btn-primary" :style {:margin-top "12px"}})
               (dom/text "Next")
+              ;; Focus on mount so the chord's keydown reaches the turn container,
+              ;; and so plain Enter advances too — the answer box that had focus is
+              ;; gone by the time this mounts.
+              (e/snapshot (modal-shell/focus-on-mount! dom/node))
               (dom/On "click"
                 (fn [_]
                   (advance! true (boolean (get-in feedback [:schedule :due-today?]))))
@@ -700,7 +734,7 @@
 ;; don't compile to client-only reactive nodes the server lacks. An inline
 ;; #?(:cljs (first (swap-vals! …)) :clj nil) in QuizPage's let diverged the
 ;; CLJ/CLJS frame slot counts (client > server → frame_signal AIOOBE on /quiz).
-;; Same platform-split-behind-a-defn shape as now-ms.
+;; Same platform-split-behind-a-defn shape as freememo.turn-timing/start-ms.
 #?(:cljs
    (defn consume-pending-preset! []
      (first (swap-vals! !pending-preset (constantly nil)))))

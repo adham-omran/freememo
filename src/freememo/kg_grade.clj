@@ -203,10 +203,12 @@
    A failed grade writes nothing at all, so the typed answer is not retained; unlike
    the session flows there is no pre-grade persist to fall back on, and the toast
    pushed by grade-question is the only recovery path.
+   Pre:  `duration-ms` is the client's turn-mount-to-submit measurement, or nil when
+         it is unavailable. It is untrusted — db/apply-fsrs-review! bounds it.
    Post: {:result <grade-question map> :schedule <apply-fsrs-review! map|nil>};
          :schedule is nil when grading failed (nothing written) OR when scheduling
          failed (grade shown, no review row, schedule untouched)."
-  [user-id question-id user-answer]
+  [user-id question-id user-answer duration-ms]
   (let [res (grade-question user-id question-id user-answer)]
     (if-not (:success res)
       {:result res :schedule nil}
@@ -217,6 +219,7 @@
                     :explanation (:explanation res)
                     :user-answer user-answer
                     :missed-fact-ids (:missed-fact-ids res)
+                    :duration-ms duration-ms
                     :grade-source "ai"})})))
 
 (defn review-card!
@@ -225,8 +228,9 @@
    flow treats the two item types identically once it has the result.
    Pre:  the card-quiz LLM setting is on (settings/card-quiz-llm-grading?) — the
          caller owns that check, since it also decides which UI arm to render.
+   Pre:  `duration-ms` as in review-question!.
    Post: {:result <grade-card map> :schedule <apply-fsrs-review! map|nil>}."
-  [user-id card-id ord user-answer]
+  [user-id card-id ord user-answer duration-ms]
   (let [res (grade-card user-id card-id ord user-answer)]
     (if-not (:success res)
       {:result res :schedule nil}
@@ -236,6 +240,7 @@
                    {:verdict (:verdict res)
                     :explanation (:explanation res)
                     :user-answer user-answer
+                    :duration-ms duration-ms
                     :grade-source "ai"})})))
 
 (defn rate-card!
@@ -244,9 +249,12 @@
    LLM-graded one and from a row written before the column existed.
    Pre:  rating ∈ #{1 2 3 4} (the caller renders exactly four buttons — any other
          value is a caller bug and is refused here rather than scheduled).
+   Pre:  `duration-ms` spans mount to RATING, so it includes the reveal — the same
+         interval Anki records for a card (question shown → answered), not the
+         post-reveal judging time alone.
    Post: {:result {:success true :rating n} :schedule <map|nil>}, or
          {:result {:success false …} :schedule nil} for a rating outside 1..4."
-  [user-id card-id ord rating]
+  [user-id card-id ord rating duration-ms]
   (if-not (#{1 2 3 4} rating)
     (do (tel/error! {:id ::rate-card-bad-rating
                      :data {:user-id user-id :card-id card-id :rating rating}}
@@ -254,7 +262,7 @@
       {:result {:success false :error "Invalid rating"} :schedule nil})
     {:result {:success true :rating rating}
      :schedule (schedule-review! user-id [:card card-id ord] rating
-                 {:grade-source "self"})}))
+                 {:grade-source "self" :duration-ms duration-ms})}))
 
 (defn grade-exam-session!
   "Grade every saved-but-ungraded answer of an exam sitting, then close the

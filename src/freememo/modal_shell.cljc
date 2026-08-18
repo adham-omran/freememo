@@ -153,6 +153,32 @@
          (.requestSubmit form)))))
 #?(:clj (defn mod-enter-request-submit! [_e] nil))
 
+;; Cmd/Ctrl+Enter → click the enclosing container's primary button. Third sibling
+;; to the two above, and the one a surface built from Forms5 `Button!` needs:
+;; `Button!` hands back no node to capture (so `!primary-btn` has nothing to hold)
+;; and mounts no `<form>` (so there is nothing to requestSubmit). It finds the
+;; action by class instead.
+;;
+;; `:not([disabled])` is load-bearing, not defensive: Forms5 disables a button
+;; while its command is in flight, so a second chord during grading finds nothing
+;; and the keydown falls through to the browser rather than queueing a second
+;; submit. Whichever button is primary at this moment IS the action — that is what
+;; lets one handler serve both a turn's answer state (Submit) and its graded state
+;; (Next) with no branch of its own.
+;;
+;; The listener sees a keydown only if focus is INSIDE the container, so a caller
+;; owes its primary surface focus on mount — an autofocused field, or
+;; focus-on-mount! on the button. Top-level platform-split defn for the same
+;; capture-symmetry reason as mod-enter-submit!.
+#?(:cljs
+   (defn mod-enter-click-primary! [e]
+     (when (and (= (.-key e) "Enter") (or (.-metaKey e) (.-ctrlKey e)))
+       (when-let [btn (.querySelector (.-currentTarget e)
+                        "button.btn-primary:not([disabled])")]
+         (.preventDefault e)
+         (.click btn)))))
+#?(:clj (defn mod-enter-click-primary! [_e] nil))
+
 ;; Pointer-capture drag of the modal by its <h3> title bar. Call from a
 ;; pointerdown handler on the modal's content container (the element whose
 ;; position gets flipped to "fixed" while dragging). Top-level defn for the

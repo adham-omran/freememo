@@ -11,6 +11,7 @@
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
+   [freememo.quiz-item-stats :as stats]
    [freememo.tape-table :refer [TapeTable]]
    [hyperfiddle.router5 :as r]
    [clojure.string :as str]
@@ -918,7 +919,7 @@
             (case result
               (t))))))))
 
-(e/defn QuestionRow [user-id q i !editing]
+(e/defn QuestionRow [user-id q i !editing !stats]
   (e/client
     (let [{:keys [id kind question reference_answer fact_count flagged suspended]} q
           open! (fn [_] (reset! !editing q))]  ; click a row cell → open the editor modal
@@ -952,7 +953,10 @@
         (dom/td (dom/props {:class "tape-cell-toggles"})
           (curate/FlagToggle user-id id flagged)
           (curate/SuspendToggle user-id id suspended))
-        ;; Reject lives in its own non-clickable cell so × never opens the editor.
+        ;; Stats and Reject each live in their own non-clickable cell, so neither
+        ;; opens the editor the rest of the row opens.
+        (dom/td (dom/props {:class "tape-cell-actions"})
+          (stats/StatsOpenerButton !stats {:question id}))
         (dom/td (dom/props {:class "tape-cell-actions"})
           (RejectQuestionButton user-id id))))))
 
@@ -998,8 +1002,12 @@
           ;; inside .tape-table-body td's 10px padding-inline each side = 102px needed.
           ;; At 82px the second toggle was clipped by `.tape-scroll table td`'s
           ;; overflow:hidden rather than widening the cell.
-          grid-cols "minmax(200px,1.4fr) minmax(200px,1.4fr) 90px 55px 104px 60px"
-          !editing (atom nil)]              ; the question map being edited, or nil
+          ;; Stats track = 60px: one .btn-sm icon toggle at 38px inside
+          ;; .tape-table-body td's 10px padding-inline each side, same arithmetic as
+          ;; the State track above.
+          grid-cols "minmax(200px,1.4fr) minmax(200px,1.4fr) 90px 55px 104px 60px 60px"
+          !editing (atom nil)               ; the question map being edited, or nil
+          !stats (atom nil)]                ; {:question id} whose stats are open
       ;; Spinner covers the first offloaded fetch chain (docs → source-id → questions);
       ;; filter changes revalidate in place via the Offload latch, no spinner reflash.
       (loading/WithLatestServerLoading
@@ -1041,7 +1049,7 @@
                 (dom/span (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
                   (dom/text (str item-count " question" (when (not= 1 item-count) "s")
                               " — click a row to edit"))))
-              (TapeTable ["Question" "Answer" "Kind" "Facts" "State" ""] grid-cols item-count
+              (TapeTable ["Question" "Answer" "Kind" "Facts" "State" "" ""] grid-cols item-count
                 [query source-id entity-id flagged? suspended?]
                 (cond
                   flagged? "No flagged questions."
@@ -1051,8 +1059,9 @@
                   :else "No matches.")
                 (e/fn [i]
                   (when-let [q (e/server (nth questions i nil))]
-                    (QuestionRow user-id q i !editing))))
+                    (QuestionRow user-id q i !editing !stats))))
               (curate/QuestionEditorModal user-id !editing)
+              (stats/QuizItemStatsModal user-id !stats)
               (ReflectScopeInUrl navigate! :knowledge-questions route-doc-id source-id))))))))
 
 (e/defn QuestionsView

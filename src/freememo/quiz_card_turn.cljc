@@ -21,7 +21,9 @@
    [hyperfiddle.electric-forms5 :as forms]
    [clojure.string :as str]
    [freememo.math :as math]
+   [freememo.modal-shell :as modal-shell]
    [freememo.quiz-feedback :as fb]
+   [freememo.turn-timing :as timing]
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.kg-grade :as grade])
    #?(:clj [freememo.settings :as settings])
@@ -52,16 +54,18 @@
 #?(:clj
    (defn grade-card-answer!*
      "LLM arm: grade the typed answer and advance the item's schedule.
+      Pre:  `duration-ms` is the turn's client measurement, or nil (untimed).
       Post: {:result <grade map> :schedule {:due-today? …}|nil}."
-     [user-id card-id ord answer]
-     (grade/review-card! user-id card-id ord answer)))
+     [user-id card-id ord answer duration-ms]
+     (grade/review-card! user-id card-id ord answer duration-ms)))
 
 #?(:clj
    (defn rate-card!*
      "Self arm: record the learner's own 1-4 rating and advance the schedule.
+      Pre:  `duration-ms` spans mount to rating, so it includes the reveal.
       Post: {:result {:success bool} :schedule {:due-today? …}|nil}."
-     [user-id card-id ord rating]
-     (grade/rate-card! user-id card-id ord rating)))
+     [user-id card-id ord rating duration-ms]
+     (grade/rate-card! user-id card-id ord rating duration-ms)))
 
 ;; ---------------------------------------------------------------------------
 ;; Views
@@ -73,6 +77,26 @@
 (def ^:private ratings
   "The four FSRS ratings, in the order Anki shows them. `Again` is the lapse."
   [[1 "Again"] [2 "Hard"] [3 "Good"] [4 "Easy"]])
+
+;; Bare 1-4 press the matching rating, as Anki does. They bind ONLY on the revealed
+;; self arm, and that is what makes an unmodified key safe: that subtree holds no
+;; text input, so nothing there can be typing a digit. A modifier is refused so the
+;; chord above and browser shortcuts keep their meaning, and the click goes through
+;; the rendered button rather than around it — the button owns the token, the busy
+;; latch and the advance, and a second path to the same effect would drift.
+;;
+;; Top-level platform-split defn, never an inline #?(:cljs) in an e/defn body: a
+;; handler must capture the same bindings on both peers or the frame slot counts
+;; diverge and the server crashes on mount (CLAUDE.md, modal-shell precedent).
+#?(:cljs
+   (defn rating-key-press! [e]
+     (when-not (or (.-metaKey e) (.-ctrlKey e) (.-altKey e) (.-shiftKey e))
+       (when (#{"1" "2" "3" "4"} (.-key e))
+         (when-let [btn (.querySelector (.-currentTarget e)
+                          (str "button[data-rating='" (.-key e) "']:not([disabled])"))]
+           (.preventDefault e)
+           (.click btn))))))
+#?(:clj (defn rating-key-press! [_e] nil))
 
 (e/defn CardHtml
   "One card field's HTML. Math is typeset by math/set-html!, never by a bare
@@ -124,7 +148,7 @@
    Forms5 Input! + Button! via e/amb — never `do` here, it would swallow whichever
    token is not last and hang that control. Field edits mirror into `!draft` and ack
    at once (no server round-trip per keystroke); Submit grades on the server."
-  [user-id card-id ord !draft draft !grading? grading? !feedback]
+  [user-id card-id ord !draft draft !grading? grading? !feedback started-at]
   (e/client
     (dom/div
       (e/for [[t edit] (e/amb
@@ -132,6 +156,7 @@
                            :class "input" :rows 4 :dir "auto"
                            :placeholder "Answer in your own words…"
                            :aria-label "Your answer"
+                           :autofocus true
                            :style {:width "100%" :resize "vertical"})
                          (forms/Button! [::submit]
                            :class "btn btn-primary" :style {:margin-top "8px"}
@@ -143,8 +168,11 @@
             (if (str/blank? answer)
               (t) ; defence in depth — the button is disabled for this
               (do (reset! !grading? true)
-                (let [res (e/server
-                            (e/Offload #(grade-card-answer!* user-id card-id ord answer)))]
+                ;; Client scope: pass the number, never the mark inside the
+                ;; server-sited closure (CLAUDE.md, unserializable capture).
+                (let [ms (timing/elapsed-ms started-at)
+                      res (e/server
+                            (e/Offload #(grade-card-answer!* user-id card-id ord answer ms)))]
                   (case res ; wait on the value — `do` would race the token
                     (do (reset! !grading? false)
                       (when (:success (:result res))
@@ -165,24 +193,27 @@
    `(t)` would tear the frame down mid-flight and the token would never be spent
    (CLAUDE.md, Token Lifecycle). A failed rating advances nothing: the item keeps its
    place and its due date."
-  [user-id card-id ord !rating-busy? rating-busy? advance!]
+  [user-id card-id ord !rating-busy? rating-busy? advance! started-at]
   (e/client
     (dom/div
       (dom/props {:style {:display "flex" :gap "8px" :margin-top "12px"}})
+      ;; data-rating is what rating-key-press! resolves a keystroke through, so the
+      ;; key finds the right button by its meaning rather than by its position.
       (e/for [[t cmd] (e/amb
-                        (forms/Button! [::rate 1] :class "btn" :label "Again"
-                          :disabled rating-busy?)
-                        (forms/Button! [::rate 2] :class "btn" :label "Hard"
-                          :disabled rating-busy?)
-                        (forms/Button! [::rate 3] :class "btn btn-primary" :label "Good"
-                          :disabled rating-busy?)
-                        (forms/Button! [::rate 4] :class "btn" :label "Easy"
-                          :disabled rating-busy?))]
+                        (forms/Button! [::rate 1] :class "btn" :label "Again (1)"
+                          :data-rating "1" :disabled rating-busy?)
+                        (forms/Button! [::rate 2] :class "btn" :label "Hard (2)"
+                          :data-rating "2" :disabled rating-busy?)
+                        (forms/Button! [::rate 3] :class "btn btn-primary" :label "Good (3)"
+                          :data-rating "3" :disabled rating-busy?)
+                        (forms/Button! [::rate 4] :class "btn" :label "Easy (4)"
+                          :data-rating "4" :disabled rating-busy?))]
         ;; Latch before the call so a second rating cannot race the first. The keyed
         ;; frame in ReviewFlow remounts this component per item, which clears it.
         (reset! !rating-busy? true)
         (let [rating (second cmd)
-              res (e/server (e/Offload #(rate-card!* user-id card-id ord rating)))]
+              ms (timing/elapsed-ms started-at)
+              res (e/server (e/Offload #(rate-card!* user-id card-id ord rating ms)))]
           (case res
             (if (:success (:result res))
               (do (e/on-unmount
@@ -195,34 +226,48 @@
   "Self arm: prompt, then Show answer, then the reference answer plus the ratings.
 
    The reveal is browser-local state, so it needs no token — nothing leaves the
-   client until a rating is pressed."
-  [user-id card-id ord answer advance!]
+   client until a rating is pressed. `started-at` is the TURN's mark, not the
+   reveal's: the recorded duration spans the reveal, because revealing is part of
+   answering."
+  [user-id card-id ord answer advance! started-at]
   (e/client
     (let [!revealed? (atom false) revealed? (e/watch !revealed?)
           !rating-busy? (atom false) rating-busy? (e/watch !rating-busy?)]
       (if revealed?
         (dom/div
+          ;; Bare 1-4 rate. The key needs focus INSIDE this div, and the reveal
+          ;; button that had it has just unmounted — so the region takes focus
+          ;; itself, the tabindex="-1" + rAF pattern ModalEscape uses. Cmd/Ctrl+Enter
+          ;; is handled by CardTurn's container above and takes Good, the primary.
+          (dom/props {:tabindex "-1"})
+          (e/snapshot (modal-shell/focus-on-mount! dom/node))
+          (dom/On "keydown" rating-key-press! nil)
           (dom/div (dom/props {:style label-style}) (dom/text "Answer"))
           (CardHtml answer "15px")
-          (RatingBar user-id card-id ord !rating-busy? rating-busy? advance!))
+          (RatingBar user-id card-id ord !rating-busy? rating-busy? advance! started-at))
         (dom/button
           (dom/props {:class "btn btn-primary" :style {:margin-top "12px"}})
           (dom/text "Show answer")
+          ;; Focused on mount so Enter or the chord reveals without a click first.
+          (e/snapshot (modal-shell/focus-on-mount! dom/node))
           (dom/On "click" (fn [_] (reset! !revealed? true)) nil))))))
 
 (e/defn LlmArm
   "LLM arm: the answer box until a grade arrives, then the verdict and Next."
-  [user-id card-id ord !feedback feedback advance!]
+  [user-id card-id ord !feedback feedback advance! started-at]
   (e/client
     (let [!draft (atom "") draft (e/watch !draft)
           !grading? (atom false) grading? (e/watch !grading?)]
       (if (nil? feedback)
-        (AnswerForm user-id card-id ord !draft draft !grading? grading? !feedback)
+        (AnswerForm user-id card-id ord !draft draft !grading? grading? !feedback started-at)
         (dom/div
           (CardFeedback (:result feedback) (:answer feedback))
           (dom/button
             (dom/props {:class "btn btn-primary" :style {:margin-top "12px"}})
             (dom/text "Next")
+            ;; Focus on mount — the answer box that had focus is gone by now, so
+            ;; without this neither Enter nor the chord reaches anything.
+            (e/snapshot (modal-shell/focus-on-mount! dom/node))
             (dom/On "click"
               (fn [_] (advance! (boolean (get-in feedback [:schedule :due-today?]))))
               nil)))))))
@@ -280,6 +325,10 @@
   (e/client
     (let [[_ card-id ord] item-ref
           settings-bump (e/server (e/watch (us/get-atom user-id :settings-refresh)))
+          ;; e/snapshot, so flipping the grading setting mid-turn re-renders the arm
+          ;; without restarting the clock. ReviewFlow's keyed frame remounts this
+          ;; component per item, which is what makes the mark per-turn.
+          started-at (e/snapshot (timing/start-ms))
           item (e/server (e/Offload #(card-turn* settings-bump user-id card-id ord)))]
       (if (nil? item)
         (dom/div
@@ -290,6 +339,10 @@
             (dom/text "Skip")
             (dom/On "click" (fn [_] (skip!)) nil)))
         (dom/div
+          ;; One chord handler for both arms: Cmd/Ctrl+Enter clicks whichever button
+          ;; is primary right now — Submit, then Next on the LLM arm; Show answer,
+          ;; then Good on the self arm. See modal-shell/mod-enter-click-primary!.
+          (dom/On "keydown" modal-shell/mod-enter-click-primary! nil)
           (dom/div
             (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
                                 :margin "14px 0 6px"}})
@@ -301,5 +354,5 @@
               (dom/text (if (:llm-grading? item) "AI graded" "Self rated"))))
           (CardHtml (:prompt item) "16px")
           (if (:llm-grading? item)
-            (LlmArm user-id card-id ord !feedback feedback advance!)
-            (SelfArm user-id card-id ord (:answer item) advance!)))))))
+            (LlmArm user-id card-id ord !feedback feedback advance! started-at)
+            (SelfArm user-id card-id ord (:answer item) advance! started-at)))))))

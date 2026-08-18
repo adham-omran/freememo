@@ -310,6 +310,134 @@ html, body {
    Non-desktop override lives in the (max-width: 1024px) block below. */
 .card-modal-inner { width: 60vw; }
 
+/* ── Quiz item statistics (freememo.quiz-item-stats) ──────────────
+   One item's lifetime record: the scheduling fields, its review history, and the
+   forgetting curve. Sized to the curve's 620px viewBox plus the panel padding, so
+   the chart is never the thing that decides the modal's width. */
+.item-stats-modal {
+    width: 680px;
+    max-width: 92vw;
+    max-height: 86vh;
+    overflow-y: auto;
+}
+.item-stats-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+.item-stats-prompt {
+    font-size: 14px;
+    line-height: 1.5;
+    margin: 0 0 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--color-border);
+}
+/* Two columns of label/value pairs. A single column wastes the width the curve
+   already claims; three makes the longer source titles wrap every time. */
+.item-stats-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 2px 20px;
+}
+.item-stats-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 13px;
+    padding: 3px 0;
+    border-bottom: 1px solid var(--color-bg-subtle);
+}
+.item-stats-label { color: var(--color-text-secondary); flex-shrink: 0; }
+.item-stats-value {
+    font-weight: 600;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.item-stats-history {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin: 14px 0 4px;
+}
+.item-stats-history th {
+    text-align: left;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--color-border);
+}
+.item-stats-history td {
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--color-bg-subtle);
+    font-variant-numeric: tabular-nums;
+}
+.item-stats-empty {
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    padding: 10px 0;
+}
+
+/* ── Quiz dashboard footer (freememo.quiz-heatmap) ────────────────
+   A year of review activity plus four numbers. FULL-BLEED past the dashboard's
+   760px column: 53 weeks at a legible cell size is about 800px, and shrinking the
+   cells to fit would cost the per-day hover target the grid exists for. The
+   negative margin is capped by max-width so a wide monitor does not stretch it. */
+.quiz-footer {
+    margin: 20px calc((760px - min(100vw - 32px, 860px)) / 2) 8px;
+    max-width: 860px;
+    padding-top: 14px;
+    border-top: 1px solid var(--color-border);
+}
+.quiz-footer-today {
+    font-size: 14px;
+    margin: 0 0 10px;
+    text-align: center;
+}
+/* Column-major: each column is one week, each row one weekday, Monday at the top.
+   The server emits the cells in that order with the leading week padded, so this
+   template is the whole layout. */
+.quiz-heatmap {
+    display: grid;
+    grid-template-rows: repeat(7, 11px);
+    grid-auto-flow: column;
+    grid-auto-columns: 11px;
+    gap: 3px;
+    justify-content: center;
+    overflow-x: auto;
+    padding-bottom: 4px;
+}
+.quiz-heatmap-pad { visibility: hidden; }
+.quiz-heatmap-cell { border-radius: 2px; }
+.quiz-heatmap-open { cursor: pointer; }
+.quiz-heatmap-open:hover { outline: 1px solid var(--color-text-secondary); }
+/* Quartile shades over the user's own active days — see bucket-thresholds. */
+.quiz-heatmap-b0 { background: light-dark(#e5e7eb, #2a3341); }
+.quiz-heatmap-b1 { background: light-dark(#bbf7d0, #14532d); }
+.quiz-heatmap-b2 { background: light-dark(#6ee7a8, #166534); }
+.quiz-heatmap-b3 { background: light-dark(#22c55e, #16a34a); }
+.quiz-heatmap-b4 { background: light-dark(#15803d, #4ade80); }
+.quiz-heatmap-today { outline: 1px solid var(--color-text-primary); }
+.quiz-footer-stats {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px 24px;
+    margin-top: 12px;
+}
+.quiz-footer-stat { display: flex; gap: 6px; align-items: baseline; font-size: 13px; }
+.quiz-footer-stat-label { color: var(--color-text-secondary); }
+.quiz-footer-stat-value { font-weight: 700; color: var(--color-primary-text); }
+.quiz-footer-note {
+    font-size: 11px;
+    color: var(--color-text-secondary);
+    text-align: center;
+    margin: 8px 0 0;
+}
+
 /* ── Toolbar / Header bar ──────────────────────────────────────── */
 .toolbar-container {
     position: relative;
@@ -1432,6 +1560,16 @@ html, body {
 }
 .tape-table-body td.tape-cell-toggles { gap: 4px; }
 .tape-table-body td.tape-cell-click { cursor: pointer; }
+/* A right-aligned number — a score, a percentage, a count. Distinct from
+   .tape-cell-actions, which is also flex-end but exists for a run of controls
+   and carries their gap. */
+.tape-table-body td.tape-cell-num {
+    justify-content: flex-end;
+    font-variant-numeric: tabular-nums;
+}
+/* Emphasis on a cell whose COLOUR is data-dependent and therefore stays inline.
+   The weight is not, so it belongs here. */
+.tape-table-body td.tape-cell-strong { font-weight: 600; }
 /* Inline "(merging)" state note in an action cell. */
 .tape-table-body .tape-cell-note { font-size: 11px; }
 /* Inner spans. The td owns clipping (see `.tape-scroll table td` above, whose
