@@ -13,7 +13,7 @@
 
    Entries are DATA, not functions. `state-reader` derives the read from an
    entry's own `:state-key`/`:shape`/`:phase`, so nothing is declared twice and
-   `:cancel-key` serves both the cancellability flag and `activity/cancel!`.
+   `:canceller-key` serves both the cancellability flag and `activity/cancel!`.
    The one thing a data entry cannot express — card generation's three-way
    phase, exam grading's progress pair — is an `:entry->state` fn.
 
@@ -84,8 +84,8 @@
    Read per tick rather than declared statically because it is genuinely
    momentary: the fn is stored when the task is submitted and dissoc'd the
    instant it settles."
-  [uid cancel-key owner-key]
-  (boolean (and cancel-key (contains? @(us/get-atom uid cancel-key) owner-key))))
+  [uid canceller-key owner-key]
+  (boolean (and canceller-key (contains? @(us/get-atom uid canceller-key) owner-key))))
 
 (defn- state-reader
   "Build an entry's reader from its own declared fields. Returns nil for a
@@ -93,7 +93,8 @@
 
    Post: `(reader uid work-key)` is nil when the owner has forgotten this work,
          else a map carrying at least `:phase`."
-  [{:keys [state-key phase cancel-key key-fn entry->state unrecoverable? in-flight?]}]
+  [{:keys [state-key phase canceller-key cancelled-key key-fn entry->state
+           unrecoverable?]}]
   (when state-key
     (let [key-fn (or key-fn key->id)]
       (fn [uid work-key]
@@ -101,11 +102,18 @@
           (let [state @(us/get-atom uid state-key)]
             ;; `contains?` reads membership for a set and key-presence for a map,
             ;; so both shapes answer "is this work in flight" the same way.
-            ;; `:in-flight?` narrows it for an owner whose membership outlives the
-            ;; work — a cancelled page scan whose request is still draining.
+            ;;
+            ;; `:cancelled-key` subtracts from that, and every cooperatively
+            ;; cancellable owner needs it. Their membership OUTLIVES the work:
+            ;; neither a page scan's OCR request nor a card generation's model
+            ;; call can be aborted, so the atom still names the work while the
+            ;; request drains. Without this subtraction, terminating the row as
+            ;; cancelled leaves live-looking membership behind and discovery
+            ;; opens a SECOND row — which is what users saw for both types.
             (when (and (contains? state owner-key)
-                    (or (nil? in-flight?) (in-flight? uid owner-key)))
-              (let [base {:cancellable (cancellable? uid cancel-key owner-key)
+                    (not (and cancelled-key
+                           (contains? @(us/get-atom uid cancelled-key) owner-key))))
+              (let [base {:cancellable (cancellable? uid canceller-key owner-key)
                           :unrecoverable (boolean unrecoverable?)}]
                 (if entry->state
                   (when-some [extra (entry->state (get state owner-key))]
@@ -130,12 +138,21 @@
    :phase       the phase to report, for entries with one fixed phase
    :entry->state  for the two owners whose entry decides phase or progress
    :key-fn      work_key -> the key the owner's atom uses (default: parse-long)
-   :cancel-key  the per-user atom of missionary cancel fns, when the owner has one
-   :in-flight?  (uid owner-key) -> bool, narrowing membership for an owner whose
-                atom outlives the work it describes. Only page scan needs it: a
-                cancelled scan stays in `:scanning-pages` until its uncancellable
-                request drains, and without this it would be re-discovered as a
-                second activity that then closed as a success
+   :canceller-key  the per-user atom of missionary cancel fns, when the owner
+                has one. Holds cancel FUNCTIONS — not to be confused with
+                :cancelled-key, which is why neither is called :cancel-key
+   :cancelled-key  the per-user set of work the user abandoned, for an owner
+                whose request cannot be aborted and whose membership therefore
+                outlives the work. Read as NOT in flight, so a cancelled run is
+                not re-discovered as a second activity while it drains.
+
+                Known window, accepted: both owners CLEAR this set when new work
+                for the same key is enqueued, so cancelling and then immediately
+                re-running the same page lets the still-draining first request
+                save after all. The user asked for that content twice in a row,
+                so the outcome is an extra result rather than a wrong one, and
+                closing it would mean identifying runs individually in a set
+                whose whole granularity is per-key
    :unrecoverable?  SERVER TIER ONLY — leaving mid-run strands state the user
                 cannot recover. Read by `state-reader`, so a pushed-tier entry
                 declaring it would be config nothing reads: those drivers pass
@@ -147,7 +164,8 @@
   {:card-gen
    {:label "Generating cards"
     :tier :server :subject :topic :work-key id->key
-    :state-key :card-gen-status :cancel-key :card-gen-cancellers
+    :state-key :card-gen-status
+    :canceller-key :card-gen-cancellers :cancelled-key :card-gen-cancelled
     ;; `forget-card-gen-item!` leaves the entry behind with `:pending` 0 and its
     ;; `:error` intact, which is exactly what makes the outcome readable after
     ;; the work is gone.
@@ -198,14 +216,7 @@
     ;; The owner key is already the (doc page) pair `work-key` takes, so it needs
     ;; no wrapping — and `doc` is the subject, being the topic the viewer opens.
     :key-fn key->doc-page :owner-key->args identity
-    :cancel-key :scan-cancellers
-    ;; A cancelled scan reads as GONE even though its request is still draining.
-    ;; Membership alone would have discovery open a SECOND row the moment the
-    ;; first was terminated as cancelled, and that row would then close as
-    ;; "Done" when the abandoned request finished — which is exactly the pair of
-    ;; rows a user saw after cancelling once.
-    :in-flight? (fn [uid owner-key]
-                  (not (contains? @(us/get-atom uid :scan-cancelled) owner-key)))
+    :canceller-key :scan-cancellers :cancelled-key :scan-cancelled
     :error-fn (fn [uid work-key]
                 (get @(us/get-atom uid :ocr-errors) (key->doc-page work-key)))}
 
@@ -223,19 +234,19 @@
    {:label "Distilling facts"
     :tier :server :subject :topic :work-key id->key
     :state-key :distilling-docs :phase "distilling"
-    :cancel-key :distill-cancellers}
+    :canceller-key :distill-cancellers}
 
    :distill-repo
    {:label "Distilling code"
     :tier :server :subject :topic :work-key id->key
     :state-key :distilling-repos :phase "distilling"
-    :cancel-key :repo-distill-cancellers}
+    :canceller-key :repo-distill-cancellers}
 
    :generate-questions
    {:label "Generating questions"
     :tier :server :subject :topic :work-key id->key
     :state-key :generating-questions :phase "generating"
-    :cancel-key :question-cancellers}
+    :canceller-key :question-cancellers}
 
    :exam-grade
    {:label "Grading exam"
@@ -410,7 +421,7 @@
    Pre : `type` is registered (violation = caller bug).
    Post: nil, or a 0-arity fn that cancels the task."
   [type uid work-key]
-  (when-some [{:keys [cancel-key key-fn]} (activity-type type)]
-    (when cancel-key
+  (when-some [{:keys [canceller-key key-fn]} (activity-type type)]
+    (when canceller-key
       (when-some [owner-key ((or key-fn key->id) work-key)]
-        (get @(us/get-atom uid cancel-key) owner-key)))))
+        (get @(us/get-atom uid canceller-key) owner-key)))))
