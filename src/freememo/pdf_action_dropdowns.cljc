@@ -45,7 +45,6 @@
      (do
        (swap! (us/get-atom uid :scanning-pages) conj [doc page])
        (swap! (us/get-atom uid :ocr-errors) dissoc [doc page])
-       (us/work-started! uid)
        (log/log-info (str "OCR scan started topic-id=" doc " page=" page))
        (let [cancel-fn
              ((m/timeout
@@ -74,6 +73,10 @@
                   (toasts/push! uid {:level :error :message (.getMessage e)}))
                 (swap! (us/get-atom uid :scanning-pages) disj [doc page])))]
          (swap! (us/get-atom uid :scan-cancellers) assoc [doc page] cancel-fn))
+       ;; AFTER the canceller, not after the membership swap. Discovery reads
+       ;; cancellability at the moment it opens the row, so nudging earlier
+       ;; recorded `cancellable = false` for a run the server could stop.
+       (us/work-started! uid)
        nil)
      :cljs nil))
 

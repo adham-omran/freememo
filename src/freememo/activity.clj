@@ -309,22 +309,44 @@
     (when (pos? promoted) (bump! user-id))
     (mapv
       (fn [r]
-        {:id (:id r)
-         :type (:type r)
-         :label (registry/label (:type r))
-         :progress-unit (registry/progress-unit (:type r))
-         :phase (:phase r)
-         :done (:done r)
-         :total (:total r)
-         :cancellable (:cancellable r)
-         :unrecoverable (:unrecoverable r)
-         :outcome (:outcome r)
-         :error (:error r)
-         :subject-id (:subject_id r)
-         :started-at (some-> (:started_at r) .toInstant .toEpochMilli)
-         :terminated-at (some-> (:terminated_at r) .toInstant .toEpochMilli)})
+        ;; The momentary flags are read LIVE for in-flight work, not taken from
+        ;; the row. Cancellability is genuinely momentary — the owner's cancel fn
+        ;; appears when its task is submitted and is gone the instant it settles
+        ;; — so a value written by the last 20s tick is stale by construction.
+        ;;
+        ;; Not a style choice. A page scan lives 30s, its owner registers the
+        ;; canceller AFTER publishing membership, and discovery therefore wrote
+        ;; `cancellable = false`: the panel offered no Cancel for a run the
+        ;; server could have stopped the whole time. Reading through the registry
+        ;; means no owner has to order its two swaps correctly for the button to
+        ;; appear, which is an ordering four of them got wrong.
+        ;;
+        ;; Phase and progress deliberately still come from the row. Those are
+        ;; display continuity rather than affordances, and sourcing them here
+        ;; would give the panel a second, disagreeing read path.
+        (let [live (when (nil? (:outcome r))
+                     (try (registry/read-state (:type r) user-id (:work_key r))
+                       ;; An adapter can throw on a shape it did not expect. One
+                       ;; row must not cost the user the whole panel.
+                       (catch Throwable _ nil)))]
+          {:id (:id r)
+           :type (:type r)
+           :label (registry/label (:type r))
+           :progress-unit (registry/progress-unit (:type r))
+           :phase (:phase r)
+           :done (:done r)
+           :total (:total r)
+           :cancellable (boolean (if live (:cancellable live) (:cancellable r)))
+           :unrecoverable (boolean (if live (:unrecoverable live) (:unrecoverable r)))
+           :outcome (:outcome r)
+           :error (:error r)
+           :subject-id (:subject_id r)
+           :started-at (some-> (:started_at r) .toInstant .toEpochMilli)
+           :terminated-at (some-> (:terminated_at r) .toInstant .toEpochMilli)}))
       (jdbc/execute! db/ds
-        ["SELECT id, type, phase, done, total, cancellable, unrecoverable,
+        ;; `work_key` is selected for the live flag read above, never sent to the
+        ;; client — it is an owner's internal identity, not something to render.
+        ["SELECT id, type, work_key, phase, done, total, cancellable, unrecoverable,
                  outcome, error, subject_id, started_at, terminated_at
             FROM activities
            WHERE user_id = ?

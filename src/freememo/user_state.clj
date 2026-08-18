@@ -110,9 +110,14 @@
 (defn work-started!
   "Tell listeners `user-id` may have new in-flight work.
 
-   Pre : called AFTER the owner's atom already reflects the work, or the
-         listener will look and find nothing (violation = caller bug: late, not
-         wrong, because the timer still catches it).
+   Pre : called after EVERY atom the owner publishes for this work already
+         reflects it — its membership AND its canceller, if it has one.
+         Nudging between the two records the work as not cancellable, which is
+         how four owners shipped a page scan and three distills whose Cancel
+         never appeared. The projection now reads cancellability live, so that
+         mistake is no longer visible, but the ordering is still the contract.
+         (Violation = caller bug: late or under-reported, never wrong, because
+         the timer still catches it.)
    Post: every listener has been handed `user-id`. Returns nil.
    Invariant: never blocks and never throws into the caller. Listeners do
          database writes, and this sits on a user's click path — an owner must

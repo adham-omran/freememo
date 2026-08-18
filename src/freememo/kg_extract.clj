@@ -538,7 +538,6 @@
   [uid root-topic-id]
   (when-not (contains? @(us/get-atom uid :distilling-docs) root-topic-id)
     (swap! (us/get-atom uid :distilling-docs) conj root-topic-id)
-    (us/work-started! uid)
     (tel/log! {:level :info :id ::distill-started
                :data {:user-id uid :root root-topic-id}}
       "Distillation started")
@@ -567,7 +566,9 @@
              (when-not (instance? Cancelled e)
                (tel/error! {:id ::distill-task} e)
                (toasts/push! uid {:level :error :message (ex-message e)}))))]
-      (swap! (us/get-atom uid :distill-cancellers) assoc root-topic-id cancel-fn))
+      (swap! (us/get-atom uid :distill-cancellers) assoc root-topic-id cancel-fn)
+      ;; After the canceller: discovery reads cancellability when it opens the row.
+      (us/work-started! uid))
     nil))
 
 (defn cancel-distill!
