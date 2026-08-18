@@ -501,6 +501,7 @@
       (do (log/log-info (str "Video processing already running topic=" topic-id)) nil)
       (do
         (swap! !in-flight conj topic-id)
+        (us/work-started! user-id)
         (commands/bump! user-id :process-video)
         (log/log-info (str "Video processing started topic=" topic-id
                         " transcribe=" (boolean transcribe?)))

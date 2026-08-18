@@ -156,12 +156,24 @@
     ;; stop a run that has already committed its LLM call, so offering Cancel on
     ;; the last in-flight item would be a button that does nothing. This
     ;; overrides the cancel-key flag, which reports only that a canceller EXISTS.
+    ;; The phase carries the outstanding count, because this entry AGGREGATES.
+    ;; Three generations on one page are one row, and without the count three
+    ;; runs and one read identically — which is exactly what a user who ran
+    ;; three and saw one activity reported.
     :entry->state (fn [{:keys [active-id pending]}]
                     (let [pending (or pending 0)
                           queued (- pending (if active-id 1 0))]
                       (cond
-                        (some? active-id) {:phase "generating" :cancellable (pos? queued)}
-                        (pos? pending) {:phase "queued" :cancellable true}
+                        (some? active-id)
+                        {:phase (if (pos? queued)
+                                  (str "generating, " queued " queued")
+                                  "generating")
+                         :cancellable (pos? queued)}
+
+                        (pos? pending)
+                        {:phase (if (> pending 1) (str pending " queued") "queued")
+                         :cancellable true}
+
                         ;; Entry left behind with nothing outstanding: the owner
                         ;; is done with it even though it has not cleared the key.
                         :else nil)))}

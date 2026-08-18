@@ -78,6 +78,50 @@
 ;; `activities` row through freememo.activity. A mirror would be a second copy of
 ;; state that row already carries, and the two could disagree.
 
+;; ---------------------------------------------------------------------------
+;; "Work started" notification.
+;;
+;; The Activity reporter discovers work by reading these atoms on a 20s timer,
+;; which is correct but LATE: a row appeared up to a tick after the click, and
+;; work that finished inside one tick was never seen running at all — a card
+;; generation reached the panel already reading "Done".
+;;
+;; So an owner says when it starts. Not registration: the owner still never
+;; calls `start!` or `terminate!`, and an owner that forgets to call this is
+;; merely late again rather than invisible, which is what keeps the timer the
+;; correctness mechanism and this only a latency fix.
+;;
+;; It lives HERE, behind an inversion, because every owner already requires this
+;; namespace — putting it in the reporter would give eight owners a dependency
+;; on it, and `user-state` cannot require the reporter without a cycle. Same
+;; shape as `db/register-sweep-job!`.
+;; ---------------------------------------------------------------------------
+
+(defonce ^:private !work-started-listeners (atom {}))
+
+(defn on-work-started!
+  "Register `f` under `k` to be called with a user-id when that user may have
+   new in-flight work. Idempotent per key, so a namespace reload replaces rather
+   than doubles."
+  [k f]
+  (swap! !work-started-listeners assoc k f)
+  nil)
+
+(defn work-started!
+  "Tell listeners `user-id` may have new in-flight work.
+
+   Pre : called AFTER the owner's atom already reflects the work, or the
+         listener will look and find nothing (violation = caller bug: late, not
+         wrong, because the timer still catches it).
+   Post: every listener has been handed `user-id`. Returns nil.
+   Invariant: never blocks and never throws into the caller. Listeners do
+         database writes, and this sits on a user's click path — an owner must
+         not pay a round trip, nor fail to start work because reporting failed."
+  [user-id]
+  (doseq [[_ f] @!work-started-listeners]
+    (future (try (f user-id) (catch Throwable _ nil))))
+  nil)
+
 (defmacro with-in-flight
   "Run `body` while `member` is published in this user's `state-key` set.
 
@@ -92,7 +136,11 @@
          afterwards, on every path. Returns body's value."
   [user-id state-key member & body]
   `(let [a# (get-atom ~user-id ~state-key)
-         m# ~member]
+         m# ~member
+         uid# ~user-id]
      (swap! a# conj m#)
+     ;; After the swap, never before: a listener that looked first would find
+     ;; nothing and report the work late anyway.
+     (work-started! uid#)
      (try ~@body
        (finally (swap! a# disj m#)))))

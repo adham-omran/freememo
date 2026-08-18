@@ -281,6 +281,7 @@
         progress! (fn [n] (swap! (us/get-atom user-id :exam-grading)
                             assoc session-id [n total]))]
     (progress! 0)
+    (us/work-started! user-id)
     (try
       (reduce (fn [n {:keys [question_id position user_answer]}]
                 (let [r (grade-answer! user-id session-id question_id position user_answer)]

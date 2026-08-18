@@ -45,6 +45,7 @@
      (do
        (swap! (us/get-atom uid :scanning-pages) conj [doc page])
        (swap! (us/get-atom uid :ocr-errors) dissoc [doc page])
+       (us/work-started! uid)
        (log/log-info (str "OCR scan started topic-id=" doc " page=" page))
        (let [cancel-fn
              ((m/timeout

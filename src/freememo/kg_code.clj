@@ -299,6 +299,7 @@
   [user-id root-id root-dir]
   (when-not (contains? @(us/get-atom user-id :distilling-repos) root-id)
     (swap! (us/get-atom user-id :distilling-repos) conj root-id)
+    (us/work-started! user-id)
     (tel/log! {:level :info :id ::repo-distill-started
                :data {:user-id user-id :root root-id}}
       "Repo fact distillation started")

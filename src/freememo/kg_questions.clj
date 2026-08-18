@@ -253,6 +253,7 @@
   [uid root-topic-id]
   (when-not (contains? @(us/get-atom uid :generating-questions) root-topic-id)
     (swap! (us/get-atom uid :generating-questions) conj root-topic-id)
+    (us/work-started! uid)
     (tel/log! {:level :info :id ::atomic-generation-started
                :data {:user-id uid :root root-topic-id}}
       "Atomic question generation started")

@@ -216,6 +216,10 @@
          (fn [s] (update (or s {:active-id nil :error nil :pending 0}) :pending inc)))
        (swap! (us/get-atom uid :card-gen-cancellers) assoc tid
          (fn [] (swap! (us/get-atom uid :card-gen-cancelled) conj tid) nil))
+       ;; After the status swap, so the Activity monitor opens this row now
+       ;; rather than up to one reporter tick later — a generation shorter than
+       ;; a tick was reaching the panel already reading "Done".
+       (us/work-started! uid)
        (card-gen-mbx item)
        :enqueued)
      :cljs nil))

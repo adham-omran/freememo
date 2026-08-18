@@ -124,6 +124,7 @@
    toast on failure or timeout. Returns nil immediately."
   [user-id topic-id]
   (swap! (us/get-atom user-id :transcribing-topics) conj topic-id)
+  (us/work-started! user-id)
   (log/log-info (str "Transcription started topic-id=" topic-id))
   ((m/timeout
      (m/via executor (transcribe-topic! user-id topic-id))

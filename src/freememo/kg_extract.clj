@@ -538,6 +538,7 @@
   [uid root-topic-id]
   (when-not (contains? @(us/get-atom uid :distilling-docs) root-topic-id)
     (swap! (us/get-atom uid :distilling-docs) conj root-topic-id)
+    (us/work-started! uid)
     (tel/log! {:level :info :id ::distill-started
                :data {:user-id uid :root root-topic-id}}
       "Distillation started")

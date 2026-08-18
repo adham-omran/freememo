@@ -136,6 +136,14 @@
       {:opened opened :refreshed 0 :closed 0}
       rows)))
 
+;; An owner calling `us/work-started!` opens its row immediately, instead of up
+;; to `tick-ms` later. Registered at namespace load, so the latency fix is live
+;; as soon as anything requires this namespace — the boot path does.
+;;
+;; The timer stays the correctness mechanism: this only moves the moment of
+;; discovery earlier. An owner that never calls it is late, never invisible.
+(us/on-work-started! ::open-rows #'open-rows!)
+
 (defonce ^:private scheduler (atom nil))
 
 (defn start!

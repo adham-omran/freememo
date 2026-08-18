@@ -365,8 +365,17 @@
    still running.
 
    Ordering is deliberate: cancel the task FIRST, terminate second. The reverse
-   leaves a window where the row reads cancelled while the LLM call is still
-   billing.
+   would let a `cancel-fn` that throws leave a row reading cancelled over work
+   that is still running, which is the worse lie of the two.
+
+   The cost of that order is a narrow race, named here because it is invisible
+   at the call site. An owner's cancel callbacks run asynchronously and clear its
+   in-flight atom; if the reporter's tick lands between `(cancel-fn)` and the
+   `terminate!` below, it sees the work gone and closes the row as 'success'.
+   First-writer-wins then keeps that, so a cancelled run can be recorded as a
+   successful one. The window is the microseconds between two adjacent
+   statements against a 20s tick, and the failure is cosmetic — the work did
+   stop — so it is documented rather than locked.
 
    Pre : `activity-id` belongs to `user-id` (enforced, not assumed — a foreign id
          returns :gone rather than cancelling anything).
