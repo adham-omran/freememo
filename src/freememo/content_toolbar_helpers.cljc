@@ -197,9 +197,22 @@
                               "basic" (cards/generate-basic-cards opts)
                               "overlapping" (cards/generate-overlapping-cards opts)
                               (cards/generate-cloze-cards opts))]
-             (if-not (:success gen-result)
-               gen-result
-               (save-cards-for-topic user-id topic-id root-topic-id card-type (:cards gen-result))))))
+             (cond
+               ;; Checked between the model call and the insert, because that is
+               ;; the only point left where cancelling can be honoured. The call
+               ;; cannot be aborted — it goes through clj-http, whose socket read
+               ;; ignores Thread.interrupt(), and this m/ap branch hands out no
+               ;; per-item cancel handle anyway. So cancelling an in-flight
+               ;; generation means: the call is paid for, and no cards land.
+               (contains? @(us/get-atom user-id :card-gen-cancelled) topic-id)
+               (do (log/log-info (str "Card gen cancelled before save topic=" topic-id))
+                 {:success false :cancelled? true :error "Card generation cancelled"})
+
+               (not (:success gen-result)) gen-result
+
+               :else
+               (save-cards-for-topic user-id topic-id root-topic-id card-type
+                 (:cards gen-result))))))
        (catch Exception e
          (log/log-error (str "generate-and-save! failed: " (.getMessage e)))
          {:success false :error (.getMessage e)}))))
@@ -259,10 +272,10 @@
                 tid (:topic-id item)
                 uid (:user-id item)
                 !status (us/get-atom uid :card-gen-status)]
-            ;; Cancellation is checked HERE, at dequeue, and nowhere else. That
-            ;; is the whole of it: an item still in the mailbox has spent
-            ;; nothing, so dropping it is free and complete, while one already
-            ;; running has committed its LLM call and its credits.
+            ;; Checked at dequeue, and again inside `generate-and-save!` just
+            ;; before the insert. Here it is free and complete — an item still in
+            ;; the mailbox has spent nothing. There it is cooperative: the model
+            ;; call cannot be recalled, but the cards need not land.
             (if (contains? @(us/get-atom uid :card-gen-cancelled) tid)
               (do (log/log-info (str "Card gen skipped (cancelled) topic=" tid))
                 (forget-card-gen-item! uid tid))
@@ -276,9 +289,18 @@
                                     120000
                                     {:success false :error "Card generation timed out"}))]
                   (forget-card-gen-item! uid tid)
-                  (if (:success result)
+                  (cond
+                    (:success result)
                     (do (commands/bump! uid :generate)
                       (log/log-info (str "Card gen complete topic=" tid)))
+
+                    ;; A cancelled run is not a failure. Recording it in `:error`
+                    ;; would make the Activity monitor close the run as one, and
+                    ;; toast an error for something the user chose.
+                    (:cancelled? result)
+                    (log/log-info (str "Card gen cancelled topic=" tid))
+
+                    :else
                     (do (log/log-warn (str "Card gen failed topic=" tid " error=" (:error result)))
                       (swap! !status update tid assoc :error (:error result))
                       (toasts/push! uid

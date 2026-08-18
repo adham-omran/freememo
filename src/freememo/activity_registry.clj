@@ -159,11 +159,16 @@
     ;; and no total is ever known — so this reports no proportion. Rendering
     ;; `:pending` as `done` would make the bar run backwards.
     ;;
-    ;; Cancellable exactly while something is still QUEUED, which is `pending`
-    ;; minus the one that is running. Cancelling drops queued items; it cannot
-    ;; stop a run that has already committed its LLM call, so offering Cancel on
-    ;; the last in-flight item would be a button that does nothing. This
-    ;; overrides the cancel-key flag, which reports only that a canceller EXISTS.
+    ;; Cancellable while ANY work is outstanding, the running one included. This
+    ;; withheld Cancel from a run with nothing queued behind it, reasoning that
+    ;; an in-flight LLM call has already committed its credits so the button
+    ;; would do nothing. That reasoning was incomplete: the call cannot be
+    ;; recalled, but the CARDS can be left uninserted, and not receiving cards
+    ;; you asked to abandon is the part still available.
+    ;; `generate-and-save!` reads `:card-gen-cancelled` immediately before its
+    ;; insert — the same cooperative shape a page scan uses, for the same
+    ;; reason: neither request can be aborted.
+    ;;
     ;; The phase carries the outstanding count, because this entry AGGREGATES.
     ;; Three generations on one page are one row, and without the count three
     ;; runs and one read identically — which is exactly what a user who ran
@@ -176,7 +181,7 @@
                         {:phase (if (pos? queued)
                                   (str "generating, " queued " queued")
                                   "generating")
-                         :cancellable (pos? queued)}
+                         :cancellable true}
 
                         (pos? pending)
                         {:phase (if (> pending 1) (str pending " queued") "queued")
