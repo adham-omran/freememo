@@ -1,9 +1,10 @@
 (ns freememo.ocr-compare
-  "3-way OCR compare: run every allowed OCR model on the current page, show the
+  "OCR compare: pick which OCR models to run on the current page, show their
    results side-by-side, and let the user adopt one (optionally remembering it as
    the per-document model). Distinct from copy-text's A/B compare, which compares
    text-extraction engines, not OCR models. Each candidate is a real billed OCR
-   call, so opening the modal spends credits per model."
+   call, so a run spends credits per SELECTED model — opening the modal spends
+   nothing, because the picker gates the fan-out."
   (:require
    [hyperfiddle.electric3 :as e]
    [hyperfiddle.electric-dom3 :as dom]
@@ -16,15 +17,30 @@
    [freememo.tooltip :as tooltip]
    #?(:clj [freememo.ocr :as ocr])
    #?(:clj [freememo.page-ocr :as page])
-   #?(:clj [freememo.settings :as settings])))
+   #?(:clj [freememo.settings :as settings])
+   #?(:clj [freememo.user-state :as us])))
 
 (defn compare-ocr-page!*
-  "OCR the page with every model for the compare modal, WITHOUT saving (bills each
-   call). The page is rendered once server-side and shared across models (C); the
-   fan-out is concurrency-bounded (B). Server-only. Returns a vector of
-   {:model-id id :result {:success ..}}; the heavy render never reaches the client."
+  "OCR the page with each model the user selected in the compare modal, WITHOUT
+   saving (bills every call). The page is rendered once server-side and shared
+   across models (C); the fan-out is concurrency-bounded (B). Server-only. Returns
+   a vector of {:model-id id :result {:success ..}} in `model-ids` order, so the
+   caller controls column order; the heavy render never reaches the client."
   [user-id root model-ids page dpi]
   #?(:clj (page/compare-ocr-page user-id root model-ids page dpi) :cljs nil))
+
+(defn effective-ocr-model-id*
+  "The OCR model :id a normal Scan Page on `root` would use right now — the id the
+   compare picker pre-selects. `_settings-refresh` exists only to create the
+   reactive dependency: adopting a model with Remember bumps :set-setting (see
+   commit-and-remember!*), so without it the next open would pre-select the model
+   the user just replaced. Server-only.
+   Post: an :id present in (ocr/allowed-ocr-model-ids) — effective-ocr-model
+   clamps every precedence branch to that list, so callers need no membership
+   guard against the picker's own options."
+  [_settings-refresh user-id root]
+  #?(:clj (:id (ocr/effective-ocr-model user-id root))
+     :cljs nil))
 
 (defn commit-and-remember!*
   "Save the chosen OCR text to the page; when `remember?`, also persist `model-id`
@@ -112,14 +128,33 @@
               (t (:error r)))))))))
 
 (e/defn OcrCompareModal
-  "Floating, draggable, non-blocking compare panel: runs every model in
-   `model-ids` on `page` (each a billed OCR call), shows results side-by-side,
-   and adopts the picked one. No backdrop — the page stays visible and
-   interactive so the user can compare against it; drag the header to move,
-   resize from the corner."
-  [user-id root-topic-id page model-ids dpi !open]
+  "Floating, draggable, non-blocking compare panel. Phase 1 picks which of
+   `model-ids` to run, with `effective-model-id` checked to start. Phase 2 runs
+   only those (each a billed OCR call), shows the results side-by-side, and adopts
+   the picked one. No backdrop — the page stays visible and interactive so the user
+   can compare against it; drag the header to move, resize from the corner.
+
+   ONE model is a legal selection, and such a run is NOT a second Scan Page:
+   compare never writes, so the text reaches the page only through \"Use this\"
+   (commit-and-remember!*).
+
+   \"Change models\" returns to phase 1 with the ticks intact. The selection outlives
+   the phase, the run's results do not — a paid run is lost by going back, by Close,
+   and by any frame remount (WS reconnect, hot reload), because nothing here is
+   persisted outside the frame by design.
+
+   Pre:  `effective-model-id` ∈ `model-ids` (effective-ocr-model-id*'s Post).
+   Post: no OCR call is issued until the phase-1 button is clicked."
+  [user-id root-topic-id page model-ids effective-model-id dpi !open]
   (e/client
-    (let [!remember (atom false)
+    ;; initial-model-id is snapshotted and then used for BOTH the seed and the
+    ;; " (current)" label, so the two cannot disagree. No nil guard: the Post of
+    ;; effective-ocr-model-id* is a real id, and a broken Post should surface as a
+    ;; failed column naming the model, not as a silently empty picker.
+    (let [initial-model-id (e/snapshot effective-model-id)
+          !selected (atom #{initial-model-id})
+          selected (e/watch !selected)
+          !run (atom nil) run (e/watch !run)
           !pos (atom {:x 60 :y 60})
           pos (e/watch !pos)]
       (dom/div
@@ -138,27 +173,96 @@
             (dom/text (str "Compare OCR — page " page)))
           (dom/span (dom/props {:style {:font-size "11px" :color "var(--color-text-hint)"}})
             (dom/text "drag to move")))
-        (dom/div
-          (dom/props {:style {:display "flex" :gap "12px" :align-items "stretch" :overflow-x "auto"}})
-          ;; C: render the page once server-side and OCR every model from it (the
-          ;; render payload stays on the server); columns appear when the batch
-          ;; resolves. Fan-out is concurrency-bounded server-side (B).
-          (loading/WithLoading
-            (e/fn [] (e/server (e/Offload #(compare-ocr-page!* user-id root-topic-id model-ids page dpi))))
-            (e/fn [results]
-              (e/for [{:keys [model-id result]} (e/diff-by :model-id results)]
-                (dom/div
-                  (dom/props {:style {:flex "1" :min-width "260px" :display "flex" :flex-direction "column" :gap "8px"}})
-                  (e/amb
-                    (OcrResultColumn model-id result)
-                    (UseOcrButton user-id root-topic-id page model-id result !remember !open)))))
-            (e/fn [] (loading/Spinner "Running OCR on every model…"))))
-        (dom/label
-          (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "13px"}})
-          (dom/input
-            (dom/props {:type "checkbox"})
-            (dom/On "change" (fn [e] (reset! !remember (-> e .-target .-checked))) nil))
-          (dom/text "Remember the picked model for this PDF"))
+        (if (nil? run)
+          ;; Phase 1 — which models to run. Nothing is billed here; the modal used
+          ;; to fan out over every allowed model on open, which spent credits nine
+          ;; times for a page the user may want two opinions on.
+          ;; ONE ordered vector feeds the disable guard, the count in the label and
+          ;; the run itself, so the button cannot promise a number the run does not
+          ;; honour. Ordered by model-ids — the order the checkboxes render in — so
+          ;; the columns match what the user ticked. NOT ocr-models/registry order:
+          ;; in credits mode allowed-ocr-model-ids returns the config allow-list,
+          ;; whose order differs from the catalog's.
+          (let [models-to-run (filterv selected model-ids)]
+            (dom/div
+              (dom/props {:style {:display "flex" :flex-direction "column" :gap "10px"}})
+              (dom/div (dom/props {:class "hint"})
+                (dom/text "Pick one or more models. Each runs a real OCR call and is billed."))
+              (dom/div
+                (dom/props {:style {:display "flex" :flex-direction "column" :gap "6px"}})
+                ;; Deliberately not Forms5: this list holds no token, makes no
+                ;; e/server call and mutates nothing — it is local state gating a
+                ;; later call, outside the "any input that goes to the server" rule.
+                ;; A variable-length set also fits Checkbox!'s fixed field map badly.
+                (e/for [mid (e/server (e/diff-by identity model-ids))]
+                  (dom/label
+                    (dom/props {:style {:display "flex" :align-items "center" :gap "8px"
+                                        :font-size "13px" :cursor "pointer"}})
+                    (dom/input
+                      (dom/props {:type "checkbox" :checked (contains? selected mid)})
+                      (dom/On "change"
+                        (fn [e] (if (-> e .-target .-checked)
+                                  (swap! !selected conj mid)
+                                  (swap! !selected disj mid)))
+                        nil))
+                    ;; " (current)" says WHY a box starts checked, so it compares
+                    ;; against the SNAPSHOT. Reading the live effective-model-id
+                    ;; would let the suffix move to a model whose box did not.
+                    (dom/text (or (:label (ocr-models/resolve-model mid)) mid)
+                      (if (= mid initial-model-id) " (current)" "")))))
+              (dom/div
+                (dom/props {:style {:display "flex" :justify-content "flex-end"}})
+                (dom/button
+                  (dom/props {:class "btn btn-sm btn-primary" :disabled (empty? models-to-run)})
+                  ;; The count is the only place the user sees how many billed calls
+                  ;; the click buys, so it stays in the label at every size.
+                  (dom/text (if (= 1 (count models-to-run))
+                              "Run (1)"
+                              (str "Compare (" (count models-to-run) ")")))
+                  (dom/On "click" (fn [_] (reset! !run {:models models-to-run})) nil)))))
+
+          ;; Phase 2 — run the selected models and show their results. !remember is
+          ;; scoped here because only this branch reads it, so going back to the
+          ;; picker starts the next run with the choice unmade.
+          (let [!remember (atom false)]
+            (dom/div
+              (dom/props {:style {:display "flex" :flex-direction "column" :gap "10px"}})
+              (dom/div
+                (dom/props {:style {:display "flex" :gap "12px" :align-items "stretch" :overflow-x "auto"}})
+                ;; C: render the page once server-side and OCR each selected model
+                ;; from it (the render payload stays on the server); columns appear
+                ;; when the batch resolves. Fan-out is concurrency-bounded
+                ;; server-side (B).
+                (loading/WithLoading
+                  (e/fn [] (e/server (e/Offload #(compare-ocr-page!* user-id root-topic-id (:models run) page dpi))))
+                  (e/fn [results]
+                    (e/for [{:keys [model-id result]} (e/diff-by :model-id results)]
+                      (dom/div
+                        (dom/props {:style {:flex "1" :min-width "260px" :display "flex" :flex-direction "column" :gap "8px"}})
+                        (e/amb
+                          (OcrResultColumn model-id result)
+                          (UseOcrButton user-id root-topic-id page model-id result !remember !open)))))
+                  (e/fn [] (loading/Spinner "Running OCR…"))))
+              (dom/div
+                (dom/props {:style {:display "flex" :align-items "center" :gap "12px"
+                                    :justify-content "space-between"}})
+                ;; Lives in phase 2, not beside the picker: "the picked model" means
+                ;; the adopted result, and rendering it during selection collides
+                ;; with the other pick the user is making.
+                (dom/label
+                  (dom/props {:style {:display "flex" :align-items "center" :gap "6px" :font-size "13px"}})
+                  (dom/input
+                    (dom/props {:type "checkbox"})
+                    (dom/On "change" (fn [e] (reset! !remember (-> e .-target .-checked))) nil))
+                  (dom/text "Remember the picked model for this PDF"))
+                (dom/button
+                  (dom/props {:class "btn btn-sm btn-secondary"})
+                  (dom/text "Change models")
+                  ;; Abandons this run's results — its credits are already spent,
+                  ;; exactly as Close does today. !selected outlives the branch, so
+                  ;; the picker returns with the previous ticks and adding one more
+                  ;; model does not force reselecting the rest.
+                  (dom/On "click" (fn [_] (reset! !run nil)) nil))))))
         (dom/div
           (dom/props {:style {:display "flex" :justify-content "flex-end"}})
           (dom/button
@@ -167,16 +271,30 @@
             (dom/On "click" (fn [_] (reset! !open nil)) nil)))))))
 
 (e/defn OcrCompareButton
-  "Toolbar button that opens the OCR compare modal for the current page."
+  "Toolbar button that opens the OCR compare modal for the current page.
+
+   Reads the effective OCR model HERE rather than in the modal, and that placement
+   is load-bearing: this button mounts with the toolbar, so the read resolves long
+   before any click, while a read inside the modal would race its own mount. An
+   unresolved e/server value is an empty e/amb, not nil, so a let binding feeding
+   the modal's atom seed would blank the modal body until it arrived."
   [user-id root-topic-id page-number dpi]
   (e/client
     (let [!open (atom nil)
           open (e/watch !open)
-          model-ids (e/server (ocr/allowed-ocr-model-ids))]
+          model-ids (e/server (ocr/allowed-ocr-model-ids))
+          ;; :settings-refresh is broader than this read needs — every setting write
+          ;; bumps it, including DPI and prompts — and it is still the right channel:
+          ;; no narrower one exists, the read is two get-settings, and an unrelated
+          ;; write returns the same id, so work-skipping means nothing crosses the
+          ;; wire. Dropping the watch instead would leave a Remember adoption
+          ;; pre-selecting the model it just replaced.
+          settings-refresh (e/server (e/watch (us/get-atom user-id :settings-refresh)))
+          effective-model-id (e/server (effective-ocr-model-id* settings-refresh user-id root-topic-id))]
       (dom/button
         (dom/props {:class "btn btn-sm btn-secondary"
                     :aria-label "Compare OCR models"})
-        (tooltip/Tooltip! "Run every OCR model on this page and compare (uses credits)")
+        (tooltip/Tooltip! "Compare OCR models on this page (uses credits per model)")
         (icons/Icon :scan-text :size 16)
         (dom/span (dom/props {:class "icon-label"}) (dom/text "Compare OCR"))
         (let [node dom/node]
@@ -184,4 +302,4 @@
           (e/on-unmount (fn [] (bus/retract-invoker! :compare-ocr))))
         (dom/On "click" (fn [_] (reset! !open true)) nil))
       (when open
-        (OcrCompareModal user-id root-topic-id page-number model-ids dpi !open)))))
+        (OcrCompareModal user-id root-topic-id page-number model-ids effective-model-id dpi !open)))))
