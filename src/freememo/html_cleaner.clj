@@ -239,8 +239,19 @@
                                                    "dl" "dt" "dd"]))
                      (.addAttributes "a" (into-array String ["href" "title"]))
                      (.addAttributes "img" (into-array String ["src" "alt" "width" "height"]))
-                     (.addAttributes "td" (into-array String ["colspan" "rowspan" "data-row"]))
-                     (.addAttributes "th" (into-array String ["colspan" "rowspan"]))
+                     (.addAttributes "td" (into-array String ["data-row"]))
+                     ;; `Safelist/relaxed` admits `colspan` and `rowspan` on
+                     ;; both cell tags already, so this has to REMOVE them —
+                     ;; dropping an `addAttributes` call would change nothing.
+                     ;; Quill 2.0.3 has no representation for either, because
+                     ;; cell merge and split are out of scope for the editor, so
+                     ;; a span that reaches storage is a ragged row waiting to
+                     ;; happen. `table-lowering/rectangularize-rows!` expands
+                     ;; `colspan` into real cells before this runs. Leaving the
+                     ;; attribute admitted only let a path with no lowering
+                     ;; reintroduce it.
+                     (.removeAttributes "td" (into-array String ["colspan" "rowspan"]))
+                     (.removeAttributes "th" (into-array String ["colspan" "rowspan"]))
                      (.addAttributes "tr" (into-array String ["data-row"]))
                      (.addAttributes "div" (into-array String ["data-language"]))
                      (.addAttributes "li" (into-array String ["data-list"]))

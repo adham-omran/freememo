@@ -342,6 +342,32 @@
       (is (str/includes? out "color: #e03e3e"))
       (is (not (str/includes? out "<img"))))))
 
+(deftest cell-spans-are-removed-and-the-cells-survive
+  (testing "Quill 2.0.3 has no representation for colspan or rowspan — cell merge
+            and split are out of scope for the editor — so a span reaching storage
+            is a ragged row waiting to happen. `table-lowering/rectangularize-rows!`
+            expands colspan into real cells before this runs, and this removal
+            closes the path for a caller that runs no lowering."
+    (let [out (cleaner/clean-html
+                (str "<table><tbody><tr>"
+                  "<td colspan=\"2\" rowspan=\"3\">a</td>"
+                  "<th colspan=\"4\" rowspan=\"5\">b</th>"
+                  "</tr></tbody></table>"))]
+      (is (not (str/includes? out "colspan")))
+      (is (not (str/includes? out "rowspan")))
+      (is (str/includes? out "<td>a</td>"))
+      (is (str/includes? out "<th>b</th>")
+        "the cells and their text survive; only the span attributes go")))
+  (testing "Safelist/relaxed admits both on td and th already, so html_cleaner has
+            to REMOVE them — dropping an addAttributes call would change nothing"
+    (is (not (str/includes? (cleaner/clean-html "<td colspan=\"9\">x</td>") "9")))))
+
+(deftest data-row-still-survives-on-a-cell
+  (testing "Quill writes its own row identity there, and `clean-html` must keep
+            it or an app-authored table loses the ids that stop its rows merging"
+    (let [out (cleaner/clean-html "<table><tbody><tr><td data-row=\"row-ab12\">x</td></tr></tbody></table>")]
+      (is (str/includes? out "data-row=\"row-ab12\"")))))
+
 (deftest strip-ql-tokens-leaves-formats-alone
   (testing "the topic-content save path unwraps ql-token spans only"
     (let [out (cleaner/strip-ql-tokens

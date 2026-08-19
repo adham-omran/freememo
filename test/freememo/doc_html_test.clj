@@ -314,7 +314,22 @@
             :keys-to-code 2
             :terms-flattened 2
             :definition-bodies-flattened 2
-            :figures-flattened 1}
+            :figures-flattened 1
+            ;; `table-lowering/lower-tables!` reports one key per step, and this
+            ;; page holds no table, so every one of them is zero. They are listed
+            ;; rather than dissoc'd because that is what this test asserts: a
+            ;; step whose name never reaches the report discards silently.
+            :tables-unnested 0
+            :stray-cells-created 0
+            :captions-lifted 0
+            :layout-tables-quoted 0
+            :header-cells-retagged 0
+            :table-sections-folded 0
+            :hidden-rows-dropped 0
+            :span-cells-added 0
+            :padding-cells-added 0
+            :cell-blocks-inlined 0
+            :table-separators-inserted 0}
           (dissoc counts :whitespace-nodes-dropped))
       "sphinx-import folds these into its report, which claims nothing is
        discarded silently")

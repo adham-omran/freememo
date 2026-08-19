@@ -22,13 +22,17 @@
      <div> (layout)        -> unwrapped, unless it is a Quill code block
      <cite> <q>            -> <em>
      <small>               -> unwrapped
-     <caption>             -> <p><strong> above its table
-     <th>                  -> <td> holding a <strong>
-     <thead> <tfoot>       -> rows folded into <tbody>
      <col> <colgroup>      -> removed
 
-   The last five exist for browser DOM, which the Chrome capture extension
+   The last four exist for browser DOM, which the Chrome capture extension
    posts verbatim. See `plans/chrome-capture-extension.md`.
+
+   **Tables belong to `freememo.table-lowering`**, which `rewrite-for-quill!`
+   calls for every caller. `caption`, `th`, `thead`, `tfoot`, `colspan`,
+   nesting, hidden rows, a block child of a cell, and two tables Quill would
+   merge are all its work. It owns them because their failures come from facts
+   about Quill's table blots that no other construct touches, and because the
+   grid arithmetic needs its own test file. See `plans/wiki-table-lowering.md`.
 
    **It MUST run before `clean-html`**, for the reason
    `sphinx-import/strip-headerlinks!` records: the sanitizer strips the class
@@ -47,7 +51,8 @@
    registration in `freememo.quill-field`.
 
    See `plans/sphinx-quill-fidelity.md`."
-  (:require [clojure.string :as str])
+  (:require [clojure.string :as str]
+            [freememo.table-lowering :as tl])
   (:import [org.jsoup Jsoup]
            [org.jsoup.nodes Element TextNode]))
 
@@ -370,65 +375,6 @@
       (.remove el))
     (+ (count smalls) (count cols))))
 
-(defn- table-captions->paragraphs!
-  "Lift every `<caption>` out of its table as a bolded paragraph above it.
-
-   Pre : `root` is a parsed document body.
-   Post: no `caption` remains. Each former caption is a `<p><strong>` placed
-         immediately before the table that held it. Returns how many moved.
-   Inv : the caption's text and inline markup are preserved in order.
-
-   Quill's table blots are `table`, `table-row`, `table-body` and
-   `table-container` — no caption among them — so a caption's text would
-   otherwise reappear as a bare run inside the table on the first edit."
-  [^Element root]
-  (let [els (vec (.select root "caption"))]
-    (doseq [^Element caption els]
-      (when-let [^Element table (.parent caption)]
-        (let [p (Element. "p")
-              strong (Element. "strong")]
-          (doseq [node (vec (.childNodes caption))]
-            (.appendChild strong node))
-          (.appendChild p strong)
-          (.before table p)
-          (.remove caption))))
-    (count els)))
-
-(defn- normalize-table-sections!
-  "Fold `thead` and `tfoot` into `tbody`, and retag `th` as a bolded `td`.
-
-   Pre : `root` is a parsed document body.
-   Post: no `th`, `thead` or `tfoot` remains. Every `tr` sits in a `tbody`, in
-         the order a browser renders them: head rows, body rows, foot rows.
-         Returns how many elements changed.
-   Inv : no row and no cell is lost, and a header cell keeps its emphasis as a
-         `strong` that `clean-html` and Quill both hold.
-
-   Measured against the vendored Quill 2.0.3 bundle: the table blots are
-   `table` (tagName TD), `table-row` (TR), `table-body` (TBODY) and
-   `table-container` (TABLE). No blot carries TH, THEAD or TFOOT, so all three
-   are dropped on load while their text stays."
-  [^Element root]
-  (let [headers (vec (.select root "th"))
-        sections (vec (.select root "thead, tfoot"))]
-    (doseq [^Element th headers]
-      (bold-in-place! th)
-      (.tagName th "td"))
-    (doseq [^Element table (vec (.select root "table"))]
-      (let [head-rows (vec (.select table "thead > tr"))
-            foot-rows (vec (.select table "tfoot > tr"))
-            body (or (.first (.select table "tbody"))
-                     (let [tb (Element. "tbody")]
-                       (.appendChild table tb)
-                       tb))]
-        (doseq [^Element tr (reverse head-rows)]
-          (.prependChild body tr))
-        (doseq [^Element tr foot-rows]
-          (.appendChild body tr))))
-    (doseq [^Element el sections]
-      (.remove el))
-    (+ (count headers) (count sections))))
-
 (defn- squeeze-whitespace!
   "Drop whitespace-only text nodes and collapse the rest.
 
@@ -480,10 +426,16 @@
    Inv : every rewrite lands on a tag and class `clean-html` already keeps, so
          no caller needs a wider allow-list.
 
-   Step order is load-bearing at three points.
+   Step order is load-bearing at four points.
 
    Keys become `code` BEFORE terms are flattened, so a term's bold run wraps
    them.
+
+   Tables are lowered BEFORE figures and definition lists. `flatten-figures!`
+   guards against emitting `<p><table>` and `flatten-definition-lists!` writes an
+   indent class onto the blocks it finds, so both read a table's position. Every
+   table has reached its final position by then, including one that
+   `table-lowering/unnest-tables!` lifted out of a cell.
 
    Figures are flattened BEFORE definition lists, because
    `flatten-definition-lists!` writes the body indent onto the blocks it finds
@@ -495,11 +447,16 @@
 
    Whitespace is squeezed LAST, so no earlier step can put blank nodes back.
 
-   `:browser-dom?` adds the five steps a captured page needs and no importer
-   wants. It is opt-in because two of them contradict invariants the other
+   `:browser-dom?` adds the three steps a captured page needs and no importer
+   wants. It is opt-in because one of them contradicts invariants the other
    corpora rely on: SuperMemo's 10391 bare layout divs and Sphinx's
    `div.sidebar` are both asserted to SURVIVE, and `unwrap-layout-divs!`
    removes them. A capture has no such construct and no such expectation.
+
+   The two table steps that used to sit behind this flag are NOT here any more.
+   They served the capture extension alone for their whole life, which is why a
+   Wikipedia import kept every `th` and merged two tables into one grid. They
+   now run for every caller, inside `table-lowering/lower-tables!`.
 
    When enabled, layout divs are unwrapped AFTER admonitions, because that step
    is the only one that reads a div's class, and BEFORE definition lists and
@@ -509,10 +466,9 @@
   ([^Element root {:keys [browser-dom?]}]
    (let [admonitions (admonitions->blockquotes! root)
          keys-rewritten (keyboard-keys->code! root)
+         tables (tl/lower-tables! root)
          browser (when browser-dom?
-                   {:captions-lifted (table-captions->paragraphs! root)
-                    :table-sections-normalized (normalize-table-sections! root)
-                    :inline-semantics-to-em (inline-semantics->em! root)
+                   {:inline-semantics-to-em (inline-semantics->em! root)
                     :presentational-dropped (drop-presentational! root)
                     :layout-divs-unwrapped (unwrap-layout-divs! root)})
          figures (flatten-figures! root)
@@ -525,6 +481,7 @@
         :definition-bodies-flattened dd
         :figures-flattened figures
         :whitespace-nodes-dropped blank-dropped}
+       tables
        browser))))
 
 (defn doc-html->quill-html

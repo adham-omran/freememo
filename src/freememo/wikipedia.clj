@@ -4,8 +4,10 @@
             [clojure.string :as str]
             [taoensso.telemere :as tel]
             [freememo.content-type :as ct]
+            [freememo.doc-html :as dh]
             [freememo.html-cleaner :as cleaner]
             [freememo.page-pipeline :as pipeline]
+            [freememo.table-lowering :as tl]
             [freememo.url-validate :as url])
   (:import [org.jsoup Jsoup]))
 
@@ -48,36 +50,66 @@
       (str/replace #"\\\^\{([^}]*)\}" "^{$1}")
       str/trim))
 
+(def ^:private wiki-banner-selector
+  "Wikipedia's own layout tables — the maintenance banners a reader sees as a
+   boxed notice, not as a grid.
+
+   **This pass is redundant today, and that is measured, not assumed.** Across
+   four articles, `table.ambox:not([role=presentation])` plus
+   `table.metadata:not([role=presentation])` is 0 — every banner also carries
+   `role=presentation`, so `table-lowering`'s generic rule already converts all
+   of them and this call finds them first only by running earlier.
+
+   It is kept as the one thing the generic rule cannot promise: `role` is an
+   attribute Wikipedia chooses to emit, and if a template stops emitting it, a
+   banner silently becomes a data table again. The class names are the source's
+   own vocabulary and do not move.
+
+   They live HERE and not in `freememo.table-lowering` because that namespace
+   owns the generic rule for every source. A Wikipedia class there would make
+   every later source pay the same cost again."
+  "table.ambox, table.metadata")
+
 (defn- preprocess-wikipedia-html
   "Pre-process Wikipedia REST API HTML before sanitization:
-   1. Remove <math> elements (prevents Jsoup text promotion of MathML nodes)
-   2. Simplify alt text on math <img> fallbacks
+   0. Strip navigation chrome (navboxes, portalboxes)
+   1. Turn maintenance banners into blockquotes — see `wiki-banner-selector`
+   2. Remove <math> elements (prevents Jsoup text promotion of MathML nodes) and
+      simplify alt text on math <img> fallbacks
    3. Rewrite protocol-relative URLs to https://
    4. Rewrite relative `./<slug>` hrefs to https://<lang>.wikipedia.org/wiki/<slug>
    5. Wrap body contents in a <div> carrying the source <body>'s `dir`/`lang`
-      so RTL layout survives `clean-html` (which discards the body element)."
+      so RTL layout survives `clean-html` (which discards the body element).
+
+   The numbers match the phase comments in the body. Phases 0 and 1 read
+   Wikipedia's own class names, so both MUST run before `clean-html`, which
+   admits neither `ambox` nor `metadata`."
   [html lang]
   (let [doc (Jsoup/parse html)
         wiki-link-prefix (str "https://" lang ".wikipedia.org/wiki/")]
     ;; Phase 0: Strip navigation chrome (navboxes, portalboxes)
     (doseq [nav (.select doc "[role=navigation], nav")]
       (.remove nav))
-    ;; Phase 1: Math — remove <math> elements, clean alt on fallback <img>
+    ;; Phase 1: Maintenance banners are layout tables. They must become
+    ;; blockquotes while their classes still exist — `clean-html` admits neither
+    ;; `ambox` nor `metadata`, so afterwards nothing can recognize one.
+    (tl/tables->blockquotes! (.body doc) wiki-banner-selector)
+    ;; Phase 2: Math — remove <math> elements, clean alt on fallback <img>
     (doseq [math-el (.select doc "math")]
       (.remove math-el))
     (doseq [img (.select doc "img.mwe-math-fallback-image-inline, img.mwe-math-fallback-image-display")]
       (let [alt (.attr img "alt")]
         (when (seq alt)
           (.attr img "alt" (simplify-latex alt)))))
-    ;; Phase 2: Images — rewrite protocol-relative URLs
+    ;; Phase 3: Images — rewrite protocol-relative URLs
     (doseq [img (.select doc "img[src^=//]")]
       (.attr img "src" (str "https:" (.attr img "src"))))
-    ;; Phase 3: Links — rewrite relative hrefs to absolute same-wiki URLs
+    ;; Phase 4: Links — rewrite relative hrefs to absolute same-wiki URLs
     (doseq [a (.select doc "a[href^=./]")]
       (let [href (.attr a "href")
             slug (subs href 2)] ;; strip "./"
         (.attr a "href" (str wiki-link-prefix slug))))
-    ;; Phase 4: Propagate body dir/lang into a wrapping <div>
+    ;; Phase 5: Propagate body dir/lang into a wrapping <div>
     (let [body (.body doc)
           body-dir  (.attr body "dir")
           body-lang (.attr body "lang")
@@ -141,7 +173,15 @@
                                (assoc :abstract (:extract summary)))
                       :identifiers {}}]
         {:title title
-         :html (-> (:body resp) (preprocess-wikipedia-html lang) cleaner/clean-html)
+         ;; `doc-html` runs between the wiki preprocess and the sanitizer, for
+         ;; the reason `page-pipeline` records: `clean-html` strips the classes
+         ;; and styles that identify a construct. Without it this path kept
+         ;; every `th`, every `colspan` and every hidden row, and Quill merged
+         ;; the banner and the infobox into one grid on load.
+         :html (-> (:body resp)
+                 (preprocess-wikipedia-html lang)
+                 dh/doc-html->quill-html
+                 cleaner/clean-html)
          :url page-url
          :source-type "wikipedia"
          :biblio biblio}))))
