@@ -1,6 +1,7 @@
 (ns dev-jetty9 ; require :jetty9 deps alias
   (:require
    freememo.main
+   #?(:cljs [freememo.client-boot :as client-boot])
 
    #?(:clj [shadow.cljs.devtools.api :as shadow-cljs-compiler])
    #?(:clj [shadow.cljs.devtools.server :as shadow-cljs-compiler-server])
@@ -36,11 +37,14 @@
 (declare browser-process)
 #?(:cljs ; client entrypoint
    (defn ^:dev/after-load ^:export -main []
+     ;; Same shape as dev.cljc — see freememo.client-boot for why the
+     ;; continuations are passed explicitly.
      (set! browser-process
-       ((freememo.main/electric-boot nil)))))  ; boot client-side Electric process
+       (client-boot/boot! (freememo.main/electric-boot nil)))))  ; boot client-side Electric process
 
 #?(:cljs
    (defn ^:dev/before-load stop! [] ; for hot code reload at dev time
+     ;; `boot!`'s thunk records the stop as deliberate, so no banner.
      (when browser-process (browser-process)) ; tear down electric browser process
      (set! browser-process nil)))
 

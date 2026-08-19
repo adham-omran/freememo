@@ -14,6 +14,7 @@
    #?(:clj [ring.middleware.session.cookie :refer [cookie-store]])
    #?(:clj [hyperfiddle.electric-ring-adapter3 :as electric-ring])
    #?(:cljs [hyperfiddle.electric-client3 :as electric-client])
+   #?(:cljs [freememo.client-boot :as client-boot])
 
    #?(:clj clojure.edn)
    #?(:clj clojure.java.io)
@@ -214,9 +215,12 @@
 
 #?(:cljs ; client entrypoint
    (defn ^:export -main []
-     ;; client-side electric process boot happens here
-     ((electric-client/reload-when-stale ; hard-reload the page to fetch new assets when a new server version is deployed
-        (freememo.main/electric-boot nil)))))  ; boot client-side Electric process
+     ;; `boot!` supplies both continuations. Calling the wrapped task with no
+     ;; arguments instead leaves them undefined, which discards every client
+     ;; failure — see `freememo.client-boot`.
+     (client-boot/boot!
+       (electric-client/reload-when-stale ; hard-reload the page to fetch new assets when a new server version is deployed
+         (freememo.main/electric-boot nil)))))  ; boot client-side Electric process
 
 
 #?(:clj

@@ -70,6 +70,14 @@
 (declare browser-process)
 #?(:cljs
    (defn ^:dev/after-load ^:export -main []
+     ;; Zero arguments on purpose, and correct only because nothing wraps the
+     ;; thunk: that arity is the one `with-default-shutdown-prints` uses to
+     ;; install its own success/failure callbacks, so a crash here still prints.
+     ;; Wrapping it — in `reload-when-stale` or anything else 2-arity — passes
+     ;; `undefined` for both and discards every failure, which is the defect
+     ;; `freememo.client-boot` exists to prevent. Route this through `boot!` if
+     ;; that day comes. This navigator gets no banner: it is a dev tool, and its
+     ;; reader can see the console.
      (set! browser-process
        ((electric-boot nil)))))
 

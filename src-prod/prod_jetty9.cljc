@@ -11,6 +11,7 @@
    #?(:clj [ring.middleware.params :refer [wrap-params]])
    #?(:clj [hyperfiddle.electric-jetty9-ring-adapter3 :as electric-jetty9]) ; jetty 9
    #?(:cljs [hyperfiddle.electric-client3 :as electric-client])
+   #?(:cljs [freememo.client-boot :as client-boot])
 
    #?(:clj clojure.edn)
    #?(:clj clojure.java.io)
@@ -59,9 +60,11 @@
 
 #?(:cljs ; client entrypoint
    (defn ^:export -main []
-     ;; client-side electric process boot happens here
-     ((electric-client/reload-when-stale ; hard-reload the page to fetch new assets when a new server version is deployed
-        (freememo.main/electric-boot nil)))))  ; boot client-side Electric process
+     ;; Same shape as `prod.cljc` — see `freememo.client-boot` for why the
+     ;; continuations are passed explicitly.
+     (client-boot/boot!
+       (electric-client/reload-when-stale ; hard-reload the page to fetch new assets when a new server version is deployed
+         (freememo.main/electric-boot nil)))))  ; boot client-side Electric process
 
 
 #?(:clj

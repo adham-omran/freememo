@@ -1,0 +1,110 @@
+(ns freememo.client-boot
+  "Boot the Electric client process, and report every way it can end.
+
+   Two things live here because all four entrypoints need them and none of them
+   owns them: the pair of continuations the reactor terminates into, and the
+   banner a termination raises.
+
+   **The continuations are not optional.** `e/boot-client` wraps the reactor in
+   `with-default-shutdown-prints`, whose ZERO-argument arity is the only one that
+   installs the default callbacks. `reload-when-stale` is strictly 2-arity, so
+   calling the wrapped task with no arguments reaches the `([s f])` arity with
+   `undefined` for both. Every client failure then surfaces as `TypeError:
+   Cannot read properties of undefined (reading 'j')` raised from inside
+   `reload-when-stale`, and the real message is discarded. That shipped, and it
+   hid an `[unserializable]` crash that stopped every Anki sync from the day the
+   Activity monitor landed. See `plans/anki-sync-client-peer-crash.md`.
+
+   **A reactor that terminates has stopped serving the page, whatever value it
+   ends with.** Close codes 1011 (server crash) and 1012 (program mismatch)
+   return `electric-client3/connector` NORMALLY, so a banner on the failure path
+   alone would leave that freeze silent — which is the symptom the user reported.
+   Both continuations raise it. Exactly two terminations do not: a deliberate
+   stop through `boot!`'s own thunk, and the stale-client reload, which owns its
+   exit.
+
+   **The banner is plain DOM on purpose.** Electric is dead by the time it
+   renders, so it cannot be an `e/defn`. It is appended to `document.body`, the
+   one parent Electric adds to and removes from by identity rather than by child
+   index — a foreign node in an Electric-created parent strands that subtree.
+
+   `.cljs`, not `.cljc`: the CLJ peer has no use for any of this, and `dev.cljc`
+   keeps Electric-heavy CLJ requires off its main thread."
+  ;; Required for one auto-resolved keyword, `::electric-client/stale-client`.
+  ;; The alias is compile-checked where the literal
+  ;; `:hyperfiddle.electric-client3/stale-client` would not be, and the namespace
+  ;; is already loaded by every caller.
+  (:require [hyperfiddle.electric-client3 :as electric-client]))
+
+(def ^:private banner-class "connection-lost-banner")
+
+(defn- raise-banner!
+  "Tell the user the app stopped, and offer the one action left.
+
+   Pre : none. Safe with the reactor dead, and safe before first paint.
+   Post: exactly one banner node under `document.body`.
+   Invariant: plain DOM only, and `document.body` only."
+  []
+  (when-not (.querySelector js/document (str "." banner-class))
+    (let [banner (.createElement js/document "div")
+          message (.createElement js/document "span")
+          reload (.createElement js/document "button")]
+      (set! (.-className banner) banner-class)
+      (.setAttribute banner "role" "alert")
+      (set! (.-textContent message)
+        "FreeMemo lost its connection to the server. Reload the page.")
+      (set! (.-className reload) "connection-lost-reload")
+      (set! (.-textContent reload) "Reload")
+      (.addEventListener reload "click" (fn [_] (.reload (.-location js/window))))
+      (.appendChild banner message)
+      (.appendChild banner reload)
+      (.appendChild (.-body js/document) banner)))
+  nil)
+
+(defn- stale-client?
+  "Whether this failure is the deploy-triggered reload, which owns its own exit.
+
+   `reload-when-stale` logs its own line and reloads the page, so neither a
+   banner nor a second console error belongs to this case. Returns false for a
+   plain JS error, because `ex-data` is nil there."
+  [error]
+  (= ::electric-client/stale-client (:hyperfiddle.electric/type (ex-data error))))
+
+(defn boot!
+  "Start the Electric client process with continuations that report themselves.
+
+   Pre : `task` is a Missionary task — a fn of `[success failure]`. Pass the
+         wrapped boot thunk itself, never the result of calling it: a
+         zero-argument call through `reload-when-stale` is the defect this fn
+         exists to prevent.
+   Post: returns a 0-arity thunk that stops the process AND records the stop as
+         deliberate, so that teardown raises no banner. It is the only handle a
+         caller gets, so the recording cannot be forgotten — stopping the process
+         any other way is a caller bug, and it banners.
+   Invariant: the banner appears only for a termination nobody asked for, and at
+         most once per page load.
+
+   **The deliberate-stop flag is per process, not per module, and that is the
+   whole reason this shape exists.** A dev hot reload cancels the process, and
+   the connector's `finally` then closes the socket and awaits that close under
+   `m/compel` (`electric_client3.cljs:135-138`) — so the success continuation
+   fires a tick or more LATER, after `^:dev/after-load` has already remounted. A
+   module-level flag that the next mount cleared would therefore be clear again
+   by the time the old process reported, and every save would raise the banner."
+  [task]
+  (let [!deliberate-stop? (atom false)
+        cancel (task
+                 (fn [_]
+                   ;; Success is not a healthy state here — only a deliberate
+                   ;; stop is.
+                   (when-not @!deliberate-stop? (raise-banner!)))
+                 (fn [error]
+                   (when-not (stale-client? error)
+                     ;; The error OBJECT, not its message: `socket-emit` enriches
+                     ;; an unserializable transfer with the let-bound values it
+                     ;; could be, and stringifying it loses them.
+                     (js/console.error "Electric client process failed" error)
+                     (when-not @!deliberate-stop? (raise-banner!)))))]
+    (fn stop-electric-process! []
+      (reset! !deliberate-stop? true)
+      (cancel))))

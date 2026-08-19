@@ -4,6 +4,8 @@
    ;; they are NOT required here, so this ns compiles cheaply on whichever
    ;; thread loads it. `load-app-namespaces!` pulls them in on a big stack.
    #?(:cljs freememo.main)
+   ;; CLJS-only, and a `.cljs` file, so the CLJ side never loads it either.
+   #?(:cljs [freememo.client-boot :as client-boot])
    [freememo.logging :as logging]
    #?(:clj dev-stack)
 
@@ -232,11 +234,16 @@
 #?(:cljs ; client entrypoint
    (defn ^:dev/after-load ^:export -main []
      (logging/init-client!) ; dev: lower client log level to :debug
+     ;; Same continuations as prod, so a client failure reads the same in both.
+     ;; No `reload-when-stale` here: dev's handler chain has no
+     ;; `wrap-reject-stale-client`, so nothing ever closes with 1008.
      (set! browser-process
-       ((freememo.main/electric-boot nil)))))  ; boot client-side Electric process
+       (client-boot/boot! (freememo.main/electric-boot nil)))))  ; boot client-side Electric process
 
 #?(:cljs
    (defn ^:dev/before-load stop! [] ; for hot code reload at dev time
+     ;; `boot!`'s thunk records the stop as deliberate, so this teardown raises no
+     ;; banner. Stopping the process any other way would.
      (when browser-process (browser-process)) ; tear down electric browser process
      (set! browser-process nil)))
 

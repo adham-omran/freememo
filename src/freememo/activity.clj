@@ -107,8 +107,17 @@
    to and is nil for the two types with nowhere to go; what it MEANS is declared
    per type in the activity registry, not here.
 
+   **`:cancellable` is for SERVER-tier callers only.** A pushed-tier row's Cancel
+   button comes from the driving tab's own registry (`activity-client/tab-owns?`),
+   not from this column — so a pushed caller that sends `true` here paints a
+   button in every OTHER tab, where `cancel!` can only answer `:client-owned`.
+   Sending it also cost the client peer: computing the flag needed the canceller
+   FUNCTION on the server, which is unserializable. See
+   `plans/anki-sync-client-peer-crash.md`. The `:pre` below assigns the blame.
+
    Pre : `user-id` is a user; `type`, `work-key` and `phase` are non-blank;
-         `subject-id` is nil or a topic that user owns (violation = caller bug).
+         `subject-id` is nil or a topic that user owns (violation = caller bug);
+         `:cancellable` is falsy for a `:pushed`-tier `type`.
    Post: exactly one row with `terminated_at IS NULL` for
          (user-id, type, work-key); returns its id.
    Invariant: idempotent. Two concurrent calls yield ONE row and the same id —
@@ -119,7 +128,8 @@
          (not (str/blank? type))
          (not (str/blank? work-key))
          (not (str/blank? phase))
-         (progress-ok? done total)]}
+         (progress-ok? done total)
+         (not (and cancellable (= :pushed (:tier (registry/activity-type type)))))]}
   (let [inserted (jdbc/execute-one! db/ds
                    ["INSERT INTO activities
                        (user_id, type, work_key, subject_id, phase, done, total,
@@ -154,8 +164,14 @@
    this statement already touches the row, so it can return the previous phase
    in the same round trip, and no caller has to remember what it last wrote.
 
+   **`:cancellable` is for SERVER-tier callers only**, for the reasons `start!`
+   states. This fn takes an `activity-id` rather than a type, so it cannot check
+   the tier and cannot assign the blame — the rule holds by discipline here, and
+   by assertion there.
+
    Pre : `activity-id` is an id; `progress` carries a non-blank `:phase`;
-         `:done`/`:total` are nil or non-negative (violation = caller bug).
+         `:done`/`:total` are nil or non-negative; `:cancellable` is absent for a
+         pushed-tier row (violation = caller bug, unchecked).
    Post: `phase`, progress and flags written; `updated_at` advanced to now(),
          which is what keeps the row out of `stale-after-ms`; `terminated_at`
          and `outcome` untouched. Returns :done.

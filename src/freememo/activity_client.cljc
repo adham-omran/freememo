@@ -174,6 +174,17 @@
    outcome, which is why a cancelled upload ends as 'cancelled' rather than
    racing two terminal writes.
 
+   **`cancel` MUST NOT appear inside an `e/server` form, in any position.** A
+   function call on the other peer is what forces a transfer, so even
+   `(some? cancel)` there sends the FUNCTION, and Electric's transit writer
+   throws for it — killing the client peer with no server-side trace. That
+   shipped: it stopped every Anki reconcile, because `quick-sync` passes a
+   canceller for exactly the phases a run spends its life in. The row needs no
+   `:cancellable` from here anyway — a pushed row's Cancel comes from
+   `tab-owns?` reading `!tab-drivers` on this peer, and writing `true` into the
+   column made a SECOND tab offer a button that `activity/cancel!` answers with
+   `:client-owned`. See `plans/anki-sync-client-peer-crash.md`.
+
    Pre : mounted inside `e/client`; `type` is a `:pushed`-tier registry type;
          `work-key` was composed through the registry (violation = caller bug).
    Post: at most one row per (user, type, work-key) is in flight, and it
@@ -181,7 +192,13 @@
    Invariant: every state change is sequenced through a token, and the local
          `!id` reset lives in `e/on-unmount` inside the frame the token spend
          unmounts — a bare reset! beside the server call would tear down the
-         in-flight effect that produced the id."
+         in-flight effect that produced the id.
+   Invariant: each server call takes ONE map, built on THIS peer — the shape
+         `anki_sync_panels.cljc:232` uses for the same reason, where client-scope
+         construction is what keeps unserializable client values out of the
+         server form. Whether it also costs fewer transfers than naming the
+         fields individually is unmeasured, and is not why it is written this
+         way."
   [user-id type work-key running? phase done total cancel unrecoverable? subject-id outcome error]
   (e/client
     (let [!id (atom nil)
@@ -192,12 +209,11 @@
       (when (and running? (nil? id))
         (let [[t _] (e/Token [type work-key])]
           (when t
-            (let [new-id (e/server (start!* user-id type work-key
-                                     {:phase (or phase "starting")
-                                      :subject-id subject-id
-                                      :done done :total total
-                                      :cancellable (some? cancel)
-                                      :unrecoverable unrecoverable?}))]
+            (let [opening {:phase (or phase "starting")
+                           :subject-id subject-id
+                           :done done :total total
+                           :unrecoverable unrecoverable?}
+                  new-id (e/server (start!* user-id type work-key opening))]
               (case new-id
                 (do (e/on-unmount
                       (fn []
@@ -207,23 +223,26 @@
                     (t)))))))
 
       ;; Report. The token input is the reading itself, so an unchanged reading
-      ;; costs nothing and a changed one writes exactly once.
+      ;; costs nothing and a changed one writes exactly once. Every field the
+      ;; reading carries MUST appear in the token input, or a change to that field
+      ;; alone never reaches the row: `unrecoverable?` sat outside it and left the
+      ;; flag stale until the next phase change.
       (when (and running? (some? id))
-        (let [[t _] (e/Token [phase done total])]
+        (let [[t _] (e/Token [phase done total unrecoverable?])]
           (when t
-            (case (e/server (report!* user-id id {:phase (or phase "running")
-                                                  :done done :total total
-                                                  :cancellable (some? cancel)
-                                                  :unrecoverable unrecoverable?}))
-              (t)))))
+            (let [reading {:phase (or phase "running")
+                           :done done :total total
+                           :unrecoverable unrecoverable?}]
+              (case (e/server (report!* user-id id reading))
+                (t))))))
 
       ;; Close. Unregisters the driver first so the leave warning disarms even if
       ;; the terminal write is the thing that fails.
       (when (and (not running?) (some? id))
         (let [[t _] (e/Token id)]
           (when t
-            (case (e/server (terminate!* user-id id (or outcome "success")
-                              {:error error :done done :total total}))
-              (do (e/on-unmount
-                    (fn [] (unregister-driver! id) (reset! !id nil)))
-                  (t)))))))))
+            (let [closing {:error error :done done :total total}]
+              (case (e/server (terminate!* user-id id (or outcome "success") closing))
+                (do (e/on-unmount
+                      (fn [] (unregister-driver! id) (reset! !id nil)))
+                    (t))))))))))
