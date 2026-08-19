@@ -587,11 +587,31 @@
 (e/defn PagesFilter [forecast]
   (e/client
     (let [!filter (atom "all")
-          filter-reason (e/watch !filter)]
+          filter-reason (e/watch !filter)
+          horizon (e/server (:horizon-days forecast))
+          projected-to (e/server (:projected-to forecast))]
       (dom/div
+        ;; `flex-wrap` is required, not tidiness: the caption is now wide enough
+        ;; to push the select past 320px, and §12.3.3 holds this pane to no
+        ;; horizontal overflow there.
         (dom/props {:style {:display "flex" :align-items "center" :gap "10px"
-                            :margin-bottom "8px"}})
+                            :margin-bottom "8px" :flex-wrap "wrap"}})
         (dom/div (dom/props {:class "dash-cap"}) (dom/text "Pages"))
+        ;; The date the rows below describe, stated beside the cap in the shape
+        ;; `PlanControls` uses — a plain sentence next to the cap, not inside
+        ;; it, because `dash-cap` uppercases and a date reads worse for it.
+        ;;
+        ;; Every row is the projection at the horizon, never today. A reader who
+        ;; took the table for today read four `known` rows against a `Known now`
+        ;; tile of `0 / 23`, with nothing on the table to reconcile the two: all
+        ;; four were pages whose mean interval crosses 21 days only inside the
+        ;; horizon. A horizon of 0 needs the other phrase, because "projected to
+        ;; <today>" contradicts itself.
+        (dom/span
+          (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"}})
+          (dom/text (if (pos? horizon)
+                      (str "verdicts projected to " projected-to ", not today")
+                      "verdicts as of today")))
         (dom/select
           (dom/props {:class "input" :style {:max-width "220px"}})
           (dom/option (dom/props {:value "all"}) (dom/text "All pages"))

@@ -576,6 +576,12 @@
          still renders its done-page count rather than an error.
    Post: `:progress` is TODAY and `:projected` is the target date. §1.1 needs
          both, and the two differ only by the horizon the projection ran at.
+   Post: `:verdicts` is the HORIZON's verdicts, and `:projected-to` names the
+         date they describe. The Pages table renders them, so without that date
+         beside it a reader takes a projected verdict for today's — measured on
+         a real schedule reading `0 / 23` known while the table showed four
+         `known` rows, all four of them pages whose mean interval crosses 21
+         days only inside the horizon.
    Inv : `:daily-load` is DERIVED from the projection, never estimated from a
          rate (§6.3). Its sum over days is the total projected reviews.
 
@@ -602,6 +608,13 @@
              reading-days (fc/coverage-window horizon lead)
              base {:schedule row
                    :horizon-days horizon
+                   ;; The date `:verdicts` describes, derived HERE for the
+                   ;; reason `:earliest-date` is: one formatter, so the caption
+                   ;; and the horizon cannot name different days. It is NOT the
+                   ;; schedule's `target_date` — `horizon` is capped at
+                   ;; `max-horizon-days`, so a target further out than that is
+                   ;; not the day the projection stopped at.
+                   :projected-to (day->iso-date horizon)
                    :cached-at (db/anki-state-cached-at user-id)
                    :pages pages
                    ;; §1.2 — what the plan table's split is made of, named once
