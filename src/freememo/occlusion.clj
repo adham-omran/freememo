@@ -27,15 +27,18 @@
   [:header :footer :remarks :sources :extra1 :extra2])
 
 (defn- sanitize-io-fields
-  "clean-html every text field; drop unknown keys; length-capped like other
-   card fields. Sanitization happens here — the single server entry point —
-   rather than per-field on the client."
+  "Sanitize every text field; drop unknown keys; length-capped like other card
+   fields. Sanitization happens here — the single server entry point — rather
+   than per-field on the client.
+
+   `clean-html-fragment`, matching `card-modals/sanitize-card-field`: these are
+   card fields, so they carry no heading `id`."
   [io-fields]
   (into {}
     (map (fn [k]
            (let [v (get io-fields k)]
              (input/check-length! k v input/card-max)
-             [k (or (some-> v cleaner/clean-html) "")])))
+             [k (or (some-> v cleaner/clean-html-fragment) "")])))
     io-field-keys))
 
 (def ^:private element-keys

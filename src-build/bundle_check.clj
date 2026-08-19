@@ -61,20 +61,63 @@
    ["Reflect.construct bridges the ES6 superclass" #"Reflect\.construct"]
    ["Quill.register is called"             #"Quill\.register"]])
 
-(defn- divider-findings
-  "What the divider registration in `source` fails to satisfy.
-   Pre : `source` is the bundle's text.
-   Post: a vector of failure strings, empty when every requirement holds."
-  [^String source]
-  (let [at (.indexOf source divider-anchor)]
-    (if (neg? at)
-      ["the divider registration is absent from the bundle — the defonce was eliminated"]
-      ;; The registration is one emitted IIFE; 400 chars covers it with room.
-      (let [block (subs source at (min (count source) (+ at 400)))]
+;; The `id` attributor is the second registration with the same exposure. Quill
+;; models no `id`, so without it every in-document anchor target dies in the
+;; Delta on the first edit — and `freememo.html-cleaner` would be storing an
+;; attribute the editor cannot keep. Its own `aget` reads are string-keyed for
+;; the reason above; these assertions prove the string keys reached the bundle.
+(def ^:private attributor-anchor "Quill.import(\"parchment\")")
+
+;; Closure canonicalises `x["Attributor"]` to `x.Attributor` and, for a property
+;; read on a value from an unknown global, leaves the NAME alone — measured:
+;; `new Bjb.Attributor("id","id",{scope:Bjb.Scope.BLOCK})`. So these match the
+;; dot form, as the divider requirements above do. Asserting the bracket form
+;; fails on a bundle that is perfectly correct.
+(def ^:private attributor-requirements
+  [["the Attributor constructor survives by name" #"\.Attributor\("]
+   ["Scope.BLOCK survives by name"                #"\.Scope\.BLOCK"]
+   ["the attribute is named \"id\" twice"         #"\"id\"\s*,\s*\"id\""]
+   ["Quill.register is called"                    #"Quill\.register"]])
+
+(def ^:private max-block-chars
+  "Each registration is one emitted IIFE; this covers it with room."
+  400)
+
+(defn- registration-findings
+  "What the registration anchored at `anchor` fails to satisfy.
+
+   Pre : `source` is the bundle's text; `requirements` is [label regex] pairs;
+         `others` names every OTHER registration's anchor.
+   Post: a vector of failure strings, empty when every requirement holds.
+   Inv : the window stops at the next registration. Closure emitted the divider
+         and the attributor adjacent, putting TWO `Quill.register` calls inside
+         a fixed 400-char window — so a deleted divider registration would have
+         passed on its neighbour's call, which is the exact elimination this
+         file exists to catch.
+   Inv : an anchor that occurs more than once is an error, not a first-match.
+         Both anchors resolve by position, so a second occurrence anywhere
+         earlier would silently retarget the whole check."
+  [^String source what anchor others requirements]
+  (let [at (.indexOf source ^String anchor)]
+    (cond
+      (neg? at)
+      [(str "the " what " registration is absent from the bundle"
+         " — the defonce was eliminated")]
+
+      (not (neg? (.indexOf source ^String anchor (inc at))))
+      [(str what ": the anchor " (pr-str anchor) " occurs more than once —"
+         " the check cannot tell which registration it is reading")]
+
+      :else
+      (let [next-at (->> others
+                      (map #(.indexOf source ^String % (inc at)))
+                      (remove neg?)
+                      (reduce min (count source)))
+            block (subs source at (min next-at (+ at max-block-chars)))]
         (into [] (keep (fn [[label re]]
                          (when-not (re-find re block)
-                           (str label " — NOT FOUND"))))
-          divider-requirements)))))
+                           (str what ": " label " — NOT FOUND"))))
+          requirements)))))
 
 (defn verify!
   "Assert the `:advanced` bundle kept what a successful build does not guarantee.
@@ -84,11 +127,15 @@
   [_]
   (let [bundle (prod-bundle)
         source (slurp bundle)
-        findings (divider-findings source)]
+        findings (into (registration-findings source "divider blot"
+                         divider-anchor [attributor-anchor] divider-requirements)
+                   (registration-findings source "id attributor"
+                     attributor-anchor [divider-anchor] attributor-requirements))]
     (when (seq findings)
       (throw (ex-info (str "bundle-check: " (.getName bundle) " failed "
                         (count findings) " assertion(s):\n  "
                         (str/join "\n  " findings))
                {:type ::bundle-check :bundle (.getName bundle) :findings findings})))
-    (println (format "bundle-check: %s satisfies %d divider-blot assertions"
-               (.getName bundle) (count divider-requirements)))))
+    (println (format "bundle-check: %s satisfies %d assertions"
+               (.getName bundle)
+               (+ (count divider-requirements) (count attributor-requirements))))))

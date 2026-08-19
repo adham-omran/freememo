@@ -555,19 +555,24 @@
       {:success false :error (.getMessage e)})))
 
 (defn- clean-pulled-field
-  "`clean-html` one pulled field value, and say so when it removed something.
+  "Sanitize one pulled field value, and say so when it removed something.
 
    pre : `html` is stored-form HTML — decorations already off, `<anki-mathjax>`
          already converted by `helpers/note->pull-update`.
    post: HTML whose every tag, class token and style declaration is allow-listed.
 
-   The `:warn` is not decoration. `clean-html` drops what
-   `quill-class-allow-list` and `safe-color-props` do not admit, and the reconcile
-   digest is now markup-sensitive — so a format Anki holds and this app does not
-   becomes a local difference on the very next run and pushes straight back. That
-   would read as a card which never settles, with nothing to grep for."
+   `clean-html-fragment`, not `clean-html`, and the difference is load-bearing.
+   A card is a fragment, so `card-modals/sanitize-card-field` strips `id` on the
+   way in. Admitting one on the way OUT would give the pulled field a token the
+   local side can never hold, and the reconcile digest is markup-sensitive — the
+   card would differ on every run and push straight back, for ever.
+
+   The `:warn` is not decoration, for the same reason: `clean-html` drops what
+   `quill-class-allow-list` and `safe-color-props` do not admit, so a format Anki
+   holds and this app does not becomes a local difference on the very next run.
+   That would read as a card which never settles, with nothing to grep for."
   [card-id field html]
-  (let [cleaned (cleaner/clean-html html)]
+  (let [cleaned (cleaner/clean-html-fragment html)]
     (when (not= cleaned html)
       (tel/log! {:level :warn
                  :id ::pulled-html-sanitized

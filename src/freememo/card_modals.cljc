@@ -22,10 +22,13 @@
    #?(:clj [freememo.settings :as settings])))
 
 (defn sanitize-card-field
-  "Sanitize a card field's HTML server-side. Uses clean-html (the user-trust
-   variant) — user-pasted <img> tags survive (pin-aware authoring may use them)."
+  "Sanitize a card field's HTML server-side. Uses clean-html-fragment: a card is
+   a piece cut out of a document, so it keeps no heading `id` — the anchors that
+   pointed at those headings stayed in the parent. Unlike clean-html-llm this is
+   the user-trust variant, so user-pasted <img> tags survive (pin-aware
+   authoring may use them)."
   [html]
-  #?(:clj (when html (cleaner/clean-html html))
+  #?(:clj (when html (cleaner/clean-html-fragment html))
      :cljs html))
 
 ;; Browser download helper

@@ -259,6 +259,75 @@
       (is (has-class? "li" "ql-indent-5"))
       (is (= "ordered" (some-> (.selectFirst doc "li") (.attr "data-list")))))))
 
+;; ── Anchor targets ─────────────────────────────────────────────────
+;; `id` is what an in-document anchor lands on. It is allowed only on the
+;; blocks Quill can hold it on — its Parchment attributor is BLOCK-scoped, so
+;; an `id` on a span or an `a` dies in the Delta on the first edit, and storing
+;; it would promise a target that does not survive editing.
+
+(deftest id-survives-on-the-blocks-quill-can-hold-it-on
+  (doseq [tag ["h1" "h2" "h3" "h4" "h5" "h6" "p"]]
+    (testing tag
+      (let [out (cleaner/clean-html (str "<" tag " id=\"intro\">Heading</" tag ">"))]
+        (is (str/includes? out "id=\"intro\"")
+          (str tag " lost its anchor target → " out))))))
+
+(deftest id-is-dropped-where-quill-cannot-keep-it
+  (doseq [[scenario html] [["inline span" "<p><span id=\"s\">x</span></p>"]
+                           ["anchor element" "<p><a id=\"a\" href=\"https://e.com\">x</a></p>"]
+                           ["layout div" "<div id=\"d\">x</div>"]]]
+    (testing scenario
+      (is (not (str/includes? (cleaner/clean-html html) "id="))
+        (str scenario " kept an id the editor would drop")))))
+
+(deftest an-id-carries-no-other-attribute-with-it
+  (testing "allowing id does not reopen the element to event handlers"
+    (let [out (cleaner/clean-html "<h2 id=\"a\" onclick=\"steal()\" class=\"evil\">H</h2>")]
+      (is (str/includes? out "id=\"a\""))
+      (is (not (str/includes? out "onclick")))
+      (is (not (str/includes? out "evil"))))))
+
+(deftest anchor-href-shapes-the-editor-must-keep
+  (doseq [[scenario html carrier] [["in-document fragment" "<a href=\"#intro\">g</a>" "href=\"#intro\""]
+                                   ["relative with fragment" "<a href=\"../x/y.html#f\">r</a>" "href=\"../x/y.html#f\""]
+                                   ["mail handler" "<a href=\"mailto:a@b.c\">m</a>" "href=\"mailto:a@b.c\""]
+                                   ["phone handler" "<a href=\"tel:+1234\">t</a>" "href=\"tel:+1234\""]
+                                   ["in-app topic link" "<a href=\"/viewer/topic/12#s\">t</a>" "href=\"/viewer/topic/12#s\""]]]
+    (testing scenario
+      (is (str/includes? (cleaner/clean-html html) carrier)
+        (str scenario " lost its href")))))
+
+(deftest script-bearing-hrefs-still-lose-the-attribute
+  (doseq [[scenario html] [["javascript" "<a href=\"javascript:alert(1)\">j</a>"]
+                           ["vbscript" "<a href=\"vbscript:x\">v</a>"]
+                           ["data document" "<a href=\"data:text/html,x\">d</a>"]]]
+    (testing scenario
+      (is (not (str/includes? (cleaner/clean-html html) "href="))
+        (str scenario " kept an executable href")))))
+
+(deftest a-fragment-keeps-no-anchor-targets
+  (testing "an extract or card field drops the ids a whole document keeps"
+    (doseq [tag ["h1" "h2" "h3" "h4" "h5" "h6" "p"]]
+      (let [html (str "<" tag " id=\"intro\">Heading</" tag ">")]
+        (is (str/includes? (cleaner/clean-html html) "id=\"intro\"")
+          (str tag ": the document variant keeps it"))
+        (is (not (str/includes? (cleaner/clean-html-fragment html) "id="))
+          (str tag ": the fragment variant must not"))))))
+
+(deftest the-fragment-variant-differs-from-the-document-variant-only-in-id
+  (doseq [{:keys [control html]} menu-format-fixtures]
+    (testing control
+      (is (= (cleaner/clean-html html) (cleaner/clean-html-fragment html))
+        (str control " diverged between the two sanitizers")))))
+
+(deftest clean-html-fragment-is-nil-preserving
+  (is (nil? (cleaner/clean-html-fragment nil)))
+  (is (= "" (cleaner/clean-html-fragment ""))))
+
+(deftest generated-cards-carry-no-anchor-targets
+  (testing "clean-html-llm inherits the fragment rule, not the document rule"
+    (is (not (str/includes? (cleaner/clean-html-llm "<h2 id=\"x\">H</h2>") "id=")))))
+
 (deftest clean-html-is-nil-preserving
   (testing "nil in, nil out — callers pass optional card fields straight through"
     (is (nil? (cleaner/clean-html nil)))))

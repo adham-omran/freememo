@@ -103,6 +103,45 @@
          (.register js/Quill Divider)
          true))))
 
+;; Quill 2.0.3 models no `id`, so `clipboard.convert` drops it from every
+;; element — measured on h1-h6, p, span and a. That makes an in-document anchor
+;; a link to nothing the moment the document is edited: `clean-html` now stores
+;; the attribute, but the first keystroke rewrites the flattened DOM back.
+;;
+;; A Parchment Attributor gives the Delta somewhere to keep it. BLOCK scope is
+;; what works: `{"insert":"Intro\n","attributes":{"id":"intro","header":2}}`
+;; round-trips on h1-h6 and p. An INLINE-scoped one does NOT rescue `<span id>`
+;; or `<a id>` — those tags have no blot to hang an attribute on — which is why
+;; `freememo.html-cleaner` allow-lists `id` on the block tags only. The two
+;; halves must agree; widening one without the other stores a target that
+;; cannot survive an edit.
+;;
+;; Splitting a block copies its `id` to both halves, so a heading cut in two
+;; yields a duplicate id and `getElementById` finds the first. That is accepted
+;; rather than de-duplicated: the anchor still lands on the right heading's
+;; first half, and a save-time sweep would have to renumber ids the document's
+;; own links point at.
+;;
+;; The blot above needs `aset` because Parchment READS `blotName` off a class we
+;; WRITE, and Closure deletes a write it believes nothing reads. Nothing here is
+;; that shape: `attrName` and `keyName` are written by Parchment's own
+;; constructor, inside vendored JavaScript Closure never compiles, and our own
+;; accesses are reads on a value from an unknown global. Closure canonicalises
+;; the string keys below back to dot access and keeps the names — the emitted
+;; bundle carries `new Bjb.Attributor("id","id",{scope:Bjb.Scope.BLOCK})`.
+;; They stay string-keyed anyway, because that is the form this file's divider
+;; comment argues for and it costs nothing. `bundle-check/verify!` asserts the
+;; emitted names either way.
+#?(:cljs
+   (defonce ^:private block-id-attributor-registered?
+     (let [Parchment (.import js/Quill "parchment")
+           Attributor (aget Parchment "Attributor")
+           block-scope (aget (aget Parchment "Scope") "BLOCK")]
+       (.register js/Quill
+         (new Attributor "id" "id" #js {:scope block-scope})
+         true)
+       true)))
+
 (defn quill-config
   "Returns the Quill constructor options map (passed via clj->js).
    Bubble theme with the SAME modules as the main document editor

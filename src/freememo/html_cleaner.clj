@@ -216,6 +216,17 @@
           i18n-tags (into-array String ["span" "div" "p" "h1" "h2" "h3" "h4" "h5" "h6"
                                         "li" "td" "th" "blockquote"
                                         "table" "tr" "ul" "ol" "a" "figure" "figcaption"])
+          ;; Tags allowed to carry `id` — the landing points for in-document
+          ;; anchors. Limited to the blocks Quill can hold an `id` on: its
+          ;; Parchment attributor is BLOCK-scoped, so an `id` on a span or an
+          ;; `a` is dropped by the Delta on the first edit and storing it would
+          ;; promise a target that does not survive.
+          ;;
+          ;; The value is not constrained. An imported `id` can collide with an
+          ;; app element's, so anchor lookup MUST be scoped to the editor root
+          ;; rather than `document.getElementById` (freememo.link-target's
+          ;; callers own that).
+          anchor-tags (into-array String ["h1" "h2" "h3" "h4" "h5" "h6" "p"])
           safelist (-> (Safelist/relaxed)
                      (.addTags (into-array String ["h1" "h2" "h3" "h4" "h5" "h6"
                                                    "p" "br" "hr"
@@ -233,7 +244,12 @@
                      (.addAttributes "tr" (into-array String ["data-row"]))
                      (.addAttributes "div" (into-array String ["data-language"]))
                      (.addAttributes "li" (into-array String ["data-list"]))
-                     (.addProtocols "a" "href" (into-array String ["http" "https" "mailto"]))
+                     ;; `tel` joins the set so a phone link reaches the OS
+                     ;; handler; without it Jsoup drops the href and leaves an
+                     ;; inert <a>. `ftp` is already present from
+                     ;; Safelist/relaxed and is left alone — Quill rewrites it
+                     ;; to about:blank anyway, which is the intended inert.
+                     (.addProtocols "a" "href" (into-array String ["http" "https" "mailto" "tel"]))
                      (.addProtocols "img" "src" (into-array String ["http" "https" "data"]))
                      ;; Keep relative URLs (e.g. /api/media/<id>) intact —
                      ;; without this, Jsoup strips relative srcs because they
@@ -245,6 +261,8 @@
         (.addAttributes safelist tag (into-array String ["class"])))
       (doseq [tag i18n-tags]
         (.addAttributes safelist tag (into-array String ["dir" "lang"])))
+      (doseq [tag anchor-tags]
+        (.addAttributes safelist tag (into-array String ["id"])))
       ;; Pass a baseUri so Jsoup can resolve relative URLs (e.g. /api/media/<id>)
       ;; against the http allow-list; combined with preserveRelativeLinks(true),
       ;; the output keeps them as relative paths instead of stripping them.
@@ -288,13 +306,36 @@
         (.unwrap el))
       (.html (.body doc)))))
 
+(defn clean-html-fragment
+  "Sanitize a piece CUT OUT of a document — an extract, a card field.
+
+   Same allow-list as `clean-html`, minus `id`. A whole document keeps its
+   heading ids because its own anchors land on them; a fragment does not,
+   because the links that pointed at those headings stayed behind in the
+   parent. Copying the ids out would put the same target in two topics and
+   promise a landing place nothing links to.
+
+   Pre : `html` is a string or nil.
+   Post: nil iff `html` is nil; otherwise `clean-html`'s output with every `id`
+         removed.
+   Inv : the only difference from `clean-html` is `id`. A fragment must not
+         diverge from a document in any other way, or the two sanitizers drift."
+  [html]
+  (when html
+    (let [doc (Jsoup/parseBodyFragment (clean-html html))]
+      (.prettyPrint (.outputSettings doc) false)
+      (doseq [^org.jsoup.nodes.Element el (.select doc "[id]")]
+        (.removeAttr el "id"))
+      (.html (.body doc)))))
+
 (defn clean-html-llm
-  "Sanitize HTML from LLM output. Same allow-list as `clean-html`, then strips
-   every `<img>` tag — pins are the sole source of images in cards (LL3-yes).
+  "Sanitize HTML from LLM output. `clean-html-fragment` — a generated card is a
+   fragment and has no anchor targets — then strips every `<img>` tag, because
+   pins are the sole source of images in cards (LL3-yes).
    Preserves cloze syntax `{{cN::text}}` in text nodes."
   [html]
   (when html
-    (let [cleaned (clean-html html)
+    (let [cleaned (clean-html-fragment html)
           doc (Jsoup/parseBodyFragment cleaned)]
       (doseq [^org.jsoup.nodes.Element img (.select doc "img")]
         (.remove img))

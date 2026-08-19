@@ -298,11 +298,20 @@
   "Rewrite every `<a>` to something this app can serve. Mutates in place.
 
    Post: a counter map. An internal page link becomes `/viewer/topic/<id>` with
-         its fragment dropped — `clean-html` strips every `id` attribute, so no
-         in-page anchor survives to land on. A fragment-only link, a link to a
-         page this import excluded, a dead link and a link to a non-image asset
-         are all UNWRAPPED: the text stays, the anchor goes. An absolute link is
-         left exactly as it is."
+         its fragment dropped. A fragment-only link, a link to a page this
+         import excluded, a dead link and a link to a non-image asset are all
+         UNWRAPPED: the text stays, the anchor goes. An absolute link is left
+         exactly as it is.
+
+   **Both losses are now defects, not design.** They were justified by
+   `clean-html` stripping every `id`, so there was nothing for an in-page anchor
+   to land on. That is no longer true: the sanitizer allow-lists `id` on
+   `h1`-`h6` and `p`, and `freememo.quill-field` registers a Parchment
+   attributor so it survives editing. Dropping the fragment collapses distinct
+   destinations onto one topic — 3531 provable duplicates in the corpus, where
+   three links differing only by anchor all became `/viewer/topic/309`.
+   Carrying it, and keeping fragment-only links, is specified in
+   plans/uniform-anchor-links.md §1.3 and §1.4."
   [user-id !media ^File root page-key id-by-key ^Element article]
   (let [c (atom {:internal 0 :fragment-only 0 :asset 0 :external 0 :dead 0})
         bump! #(swap! c update % inc)]

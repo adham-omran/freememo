@@ -85,7 +85,7 @@
 (defn build-gen-context* [{:keys [selection-html content-text context-mode use-context
                                   topic-id root-topic-id page-number context-window]}]
   #?(:clj
-     (let [sel-html (cleaner/clean-html selection-html)
+     (let [sel-html (cleaner/clean-html-fragment selection-html)
            context (when use-context
                      (case context-mode
                        :extract (if sel-html content-text (or (get-parent-content* topic-id) ""))
@@ -111,7 +111,11 @@
                                     (db/resolve-effective-source-id parent-id))
                     created (db/create-topic! {:parent-id parent-id
                                                :user-id user-id
-                                               :content (cleaner/clean-html content)
+                                               ;; A fragment, so it keeps no
+                                               ;; heading ids — the anchors that
+                                               ;; pointed at them stayed in the
+                                               ;; parent.
+                                               :content (cleaner/clean-html-fragment content)
                                                :kind "basic"
                                                :title title
                                                :source-id inherited-src})]
