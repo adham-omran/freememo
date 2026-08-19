@@ -565,7 +565,11 @@
          message left a stale bookmark waiting forever with no way out.
          `:status` is one of
            :ok         — a forecast, from state cached at `:cached-at`
-           :not-found  — no such schedule, or it belongs to another user
+           :not-found  — no such schedule, it belongs to another user, or its
+                         document is staged for deletion. `db/get-study-schedule`
+                         applies all three, in the clause `schedules-where` uses
+                         for the two lists, so the tab cannot show a schedule in
+                         one place and refuse it in another
            :no-config  — Anki has never been read for this user (§8.1)
            :no-cards   — the document has no pushed cards (§8.3)
          and which always carries `:progress`, so a document with no cards
@@ -884,6 +888,10 @@
                p (pace-of row inputs progress)]
            {:id (:study_schedules/id row)
             :title (or (:topics/doc_title row) "Untitled")
+            ;; The document this schedule is for, so the home view's card can
+            ;; open it. `display-rows` already projects it for the sidebar; the
+            ;; two views must offer the same destination.
+            :root-topic-id (:study_schedules/root_topic_id row)
             :target-date (:study_schedules/target_date row)
             :days-to-target (signed-days-to-target (:study_schedules/target_date row))
             :status (:status inputs)

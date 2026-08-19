@@ -19,7 +19,9 @@
    [freememo.schedule-anki :as sa]
    [freememo.schedule-forecast :as fc]
    [freememo.schedule-detail :refer [ScheduleForecast]]
+   [freememo.a11y :as a11y]
    [freememo.icons :as icons]
+   [freememo.navigation :as nav]
    [freememo.tooltip :as tooltip]
    [freememo.typeahead :as typeahead]
    [clojure.string :as str]
@@ -319,29 +321,108 @@
               (token (e/server (:error res))))))))))
 
 ;; ---------------------------------------------------------------------------
+;; The document a schedule is for
+;; ---------------------------------------------------------------------------
+;;
+;; A schedule exists to send the reader to a document, and this tab could not
+;; reach it: the user left for Library or search and found the book by name.
+;; Three surfaces name a document — the sidebar card, the home card and the
+;; detail heading — and all three route through the two fns below, so the tab
+;; has ONE definition of "the document this schedule is for".
+;;
+;; COMMAND PALETTE: no entry, and `:open-topic` covers the action already
+;; (`commands.cljc`, `:palette-hidden true`, `:nav-tab :viewer`). This link is
+;; contextual — it means nothing without a schedule on screen — so it is
+;; neither a place nor an action a user could name from anywhere. Recorded here
+;; because every new surface owes that decision in writing, not because the
+;; answer was in doubt.
+
+;; Pre : `root-topic-id` is non-nil.
+;; Post: the path `main/nav->route` builds for a bare topic, as a string. It is
+;;       duplicated rather than derived because the router owns route
+;;       CONSTRUCTION and exposes no path renderer; an href needs the string.
+(defn document-path [root-topic-id]
+  (str "/viewer/topic/" root-topic-id))
+
+;; Pre : `root-topic-id` is non-nil; `navigate!` is the tab's navigate fn.
+;; Post: a click handler that navigates in-app and cancels TWO defaults.
+;;       `preventDefault` keeps the anchor's href from reloading the page, so
+;;       navigation stays in the SPA router (`main.cljc`'s nav brand is the same
+;;       shape, for the same reason). `stopPropagation` keeps the enclosing
+;;       card's own handler from firing: both cards navigate to the SCHEDULE
+;;       from their outer div, so a document link inside one would otherwise
+;;       run two navigations from one click. It is stated unconditionally
+;;       because the handler cannot see which site mounted it — at the detail
+;;       heading no ancestor listens and the call is inert, which is cheaper
+;;       than two handlers that differ by one line.
+;; Post: `stopPropagation` is sufficient because `dom/On` registers on the
+;;       BUBBLE phase — its `opts` default is `{}`. A capture-phase ancestor
+;;       would fire first and this would not stop it. Measured in Chromium:
+;;       bubble → only this handler runs; capture → the ancestor runs first.
+;; Post: `:origin :schedule` records where the reader came from. Only phone
+;;       reading-mode reads `:origin`, gated on `:learn`, so this value changes
+;;       no behaviour today.
+;; Inv : the ONLY place this tab names a document destination.
+(defn open-document! [navigate! root-topic-id]
+  (fn [e]
+    #?(:cljs (do (.preventDefault e) (.stopPropagation e))
+       :clj nil)
+    (navigate! :viewer (nav/nav-topic root-topic-id :schedule))))
+
+;; Pre : `root-topic-id` non-nil; `title` is the document's title.
+;; Post: an icon-only anchor to the document. A real `dom/a` with an href, so
+;;       Tab reaches it and ⌘-click opens a second tab — which no
+;;       `dom/On`-on-a-div navigation in this app offers.
+;; Inv : the card's TITLE is not this link. The card's own click opens the
+;;       schedule and the title is that card's label, so leading the label
+;;       somewhere else would put two destinations on one card with nothing to
+;;       tell them apart. The icon is the second destination, stated as one.
+(e/defn DocumentIconLink [root-topic-id title navigate!]
+  (e/client
+    (dom/a
+      (dom/props {:href (document-path root-topic-id)
+                  :class "sched-doc-link"
+                  :aria-label (str "Open document: " title)})
+      (tooltip/Tooltip! "Open document")
+      (icons/Icon :book-open :size 14)
+      (dom/On "click" (open-document! navigate! root-topic-id) nil))))
+
+;; ---------------------------------------------------------------------------
 ;; Schedule list
 ;; ---------------------------------------------------------------------------
 
+;; Pre:  `s` is one row of `sched/list-schedules` or `list-archived-schedules`.
+;; Inv : the card has TWO destinations and both are keyboard-operable. Click and
+;;       Enter/Space share `open-schedule!`, so the activation exists once;
+;;       `DocumentIconLink` is an anchor and Tab already reaches it. Adding the
+;;       anchor without `KeyActivate` left the SECONDARY action reachable by
+;;       keyboard and the primary one not.
 (e/defn ScheduleCard [s navigate! selected?]
   (e/client
-    (dom/div
-      (dom/props {:class (str "dash-card sched-card" (when selected? " is-selected"))
-                  :style {:cursor "pointer" :padding "10px 12px" :margin-bottom "8px"}})
-      (dom/On "click" (fn [_] (navigate! :schedule {:type :schedule-detail :id (:id s)})) nil)
+    (let [open-schedule! (fn [_] (navigate! :schedule {:type :schedule-detail :id (:id s)}))]
       (dom/div
-        (dom/props {:style {:font-weight "600" :font-size "13px"
-                            :overflow "hidden" :text-overflow "ellipsis"
-                            :white-space "nowrap"}})
-        (tooltip/Tooltip! (:title s))
-        (dom/text (:title s)))
-      (dom/div
-        (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
-                            :margin-top "2px"}})
-        (dom/text (str (:target-date s) " · "
-                    (if (pos? (:days-left s)) (str (:days-left s) " days left") "today")
-                    (when (:first-page s)
-                      (str " · pages " (:first-page s) "–"
-                        (or (:last-page s) "end")))))))))
+        (dom/props {:class (str "dash-card sched-card" (when selected? " is-selected"))
+                    :style {:cursor "pointer" :padding "10px 12px" :margin-bottom "8px"}})
+        (dom/On "click" open-schedule! nil)
+        (a11y/KeyActivate {:role "button" :label (str "Open schedule: " (:title s))}
+          open-schedule!)
+        (dom/div
+          (dom/props {:class "sched-card-title-row"})
+          (dom/div
+            (dom/props {:style {:font-weight "600" :font-size "13px"
+                                :overflow "hidden" :text-overflow "ellipsis"
+                                :white-space "nowrap"}})
+            (tooltip/Tooltip! (:title s))
+            (dom/text (:title s)))
+          (DocumentIconLink (:root-topic-id s) (:title s) navigate!))
+        (dom/div
+          (dom/props {:style {:font-size "12px" :color "var(--color-text-secondary)"
+                              :margin-top "2px"}})
+          (dom/text (str (:target-date s) " · "
+                      (if (pos? (:days-left s)) (str (:days-left s) " days left") "today")
+                      (when (:first-page s)
+                        (str " · pages " (:first-page s) "–"
+                          (or (:last-page s) "end"))))))))))
 
 (e/defn ArchivedSchedules [user-id navigate! selected-id]
   (e/client
@@ -397,11 +478,24 @@
 ;; Detail pane
 ;; ---------------------------------------------------------------------------
 
-(e/defn ScheduleHeader [user-id schedule-id navigate! archived? !edit-open?]
+;; Pre:  `document` is `{:title str :root-topic-id id-or-nil}`. `:root-topic-id`
+;;       is nil exactly when the forecast is `:not-found` — this header renders
+;;       ABOVE that branch, so a stale bookmark reaches here with no document to
+;;       name — and it is the only key that says so. `:title` is always a
+;;       string, "Untitled" where the join found no title, so it is no test.
+;; Post: the heading is the document's title, and the title is the link. The
+;;       word `Forecast` moves to a sibling note; with no document the note is
+;;       the whole heading, which is what this pane read before.
+(e/defn ScheduleHeader [user-id schedule-id navigate! archived? document !edit-open?]
   (e/client
+    ;; Layout in CSS, not an inline style map, for the reason `SchedulePage`
+    ;; gives: it has to change with the viewport. Five items share this row —
+    ;; back, title, note, Edit, Archive — and at 359px the title shrank to 81px
+    ;; while the note held its 99px, measured in Chromium. The title is the data
+    ;; and the rest is chrome, so below 600px `.sched-detail-header` wraps and
+    ;; gives the heading a row of its own.
     (dom/div
-      (dom/props {:style {:display "flex" :align-items "center" :gap "10px"
-                          :margin-bottom "12px"}})
+      (dom/props {:class "sched-detail-header"})
       ;; The phone layout replaces the list with this pane, so it needs a way
       ;; back. CSS hides it above 600px, where the list is still on screen and
       ;; a back button would point at something already visible.
@@ -410,9 +504,27 @@
         (icons/Icon :chevron-down :size 16)
         (dom/text "Schedules")
         (dom/On "click" (fn [_] (navigate! :schedule)) nil))
+      ;; The document's title IS the heading here, and it is the link. This is
+      ;; the surface that needed it most: below 600px the sidebar carrying the
+      ;; name is `display: none` while a pane is open
+      ;; (`.sched-layout.is-detail .sched-sidebar`), so the phone detail view
+      ;; named the document nowhere at all.
+      ;;
+      ;; `archived` stays visible. It is the only signal that the schedule is
+      ;; retired, and the button beside it reads Restore rather than Archive
+      ;; because of that state.
       (dom/h2
-        (dom/props {:style {:margin "0" :font-size "16px" :flex "1"}})
-        (dom/text (if archived? "Forecast · archived" "Forecast")))
+        (dom/props {:class "sched-doc-heading"})
+        (when (some? (:root-topic-id document))
+          (dom/a
+            (dom/props {:href (document-path (:root-topic-id document))
+                        :class "sched-doc-heading-link"})
+            (tooltip/Tooltip! "Open document")
+            (dom/text (:title document))
+            (dom/On "click" (open-document! navigate! (:root-topic-id document)) nil)))
+        (dom/span
+          (dom/props {:class "sched-doc-heading-note"})
+          (dom/text (if archived? "Forecast · archived" "Forecast"))))
       ;; Edit sits beside Archive because both act on the schedule as a whole.
       ;; Hidden while archived: a retired schedule has no plan to revise, and
       ;; Restore is the one action that makes sense there.
@@ -464,7 +576,14 @@
           ;; a different schedule never inherits the previous one's open form.
           !edit-open? (atom false)
           edit-open? (e/watch !edit-open?)]
-      (ScheduleHeader user-id schedule-id navigate! archived? !edit-open?)
+      ;; Two fields, read one at a time off the server-form binding rather than
+      ;; shipped as a row: the row carries an array column and a page range the
+      ;; header has no use for. `:topics/doc_title` is the JOINED column, and
+      ;; next.jdbc qualifies it by `topics` — a bare `:doc_title` reads nil.
+      (ScheduleHeader user-id schedule-id navigate! archived?
+        {:title (e/server (or (get-in forecast [:schedule :topics/doc_title]) "Untitled"))
+         :root-topic-id (e/server (get-in forecast [:schedule :study_schedules/root_topic_id]))}
+        !edit-open?)
       (when edit-open?
         ;; The seed is read field by field rather than shipped as one row: the
         ;; row carries an array column and a page-range that mean nothing here.
@@ -483,7 +602,12 @@
         (dom/div
           (dom/props {:style {:padding "24px" :color "var(--color-text-secondary)"
                               :font-size "13px"}})
-          (dom/text "This schedule no longer exists.")
+          ;; Not "no longer exists": `:not-found` covers a deleted DOCUMENT too,
+          ;; and that schedule is still there and recoverable for twelve hours.
+          ;; The pane cannot tell the two causes apart — `get-study-schedule`
+          ;; returns nil for both — so the wording has to be true of each, and
+          ;; the second sentence names the recoverable one.
+          (dom/text "This schedule is not available. If you deleted its document, Undo restores both.")
           (dom/button
             (dom/props {:class "btn" :style {:margin-left "10px" :font-size "12px"}})
             (dom/text "Back to schedules")
@@ -500,45 +624,58 @@
 ;;       tab header carries no Anki chip: with FSRS off nothing ingests, so
 ;;       every row reports "Anki not read yet" on its own rather than one
 ;;       global banner speaking for figures it cannot vouch for.
+;; Inv : same two destinations and the same keyboard contract as `ScheduleCard`.
+;; Inv : the document icon sits immediately right of the TITLE, not after the
+;;       deadline badge. `.sched-card-title-row` holds the pair at both card
+;;       shapes, so one control has one place; the badge stays outside it. With
+;;       the icon as a third sibling of a `flex: 1` title it landed at the far
+;;       right of the home card and beside the text in the sidebar — two
+;;       positions for one thing.
 (e/defn DashboardCard [s navigate!]
   (e/client
-    (dom/div
-      (dom/props {:class "dash-card" :style {:cursor "pointer" :padding "12px 14px"
-                                             :margin-bottom "10px"}})
-      (dom/On "click" (fn [_] (navigate! :schedule {:type :schedule-detail :id (:id s)})) nil)
+    (let [open-schedule! (fn [_] (navigate! :schedule {:type :schedule-detail :id (:id s)}))]
       (dom/div
-        (dom/props {:style {:display "flex" :align-items "baseline" :gap "8px"}})
+        (dom/props {:class "dash-card" :style {:cursor "pointer" :padding "12px 14px"
+                                              :margin-bottom "10px"}})
+        (dom/On "click" open-schedule! nil)
+        (a11y/KeyActivate {:role "button" :label (str "Open schedule: " (:title s))}
+          open-schedule!)
         (dom/div
-          (dom/props {:style {:font-weight "600" :font-size "14px" :flex "1"
-                              :overflow "hidden" :text-overflow "ellipsis"
-                              :white-space "nowrap"}})
-          (tooltip/Tooltip! (:title s))
-          (dom/text (:title s)))
-        (dom/span
-          (dom/props {:class "toolbar-badge"})
-          (dom/text (fc/deadline-token (:days-to-target s)))))
-      (dom/div
-        (dom/props {:style {:margin-top "6px" :font-size "12px"
-                            :color "var(--color-text-secondary)"}})
-        ;; `quota-phrase`, the same fn the tab's Today tile reads, so the home
-        ;; view and the tab cannot disagree about whether the day is finished.
-        ;;
-        ;; The `today:` label is load-bearing here and absent in the tab, where
-        ;; the tile's own cap supplies it. Without it this segment reads
-        ;; `4 pages ahead · 44 / 60 covered · 2 ahead` — two different `ahead`
-        ;; numbers in one line, one measured against the pace line and one
-        ;; against today's allocation. A bare `done` reads as the whole
-        ;; schedule being finished.
-        (dom/text (str (:pace-phrase s)
-                    " · " (:covered s) " / " (:total s) " covered"
-                    " · today: " (fc/quota-phrase (:pages-today s)))))
-      ;; :ok needs no line — a working forecast is the ordinary case, and
-      ;; labelling it would make the exceptions harder to spot.
-      (when (not= :ok (:status s))
+          (dom/props {:style {:display "flex" :align-items "baseline" :gap "8px"}})
+          (dom/div
+            (dom/props {:class "sched-card-title-row" :style {:flex "1"}})
+            (dom/div
+              (dom/props {:style {:font-weight "600" :font-size "14px"
+                                  :overflow "hidden" :text-overflow "ellipsis"
+                                  :white-space "nowrap"}})
+              (tooltip/Tooltip! (:title s))
+              (dom/text (:title s)))
+            (DocumentIconLink (:root-topic-id s) (:title s) navigate!))
+          (dom/span
+            (dom/props {:class "toolbar-badge"})
+            (dom/text (fc/deadline-token (:days-to-target s)))))
         (dom/div
-          (dom/props {:style {:margin-top "4px" :font-size "12px"
-                              :color "var(--color-text-hint)"}})
-          (dom/text (:status-label s)))))))
+          (dom/props {:style {:margin-top "6px" :font-size "12px"
+                              :color "var(--color-text-secondary)"}})
+          ;; `quota-phrase`, the same fn the tab's Today tile reads, so the home
+          ;; view and the tab cannot disagree about whether the day is finished.
+          ;;
+          ;; The `today:` label is load-bearing here and absent in the tab, where
+          ;; the tile's own cap supplies it. Without it this segment reads
+          ;; `4 pages ahead · 44 / 60 covered · 2 ahead` — two different `ahead`
+          ;; numbers in one line, one measured against the pace line and one
+          ;; against today's allocation. A bare `done` reads as the whole
+          ;; schedule being finished.
+          (dom/text (str (:pace-phrase s)
+                      " · " (:covered s) " / " (:total s) " covered"
+                      " · today: " (fc/quota-phrase (:pages-today s)))))
+        ;; :ok needs no line — a working forecast is the ordinary case, and
+        ;; labelling it would make the exceptions harder to spot.
+        (when (not= :ok (:status s))
+          (dom/div
+            (dom/props {:style {:margin-top "4px" :font-size "12px"
+                                :color "var(--color-text-hint)"}})
+            (dom/text (:status-label s))))))))
 
 (e/defn ScheduleDashboard [user-id navigate!]
   (e/client

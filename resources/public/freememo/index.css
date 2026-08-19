@@ -4866,6 +4866,72 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
    button pointing at something already visible is noise. */
 .sched-back { display: none; }
 
+/* ── The document a schedule is for ───────────────────────────────
+   On a card the document gets an icon of its own, never the title: the card's
+   own click opens the SCHEDULE, and the title is that card's label. Two
+   destinations on one label, with nothing to tell them apart, is the trade
+   this shape refuses. `align-self` because the home card's title row aligns on
+   the baseline, where an inline-flex icon sits low. */
+.sched-card-title-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.sched-doc-link {
+    flex-shrink: 0;
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    line-height: 0;
+    padding: 2px;
+    border-radius: var(--radius-sm);
+    color: var(--color-text-secondary);
+}
+
+.sched-doc-link:hover {
+    color: var(--color-text-primary);
+    background: var(--color-bg-hover);
+}
+
+/* The detail pane's own header row: back, heading, Edit, Archive. */
+.sched-detail-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+/* The detail heading, where the title IS the link. It earns that here and
+   nowhere else: below 600px `.sched-layout.is-detail .sched-sidebar` is
+   `display: none`, so this pane is the only place a phone can read the name. */
+.sched-doc-heading {
+    margin: 0;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 16px;
+}
+
+.sched-doc-heading-link {
+    color: inherit;
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sched-doc-heading-link:hover { text-decoration: underline; }
+
+.sched-doc-heading-note {
+    flex-shrink: 0;
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--color-text-secondary);
+}
+
 /* ── Tables ───────────────────────────────────────────────────────
    `--grid-cols` is declared HERE, never inline on the element. An inline
    custom property beats every stylesheet rule short of `!important`, so a
@@ -4990,6 +5056,18 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     }
     /* The chevron points down by default; rotate it to point back. */
     .sched-back svg { transform: rotate(90deg); }
+
+    /* The heading takes a row of its own. Five items in one row left the title
+       at 81px here, and 26px at 320px, because the note and both buttons do not
+       shrink — a decoration outranking the data it labels. This is also the ONE
+       width where the heading is the only place the document is named, since
+       `.sched-layout.is-detail .sched-sidebar` above is `display: none`. */
+    .sched-detail-header { flex-wrap: wrap; }
+    .sched-detail-header .sched-doc-heading {
+        order: 1;
+        flex-basis: 100%;
+        font-size: 15px;
+    }
 
     /* Two tiles per row at 320px, three at 420px. `flex-basis` in percent
        rather than pixels, so the pair always fits whatever the width is. */

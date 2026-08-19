@@ -10719,14 +10719,32 @@
                                    [:= :s/root_topic_id root-topic-id]])))
 
 (defn get-study-schedule
-  "One schedule, or nil when it is absent or another user's.
+  "One schedule, or nil when it is absent, another user's, or over a document
+   staged for deletion.
 
    Pre : ownership is checked HERE, not by the caller. Every read of a schedule
-         crosses a reactive boundary where the id came from a URL."
+         crosses a reactive boundary where the id came from a URL.
+   Post: `:topics/doc_title` is the document's title. next.jdbc qualifies an
+         aliased column by the table it was selected FROM, not by the alias, so
+         a read of a bare `:doc_title` returns nil — which renders as
+         'Untitled' with nothing in any log. `schedule/display-rows` states the
+         same trap for the same reason.
+   Post: nil for a staged document — the SAME condition `schedules-where`
+         applies. The two readers must agree: both lists hide such a schedule,
+         and a detail pane that still rendered one offered its document link a
+         topic the user has already deleted. `stage-topic-for-deletion!` sets
+         `staged_delete_id` across the whole subtree, root included, so the
+         root's own column is the test.
+   Post: the caller reads `:not-found` from that nil (`schedule/forecast`),
+         which is the branch the detail pane already renders."
   [user-id schedule-id]
   (some-> (jdbc/execute-one! ds
-            (sql/format {:select [:*] :from [:study_schedules]
-                         :where [:and [:= :id schedule-id] [:= :user_id user-id]]}))
+            (sql/format {:select [:s/* [:t/title :doc_title]]
+                         :from [[:study_schedules :s]]
+                         :join [[:topics :t] [:= :s/root_topic_id :t/id]]
+                         :where [:and [:= :s/id schedule-id]
+                                 [:= :s/user_id user-id]
+                                 [:is :t/staged_delete_id nil]]}))
     schedule-row->map))
 
 (defn create-study-schedule!
