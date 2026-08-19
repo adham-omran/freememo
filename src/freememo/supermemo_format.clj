@@ -337,10 +337,26 @@
 (def ^:private reference-record-bytes 32)
 
 (defn- read-references
-  "Eight Text-registry ids per reference; index = reference id.
+  "Eight Text-registry ids per reference; reference ids are 1-based.
    Field positions established by inspection: 1 title, 2 date, 3 link,
    4 source, 7 comment. 0, 5 and 6 are unused in every observed collection.
-   Post: {reference-id {:title :date :url :source :comment}} for non-empty rows."
+
+   **Reference id R is the record at byte index R-1**, the same 1-based
+   convention `read-mem` and `read-element-info` state with their own
+   `(inc i)`. This reader keyed the record at index `i` as reference `i` and
+   started at 1, which shifted every lookup by one record and dropped the
+   highest reference outright: an element citing R received R+1's
+   bibliography, and an element citing the last reference received none.
+   Measured on a 37-reference collection whose used ids ran 1..37 with no
+   gaps over 37 records — element `Navigate with the sidebar` cited record 3
+   (`Intro to workspaces`) and cites its own page under this keying.
+   Shipped collections carry the shift; `plans/supermemo-reference-off-by-one.md`
+   holds the remap.
+
+   Pre : `b` is `reference.dat`, a whole number of `reference-record-bytes`.
+   Post: {reference-id {:title :date :url :source :comment}} for non-empty
+         records, keys 1..(record count).
+   Inv : every byte index in `b` is read exactly once."
   [^bytes b text-registry]
   (into {}
     (keep (fn [i]
@@ -348,8 +364,8 @@
                   fld #(registry-text text-registry (i32 b (+ o (* 4 %))))
                   m {:title (fld 1) :date (fld 2) :url (fld 3)
                      :source (fld 4) :comment (fld 7)}]
-              (when (some some? (vals m)) [i m]))))
-    (range 1 (quot (alength b) reference-record-bytes))))
+              (when (some some? (vals m)) [(inc i) m]))))
+    (range 0 (quot (alength b) reference-record-bytes))))
 
 ;; ── Verification ───────────────────────────────────────────────────
 
