@@ -14,9 +14,12 @@
             [freememo.archive :as archive]
             [freememo.audio :as audio]
             [freememo.biblio-import :as biblio-import]
+            [freememo.csl :as csl]
             [freememo.db :as db]
             [freememo.epub :as epub]
             [freememo.image-rehost :as image-rehost]
+            [freememo.page-pipeline :as pipeline]
+            [freememo.text :as text]
             [freememo.import-staging :as staging]
             [freememo.logging :as log]
             [taoensso.telemere :as tel]
@@ -85,6 +88,90 @@
     (catch Exception e
       (tel/error! {:id ::import-url :data {:user-id user-id :url url}} e)
       {:ok false :error (.getMessage e)})))
+
+(defn capture-page!*
+  "Store a page the browser serialized, which the server cannot fetch itself.
+
+   Pre  : user-id is a logged-in user. `html` is a serialized browser DOM, not
+          yet sanitized. `url` is the page's address. `csl` is caller-supplied
+          CSL-JSON, or nil.
+   Post : returns one of:
+            {:ok true :flow :captured       :topic-id N :title S}
+            {:ok true :flow :already-exists :topic-id N :title S}
+            {:ok false :error S}.
+   Inv  : within one source, a capture whose stored text repeats an existing
+          capture's creates no second topic, unless `version?` is set.
+
+   Three differences from `import-url!*`, all of them because the browser did
+   the fetching.
+
+   The pipeline runs with `:browser-dom?`, so the constructs Quill drops are
+   rewritten before they can be stored and flattened by the first edit.
+
+   De-duplication compares CONTENT, not the URL alone. A URL identifies a page,
+   but a capture is a page at a moment, and the same URL legitimately yields a
+   selection, a re-read, and a later revision. `find-topic-by-content-digest`
+   answers the question the user actually asks — is this already here.
+
+   Images are re-hosted from `data:` URIs, never fetched. The extension inlines
+   them precisely because the server cannot reach them, so
+   `rehost-html-images!` would 403 on exactly the pages this path exists for."
+  [user-id {:keys [html url csl version?]}]
+  (try
+    (cond
+      (str/blank? html)
+      {:ok false :error "Nothing to capture" :blame :caller}
+
+      ;; Without a URL there is no source row, and without a source row there
+      ;; is nothing to deduplicate against — every capture would silently
+      ;; become a new root. Refusing is honest; succeeding quietly is not.
+      (str/blank? url)
+      {:ok false :error "A capture needs the page address" :blame :caller}
+
+      :else
+      (let [page (pipeline/page->document html url {:browser-dom? true})
+            canonical-url (or (get-in page [:biblio :local :URL]) url)
+            source (db/ensure-source-for-url! user-id canonical-url
+                     {:source-type (:source-type page)
+                      :title (:title page)
+                      :issued-date-parts (:issued-date-parts page)})
+            source-id (:sources/id source)
+            stored-html (:html (image-rehost/rehost-data-uris!
+                                 {:html (:html page) :user-id user-id}))
+            content-text (text/strip-html stored-html)
+            existing (when-not version?
+                       (db/find-topic-by-content-digest user-id source-id content-text))]
+        (if existing
+          {:ok true :flow :already-exists
+           :topic-id (:topics/id existing)
+           :title (:topics/title existing)}
+          (let [topic-id (db/create-web-topic! user-id (:title page) stored-html
+                           {:url canonical-url
+                            :source-type (:source-type page)
+                            :issued-date-parts (:issued-date-parts page)})]
+            (when topic-id
+              (attach-biblio-best-effort! user-id topic-id
+                (if csl (csl/csljson->web-biblio csl) (:biblio page)))
+              (commands/bump! user-id :import-document))
+            {:ok true :flow :captured :topic-id topic-id :title (:title page)}))))
+    (catch Exception e
+      (tel/error! {:id ::capture-page :data {:user-id user-id :url url}} e)
+      {:ok false :error (.getMessage e)})))
+
+(defn existing-pdf-capture
+  "The user's PDF topic for `url`, if a capture of that page already exists.
+
+   Pre : user-id non-nil. `url` is a page address, or nil.
+   Post: {:topics/id :topics/title} or nil.
+   Inv : reads only. A caller uses this to avoid staging bytes it will discard.
+
+   Content de-duplication cannot serve a screenshot. `content_text` is empty
+   until the user runs OCR, so every screenshot would digest alike. The URL is
+   the whole of a screenshot's identity, so the URL is what this matches."
+  [user-id url]
+  (when (and user-id (not (str/blank? url)))
+    (when-let [source (db/find-source-by-url user-id url)]
+      (db/find-pdf-topic-by-source-id user-id (:sources/id source)))))
 
 (defn confirm-staged-upload!*
   "Finalize a staged binary upload into a topic.

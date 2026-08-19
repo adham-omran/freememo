@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Capture to FreeMemo</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0;
+        padding: 12px;
+        width: 240px;
+        font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        opacity: 0.6;
+      }
+      button {
+        display: block;
+        width: 100%;
+        margin-bottom: 6px;
+        padding: 9px 10px;
+        font: inherit;
+        text-align: left;
+        border: 1px solid rgba(128, 128, 128, 0.35);
+        border-radius: 6px;
+        background: transparent;
+        cursor: pointer;
+      }
+      button:hover { background: rgba(128, 128, 128, 0.12); }
+      button:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
+      button span { display: block; font-size: 11px; opacity: 0.6; }
+      footer { margin-top: 10px; font-size: 11px; opacity: 0.55; }
+      footer a { color: inherit; }
+    </style>
+  </head>
+  <body>
+    <h1>Capture to FreeMemo</h1>
+
+    <button id="dom" type="button" autofocus>
+      Page
+      <span>The document as rendered</span>
+    </button>
+    <button id="selection" type="button">
+      Selection
+      <span>Only what you highlighted</span>
+    </button>
+    <button id="screenshot" type="button">
+      Screenshot
+      <span>Full-page image as a PDF</span>
+    </button>
+
+    <footer><a href="#" id="options">Settings</a></footer>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

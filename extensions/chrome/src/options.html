@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>FreeMemo Web Capture — Settings</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0 auto;
+        padding: 28px 24px;
+        max-width: 34rem;
+        font: 14px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      h1 { margin: 0 0 4px; font-size: 18px; }
+      p.lede { margin: 0 0 24px; opacity: 0.65; }
+      fieldset { margin: 0; padding: 0; border: 0; }
+      legend { padding: 0; font-weight: 600; }
+      label { display: block; margin: 10px 0; }
+      label span { display: block; margin-left: 24px; font-size: 12px; opacity: 0.65; }
+      #saved { margin-left: 8px; font-size: 12px; color: #16a34a; opacity: 0; transition: opacity .2s; }
+      #saved.show { opacity: 1; }
+    </style>
+  </head>
+  <body>
+    <h1>FreeMemo Web Capture</h1>
+    <p class="lede">
+      Captures go to your FreeMemo library using this browser's session. There
+      is no key to enter — sign in to FreeMemo and the extension follows.
+    </p>
+
+    <fieldset>
+      <legend>When a page is already captured<span id="saved">Saved</span></legend>
+
+      <label>
+        <input type="radio" name="onDuplicate" value="existing" />
+        Open what I already have
+        <span>The server returns the existing topic. Nothing is added.</span>
+      </label>
+
+      <label>
+        <input type="radio" name="onDuplicate" value="version" />
+        Save it again as a new version
+        <span>
+          A second topic is created alongside the first, sharing one source, so
+          you can compare how the page changed.
+        </span>
+      </label>
+    </fieldset>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

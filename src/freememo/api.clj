@@ -34,6 +34,7 @@
    [freememo.epub-http :as epub-http]
    [freememo.upload-http :as upload-http]
    [freememo.video-http :as video-http]
+   [freememo.web-import :as web-import]
    [taoensso.telemere :as tel]
    [clojure.java.io :as io]
    [clojure.string :as str]
@@ -173,6 +174,18 @@
 
 ;; ── /api/upload-file ───────────────────────────────────────────────
 
+(defn- parse-csljson
+  "Decode a caller-supplied CSL-JSON string. Returns a map, or nil.
+
+   Pre : `s` is a JSON string, blank, or nil.
+   Post: nil for anything that does not parse. A malformed blob costs the
+         caller its bibliography, never its import — the same contract
+         `zotero-stage-handler` set, which is where this shape started."
+  [s]
+  (when (and s (not (str/blank? s)))
+    (try (json/parse-string s true)
+         (catch Exception _ nil))))
+
 (defn upload-file-handler
   "POST /api/upload-file — multipart file.
    Pre:  authenticated; size within cap.
@@ -201,9 +214,24 @@
             (let [[kind reject-msg] (ct/classify-multipart filename mime-type bytes)]
               (case kind
                 :pdf
-                (let [upload-id (staging/stage! user-id bytes filename :pdf)]
-                  (json-response 200 {:success true :upload_id upload-id :flow "pdf"
-                                      :filename filename :size size}))
+                ;; `csljson` carries the page address for a capture, the same
+                ;; way `/api/zotero/stage` carries a Zotero item's metadata.
+                ;; `create-pdf-topic!` writes no URL of its own, so without
+                ;; this a screenshot has nothing to be deduplicated against.
+                (let [csl (parse-csljson (get-in request [:params "csljson"]))
+                      web-biblio (when csl (csl/csljson->web-biblio csl))
+                      page-url (some-> csl :URL not-empty)
+                      existing (web-import/existing-pdf-capture user-id page-url)]
+                  (if existing
+                    (json-response 200 {:success true
+                                        :doc_id (:topics/id existing)
+                                        :title (:topics/title existing)
+                                        :flow "already-exists"})
+                    (let [upload-id (staging/stage! user-id bytes filename :pdf
+                                      (when web-biblio
+                                        {:web-biblio web-biblio :source :capture}))]
+                      (json-response 200 {:success true :upload_id upload-id :flow "pdf"
+                                          :filename filename :size size}))))
 
                 :epub
                 (if (epub/epub-magic-bytes? bytes)
@@ -275,22 +303,56 @@
 ;; ── /api/upload-paste ──────────────────────────────────────────────
 
 (defn upload-paste-handler
-  "POST /api/upload-paste — {format, title, content, url?}.
-   Pre:  authenticated; title and content non-blank; format is \"html\" or \"markdown\".
-   Post: {:success true :doc_id N} or {:success false :error <msg>}."
+  "POST /api/upload-paste — {format, title, content, url?} for a paste,
+   {capture, content, url, csljson?, version?} for a browser capture.
+
+   Pre:  authenticated; content non-blank. A paste needs a non-blank title and
+         a format of \"html\" or \"markdown\". A capture needs neither — the
+         server derives the title, because the extension's popup has no field
+         for one.
+   Post: {:success true :doc_id N} for a paste.
+         {:success true :doc_id N :flow \"captured\"|\"already-exists\"} for a
+         capture, so the extension can badge a duplicate differently from a
+         new topic.
+         {:success false :error <msg>} otherwise.
+   Inv:  a request with no `capture` flag takes exactly the path it took before
+         the capture extension existed — same sanitizing, same de-duplication,
+         same response shape."
   [request]
   (if-let [user-id (require-auth request)]
     (try
       (let [format (get-in request [:params "format"])
             title (get-in request [:params "title"])
             content (get-in request [:params "content"])
-            url-val (get-in request [:params "url"])]
+            url-val (get-in request [:params "url"])
+            capture? (= "true" (get-in request [:params "capture"]))
+            version? (= "true" (get-in request [:params "version"]))
+            csl (parse-csljson (get-in request [:params "csljson"]))]
         (cond
-          (str/blank? title)
-          (json-response 400 {:success false :error "Title is required"})
-
           (str/blank? content)
           (json-response 400 {:success false :error "Content is required"})
+
+          capture?
+          (let [r (web-import/capture-page!* user-id
+                    {:html content :url url-val :csl csl :version? version?})]
+            (cond
+              (:ok r)
+              (json-response 200 {:success true
+                                  :doc_id (:topic-id r)
+                                  :title (:title r)
+                                  :flow (name (:flow r))})
+
+              ;; `capture-page!*` marks a violated precondition. A missing URL
+              ;; or empty content is the extension's mistake, and answering 500
+              ;; would tell it to retry something that cannot succeed.
+              (= :caller (:blame r))
+              (json-response 400 {:success false :error (:error r)})
+
+              :else
+              (json-response 500 {:success false :error (:error r)})))
+
+          (str/blank? title)
+          (json-response 400 {:success false :error "Title is required"})
 
           (= format "html")
           (let [bib (when (seq url-val) {:url url-val :source-type "web"})

@@ -5,6 +5,7 @@
    [hyperfiddle.electric-dom3 :as dom]
    [hyperfiddle.electric-forms5 :as forms]
    [freememo.editor-actions :as editor-actions]
+   [freememo.browser-extension-section :refer [BrowserExtensionSection]]
    [freememo.storage-section :refer [StorageSection]]
    [freememo.account-transfer-section :refer [AccountTransferSection]]
    [freememo.credits-section :refer [CreditsSection]]
@@ -25,6 +26,7 @@
    {:id "settings-appearance" :label "Appearance"}
    {:id "settings-anki" :label "Anki Sync"}
    {:id "settings-zotero" :label "Zotero"}
+   {:id "settings-extension" :label "Browser Extension"}
    {:id "settings-keyboard" :label "Keyboard Shortcuts"}])
 
 ;; Stable atom shared across reactive cycles. Atoms created inside e/defn let
@@ -492,6 +494,12 @@
             (dom/props {:id "settings-zotero"
                         :style (tab-style active "settings-zotero")})
             (ZoteroSection user-id))
+
+      ;; ── Browser Extension section ──────────────────────────────
+          (dom/div
+            (dom/props {:id "settings-extension"
+                        :style (tab-style active "settings-extension")})
+            (BrowserExtensionSection user-id))
 
       ;; ── Keyboard Shortcuts section (read-only) ──
           (dom/div

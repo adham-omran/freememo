@@ -19,6 +19,16 @@
      <kbd>                 -> <code>
      <div class=admonition> -> <blockquote>, title line bolded
      <figure>              -> <p>, any <figcaption> becomes <em>
+     <div> (layout)        -> unwrapped, unless it is a Quill code block
+     <cite> <q>            -> <em>
+     <small>               -> unwrapped
+     <caption>             -> <p><strong> above its table
+     <th>                  -> <td> holding a <strong>
+     <thead> <tfoot>       -> rows folded into <tbody>
+     <col> <colgroup>      -> removed
+
+   The last five exist for browser DOM, which the Chrome capture extension
+   posts verbatim. See `plans/chrome-capture-extension.md`.
 
    **It MUST run before `clean-html`**, for the reason
    `sphinx-import/strip-headerlinks!` records: the sanitizer strips the class
@@ -284,6 +294,141 @@
         (.tagName el "p")))
     (count els)))
 
+(def ^:private code-block-container-selector
+  "Where a `div` is load-bearing and MUST survive `unwrap-layout-divs!`.
+   Mirrors `html-cleaner/inside-code-block-container?`, which is the only
+   other place that treats a `div` as meaningful rather than as layout."
+  ".ql-code-block-container")
+
+(defn- unwrap-layout-divs!
+  "Unwrap every `div` that is not part of a Quill code block.
+
+   Pre : `root` is a parsed document body. `admonitions->blockquotes!` MUST
+         have run — it is the one step that reads a `div`'s class, and after
+         this step that div is gone.
+   Post: every remaining `div` is, or sits inside, a `.ql-code-block-container`.
+         Returns how many were unwrapped.
+   Inv : no text is added or removed. Children keep their order and their
+         position relative to the div's former siblings.
+
+   Quill 2.0.3 registers no `div` blot outside the code-block pair, so a layout
+   div is dropped on load whatever the database holds. Unwrapping here moves
+   that loss into the stored form, where the first edit cannot enlarge it.
+
+   A browser DOM is mostly these. One measured Wikipedia article carried 179
+   divs, all of which `clean-html` keeps and Quill then discards."
+  [^Element root]
+  (let [els (->> (.select root "div")
+              vec
+              (remove (fn [^Element el] (some? (.closest el code-block-container-selector)))))]
+    ;; Deepest first: unwrapping an ancestor reparents a descendant, and Jsoup
+    ;; keeps the descendant's own handle valid, but the depth order makes the
+    ;; traversal independent of that guarantee.
+    (doseq [^Element el (reverse els)]
+      (.unwrap el))
+    (count els)))
+
+(def ^:private emphasis-tags
+  "Inline tags Quill has no blot for whose meaning survives as emphasis.
+   `cite` appears on real articles — one measured Wikipedia page carried 38."
+  #{"cite" "q"})
+
+(defn- inline-semantics->em!
+  "Retag every `cite` and `q` as `em`.
+
+   Pre : `root` is a parsed document body.
+   Post: no `cite` or `q` remains. Returns how many were retagged.
+   Inv : text is unchanged. `em` is in `clean-html`'s allow-list and has an
+         `italic` blot, so nothing downstream drops the result.
+
+   Both tags survive `clean-html` — they are in Jsoup's relaxed safelist — and
+   both are absent from Quill's registry, so without this the emphasis is lost
+   on the first edit while the text stays."
+  [^Element root]
+  (let [els (vec (.select root (str/join ", " emphasis-tags)))]
+    (doseq [^Element el els]
+      (.tagName el "em"))
+    (count els)))
+
+(defn- drop-presentational!
+  "Unwrap `small` and remove `col` and `colgroup`.
+
+   Pre : `root` is a parsed document body.
+   Post: no `small`, `col` or `colgroup` remains. Returns how many elements
+         were touched.
+   Inv : `small` keeps its text, because it wraps content. `col` and
+         `colgroup` carry none, so removing them loses nothing.
+
+   All three pass `clean-html` through Jsoup's relaxed safelist and all three
+   are absent from Quill's registry."
+  [^Element root]
+  (let [smalls (vec (.select root "small"))
+        cols (vec (.select root "col, colgroup"))]
+    (doseq [^Element el smalls]
+      (.unwrap el))
+    (doseq [^Element el cols]
+      (.remove el))
+    (+ (count smalls) (count cols))))
+
+(defn- table-captions->paragraphs!
+  "Lift every `<caption>` out of its table as a bolded paragraph above it.
+
+   Pre : `root` is a parsed document body.
+   Post: no `caption` remains. Each former caption is a `<p><strong>` placed
+         immediately before the table that held it. Returns how many moved.
+   Inv : the caption's text and inline markup are preserved in order.
+
+   Quill's table blots are `table`, `table-row`, `table-body` and
+   `table-container` — no caption among them — so a caption's text would
+   otherwise reappear as a bare run inside the table on the first edit."
+  [^Element root]
+  (let [els (vec (.select root "caption"))]
+    (doseq [^Element caption els]
+      (when-let [^Element table (.parent caption)]
+        (let [p (Element. "p")
+              strong (Element. "strong")]
+          (doseq [node (vec (.childNodes caption))]
+            (.appendChild strong node))
+          (.appendChild p strong)
+          (.before table p)
+          (.remove caption))))
+    (count els)))
+
+(defn- normalize-table-sections!
+  "Fold `thead` and `tfoot` into `tbody`, and retag `th` as a bolded `td`.
+
+   Pre : `root` is a parsed document body.
+   Post: no `th`, `thead` or `tfoot` remains. Every `tr` sits in a `tbody`, in
+         the order a browser renders them: head rows, body rows, foot rows.
+         Returns how many elements changed.
+   Inv : no row and no cell is lost, and a header cell keeps its emphasis as a
+         `strong` that `clean-html` and Quill both hold.
+
+   Measured against the vendored Quill 2.0.3 bundle: the table blots are
+   `table` (tagName TD), `table-row` (TR), `table-body` (TBODY) and
+   `table-container` (TABLE). No blot carries TH, THEAD or TFOOT, so all three
+   are dropped on load while their text stays."
+  [^Element root]
+  (let [headers (vec (.select root "th"))
+        sections (vec (.select root "thead, tfoot"))]
+    (doseq [^Element th headers]
+      (bold-in-place! th)
+      (.tagName th "td"))
+    (doseq [^Element table (vec (.select root "table"))]
+      (let [head-rows (vec (.select table "thead > tr"))
+            foot-rows (vec (.select table "tfoot > tr"))
+            body (or (.first (.select table "tbody"))
+                     (let [tb (Element. "tbody")]
+                       (.appendChild table tb)
+                       tb))]
+        (doseq [^Element tr (reverse head-rows)]
+          (.prependChild body tr))
+        (doseq [^Element tr foot-rows]
+          (.appendChild body tr))))
+    (doseq [^Element el sections]
+      (.remove el))
+    (+ (count headers) (count sections))))
+
 (defn- squeeze-whitespace!
   "Drop whitespace-only text nodes and collapse the rest.
 
@@ -348,19 +493,39 @@
    survives to `clean-html`, which is `indent-definition-block!`'s stated
    precondition.
 
-   Whitespace is squeezed LAST, so no earlier step can put blank nodes back."
-  [^Element root]
-  (let [admonitions (admonitions->blockquotes! root)
-        keys-rewritten (keyboard-keys->code! root)
-        figures (flatten-figures! root)
-        {:keys [dt dd]} (flatten-definition-lists! root)
-        blank-dropped (squeeze-whitespace! root)]
-    {:admonitions-to-blockquotes admonitions
-     :keys-to-code keys-rewritten
-     :terms-flattened dt
-     :definition-bodies-flattened dd
-     :figures-flattened figures
-     :whitespace-nodes-dropped blank-dropped}))
+   Whitespace is squeezed LAST, so no earlier step can put blank nodes back.
+
+   `:browser-dom?` adds the five steps a captured page needs and no importer
+   wants. It is opt-in because two of them contradict invariants the other
+   corpora rely on: SuperMemo's 10391 bare layout divs and Sphinx's
+   `div.sidebar` are both asserted to SURVIVE, and `unwrap-layout-divs!`
+   removes them. A capture has no such construct and no such expectation.
+
+   When enabled, layout divs are unwrapped AFTER admonitions, because that step
+   is the only one that reads a div's class, and BEFORE definition lists and
+   figures, because `indent-definition-block!` requires that nothing later
+   unwraps the element it wrote the indent onto."
+  ([^Element root] (rewrite-for-quill! root {}))
+  ([^Element root {:keys [browser-dom?]}]
+   (let [admonitions (admonitions->blockquotes! root)
+         keys-rewritten (keyboard-keys->code! root)
+         browser (when browser-dom?
+                   {:captions-lifted (table-captions->paragraphs! root)
+                    :table-sections-normalized (normalize-table-sections! root)
+                    :inline-semantics-to-em (inline-semantics->em! root)
+                    :presentational-dropped (drop-presentational! root)
+                    :layout-divs-unwrapped (unwrap-layout-divs! root)})
+         figures (flatten-figures! root)
+         {:keys [dt dd]} (flatten-definition-lists! root)
+         blank-dropped (squeeze-whitespace! root)]
+     (merge
+       {:admonitions-to-blockquotes admonitions
+        :keys-to-code keys-rewritten
+        :terms-flattened dt
+        :definition-bodies-flattened dd
+        :figures-flattened figures
+        :whitespace-nodes-dropped blank-dropped}
+       browser))))
 
 (defn doc-html->quill-html
   "`rewrite-for-quill!` for a caller holding a string rather than an Element.
@@ -376,6 +541,24 @@
     (let [doc (Jsoup/parseBodyFragment html)]
       (.prettyPrint (.outputSettings doc) false)
       (rewrite-for-quill! (.body doc))
+      (.html (.body doc)))))
+
+(defn browser-dom->quill-html
+  "`doc-html->quill-html` for a page serialized out of a live browser.
+
+   Pre : `html` is browser DOM, or nil. `clean-html` has NOT run — the layout
+         step reads a div's class to spare Quill code blocks.
+   Post: nil iff `html` is nil. Otherwise the rewritten HTML, holding no
+         layout `div`, `cite`, `q`, `small`, `caption`, `col` or `colgroup`.
+   Inv : does NOT sanitize. The caller still owes `clean-html`.
+
+   The importers keep calling `doc-html->quill-html`, whose output this does
+   not change. See the `:browser-dom?` note on `rewrite-for-quill!`."
+  [html]
+  (when html
+    (let [doc (Jsoup/parseBodyFragment html)]
+      (.prettyPrint (.outputSettings doc) false)
+      (rewrite-for-quill! (.body doc) {:browser-dom? true})
       (.html (.body doc)))))
 
 (defn drop-bare-spans

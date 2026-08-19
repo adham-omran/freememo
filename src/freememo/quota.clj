@@ -67,6 +67,23 @@
         "Invalid STORAGE_REQUEST_MAX_BYTES; using default")
       104857600)))
 
+(def small-request-max-bytes
+  "HTTP request-body ceiling for `:small` routes and any unclassified /api/*
+   POST. A request-shape guard, not a storage limit — these routes carry
+   metadata, a form, or one document's text.
+
+   50 MiB, raised from 10 MiB for the Chrome capture extension. A serialized
+   browser DOM with its images inlined as data: URIs is the largest thing that
+   travels this way. Measured across twelve real pages: eleven encode under
+   10 MiB, the ECMA-262 specification needs 12.87 MiB on text alone, and the
+   worst page reaches about 37.5 MiB with every image inlined.
+
+   `/login` is in this class. It needs no session and no route in this
+   application has a rate limit, so this figure is also the number of bytes an
+   anonymous caller can post there. `wrap-params` reads that body into memory
+   before any handler runs. See `plans/chrome-capture-extension.md` §7."
+  52428800)
+
 (defn unlimited?
   "Sentinel check — `0` means no cap."
   [n]

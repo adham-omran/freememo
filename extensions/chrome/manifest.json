@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "FreeMemo Web Capture",
+  "version": "0.1.0",
+  "description": "Save the page you are reading into FreeMemo, including pages behind a login.",
+  "homepage_url": "https://freememo.net",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Capture to FreeMemo",
+    "default_popup": "src/popup.html"
+  },
+  "options_page": "src/options.html"
+}

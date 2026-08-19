@@ -86,7 +86,7 @@
    (defn wrap-route-body-size
      "Cap request body size, keyed on `api/body-class`. `:upload` routes use
       `quota/request-max-bytes` (nil when env=0 → unlimited); `:small` and any
-      other /api/* POST get 10 MB (request-shape guard).
+      other /api/* POST get `quota/small-request-max-bytes`.
       Returns 411 for chunked uploads, 413 when Content-Length exceeds the cap."
      [handler]
      (fn [request]
@@ -96,9 +96,10 @@
                          (case (api/body-class uri method)
                            :upload (when-not (quota/unlimited? quota/request-max-bytes)
                                      quota/request-max-bytes)
-                           :small 10485760
+                           :small quota/small-request-max-bytes
                            ;; Unclassified /api/* POST keeps the legacy guard.
-                           (when (.startsWith ^String uri "/api/") 10485760)))
+                           (when (.startsWith ^String uri "/api/")
+                             quota/small-request-max-bytes)))
              transfer-encoding (some-> (get-in request [:headers "transfer-encoding"])
                                  clojure.string/lower-case)
              content-length (parse-content-length (get-in request [:headers "content-length"]))]

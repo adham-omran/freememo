@@ -306,6 +306,18 @@
   (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_content_text_trgm
                       ON topics USING GIN (content_text gin_trgm_ops)"])
 
+  ;; Capture dedupe. Index the DIGEST, never the text — a btree row cannot
+  ;; exceed about 2704 bytes and `content_text` routinely does, which is the
+  ;; same reason `uq_flashcards_question` indexes `md5(question)`.
+  ;;
+  ;; Scoped by source_id rather than user_id: the question a capture asks is
+  ;; "does this user already hold this page's content under this URL", and
+  ;; `sources` is where the URL lives. That also keeps the index selective —
+  ;; one source has a handful of topics, one user has tens of thousands.
+  (jdbc/execute! ds ["CREATE INDEX IF NOT EXISTS idx_topics_source_content_digest
+                      ON topics (source_id, md5(content_text))
+                      WHERE source_id IS NOT NULL AND content_text IS NOT NULL"])
+
   ;; Learn-queue preview. GENERATED, not written by the app, for the reason
   ;; `neoreader_highlights.quote_hash` is: the derivation belongs beside the
   ;; column it reads, where the two cannot drift.
@@ -3559,7 +3571,13 @@
    Used to dedupe URL imports — a single sources row may already be
    linked from a topic, in which case re-importing should return the
    existing topic instead of creating a duplicate.
-   Returns {:topics/id ...} or nil."
+   Returns {:topics/id ...} or nil.
+
+   Ordered, because a source can now hold more than one root. The capture
+   extension's version setting creates siblings that share a source row
+   deliberately, and an unordered `LIMIT 1` over them returns whichever the
+   planner reaches first — so the same re-import could resolve to a different
+   topic on consecutive calls. Oldest wins."
   [user-id source-id]
   (when (and user-id source-id)
     (jdbc/execute-one! ds
@@ -3570,6 +3588,53 @@
                            [:= :kind "web"]
                            [:is :parent_id nil]
                            [:= :source_id source-id]]
+                   :order-by [[:id :asc]]
+                   :limit 1}))))
+
+(defn find-topic-by-content-digest
+  "The user's topic under `source-id` whose stored text matches `content-text`.
+
+   Pre : user-id and source-id non-nil. content-text is the plain text a
+         caller is about to store, already derived from sanitized HTML.
+   Post: {:topics/id :topics/title} or nil.
+   Inv : compares digests, never text, so the query stays index-eligible
+         against `idx_topics_source_content_digest`.
+
+   Blank `content-text` matches nothing. A screenshot has none until OCR runs,
+   and every screenshot would otherwise collide with every other one — that
+   case belongs to `find-pdf-topic-by-source-id`."
+  [user-id source-id content-text]
+  (when (and user-id source-id (not (str/blank? content-text)))
+    (jdbc/execute-one! ds
+      ["SELECT id, title FROM topics
+        WHERE user_id = ? AND source_id = ? AND parent_id IS NULL
+          AND content_text IS NOT NULL
+          AND md5(content_text) = md5(?)
+        ORDER BY id ASC
+        LIMIT 1"
+       user-id source-id content-text])))
+
+(defn find-pdf-topic-by-source-id
+  "The user's root PDF topic for `source-id`, oldest first.
+
+   Pre : user-id and source-id non-nil.
+   Post: {:topics/id :topics/title} or nil.
+   Inv : matches on the source alone, which for a PDF means the URL.
+
+   A screenshot capture stores no text until the user runs OCR, so a content
+   digest cannot tell two of them apart. The source row carries the URL, and
+   the URL is the whole identity of a screenshot."
+  [user-id source-id]
+  (when (and user-id source-id)
+    (jdbc/execute-one! ds
+      (sql/format {:select [:id :title]
+                   :from [:topics]
+                   :where [:and
+                           [:= :user_id user-id]
+                           [:= :kind "pdf"]
+                           [:is :parent_id nil]
+                           [:= :source_id source-id]]
+                   :order-by [[:id :asc]]
                    :limit 1}))))
 
 (defn ensure-source-for-url!

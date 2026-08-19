@@ -3,9 +3,9 @@
   (:require [clj-http.client :as http]
             [clojure.string :as str]
             [taoensso.telemere :as tel]
-            [freememo.biblio-web :as bw]
             [freememo.content-type :as ct]
             [freememo.html-cleaner :as cleaner]
+            [freememo.page-pipeline :as pipeline]
             [freememo.url-validate :as url])
   (:import [org.jsoup Jsoup]))
 
@@ -14,42 +14,6 @@
 
 (def ^:private outbound-max-bytes 26214400)  ;; 25 MB
 (def ^:private outbound-timeout-ms 30000)    ;; 30 s
-
-(defn- parse-iso-date-parts
-  "Parse common publication-date string shapes into a CSL :date-parts vec:
-   [[Y]] [[Y M]] or [[Y M D]]. Returns nil on unparseable input.
-   Handles: 2023-01-19 · 2023/01/19 · 2023-01 · 2023 · 2023-01-19T18:59:59Z."
-  [s]
-  (when (and s (string? s) (not (str/blank? s)))
-    (let [stripped (-> s str/trim (str/replace #"T.*$" "") (str/replace "/" "-"))
-          parts (str/split stripped #"-")
-          ints (->> parts
-                 (keep #(try (Integer/parseInt %) (catch Exception _ nil)))
-                 (take 3)
-                 vec)]
-      (when (and (seq ints) (<= 1900 (first ints) 2100))
-        [ints]))))
-
-(defn- extract-issued-date-parts
-  "Mine a CSL :issued date-parts vec from a parsed HTML document by checking
-   common publication-date meta tags. Priority order: citation_date (Google
-   Scholar / ArXiv abstract pages) → DC.date → DC.date.issued → article:published_time
-   (Open Graph) → <time pubdate datetime=…>. Returns nil if none present or
-   none parse."
-  [^org.jsoup.nodes.Document doc]
-  (let [meta-attr (fn [selector]
-                    (some-> (.selectFirst doc selector) (.attr "content") not-empty))
-        time-attr (some-> (.selectFirst doc "time[pubdate][datetime]")
-                    (.attr "datetime") not-empty)
-        candidate (or (meta-attr "meta[name=citation_date]")
-                      (meta-attr "meta[name=citation_publication_date]")
-                      (meta-attr "meta[name=citation_online_date]")
-                      (meta-attr "meta[name=DC.date.issued]")
-                      (meta-attr "meta[name=DC.date]")
-                      (meta-attr "meta[property=article:published_time]")
-                      (meta-attr "meta[name=pubdate]")
-                      time-attr)]
-    (parse-iso-date-parts candidate)))
 
 (defn- redirect-error
   "Build an error result for a 3xx response. Surfaces the Location header so
@@ -194,34 +158,6 @@
         (and (= 403 status)
              (str/includes? (str/lower-case server) "cloudflare")))))
 
-(defn- process-html-body
-  "Extract title + cleaned content + biblio from an already-decoded HTML string.
-   Pre:  html-str is a non-blank string; url is the originating URL.
-   Post: {:title :html :url :source-type \"web\" :biblio {:local :identifiers}}."
-  [html-str url]
-  (let [biblio (try (bw/harvest-html html-str)
-                    (catch Exception _ {:local {} :identifiers {}}))
-        doc (Jsoup/parse html-str)
-        title (or (some-> (.select doc "title") (.first) (.text))
-                  (some-> (.select doc "h1") (.first) (.text))
-                  url)
-        issued-date-parts (extract-issued-date-parts doc)
-        _ (doseq [sel ["nav" "footer" "header" "aside" ".sidebar" ".nav"
-                       ".footer" ".header" ".advertisement" ".ad" "#comments"
-                       "script" "style" "noscript" "iframe"]]
-            (.remove (.select doc sel)))
-        main-content (or (some-> (.select doc "article") (.first) (.html))
-                         (some-> (.select doc "main") (.first) (.html))
-                         (some-> (.select doc "[role=main]") (.first) (.html))
-                         (some-> (.select doc ".content") (.first) (.html))
-                         (some-> (.select doc "#content") (.first) (.html))
-                         (.html (.body doc)))
-        html (cleaner/clean-html main-content)
-        biblio+url (update biblio :local
-                     (fn [m] (cond-> m (not (:URL m)) (assoc :URL url))))]
-    (cond-> {:title title :html html :url url :source-type "web" :biblio biblio+url}
-      issued-date-parts (assoc :issued-date-parts issued-date-parts))))
-
 (defn- fetch-generic-url
   "Fetch a generic URL as bytes, classify by Content-Type, and either decode +
    process as HTML or return a binary dispatch shape.
@@ -263,7 +199,7 @@
           :html
           (let [charset (ct/extract-charset content-type)
                 html-str (String. body-bytes ^String charset)]
-            (assoc (process-html-body html-str url) :success true))
+            (assoc (pipeline/page->document html-str url) :success true))
 
           (:pdf :epub)
           {:success true
