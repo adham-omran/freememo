@@ -77,7 +77,7 @@ source live:
 # Replace <PROFILE> with the actual profile dir name under Profiles/.
 PROFILE_DIR="$HOME/Library/Application Support/Zotero/Profiles/<PROFILE>"
 mkdir -p "$PROFILE_DIR/extensions"
-printf '%s\n' "$PWD/freememo-zotero-plugin/" > "$PROFILE_DIR/extensions/freememo@freememo.net"
+printf '%s\n' "$PWD/extensions/zotero/" > "$PROFILE_DIR/extensions/freememo@freememo.net"
 ```
 
 Restart Zotero with caches purged so the proxy is picked up:
@@ -121,7 +121,7 @@ If the response is `{ error: "origin-not-allowed", got: ... }`:
 ## Layout
 
 ```
-freememo-zotero-plugin/
+extensions/zotero/
 ├── manifest.json                plugin metadata (Zotero 7+ format)
 ├── bootstrap.js                 lifecycle hooks (startup, shutdown, …)
 ├── src/

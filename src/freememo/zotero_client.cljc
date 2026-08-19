@@ -2,7 +2,7 @@
   "Browser-side client for the FreeMemo-for-Zotero plugin's HTTP API.
 
    Talks to http://127.0.0.1:23119/freememo/* — endpoints registered by the
-   plugin (see freememo-zotero-plugin/ at the repo root). All calls are
+   plugin (see extensions/zotero/ in this repo). All calls are
    `fetch`-based and return Promises; results are Clojure maps with
    :keywordize-keys true.
 

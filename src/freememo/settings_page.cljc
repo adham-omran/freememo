@@ -65,10 +65,12 @@
 ;; Plugin .xpi download URL — points at the committed artifact in the repo.
 ;; /raw/ (not /blob/) so the browser downloads the binary instead of rendering
 ;; GitHub's HTML "binary file" preview page. Bump the version segment in the
-;; filename when freememo-zotero-plugin/manifest.json version changes (the
+;; filename when extensions/zotero/manifest.json version changes (the
 ;; build.sh output filename embeds it).
+;; The artifact NAME is independent of the directory — build.sh hardcodes
+;; NAME=freememo-zotero-plugin — so relocating the source moves only the path.
 (def ^:private plugin-download-url
-  "https://github.com/adham-omran/freememo/raw/main/freememo-zotero-plugin/dist/freememo-zotero-plugin-0.1.0.xpi")
+  "https://github.com/adham-omran/freememo/raw/main/extensions/zotero/dist/freememo-zotero-plugin-0.1.0.xpi")
 
 (e/defn ZoteroSection
   "Settings → Zotero. Per-user enable toggle + plugin-install link + a
