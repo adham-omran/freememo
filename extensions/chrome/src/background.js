@@ -418,6 +418,24 @@ async function capture(mode) {
   }
 }
 
+/**
+ * Receive a capture request from the popup.
+ *
+ * Pre : `message.mode` is "dom", "selection" or "screenshot".
+ * Post: the sender is answered AT ONCE, so its popup can close, and the
+ *       capture continues here.
+ * Inv : the acknowledgement says "started", never "finished". Holding the
+ *       message channel open until the capture completes would keep the
+ *       worker alive, but it would also hold the popup open for the whole
+ *       capture — the popup awaits this answer. Fast acknowledgement is what
+ *       lets the popup close, which is the whole reason the work is here.
+ *
+ * Worker lifetime is not solved by this handler. Chrome terminates an idle
+ * worker after 30 seconds, and since Chrome 110 a pending event holds it —
+ * every `chrome.scripting` and `chrome.tabs` call in a capture is such an
+ * event, so a stitch or an upload keeps resetting the timer. The gap that
+ * remains is a single fetch that takes more than 30 seconds to answer at all.
+ */
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message && message.type === "capture") {
     capture(message.mode);

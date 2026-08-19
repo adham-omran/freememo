@@ -6,11 +6,23 @@
 
 /**
  * Ask the worker for one capture, then close.
+ *
  * Pre : `mode` is "dom", "selection" or "screenshot".
- * Post: the window is closed. The outcome arrives as a toolbar badge.
+ * Post: the worker has ACKNOWLEDGED the request, and the window is closed.
+ *       The outcome arrives later as a toolbar badge.
+ * Inv : the close waits on the acknowledgement. `sendMessage` is asynchronous
+ *       and closing the popup destroys the context it is delivered in, so a
+ *       synchronous `window.close()` on the next line can abort the message
+ *       before the worker ever hears it — a click that does nothing at all,
+ *       with no error anywhere to say so.
  */
-function start(mode) {
-  chrome.runtime.sendMessage({ type: "capture", mode });
+async function start(mode) {
+  try {
+    await chrome.runtime.sendMessage({ type: "capture", mode });
+  } catch (error) {
+    // The worker is gone or failed to register. Say so where a click cannot.
+    console.warn("FreeMemo: the extension worker did not answer:", error);
+  }
   window.close();
 }
 
