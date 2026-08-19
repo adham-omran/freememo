@@ -3092,13 +3092,24 @@
 
 (defn find-source-by-url
   "Look up a sources row for (user-id, url). Returns row or nil.
-   Used at import to dedupe — same wiki article → one sources row, many topics."
+   Used at import to dedupe — same wiki article → one sources row, many topics.
+
+   Ordered, for the reason `find-web-topic-by-source-id` gives about its own
+   `LIMIT 1`: `idx_sources_user_url` is NOT unique and one URL really does hold
+   several rows. `sphinx-import` writes its build's source through
+   `insert-source-rows!` rather than `ensure-source-for-url!`, so every
+   re-import of a build adds another — production carries eight rows for one
+   Blender manual URL and six for another, with only one of each set attached
+   to a topic. Unordered, this returned whichever row the planner reached
+   first, so a dedupe could look past the attached one and import the page
+   again. Oldest wins, matching that sibling."
   [user-id url]
   (when (and user-id (not (str/blank? url)))
     (when-let [row (jdbc/execute-one! ds
                      (sql/format {:select [:*]
                                   :from [:sources]
                                   :where [:and [:= :user_id user-id] [:= :url url]]
+                                  :order-by [[:id :asc]]
                                   :limit 1}))]
       (update row :sources/csl pgobject->clj))))
 

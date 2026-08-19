@@ -54,6 +54,13 @@
           ;; time, and a second click on the same link joins the first rather
           ;; than racing it.
           :importing-urls   (atom #{})
+          ;; url -> error string for a link Import that failed. Written before
+          ;; membership drops, so `activity-registry`'s :error-fn can still read
+          ;; it when the reporter closes the row — otherwise a failed import is
+          ;; recorded in history as a success. Left behind on purpose after the
+          ;; work is gone, which is what makes the outcome readable; a later
+          ;; success on the same url clears its entry, so only failures persist.
+          :url-import-errors (atom {})
           :processing-videos (atom #{})     ; video topic ids in the ffmpeg/Whisper pipeline
           :ocr-errors       (atom {})
           :scan-cancellers  (atom {})

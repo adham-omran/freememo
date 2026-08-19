@@ -336,7 +336,13 @@
    {:label "Importing page"
     :tier :server :subject :none :work-key identity
     :state-key :importing-urls :phase "fetching"
-    :key-fn identity :owner-key->args (constantly [])}})
+    :key-fn identity :owner-key->args (constantly [])
+    ;; Without this a failed fetch closes as a success, because the reporter
+    ;; reads outcomes here and nowhere else. `start-url-import!*` records the
+    ;; error before membership drops, and clears it on a later success for the
+    ;; same url, so the map holds failures only.
+    :error-fn (fn [uid work-key]
+                (get @(us/get-atom uid :url-import-errors) work-key))}})
 
 (def registry
   "`entries`, with each server-tier entry's `:read` derived from its own data."

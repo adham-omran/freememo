@@ -314,17 +314,53 @@
         (dom/div (dom/props {:class "hint"})
           (dom/text "Adjusts text size for cards (10-20px)"))))))
 
+(e/defn LinkImportNavigatesField
+  "Whether Import follows the page it just found.
+
+   Only a DUPLICATE can be followed at once — a fresh import has nowhere to go
+   until its fetch lands, and that outcome arrives as a toast with its own Open
+   button. So this governs the duplicate case; off keeps the reader where they
+   are, and the toast is still there to follow.
+
+   Forms5 `Checkbox!`, the standalone persisted-toggle shape
+   `content-toolbar-settings/ContextSettings` uses."
+  [user-id]
+  (e/client
+    (let [server-value (e/server (settings/get-link-import-navigates user-id))
+          !navigates (atom server-value)
+          navigates (e/watch !navigates)]
+      (dom/div
+        (dom/props {:class "field"})
+        (dom/label
+          (dom/props {:style {:display "flex" :align-items "center" :gap "8px"}})
+          (e/amb
+            (e/for [[t {v :link-import-navigates}]
+                    (forms/Checkbox! :link-import-navigates navigates)]
+              (let [r (e/server (e/Offload #(settings/save-link-import-navigates user-id v)))]
+                (case r
+                  (if (:success r)
+                    (do (reset! !navigates v) (t))
+                    (t (:error r))))))
+            (do (dom/text "Open a link's page when Import finds it already imported")
+                (e/amb))))))))
+
 (e/defn AppearanceSection
-  "Settings → Appearance. Theme (hand-rolled select) + card text size
-   (Forms5 Input!). Wrapped by the caller in the tab-visibility div, same
-   convention as AIFeaturesSection."
+  "Settings → Appearance. Theme (hand-rolled select), card text size
+   (Forms5 Input!) and the link-Import navigation toggle. Wrapped by the caller
+   in the tab-visibility div, same convention as AIFeaturesSection.
+
+   The link toggle lives here rather than in a section of its own because
+   `Settings sections` is a Coverage-counts figure — an eighth section would
+   fail `coverage-counts.spec.mjs` until docs/post-deploy-checklist.md moved
+   with it, and one checkbox does not earn a section."
   [user-id]
   (e/client
     (dom/div
       (dom/props {:class "card"})
       (dom/h3 (dom/props {:class "section-title"}) (dom/text "Appearance"))
       (ThemeField user-id)
-      (CardFontSizeField user-id))))
+      (CardFontSizeField user-id)
+      (LinkImportNavigatesField user-id))))
 
 ;; ---------------------------------------------------------------------------
 ;; Anki Sync tab

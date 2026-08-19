@@ -138,7 +138,15 @@
               (let [r (try (import-url!* user-id url)
                            (catch Throwable e
                              (tel/error! {:id ::start-url-import :data {:user-id user-id :url url}} e)
-                             {:ok false :error (.getMessage e)}))]
+                             {:ok false :error (.getMessage e)}))
+                    errors (us/get-atom user-id :url-import-errors)]
+                ;; Record the outcome BEFORE `with-in-flight`'s finally drops
+                ;; membership: that is when the reporter closes the row and
+                ;; reads `:error-fn`. Recorded after, the row is already closed
+                ;; as a success.
+                (if (:ok r)
+                  (swap! errors dissoc url)
+                  (swap! errors assoc url (or (:error r) "Import failed")))
                 (cond
                   (and (:ok r) (:topic-id r))
                   (toasts/push! user-id

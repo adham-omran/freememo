@@ -43,6 +43,11 @@
 (def PRE_PROMPT_HISTORY "pre_prompt_history")
 (def PRE_PROMPT_MODE "pre_prompt_mode")
 (def CARD_FONT_SIZE "card_font_size")
+
+;; Whether a link Import follows the page when it finds one already imported.
+;; The key `freememo.editor-pane/link-import-navigates?*` reads on the click
+;; path; kept here so the two halves cannot name different strings.
+(def LINK_IMPORT_NAVIGATES "link_import_navigates")
 (def SCAN_DPI "scan_dpi")
 (def TRANSCRIBE_LANGUAGE "transcribe_language")
 (def VIDEO_TRANSCRIBE_ON_UPLOAD "video_transcribe_on_upload")
@@ -766,6 +771,33 @@
     (catch Exception e
       (tel/error! {:id ::save-card-font-size} e)
       {:success false :error "Failed to save card font size"})))
+
+(defn get-link-import-navigates
+  "Whether Import opens a page it found already imported.
+   Post: true unless the user turned it off. Defaults ON, which is what the
+         behaviour was before the setting existed."
+  [user-id]
+  (not= "false" (db/get-setting user-id LINK_IMPORT_NAVIGATES)))
+
+(defn save-link-import-navigates
+  "Pre : `value` is a boolean.
+   Post: {:success true}. The Settings checkbox reflects it at once from its
+         own atom.
+
+   The editor reads this on a `:settings-refresh` watch, and `db/set-setting`
+   bumps NO channel — only `freememo.commands` may — so an editor already
+   mounted keeps the old value until it remounts. That is the whole cost, and
+   it is small: changing this means being on the Settings page, and leaving it
+   remounts the editor before any link can be clicked. Routing the write
+   through a command would fix it and would add a registry entry, which moves
+   a Coverage-counts figure for a preference nothing else reads."
+  [user-id value]
+  (try
+    (db/set-setting user-id LINK_IMPORT_NAVIGATES (str (boolean value)))
+    {:success true}
+    (catch Exception e
+      (tel/error! {:id ::save-link-import-navigates} e)
+      {:success false :error "Failed to save link import navigation"})))
 
 (defn get-card-split
   "Global per-user content↕card-table split, as a percentage in [15,85].

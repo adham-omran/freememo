@@ -16,6 +16,7 @@
    #?(:cljs [freememo.editor-image-menu :as image-menu])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
+   #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.image-rehost :as image-rehost])
    #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.web-import :as web-import])))
@@ -46,19 +47,20 @@
             not-empty)
      :cljs nil))
 
-(def ^:private navigate-on-import-key "link_import_navigates")
-
 (defn link-import-navigates?*
   "Whether Import should follow the page it just found.
 
    Pre : `_refresh` creates the reactive dependency; `user-id` is logged in.
-   Post: true unless the user turned it off. Defaults to true, matching the
-         behaviour before the setting existed.
-   Inv : only a duplicate can navigate immediately. A fresh import has nowhere
-         to go yet — the topic does not exist until the fetch lands — so this
-         governs the duplicate case and the toast governs the rest."
+   Post: true unless the user turned it off, defaulting to the behaviour that
+         existed before the setting.
+   Inv : the key lives in `freememo.settings` and is read through it, so the
+         Settings checkbox and this click-path read cannot name different
+         strings.
+   Inv : only a DUPLICATE can navigate immediately. A fresh import has nowhere
+         to go — its topic does not exist until the fetch lands — so this
+         governs the duplicate case and the completion toast governs the rest."
   [_refresh user-id]
-  #?(:clj (not= "false" (db/get-setting user-id navigate-on-import-key))
+  #?(:clj (settings/get-link-import-navigates user-id)
      :cljs true))
 
 (defn announce-duplicate!
