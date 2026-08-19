@@ -25,6 +25,80 @@
 ;; reader conditional lives in a plain defn body, not in the Electric graph.
 ;; ---------------------------------------------------------------------------
 
+;; ---------------------------------------------------------------------------
+;; The editor's link channel — server half
+;; ---------------------------------------------------------------------------
+
+(defn document-base-url*
+  "The address `topic-id` was imported from, for resolving its relative hrefs.
+
+   Pre : `topic-id` may be nil.
+   Post: an absolute http(s) URL, or nil when the topic has no effective
+         source — which is the honest answer for 9680 SuperMemo topics and
+         every hand-written one, and is what makes a relative link :no-base.
+   Inv : resolves through the ancestor walk, so a page inherits its build's
+         address. That address is the BUILD's for a Sphinx import, which is
+         why those documents keep their links in-app instead of relative."
+  [topic-id]
+  #?(:clj (some-> (db/resolve-effective-source-id topic-id)
+            db/get-source
+            :sources/url
+            not-empty)
+     :cljs nil))
+
+(def ^:private navigate-on-import-key "link_import_navigates")
+
+(defn link-import-navigates?*
+  "Whether Import should follow the page it just found.
+
+   Pre : `_refresh` creates the reactive dependency; `user-id` is logged in.
+   Post: true unless the user turned it off. Defaults to true, matching the
+         behaviour before the setting existed.
+   Inv : only a duplicate can navigate immediately. A fresh import has nowhere
+         to go yet — the topic does not exist until the fetch lands — so this
+         governs the duplicate case and the toast governs the rest."
+  [_refresh user-id]
+  #?(:clj (not= "false" (db/get-setting user-id navigate-on-import-key))
+     :cljs true))
+
+(defn announce-duplicate!
+  "Tell the user what Import found, when it found it at once.
+
+   Pre : `result` is `start-url-import!*`'s return.
+   Post: :announced. A duplicate toasts with a button that opens the topic; a
+         queued fetch says so; anything else is an error the user can see.
+   Inv : always returns a value, so a `case` in the caller can sequence on it."
+  [user-id result]
+  #?(:clj
+     (do (case (:flow result)
+           :already-exists
+           (toasts/push! user-id
+             {:level :info
+              :message (str "Already imported — \"" (:title result) "\"")
+              :actions [{:label "Open"
+                         :nav [:viewer {:type :topic :topic-id (:topic-id result)}]}]})
+
+           (:queued :busy)
+           (toasts/push! user-id
+             {:level :info :message "Importing in the background…"})
+
+           (toasts/push! user-id
+             {:level :error :message "Could not start the import."}))
+         :announced)
+     :cljs :announced))
+
+(defn push-link-toast!
+  "Surface what a click could only explain — a missing heading, or a relative
+   href with no address to resolve against.
+
+   Pre : `data` is `editor/!link-toast`'s value.
+   Post: :announced."
+  [user-id data]
+  #?(:clj (do (toasts/push! user-id {:level (or (:level data) :info)
+                                     :message (:message data)})
+              :announced)
+     :cljs :announced))
+
 (defn install-image-contextmenu!
   "Attach the image contextmenu to container-el. Returns a cleanup fn.
    CLJS-only; returns nil on CLJ."
@@ -111,26 +185,44 @@
                            " err=" (:error save-result))))
 
         ;; -----------------------------------------------------------------------
-        ;; Wikipedia link import effect
+        ;; The document's own address, for resolving relative hrefs
         ;; -----------------------------------------------------------------------
+        ;; nil when the topic has no effective source, which is what makes a
+        ;; relative link :no-base rather than a wrong guess. 9680 SuperMemo
+        ;; topics are in that state.
+        (let [base-url (e/server (document-base-url* topic-id))]
+          (e/client (reset! editor/!document-base-url base-url)))
+
+        ;; -----------------------------------------------------------------------
+        ;; Link import
+        ;; -----------------------------------------------------------------------
+        ;; `start-url-import!*` answers a duplicate synchronously and hands the
+        ;; fetch off to a thread that publishes its Activity membership, so a
+        ;; reader never waits on a network round trip inside their editor. The
+        ;; import's own outcome arrives later as a toast; only the immediate
+        ;; answer is handled here.
         (let [import-data (e/watch editor/!import-url)
+              navigate-on-import? (e/server
+                                    (let [rev (e/watch (us/get-atom user-id :settings-refresh))]
+                                      (link-import-navigates?* rev user-id)))
               [t _] (e/Token import-data)]
           (when t
             (e/on-unmount #(reset! editor/!import-url nil))
             (let [url (:url import-data)
-                  result (e/server
-                           (e/Offload
-                             #(web-import/import-url!* user-id url)))]
+                  result (e/server (e/Offload #(web-import/start-url-import!* user-id url)))]
               (case result
-                (let [status (cond
-                               (and (:ok result) (= :imported (:flow result)))       :done
-                               (and (:ok result) (= :already-exists (:flow result))) :already-exists
-                               :else :error)]
-                  (reset! editor/!import-status status)
-                  (if (and (#{:done :already-exists} status)
-                        (:topic-id result) on-imported-navigate!)
-                    (case (on-imported-navigate! (:topic-id result)) (t))
-                    (t)))))))
+                (let [dupe? (= :already-exists (:flow result))]
+                  (reset! editor/!import-status
+                    (case (:flow result)
+                      :already-exists :already-exists
+                      :queued :queued
+                      :busy :queued
+                      :error))
+                  (if (and dupe? (:topic-id result) navigate-on-import?)
+                    ;; A duplicate is the one case with somewhere to go now.
+                    (case (e/server (announce-duplicate! user-id result))
+                      (case (on-imported-navigate! (:topic-id result)) (t)))
+                    (case (e/server (announce-duplicate! user-id result)) (t))))))))
 
         ;; -----------------------------------------------------------------------
         ;; In-document topic link
@@ -144,9 +236,25 @@
               [t _] (e/Token nav-data)]
           (when t
             (e/on-unmount #(reset! editor/!navigate-topic nil))
+            ;; The anchor outlives the navigation: the target document has not
+            ;; loaded yet, so the scroll cannot happen here. init-editor! reads
+            ;; this once its content is in the DOM.
+            (reset! editor/!pending-anchor (:fragment nav-data))
             (if (and (:topic-id nav-data) on-imported-navigate!)
               (case (on-imported-navigate! (:topic-id nav-data)) (t))
               (t))))
+
+        ;; -----------------------------------------------------------------------
+        ;; A click the editor could only explain
+        ;; -----------------------------------------------------------------------
+        ;; A fragment with no matching heading, or a relative href in a document
+        ;; with no source address. The DOM listener cannot reach the toast queue,
+        ;; which lives per-user on the server.
+        (let [toast-data (e/watch editor/!link-toast)
+              [t _] (e/Token toast-data)]
+          (when t
+            (e/on-unmount #(reset! editor/!link-toast nil))
+            (case (e/server (push-link-toast! user-id toast-data)) (t))))
 
         ;; -----------------------------------------------------------------------
         ;; Audio player (audio topics) — sits on top of the editor; the

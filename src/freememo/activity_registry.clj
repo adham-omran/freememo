@@ -320,6 +320,22 @@
    {:label "Importing account"
     :tier :server :subject :none :work-key (constantly "account")
     :state-key :importing-accounts :phase "importing"
+    :key-fn identity :owner-key->args (constantly [])}
+
+   ;; A page fetched by the editor's link Import. SERVER tier for the same
+   ;; reason as the two above: it runs on a thread that outlives no browser,
+   ;; so discovery opens and closes the row and no driver is needed.
+   ;;
+   ;; `:subject :none` although the work produces a topic — the topic does not
+   ;; exist while the fetch runs, and by the time it does the user has already
+   ;; been navigated or toasted. A subject that is null for the row's whole
+   ;; life is worse than declaring none.
+   ;;
+   ;; The member is the URL, so two links to the same page share one row.
+   :url-import
+   {:label "Importing page"
+    :tier :server :subject :none :work-key identity
+    :state-key :importing-urls :phase "fetching"
     :key-fn identity :owner-key->args (constantly [])}})
 
 (def registry

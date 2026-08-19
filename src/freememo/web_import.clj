@@ -20,6 +20,8 @@
             [freememo.image-rehost :as image-rehost]
             [freememo.page-pipeline :as pipeline]
             [freememo.text :as text]
+            [freememo.toasts :as toasts]
+            [freememo.user-state :as us]
             [freememo.import-staging :as staging]
             [freememo.logging :as log]
             [taoensso.telemere :as tel]
@@ -31,6 +33,20 @@
             [freememo.supermemo-import :as sm-import]
             [clojure.string :as str]
             [freememo.wikipedia :as wiki]))
+
+(defn find-existing-topic-for-url*
+  "The topic already holding `url`, or nil.
+
+   Pre : `url` is absolute and fragment-stripped — `link-target` strips it, and
+         it must, or `page.html#a` and `page.html#b` would be two topics.
+   Post: {:topic-id N :title S} or nil.
+   Inv : one indexed lookup on (user_id, url) plus one on source_id. Cheap
+         enough to run on the click path, which is why the duplicate answer is
+         immediate while a real import is not."
+  [user-id url]
+  (when-let [src (db/find-source-by-url user-id url)]
+    (when-let [t (db/find-web-topic-by-source-id user-id (:sources/id src))]
+      {:topic-id (:topics/id t) :title (:topics/title t)})))
 
 (defn- attach-biblio-best-effort!
   "Best-effort biblio attach — log and swallow exceptions so a biblio
@@ -88,6 +104,63 @@
     (catch Exception e
       (tel/error! {:id ::import-url :data {:user-id user-id :url url}} e)
       {:ok false :error (.getMessage e)})))
+
+(defn start-url-import!*
+  "Answer a link Import without waiting for the network.
+
+   Pre  : `user-id` is logged in; `url` is absolute and fragment-stripped.
+   Post : returns immediately, one of
+            {:flow :already-exists :topic-id N :title S}
+            {:flow :queued}
+            {:flow :busy}
+          and NEVER {:flow :imported} — the fetch has not happened yet.
+   Inv  : the duplicate answer is synchronous and the fetch is not. A reader
+          clicking a link is answered at once when the page is already held,
+          and handed off when it is not; nothing makes them wait on a network
+          round trip inside their editor.
+   Inv  : membership in `:importing-urls` is published for the whole extent of
+          the fetch, so `activity-reporter` discovers the row, keeps it fresh
+          and closes it. `us/with-in-flight` owns the `finally`.
+   Inv  : the outcome reaches the user as a toast, because by the time it
+          lands they may be reading something else. `import-url!*` owns the
+          import itself; this owns only when it runs and who is told."
+  [user-id url]
+  (if-let [existing (find-existing-topic-for-url* user-id url)]
+    (assoc existing :flow :already-exists)
+    (let [in-flight (us/get-atom user-id :importing-urls)]
+      (if (contains? @in-flight url)
+        ;; A second click on the same link joins the first rather than racing
+        ;; it — two fetches would produce two topics for one page.
+        {:flow :busy}
+        (do
+          (future
+            (us/with-in-flight user-id :importing-urls url
+              (let [r (try (import-url!* user-id url)
+                           (catch Throwable e
+                             (tel/error! {:id ::start-url-import :data {:user-id user-id :url url}} e)
+                             {:ok false :error (.getMessage e)}))]
+                (cond
+                  (and (:ok r) (:topic-id r))
+                  (toasts/push! user-id
+                    {:level :success
+                     :message (str "Imported \"" (:title r) "\"")
+                     :actions [{:label "Open"
+                                :nav [:viewer {:type :topic :topic-id (:topic-id r)}]}]})
+
+                  ;; A PDF or EPUB needs a confirmation step this path cannot
+                  ;; drive, so it is reported rather than silently staged.
+                  (= :staged (:flow r))
+                  (toasts/push! user-id
+                    {:level :info
+                     :message (str (:flow-label r) " downloaded — open Import to finish it.")
+                     :actions [{:label "Import" :nav :import}]})
+
+                  :else
+                  (toasts/push! user-id
+                    {:level :error
+                     :message (str "Could not import " url
+                               (when (:error r) (str " — " (:error r))))})))))
+          {:flow :queued})))))
 
 (defn capture-page!*
   "Store a page the browser serialized, which the server cannot fetch itself.

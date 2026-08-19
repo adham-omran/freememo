@@ -49,6 +49,11 @@
           :card-gen-cancellers (atom {})    ; topic id -> fn marking it cancelled
           :scanning-pages   (atom #{})
           :transcribing-topics (atom #{})
+          ;; URLs being fetched by a link Import, so the Activity monitor can
+          ;; discover them. The member is the url: one import per url at a
+          ;; time, and a second click on the same link joins the first rather
+          ;; than racing it.
+          :importing-urls   (atom #{})
           :processing-videos (atom #{})     ; video topic ids in the ffmpeg/Whisper pipeline
           :ocr-errors       (atom {})
           :scan-cancellers  (atom {})

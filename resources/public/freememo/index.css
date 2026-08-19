@@ -5275,3 +5275,24 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
     cursor: pointer;
 }
 .connection-lost-reload:hover { background: rgba(255, 255, 255, 0.15); }
+
+/* ── Anchor links in the editor ────────────────────────────────────────────
+   The card freememo.editor-links anchors to a clicked link. Its position and
+   visibility are set inline by that namespace; only the parts that are not
+   per-instance live here. */
+.link-actions-popover .btn { white-space: nowrap; }
+.link-actions-popover .btn.importing { opacity: 0.7; pointer-events: none; }
+
+/* The heading an in-document anchor just landed on. Transient: editor-links
+   removes the class after 1.6s, so this must not be relied on as state. */
+.ql-editor .anchor-target-flash {
+    animation: anchor-target-flash 1.6s ease-out;
+    border-radius: var(--radius-sm);
+}
+@keyframes anchor-target-flash {
+    0%   { background: var(--color-primary-bg, rgba(255, 214, 102, 0.55)); }
+    100% { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .ql-editor .anchor-target-flash { animation: none; outline: 2px solid var(--color-primary); }
+}

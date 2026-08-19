@@ -8,9 +8,9 @@
      page                      -> topics row, kind 'web'
      <link rel=canonical>      -> one sources row for the BUILD, on the root
      <img src>                 -> media row; src rewritten to /api/media/<id>
-     internal <a href>         -> /viewer/topic/<id>, fragment dropped
+     internal <a href>         -> /viewer/topic/<id>, fragment carried
      a.headerlink (the ¶)      -> removed before sanitizing
-     fragment-only <a href>    -> unwrapped
+     fragment-only <a href>    -> kept, lands on a heading id
      external <a href>         -> unchanged
 
    **Ids are drawn before anything is written.** A documentation build's pages
@@ -297,21 +297,25 @@
 (defn- rewrite-links!
   "Rewrite every `<a>` to something this app can serve. Mutates in place.
 
-   Post: a counter map. An internal page link becomes `/viewer/topic/<id>` with
-         its fragment dropped. A fragment-only link, a link to a page this
-         import excluded, a dead link and a link to a non-image asset are all
-         UNWRAPPED: the text stays, the anchor goes. An absolute link is left
-         exactly as it is.
+   Post: a counter map. An internal page link becomes
+         `/viewer/topic/<id>[#fragment]`. A fragment-only link is KEPT as it is.
+         A link to a page this import excluded, a dead link and a link to a
+         non-image asset are UNWRAPPED: the text stays, the anchor goes. An
+         absolute link is left exactly as it is.
 
-   **Both losses are now defects, not design.** They were justified by
-   `clean-html` stripping every `id`, so there was nothing for an in-page anchor
-   to land on. That is no longer true: the sanitizer allow-lists `id` on
-   `h1`-`h6` and `p`, and `freememo.quill-field` registers a Parchment
-   attributor so it survives editing. Dropping the fragment collapses distinct
-   destinations onto one topic — 3531 provable duplicates in the corpus, where
-   three links differing only by anchor all became `/viewer/topic/309`.
-   Carrying it, and keeping fragment-only links, is specified in
-   plans/uniform-anchor-links.md §1.3 and §1.4."
+   **The fragment used to be dropped and fragment-only links unwrapped**, both
+   justified by `clean-html` stripping every `id` — there was nothing for an
+   in-page anchor to land on. That stopped being true when the sanitizer
+   allow-listed `id` on `h1`-`h6` and `p` and `freememo.quill-field` registered
+   a Parchment attributor to keep it through an edit.
+
+   Dropping the fragment collapsed distinct destinations onto one topic: 3531
+   provable duplicates in the corpus, where three links differing only by
+   anchor all became `/viewer/topic/309`.
+
+   Neither change reaches a build already imported — those topics hold no ids,
+   so a carried fragment would land nowhere. Re-import is what pays it off.
+   See plans/uniform-anchor-links.md §3."
   [user-id !media ^File root page-key id-by-key ^Element article]
   (let [c (atom {:internal 0 :fragment-only 0 :asset 0 :external 0 :dead 0})
         bump! #(swap! c update % inc)]
@@ -320,18 +324,21 @@
         (cond
           (str/blank? href) (.unwrap a)
 
+          ;; An anchor into this same page. It lands on a heading `id` the
+          ;; sanitizer now keeps, so it is left exactly as written.
           (str/starts-with? href "#")
-          (do (.unwrap a) (bump! :fragment-only))
+          (bump! :fragment-only)
 
           (re-find absolute-target-re href)
           (bump! :external)
 
           :else
-          (let [[target _] (resolve-target page-key href)
+          (let [[target fragment] (resolve-target page-key href)
+                anchor (if fragment (str "#" fragment) "")
                 topic-id (when target (get id-by-key target))]
             (cond
               topic-id
-              (do (.attr a "href" (str "/viewer/topic/" topic-id))
+              (do (.attr a "href" (str "/viewer/topic/" topic-id anchor))
                   (bump! :internal))
 
               ;; A `dirhtml` build addresses a page by its directory, so
@@ -339,7 +346,7 @@
               ;; the trailing slash, which is why this is a second lookup
               ;; rather than a branch in `resolve-target`.
               (and target (get id-by-key (index-key target)))
-              (do (.attr a "href" (str "/viewer/topic/" (get id-by-key (index-key target))))
+              (do (.attr a "href" (str "/viewer/topic/" (get id-by-key (index-key target)) anchor))
                   (bump! :internal))
 
               :else
@@ -549,7 +556,7 @@
                      :links-to-topics (or (:internal c) 0)
                      :links-to-assets (or (:asset c) 0)
                      :links-external-kept (or (:external c) 0)
-                     :links-fragment-unwrapped (or (:fragment-only c) 0)
+                     :links-fragment-kept (or (:fragment-only c) 0)
                      :links-dead-unwrapped (or (:dead c) 0)
                      ;; freememo.doc-html — what it rewrote so Quill can hold it.
                      :terms-flattened (or (:terms-flattened c) 0)

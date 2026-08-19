@@ -9,6 +9,7 @@
    [freememo.editor-actions :as editor-actions]
    [freememo.math :as math]
    [freememo.a11y :as a11y]
+   #?(:cljs [freememo.editor-links :as editor-links])
    #?(:cljs [freememo.format-menu :as format-menu])
    #?(:cljs [freememo.code-lang-picker :as code-lang-picker])
    #?(:cljs [freememo.formula-ui :as formula-ui])
@@ -23,20 +24,46 @@
 ;; Defined on both peers (no reader conditional) — referenced in an e/defn body.
 (defonce !toolbar-node (atom nil))
 
-;; Set by Import button click in Quill tooltip — picked up by e/Token in extract_page
-;; Shape: {:url "https://en.wikipedia.org/wiki/..." :ts <timestamp>} or nil
+;; ── The editor's link channel ──────────────────────────────────────
+;; `freememo.editor-links` owns the DOM; these five atoms are its only way out.
+;; A click listener cannot reach the server, the router or the toast queue, so
+;; every one of those is published here and answered by an e/Token in
+;; editor_pane. All are defined on BOTH peers with no reader conditional —
+;; they are named in e/defn bodies, and a CLJ-only def read from client scope
+;; makes the two peers disagree on frame shape and kills the WebSocket.
+
+;; Set by the card's Import button.
+;; Shape: {:url "https://…" :ts <timestamp>} or nil. The url is already
+;; fragment-stripped by link-target — it is the dupe key.
 (defonce !import-url (atom nil))
 
-;; Import status feedback — set by Electric wiring, read by tooltip JS
-;; :idle | :importing | :done | :already-exists | :error
+;; Import status, written by the Electric wiring and read by the card's button.
+;; :idle | :importing | :queued | :done | :already-exists | :error
 (defonce !import-status (atom :idle))
 
-;; Set by a click on an in-document link to another topic — picked up by an
-;; e/Token in editor_pane, which routes it through the same navigation bridge
-;; the wiki import uses. An imported documentation tree's cross-references are
-;; the reason this exists; see setup-internal-link-navigation!.
-;; Shape: {:topic-id N :ts <timestamp>} or nil.
+;; Set by a click on a link to another topic. An imported documentation tree's
+;; cross-references are why this exists: the href cannot navigate on its own,
+;; because Chrome does not follow an anchor click inside a contenteditable and
+;; router5 binds its handler per node rather than at the document.
+;; Shape: {:topic-id N :fragment "sec" :ts <timestamp>} or nil.
 (defonce !navigate-topic (atom nil))
+
+;; Set when a click can only be explained, not acted on — a fragment with no
+;; matching heading, or a relative href in a document with no source address.
+;; Shape: {:level :info :message "…" :ts <timestamp>} or nil.
+(defonce !link-toast (atom nil))
+
+;; The document's own address, for resolving relative hrefs. Written by
+;; editor_pane from the topic's effective source; nil when it has none, which
+;; is what makes a relative link :no-base rather than a broken guess.
+(defonce !document-base-url (atom nil))
+
+;; An anchor to land on once the NEXT document has loaded. A click on
+;; `/viewer/topic/<id>#sec` cannot scroll where it was clicked — that document
+;; is about to be replaced — so the fragment waits here and init-editor! spends
+;; it after the new content is in the DOM.
+;; Shape: "section-id" or nil.
+(defonce !pending-anchor (atom nil))
 
 ;; Set to the current HTML on every user edit (immediate, no debounce — other
 ;; consumers need the live value: bottom_panel.cljc's ToolbarBar derives
@@ -81,17 +108,15 @@
      :cljs
      (do
        (swap! !init-gen inc)
-       (when-let [{:keys [editor container toolbar import-popover-teardown internal-link-teardown format-menu-teardown code-lang-teardown formula-teardown resize-focus-teardown a11y-observer]} @!editor-state]
+       (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown formula-teardown resize-focus-teardown a11y-observer]} @!editor-state]
          (let [^js ed editor
                ^js ct container
                ^js tb toolbar]
            ;; Stop the content-a11y MutationObserver before the DOM is torn down.
            (when a11y-observer (.disconnect ^js a11y-observer))
-           ;; Tear down the wiki-link import popover (element + document/window
-           ;; listeners + status watch). Must run before innerHTML clear below.
-           (when import-popover-teardown (import-popover-teardown))
-           ;; Remove the in-document topic-link click/auxclick listeners.
-           (when internal-link-teardown (internal-link-teardown))
+           ;; Tear down the anchor click listener, its card and its status
+           ;; watch. Must run before the innerHTML clear below.
+           (when link-actions-teardown (link-actions-teardown))
            ;; Remove the custom format-menu (card element + its listeners).
            (when format-menu-teardown (format-menu-teardown))
            ;; Remove the custom code-language picker (observer + popup + triggers).
@@ -116,165 +141,6 @@
              (set! (.-innerHTML ct) "")))
          (reset! !editor-state nil)
          (reset! !last-selection nil)))))
-
-(defn- wikipedia-url? [href]
-  #?(:cljs (and (string? href)
-             (or (.includes href "wikipedia.org/wiki/")
-               (.includes href "wikipedia.org/w/")))
-     :clj false))
-
-(defn- wiki-slug
-  "Human-readable article title decoded from a wikipedia /wiki/<slug> href."
-  [href]
-  #?(:cljs
-     (try
-       (if-let [m (re-find #"/wiki/([^#?]+)" (str href))]
-         (-> (second m) js/decodeURIComponent (str/replace "_" " "))
-         "")
-       (catch :default _ ""))
-     :clj ""))
-
-(defn- setup-link-import-popover!
-  "Standalone, link-anchored Import popover for Wikipedia links in the article.
-   A click on an internal wiki <a> shows a small popover anchored to the link;
-   clicking Import drives the existing !import-url pipeline. Decoupled from
-   Quill's bubble tooltip (which only appears on a text selection, so the old
-   tooltip-button affordance was invisible on a plain link click). Body-anchored
-   + position:fixed to avoid positioned-ancestor assumptions. Returns a teardown
-   fn that removes the element, document/window listeners, and the status watch."
-  [editor]
-  #?(:cljs
-     (let [^js ed   editor
-           ^js root (.-root ed)                 ; the .ql-editor content element
-           ^js pop  (js/document.createElement "div")
-           ^js label (js/document.createElement "span")
-           ^js btn  (js/document.createElement "button")
-           !href    (atom nil)
-           visible? (fn [] (not= "none" (.. pop -style -display)))
-           hide!    (fn [] (set! (.. pop -style -display) "none"))
-           wiki-anchor (fn [^js target]
-                         (let [^js a (when (and target (.-closest target)) (.closest target "a"))]
-                           (when (and a (wikipedia-url? (.getAttribute a "href"))) a)))
-           show-at! (fn [^js a href]
-                      (reset! !href href)
-                      (set! (.-textContent label) (wiki-slug href))
-                      (set! (.-textContent btn) "Import")
-                      (.remove (.-classList btn) "importing")
-                      (let [r (.getBoundingClientRect a)]
-                        (set! (.. pop -style -top) (str (+ (.-bottom r) 4) "px"))
-                        (set! (.. pop -style -left) (str (.-left r) "px"))
-                        (set! (.. pop -style -display) "flex")))
-           on-link-click (fn [e]
-                           (when-let [^js a (wiki-anchor (.-target e))]
-                             (show-at! a (.getAttribute a "href"))))
-           on-doc-click (fn [e]
-                          (when (and (visible?)
-                                  (not (.contains pop (.-target e)))
-                                  (not (wiki-anchor (.-target e))))
-                            (hide!)))
-           on-key    (fn [e] (when (and (= "Escape" (.-key e)) (visible?)) (hide!)))
-           on-scroll (fn [_] (when (visible?) (hide!)))]
-       (set! (.-className pop) "wiki-import-popover")
-       (.setAttribute pop "style"
-         (str "position:fixed;display:none;z-index:1000;align-items:center;gap:8px;"
-           "padding:6px 8px;background:var(--color-bg-card);"
-           "border:1px solid var(--color-border);border-radius:var(--radius-sm);"
-           "box-shadow:0 2px 8px rgba(0,0,0,0.18);font-size:13px;max-width:320px;"))
-       (.setAttribute label "style"
-         "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;color:var(--color-text-secondary);")
-       (set! (.-className btn) "btn btn-sm btn-primary")
-       (set! (.-type btn) "button")
-       (set! (.-textContent btn) "Import")
-       (.appendChild pop label)
-       (.appendChild pop btn)
-       (.appendChild (.-body js/document) pop)
-       ;; Import → existing !import-url pipeline.
-       (.addEventListener btn "click"
-         (fn [e]
-           (.preventDefault e)
-           (when-not (= @!import-status :importing)
-             (let [href @!href]
-               (when (wikipedia-url? href)
-                 (reset! !import-status :importing)
-                 (set! (.-textContent btn) "Importing...")
-                 (.add (.-classList btn) "importing")
-                 (reset! !import-url {:url href :ts (js/Date.now)}))))))
-       ;; Status → button text (same states as the old tooltip button).
-       (add-watch !import-status ::import-popover-btn
-         (fn [_ _ _ st]
-           (case st
-             :importing      (do (set! (.-textContent btn) "Importing...") (.add (.-classList btn) "importing"))
-             :done           (do (set! (.-textContent btn) "Imported!") (.remove (.-classList btn) "importing")
-                                  (js/setTimeout (fn [] (hide!) (reset! !import-status :idle)) 1500))
-             :already-exists (do (set! (.-textContent btn) "Already imported") (.remove (.-classList btn) "importing")
-                                  (js/setTimeout (fn [] (hide!) (reset! !import-status :idle)) 1500))
-             :error          (do (set! (.-textContent btn) "Error") (.remove (.-classList btn) "importing")
-                                  (js/setTimeout (fn [] (reset! !import-status :idle)) 2000))
-             nil)))
-       (.addEventListener root "click" on-link-click)
-       (.addEventListener js/document "click" on-doc-click)
-       (.addEventListener js/document "keydown" on-key)
-       (.addEventListener js/document "scroll" on-scroll true) ; capture: catch editor-pane scroll
-       (.addEventListener js/window "resize" on-scroll)
-       (fn teardown []
-         (remove-watch !import-status ::import-popover-btn)
-         (.removeEventListener root "click" on-link-click)
-         (.removeEventListener js/document "click" on-doc-click)
-         (.removeEventListener js/document "keydown" on-key)
-         (.removeEventListener js/document "scroll" on-scroll true)
-         (.removeEventListener js/window "resize" on-scroll)
-         (when (.-parentNode pop) (.remove pop))))
-     :clj nil))
-
-(def ^:private topic-href-re
-  "An in-document link to another topic. Deliberately narrow: anything wider
-   would hijack the external links an imported page keeps verbatim."
-  #"^/viewer/topic/(\d+)")
-
-(defn- setup-internal-link-navigation!
-  "Route clicks on `/viewer/topic/<id>` links to in-app navigation.
-
-   A listener is REQUIRED here — the href alone does nothing, for two
-   independent reasons. Chrome does not follow an anchor click inside a
-   `contenteditable`; the click event still fires, with `defaultPrevented`
-   false, and no navigation happens. And `hyperfiddle.router5` attaches its
-   click handler per node inside `router/Link`, never at the document level, so
-   an anchor this app did not render is invisible to the router.
-
-   Modified and middle clicks open a new tab explicitly, for the same reason:
-   `contenteditable` suppresses the browser's own handling, so without this
-   they would do nothing at all.
-
-   Pre : `editor` is a live Quill instance.
-   Post: a teardown fn removing both listeners. The atom is the only channel out
-         — navigation itself belongs to Electric, not to this listener."
-  [editor]
-  #?(:cljs
-     (let [^js ed editor
-           ^js root (.-root ed)
-           topic-id (fn [^js target]
-                      (let [^js a (when (and target (.-closest target)) (.closest target "a"))]
-                        (when a
-                          (some-> (re-find topic-href-re (str (.getAttribute a "href")))
-                            second js/parseInt))))
-           on-click (fn [e]
-                      (when-let [id (topic-id (.-target e))]
-                        (.preventDefault e)
-                        (if (or (.-metaKey e) (.-ctrlKey e))
-                          (js/window.open (str "/viewer/topic/" id) "_blank")
-                          (reset! !navigate-topic {:topic-id id :ts (js/Date.now)}))))
-           ;; Middle click fires `auxclick`, not `click`.
-           on-aux (fn [e]
-                    (when (= 1 (.-button e))
-                      (when-let [id (topic-id (.-target e))]
-                        (.preventDefault e)
-                        (js/window.open (str "/viewer/topic/" id) "_blank"))))]
-       (.addEventListener root "click" on-click)
-       (.addEventListener root "auxclick" on-aux)
-       (fn teardown []
-         (.removeEventListener root "click" on-click)
-         (.removeEventListener root "auxclick" on-aux)))
-     :clj nil))
 
 ;; The bubble editor's formatting UI is a custom floating card
 ;; (freememo.format-menu), not Quill's native `.ql-tooltip` — the native
@@ -410,6 +276,10 @@
            delta (.convert clipboard #js {:html for-editor})]
        (when (seq cleaned-html)
          (.setContents editor delta))
+       ;; A `/viewer/topic/<id>#sec` click left its anchor behind, because the
+       ;; document it was clicked in was about to be replaced. This is the
+       ;; first moment the target exists.
+       (editor-links/flush-pending-anchor! (.-root editor) !pending-anchor)
        ;; dir="auto" → browser resolves direction from first strong
        ;; directional character. Paired with .ql-editor{text-align:start}
        ;; in index.css so RTL imports (Arabic, Hebrew) render right-aligned
@@ -456,8 +326,12 @@
                               ;; line correct.
                               :math? (boolean math?)
                               :a11y-observer (install-content-a11y! editor)
-                              :import-popover-teardown (setup-link-import-popover! editor)
-                              :internal-link-teardown (setup-internal-link-navigation! editor)
+                              :link-actions-teardown (editor-links/install! editor
+                                                       {:!import !import-url
+                                                        :!navigate !navigate-topic
+                                                        :!toast !link-toast
+                                                        :!base-url !document-base-url
+                                                        :!import-status !import-status})
                               :format-menu-teardown (format-menu/install! editor {:card-gen? true})
                               :code-lang-teardown (code-lang-picker/install! editor)
                               ;; Formula popover + typed-source conversion. Only
