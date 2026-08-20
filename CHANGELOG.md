@@ -9,10 +9,100 @@ Format contract (see freememo.changelog):
   `### Technical` never leaves the repo — put developer-facing notes there.
 -->
 
-## Unreleased
+## v20260819-11689b6
 
 ### For users
 
+- **An Activity monitor shows every long-running operation, and can stop most of
+  them.** Page scans, card generation, imports, transcription, fact extraction,
+  account export and import, and Anki sync all report into one panel with a
+  phase, a progress figure and a start time. Before this, each one sat behind a
+  modal spinner, and a refresh mid-operation had unknown consequences — you could
+  not tell whether the work continued, died, or half-finished.
+  - **A row opens the moment you click.** Discovery used to run on a 20-second
+    tick, so work that finished inside one tick was never seen running at all.
+    Three card generations on one page reached the panel as a single row already
+    reading `Done`.
+  - **Cancel reaches six operations**, a running card generation and a running
+    page scan included.
+  - **Cancelling a page scan now leaves your page alone.** It used to set the row
+    to `cancelled` and then let the scan finish and overwrite the page you had
+    just abandoned. A second row appeared beside the first and closed as a
+    success.
+  - **A cancelled run reads as cancelled, not as a failure.** Cancelling a scan
+    raised the toast `Scan cancelled` as an error and recorded a scan error on
+    the page.
+- **The quiz tab answers "how is this question doing" and "how much did I
+  study".** A per-item panel opens from a review, from a Knowledge question row
+  and from a Library card row. It carries the review record, the scheduler
+  numbers, a forgetting curve and the time each turn took.
+  - **A footer states today's reviews, the minutes spent, the per-item average
+    and your streak.** The `Reviewed today` tile is gone, because the footer says
+    the same number with its context.
+  - **Time per turn is recorded from now on.** Reviews taken before this update
+    carry no timing, and every figure states how many rows it counted rather than
+    averaging a missing value as zero.
+  - **Both history lists scroll like the Knowledge and Library tables.** They
+    were the last unwindowed tables in the app.
+  - **Cmd/Ctrl+Enter presses whichever button is primary**, so one chord serves
+    Submit and Next. Keys `1` to `4` rate a revealed card.
+  - Bug fix: **your review streak was reported as 1 day, whatever its real
+    length.**
+- **Fact extraction skips pages it has already read, and resumes where it
+  stopped.** Distillation re-sent every page to the model on every run, and it
+  inserted nothing until the last page returned. A cancel or the 20-minute
+  timeout threw away every paid call, and a document past roughly 300 pages
+  could never finish inside that timeout at all.
+  - **`Cancel` is now `Pause`,** because it discards nothing.
+  - **Only pages whose text changed are read again.** Editing a page brings it
+    back into the next run.
+  - **Knowledge → Documents gains a `Pages` column** reading done against total,
+    plus any pages the run gave up on.
+- **Compare OCR asks which models to run.** Opening it used to fan out over every
+  allowed model, which is nine billed calls, serialized into about five waves
+  before the first column appeared. The modal now opens on a checkbox list with
+  your document's own model already ticked, and issues no call until you confirm.
+- **Every link in the editor now does something, and they all do the same
+  thing.** A Wikipedia link offered an Import popover, a FreeMemo topic link
+  navigated, and every other link did nothing at all — a click inside an editor
+  does not follow an address. On one account 833 of 1046 external links were
+  inert.
+  - **An external link offers Import and View.** The import runs in the
+    background and reports as a toast, so the reader is not held while a page is
+    fetched.
+  - **A link to a heading in the same document scrolls to it.** Headings now keep
+    their anchors through storage and editing, which no imported document could
+    do before.
+  - **Clicking a link to a page you already have can open your copy.** A new
+    Appearance checkbox controls that.
+- Bug fix: **an imported table renders as the table it was.** A Wikipedia
+  article stored two tables and the editor drew one: a maintenance banner and an
+  infobox merged into a single grid whose first row was four cells wide and whose
+  other nine rows were one cell wide, with two rows the article does not have.
+  Nested tables, captions, header cells, hidden rows, merged columns and lists
+  inside a cell are all lowered into a shape the editor can hold.
+- Bug fix: **the format menu no longer covers the text you selected.** It
+  anchored to the selection's first line and preferred the space below it, so
+  every selection of more than one line put the menu inside the selection.
+- Bug fix: **Anki sync no longer freezes the tab.** Since the Activity monitor
+  landed, every sync killed the page: the tab froze with nothing on screen, the
+  server logged a clean disconnect, and no sync run ever reached an outcome.
+- Bug fix: **a client failure now says so on screen.** Every client crash
+  reported one wrong message and threw the real one away, so a frozen tab was
+  all you saw. A banner now appears for a crash and for a server that goes away.
+- Bug fix: **a SuperMemo citation named the wrong article.** `reference.dat`
+  stores reference R at index R-1, so every imported element cited the article
+  after its own, and an element citing the last reference got none. New imports
+  are correct. I have a repair for collections already imported, rehearsed
+  against a copy of production — see Known issues.
+- **A schedule links to the document it plans.** The sidebar card, the home card
+  and the detail heading all reach it. The tab used to be a dead end for the book
+  it schedules.
+- **The schedule's `Pages` table says which date it describes.** Every row is the
+  projection at the horizon, never today, and four rows reading `known` against a
+  `Known now` tile of `0 / 23` had nothing on the table to explain them.
+- **The Zotero plugin moved to `extensions/zotero`.** The download link in
+  Settings moved with it. A link you saved by hand no longer resolves.
 - **A change to formatting now syncs.** Styling a word as `code`, bold, italic or
   any other inline format counts as a change, in both directions. Before this,
   sync compared the visible text only, so a formatting-only edit was invisible —
@@ -40,21 +130,123 @@ Format contract (see freememo.changelog):
 - **`Keep FreeMemo` and `Keep Anki` are greyed out unless a conflicted card is
   selected.** They used to look available on any selection and then do nothing but
   print a small note beside themselves.
-
 - **Your first sync after this update rebuilds its records instead of resending
   your collection.** Change detection reads formatting now, so no record written
   by the old version matches. FreeMemo notices that and rebuilds the records from
   what both sides currently hold — nothing is sent to Anki and no card is reported
   as changed.
+- **A Chrome extension captures the page you are reading.** FreeMemo could only
+  import a page the server could fetch itself, which excludes most pages worth
+  keeping: documentation behind a login, an application that draws itself in the
+  browser, one paragraph in the middle of an article. Reddit, Amazon, Zillow and
+  IMDb refuse a server fetch outright.
+  - **Four things can be captured** — the page as rendered, the current
+    selection, a full-page screenshot wrapped in a PDF, and a PDF already open
+    in Chrome's viewer, uploaded as the file it is.
+  - **The popup closes at once and the capture continues in the background.** A
+    capture can take tens of seconds.
+  - **A second capture of the same URL is a new topic when the content differs.**
+    One URL legitimately gives a selection, a re-read and a later revision, so
+    the duplicate check compares content rather than the address.
+  - **Settings holds the install steps** in a new browser-extension section.
 
 ### Known issues
 
+- **Cancelling a model call does not refund it.** The request goes through an
+  HTTP client that ignores an interrupt, so the call runs to completion and the
+  credits are spent. What cancelling saves is the result: a scanned page is not
+  overwritten and generated cards are not inserted. That is the part still
+  available once you have clicked.
+- **Cancel a page or a card and immediately run it again, and the abandoned run
+  may still save.** Each owner clears its cancel marker when new work for the
+  same page arrives. You asked for that content twice, so the outcome is an extra
+  result rather than a wrong one. Accepted rather than closed.
+- **An operation that reports failure only as a toast is recorded as a success in
+  Activity history.** The row closes clean and the toast is the only record. URL
+  import records its error; the others do not yet.
+- **A Compare OCR run is lost by `Close` and by `Change models`.** Nothing
+  persists the columns outside the open modal, so a paid comparison cannot be
+  reopened. The same gap applies to card compare.
+- **A page that returns no facts is not read again until you edit it**, and a page
+  whose extraction fails twice on unchanged text is given up on and reported per
+  document. Both are deliberate: before this, every such page cost money on every
+  run. `Forget extractions` is the way back for a whole document.
+- **A capture records only what the page had drawn.** On one GitHub issue that
+  was 26 of 404 comments, because the page draws comments as you scroll. A long
+  capture is also absent from the default fuzzy search, which ranks the 200
+  shortest matches. Exact search still finds it.
+- **Chrome stops an idle extension worker after 30 seconds.** Each step of a
+  capture resets that timer, so a normal capture is safe. A single request that
+  takes longer than 30 seconds to answer at all is not.
+- **A document imported before this update has no heading anchors.** Its links to
+  its own headings cannot land anywhere until you import it again.
+- **A merged table row keeps its height, not its span.** `rowspan` is dropped
+  rather than expanded, which no article I sampled needs. Two adjacent tables you
+  author inside FreeMemo still merge into one.
+- **The link affordance and the quiz panel have not been driven in a browser.**
+  Every Clojure test passes and both compilers are clean, which covers the
+  classification and the sanitizer and nothing of the interface. Tell me what
+  breaks.
+- **`Open my copy instead` takes effect on the next editor.** Changing a setting
+  does not reach an editor that is already open. Leaving the Settings page is
+  enough.
 - **A card you edited in FreeMemo but never synced still needs one decision.**
   Three such cards existed across all accounts when this shipped. They wait in
   Library → Cards; `Keep FreeMemo` sends your edit to Anki.
 
 ### Technical
 
+- Three new tables. `activities` is one row per operation, with a unique partial
+  index on in-flight work per user and type. `kg_page_extractions` records a
+  page's content digest, attempt count and extraction version.
+  `kg_staged_triples` holds extracted triples until linking runs.
+  `kg_reviews.duration_ms` records the turn time and is NULL for every earlier
+  review, with no backfill.
+- `freememo.activity`, `activity-registry`, `activity-reporter`,
+  `activity-panel` and `activity-client` are the monitor. No owner namespace
+  calls `start!` or `terminate!` — the reporter DISCOVERS work by reading the
+  per-user atoms owners already publish, so an owner joins by adding a registry
+  entry. `us/work-started!` opens the row on the click path instead of on the
+  20-second tick.
+- `freememo.table-lowering` owns every table an importer stores, and
+  `rewrite-for-quill!` calls it for every caller. Two table steps existed behind
+  `:browser-dom?` and served the capture extension alone for their whole life,
+  while the Wikipedia path called no lowering at all.
+- `freememo.page-pipeline` holds the shared import HTML transform that was
+  private to `wikipedia` and welded to its fetch. Output for the fetch path is
+  byte-identical to the pre-move code.
+- `clean-html` allow-lists `id` on `h1`-`h6` and `p` only, and `quill-field`
+  registers a BLOCK-scope Parchment attributor so the editor keeps it.
+  `clean-html-fragment` is the same sanitizer minus `id`, and six callers take
+  it — content cut out of a document must not carry its parent's anchors. A test
+  asserts the two differ in nothing but `id`.
+- `freememo.client-boot` owns both boot continuations for all four entrypoints.
+  `e/boot-client` returns a two-arity fn, so wrapping its thunk and calling it
+  with no arguments passed `undefined` for both callbacks and discarded every
+  real error message.
+- `freememo.selection-placement` and `freememo.turn-timing` are `.cljc` because
+  `test/` is Clojure only. A function inside a `.cljs` file cannot be unit tested
+  at all.
+- `freememo.link-target` classifies what a click can offer, and
+  `editor-links.cljs` owns the DOM half. Citation plumbing gets no affordance:
+  it is 93.6% of the corpus's 149,457 fragment links and points into reference
+  lists no importer carried in.
+- The `:small` upload cap moves from 10 MiB to 50 MiB. Eleven of twelve measured
+  pages encode under 10 MiB, but one single-page specification needs 12.87 MiB on
+  text alone, and the worst page reaches about 37.5 MiB with its images inlined.
+- Both day-scoped review queries use a half-open range rather than
+  `reviewed_at::date = ?::date`. The cast is not sargable, so the index served
+  only the `user_id` half.
+- Capture de-duplication indexes `md5(content_text)`, never the text: a btree
+  row cannot exceed about 2704 bytes.
+- `playwright/probe-wiki-tables.mjs` loads stored HTML into a real Quill and
+  asserts the table count, row-id distinctness and convergence. Every table
+  defect happened during Quill's Delta conversion, so the Clojure suite could not
+  have caught any of them. `probe-format-menu-placement.mjs` samples
+  `elementFromPoint` across the selection's own client rects.
+- `extensions/` holds both companion clients. The Zotero plugin moved from the
+  repository root, and the install URL, its download filename and two comments
+  moved with it.
 - `flashcards` gains `local_current_digest`, `anki_header_text` and
   `anki_bibliography_html`. The first is the one staleness predicate
   (`db/unsynced-sql` and `card-components/unsynced?` are its two restatements);
@@ -72,6 +264,11 @@ Format contract (see freememo.changelog):
   next run. Version 2 shipped without this and reported 1459 of 1528 cards on one
   account as conflicts; the recovery was a manual baseline reset.
 - `plans/anki-html-change-detection.md` holds the spec.
+- No new dependencies.
+- `CLAUDE.md` gains "A Missionary Canceller Cannot Stop an LLM Call",
+  "Long-running work owes the Activity monitor a decision", "The Interop Call Is
+  What Transfers", "The Client Entrypoint Owes Both Continuations" and the Quill
+  table-merge section. Each one records a defect that shipped.
 
 ## v20260814-1e4cf45
 
