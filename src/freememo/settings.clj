@@ -1209,6 +1209,15 @@
     (try (slurp (io/resource "prompts/system.md"))
       (catch Exception _ nil))))
 
+;; Only the :chat lane sends this prompt. The Mistral :plugin lane never sees it
+;; (ocr.clj sends "ok" plus the PDF), so a rule stated here reaches eight of the
+;; nine registry models.
+;;
+;; The element list deliberately omits <br>, and REFLOW/HYPHENS are load-bearing.
+;; Offering <br> as a general element read to a vision model as "transcribe the
+;; page line by line": it emitted one <br> per typeset line, Quill's clipboard
+;; turns each <br> into a Delta newline, and every line became its own <p> under
+;; `.ql-editor p + p` paragraph spacing. See plans/ocr-prompt-reflow-hyphens.md.
 (def default-ocr-prompt
   "Extract all text from this image and return it as clean, semantic HTML. Use:
 - <h1>, <h2>, <h3> for headings
@@ -1216,9 +1225,11 @@
 - <ul><li> and <ol><li> for lists
 - <strong> for bold/important text
 - <em> for italic/emphasized text
-- <br> for line breaks within paragraphs
 - LaTeX between \\( and \\) for mathematical notation, e.g. \\(x \\times (y + z)\\)
 Preserve the reading order and document structure. Return only the HTML body content (no <html> or <body> tags).
+REFLOW: a line ending on the page is layout, not content. Join the lines the layout wrapped into one continuous <p>. Open a new <p> only where the source itself starts a new paragraph — a first-line indent, extra vertical space, or a heading above it. Never end a wrapped line with a line break.
+HYPHENS: when a word is split across a line ending, rejoin it. Drop the hyphen when the joined word is not hyphenated in ordinary use (\"program-\" + \"ming\" -> \"programming\"). Keep the hyphen when the word is a real compound (\"tree-\" + \"like\" -> \"tree-like\"). Decide word by word.
+<br> is only for a break the source itself forces — verse, an address block, a line of code. Never for a wrapped line.
 Transcribe formulas as LaTeX in \\(...\\) whether they sit mid-sentence or on their own line. \\(...\\) is the only delimiter — never $...$, never $$...$$, never \\[...\\]. Do not convert prose into notation — only text that is already mathematical.
 IMPORTANT: Do NOT wrap the HTML in markdown code fences (```html or ```). Return raw HTML only.")
 
