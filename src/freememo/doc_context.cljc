@@ -85,6 +85,25 @@
 ;; Focus reader — the PDF pane is unmounted and the editor column is centered.
 ;; Independent of `layout`: the stored split orientation survives the mode.
 (e/declare focus?)
+;; Merged reading: the whole PDF as one document with a boundary marker per page
+;; (plans/merged-page-reading.md). True only in focus mode on a real PDF.
+;; `merged-page-numbers` is what the split needs — the editor cannot report a
+;; page whose marker the reader deleted.
+(e/declare merged?)
+(e/declare merged-page-numbers)
+;; The identity of the DOCUMENT the editor holds, which is not always the topic
+;; whose id sits in `topic-id`.
+;;
+;; Per-page mode: the page topic — the two agree.
+;; Merged mode: the PDF ROOT. The editor holds every page, so the page the
+;; reader has scrolled to must not read as a different document. It did: a
+;; scroll moved `topic-id`, the component read that as a topic switch and called
+;; `set-content!`, which re-parsed the document and scrolled it back to the top —
+;; reporting page 1 again. A scroll fed itself.
+;;
+;; `topic-id` still follows the page, because a new extract or card must be
+;; parented to the page the selection came from.
+(e/declare editor-doc-id)
 (e/declare top-pct)
 (e/declare top-split-pct)
 (e/declare left-pct)

@@ -132,6 +132,21 @@
   [node]
   (.addEventListener node "mousedown" (fn [^js e] (.preventDefault e))))
 
+(def ^:private page-break-glyph
+  "A rule with a downward arrow through it — a boundary being put back.
+
+   Inline SVG whose stroke is currentColor, NOT the toolbar's `.ql-stroke`
+   class: that class resolves only inside `.ql-toolbar`, and the format menu is
+   not one."
+  (str "<svg viewBox=\"0 0 18 18\" width=\"14\" height=\"14\" fill=\"none\" "
+       "stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" "
+       "stroke-linejoin=\"round\" aria-hidden=\"true\">"
+       "<line x1=\"2\" y1=\"9\" x2=\"6\" y2=\"9\"/>"
+       "<line x1=\"12\" y1=\"9\" x2=\"16\" y2=\"9\"/>"
+       "<polyline points=\"9 3 9 12\"/>"
+       "<polyline points=\"6.5 9.5 9 12 11.5 9.5\"/>"
+       "</svg>"))
+
 (defn- glyph-button
   "A single icon/glyph toolbar button. `on-click` fires with no args.
 
@@ -374,7 +389,9 @@
         row-block (section)
         row-inline (section)
         row-blockfmt (section)
-        cardgen (when (:card-gen? opts) (card-gen-row q get-rng card))]
+        cardgen (when (:card-gen? opts) (card-gen-row q get-rng card))
+        page-break-btn (glyph-button page-break-glyph "Restore page boundary"
+                         (after #(editor-actions/insert-page-break! q (:index (get-rng)))))]
     ;; Row 1 — block type + size dropdowns
     (.appendChild row-block (:wrap block-dd))
     (.appendChild row-block (:wrap size-dd))
@@ -398,6 +415,16 @@
       (.appendChild row-blockfmt
         (glyph-button image-glyph "Insert image"
           (after #(editor-actions/insert-image! q (:index (get-rng)))))))
+    ;; Restore a page boundary (plans/merged-page-reading.md §4.3-4.7).
+    ;;
+    ;; Built ALWAYS and hidden by `refresh` below, NOT gated by `opts`:
+    ;; install! takes its opts once per editor construction and the document
+    ;; editor is persistent, so opts cannot carry a flag the reader toggles.
+    ;;
+    ;; It restores a lost boundary and never creates a page. `restorable-page`
+    ;; answers nil when there is nothing to restore, and insert-page-break!
+    ;; refuses on nil, so the button cannot mint a page number.
+    (.appendChild row-blockfmt page-break-btn)
     (.appendChild card row-block)
     (.appendChild card (el "div" "fmt-divider"))
     (.appendChild card row-inline)
@@ -444,7 +471,20 @@
            (let [on? (boolean (aget af fmt))]
              (if on? (.add (.-classList el) "active") (.remove (.-classList el) "active"))
              (.setAttribute el "aria-pressed" (str on?))))
-         (set! (.-textContent (:label block-dd)) (block-label af))))}))
+         (set! (.-textContent (:label block-dd)) (block-label af))
+         ;; The page-break control's visibility, per selection. It is present
+         ;; only in focus reader's merged mode, and disabled there when every
+         ;; page between the neighbours already has a marker — which is the
+         ;; refusal item 4.7 asks for, stated in the control rather than in a
+         ;; toast the reader would have to trigger to read.
+         (let [ctx @editor-actions/!page-break-context
+               page (when ctx (editor-actions/restorable-page q (:index (get-rng))))]
+           (set! (.. page-break-btn -style -display) (if ctx "" "none"))
+           (set! (.-disabled page-break-btn) (not page))
+           (.setAttribute page-break-btn "title"
+             (cond (nil? ctx) "Restore page boundary"
+                   page (str "Restore the boundary for page " page)
+                   :else "No page is missing a boundary here")))))}))
 
 ;; ---------------------------------------------------------------------------
 ;; Placement

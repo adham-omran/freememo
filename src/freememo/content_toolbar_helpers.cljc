@@ -11,6 +11,7 @@
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.db :as db])
    #?(:clj [freememo.html-cleaner :as cleaner])
+   #?(:clj [freememo.page-merge :as page-merge])
    #?(:clj [freememo.toasts :as toasts])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [missionary.core :as m]))
@@ -115,7 +116,23 @@
                                                ;; heading ids — the anchors that
                                                ;; pointed at them stayed in the
                                                ;; parent.
-                                               :content (cleaner/clean-html-fragment content)
+                                               ;;
+                                               ;; `strip-markers` FIRST, before
+                                               ;; the sanitizer. A selection in
+                                               ;; focus reader's merged mode can
+                                               ;; span a page boundary, and
+                                               ;; `clean-html-fragment` strips
+                                               ;; the `id` that identifies the
+                                               ;; boundary heading while keeping
+                                               ;; its text — so afterwards the
+                                               ;; literal "Page 7" is
+                                               ;; indistinguishable from prose.
+                                               ;; Same ordering trap
+                                               ;; `sphinx_import/strip-headerlinks!`
+                                               ;; records.
+                                               :content (-> content
+                                                          page-merge/strip-markers
+                                                          cleaner/clean-html-fragment)
                                                :kind "basic"
                                                :title title
                                                :source-id inherited-src})]

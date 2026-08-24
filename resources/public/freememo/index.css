@@ -5320,3 +5320,41 @@ body[data-theme="dark"] .ql-editor [style*="color:"]:not([style*="background-col
 .focus-reader-column .ql-editor {
     padding-inline: max(15px, calc((100% - var(--focus-column-width)) / 2));
 }
+
+/* ── Merged page boundaries (plans/merged-page-reading.md §2.4) ────────────
+   Focus reader stitches every page of a PDF into one document and marks each
+   boundary with `<h6 id="fm-page-N">Page N</h6>`. The heading is chrome inside
+   the text column, not prose, so it is styled as a rule with a label rather
+   than as a heading.
+
+   Selected by the `id` prefix and NOT by a class. The id is the marker's only
+   identifier — a BLOCK-scoped Attributor keeps it through a Quill edit, while
+   an unregistered class is dropped on the first keystroke.
+
+   Scoped under `.focus-reader-column`, like the centered column itself,
+   because `.ql-editor` also styles card fields and every other Quill surface
+   in the app. */
+.focus-reader-column .ql-editor [id^="fm-page-"] {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 2.5em 0 1.2em;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+    user-select: none;
+}
+/* The rule itself. A border on the heading would sit under the text; a flex
+   pseudo-element sits beside it and takes the remaining width. */
+.focus-reader-column .ql-editor [id^="fm-page-"]::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--color-bg-subtle);
+}
+/* The first marker opens the document, so it needs no space above it. */
+.focus-reader-column .ql-editor > [id^="fm-page-"]:first-child {
+    margin-top: 0;
+}

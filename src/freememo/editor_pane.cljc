@@ -13,6 +13,7 @@
    [freememo.occlusion-modal :refer [OcclusionModal]]
    [clojure.string :as str]
    [freememo.commands :as commands]
+   [freememo.merged-page-bridge :refer [MergedPageBridge]]
    #?(:cljs [freememo.editor-image-menu :as image-menu])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.db :as db])
@@ -132,6 +133,40 @@
 ;; EditorPane
 ;; ---------------------------------------------------------------------------
 
+(defn save-editor-html!*
+  "Persist an editor body. TWO DESTINATIONS, one image-rehost step.
+
+   Per-page mode writes the body to `topic-id`, as it always has.
+
+   Merged mode splits it back across `pdf-root-id`'s page rows
+   (plans/merged-page-reading.md item 3.2). The editor holds the WHOLE document
+   there, so writing it to `topic-id` would put every page's text — boundary
+   markers included — into one page row and empty the rest on the next merge.
+
+   `page-numbers` is the list the merge reported. The editor cannot supply it:
+   a page whose marker the reader deleted has no marker left to report.
+
+   Image rehosting runs first either way. `topics.content` has no length cap, so
+   a `data:` URI is stored silently and unbounded, unlike the card path which
+   rejects. A failed rehost keeps the base64 and still saves — losing the user's
+   text to protect the column would be the worse trade.
+
+   Body-level reader conditional, not whole-form: this symbol is named inside
+   `(e/server (e/Offload #(…)))`, which Electric compiles on BOTH peers, so the
+   var has to exist on CLJS."
+  [{:keys [user-id topic-id html merged? pdf-root-id page-numbers]}]
+  #?(:clj
+     (try
+       (let [{rehosted :html} (image-rehost/rehost-data-uris! {:html html :user-id user-id})]
+         (if merged?
+           (let [r (db/save-merged-pages! pdf-root-id rehosted page-numbers)]
+             {:success true :written (:written r)})
+           (do (db/update-topic-content! topic-id rehosted)
+               {:success true})))
+       (catch Exception ex
+         {:success false :error (.getMessage ex)}))
+     :cljs nil))
+
 (e/defn EditorPane
   []
   (e/client
@@ -139,7 +174,9 @@
           root-topic-id dctx/root-topic-id
           is-pdf-page? dctx/is-pdf-page? static-content dctx/static-content
           effective-content-topic-id dctx/effective-content-topic-id
-          on-imported-navigate! dctx/on-imported-navigate!]
+          on-imported-navigate! dctx/on-imported-navigate!
+          merged? dctx/merged? pdf-root-id dctx/pdf-root-id
+          merged-page-numbers dctx/merged-page-numbers]
     (dom/div
       (dom/props {:style {:flex "1" :display "flex" :flex-direction "column"
                           :min-width "0" :min-height "0" :overflow "hidden"}})
@@ -158,28 +195,22 @@
       ;; -----------------------------------------------------------------------
       (let [dirty-data (e/watch editor/!dirty-html)
             !last-saved (atom nil)
+            ;; The dirty tag is the DOCUMENT id, which merged reading makes
+            ;; distinct from the page — see doc-context/editor-doc-id.
+            doc-id (or dctx/editor-doc-id topic-id)
             needs-save? (and (some? dirty-data)
-                          (= (:topic-id dirty-data) topic-id)
+                          (= (:topic-id dirty-data) doc-id)
                           (not= (:html dirty-data) (e/watch !last-saved)))
             save-result (when needs-save?
                           (log/log-debug (str "EditorPane auto-save topic-id=" topic-id))
                           (e/server
                             (e/Offload
-                              #(try
-                                 ;; Re-host pasted images before persisting.
-                                 ;; topics.content has no length cap, so a data:
-                                 ;; URI here is stored silently and unbounded —
-                                 ;; unlike the card path, which rejects. A
-                                 ;; failed re-host keeps the base64 and still
-                                 ;; saves: losing the user's text to protect the
-                                 ;; column would be the worse trade.
-                                 (let [{:keys [html]}
-                                       (image-rehost/rehost-data-uris!
-                                         {:html (:html dirty-data) :user-id user-id})]
-                                   (db/update-topic-content! topic-id html))
-                                 {:success true}
-                                 (catch Exception ex
-                                   {:success false :error (.getMessage ex)})))))]
+                              #(save-editor-html!*
+                                 {:user-id user-id :topic-id topic-id
+                                  :html (:html dirty-data)
+                                  :merged? merged?
+                                  :pdf-root-id pdf-root-id
+                                  :page-numbers merged-page-numbers}))))]
         (when (:success save-result)
           (reset! !last-saved (:html dirty-data)))
         (when (and (some? save-result) (not (:success save-result)))
@@ -194,6 +225,10 @@
         ;; topics are in that state.
         (let [base-url (e/server (document-base-url* topic-id))]
           (e/client (reset! editor/!document-base-url base-url)))
+
+        ;; Merged reading's two-way link with the page state. Its own namespace
+        ;; because inlining it here pushed this e/defn past the 64KB method cap.
+        (MergedPageBridge)
 
         ;; -----------------------------------------------------------------------
         ;; Link import

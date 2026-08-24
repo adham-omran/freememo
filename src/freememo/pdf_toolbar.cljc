@@ -35,6 +35,8 @@
    [freememo.copy-text :as copy]
    [freememo.pdf-action-dropdowns :refer [ScanDropdown CopyDropdown KgCommandSources]]
    [freememo.pdf-viewer :as viewer]
+   [freememo.editor-actions :as editor-actions]
+   [freememo.rich-text-editor :as editor]
    [freememo.live-doc-wizard :refer [LiveDocAddPhotos]]
    [freememo.score-toolbar :refer [ScoreRectButton]]
    [freememo.toolbar-overflow :refer [install-overflow-detector!]]
@@ -67,6 +69,7 @@
   []
   (e/client
     (let [page-number dctx/page-number total dctx/total on-page-change! dctx/on-page-change!
+          merged? dctx/merged?
           !input-val   (atom (str page-number))
           input-val    (e/watch !input-val)
           !inp-focused (atom false)
@@ -81,9 +84,16 @@
           ;; (pdf_viewer/go-to-page! guards on @!viewer-state), which is what
           ;; makes a flip work in focus reader: the editor text keys on the page
           ;; NUMBER, not on a topic id, so on-page-change! alone drives it.
+          ;; In merged mode the editor already holds every page, so a flip is a
+          ;; scroll to that page's boundary marker rather than a fetch
+          ;; (plans/merged-page-reading.md §5.3). go-to-page! stays in the call
+          ;; either way and is a silent no-op with no viewer.
           nav! (fn [p via]
                  (trail/record! :pdf-page {:via via :page p})
                  (viewer/go-to-page! p)
+                 (when merged?
+                   (when-let [ed (editor/current-editor)]
+                     (editor-actions/scroll-to-page! ed p)))
                  (when on-page-change! (on-page-change! p)))]
       (when (and (not inp-focused) (not= input-val (str page-number)))
         (reset! !input-val (str page-number)))

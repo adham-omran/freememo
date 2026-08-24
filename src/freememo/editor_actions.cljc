@@ -12,6 +12,7 @@
   (:require [clojure.string :as str]
             [freememo.client-errors :as ce]
             [freememo.math :as math]
+            [freememo.page-merge :as page-merge]
             [freememo.util :as util]))
 
 ;; ---------------------------------------------------------------------------
@@ -571,3 +572,255 @@
                (.readAsDataURL reader file)))))
        (.click input))
      :clj nil))
+
+;; ---------------------------------------------------------------------------
+;; Page-boundary restore (plans/merged-page-reading.md §4)
+;; ---------------------------------------------------------------------------
+
+;; Whether the reader can restore a page boundary here, and the page numbers
+;; they can restore.
+;;
+;; nil = unavailable, which is every editor outside focus reader's merged mode.
+;; Otherwise `{:pages [ints]}` — every page number the document was merged from,
+;; which item 4.6 needs as the bound on what may be restored.
+;;
+;; WHY AN ATOM AND NOT A FORMAT-MENU OPT. `format-menu/install!` takes its opts
+;; once per editor construction, and the document editor is persistent — so opts
+;; cannot carry a flag that changes when the reader toggles the mode. The control
+;; is built always and reads this. Re-installing the menu on every toggle is the
+;; alternative, and it costs an editor teardown.
+;;
+;; Not a boolean, because the control needs the page list anyway: with markers 7
+;; and 10 present it must answer 8, and it cannot know 8 exists without it.
+;;
+;; `defonce` takes no docstring — clojure.core/defonce is [name expr].
+(defonce !page-break-context (atom nil))
+
+(defn markers-in-document
+  "Every live page marker, as `{:page <n> :index <document index>}`, ascending
+   by document index.
+
+   Pre : `ed` is a Quill instance.
+   Post: one entry per element whose `id` parses as a page marker and whose
+         blot is still live. A duplicate page number can appear — splitting a
+         marker heading copies its id to both halves — and the caller decides
+         what that means.
+
+   Reads the DOM and resolves each index through `Quill.find`, the same way
+   `replace-formula!` does: an index cached when the control opened would be
+   stale the moment the document changed."
+  [ed]
+  #?(:cljs
+     (let [^js ed ed
+           ^js Quill (.-Quill js/window)
+           els (.querySelectorAll (.-root ed) (str "[id^=\"" page-merge/marker-id-prefix "\"]"))]
+       (->> (array-seq els)
+            (keep (fn [^js el]
+                    (when-let [page (page-merge/parse-marker-id (.-id el))]
+                      (when-let [blot (.find Quill el)]
+                        {:page page :index (.getIndex ed blot)}))))
+            (sort-by :index)
+            vec))
+     :clj nil))
+
+(defn page-above
+  "The page the document position `index` belongs to, or nil when it sits above
+   every marker.
+
+   Pre : `markers` is `markers-in-document`'s result.
+   Post: the page of the LAST marker at or before `index`."
+  [markers index]
+  (->> markers
+       (filter #(<= (:index %) index))
+       last
+       :page))
+
+(defn restorable-page
+  "The page a restore at `index` would re-create, or nil to refuse.
+
+   Pre : `ed` is a Quill instance. `!page-break-context` holds the merged
+         document's page list, or nil.
+   Post: nil when the mode is off, when the context is missing, or when every
+         page between the neighbours already has a marker. Otherwise the LOWEST
+         missing page above the insertion point.
+
+   nil is the refusal signal, and a caller MUST NOT insert on it. This control
+   restores a boundary and never creates a page: `topics.page_number` is an
+   integer under a unique index, so a new page would mean renumbering every
+   later one — which desynchronizes the text pages from the PDF and invalidates
+   `p. N` on notes already pushed to Anki."
+  [ed index]
+  #?(:cljs
+     (when-let [{:keys [pages]} @!page-break-context]
+       (let [markers (markers-in-document ed)]
+         (page-merge/next-missing-page (map :page markers)
+           (page-above markers index)
+           pages)))
+     :clj nil))
+
+(defn marker-safe-index
+  "`index`, moved out of any marker heading it falls inside.
+
+   Pre : `ed` is a Quill instance.
+   Post: `index` when it is in body text. Otherwise the first position AFTER the
+         enclosing heading's line, which is that page's first body position.
+
+   WHY. A selection start inside another marker's heading splits that heading,
+   and the new marker lands BEFORE it. Measured: restoring page 2 from a
+   selection inside page 1's heading produced the document order 2, 1, 3, 4, 5.
+   `split-merged` walks in document order, so that swaps two pages' content —
+   corruption, not the drift the design accepts.
+
+   A marker at document index `mi` whose text is `len` characters occupies
+   `[mi, mi + len]`, and its line ends with the newline at `mi + len`."
+  [ed index]
+  #?(:cljs
+     (let [^js ed ed
+           ^js root (.-root ed)]
+       (or (->> (markers-in-document ed)
+                (keep (fn [{:keys [page] mi :index}]
+                        (let [el (.querySelector root (str "#" (page-merge/marker-id page)))
+                              len (if el (count (.-textContent el)) 0)]
+                          (when (and (<= mi index) (<= index (+ mi len)))
+                            (+ mi len 1)))))
+                first)
+           index))
+     :clj nil))
+
+(defn insert-page-break!
+  "Restore a page boundary at `index`. Returns the page restored, or nil when
+   there was nothing to restore.
+
+   Pre : `ed` is a Quill instance; `index` is a document position.
+   Post: on a page number, one marker heading for it sits at `index` and the
+         caret is after it. On nil, the document is untouched.
+   Inv  : inserts at most one marker, and never for a page outside the merged
+         document's page list.
+
+   Source \"user\", so `text-change` fires and the editor's auto-save persists
+   the split. `formatLine` after `insertText` is what makes the line a heading
+   carrying the id — the `id` Attributor is BLOCK-scoped, so the format has to
+   land on the line rather than on the text."
+  [ed index]
+  #?(:cljs
+     (when-let [page (restorable-page ed index)]
+       (let [^js ed ed
+             label (str "Page " page)
+             at (marker-safe-index ed index)]
+         (.insertText ed at (str label "\n") "user")
+         (.formatLine ed at 1
+           #js {:header 6 :id (page-merge/marker-id page)}
+           "user")
+         (.setSelection ed (+ at (count label) 1) 0 "user")
+         page))
+     :clj nil))
+
+;; The page marker tracking installer's callback, and the scroll container it
+;; watches. Both are per-editor and set by install-page-marker-tracking!.
+;;
+;; Kept as one atom rather than two so a teardown cannot leave half a wiring
+;; behind: `install!` returns a fn that clears it.
+(defonce ^:private !marker-tracking (atom nil))
+
+;; The page the reader has scrolled to in a merged document, or nil.
+;;
+;; The editor writes; Electric watches. Same direction as
+;; `rich-text-editor/!dirty-html`, and for the same reason: the scroll listener
+;; lives with the Quill instance, and the page-change funnel lives in the
+;; reactive graph.
+(defonce !scrolled-page (atom nil))
+
+(defn scroll-to-page!
+  "Scroll the editor so page `page`'s boundary marker sits at the top of its
+   scroll container. Returns true when a marker for that page was found.
+
+   Pre : `ed` is a Quill instance.
+   Post: on true, the marker is the topmost visible line. On false, nothing
+         moved — a page whose marker the reader deleted has nowhere to scroll
+         to, and guessing would land the reader on the wrong text.
+
+   This is what page navigation means in merged mode: the editor already holds
+   every page, so a flip is a scroll rather than a fetch."
+  [ed page]
+  #?(:cljs
+     (let [^js ed ed
+           el (.querySelector (.-root ed) (str "#" (page-merge/marker-id page)))]
+       (boolean
+         (when el
+           ;; `scrollIntoView` on the element rather than arithmetic on
+           ;; offsetTop: the scroll container is Quill's own, and its identity
+           ;; differs between the two editors in this app.
+           (.scrollIntoView el #js {:block "start" :behavior "auto"})
+           true)))
+     :clj nil))
+
+(defn page-at-scroll-top
+  "The page whose marker is the last one at or above the scroll container's top
+   edge, or nil when no marker is at or above it.
+
+   Pre : `ed` is a Quill instance.
+   Post: a page number present in the document, or nil.
+
+   PURE PER-CALL. It reads only the live DOM — no remembered previous answer and
+   no hysteresis. Electric frames remount on a WebSocket reconnect and on a hot
+   reload, which wipes any state kept across frames, so a derivation that
+   depended on one could not hold. Same rule the vendored `Scroll-window`
+   follows for its offset."
+  [ed]
+  #?(:cljs
+     (let [^js ed ed
+           ;; `.ql-editor` IS the scroller. Measured on the document editor:
+           ;; scrollHeight 4419 against clientHeight 636, while the
+           ;; `.ql-container` above it — which is the same element as
+           ;; `.quill-editor-wrapper` — never overflows. Both carry
+           ;; `overflow-y: auto`, so the computed style cannot tell them apart;
+           ;; only the scroll extent can. Listening on the container gave NO
+           ;; scroll events at all and the page field never moved.
+           ^js root (.-root ed)
+           edge (.-top (.getBoundingClientRect root))
+           els (.querySelectorAll root (str "[id^=\"" page-merge/marker-id-prefix "\"]"))
+           markers (array-seq els)]
+       (or (->> markers
+                (keep (fn [^js el]
+                        (when-let [page (page-merge/parse-marker-id (.-id el))]
+                          ;; A small tolerance, so a marker flush with the top
+                          ;; edge counts as reached rather than as one line away.
+                          (when (<= (.-top (.getBoundingClientRect el)) (+ edge 4))
+                            page))))
+                last)
+           ;; Scrolled above every marker: the document's own first page.
+           (some-> markers first .-id page-merge/parse-marker-id)))
+     :clj nil))
+
+(defn install-page-marker-tracking!
+  "Report the page the reader has scrolled to. Returns a teardown fn.
+
+   Pre : `ed` is a Quill instance. `on-page` takes a page number.
+   Post: `on-page` fires with a page number whenever the topmost marker
+         changes, and never with the same page twice in a row. The teardown
+         removes the listener.
+
+   `on-page` is the app's one page-change funnel, so a scroll records the page
+   as current AND requests the last-page write — the same path the toolbar
+   arrows and the PDF viewer use.
+
+   The last-reported page is remembered ONLY to suppress a repeat call. It is
+   not read to compute the answer: `page-at-scroll-top` is pure, so a remount
+   that loses this simply re-reports once."
+  [ed on-page]
+  #?(:cljs
+     (let [^js ed ed
+           ;; The scroller is `.ql-editor` itself — see page-at-scroll-top.
+           ^js scroller (.-root ed)
+           !last (atom nil)
+           handler (fn []
+                     (when-let [page (page-at-scroll-top ed)]
+                       (when (not= page @!last)
+                         (reset! !last page)
+                         (on-page page))))]
+       (.addEventListener scroller "scroll" handler #js {:passive true})
+       (reset! !marker-tracking {:scroller scroller :handler handler})
+       (fn []
+         (.removeEventListener scroller "scroll" handler)
+         (reset! !marker-tracking nil)))
+     :clj (fn [] nil)))

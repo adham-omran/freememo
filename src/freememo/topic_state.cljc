@@ -15,6 +15,7 @@
    [freememo.viewport :as viewport]
    [freememo.bibliography-form :as bibform]
    [clojure.string :as str]
+   #?(:clj [taoensso.telemere :as tel])
    #?(:clj [freememo.user-state :as us])
    #?(:clj [freememo.settings :as settings])
    #?(:clj [freememo.page-ocr :as page])
@@ -119,6 +120,35 @@
   [_refresh pdf-root-id page-number]
   #?(:clj (when (and pdf-root-id page-number)
             (page/get-page-text pdf-root-id page-number))
+     :cljs nil))
+
+(defn get-merged-document*
+  "The whole PDF as one document, with a boundary marker per page
+   (plans/merged-page-reading.md item 1.1).
+
+   Returns `{:html <merged> :page-numbers [ints]}`, or nil when there is no PDF
+   root. The page-number list rides along because the split needs it: the editor
+   cannot report a page whose marker the reader deleted.
+
+   Re-fetches on `:refresh`, which is what an OCR scan bumps — a page scanned
+   while the mode is on has to appear."
+  [_refresh pdf-root-id]
+  #?(:clj (when pdf-root-id (db/merged-page-document pdf-root-id))
+     :cljs nil))
+
+(defn save-merged-document!*
+  "Split a merged document back into its page rows.
+
+   Returns `{:success true :written N}` or `{:success false :error msg}`. Bumps
+   no invalidation channel: the existing per-page auto-save bumps none either,
+   because `:refresh` would re-fetch and re-initialize Quill mid-typing."
+  [pdf-root-id merged page-numbers]
+  #?(:clj (try
+            (let [r (db/save-merged-pages! pdf-root-id merged page-numbers)]
+              {:success true :written (:written r)})
+            (catch Exception e
+              (tel/error! {:id ::save-merged-document :data {:root pdf-root-id}} e)
+              {:success false :error (.getMessage e)}))
      :cljs nil))
 
 (defn get-topic-status*
@@ -314,10 +344,14 @@
    Pre:  `resolved` carries :refresh :meta-refresh :is-pdf? :pdf-root-id :kind
          :initial-page :static-content :queue-ctx; `topic-id` is the viewed topic.
    Post: returns the page/content/biblio prop slice for DocumentBody."
-  [resolved topic-id]
+  [resolved topic-id focus?]
   (e/client
     (let [{:keys [refresh meta-refresh is-pdf? is-score? pdf-root-id initial-page
                   pdf-page-count static-content static-content-topic-id queue-ctx]} resolved
+          ;; Merged reading (plans/merged-page-reading.md). The whole PDF becomes
+          ;; one document with a boundary marker per page. Score topics are out:
+          ;; they have no page children.
+          merged? (boolean (and is-pdf? (not is-score?) focus?))
           ;; Current PDF page (mutated by PdfPane via callback)
           !current-page (atom initial-page)
           current-page (e/watch !current-page)
@@ -366,14 +400,29 @@
           page-topic-id (if (and is-pdf? (not is-score?))
                           (or (:topic-id page-info) topic-id)
                           topic-id)
-          ;; Effective content: PDF -> fetched page text; non-PDF and score ->
-          ;; static (score pages carry no per-page text).
+          ;; Effective content: merged mode -> the whole document; PDF ->
+          ;; fetched page text; non-PDF and score -> static (score pages carry
+          ;; no per-page text).
+          ;;
+          ;; The `(e/server …)` form is the OUTERMOST form of each binding. A
+          ;; client-sited conditional wrapped around it would site the value on
+          ;; the client and materialize the whole result there — measured at
+          ;; 155 KB for a search-results frame, and this result is megabytes.
+          ;; The two fields are read separately for the same reason: the map is
+          ;; never materialized whole.
+          merged-doc (e/server
+                       (when merged?
+                         (e/Offload #(get-merged-document* refresh pdf-root-id))))
+          merged-html (e/server (:html merged-doc))
+          merged-page-numbers (e/server (:page-numbers merged-doc))
           text-result (e/server
-                        (when (and is-pdf? (not is-score?))
+                        (when (and is-pdf? (not is-score?) (not merged?))
                           (e/Offload #(get-page-text* refresh pdf-root-id current-page))))
-          effective-content (if (and is-pdf? (not is-score?))
+          effective-content (cond
+                              merged? merged-html
+                              (and is-pdf? (not is-score?))
                               (when (:success text-result) (:text text-result))
-                              static-content)
+                              :else static-content)
           ;; Topic the shown editor body belongs to. Non-PDF/score read the
           ;; static body → carry its fetched-for id, which lags the live topic-id
           ;; through a switch (stale-detectable). Real PDFs read per-page text
@@ -383,6 +432,10 @@
           effective-content-topic-id (if (and is-pdf? (not is-score?))
                                        page-topic-id
                                        static-content-topic-id)
+          ;; The identity of the body in the editor — see doc-context. Merged
+          ;; mode holds the whole document, so it is the root; every other mode
+          ;; holds one topic's body, so it is that topic.
+          editor-doc-id (if merged? pdf-root-id page-topic-id)
           ;; Score editor state — owned here (the stable client ancestor) so the
           ;; waveform strip, the PDF-toolbar rect button, the rect modal, and
           ;; the score card bar all share one pending-card selection.
@@ -410,6 +463,8 @@
        :!total !total :total total :!nav-target !nav-target :target-page target-page
        :page-info page-info :page-topic-id page-topic-id :effective-content effective-content
        :effective-content-topic-id effective-content-topic-id
+       :merged? merged? :merged-page-numbers merged-page-numbers
+       :editor-doc-id editor-doc-id
        :!show-bib !show-bib :show-bib? show-bib? :phone? phone? :reading-mode? reading-mode?
        :!score-region !score-region :!score-pages !score-pages
        :!score-modal-open? !score-modal-open? :!score-edit !score-edit

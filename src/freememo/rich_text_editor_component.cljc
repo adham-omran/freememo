@@ -29,6 +29,10 @@
                   :data-role "widget"})
 
       (let [initial-html dctx/initial-html topic-id dctx/topic-id
+            ;; The DOCUMENT in the editor, which merged reading makes distinct
+            ;; from `topic-id` — see doc-context/editor-doc-id. Every decision
+            ;; below is about the document, so all three use this.
+            doc-id (or dctx/editor-doc-id topic-id)
             node dom/node
             ;; Store timer-id in atom so the e/on-unmount closure is constant
             ;; (no reactive captures). A reactive closure causes Electric to
@@ -36,20 +40,33 @@
             !timer-id (atom nil)]
         ;; Init once — Quill persists for the component's lifetime.
         (when-not (some? (:editor @editor/!editor-state))
-          (log/log-debug (str "Editor init topic-id=" topic-id " html-len=" (count initial-html)))
-          (reset! !timer-id (js/setTimeout (fn [] (editor/init-editor! node (or initial-html "") topic-id)) 0)))
+          (log/log-debug (str "Editor init doc-id=" doc-id " html-len=" (count initial-html)))
+          (reset! !timer-id (js/setTimeout (fn [] (editor/init-editor! node (or initial-html "") doc-id)) 0)))
         (e/on-unmount (fn []
                         (when-let [t @!timer-id] (js/clearTimeout t))
                         (editor/destroy-editor!)))
 
-        ;; Update topic-id in editor state (page navigation)
-        ;; Text-change listener reads from !editor-state, so dirty-html gets correct topic-id
-        (editor/update-topic-id! topic-id)
+        ;; Tag dirty-html with the DOCUMENT, not the page. The text-change
+        ;; listener reads this, and EditorPane's save gate compares against it —
+        ;; in merged mode a scroll moves the page, and tagging by page would
+        ;; make that scroll discard the reader's unsaved edit.
+        (editor/update-topic-id! doc-id)
 
         ;; Update content in-place when initial-html changes reactively
-        ;; (page navigation, OCR scan, !refresh re-fetch)
-        ;; Skip if user has unsaved edits — "don't damage user input"
+        ;; (page navigation, OCR scan, !refresh re-fetch).
+        ;; Skip if user has unsaved edits — "don't damage user input".
+        ;;
+        ;; `ready?` is load-bearing. `set-content!` is a NO-OP before the editor
+        ;; exists — `init-editor!` defers its build behind `math/on-katex-ready!`
+        ;; — and nothing else re-runs this node, so a body that arrived first was
+        ;; applied to nothing and never applied again. Watching !editor-state
+        ;; makes the node re-evaluate the moment the editor is built.
+        ;;
+        ;; Measured: focus reader's merged document (13,930 chars) reached here
+        ;; and the editor stayed empty, with no error anywhere. A per-page body
+        ;; had hidden this by usually arriving after the build.
         (when (some? initial-html)
-          (let [dirty (e/watch editor/!dirty-html)]
-            (when-not (and dirty (= (:topic-id dirty) topic-id))
+          (let [dirty (e/watch editor/!dirty-html)
+                ready? (some? (:editor (e/watch editor/!editor-state)))]
+            (when (and ready? (not (and dirty (= (:topic-id dirty) doc-id))))
               (editor/set-content! initial-html))))))))

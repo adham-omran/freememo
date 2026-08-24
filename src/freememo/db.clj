@@ -21,6 +21,7 @@
    [freememo.fsrs :as fsrs]
    [freememo.logging :as log]
    [freememo.occlusion-ordinals :as ord]
+   [freememo.page-merge :as page-merge]
    [freememo.priority :as priority]
    [freememo.text :as text])
   (:import [com.zaxxer.hikari HikariDataSource]
@@ -2799,19 +2800,115 @@
                  :where [:and [:= :parent_id parent-id] [:is :staged_delete_id nil]]
                  :order-by [[:page_number :asc-nulls-last] [:created_at :asc]]})))
 
-(defn update-topic-content!
-  "Update the content of a topic.
+(defn stored-content
+  "The stored form of editor HTML — the ONE filter the document-content path
+   applies, so `update-topic-content!` and `save-merged-pages!` cannot drift.
 
-   Strips `<span class=\"ql-token …\">` wrappers before persisting — Quill 2.0.3's
+   Strips `<span class=\"ql-token …\">` wrappers — Quill 2.0.3's
    `clipboard.convert` misreads them as `code-token: true`, corrupting render on
-   reload. The browser's `syntax` module re-applies tokens on each load."
+   reload. The browser's `syntax` module re-applies tokens on each load.
+
+   `clean-html` deliberately does NOT run here. The document-content path has
+   never sanitized, and adding it would newly strip formats the editor keeps."
+  [content]
+  (sanitize-utf8 (cleaner/strip-ql-tokens content)))
+
+(defn update-topic-content!
+  "Update the content of a topic. Filter: `stored-content`."
   [id content]
-  (let [sanitized (sanitize-utf8 (cleaner/strip-ql-tokens content))]
+  (let [sanitized (stored-content content)]
     (jdbc/execute-one! ds
       (sql/format {:update :topics
                    :set {:content sanitized
                          :content_text (text/strip-html sanitized)}
                    :where [:= :id id]}))))
+
+;; ---------------------------------------------------------------------------
+;; Merged page reading (plans/merged-page-reading.md)
+;; ---------------------------------------------------------------------------
+
+(defn page-rows-for-merge
+  "The page rows a merged reading surface is built from.
+
+   Pre : `root-id` is a PDF root topic id.
+   Post: `{:id :page_number :content}` per page, ascending, staged deletes
+         excluded — the same exclusion `count-pages` applies, so the merged
+         document and the toolbar's page count agree.
+
+   Selects three columns rather than `*`: a merged 883-page document is
+   megabytes, and every other column would ride along for nothing."
+  [root-id]
+  (jdbc/execute! ds
+    (sql/format {:select [:id :page_number :content]
+                 :from [:topics]
+                 :where [:and
+                         [:= :parent_id root-id]
+                         [:= :kind "page"]
+                         [:is :staged_delete_id nil]
+                         [:is-not :page_number nil]]
+                 :order-by [[:page_number :asc]]})))
+
+(defn merged-page-document
+  "One document from `root-id`'s page rows, with a boundary marker per page.
+
+   Pre : `root-id` is a PDF root topic id.
+   Post: `{:html <merged> :page-numbers [ints]}`. The page-number list is what
+         `save-merged-pages!` needs to split the document back, because the
+         editor cannot report a page whose marker the reader deleted."
+  [root-id]
+  (let [rows (page-rows-for-merge root-id)]
+    {:html (page-merge/merge-pages rows)
+     :page-numbers (mapv :topics/page_number rows)}))
+
+(defn save-merged-pages!
+  "Split a merged document back into `root-id`'s page rows.
+
+   Pre : `root-id` is a PDF root topic id. `merged` is HTML read out of the
+         editor. `page-numbers` is the list the merge reported.
+   Post: every page whose slice differs from its stored content is updated.
+         Unchanged pages are not written. Returns
+         `{:written <count> :pages [page-numbers]}`.
+   Invariant: no row is inserted and no row is deleted. Only `content` and
+         `content_text` change — `status`, `page_number`, `priority` and every
+         scheduling column are untouched, so Done marks, the \"N / M pages done\"
+         figure and a schedule's progress survive a merged save.
+
+   ONE UPDATE PER CHANGED PAGE, NOT PER PAGE. The editor's auto-save fires on
+   every edit whose HTML differs, and the largest real PDF in this collection
+   holds 883 pages — an unconditional split would be 883 statements per
+   keystroke.
+
+   The read and the writes share one transaction, so a failure part-way leaves
+   no page row written."
+  [root-id merged page-numbers]
+  (jdbc/with-transaction [tx ds]
+    (let [rows (jdbc/execute! tx
+                 (sql/format {:select [:id :page_number :content]
+                              :from [:topics]
+                              :where [:and
+                                      [:= :parent_id root-id]
+                                      [:= :kind "page"]
+                                      [:is :staged_delete_id nil]
+                                      [:is-not :page_number nil]]}))
+          by-page (into {} (map (juxt :topics/page_number identity)) rows)
+          ;; The caller's list is authoritative for WHICH pages to split into.
+          ;; Intersecting it with the live rows keeps a page deleted in another
+          ;; tab out of the write set.
+          wanted (filterv #(contains? by-page %) (remove nil? page-numbers))
+          slices (page-merge/split-merged merged wanted)
+          changed (for [[page slice] slices
+                        :let [row (get by-page page)
+                              sanitized (stored-content slice)]
+                        :when (not= sanitized (or (:topics/content row) ""))]
+                    [page (:topics/id row) sanitized])]
+      (doseq [[_ id sanitized] changed]
+        (jdbc/execute-one! tx
+          (sql/format {:update :topics
+                       :set {:content sanitized
+                             :content_text (text/strip-html sanitized)}
+                       :where [:= :id id]})))
+      {:written (count changed)
+       :pages (mapv first changed)})))
 
 (defn rename-topic!
   "Rename a topic. Sanitizes and length-checks the new title.

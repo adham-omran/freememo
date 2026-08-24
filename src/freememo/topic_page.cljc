@@ -30,7 +30,11 @@
         ;; Three providers each return a prop-keyed map; merge seeds DocumentRoot,
         ;; the thin binder that unpacks the map into the doc-context dynamic vars
         ;; (dctx). No prop map reaches any component — they read dctx.
+        ;; DocumentViewState takes the LIVE focus flag, not resolved's
+        ;; :initial-focus?. Merged reading is effective content, which that
+        ;; provider owns, and the flag lives in DocumentLayoutState — so it
+        ;; crosses as an argument rather than through the merged map.
         (let [resolved (ts/ResolveTopic user-id enc-key topic-id navigate! llm-enabled? queue-ctx url-page)
               layout   (ts/DocumentLayoutState resolved)
-              view     (ts/DocumentViewState resolved topic-id)]
+              view     (ts/DocumentViewState resolved topic-id (:focus? layout))]
           (DocumentRoot (merge resolved layout view)))))))

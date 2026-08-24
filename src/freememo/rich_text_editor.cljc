@@ -94,6 +94,16 @@
 ;; inside an e/defn body would not increment reliably.
 (defonce ^:private !init-gen (atom 0))
 
+(defn current-editor
+  "The live document-editor Quill instance, or nil.
+
+   Pre : none.
+   Post: nil when no editor is mounted, so every caller must handle nil — the
+         document editor is torn down on navigation away from a topic."
+  []
+  #?(:clj nil
+     :cljs (:editor @!editor-state)))
+
 (defn destroy-editor!
   "Destroy the current global editor instance (if any).
 
@@ -108,7 +118,7 @@
      :cljs
      (do
        (swap! !init-gen inc)
-       (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown formula-teardown resize-focus-teardown a11y-observer]} @!editor-state]
+       (when-let [{:keys [editor container toolbar link-actions-teardown format-menu-teardown code-lang-teardown formula-teardown resize-focus-teardown page-marker-teardown a11y-observer]} @!editor-state]
          (let [^js ed editor
                ^js ct container
                ^js tb toolbar]
@@ -125,6 +135,9 @@
            (when formula-teardown (formula-teardown))
            ;; Remove the resize focus-out listener on the editor container.
            (when resize-focus-teardown (resize-focus-teardown))
+           ;; Remove the scroll listener that reports the merged document's
+           ;; current page.
+           (when page-marker-teardown (page-marker-teardown))
            ;; Tear down the table action bar (appended to document.body)
            ;; and its window scroll/resize listeners. Idempotent; safe
            ;; even if table-ui/init! never ran.
@@ -346,7 +359,16 @@
                               ;; first keystroke typed into any modal, palette or
                               ;; canvas label editor on the page.
                               :resize-focus-teardown
-                              (quill-field/install-resize-release-on-focus-out! editor)})
+                              (quill-field/install-resize-release-on-focus-out! editor)
+                              ;; Report the page the reader scrolls to in a
+                              ;; merged document (plans/merged-page-reading.md
+                              ;; §5.1). Installed unconditionally: the handler
+                              ;; finds no marker outside merged mode and reports
+                              ;; nothing, which costs one querySelectorAll per
+                              ;; scroll event and needs no mode flag here.
+                              :page-marker-teardown
+                              (editor-actions/install-page-marker-tracking! editor
+                                #(reset! editor-actions/!scrolled-page %))})
        (setup-mobile-keyboard-suppression! editor)
        (table-ui/init! editor)
        ;; Bubble's toolbar lives in the floating .ql-tooltip inside the

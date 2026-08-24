@@ -128,6 +128,8 @@
               dctx/!left-pct (:!left-pct m) dctx/card-font-size (:card-font-size m) dctx/t-layout (:t-layout m)
               dctx/layout-save (:layout-save m) dctx/!top-pct (:!top-pct m) dctx/!top-pct-save (:!top-pct-save m)
               dctx/focus? (:focus? m) dctx/set-focus! (:set-focus! m)
+              dctx/merged? (:merged? m) dctx/merged-page-numbers (:merged-page-numbers m)
+              dctx/editor-doc-id (:editor-doc-id m)
               dctx/t-focus (:t-focus m) dctx/focus-save (:focus-save m)
               dctx/t-last-page (:t-last-page m) dctx/last-page-save (:last-page-save m)
               dctx/on-page-change! (:on-page-change! m)
